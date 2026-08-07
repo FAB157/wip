@@ -1,0 +1,113 @@
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply plugin: 'kotlin-kapt'
+
+android {
+    namespace "com.itaintasca.app"
+    compileSdk libs.versions.compileSdk.get().toInteger()
+    defaultConfig {
+        applicationId "com.itaintasca.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        multiDexEnabled true
+        versionCode 2
+        versionName "1.1"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        
+        buildConfigField "String", "SUPABASE_URL", "\"https://qfxxhzkkrkvbuekfknhh.supabase.co\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDM1ODcsImV4cCI6MjA5NDY3OTU4N30.4v8qFrPU4QOJ-Ko61CASjUoPVEBOM8J9rGeiAbNMpSs\""
+
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    signingConfigs {
+        release {
+            storeFile file('C:\\KEYS APP ANDROID STUDIO\\itainta')
+            storePassword 'Carrara75!'
+            keyAlias 'key0'
+            keyPassword 'Carrara75!'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            crunchPngs false
+        }
+    }
+    kapt {
+        correctErrorTypes = true
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.coordinatorlayout
+    implementation libs.androidx.core.splashscreen
+    implementation 'androidx.multidex:multidex:2.0.1'
+    implementation project(':capacitor-android')
+    testImplementation libs.junit
+    androidTestImplementation libs.androidx.junit
+    androidTestImplementation libs.androidx.espresso.core
+    implementation project(':capacitor-cordova-android-plugins')
+
+    // Jetpack Media3 (ExoPlayer & MediaSession) for background audio playback
+    implementation "androidx.media3:media3-exoplayer:1.2.0"
+    implementation "androidx.media3:media3-session:1.2.0"
+    implementation "com.google.android.gms:play-services-location:21.3.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-play-services:${rootProject.ext.kotlinxCoroutinesVersion}"
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    implementation libs.google.gson
+
+    // Play Services Location for native geofencing and background tracking
+    // Using version 21.3.0 as requested
+    // (Old version was 21.0.1)
+
+    // Room Database
+    implementation libs.room.runtime
+    implementation libs.room.ktx
+    kapt libs.room.compiler
+
+    // Android Auto (Car App Library, template host) + lifecycleScope per la Screen
+    implementation "androidx.car.app:app:1.4.0"
+    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

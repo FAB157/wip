@@ -1,0 +1,210 @@
+{
+  "totals": {
+    "totalRows": 137929,
+    "validPois": 137927,
+    "invalidCoords": 1,
+    "missingCategory": 14
+  },
+  "topCategories": [
+    {
+      "category": "amenity:drinking_water",
+      "count": 67361
+    },
+    {
+      "category": "amenity:pharmacy",
+      "count": 16135
+    },
+    {
+      "category": "leisure:playground",
+      "count": 10389
+    },
+    {
+      "category": "shop:bakery",
+      "count": 10066
+    },
+    {
+      "category": "amenity:police",
+      "count": 3807
+    },
+    {
+      "category": "shop:pastry",
+      "count": 3539
+    },
+    {
+      "category": "railway:station",
+      "count": 3060
+    },
+    {
+      "category": "shop:gift",
+      "count": 2807
+    },
+    {
+      "category": "shop:deli",
+      "count": 2142
+    },
+    {
+      "category": "amenity:restaurant",
+      "count": 1987
+    },
+    {
+      "category": "railway:subway_entrance",
+      "count": 1354
+    },
+    {
+      "category": "craft:winery",
+      "count": 969
+    },
+    {
+      "category": "amenity:taxi",
+      "count": 965
+    },
+    {
+      "category": "amenity:cafe",
+      "count": 849
+    },
+    {
+      "category": "amenity:marketplace",
+      "count": 758
+    },
+    {
+      "category": "craft:photographer",
+      "count": 719
+    },
+    {
+      "category": "amenity:hospital",
+      "count": 674
+    },
+    {
+      "category": "shop:cheese",
+      "count": 591
+    },
+    {
+      "category": "craft:electronics_repair",
+      "count": 578
+    },
+    {
+      "category": "craft:window_construction",
+      "count": 550
+    },
+    {
+      "category": "amenity:fast_food",
+      "count": 452
+    },
+    {
+      "category": "craft:shoemaker",
+      "count": 433
+    },
+    {
+      "category": "craft:handicraft",
+      "count": 430
+    },
+    {
+      "category": "craft:plumber",
+      "count": 420
+    },
+    {
+      "category": "craft:electrician",
+      "count": 399
+    },
+    {
+      "category": "craft:carpenter",
+      "count": 330
+    },
+    {
+      "category": "craft:hvac",
+      "count": 286
+    },
+    {
+      "category": "craft:dressmaker",
+      "count": 267
+    },
+    {
+      "category": "craft:joiner",
+      "count": 259
+    },
+    {
+      "category": "craft:metal_construction",
+      "count": 252
+    },
+    {
+      "category": "craft:tailor",
+      "count": 244
+    },
+    {
+      "category": "craft:glaziery",
+      "count": 217
+    },
+    {
+      "category": "craft:upholsterer",
+      "count": 201
+    },
+    {
+      "category": "craft:brewery",
+      "count": 167
+    },
+    {
+      "category": "shop:craft",
+      "count": 166
+    },
+    {
+      "category": "shop:boutique",
+      "count": 159
+    },
+    {
+      "category": "craft:pottery",
+      "count": 157
+    },
+    {
+      "category": "craft:photographic_laboratory",
+      "count": 140
+    },
+    {
+      "category": "shop:supermarket",
+      "count": 136
+    },
+    {
+      "category": "craft:blacksmith",
+      "count": 136
+    },
+    {
+      "category": "craft:watchmaker",
+      "count": 132
+    },
+    {
+      "category": "amenity:ice_cream",
+      "count": 116
+    },
+    {
+      "category": "craft:beekeeper",
+      "count": 110
+    },
+    {
+      "category": "craft:stonemason",
+      "count": 109
+    },
+    {
+      "category": "craft:caterer",
+      "count": 100
+    },
+    {
+      "category": "amenity:bar",
+      "count": 94
+    },
+    {
+      "category": "craft:builder",
+      "count": 92
+    },
+    {
+      "category": "tourism:theme_park",
+      "count": 89
+    },
+    {
+      "category": "craft:sawmill",
+      "count": 87
+    },
+    {
+      "category": "craft:key_cutter",
+      "count": 83
+    }
+  ]
+}

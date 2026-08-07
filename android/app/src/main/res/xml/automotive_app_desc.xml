@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dichiara ad Android Auto che l'app è di tipo "template" (Car App Library):
+     l'host dell'auto renderizza i template forniti da WipCarAppService. -->
+<automotiveApp>
+    <uses name="template" />
+</automotiveApp>

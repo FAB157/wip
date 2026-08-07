@@ -1,0 +1,139 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-surface: #ffffff;
+  --color-surface-variant: #f3f4f6;
+  --color-surface-dim: #f9fafb;
+  --color-surface-bright: #ffffff;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #faf9f6;
+  --color-surface-container: #f3f4f6;
+  --color-surface-container-high: #e5e7eb;
+  --color-surface-container-highest: #d1d5db;
+  --color-on-surface: #1a1a1a;
+  --color-on-surface-variant: #4b5563;
+  --color-inverse-surface: #1a1a1a;
+  --color-inverse-on-surface: #faf9f6;
+  --color-outline: #9ca3af;
+  --color-outline-variant: #e5e7eb;
+  
+  --color-primary: #1e3a8a; /* Blu Navy Lusso */
+  --color-on-primary: #ffffff;
+  --color-primary-container: #eff6ff;
+  --color-on-primary-container: #1e3a8a;
+  
+  --color-secondary: #d4af37; /* Champagne Gold */
+  --color-on-secondary: #ffffff;
+  
+  --color-tertiary: #9ca3af;
+  --color-on-tertiary: #ffffff;
+  
+  --color-background: #fdfbf7; /* Panna */
+  --color-on-background: #1e3a8a;
+
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+}
+
+@layer base {
+  html, body {
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-on-background font-sans antialiased;
+    touch-action: pan-x pan-y;
+  }
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.leaflet-popup-content-wrapper {
+  @apply bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 p-0 overflow-hidden;
+}
+
+.leaflet-popup-content {
+  @apply !m-0;
+}
+
+.leaflet-popup-tip {
+  @apply !bg-white/90;
+}
+
+.leaflet-container {
+  @apply !font-sans;
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s infinite linear;
+}
+
+.custom-poi-marker {
+  pointer-events: auto !important;
+}
+
+.custom-cluster-icon {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+@media print {
+  .leaflet-container {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  body, html, #root {
+    height: auto !important;
+    min-height: auto !important;
+    overflow: visible !important;
+    position: static !important;
+  }
+  .overflow-y-auto, .overflow-y-scroll, .overflow-hidden, .overflow-x-hidden, .overflow-x-auto {
+    overflow: visible !important;
+  }
+  .h-screen, .h-full, .max-h-screen, .absolute, .fixed, .flex-1, .inset-0 {
+    height: auto !important;
+    max-height: none !important;
+    position: static !important;
+  }
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Stampa "con ambito" (vedi src/lib/printScoped.ts): di default nessuno
+     dei due documenti stampabili è visibile; la classe sul body attiva solo
+     quello richiesto. Senza, PrintView (sempre montato) si stampava da solo
+     su qualunque window.print(), anche quello della Guida Premium. */
+  body:not(.printing-itinerary) .print-optimized-view {
+    display: none !important;
+  }
+  body:not(.printing-guide) #premium-guide-pdf-container {
+    display: none !important;
+  }
+  /* Vista completa del manuale d'uso (AppGuide): stampata solo con
+     printScoped('manual'), mai sulle altre stampe. */
+  body:not(.printing-manual) #app-guide-print-view {
+    display: none !important;
+  }
+}
+

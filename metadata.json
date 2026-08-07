@@ -1,0 +1,12 @@
+{
+  "name": "Italia in Tasca v2",
+  "description": "Un compagno di viaggio intelligente ed elegante per esplorare le meraviglie dell'Italia con mappe interattive e audioguide AI.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

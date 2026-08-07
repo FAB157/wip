@@ -1,0 +1,46 @@
+node_modules
+dist
+.gemini
+*.log
+local.db
+*.sqlite
+.vercel
+
+# App native: non fanno parte del deploy web (Vercel builda solo PWA + API)
+android
+ios
+
+# Riscrittura Expo mai completata: 434 MB che non servono in produzione.
+# È la causa principale del superamento del limite di 100 MB.
+itainta-native
+
+# Script usa-e-getta e dati di importazione (175 MB + 35 MB)
+scratch
+import_csv
+
+# Backup, esportazioni e file di lavoro nella root
+*.csv
+*_backup.json
+10_pois.json
+3_full.json
+details_3.json
+csv_analysis.txt
+csv_summary.json
+
+# Script di debug ad-hoc nella root: già esclusi da tsconfig.json,
+# non hanno motivo di finire nel pacchetto di deploy
+check_*.cjs
+check_*.mjs
+check_*.js
+check_*.ts
+analyze_*.cjs
+analyze_*.js
+count_*.cjs
+audit_*.mjs
+dedup_*.cjs
+diff.cjs
+deploy_*.cjs
+deploy_*.js
+append_env*.ts
+append_env*.js
+__splice.ps1

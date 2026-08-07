@@ -1,0 +1,100 @@
+- Musei Civici (museum) - 2026-07-12T09:35:08.955+00:00
+- Piazza D'Armi (viewpoint) - 2026-07-12T09:35:06.665+00:00
+- San Genesio (church) - 2026-07-12T09:34:31.971+00:00
+- Ten (museum) - 2026-07-12T09:33:57.52+00:00
+- Castello Vecchio (castle) - 2026-07-12T09:33:50.581+00:00
+- Poli Museo della Grappa (museum) - 2026-07-12T09:32:13.341+00:00
+- Chiesa del Corpus Domini (church) - 2026-07-12T09:31:59.295+00:00
+- Biblioteca comunale (museum) - 2026-07-12T09:31:48.326+00:00
+- Oggetti di civiltà contadina (museum) - 2026-07-12T09:31:47.193+00:00
+- Museo Archeologico (museum) - 2026-07-12T09:31:44.686+00:00
+- Pinacoteca Carlo Levi (museum) - 2026-07-12T09:31:38.368+00:00
+- Santa Maria delle Grazie (monument) - 2026-07-12T09:31:36.867+00:00
+- Pantheon (monument) - 2026-07-12T09:31:34.22+00:00
+- Acquedotto Carolino (monument) - 2026-07-12T09:31:26.401+00:00
+- Acquedotto Carolino (monument) - 2026-07-12T09:31:25.054+00:00
+- Monumento ai Caduti (monument) - 2026-07-12T09:31:17.962+00:00
+- Chiesa di San Francesco d'Assisi (church) - 2026-07-12T09:31:06.73+00:00
+- Luigi Capuana (artwork) - 2026-07-12T09:31:04.972+00:00
+- Valle dei Templi (monument) - 2026-07-12T09:30:52.01+00:00
+- Falconara (monument) - 2026-07-12T09:30:34.566+00:00
+- Giardino di Boboli (monument) - 2026-07-12T09:29:55.489+00:00
+- Torre Medievale (castle) - 2026-07-12T09:28:31.337+00:00
+- Sacro Monte di Crea (monument) - 2026-07-12T09:27:58.021+00:00
+- Sacro Monte di Varallo (monument) - 2026-07-12T09:27:57.088+00:00
+- Siracusa (monument) - 2026-07-12T09:27:46.557+00:00
+- Tempietto Longobardo (monument) - 2026-07-12T09:27:41.268+00:00
+- Belvedere (viewpoint) - 2026-07-12T09:27:00.307+00:00
+- Museo del Giocattolo Pietro Piraino (museum) - 2026-07-12T00:29:48.789+00:00
+- Ruin (ruins) - 2026-07-12T00:29:47.585+00:00
+- Museo Archeologico di Saturnia (museum) - 2026-07-12T00:29:43.344+00:00
+- Raccolta d'Arte di Palazzo Nerucci (museum) - 2026-07-12T00:29:41.672+00:00
+- Museo della Certosa (museum) - 2026-07-12T00:29:35.672+00:00
+- Museo Minerario del Parco Minerario Naturalistico di Gavorrano (museum) - 2026-07-12T00:29:30.751+00:00
+- Cappella di San Donato (church) - 2026-07-12T00:29:22.961+00:00
+- Grotta di Lamalunga (archaeological_site) - 2026-07-12T00:29:14.744+00:00
+- Casa-Studio Fernando Melani (museum) - 2026-07-12T00:28:31.689+00:00
+- Cenacolo Di Sant'Apollonia (museum) - 2026-07-12T00:28:30.606+00:00
+- La Piazzetta (museum) - 2026-07-12T00:28:22.871+00:00
+- Museo della cultura della memoria di Fontecchio (museum) - 2026-07-12T00:28:21.882+00:00
+- Galleria Corsini (museum) - 2026-07-12T00:28:16.752+00:00
+- Museo Civico Per La Preistoria del Monte Cetona (museum) - 2026-07-12T00:28:05.539+00:00
+- San Raffaele (monument) - 2026-07-12T00:27:47.71+00:00
+- Museo archeologico di Teanum Sidicinum (museum) - 2026-07-12T00:27:38.192+00:00
+- Isola (monument) - 2026-07-12T00:27:29.918+00:00
+- Monumento ai caduti (monument) - 2026-07-12T00:27:24.225+00:00
+- Chiesa di San Maurizio (church) - 2026-07-12T00:27:18.399+00:00
+- Chiesa di San Giovanni Battista (church) - 2026-07-12T00:27:17.545+00:00
+- Chiesa di San Niccolò (church) - 2026-07-12T00:27:16.622+00:00
+- Chiesa di Santa Maria Assunta (church) - 2026-07-12T00:27:15.656+00:00
+- Chiesa di Santa Maria Assunta (church) - 2026-07-12T00:27:11.426+00:00
+- Chiesa di San Pietro Apostolo (church) - 2026-07-12T00:27:10.326+00:00
+- Chiesa di San Matteo (church) - 2026-07-12T00:27:08.633+00:00
+- Chiesa di Santa Cristina (church) - 2026-07-12T00:27:01.853+00:00
+- Chiesa di Sant'Ilario (church) - 2026-07-12T00:27:01.084+00:00
+- Chiesa di San Geminiano (church) - 2026-07-12T00:26:56.758+00:00
+- Chiesa di San Pietro (church) - 2026-07-12T00:26:55.975+00:00
+- Chiesa della Santissima Annunziata (church) - 2026-07-12T00:26:53.485+00:00
+- Monumento ai caduti (monument) - 2026-07-12T00:26:46.466+00:00
+- Chiesa di Santo Stefano (church) - 2026-07-12T00:26:40.932+00:00
+- Chiesa di San Lorenzo (church) - 2026-07-12T00:26:35.378+00:00
+- Chiesa di San Giuseppe (church) - 2026-07-12T00:26:34.178+00:00
+- Monumento ai caduti (monument) - 2026-07-12T00:26:26.879+00:00
+- Museo Etnografico (museum) - 2026-07-12T00:26:21.385+00:00
+- Cappella della Beata Vergine (church) - 2026-07-12T00:26:19.865+00:00
+- Museo Civico Archeologico (museum) - 2026-07-12T00:26:18.871+00:00
+- Chiesa Evangelica (church) - 2026-07-12T00:26:14.464+00:00
+- Ostia Antica (monument) - 2026-07-12T00:26:13.489+00:00
+- Museo del Giocattolo (museum) - 2026-07-12T00:26:12.353+00:00
+- Museo del Giocattolo Pietro Piraino (museum) - 2026-07-12T00:26:10.827+00:00
+- Terminus (artwork) - 2026-07-12T00:26:05.911+00:00
+- Apollo (artwork) - 2026-07-12T00:26:04.342+00:00
+- Polo Culturale Pietro Aldi (museum) - 2026-07-12T00:25:58.257+00:00
+- Museo della Grande Guerra (museum) - 2026-07-12T00:25:56.993+00:00
+- Museo di Paleontologia e Mineralogia (museum) - 2026-07-12T00:25:55.479+00:00
+- Museo della Val Cavallina (museum) - 2026-07-12T00:25:54.353+00:00
+- Museo della Bicicletta (museum) - 2026-07-12T00:25:48.941+00:00
+- Madonna (artwork) - 2026-07-12T00:25:48.065+00:00
+- Torre del Mangia (castle) - 2026-07-12T00:25:47.234+00:00
+- Terra (artwork) - 2026-07-12T00:25:45.704+00:00
+- Museo Contadino (museum) - 2026-07-12T00:25:40.224+00:00
+- Museo del Grande Torino e della Leggenda Granata (museum) - 2026-07-12T00:25:38.622+00:00
+- Al Castello (castle) - 2026-07-12T00:25:37.305+00:00
+- Monumento ai caduti (monument) - 2026-07-12T00:25:33.237+00:00
+- Archivio di Stato (museum) - 2026-07-12T00:25:30.871+00:00
+- Museo della Bambola e del Giocattolo (museum) - 2026-07-12T00:25:25.35+00:00
+- Bunker Mooseum (museum) - 2026-07-12T00:25:24.478+00:00
+- Museo della Civiltà Contadina (museum) - 2026-07-12T00:25:23.262+00:00
+- Mole Antonelliana (viewpoint) - 2026-07-12T00:25:22.303+00:00
+- Sacro Cuore (viewpoint) - 2026-07-12T00:25:21.347+00:00
+- Parco Nazionale Dolomiti Bellunesi (monument) - 2026-07-12T00:25:14.409+00:00
+- La Galleria (museum) - 2026-07-12T00:25:10.127+00:00
+- La Cattedrale (church) - 2026-07-12T00:25:08.565+00:00
+- Bruni (archaeological_site) - 2026-07-12T00:25:06.624+00:00
+- Al Duomo (church) - 2026-07-12T00:25:01.799+00:00
+- La Rocca (castle) - 2026-07-12T00:24:53.83+00:00
+- Galleria d'Arte Moderna Achille Forti (museum) - 2026-07-12T00:24:52.662+00:00
+- San Gennaro (viewpoint) - 2026-07-12T00:24:47.347+00:00
+- Museo iconografico della storia postale regionale (museum) - 2026-07-12T00:24:45.127+00:00
+- Le torri (artwork) - 2026-07-12T00:24:40.938+00:00
+- Museo dell'Arte Salvata (museum) - 2026-07-12T00:24:39.742+00:00

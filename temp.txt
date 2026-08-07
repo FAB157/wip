@@ -1,0 +1,2 @@
+Line 3402:   app.post("/api/premium-guide/generate", async (req, res) => {
+Line 3608:   app.post("/api/premium-guide/pdf-url", async (req, res) => {

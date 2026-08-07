@@ -1,0 +1,218 @@
+src/services/locationService.ts:2: // ITAINTA · LocationService — Gestore centralizzato posizione e audio
+src/services/locationService.ts:8: import { getGeofencePois } from './poiRepository';
+src/services/locationService.ts:9: import { getOrCreateAudioguideText } from './audioguideService';
+src/services/locationService.ts:11: import type { GeofencePoi } from '../types/poi';
+src/services/locationService.ts:15: import { audioQueueManager } from '../lib/AudioQueueManager';
+src/services/locationService.ts:34: export interface AudioState {
+src/services/locationService.ts:46: export type AudioStateListener = (state: AudioState) => void;
+src/services/locationService.ts:51: private audioListeners: Set<AudioStateListener> = new Set();
+src/services/locationService.ts:55: private geofenceCandidates: GeofencePoi[] = [];
+src/services/locationService.ts:63: // Audio system
+src/services/locationService.ts:64: private ambientPlayer: HTMLAudioElement | null = null;
+src/services/locationService.ts:65: private speechPlayer: HTMLAudioElement | null = null;
+src/services/locationService.ts:66: private activeGuideAudio: HTMLAudioElement | null = null;
+src/services/locationService.ts:67: private audioUnlocked = false;
+src/services/locationService.ts:68: private audioQueue: Array<{ text?: string, url?: string, poiName?: string, poiCategory?: string, poiId?: string }> = [];
+src/services/locationService.ts:70: private audioState: AudioState = {
+src/services/locationService.ts:81: private audioCtx: AudioContext | null = null;
+src/services/locationService.ts:82: private audioNodes: {
+src/services/locationService.ts:83: source: MediaElementAudioSourceNode;
+src/services/locationService.ts:115: this.isOnline = navigator.onLine;
+src/services/locationService.ts:119: // Unlock audio on first interaction
+src/services/locationService.ts:121: if (this.audioUnlocked) return;
+src/services/locationService.ts:122: const audio = new Audio();
+src/services/locationService.ts:123: audio.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+src/services/locationService.ts:124: audio.play().catch(() => {});
+src/services/locationService.ts:125: this.audioUnlocked = true;
+src/services/locationService.ts:139: this.geofenceCandidates = pois;
+src/services/locationService.ts:149: window.dispatchEvent(new CustomEvent('audioguide-status', { detail: data.data }));
+src/services/locationService.ts:189: public getAudioState(): AudioState { return this.audioState; }
+src/services/locationService.ts:191: public observeAudioState(listener: AudioStateListener): () => void {
+src/services/locationService.ts:192: this.audioListeners.add(listener);
+src/services/locationService.ts:193: listener(this.audioState);
+src/services/locationService.ts:194: return () => { this.audioListeners.delete(listener); };
+src/services/locationService.ts:197: private notifyAudioState() {
+src/services/locationService.ts:198: this.audioListeners.forEach(l => l({ ...this.audioState }));
+src/services/locationService.ts:202: this.audioState.playbackSpeed = speed;
+src/services/locationService.ts:205: const { WipBackgroundAudio } = require('../plugins/WipBackgroundAudio');
+src/services/locationService.ts:206: WipBackgroundAudio.setSpeed({ speed }).catch(() => {});
+src/services/locationService.ts:208: this.notifyAudioState();
+src/services/locationService.ts:212: this.audioState.isMegaphone = enabled;
+src/services/locationService.ts:213: this.updateAudioFilters();
+src/services/locationService.ts:214: this.notifyAudioState();
+src/services/locationService.ts:217: private initAudioContext() {
+src/services/locationService.ts:218: if (this.audioCtx || typeof window === 'undefined') return;
+src/services/locationService.ts:220: const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+src/services/locationService.ts:221: this.audioCtx = new AudioCtx();
+src/services/locationService.ts:223: const source = this.audioCtx.createMediaElementSource(this.speechPlayer);
+src/services/locationService.ts:224: const highpass = this.audioCtx.createBiquadFilter();
+src/services/locationService.ts:226: const lowpass = this.audioCtx.createBiquadFilter();
+src/services/locationService.ts:228: const gain = this.audioCtx.createGain();
+src/services/locationService.ts:232: gain.connect(this.audioCtx.destination);
+src/services/locationService.ts:233: this.audioNodes = { source, highpass, lowpass, gain };
+src/services/locationService.ts:234: this.updateAudioFilters();
+src/services/locationService.ts:237: console.error("[LocationService] AudioContext init failed", e);
+src/services/locationService.ts:241: private updateAudioFilters() {
+src/services/locationService.ts:242: if (!this.audioNodes || !this.audioCtx) return;
+src/services/locationService.ts:243: const { highpass, lowpass, gain } = this.audioNodes;
+src/services/locationService.ts:244: const now = this.audioCtx.currentTime;
+src/services/locationService.ts:245: if (this.audioState.isMegaphone) {
+src/services/locationService.ts:273: window.dispatchEvent(new CustomEvent('audioguide-status', { detail: "📡 Attivazione radar e GPS..." }));
+src/services/locationService.ts:301: const { getGeofencePois } = await import('./poiRepository');
+src/services/locationService.ts:302: let pois = await getGeofencePois(loc.latitude, loc.longitude, userId, 1000);
+src/services/locationService.ts:313: this.geofenceCandidates = pois;
+src/services/locationService.ts:374: const player = new Audio("https://assets.mixkit.co/music/preview/mixkit-ambient-tone-340.mp3");
+src/services/locationService.ts:380: // PWA AUDIO UNLOCK: Inizializziamo anche il player vocale nel contesto interattivo
+src/services/locationService.ts:382: const sp = new Audio("data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
+src/services/locationService.ts:391: if (this.activeGuideAudio) { this.activeGuideAudio.pause(); this.activeGuideAudio = null; }
+src/services/locationService.ts:432: const { getGeofencePois } = await import('./poiRepository');
+src/services/locationService.ts:433: let pois = await getGeofencePois(update.latitude, update.longitude, userId, 1000);
+src/services/locationService.ts:444: this.geofenceCandidates = pois;
+src/services/locationService.ts:469: this.watchId = navigator.geolocation.watchPosition(
+src/services/locationService.ts:483: navigator.geolocation.clearWatch(this.watchId as number);
+src/services/locationService.ts:489: public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string): Promise<boolean> {
+src/services/locationService.ts:494: if (this.audioState.poiId === poiId && this.activeGuideAudio) {
+src/services/locationService.ts:495: this.resumeGuideAudio();
+src/services/locationService.ts:499: if (this.activeGuideAudio) {
+src/services/locationService.ts:500: this.audioQueue.push({ text, poiName, poiCategory, poiId });
+src/services/locationService.ts:504: this.initAudioContext();
+src/services/locationService.ts:505: if (this.audioCtx?.state === "suspended") this.audioCtx.resume();
+src/services/locationService.ts:509: this.audioState.poiId = poiId || null;
+src/services/locationService.ts:510: this.audioState.poiName = poiName || null;
+src/services/locationService.ts:511: this.notifyAudioState();
+src/services/locationService.ts:523: return await this.playAudioBlob(blob, text);
+src/services/locationService.ts:526: this.audioState.isPlaying = false;
+src/services/locationService.ts:527: this.notifyAudioState();
+src/services/locationService.ts:532: public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<boolean> {
+src/services/locationService.ts:534: if (this.activeGuideAudio) return false;
+src/services/locationService.ts:536: this.initAudioContext();
+src/services/locationService.ts:537: if (this.audioCtx?.state === "suspended") this.audioCtx.resume();
+src/services/locationService.ts:541: this.audioState.poiId = poiId || null;
+src/services/locationService.ts:542: this.audioState.poiName = poiName || null;
+src/services/locationService.ts:543: this.notifyAudioState();
+src/services/locationService.ts:548: return await this.playAudioBlob(blob, "");
+src/services/locationService.ts:551: this.audioState.isPlaying = false;
+src/services/locationService.ts:552: this.notifyAudioState();
+src/services/locationService.ts:557: private async playAudioBlob(blob: Blob, textLengthFallback: string): Promise<boolean> {
+src/services/locationService.ts:559: const audio = this.speechPlayer || new Audio();
+src/services/locationService.ts:560: this.speechPlayer = audio;
+src/services/locationService.ts:562: audio.src = url;
+src/services/locationService.ts:563: this.activeGuideAudio = audio;
+src/services/locationService.ts:564: audio.playbackRate = this.audioState.playbackSpeed;
+src/services/locationService.ts:566: audio.ontimeupdate = () => {
+src/services/locationService.ts:567: if (audio.duration) {
+src/services/locationService.ts:568: this.audioState.currentTime = audio.currentTime;
+src/services/locationService.ts:569: this.audioState.duration = audio.duration;
+src/services/locationService.ts:570: this.audioState.progress = (audio.currentTime / audio.duration) * 100;
+src/services/locationService.ts:571: this.notifyAudioState();
+src/services/locationService.ts:575: audio.onended = () => {
+src/services/locationService.ts:576: this.activeGuideAudio = null;
+src/services/locationService.ts:577: this.audioState.isPlaying = false;
+src/services/locationService.ts:578: this.audioState.progress = 100;
+src/services/locationService.ts:579: this.notifyAudioState();
+src/services/locationService.ts:584: this.audioState.progress = 0;
+src/services/locationService.ts:585: this.audioState.currentTime = 0;
+src/services/locationService.ts:586: this.notifyAudioState();
+src/services/locationService.ts:587: this.checkAudioQueue();
+src/services/locationService.ts:593: const { getNativeAudioUri } = await import('../lib/capacitor/nativeAudioHelper');
+src/services/locationService.ts:594: const { WipBackgroundAudio } = await import('../plugins/WipBackgroundAudio');
+src/services/locationService.ts:597: const nativeUri = await getNativeAudioUri(blob, fileName);
+src/services/locationService.ts:599: await WipBackgroundAudio.play({
+src/services/locationService.ts:601: title: this.audioState.poiName || "ItaInta Audioguida",
+src/services/locationService.ts:604: await WipBackgroundAudio.setSpeed({ speed: this.audioState.playbackSpeed });
+src/services/locationService.ts:606: this.audioState.isPlaying = true;
+src/services/locationService.ts:607: this.notifyAudioState();
+src/services/locationService.ts:609: audio.play().catch(() => {});
+src/services/locationService.ts:610: audio.volume = 0; // Silenzioso in webview, suona il nativo
+src/services/locationService.ts:615: if (this.audioState.poiId) {
+src/services/locationService.ts:616: await incrementUserQuota(currentUserId, "audio_guide");
+src/services/locationService.ts:618: const poi = await getPoiById(this.audioState.poiId);
+src/services/locationService.ts:623: console.error("[LocationService] Native audio playback failed:", e);
+src/services/locationService.ts:628: await audio.play();
+src/services/locationService.ts:629: this.audioState.isPlaying = true;
+src/services/locationService.ts:630: this.notifyAudioState();
+src/services/locationService.ts:635: if (this.audioState.poiId) {
+src/services/locationService.ts:636: await incrementUserQuota(currentUserId, "audio_guide");
+src/services/locationService.ts:638: const poi = await getPoiById(this.audioState.poiId);
+src/services/locationService.ts:643: console.warn("[LocationService] Audio playback failed", e);
+src/services/locationService.ts:644: this.audioState.isPlaying = false;
+src/services/locationService.ts:645: this.notifyAudioState();
+src/services/locationService.ts:650: private checkAudioQueue() {
+src/services/locationService.ts:651: const next = this.audioQueue.shift();
+src/services/locationService.ts:652: if (next && next.text) this.playAudio(next.text, next.poiName, next.poiCategory, next.poiId);
+src/services/locationService.ts:669: public unlockAudio() { this.audioUnlocked = true; this.initAudioContext(); }
+src/services/locationService.ts:671: public pauseGuideAudio() {
+src/services/locationService.ts:672: if (this.activeGuideAudio) this.activeGuideAudio.pause();
+src/services/locationService.ts:674: const { WipBackgroundAudio } = require('../plugins/WipBackgroundAudio');
+src/services/locationService.ts:675: WipBackgroundAudio.pause().catch(() => {});
+src/services/locationService.ts:677: this.audioState.isPlaying = false;
+src/services/locationService.ts:678: this.notifyAudioState();
+src/services/locationService.ts:681: public resumeGuideAudio() {
+src/services/locationService.ts:682: if (this.activeGuideAudio) this.activeGuideAudio.play().catch(() => {});
+src/services/locationService.ts:684: const { WipBackgroundAudio } = require('../plugins/WipBackgroundAudio');
+src/services/locationService.ts:685: WipBackgroundAudio.resume().catch(() => {});
+src/services/locationService.ts:687: this.audioState.isPlaying = true;
+src/services/locationService.ts:688: this.notifyAudioState();
+src/services/locationService.ts:691: public stopGuideAudio() {
+src/services/locationService.ts:692: if (this.activeGuideAudio) {
+src/services/locationService.ts:693: this.activeGuideAudio.pause();
+src/services/locationService.ts:694: this.activeGuideAudio.src = "";
+src/services/locationService.ts:695: this.activeGuideAudio = null;
+src/services/locationService.ts:698: const { WipBackgroundAudio } = require('../plugins/WipBackgroundAudio');
+src/services/locationService.ts:699: WipBackgroundAudio.stop().catch(() => {});
+src/services/locationService.ts:701: this.audioQueue = [];
+src/services/locationService.ts:702: this.audioState.isPlaying = false;
+src/services/locationService.ts:703: this.audioState.poiId = null;
+src/services/locationService.ts:704: this.audioState.progress = 0;
+src/services/locationService.ts:705: this.audioState.currentTime = 0;
+src/services/locationService.ts:706: this.notifyAudioState();
+src/services/locationService.ts:711: if (this.activeGuideAudio) {
+src/services/locationService.ts:712: this.activeGuideAudio.currentTime += seconds;
+src/services/locationService.ts:717: if (this.activeGuideAudio) {
+src/services/locationService.ts:718: this.activeGuideAudio.currentTime = 0;
+src/services/locationService.ts:719: this.resumeGuideAudio();
+src/App.tsx:14: import { clearOrphanedAudioFiles } from "./lib/offlineStorage";
+src/App.tsx:27: import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
+src/App.tsx:29: import AudioPlayerBanner from "./components/AudioPlayerBanner";
+src/App.tsx:46: // --- 2. Navigation & UI ---
+src/App.tsx:51: // --- 3. Audio Guide State ---
+src/App.tsx:52: const [isAudioGuideActive, setIsAudioGuideActive] = useState(false);
+src/App.tsx:53: const [isAudioGuideMuted, setIsAudioGuideMuted] = useState(false);
+src/App.tsx:60: const isFollowingItinerary = isAudioGuideActive && (!!activePlan || itinerary.length > 0);
+src/App.tsx:124: window.addEventListener('wip-smart-navigate', handleSmartNav);
+src/App.tsx:125: return () => window.removeEventListener('wip-smart-navigate', handleSmartNav);
+src/App.tsx:134: const handleToggleAudioGuide = useCallback((active: boolean) => {
+src/App.tsx:135: console.log(`[App.tsx] Audio Guide toggle: ${active}`);
+src/App.tsx:136: setIsAudioGuideActive(active);
+src/App.tsx:137: localStorage.setItem('wip_audioguide_active', active ? 'true' : 'false');
+src/App.tsx:139: locationService.unlockAudio();
+src/App.tsx:140: // Proponi il bundle delle audioguide solo all'attivazione del tasto cuffie
+src/App.tsx:148: if (next && !isAudioGuideActive) handleToggleAudioGuide(true);
+src/App.tsx:201: // 🧹 Garbage Collection: Pulisci audio orfani all'avvio
+src/App.tsx:206: clearOrphanedAudioFiles(activeIds.map(id => String(id)));
+src/App.tsx:334: window.addEventListener('audioguide-status', handleGuideStatus);
+src/App.tsx:338: window.removeEventListener('audioguide-status', handleGuideStatus);
+src/App.tsx:353: locationService.syncSettings(itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted);
+src/App.tsx:354: }, [itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted, selectedCategories]);
+src/App.tsx:384: {isAudioGuideActive && activeTab === "map" && (
+src/App.tsx:428: isAudioGuideActive={isAudioGuideActive}
+src/App.tsx:429: setIsAudioGuideActive={handleToggleAudioGuide}
+src/App.tsx:437: {activeTab === "camera" && <CameraScreen onRecognize={(data) => { setVisionText(data.spiegazione_audio || ""); setSelectedPoi({...data, id: `vision-${Date.now()}`}); setActiveTab("map"); }} onClose={() => setActiveTab("map")} language={language} />}
+src/App.tsx:448: <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} onPlanClick={() => setActiveTab("plan")} isAudioGuideActive={isAudioGuideActive} setIsAudioGuideActive={handleToggleAudioGuide} isAudioGuideMuted={isAudioGuideMuted} setIsAudioGuideMuted={setIsAudioGuideMuted} language={language} />
+src/App.tsx:453: <GeofenceAudioGuide isActive={isAudioGuideActive} isMuted={isAudioGuideMuted} itinerary={itinerary} guideMode={guideMode} language={language} />
+src/App.tsx:454: <AudioPlayerBanner />
+src/App.tsx:476: onStartNavigation={(pois) => {
+src/services/audioguideService.ts:2: // ITAINTA · Audioguide on-demand (cache-first) + "Chiedi di piu'"
+src/services/audioguideService.ts:3: // Testo generato da Gemini via /api/regenerate, salvato in poi_audioguides
+src/services/audioguideService.ts:8: getAudioguide,
+src/services/audioguideService.ts:9: upsertAudioguide,
+src/services/audioguideService.ts:10: incrementAudioguidePlay,
+src/services/audioguideService.ts:47: * Ritorna il testo dell'audioguida per poi+lingua+personaggio.
+src/services/audioguideService.ts:51: export async function getOrCreateAudioguideText(
+src/services/audioguideService.ts:57: const cached = await getAudioguide(poi.id, language, character);
+src/services/audioguideService.ts:58: if (cached?.audio_text) {
+src/services/audioguideService.ts:59: await incrementAudioguidePlay(cached.id);
+src/services/audioguideService.ts:60: return cached.audio_text;
+src/services/audioguideService.ts:80: await upsertAudioguide(poi.id, language, character, text);
+src/services/audioguideService.ts:99: const details = await getAudioguide(poi.id, language, character);
+src/services/audioguideService.ts:101: details?.audio_text ||

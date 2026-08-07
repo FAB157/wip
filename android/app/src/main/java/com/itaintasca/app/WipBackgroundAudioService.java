@@ -1,0 +1,468 @@
+package com.itaintasca.app;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.media.audiofx.Equalizer;
+import android.media.audiofx.LoudnessEnhancer;
+import android.os.Binder;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.util.Log;
+
+import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.ServiceCompat;
+import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.C;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MediaMetadata;
+import androidx.media3.common.PlaybackException;
+import androidx.media3.common.PlaybackParameters;
+import androidx.media3.common.Player;
+import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.session.MediaSession;
+import androidx.media3.session.MediaStyleNotificationHelper;
+
+/**
+ * Servizio di riproduzione delle audioguide.
+ *
+ * Punti chiave per il funzionamento in background (schermo spento / app in tasca):
+ * - wake mode + audio focus gestiti da ExoPlayer;
+ * - foreground service di tipo mediaPlayback (obbligatorio da Android 14);
+ * - MediaSession per i controlli da lock screen / cuffie;
+ * - callback verso il plugin Capacitor per fine riproduzione, errori e progresso,
+ *   perche' la WebView in background non e' una sorgente di eventi affidabile.
+ */
+public class WipBackgroundAudioService extends Service {
+
+    /** Eventi inoltrati al plugin Capacitor (e quindi al JS). */
+    public interface PlaybackCallback {
+        void onPlaybackEnded();
+        void onPlaybackError(String message);
+        void onPlaybackStateChanged(boolean isPlaying);
+        void onPlaybackProgress(long positionMs, long durationMs);
+    }
+
+    private static final String TAG = "WipAudio";
+    private static final String CHANNEL_ID = "wip_audio_channel";
+    private static final int NOTIFICATION_ID = 101;
+    private static final long PROGRESS_INTERVAL_MS = 500L;
+
+    public static final String ACTION_PAUSE = "com.itaintasca.audio.PAUSE";
+    public static final String ACTION_RESUME = "com.itaintasca.audio.RESUME";
+    public static final String ACTION_STOP = "com.itaintasca.audio.STOP";
+
+    private final IBinder binder = new LocalBinder();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private ExoPlayer exoPlayer;
+    private MediaSession mediaSession;
+    private PlaybackCallback callback;
+
+    private boolean isForeground = false;
+    private String currentTitle = "Italia in Tasca";
+    private String currentSubtitle = "Audioguida";
+
+    // Effetto "megafono": banda vocale stretta (700-3500Hz) + volume spinto.
+    // Sul web lo fa il grafo WebAudio della WebView; qui l'audio esce
+    // dall'ExoPlayer nativo, quindi servono gli audiofx di sistema.
+    private boolean megaphoneEnabled = false;
+    private Equalizer megaphoneEq;
+    private LoudnessEnhancer megaphoneBoost;
+
+    private final Runnable progressTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (exoPlayer != null && callback != null) {
+                long duration = exoPlayer.getDuration();
+                callback.onPlaybackProgress(
+                        Math.max(0, exoPlayer.getCurrentPosition()),
+                        duration == C.TIME_UNSET ? 0 : duration
+                );
+            }
+            if (exoPlayer != null && exoPlayer.isPlaying()) {
+                mainHandler.postDelayed(this, PROGRESS_INTERVAL_MS);
+            }
+        }
+    };
+
+    public class LocalBinder extends Binder {
+        public WipBackgroundAudioService getService() {
+            return WipBackgroundAudioService.this;
+        }
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        createNotificationChannel();
+        ensurePlayer();
+    }
+
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return binder;
+    }
+
+    /** Gestisce i pulsanti della notifica / lock screen. */
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent != null ? intent.getAction() : null;
+        if (ACTION_PAUSE.equals(action)) {
+            pause();
+        } else if (ACTION_RESUME.equals(action)) {
+            resume();
+        } else if (ACTION_STOP.equals(action)) {
+            stop();
+        }
+        return START_NOT_STICKY;
+    }
+
+    public void setCallback(@Nullable PlaybackCallback cb) {
+        this.callback = cb;
+    }
+
+    private void ensurePlayer() {
+        if (exoPlayer != null) return;
+
+        AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
+                .build();
+
+        exoPlayer = new ExoPlayer.Builder(this)
+                // true => ExoPlayer richiede/abbandona l'audio focus da solo:
+                // mette in pausa quando arriva una chiamata, abbassa il volume di Maps, ecc.
+                .setAudioAttributes(attrs, true)
+                .setHandleAudioBecomingNoisy(true)
+                .build();
+
+        // Mantiene CPU e Wi-Fi attivi con lo schermo spento: senza questo la guida
+        // si interrompe appena il dispositivo entra in doze.
+        exoPlayer.setWakeMode(C.WAKE_MODE_NETWORK);
+
+        exoPlayer.addListener(new Player.Listener() {
+            @Override
+            public void onPlaybackStateChanged(int state) {
+                if (state == Player.STATE_ENDED) {
+                    stopProgressTicker();
+                    if (callback != null) {
+                        callback.onPlaybackProgress(exoPlayer.getDuration(), exoPlayer.getDuration());
+                        callback.onPlaybackEnded();
+                    }
+                    releaseForeground();
+                }
+            }
+
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                if (callback != null) callback.onPlaybackStateChanged(isPlaying);
+                if (isPlaying) {
+                    startProgressTicker();
+                } else {
+                    stopProgressTicker();
+                }
+                updateNotification();
+            }
+
+            @Override
+            public void onAudioSessionIdChanged(int audioSessionId) {
+                // La session id cambia (o nasce) a ogni nuova pipeline audio:
+                // l'effetto va riagganciato, altrimenti resta orfano della
+                // sessione precedente e il megafono smette di sentirsi.
+                if (megaphoneEnabled) applyMegaphone();
+            }
+
+            @Override
+            public void onPlayerError(PlaybackException error) {
+                Log.e(TAG, "Playback error: " + error.getMessage(), error);
+                stopProgressTicker();
+                if (callback != null) callback.onPlaybackError(error.getMessage());
+                releaseForeground();
+            }
+        });
+
+        try {
+            mediaSession = new MediaSession.Builder(this, exoPlayer)
+                    .setId("wip_audio_session")
+                    .setSessionActivity(buildContentIntent())
+                    .build();
+        } catch (Exception e) {
+            // La MediaSession e' un extra (controlli da lock screen): se fallisce
+            // la riproduzione deve comunque funzionare.
+            Log.w(TAG, "MediaSession non disponibile: " + e.getMessage());
+            mediaSession = null;
+        }
+    }
+
+    public void play(String url, String title, String subtitle) {
+        try {
+            ensurePlayer();
+            currentTitle = title != null ? title : "Italia in Tasca";
+            currentSubtitle = subtitle != null ? subtitle : "Audioguida";
+
+            exoPlayer.stop();
+            exoPlayer.clearMediaItems();
+
+            Log.d(TAG, "Preparazione riproduzione URL: " + url);
+
+            MediaItem mediaItem = new MediaItem.Builder()
+                    .setUri(android.net.Uri.parse(url))
+                    .setMediaMetadata(new MediaMetadata.Builder()
+                            .setTitle(currentTitle)
+                            .setArtist(currentSubtitle)
+                            .build())
+                    .build();
+
+            // Il foreground va avviato prima della riproduzione: se il sistema lo nega
+            // (restrizioni background di Android 12+) proseguiamo comunque.
+            startForegroundSafe();
+
+            exoPlayer.setMediaItem(mediaItem);
+            exoPlayer.prepare();
+            exoPlayer.play();
+        } catch (Exception e) {
+            Log.e(TAG, "Errore critico riproduzione: " + e.getMessage(), e);
+            if (callback != null) callback.onPlaybackError(e.getMessage());
+        }
+    }
+
+    public void pause() {
+        if (exoPlayer != null) exoPlayer.pause();
+    }
+
+    public void resume() {
+        if (exoPlayer == null) return;
+        if (exoPlayer.getPlaybackState() == Player.STATE_IDLE) return;
+        startForegroundSafe();
+        exoPlayer.play();
+    }
+
+    public void stop() {
+        stopProgressTicker();
+        if (exoPlayer != null) {
+            exoPlayer.stop();
+            exoPlayer.clearMediaItems();
+        }
+        releaseForeground();
+        // Nessun stopSelf(): il servizio resta legato al plugin cosi' la guida
+        // successiva parte immediatamente, senza attendere un nuovo bind.
+    }
+
+    public void seekTo(long positionMs) {
+        if (exoPlayer == null) return;
+        long duration = exoPlayer.getDuration();
+        long target = Math.max(0, positionMs);
+        if (duration != C.TIME_UNSET && target > duration) target = duration;
+        exoPlayer.seekTo(target);
+        if (callback != null) {
+            callback.onPlaybackProgress(target, duration == C.TIME_UNSET ? 0 : duration);
+        }
+    }
+
+    public long getPosition() {
+        return exoPlayer != null ? Math.max(0, exoPlayer.getCurrentPosition()) : 0;
+    }
+
+    public long getDuration() {
+        if (exoPlayer == null) return 0;
+        long d = exoPlayer.getDuration();
+        return d == C.TIME_UNSET ? 0 : d;
+    }
+
+    public boolean isPlaying() {
+        return exoPlayer != null && exoPlayer.isPlaying();
+    }
+
+    public boolean hasMedia() {
+        return exoPlayer != null && exoPlayer.getPlaybackState() != Player.STATE_IDLE;
+    }
+
+    public void setSpeed(float speed) {
+        if (exoPlayer != null) {
+            exoPlayer.setPlaybackParameters(new PlaybackParameters(speed));
+        }
+    }
+
+    public void setMegaphone(boolean enabled) {
+        megaphoneEnabled = enabled;
+        if (enabled) {
+            applyMegaphone();
+        } else {
+            releaseMegaphone();
+        }
+    }
+
+    private void applyMegaphone() {
+        releaseMegaphone();
+        if (!megaphoneEnabled || exoPlayer == null) return;
+        int sessionId = exoPlayer.getAudioSessionId();
+        if (sessionId == C.AUDIO_SESSION_ID_UNSET || sessionId == 0) return;
+        try {
+            megaphoneEq = new Equalizer(0, sessionId);
+            short minLevel = megaphoneEq.getBandLevelRange()[0];
+            short maxLevel = megaphoneEq.getBandLevelRange()[1];
+            short midBoost = (short) Math.min(maxLevel, 300); // +3dB sulla banda voce
+            for (short band = 0; band < megaphoneEq.getNumberOfBands(); band++) {
+                int centerHz = megaphoneEq.getCenterFreq(band) / 1000; // milliHz -> Hz
+                megaphoneEq.setBandLevel(band, (centerHz < 700 || centerHz > 3500) ? minLevel : midBoost);
+            }
+            megaphoneEq.setEnabled(true);
+
+            megaphoneBoost = new LoudnessEnhancer(sessionId);
+            megaphoneBoost.setTargetGain(600); // millibel: ~+6dB, come il gain 2.5x del web
+            megaphoneBoost.setEnabled(true);
+        } catch (Exception e) {
+            // Alcuni device/ROM non espongono gli audiofx: il megafono resta
+            // senza effetto ma la riproduzione non deve risentirne.
+            Log.w(TAG, "Effetto megafono non disponibile: " + e.getMessage());
+            releaseMegaphone();
+        }
+    }
+
+    private void releaseMegaphone() {
+        if (megaphoneEq != null) {
+            try { megaphoneEq.setEnabled(false); megaphoneEq.release(); } catch (Exception ignored) { }
+            megaphoneEq = null;
+        }
+        if (megaphoneBoost != null) {
+            try { megaphoneBoost.setEnabled(false); megaphoneBoost.release(); } catch (Exception ignored) { }
+            megaphoneBoost = null;
+        }
+    }
+
+    private void startProgressTicker() {
+        mainHandler.removeCallbacks(progressTicker);
+        mainHandler.post(progressTicker);
+    }
+
+    private void stopProgressTicker() {
+        mainHandler.removeCallbacks(progressTicker);
+    }
+
+    private void startForegroundSafe() {
+        try {
+            int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                    : 0;
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type);
+            isForeground = true;
+        } catch (Exception e) {
+            // Es. ForegroundServiceStartNotAllowedException: l'audio parte lo stesso
+            // finche' l'app resta in memoria.
+            Log.w(TAG, "startForeground non consentito: " + e.getMessage());
+            isForeground = false;
+        }
+    }
+
+    private void releaseForeground() {
+        if (!isForeground) return;
+        isForeground = false;
+        try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
+        } catch (Exception e) {
+            Log.w(TAG, "stopForeground fallito: " + e.getMessage());
+        }
+    }
+
+    private void updateNotification() {
+        if (!isForeground) return;
+        try {
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.notify(NOTIFICATION_ID, buildNotification());
+        } catch (Exception e) {
+            Log.w(TAG, "Aggiornamento notifica fallito: " + e.getMessage());
+        }
+    }
+
+    private PendingIntent buildContentIntent() {
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        notificationIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(
+                this, 0, notificationIntent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
+    }
+
+    private PendingIntent buildActionIntent(String action, int requestCode) {
+        Intent intent = new Intent(this, WipBackgroundAudioService.class);
+        intent.setAction(action);
+        return PendingIntent.getService(
+                this, requestCode, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
+    }
+
+    private Notification buildNotification() {
+        boolean playing = isPlaying();
+
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(currentTitle)
+                .setContentText(currentSubtitle)
+                .setSmallIcon(playing ? android.R.drawable.ic_media_play : android.R.drawable.ic_media_pause)
+                .setContentIntent(buildContentIntent())
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOnlyAlertOnce(true)
+                .setOngoing(playing)
+                .addAction(
+                        playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                        playing ? "Pausa" : "Riprendi",
+                        buildActionIntent(playing ? ACTION_PAUSE : ACTION_RESUME, playing ? 1 : 2)
+                )
+                .addAction(
+                        android.R.drawable.ic_menu_close_clear_cancel,
+                        "Stop",
+                        buildActionIntent(ACTION_STOP, 3)
+                );
+
+        if (mediaSession != null) {
+            try {
+                builder.setStyle(new MediaStyleNotificationHelper.MediaStyle(mediaSession)
+                        .setShowActionsInCompactView(0, 1));
+            } catch (Exception e) {
+                Log.w(TAG, "MediaStyle non applicabile: " + e.getMessage());
+            }
+        }
+
+        return builder.build();
+    }
+
+    private void createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel serviceChannel = new NotificationChannel(
+                    CHANNEL_ID,
+                    "Riproduzione Audioguida",
+                    NotificationManager.IMPORTANCE_LOW
+            );
+            serviceChannel.setShowBadge(false);
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.createNotificationChannel(serviceChannel);
+            }
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        stopProgressTicker();
+        releaseMegaphone();
+        callback = null;
+        if (mediaSession != null) {
+            try { mediaSession.release(); } catch (Exception ignored) { }
+            mediaSession = null;
+        }
+        if (exoPlayer != null) {
+            exoPlayer.release();
+            exoPlayer = null;
+        }
+        super.onDestroy();
+    }
+}

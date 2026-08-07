@@ -1,0 +1,3885 @@
+[
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è conosciuta come la capitale d'Italia ed è famosa per la sua storia e il patrimonio culturale."
+  },
+  {
+    "question": "Qual è il fiume più lungo del mondo?",
+    "options": [
+      "Nilo",
+      "Amazonas",
+      "Yangtze",
+      "Mississippi"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Amazzonia è considerato il fiume più lungo del mondo, superando il Nilo in lunghezza."
+  },
+  {
+    "question": "Chi ha dipinto la Gioconda?",
+    "options": [
+      "Michelangelo",
+      "Raffaello",
+      "Leonardo da Vinci",
+      "Caravaggio"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Gioconda è un'opera iconica di Leonardo da Vinci, realizzata nel XVI secolo."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Risotto",
+      "Pizza",
+      "Lasagna",
+      "Polenta"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza è il piatto tipico di Napoli, famoso in tutto il mondo."
+  },
+  {
+    "question": "In quale anno è stata fondata Roma?",
+    "options": [
+      "753 a.C.",
+      "509 a.C.",
+      "27 a.C.",
+      "476 d.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "Secondo la leggenda, Roma è stata fondata nel 753 a.C."
+  },
+  {
+    "question": "Qual è la montagna più alta del mondo?",
+    "options": [
+      "K2",
+      "Kangchenjunga",
+      "Everest",
+      "Lhotse"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Everest è la montagna più alta del mondo, con un'altezza di 8.848 metri."
+  },
+  {
+    "question": "Chi scrisse 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Manzoni"
+    ],
+    "correctIndex": 1,
+    "explanation": "Dante Alighieri è l'autore della 'Divina Commedia', un capolavoro della letteratura italiana."
+  },
+  {
+    "question": "Qual è il mare che bagna le coste italiane a ovest?",
+    "options": [
+      "Mare Adriatico",
+      "Mare Ionio",
+      "Mare Tirreno",
+      "Mare di Sardegna"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il Mare Tirreno si trova a ovest dell'Italia e fa parte del Mar Mediterraneo."
+  },
+  {
+    "question": "Quale città è conosciuta come la 'Città Eterna'?",
+    "options": [
+      "Firenze",
+      "Venezia",
+      "Roma",
+      "Milano"
+    ],
+    "correctIndex": 2,
+    "explanation": "Roma è chiamata la 'Città Eterna' per la sua lunga e ricca storia."
+  },
+  {
+    "question": "Chi ha scoperto l'America nel 1492?",
+    "options": [
+      "Ferdinando Magellano",
+      "Cristoforo Colombo",
+      "Vasco da Gama",
+      "James Cook"
+    ],
+    "correctIndex": 1,
+    "explanation": "Cristoforo Colombo è noto per aver scoperto l'America nel 1492 durante il suo viaggio per conto della Spagna."
+  },
+  {
+    "question": "Qual è il più grande deserto del mondo?",
+    "options": [
+      "Sahara",
+      "Gobi",
+      "Kalahari",
+      "Antartico"
+    ],
+    "correctIndex": 3,
+    "explanation": "Il deserto Antartico è il più grande del mondo in termini di superficie."
+  },
+  {
+    "question": "Quale artista è famoso per il dipinto 'La Creazione di Adamo'?",
+    "options": [
+      "Caravaggio",
+      "Michelangelo",
+      "Raphael",
+      "Leonardo da Vinci"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michelangelo ha realizzato 'La Creazione di Adamo' sulla volta della Cappella Sistina."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Lione",
+      "Marsiglia",
+      "Parigi",
+      "Nizza"
+    ],
+    "correctIndex": 2,
+    "explanation": "Parigi è la capitale della Francia, conosciuta per la sua cultura e storia."
+  },
+  {
+    "question": "Qual è la lingua ufficiale in Italia?",
+    "options": [
+      "Italiano",
+      "Francese",
+      "Spagnolo",
+      "Tedesco"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'italiano è la lingua ufficiale dell'Italia."
+  },
+  {
+    "question": "Che cos'è il tartufo?",
+    "options": [
+      "Un tipo di fungo",
+      "Un dolce",
+      "Un formaggio",
+      "Un pesce"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il tartufo è un tipo di fungo pregiato, molto apprezzato nella cucina italiana."
+  },
+  {
+    "question": "Qual è il simbolo della città di Venezia?",
+    "options": [
+      "Torre Eiffel",
+      "Colosseo",
+      "Ponte di Rialto",
+      "Duomo di Milano"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il Ponte di Rialto è uno dei simboli più iconici di Venezia."
+  },
+  {
+    "question": "Chi è l'autore del 'Fior di leggende'?",
+    "options": [
+      "Giovanni Boccaccio",
+      "Dante Alighieri",
+      "Italo Calvino",
+      "Umberto Eco"
+    ],
+    "correctIndex": 0,
+    "explanation": "Giovanni Boccaccio è l'autore di 'Il Decamerone', noto anche per il 'Fior di leggende'."
+  },
+  {
+    "question": "Qual è il patrimonio dell'umanità UNESCO in Italia famoso per i suoi trulli?",
+    "options": [
+      "Pompei",
+      "Alberobello",
+      "Firenze",
+      "Roma"
+    ],
+    "correctIndex": 1,
+    "explanation": "Alberobello è famoso per i suoi trulli, strutture architettoniche tradizionali e patrimonio UNESCO."
+  },
+  {
+    "question": "Qual è il famoso formaggio italiano a pasta filata, originario di Napoli?",
+    "options": [
+      "Parmesan",
+      "Mozzarella",
+      "Gorgonzola",
+      "Ricotta"
+    ],
+    "correctIndex": 1,
+    "explanation": "La mozzarella è un formaggio a pasta filata famoso, originario della Campania."
+  },
+  {
+    "question": "Qual è il capoluogo della regione Lombardia?",
+    "options": [
+      "Bergamo",
+      "Milano",
+      "Como",
+      "Varese"
+    ],
+    "correctIndex": 1,
+    "explanation": "Milano è il capoluogo della regione Lombardia ed è uno dei principali centri economici e culturali in Italia."
+  },
+  {
+    "question": "Chi era il leader della Rivoluzione Francese?",
+    "options": [
+      "Napoleone Bonaparte",
+      "Maximilien Robespierre",
+      "Louis XVI",
+      "Giuseppe Garibaldi"
+    ],
+    "correctIndex": 1,
+    "explanation": "Maximilien Robespierre è stato uno dei leader principali durante la Rivoluzione Francese."
+  },
+  {
+    "question": "Qual è il più grande lago d'Italia?",
+    "options": [
+      "Lago di Como",
+      "Lago di Garda",
+      "Lago Maggiore",
+      "Lago Trasimeno"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Lago di Garda è il più grande lago italiano in termini di superficie."
+  },
+  {
+    "question": "Chi è considerato il padre della psicoanalisi?",
+    "options": [
+      "Carl Jung",
+      "Sigmund Freud",
+      "Alfred Adler",
+      "Jacques Lacan"
+    ],
+    "correctIndex": 1,
+    "explanation": "Sigmund Freud è considerato il fondatore della psicoanalisi."
+  },
+  {
+    "question": "Quale città è famosa per il suo colosseo?",
+    "options": [
+      "Roma",
+      "Atene",
+      "Pompei",
+      "Capri"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Colosseo è un antico anfiteatro situato a Roma."
+  },
+  {
+    "question": "Qual è la capitale del Giappone?",
+    "options": [
+      "Pechino",
+      "Seul",
+      "Tokyo",
+      "Bangkok"
+    ],
+    "correctIndex": 2,
+    "explanation": "Tokyo è la capitale del Giappone ed è una delle città più popolose del mondo."
+  },
+  {
+    "question": "Quale artista è famoso per il suo lavoro 'Il Giudizio Universale'?",
+    "options": [
+      "Raffaello",
+      "Leonardo da Vinci",
+      "Michelangelo",
+      "Caravaggio"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo ha realizzato 'Il Giudizio Universale' nella Cappella Sistina."
+  },
+  {
+    "question": "Qual è il simbolo della città di Firenze?",
+    "options": [
+      "Torre di Pisa",
+      "Duomo",
+      "Colosseo",
+      "Vaticano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Duomo di Firenze, con la sua cupola progettata da Brunelleschi, è un simbolo iconico della città."
+  },
+  {
+    "question": "In quale anno è stata scoperta la tomba di Tutankhamon?",
+    "options": [
+      "1922",
+      "1901",
+      "1935",
+      "1980"
+    ],
+    "correctIndex": 0,
+    "explanation": "La tomba di Tutankhamon è stata scoperta nel 1922 da Howard Carter."
+  },
+  {
+    "question": "Qual è la capitale dell'Egitto?",
+    "options": [
+      "Cairo",
+      "Algeri",
+      "Tunisi",
+      "Tripoli"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Cairo è la capitale dell'Egitto e una delle città più storiche del mondo."
+  },
+  {
+    "question": "Qual è il nome del famoso gelato italiano?",
+    "options": [
+      "Sorbetto",
+      "Gelato",
+      "Granita",
+      "Panna cotta"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il gelato è un dolce freddo tipico italiano, noto per la sua consistenza cremosa."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è la capitale d'Italia, conosciuta per la sua storia millenaria."
+  },
+  {
+    "question": "Quale fiume è il più lungo d'Italia?",
+    "options": [
+      "Po",
+      "Arno",
+      "Tevere",
+      "Adige"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Po è il fiume più lungo d'Italia, con una lunghezza di circa 652 km."
+  },
+  {
+    "question": "Chi ha dipinto la 'Gioconda'?",
+    "options": [
+      "Vincent van Gogh",
+      "Pablo Picasso",
+      "Leonardo da Vinci",
+      "Michelangelo"
+    ],
+    "correctIndex": 2,
+    "explanation": "La 'Gioconda' è un famoso dipinto di Leonardo da Vinci, realizzato tra il 1503 e il 1506."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Arancini",
+      "Pizza",
+      "Lasagna",
+      "Risotto"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza è uno dei piatti più celebri della cucina napoletana, conosciuta in tutto il mondo."
+  },
+  {
+    "question": "Qual è la montagna più alta d'Italia?",
+    "options": [
+      "Monte Bianco",
+      "Monte Rosa",
+      "Gran Paradiso",
+      "Civetta"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Monte Bianco, con i suoi 4.808 metri, è la montagna più alta d'Italia."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Manzoni"
+    ],
+    "correctIndex": 1,
+    "explanation": "'La Divina Commedia' è un poema epico scritto da Dante Alighieri nel XIV secolo."
+  },
+  {
+    "question": "Quale città è famosa per i suoi canali?",
+    "options": [
+      "Roma",
+      "Firenze",
+      "Venezia",
+      "Milano"
+    ],
+    "correctIndex": 2,
+    "explanation": "Venezia è conosciuta per i suoi canali e le sue gondole, rendendola unica al mondo."
+  },
+  {
+    "question": "In quale anno è stata unificata l'Italia?",
+    "options": [
+      "1861",
+      "1871",
+      "1805",
+      "1815"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'unità d'Italia è stata proclamata nel 1861."
+  },
+  {
+    "question": "Quale artista ha scolpito il David?",
+    "options": [
+      "Donatello",
+      "Michelangelo",
+      "Bernini",
+      "Raffaello"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il famoso David è una scultura di Michelangelo realizzata tra il 1501 e il 1504."
+  },
+  {
+    "question": "Qual è il vulcano attivo più famoso d'Italia?",
+    "options": [
+      "Etna",
+      "Vesuvio",
+      "Stromboli",
+      "Campi Flegrei"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Vesuvio è noto per l'eruzione che distrusse Pompei nel 79 d.C."
+  },
+  {
+    "question": "Dove si trova la Torre di Pisa?",
+    "options": [
+      "Roma",
+      "Firenze",
+      "Pisa",
+      "Milano"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Torre di Pisa si trova nella città di Pisa ed è famosa per la sua inclinazione."
+  },
+  {
+    "question": "Qual è la pizza tipica con pomodoro e mozzarella?",
+    "options": [
+      "Margherita",
+      "Capricciosa",
+      "Diavola",
+      "Quattro Stagioni"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Pizza Margherita è classica con pomodoro, mozzarella e basilico."
+  },
+  {
+    "question": "Qual è il periodo storico del Rinascimento?",
+    "options": [
+      "Medioevo",
+      "XVI secolo",
+      "XV secolo",
+      "XX secolo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Rinascimento si è sviluppato principalmente tra il XIV e il XVI secolo."
+  },
+  {
+    "question": "Chi ha composto 'Nessun dorma'?",
+    "options": [
+      "Giuseppe Verdi",
+      "Giacomo Puccini",
+      "Wolfgang Amadeus Mozart",
+      "Richard Wagner"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Nessun dorma' è una famosa aria tratta dall'opera 'Turandot' di Giacomo Puccini."
+  },
+  {
+    "question": "Qual è il principale ingrediente del pesto alla genovese?",
+    "options": [
+      "Pomodoro",
+      "Basilico",
+      "Peperoncino",
+      "Aglio"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il basilico è l'ingrediente principale del pesto alla genovese."
+  },
+  {
+    "question": "Qual è il museo più visitato al mondo?",
+    "options": [
+      "Louvre",
+      "Ermitage",
+      "Metropolitan Museum",
+      "Uffizi"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Louvre di Parigi è il museo più visitato al mondo."
+  },
+  {
+    "question": "In quale città si trova il Colosseo?",
+    "options": [
+      "Roma",
+      "Milano",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Colosseo si trova a Roma ed è uno dei simboli dell'antica Roma."
+  },
+  {
+    "question": "Qual è il piatto tradizionale del Carnevale di Venezia?",
+    "options": [
+      "Tiramisu",
+      "Struffoli",
+      "Frittelle",
+      "Panettone"
+    ],
+    "correctIndex": 2,
+    "explanation": "Le frittelle sono dolci tipici del Carnevale di Venezia."
+  },
+  {
+    "question": "Chi fu il primo imperatore romano?",
+    "options": [
+      "Giulio Cesare",
+      "Augusto",
+      "Nerone",
+      "Tiberio"
+    ],
+    "correctIndex": 1,
+    "explanation": "Augusto è considerato il primo imperatore romano, regnando dal 27 a.C."
+  },
+  {
+    "question": "Qual è la regione italiana famosa per il vino Chianti?",
+    "options": [
+      "Toscana",
+      "Lazio",
+      "Campania",
+      "Puglia"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Chianti è un famoso vino rosso prodotto in Toscana."
+  },
+  {
+    "question": "Quale monumento è noto come 'la Mole'?",
+    "options": [
+      "Duomo di Milano",
+      "Torre di Pisa",
+      "Mole Antonelliana",
+      "Castel Sant'Angelo"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Mole Antonelliana è un simbolo di Torino e un importante monumento."
+  },
+  {
+    "question": "In quale anno è stata fondata Roma secondo la leggenda?",
+    "options": [
+      "753 a.C.",
+      "476 d.C.",
+      "1000 d.C.",
+      "509 a.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "Secondo la leggenda, Roma fu fondata nel 753 a.C. da Romolo."
+  },
+  {
+    "question": "Qual è il dolce tipico di San Valentino in Italia?",
+    "options": [
+      "Panettone",
+      "Torta di rose",
+      "Baci Perugina",
+      "Tiramisu"
+    ],
+    "correctIndex": 2,
+    "explanation": "I Baci Perugina sono dolci tipici e simbolici per la festa di San Valentino."
+  },
+  {
+    "question": "Chi ha scritto 'Il Principe'?",
+    "options": [
+      "Boccaccio",
+      "Machiavelli",
+      "Dante Alighieri",
+      "Petrarca"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Il Principe' è un'opera politica scritta da Niccolò Machiavelli nel 1513."
+  },
+  {
+    "question": "Qual è il mare che bagna le coste italiane ad ovest?",
+    "options": [
+      "Mare Adriatico",
+      "Mare Tirreno",
+      "Mare Ionio",
+      "Mare Ligure"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Mare Tirreno si trova a ovest della penisola italiana."
+  },
+  {
+    "question": "Chi ha scoperto l'America?",
+    "options": [
+      "Ferdinando Magellano",
+      "Cristoforo Colombo",
+      "Vasco da Gama",
+      "James Cook"
+    ],
+    "correctIndex": 1,
+    "explanation": "Cristoforo Colombo scoprì l'America nel 1492."
+  },
+  {
+    "question": "Quale opera è considerata il capolavoro di Michelangelo?",
+    "options": [
+      "La Pietà",
+      "La Cappella Sistina",
+      "Il David",
+      "La Creazione di Adamo"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il David è considerato uno dei capolavori di Michelangelo."
+  },
+  {
+    "question": "Qual è il simbolo della città di Milano?",
+    "options": [
+      "Colosseo",
+      "Duomo",
+      "Torre di Pisa",
+      "Castel Sant'Angelo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Duomo di Milano è il simbolo della città e uno dei più grandi d'Europa."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Roma",
+      "Londra",
+      "Parigi",
+      "Berlino"
+    ],
+    "correctIndex": 2,
+    "explanation": "Parigi è la capitale della Francia ed è famosa per la Torre Eiffel."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina romana a base di pasta?",
+    "options": [
+      "Carbonara",
+      "Bolognese",
+      "Pesto",
+      "Arrabbiata"
+    ],
+    "correctIndex": 0,
+    "explanation": "La pasta alla Carbonara è un piatto tipico della cucina romana."
+  },
+  {
+    "question": "Quale città è famosa per la sua opera e il suo festival lirico?",
+    "options": [
+      "Milano",
+      "Verona",
+      "Venezia",
+      "Firenze"
+    ],
+    "correctIndex": 1,
+    "explanation": "Verona è famosa per il suo festival lirico all'Arena di Verona."
+  },
+  {
+    "question": "Qual è la principale lingua parlata in Italia?",
+    "options": [
+      "Tedesco",
+      "Francese",
+      "Italiano",
+      "Spagnolo"
+    ],
+    "correctIndex": 2,
+    "explanation": "La lingua ufficiale e principale parlata in Italia è l'italiano."
+  },
+  {
+    "question": "Qual è il fiume più lungo d'Italia?",
+    "options": [
+      "Po",
+      "Arno",
+      "Tevere",
+      "Adige"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Po è il fiume più lungo d'Italia, con una lunghezza di circa 652 km."
+  },
+  {
+    "question": "Chi ha dipinto la Cappella Sistina?",
+    "options": [
+      "Raphael",
+      "Caravaggio",
+      "Michelangelo",
+      "Leonardo da Vinci"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo ha dipinto gli affreschi della Cappella Sistina tra il 1508 e il 1512."
+  },
+  {
+    "question": "Qual è la capitale della Spagna?",
+    "options": [
+      "Barcellona",
+      "Madrid",
+      "Valencia",
+      "Siviglia"
+    ],
+    "correctIndex": 1,
+    "explanation": "Madrid è la capitale della Spagna ed è anche la sua città più grande."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Risotto",
+      "Pizza",
+      "Lasagna",
+      "Fettuccine"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza, in particolare la pizza Margherita, è un piatto tipico di Napoli."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Leopardi"
+    ],
+    "correctIndex": 1,
+    "explanation": "'La Divina Commedia' è un'opera di Dante Alighieri, uno dei più grandi poeti italiani."
+  },
+  {
+    "question": "Qual è la montagna più alta del mondo?",
+    "options": [
+      "K2",
+      "Kangchenjunga",
+      "Everest",
+      "Lhotse"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Everest è la montagna più alta del mondo, con un'altezza di 8.848 metri."
+  },
+  {
+    "question": "Qual è il nome della famosa torre inclinata in Italia?",
+    "options": [
+      "Torre di Pisa",
+      "Torre di Milano",
+      "Torre di Roma",
+      "Torre di Venezia"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre di Pisa è famosa per la sua inclinazione e si trova nella città di Pisa."
+  },
+  {
+    "question": "In quale anno è iniziata la Seconda Guerra Mondiale?",
+    "options": [
+      "1939",
+      "1941",
+      "1945",
+      "1937"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Seconda Guerra Mondiale è iniziata il 1° settembre 1939 con l'invasione della Polonia."
+  },
+  {
+    "question": "Qual è il simbolo della città di Venezia?",
+    "options": [
+      "Colosseo",
+      "Torre Eiffel",
+      "Basilica di San Marco",
+      "Duomo di Milano"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Basilica di San Marco è uno dei simboli più noti della città di Venezia."
+  },
+  {
+    "question": "Quale artista è famoso per le sue sculture in marmo, tra cui il 'David'?",
+    "options": [
+      "Donatello",
+      "Michelangelo",
+      "Bernini",
+      "Ghiberti"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michelangelo è famoso per le sue sculture in marmo, tra cui il famoso 'David'."
+  },
+  {
+    "question": "Qual è il deserto più grande del mondo?",
+    "options": [
+      "Sahara",
+      "Gobi",
+      "Kalahari",
+      "Atacama"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Sahara è il deserto più grande del mondo, estendendosi su diversi paesi dell'Africa."
+  },
+  {
+    "question": "Qual è la capitale dell'Italia?",
+    "options": [
+      "Milano",
+      "Firenze",
+      "Roma",
+      "Torino"
+    ],
+    "correctIndex": 2,
+    "explanation": "Roma è la capitale d'Italia e una delle città più storiche del mondo."
+  },
+  {
+    "question": "Chi ha composto 'La Traviata'?",
+    "options": [
+      "Verdi",
+      "Puccini",
+      "Rossini",
+      "Bellini"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Traviata' è un'opera composta da Giuseppe Verdi."
+  },
+  {
+    "question": "Qual è il più grande oceano del mondo?",
+    "options": [
+      "Atlantico",
+      "Indiano",
+      "Artico",
+      "Pacifico"
+    ],
+    "correctIndex": 3,
+    "explanation": "Il Pacifico è il più grande oceano del mondo, coprendo un'area vastissima."
+  },
+  {
+    "question": "Qual è la specialità culinaria della regione Emilia-Romagna?",
+    "options": [
+      "Sushi",
+      "Tortellini",
+      "Paella",
+      "Hummus"
+    ],
+    "correctIndex": 1,
+    "explanation": "I tortellini sono una specialità tipica della regione Emilia-Romagna."
+  },
+  {
+    "question": "Chi è il fondatore dell'Impero Romano?",
+    "options": [
+      "Giulio Cesare",
+      "Ottaviano Augusto",
+      "Nerone",
+      "Carlo Magno"
+    ],
+    "correctIndex": 1,
+    "explanation": "Ottaviano Augusto è considerato il fondatore e primo imperatore dell'Impero Romano."
+  },
+  {
+    "question": "Qual è il lago più grande d'Italia?",
+    "options": [
+      "Lago di Como",
+      "Lago di Garda",
+      "Lago Maggiore",
+      "Lago di Iseo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Lago di Garda è il lago più grande d'Italia."
+  },
+  {
+    "question": "Qual è la capitale dell'Inghilterra?",
+    "options": [
+      "Edimburgo",
+      "Dublino",
+      "Londra",
+      "Cardiff"
+    ],
+    "correctIndex": 2,
+    "explanation": "Londra è la capitale dell'Inghilterra e una delle città più importanti del mondo."
+  },
+  {
+    "question": "Qual è il movimento artistico associato a Van Gogh?",
+    "options": [
+      "Cubismo",
+      "Impressionismo",
+      "Surrealismo",
+      "Espressionismo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Van Gogh è associato all'Impressionismo, anche se il suo stile è unico."
+  },
+  {
+    "question": "Qual è il cibo tradizionale giapponese a base di riso e pesce crudo?",
+    "options": [
+      "Sushi",
+      "Ramen",
+      "Tempura",
+      "Sashimi"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Sushi è un piatto giapponese a base di riso e pesce crudo."
+  },
+  {
+    "question": "Chi ha scritto 'Il Gattopardo'?",
+    "options": [
+      "Lampedusa",
+      "Calvino",
+      "Sciascia",
+      "Pirandello"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il Gattopardo' è un romanzo scritto da Giuseppe Tomasi di Lampedusa."
+  },
+  {
+    "question": "Dove si trova il famoso sito archeologico di Pompei?",
+    "options": [
+      "Lazio",
+      "Toscana",
+      "Campania",
+      "Liguria"
+    ],
+    "correctIndex": 2,
+    "explanation": "Pompei è un sito archeologico situato nella regione Campania, vicino a Napoli."
+  },
+  {
+    "question": "Qual è la capitale dell'Australia?",
+    "options": [
+      "Sydney",
+      "Canberra",
+      "Melbourne",
+      "Brisbane"
+    ],
+    "correctIndex": 1,
+    "explanation": "Canberra è la capitale dell'Australia, scelta per essere una capitale neutra tra Sydney e Melbourne."
+  },
+  {
+    "question": "Quale continente è conosciuto come la 'culla della civiltà'?",
+    "options": [
+      "Europa",
+      "Asia",
+      "Africa",
+      "America"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Africa è spesso considerata la 'culla della civiltà' per via delle sue antiche culture."
+  },
+  {
+    "question": "Qual è la bevanda alcolica tipica della produzione italiana di vino?",
+    "options": [
+      "Whisky",
+      "Vodka",
+      "Vino",
+      "Rum"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Italia è famosa per la sua produzione di vino, che è una delle bevande alcoliche più tipiche."
+  },
+  {
+    "question": "Chi è l'autore della famosa opera 'Odissea'?",
+    "options": [
+      "Omero",
+      "Euripide",
+      "Sofocle",
+      "Virgilio"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Odissea' è un poema epico attribuito a Omero, uno dei più grandi poeti dell'antichità."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Marsiglia",
+      "Parigi",
+      "Lione",
+      "Nizza"
+    ],
+    "correctIndex": 1,
+    "explanation": "Parigi è la capitale della Francia e una delle città più romantiche del mondo."
+  },
+  {
+    "question": "Quale pianta è l'ingrediente principale del pesto genovese?",
+    "options": [
+      "Basilico",
+      "Prezzemolo",
+      "Rucola",
+      "Menta"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il basilico è l'ingrediente principale del tradizionale pesto genovese."
+  },
+  {
+    "question": "Quale evento storico è noto come la caduta del muro di Berlino?",
+    "options": [
+      "1953",
+      "1989",
+      "1961",
+      "1975"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il muro di Berlino è caduto il 9 novembre 1989, segnando la fine della Guerra Fredda."
+  },
+  {
+    "question": "Chi ha creato l'opera 'Il Giudizio Universale'?",
+    "options": [
+      "Giotto",
+      "Michelangelo",
+      "Raffaello",
+      "Caravaggio"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Il Giudizio Universale' è un affresco realizzato da Michelangelo nella Cappella Sistina."
+  },
+  {
+    "question": "Qual è il piatto tradizionale spagnolo a base di riso?",
+    "options": [
+      "Risotto",
+      "Paella",
+      "Fideuà",
+      "Tortilla"
+    ],
+    "correctIndex": 1,
+    "explanation": "La Paella è un piatto tradizionale spagnolo a base di riso, originario della regione di Valencia."
+  },
+  {
+    "question": "Qual è la capitale della Germania?",
+    "options": [
+      "Amburgo",
+      "Berlino",
+      "Monaco",
+      "Francoforte"
+    ],
+    "correctIndex": 1,
+    "explanation": "Berlino è la capitale della Germania e una delle città più significative dell'Europa."
+  },
+  {
+    "question": "Quale monumento è considerato simbolo della città di Roma?",
+    "options": [
+      "Colosseo",
+      "Torre di Pisa",
+      "Duomo di Milano",
+      "Basilica di San Pietro"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Colosseo è un monumento iconico e simbolo della città di Roma."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è la capitale d'Italia e ha una storia millenaria."
+  },
+  {
+    "question": "Qual è il fiume più lungo d'Italia?",
+    "options": [
+      "Po",
+      "Arno",
+      "Tevere",
+      "Adda"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Po è il fiume più lungo d'Italia, con una lunghezza di circa 652 km."
+  },
+  {
+    "question": "Chi ha dipinto la Cappella Sistina?",
+    "options": [
+      "Leonardo da Vinci",
+      "Caravaggio",
+      "Michelangelo",
+      "Raffaello"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo ha dipinto il soffitto della Cappella Sistina tra il 1508 e il 1512."
+  },
+  {
+    "question": "Quale piatto è tipico della cucina napoletana?",
+    "options": [
+      "Risotto",
+      "Pizza",
+      "Lasagna",
+      "Carbonara"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza, in particolare la pizza margherita, è tipica di Napoli."
+  },
+  {
+    "question": "Qual è il monte più alto del mondo?",
+    "options": [
+      "K2",
+      "Kangchenjunga",
+      "Monte Everest",
+      "Monte Lhotse"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il Monte Everest è la montagna più alta del mondo, con un'altezza di 8.848 metri."
+  },
+  {
+    "question": "In quale anno è iniziata la Seconda Guerra Mondiale?",
+    "options": [
+      "1935",
+      "1940",
+      "1939",
+      "1942"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Seconda Guerra Mondiale è iniziata il 1 settembre 1939."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Parigi",
+      "Lione",
+      "Marsiglia",
+      "Tolosa"
+    ],
+    "correctIndex": 0,
+    "explanation": "Parigi è la capitale della Francia e una delle città più famose del mondo."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Dante Alighieri",
+      "Petrarca",
+      "Boccaccio",
+      "Manzoni"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Divina Commedia' è un poema epico scritto da Dante Alighieri nel XIV secolo."
+  },
+  {
+    "question": "Qual è la valuta ufficiale dell'Italia?",
+    "options": [
+      "Euro",
+      "Lira",
+      "Franco",
+      "Pound"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'Euro è la valuta ufficiale dell'Italia dal 2002, sostituendo la Lira."
+  },
+  {
+    "question": "Quale città è conosciuta come 'La Serenissima'?",
+    "options": [
+      "Venezia",
+      "Firenze",
+      "Milano",
+      "Roma"
+    ],
+    "correctIndex": 0,
+    "explanation": "Venezia è chiamata 'La Serenissima' per la sua storia e bellezza."
+  },
+  {
+    "question": "Quale artista è celebre per le sue sculture di marmo?",
+    "options": [
+      "Bernini",
+      "Michelangelo",
+      "Donatello",
+      "Canova"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michelangelo è noto per le sue sculture in marmo, tra cui il David e La Pietà."
+  },
+  {
+    "question": "Qual è la capitale del Giappone?",
+    "options": [
+      "Tokyo",
+      "Kyoto",
+      "Osaka",
+      "Hiroshima"
+    ],
+    "correctIndex": 0,
+    "explanation": "Tokyo è la capitale del Giappone ed è una delle metropoli più grandi del mondo."
+  },
+  {
+    "question": "Chi ha scoperto l'America?",
+    "options": [
+      "Ferdinando Magellano",
+      "Cristoforo Colombo",
+      "Vasco da Gama",
+      "James Cook"
+    ],
+    "correctIndex": 1,
+    "explanation": "Cristoforo Colombo scoprì l'America nel 1492 durante il suo viaggio verso le Indie."
+  },
+  {
+    "question": "Qual è la famosa piazza di Venezia?",
+    "options": [
+      "Piazza Navona",
+      "Piazza della Signoria",
+      "Piazza San Marco",
+      "Piazza del Duomo"
+    ],
+    "correctIndex": 2,
+    "explanation": "Piazza San Marco è la piazza principale di Venezia, famosa per la Basilica di San Marco."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina romana a base di pasta?",
+    "options": [
+      "Spaghetti alla carbonara",
+      "Fettuccine Alfredo",
+      "Ravioli",
+      "Pasta al pesto"
+    ],
+    "correctIndex": 0,
+    "explanation": "Gli Spaghetti alla carbonara sono un piatto tradizionale della cucina romana."
+  },
+  {
+    "question": "In quale anno è stata fondata Roma secondo la leggenda?",
+    "options": [
+      "753 a.C.",
+      "509 a.C.",
+      "27 a.C.",
+      "476 d.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "Secondo la leggenda, Roma è stata fondata nel 753 a.C. da Romolo."
+  },
+  {
+    "question": "Qual è il monumento simbolo di Parigi?",
+    "options": [
+      "La Torre Eiffel",
+      "Il Louvre",
+      "Notre-Dame",
+      "L'Arco di Trionfo"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre Eiffel è il monumento più famoso di Parigi e un simbolo della Francia."
+  },
+  {
+    "question": "Quale continente è conosciuto come 'il continente nero'?",
+    "options": [
+      "Asia",
+      "Europa",
+      "Africa",
+      "America"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Africa è chiamata 'il continente nero' a causa della sua popolazione e cultura diversificata."
+  },
+  {
+    "question": "Chi è l'autore del 'Il Gattopardo'?",
+    "options": [
+      "Giuseppe Tomasi di Lampedusa",
+      "Umberto Eco",
+      "Italo Calvino",
+      "Leonardo Sciascia"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il Gattopardo' è un romanzo scritto da Giuseppe Tomasi di Lampedusa nel 1958."
+  },
+  {
+    "question": "Qual è il deserto più grande del mondo?",
+    "options": [
+      "Deserto del Sahara",
+      "Deserto del Gobi",
+      "Deserto di Kalahari",
+      "Deserto di Atacama"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il deserto del Sahara è il più grande deserto caldo del mondo."
+  },
+  {
+    "question": "Qual è la lingua ufficiale in Brasile?",
+    "options": [
+      "Spagnolo",
+      "Portoghese",
+      "Francese",
+      "Italiano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il portoghese è la lingua ufficiale del Brasile, a causa della colonizzazione portoghese."
+  },
+  {
+    "question": "Chi ha scritto 'Il Principe'?",
+    "options": [
+      "Niccolò Machiavelli",
+      "Giovanni Boccaccio",
+      "Dante Alighieri",
+      "Francesco Petrarca"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il Principe' è un trattato politico scritto da Niccolò Machiavelli nel 1513."
+  },
+  {
+    "question": "Qual è il simbolo della città di Milano?",
+    "options": [
+      "La Torre di Pisa",
+      "Il Duomo",
+      "La Fontana di Trevi",
+      "Il Colosseo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Duomo di Milano è uno dei simboli della città e un esempio di architettura gotica."
+  },
+  {
+    "question": "In quale anno è stata proclamata la Repubblica Italiana?",
+    "options": [
+      "1946",
+      "1945",
+      "1950",
+      "1960"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Repubblica Italiana è stata proclamata il 2 giugno 1946."
+  },
+  {
+    "question": "Quale famoso scultore ha creato 'Il David'?",
+    "options": [
+      "Donatello",
+      "Michelangelo",
+      "Bernini",
+      "Rodin"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michelangelo ha scolpito 'Il David', una delle opere più celebri dell'arte rinascimentale."
+  },
+  {
+    "question": "Qual è il cibo tradizionale giapponese a base di riso?",
+    "options": [
+      "Sushi",
+      "Paella",
+      "Tacos",
+      "Pasta"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il sushi è un piatto a base di riso, tipico della cucina giapponese."
+  },
+  {
+    "question": "Quale antico popolo abitava l'Italia prima dei Romani?",
+    "options": [
+      "Etruschi",
+      "Greci",
+      "Celti",
+      "Fenici"
+    ],
+    "correctIndex": 0,
+    "explanation": "Gli Etruschi erano un popolo che abitava l'Italia centrale prima dell'espansione romana."
+  },
+  {
+    "question": "Qual è il mare che bagna la costa occidentale dell'Italia?",
+    "options": [
+      "Mare Adriatico",
+      "Mare Tirreno",
+      "Mare Ionio",
+      "Mare Ligure"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Mare Tirreno bagna la costa occidentale dell'Italia."
+  },
+  {
+    "question": "Chi ha scritto 'Il Codice da Vinci'?",
+    "options": [
+      "Dan Brown",
+      "Stephen King",
+      "Agatha Christie",
+      "J.K. Rowling"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il Codice da Vinci' è un romanzo scritto da Dan Brown nel 2003."
+  },
+  {
+    "question": "Qual è la forma di governo dell'Italia?",
+    "options": [
+      "Monarchia",
+      "Repubblica",
+      "Dittatura",
+      "Anarchia"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Italia è una Repubblica parlamentare."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è la capitale d'Italia dal 1871."
+  },
+  {
+    "question": "In quale anno è stato scoperto l'America da Cristoforo Colombo?",
+    "options": [
+      "1492",
+      "1482",
+      "1500",
+      "1520"
+    ],
+    "correctIndex": 0,
+    "explanation": "Cristoforo Colombo scoprì l'America nel 1492."
+  },
+  {
+    "question": "Qual è il fiume più lungo del mondo?",
+    "options": [
+      "Mississippi",
+      "Nilo",
+      "Amazzoni",
+      "Yangtze"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Amazzoni è considerato il fiume più lungo del mondo."
+  },
+  {
+    "question": "Chi ha dipinto la Gioconda?",
+    "options": [
+      "Michelangelo",
+      "Raffaello",
+      "Leonardo da Vinci",
+      "Caravaggio"
+    ],
+    "correctIndex": 2,
+    "explanation": "Leonardo da Vinci è l'autore della Gioconda, uno dei dipinti più famosi al mondo."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Risotto",
+      "Pizza",
+      "Pasta",
+      "Lasagna"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza è originaria di Napoli ed è un piatto tipico della sua cucina."
+  },
+  {
+    "question": "Qual è il continente più grande del mondo?",
+    "options": [
+      "Africa",
+      "Asia",
+      "America",
+      "Europa"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Asia è il continente più grande del mondo."
+  },
+  {
+    "question": "Chi fu il primo presidente degli Stati Uniti?",
+    "options": [
+      "George Washington",
+      "Thomas Jefferson",
+      "Abraham Lincoln",
+      "John Adams"
+    ],
+    "correctIndex": 0,
+    "explanation": "George Washington fu il primo presidente degli Stati Uniti, in carica dal 1789 al 1797."
+  },
+  {
+    "question": "In quale regione italiana si trova il lago di Como?",
+    "options": [
+      "Lombardia",
+      "Lazio",
+      "Campania",
+      "Toscana"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il lago di Como si trova in Lombardia, ed è noto per la sua bellezza paesaggistica."
+  },
+  {
+    "question": "Quale movimento artistico è associato a Van Gogh?",
+    "options": [
+      "Impressionismo",
+      "Cubismo",
+      "Post-impressionismo",
+      "Surrealismo"
+    ],
+    "correctIndex": 2,
+    "explanation": "Vincent Van Gogh è un importante esponente del Post-impressionismo."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Lione",
+      "Marsiglia",
+      "Parigi",
+      "Bordeaux"
+    ],
+    "correctIndex": 2,
+    "explanation": "Parigi è la capitale della Francia."
+  },
+  {
+    "question": "Quale antico monumento si trova a Roma e fu costruito per gli imperatori?",
+    "options": [
+      "Colosseo",
+      "Pantheon",
+      "Foro Romano",
+      "Castel Sant'Angelo"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Colosseo è un antico anfiteatro romano, simbolo di Roma."
+  },
+  {
+    "question": "Qual è il dessert italiano a base di mascarpone e caffè?",
+    "options": [
+      "Tiramisù",
+      "Panna cotta",
+      "Zabaione",
+      "Cannolo"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il tiramisù è un famoso dessert italiano preparato con mascarpone e caffè."
+  },
+  {
+    "question": "Qual è il monte più alto d'Italia?",
+    "options": [
+      "Monte Bianco",
+      "Gran Sasso",
+      "Etna",
+      "Matterhorn"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Monte Bianco è il monte più alto d'Italia, con un'altitudine di 4.808 metri."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Manzoni"
+    ],
+    "correctIndex": 1,
+    "explanation": "'La Divina Commedia' è un'opera scritta da Dante Alighieri nel XIV secolo."
+  },
+  {
+    "question": "Qual è la capitale della Spagna?",
+    "options": [
+      "Barcellona",
+      "Madrid",
+      "Valencia",
+      "Siviglia"
+    ],
+    "correctIndex": 1,
+    "explanation": "Madrid è la capitale della Spagna."
+  },
+  {
+    "question": "Quale famoso scultore ha creato il David?",
+    "options": [
+      "Donatello",
+      "Michelangelo",
+      "Bernini",
+      "Rodin"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michelangelo ha scolpito il famoso David, una delle sue opere più celebri."
+  },
+  {
+    "question": "Qual è il vino tipico della regione Toscana?",
+    "options": [
+      "Chianti",
+      "Brunello",
+      "Prosecco",
+      "Barolo"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Chianti è un vino tipico della regione Toscana."
+  },
+  {
+    "question": "Qual è il mare che bagna le coste italiane a est?",
+    "options": [
+      "Mar Tirreno",
+      "Mar Adriatico",
+      "Mar Ionio",
+      "Mar Ligure"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Mar Adriatico bagna le coste italiane a est."
+  },
+  {
+    "question": "Chi fu il leader dell'Unione Sovietica durante la Seconda Guerra Mondiale?",
+    "options": [
+      "Stalin",
+      "Trotskij",
+      "Lenin",
+      "Khrushchev"
+    ],
+    "correctIndex": 0,
+    "explanation": "Joseph Stalin fu il leader dell'Unione Sovietica durante la Seconda Guerra Mondiale."
+  },
+  {
+    "question": "Qual è la catena montuosa che separa Europa e Asia?",
+    "options": [
+      "Alpi",
+      "Appennini",
+      "Ural",
+      "Rocky Mountains"
+    ],
+    "correctIndex": 2,
+    "explanation": "Le montagne degli Urali separano Europa e Asia."
+  },
+  {
+    "question": "Quale città è conosciuta come la 'Città Eterna'?",
+    "options": [
+      "Firenze",
+      "Roma",
+      "Venezia",
+      "Milano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è spesso chiamata la 'Città Eterna' per la sua lunga storia."
+  },
+  {
+    "question": "Qual è il piatto tipico piemontese a base di riso e zafferano?",
+    "options": [
+      "Risotto alla milanese",
+      "Riso venere",
+      "Risotto al barolo",
+      "Risotto ai funghi"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Risotto alla milanese è un piatto tipico piemontese preparato con riso e zafferano."
+  },
+  {
+    "question": "Chi scrisse 'I Promessi Sposi'?",
+    "options": [
+      "Manzoni",
+      "Dante",
+      "Petrarca",
+      "Boccaccio"
+    ],
+    "correctIndex": 0,
+    "explanation": "'I Promessi Sposi' è un romanzo scritto da Alessandro Manzoni."
+  },
+  {
+    "question": "Qual è il monumento simbolo di Parigi?",
+    "options": [
+      "Torre Eiffel",
+      "Cattedrale di Notre-Dame",
+      "Museo del Louvre",
+      "Arc de Triomphe"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre Eiffel è il monumento simbolo di Parigi."
+  },
+  {
+    "question": "Qual è la lingua ufficiale del Brasile?",
+    "options": [
+      "Spagnolo",
+      "Portoghese",
+      "Francese",
+      "Italiano"
+    ],
+    "correctIndex": 1,
+    "explanation": "La lingua ufficiale del Brasile è il portoghese."
+  },
+  {
+    "question": "Quale famoso artista è noto per i suoi affreschi nella Cappella Sistina?",
+    "options": [
+      "Raffaello",
+      "Caravaggio",
+      "Michelangelo",
+      "Tintoretto"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo è noto per i suoi affreschi nella Cappella Sistina, tra cui il Giudizio Universale."
+  },
+  {
+    "question": "Qual è la capitale del Giappone?",
+    "options": [
+      "Tokyo",
+      "Kyoto",
+      "Osaka",
+      "Hiroshima"
+    ],
+    "correctIndex": 0,
+    "explanation": "Tokyo è la capitale del Giappone."
+  },
+  {
+    "question": "In quale anno è caduto il Muro di Berlino?",
+    "options": [
+      "1989",
+      "1991",
+      "1987",
+      "1990"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Muro di Berlino è caduto nel 1989, simbolizzando la fine della Guerra Fredda."
+  },
+  {
+    "question": "Qual è il simbolo della città di Venezia?",
+    "options": [
+      "Ponte di Rialto",
+      "Campanile di San Marco",
+      "Colosseo",
+      "Torre Eiffel"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Campanile di San Marco è uno dei simboli più riconoscibili di Venezia."
+  },
+  {
+    "question": "Quale regione italiana è famosa per il suo vino Prosecco?",
+    "options": [
+      "Toscana",
+      "Veneto",
+      "Lombardia",
+      "Piemonte"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Prosecco è un vino tipico della regione Veneto."
+  },
+  {
+    "question": "Chi fu il fondatore dell'Impero Romano?",
+    "options": [
+      "Giulio Cesare",
+      "Augusto",
+      "Nerone",
+      "Traiano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Augusto è considerato il fondatore dell'Impero Romano."
+  },
+  {
+    "question": "Qual è la montagna più alta d'Europa?",
+    "options": [
+      "Monte Bianco",
+      "Monte Elbrus",
+      "Montenegro",
+      "Alpi"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Monte Elbrus, situato in Russia, è la montagna più alta d'Europa."
+  },
+  {
+    "question": "Qual è il famoso festival musicale che si tiene a Firenze?",
+    "options": [
+      "Umbria Jazz",
+      "Festival di Sanremo",
+      "Pistoia Blues",
+      "Firenze Rocks"
+    ],
+    "correctIndex": 3,
+    "explanation": "Firenze Rocks è un famoso festival musicale che si tiene a Firenze."
+  },
+  {
+    "question": "Qual è il principale ingrediente del pesto alla genovese?",
+    "options": [
+      "Basilico",
+      "Prezzemolo",
+      "Rucola",
+      "Spinaci"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il basilico è l'ingrediente principale del pesto alla genovese."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è la capitale d'Italia e ha una grande importanza storica e culturale."
+  },
+  {
+    "question": "Chi ha dipinto la Gioconda?",
+    "options": [
+      "Vincent van Gogh",
+      "Pablo Picasso",
+      "Leonardo da Vinci",
+      "Michelangelo"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Gioconda è un famoso dipinto realizzato da Leonardo da Vinci, considerato un capolavoro dell'arte."
+  },
+  {
+    "question": "Qual è il fiume più lungo d'Italia?",
+    "options": [
+      "Tevere",
+      "Po",
+      "Arno",
+      "Adige"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Po è il fiume più lungo d'Italia, con una lunghezza di circa 652 km."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Leonardo da Vinci"
+    ],
+    "correctIndex": 1,
+    "explanation": "'La Divina Commedia' è un poema epico scritto da Dante Alighieri, considerato uno dei più grandi lavori della letteratura mondiale."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Lasagna",
+      "Pizza",
+      "Risotto",
+      "Polenta"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza è originaria di Napoli ed è uno dei piatti più iconici della cucina italiana."
+  },
+  {
+    "question": "Quale paese ha il vulcano attivo più alto del mondo?",
+    "options": [
+      "Italia",
+      "Cile",
+      "Giappone",
+      "Hawaii"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Cile ospita il vulcano Ojos del Salado, che è il vulcano attivo più alto del mondo."
+  },
+  {
+    "question": "Qual è la montagna più alta d'Italia?",
+    "options": [
+      "Gran Paradiso",
+      "Monte Bianco",
+      "Monte Rosa",
+      "Etna"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Monte Bianco è la montagna più alta d'Italia, con un'altezza di 4.808 metri."
+  },
+  {
+    "question": "Quale delle seguenti città è famosa per i suoi canali?",
+    "options": [
+      "Firenze",
+      "Venezia",
+      "Milano",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Venezia è famosa in tutto il mondo per i suoi canali e la sua architettura unica."
+  },
+  {
+    "question": "In quale anno è stata fondata Roma secondo la leggenda?",
+    "options": [
+      "753 a.C.",
+      "509 a.C.",
+      "476 d.C.",
+      "27 a.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "Secondo la leggenda, Roma è stata fondata nel 753 a.C. da Romolo."
+  },
+  {
+    "question": "Qual è il simbolo della città di Firenze?",
+    "options": [
+      "Leone",
+      "Giglio",
+      "Aquila",
+      "Torre"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il giglio è il simbolo di Firenze e rappresenta la città dal Medioevo."
+  },
+  {
+    "question": "Quale forma di arte è associata al termine 'impressionismo'?",
+    "options": [
+      "Scultura",
+      "Architettura",
+      "Pittura",
+      "Musica"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'impressionismo è un movimento artistico che ha influenzato profondamente la pittura, soprattutto nel XIX secolo."
+  },
+  {
+    "question": "Qual è il nome del famoso monumento di Roma dedicato all'unità d'Italia?",
+    "options": [
+      "Colosseo",
+      "Altare della Patria",
+      "Pantheon",
+      "Foro Romano"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Altare della Patria, noto anche come Vittoriano, è un monumento dedicato all'unità d'Italia."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Lione",
+      "Marsiglia",
+      "Parigi",
+      "Nizza"
+    ],
+    "correctIndex": 2,
+    "explanation": "Parigi è la capitale della Francia ed è famosa per la sua cultura, arte e storia."
+  },
+  {
+    "question": "Quale dei seguenti artisti è noto per le sue sculture in marmo?",
+    "options": [
+      "Caravaggio",
+      "Donatello",
+      "Raffaello",
+      "Titian"
+    ],
+    "correctIndex": 1,
+    "explanation": "Donatello è famoso per le sue sculture in marmo e bronzo, considerato un grande maestro del Rinascimento."
+  },
+  {
+    "question": "Quale paese è famoso per la sua cucina a base di sushi?",
+    "options": [
+      "Cina",
+      "Thailandia",
+      "Giappone",
+      "Corea del Sud"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il Giappone è famoso in tutto il mondo per il sushi, un piatto a base di pesce e riso."
+  },
+  {
+    "question": "Che cos'è il 'Tiramisu'?",
+    "options": [
+      "Un dolce",
+      "Un piatto di pasta",
+      "Un vino",
+      "Un formaggio"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Tiramisu è un famoso dolce italiano a base di caffè, mascarpone e savoiardi."
+  },
+  {
+    "question": "Chi è l'autore del 'Sonnets' e 'Romeo e Giulietta'?",
+    "options": [
+      "Dante Alighieri",
+      "William Shakespeare",
+      "Herman Melville",
+      "Mark Twain"
+    ],
+    "correctIndex": 1,
+    "explanation": "William Shakespeare è l'autore di opere celebri come 'Romeo e Giulietta' e i suoi sonetti."
+  },
+  {
+    "question": "Qual è il nome dell'isola italiana famosa per la sua produzione di limoni?",
+    "options": [
+      "Sicilia",
+      "Capri",
+      "Sardegna",
+      "Elba"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Sicilia è famosa per la produzione di limoni, in particolare nella zona di Taormina."
+  },
+  {
+    "question": "Qual è l'animale simbolo dell'Emilia-Romagna?",
+    "options": [
+      "Cinghiale",
+      "Lupo",
+      "Cavallo",
+      "Tartufo"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il cinghiale è un animale simbolo della tradizione gastronomica e culturale dell'Emilia-Romagna."
+  },
+  {
+    "question": "Qual è la capitale dell'Egitto?",
+    "options": [
+      "Il Cairo",
+      "Alessandria",
+      "Luxor",
+      "Giza"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Cairo è la capitale dell'Egitto e una delle città più antiche del mondo."
+  },
+  {
+    "question": "Quale pittore olandese è famoso per i suoi girasoli?",
+    "options": [
+      "Rembrandt",
+      "Van Gogh",
+      "Vermeer",
+      "Frans Hals"
+    ],
+    "correctIndex": 1,
+    "explanation": "Vincent van Gogh è noto per la sua serie di dipinti dei girasoli."
+  },
+  {
+    "question": "Qual è il piatto tradizionale delle feste in Italia?",
+    "options": [
+      "Panettone",
+      "Pizza",
+      "Pasta",
+      "Risotto"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Panettone è un dolce tipico delle festività natalizie in Italia."
+  },
+  {
+    "question": "Chi è considerato il padre della storia?",
+    "options": [
+      "Erodoto",
+      "Plutarco",
+      "Tacito",
+      "Livio"
+    ],
+    "correctIndex": 0,
+    "explanation": "Erodoto è considerato il 'padre della storia' per il suo lavoro 'Storie'."
+  },
+  {
+    "question": "Qual è la capitale della Spagna?",
+    "options": [
+      "Barcellona",
+      "Valencia",
+      "Madrid",
+      "Siviglia"
+    ],
+    "correctIndex": 2,
+    "explanation": "Madrid è la capitale della Spagna e una delle città più importanti del paese."
+  },
+  {
+    "question": "Quale famoso festival si tiene a Venezia?",
+    "options": [
+      "Carnevale",
+      "Regata",
+      "Festa della Madonna della Salute",
+      "Mostra del Cinema"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Carnevale di Venezia è famoso in tutto il mondo per le sue maschere e le sfilate."
+  },
+  {
+    "question": "Quale dei seguenti è un famoso formaggio italiano?",
+    "options": [
+      "Brie",
+      "Cheddar",
+      "Parmesan",
+      "Gorgonzola"
+    ],
+    "correctIndex": 3,
+    "explanation": "Il Gorgonzola è un famoso formaggio italiano, noto per il suo sapore forte e piccante."
+  },
+  {
+    "question": "Qual è il nome della famosa torre pendente in Italia?",
+    "options": [
+      "Torre di Pisa",
+      "Torre di Milano",
+      "Torre di Venezia",
+      "Torre di Bologna"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre di Pisa è famosa per la sua inclinazione e attrazione turistica."
+  },
+  {
+    "question": "Qual è il continente più grande del mondo?",
+    "options": [
+      "Asia",
+      "Africa",
+      "America",
+      "Europa"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'Asia è il continente più grande del mondo, sia in termini di superficie che di popolazione."
+  },
+  {
+    "question": "In quale anno è avvenuta la caduta dell'Impero Romano d'Occidente?",
+    "options": [
+      "476 d.C.",
+      "1492 d.C.",
+      "800 d.C.",
+      "1000 d.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "La caduta dell'Impero Romano d'Occidente è avvenuta nel 476 d.C., segnando la fine dell'era antica."
+  },
+  {
+    "question": "Chi ha scolpito il David in marmo?",
+    "options": [
+      "Donatello",
+      "Michelangelo",
+      "Bernini",
+      "Rodin"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il David scolpito in marmo da Michelangelo è uno dei capolavori dell'arte rinascimentale."
+  },
+  {
+    "question": "Quale dei seguenti paesi è famoso per le sue piramidi?",
+    "options": [
+      "Giappone",
+      "Messico",
+      "Egitto",
+      "Grecia"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Egitto è famoso per le sue piramidi, in particolare quelle di Giza."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è la capitale d'Italia dal 1871."
+  },
+  {
+    "question": "Quale fiume attraversa Roma?",
+    "options": [
+      "Arno",
+      "Tevere",
+      "Po",
+      "Adige"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Tevere è il principale fiume che scorre attraverso Roma."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Lasagna",
+      "Pizza",
+      "Risotto",
+      "Polenta"
+    ],
+    "correctIndex": 1,
+    "explanation": "La pizza è originaria di Napoli ed è famosa in tutto il mondo."
+  },
+  {
+    "question": "Chi ha dipinto la Cappella Sistina?",
+    "options": [
+      "Leonardo da Vinci",
+      "Caravaggio",
+      "Michelangelo",
+      "Raffaello"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo ha realizzato gli affreschi della Cappella Sistina."
+  },
+  {
+    "question": "Qual è la montagna più alta d'Italia?",
+    "options": [
+      "Gran Paradiso",
+      "Monte Bianco",
+      "Monte Rosa",
+      "Etna"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Monte Bianco è la montagna più alta d'Italia, con un'altezza di 4.808 metri."
+  },
+  {
+    "question": "In quale anno è stata unita l'Italia?",
+    "options": [
+      "1861",
+      "1870",
+      "1848",
+      "1900"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'Italia è stata unita nel 1861."
+  },
+  {
+    "question": "Qual è il Lago più grande d'Italia?",
+    "options": [
+      "Lago di Como",
+      "Lago di Garda",
+      "Lago Maggiore",
+      "Lago d'Iseo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Lago di Garda è il lago più grande d'Italia."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Dante Alighieri",
+      "Boccaccio",
+      "Tasso"
+    ],
+    "correctIndex": 1,
+    "explanation": "'La Divina Commedia' è un'opera scritta da Dante Alighieri."
+  },
+  {
+    "question": "Quale di queste città è conosciuta come la città dei canali?",
+    "options": [
+      "Venezia",
+      "Firenze",
+      "Milano",
+      "Bologna"
+    ],
+    "correctIndex": 0,
+    "explanation": "Venezia è famosa per i suoi canali."
+  },
+  {
+    "question": "In quale città si trova il Colosseo?",
+    "options": [
+      "Napoli",
+      "Roma",
+      "Milano",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Colosseo si trova a Roma ed è uno dei monumenti più iconici d'Italia."
+  },
+  {
+    "question": "Qual è il capoluogo della Toscana?",
+    "options": [
+      "Siena",
+      "Firenze",
+      "Livorno",
+      "Pisa"
+    ],
+    "correctIndex": 1,
+    "explanation": "Firenze è il capoluogo della Toscana."
+  },
+  {
+    "question": "Qual è il formaggio tipico della regione Emilia-Romagna?",
+    "options": [
+      "Gorgonzola",
+      "Parmesano",
+      "Mozzarella",
+      "Ricotta"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Parmigiano Reggiano è un formaggio tipico dell'Emilia-Romagna."
+  },
+  {
+    "question": "Chi è conosciuto come il 'padre della psicoanalisi'?",
+    "options": [
+      "Carl Jung",
+      "Sigmund Freud",
+      "Alfred Adler",
+      "Wilhelm Wundt"
+    ],
+    "correctIndex": 1,
+    "explanation": "Sigmund Freud è considerato il padre della psicoanalisi."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Marsiglia",
+      "Lione",
+      "Parigi",
+      "Nizza"
+    ],
+    "correctIndex": 2,
+    "explanation": "La capitale della Francia è Parigi."
+  },
+  {
+    "question": "Qual è il monumento più famoso di Pisa?",
+    "options": [
+      "Torre di Pisa",
+      "Duomo di Pisa",
+      "Museo dell’Opera",
+      "Battistero"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre di Pisa è il monumento più famoso della città."
+  },
+  {
+    "question": "Qual è il festival musicale più famoso di Venezia?",
+    "options": [
+      "Umbria Jazz",
+      "Carnevale di Venezia",
+      "Festa della Musica",
+      "Venezia Jazz Festival"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Carnevale di Venezia è uno dei festival più celebri al mondo."
+  },
+  {
+    "question": "Qual è il più grande deserto del mondo?",
+    "options": [
+      "Sahara",
+      "Gobi",
+      "Kalahari",
+      "Atacama"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Sahara è il deserto più grande del mondo."
+  },
+  {
+    "question": "Quale artista è noto per le sue opere surrealiste?",
+    "options": [
+      "Pablo Picasso",
+      "Salvador Dalí",
+      "Vincent van Gogh",
+      "Claude Monet"
+    ],
+    "correctIndex": 1,
+    "explanation": "Salvador Dalí è uno degli artisti più noti del surrealismo."
+  },
+  {
+    "question": "Qual è la lingua ufficiale del Brasile?",
+    "options": [
+      "Spagnolo",
+      "Portoghese",
+      "Francese",
+      "Italiano"
+    ],
+    "correctIndex": 1,
+    "explanation": "La lingua ufficiale del Brasile è il portoghese."
+  },
+  {
+    "question": "Quale monumento si trova a New York e rappresenta la libertà?",
+    "options": [
+      "Empire State Building",
+      "Statua della Libertà",
+      "Brooklyn Bridge",
+      "One World Trade Center"
+    ],
+    "correctIndex": 1,
+    "explanation": "La Statua della Libertà è un simbolo di libertà a New York."
+  },
+  {
+    "question": "Dove si trova il famoso sito archeologico di Pompei?",
+    "options": [
+      "Lazio",
+      "Campania",
+      "Toscana",
+      "Sicilia"
+    ],
+    "correctIndex": 1,
+    "explanation": "Pompei si trova in Campania ed è un importante sito archeologico."
+  },
+  {
+    "question": "Qual è il cibo tradizionale tedesco a base di carne di maiale?",
+    "options": [
+      "Salsiccia",
+      "Pizza",
+      "Hamburger",
+      "Schnitzel"
+    ],
+    "correctIndex": 3,
+    "explanation": "Lo Schnitzel è un piatto tradizionale tedesco a base di carne di maiale."
+  },
+  {
+    "question": "Chi ha scoperto l'America?",
+    "options": [
+      "Ferdinando Magellano",
+      "Cristoforo Colombo",
+      "Vasco da Gama",
+      "James Cook"
+    ],
+    "correctIndex": 1,
+    "explanation": "Cristoforo Colombo è noto per la scoperta dell'America nel 1492."
+  },
+  {
+    "question": "Quale delle seguenti città è famosa per il suo carnevale?",
+    "options": [
+      "Rio de Janeiro",
+      "Tokyo",
+      "Londra",
+      "Madrid"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il carnevale di Rio de Janeiro è uno dei più famosi al mondo."
+  },
+  {
+    "question": "Qual è la valuta ufficiale dell'Unione Europea?",
+    "options": [
+      "Sterlina",
+      "Yen",
+      "Euro",
+      "Franco svizzero"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Euro è la valuta ufficiale utilizzata da molti paesi dell'Unione Europea."
+  },
+  {
+    "question": "Chi è l'autore del romanzo 'Il Gattopardo'?",
+    "options": [
+      "Giuseppe Tomasi di Lampedusa",
+      "Umberto Eco",
+      "Italo Calvino",
+      "Dante Alighieri"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il Gattopardo' è un romanzo scritto da Giuseppe Tomasi di Lampedusa."
+  },
+  {
+    "question": "Qual è il simbolo della città di Milano?",
+    "options": [
+      "Torre di Pisa",
+      "Duomo di Milano",
+      "Colosseo",
+      "Vaticano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Duomo di Milano è il simbolo della città."
+  },
+  {
+    "question": "Qual è l'arte di piegare la carta per creare figure?",
+    "options": [
+      "Origami",
+      "Pittura",
+      "Scultura",
+      "Ceramica"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'origami è l'arte giapponese di piegare la carta."
+  },
+  {
+    "question": "Qual è la capitale della Spagna?",
+    "options": [
+      "Barcellona",
+      "Madrid",
+      "Valencia",
+      "Siviglia"
+    ],
+    "correctIndex": 1,
+    "explanation": "Madrid è la capitale della Spagna."
+  },
+  {
+    "question": "Qual è il principale ingrediente del risotto?",
+    "options": [
+      "Riso",
+      "Pasta",
+      "Patate",
+      "Legumi"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il riso è l'ingrediente principale del risotto."
+  },
+  {
+    "question": "Qual è la lingua ufficiale del Giappone?",
+    "options": [
+      "Cinese",
+      "Coreano",
+      "Giapponese",
+      "Vietnamita"
+    ],
+    "correctIndex": 2,
+    "explanation": "La lingua ufficiale del Giappone è il giapponese."
+  },
+  {
+    "question": "Chi ha scritto 'I Promessi Sposi'?",
+    "options": [
+      "Manzoni",
+      "Dante",
+      "Leopardi",
+      "Pirandello"
+    ],
+    "correctIndex": 0,
+    "explanation": "'I Promessi Sposi' è un romanzo scritto da Alessandro Manzoni."
+  },
+  {
+    "question": "Qual è il colore della bandiera italiana?",
+    "options": [
+      "Blu",
+      "Rosso",
+      "Verde",
+      "Giallo"
+    ],
+    "correctIndex": 2,
+    "explanation": "La bandiera italiana è composta da tre bande verticali: verde, bianco e rosso."
+  },
+  {
+    "question": "Qual è il principale obiettivo della dieta mediterranea?",
+    "options": [
+      "Perdere peso",
+      "Aumentare la massa muscolare",
+      "Mantenere la salute",
+      "Mangiare più proteine"
+    ],
+    "correctIndex": 2,
+    "explanation": "La dieta mediterranea è famosa per i suoi benefici per la salute."
+  },
+  {
+    "question": "Qual è il principale ingrediente della pasta alla carbonara?",
+    "options": [
+      "Pomodoro",
+      "Formaggio",
+      "Uova",
+      "Pancetta"
+    ],
+    "correctIndex": 3,
+    "explanation": "La pancetta è uno degli ingredienti principali della carbonara."
+  },
+  {
+    "question": "In quale continente si trova l'Italia?",
+    "options": [
+      "Asia",
+      "America",
+      "Europa",
+      "Africa"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Italia si trova nel continente europeo."
+  },
+  {
+    "question": "Chi è l'autore del celebre dipinto 'La Gioconda'?",
+    "options": [
+      "Michelangelo",
+      "Raffaello",
+      "Leonardo da Vinci",
+      "Caravaggio"
+    ],
+    "correctIndex": 2,
+    "explanation": "'La Gioconda' è un dipinto famoso di Leonardo da Vinci."
+  },
+  {
+    "question": "Qual è la capitale d'Italia?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Napoli",
+      "Torino"
+    ],
+    "correctIndex": 1,
+    "explanation": "La capitale d'Italia è Roma, storicamente e culturalmente significativa."
+  },
+  {
+    "question": "Quale isola è la più grande del Mediterraneo?",
+    "options": [
+      "Sicilia",
+      "Corsica",
+      "Malta",
+      "Cipro"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Sicilia è la più grande isola del Mediterraneo."
+  },
+  {
+    "question": "Chi ha dipinto la Cappella Sistina?",
+    "options": [
+      "Leonardo da Vinci",
+      "Raffaello",
+      "Michelangelo",
+      "Caravaggio"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo è famoso per aver dipinto il soffitto della Cappella Sistina."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina napoletana?",
+    "options": [
+      "Pasta alla carbonara",
+      "Pizza Margherita",
+      "Risotto alla milanese",
+      "Lasagna"
+    ],
+    "correctIndex": 1,
+    "explanation": "La Pizza Margherita è un piatto tipico di Napoli."
+  },
+  {
+    "question": "Quale fiume attraversa Firenze?",
+    "options": [
+      "Tevere",
+      "Arno",
+      "Po",
+      "Adige"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Arno è il fiume che attraversa Firenze."
+  },
+  {
+    "question": "Chi scrisse 'La Divina Commedia'?",
+    "options": [
+      "Dante Alighieri",
+      "Giovanni Boccaccio",
+      "Francesco Petrarca",
+      "Niccolò Machiavelli"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Divina Commedia' è stata scritta da Dante Alighieri."
+  },
+  {
+    "question": "Quale città è conosciuta come la 'Città Eterna'?",
+    "options": [
+      "Venezia",
+      "Roma",
+      "Firenze",
+      "Milano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è conosciuta come la 'Città Eterna' per la sua lunga storia."
+  },
+  {
+    "question": "Quale monumento è simbolo di Parigi?",
+    "options": [
+      "Torre Eiffel",
+      "Colosseo",
+      "Big Ben",
+      "Statua della Libertà"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre Eiffel è il monumento simbolo di Parigi."
+  },
+  {
+    "question": "Qual è la lingua ufficiale del Brasile?",
+    "options": [
+      "Spagnolo",
+      "Portoghese",
+      "Francese",
+      "Italiano"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Portoghese è la lingua ufficiale del Brasile."
+  },
+  {
+    "question": "Qual è la montagna più alta del mondo?",
+    "options": [
+      "K2",
+      "Kangchenjunga",
+      "Everest",
+      "Lhotse"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'Everest è la montagna più alta del mondo."
+  },
+  {
+    "question": "Chi ha composto 'La Traviata'?",
+    "options": [
+      "Giuseppe Verdi",
+      "Giacomo Puccini",
+      "Wolfgang Amadeus Mozart",
+      "Richard Wagner"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Traviata' è un'opera di Giuseppe Verdi."
+  },
+  {
+    "question": "Quale città è famosa per i suoi canali?",
+    "options": [
+      "Amsterda",
+      "Venezia",
+      "Stoccolma",
+      "Praga"
+    ],
+    "correctIndex": 1,
+    "explanation": "Venezia è famosa per i suoi canali."
+  },
+  {
+    "question": "Qual è la capitale della Spagna?",
+    "options": [
+      "Madrid",
+      "Barcellona",
+      "Valencia",
+      "Bilbao"
+    ],
+    "correctIndex": 0,
+    "explanation": "Madrid è la capitale della Spagna."
+  },
+  {
+    "question": "Dove si trova il Colosseo?",
+    "options": [
+      "Napoli",
+      "Roma",
+      "Milano",
+      "Firenze"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Colosseo si trova a Roma."
+  },
+  {
+    "question": "Qual è il formaggio tipico della Campania?",
+    "options": [
+      "Pecorino",
+      "Gorgonzola",
+      "Mozzarella di bufala",
+      "Parmesano"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Mozzarella di bufala è un formaggio tipico della Campania."
+  },
+  {
+    "question": "Qual è la valuta ufficiale dell'Europa?",
+    "options": [
+      "Sterlina",
+      "Euro",
+      "Dollar",
+      "Franco"
+    ],
+    "correctIndex": 1,
+    "explanation": "L'Euro è la valuta ufficiale di molti paesi europei."
+  },
+  {
+    "question": "Chi è l'autore di 'Il Gattopardo'?",
+    "options": [
+      "Giovanni Verga",
+      "Tomasi di Lampedusa",
+      "Umberto Eco",
+      "Dante Alighieri"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Il Gattopardo' è un romanzo di Tomasi di Lampedusa."
+  },
+  {
+    "question": "Qual è il deserto più grande del mondo?",
+    "options": [
+      "Sahara",
+      "Gobi",
+      "Kalahari",
+      "Antartide"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Sahara è il deserto più grande del mondo."
+  },
+  {
+    "question": "Quale artista è noto per i suoi affreschi nella Cappella Sistina?",
+    "options": [
+      "Caravaggio",
+      "Raphael",
+      "Michelangelo",
+      "Donatello"
+    ],
+    "correctIndex": 2,
+    "explanation": "Michelangelo è noto per i suoi affreschi nella Cappella Sistina."
+  },
+  {
+    "question": "Quale frutto è il principale ingrediente del pesto?",
+    "options": [
+      "Pomodoro",
+      "Basilico",
+      "Spinaci",
+      "Rucola"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il basilico è l'ingrediente principale del pesto."
+  },
+  {
+    "question": "Qual è il mare che bagna le coste italiane?",
+    "options": [
+      "Mar Mediterraneo",
+      "Mar Nero",
+      "Oceano Atlantico",
+      "Oceano Indiano"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il Mar Mediterraneo bagna le coste italiane."
+  },
+  {
+    "question": "Chi fu il primo presidente degli Stati Uniti?",
+    "options": [
+      "George Washington",
+      "Thomas Jefferson",
+      "Abraham Lincoln",
+      "John Adams"
+    ],
+    "correctIndex": 0,
+    "explanation": "George Washington fu il primo presidente degli Stati Uniti."
+  },
+  {
+    "question": "Quale città è famosa per i suoi trulli?",
+    "options": [
+      "Matera",
+      "Alberobello",
+      "Lecce",
+      "Catania"
+    ],
+    "correctIndex": 1,
+    "explanation": "Alberobello è famosa per i suoi trulli."
+  },
+  {
+    "question": "Qual è la principale catena montuosa dell'Italia?",
+    "options": [
+      "Alpi",
+      "Appennini",
+      "Himalaya",
+      "Ande"
+    ],
+    "correctIndex": 1,
+    "explanation": "Gli Appennini sono la principale catena montuosa dell'Italia."
+  },
+  {
+    "question": "Quale vino è tipico della regione Toscana?",
+    "options": [
+      "Barolo",
+      "Chianti",
+      "Prosecco",
+      "Nero d'Avola"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Chianti è un vino tipico della Toscana."
+  },
+  {
+    "question": "Chi ha scoperto l'America?",
+    "options": [
+      "Ferdinando Magellano",
+      "Cristoforo Colombo",
+      "Vasco da Gama",
+      "Marco Polo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Cristoforo Colombo è conosciuto per aver scoperto l'America nel 1492."
+  },
+  {
+    "question": "Qual è la capitale dell'Australia?",
+    "options": [
+      "Sydney",
+      "Melbourne",
+      "Canberra",
+      "Brisbane"
+    ],
+    "correctIndex": 2,
+    "explanation": "Canberra è la capitale dell'Australia."
+  },
+  {
+    "question": "Quale pittore è famoso per 'La Gioconda'?",
+    "options": [
+      "Vincent van Gogh",
+      "Pablo Picasso",
+      "Leonardo da Vinci",
+      "Claude Monet"
+    ],
+    "correctIndex": 2,
+    "explanation": "'La Gioconda' è un famoso dipinto di Leonardo da Vinci."
+  },
+  {
+    "question": "Qual è il piatto tradizionale del Carnevale di Venezia?",
+    "options": [
+      "Tortellini",
+      "Tiramisù",
+      "Frittelle",
+      "Panettone"
+    ],
+    "correctIndex": 2,
+    "explanation": "Le frittelle sono un piatto tradizionale del Carnevale di Venezia."
+  },
+  {
+    "question": "Qual è la capitale della Francia?",
+    "options": [
+      "Lione",
+      "Marsiglia",
+      "Parigi",
+      "Nizza"
+    ],
+    "correctIndex": 2,
+    "explanation": "Parigi è la capitale della Francia."
+  },
+  {
+    "question": "In che anno è stata fondata Roma secondo la leggenda?",
+    "options": [
+      "753 a.C.",
+      "509 a.C.",
+      "27 a.C.",
+      "476 d.C."
+    ],
+    "correctIndex": 0,
+    "explanation": "Secondo la leggenda, Roma fu fondata nel 753 a.C."
+  },
+  {
+    "question": "Qual è il piatto tipico della cucina emiliana?",
+    "options": [
+      "Pizza",
+      "Lasagna",
+      "Risotto",
+      "Tortellini"
+    ],
+    "correctIndex": 3,
+    "explanation": "I tortellini sono un piatto tipico della cucina emiliana."
+  },
+  {
+    "question": "Qual è il monumento più famoso di Pisa?",
+    "options": [
+      "Torre Pendente",
+      "Duomo",
+      "Battistero",
+      "Palazzo della Carovana"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Torre Pendente è il monumento più famoso di Pisa."
+  },
+  {
+    "question": "Qual è la teoria scientifica che spiega l'origine dell'universo?",
+    "options": [
+      "Teoria della relatività",
+      "Teoria del Big Bang",
+      "Teoria delle stringhe",
+      "Teoria dell'evoluzione"
+    ],
+    "correctIndex": 1,
+    "explanation": "La Teoria del Big Bang descrive l'espansione dell'universo da uno stato iniziale di alta densità e temperatura."
+  },
+  {
+    "question": "Chi ha scritto 'Il nome della rosa'?",
+    "options": [
+      "Umberto Eco",
+      "Gabriel García Márquez",
+      "J.K. Rowling",
+      "Fëdor Dostoevskij"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il nome della rosa' è un romanzo di Umberto Eco pubblicato nel 1980."
+  },
+  {
+    "question": "Qual è il film vincitore del premio Oscar come Miglior Film nel 2020?",
+    "options": [
+      "1917",
+      "Parasite",
+      "Joker",
+      "Once Upon a Time in Hollywood"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Parasite' ha vinto l'Oscar per il Miglior Film nel 2020, diventando il primo film sudcoreano a ricevere questo premio."
+  },
+  {
+    "question": "Chi è il cantante principale dei Queen?",
+    "options": [
+      "Freddie Mercury",
+      "Elton John",
+      "David Bowie",
+      "Mick Jagger"
+    ],
+    "correctIndex": 0,
+    "explanation": "Freddie Mercury è il leggendario cantante e frontman della band britannica Queen."
+  },
+  {
+    "question": "In quale sport si viene penalizzati con un 'fuorigioco'?",
+    "options": [
+      "Basket",
+      "Calcio",
+      "Pallavolo",
+      "Rugby"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il fuorigioco è una regola del calcio che penalizza i giocatori sulla base della loro posizione rispetto alla palla e agli avversari."
+  },
+  {
+    "question": "Chi ha formulato la teoria della relatività ristretta?",
+    "options": [
+      "Isaac Newton",
+      "Albert Einstein",
+      "Galileo Galilei",
+      "Niels Bohr"
+    ],
+    "correctIndex": 1,
+    "explanation": "Albert Einstein ha formulato la teoria della relatività ristretta nel 1905."
+  },
+  {
+    "question": "Qual è il romanzo più celebre di Jane Austen?",
+    "options": [
+      "Orgoglio e pregiudizio",
+      "Mansfield Park",
+      "Emma",
+      "Ragione e sentimento"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Orgoglio e pregiudizio' è uno dei romanzi più conosciuti e apprezzati di Jane Austen."
+  },
+  {
+    "question": "Quale film ha reso famoso il personaggio di Forrest Gump?",
+    "options": [
+      "Cast Away",
+      "Forrest Gump",
+      "Big",
+      "Sleepless in Seattle"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il film 'Forrest Gump' ha come protagonista l'omonimo personaggio interpretato da Tom Hanks."
+  },
+  {
+    "question": "Quale artista ha pubblicato l'album 'Thriller'?",
+    "options": [
+      "Elton John",
+      "Prince",
+      "Michael Jackson",
+      "Madonna"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'album 'Thriller', pubblicato nel 1982, è di Michael Jackson ed è uno degli album più venduti di tutti i tempi."
+  },
+  {
+    "question": "Quale atleta ha vinto più medaglie olimpiche nella storia?",
+    "options": [
+      "Usain Bolt",
+      "Michael Phelps",
+      "Larisa Latynina",
+      "Carl Lewis"
+    ],
+    "correctIndex": 1,
+    "explanation": "Michael Phelps ha vinto un totale di 28 medaglie olimpiche, di cui 23 d'oro."
+  },
+  {
+    "question": "Qual è l'elemento chimico con simbolo O?",
+    "options": [
+      "Oro",
+      "Ossigeno",
+      "Osmio",
+      "Ombrello"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il simbolo chimico O rappresenta l'ossigeno, un elemento fondamentale per la vita."
+  },
+  {
+    "question": "Chi ha scritto 'La divina commedia'?",
+    "options": [
+      "Dante Alighieri",
+      "Petrarca",
+      "Boccaccio",
+      "Tasso"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La divina commedia' è un poema epico scritto da Dante Alighieri nel XIV secolo."
+  },
+  {
+    "question": "Quale film ha vinto l'Oscar per il miglior film d'animazione nel 2016?",
+    "options": [
+      "Zootopia",
+      "Toy Story",
+      "Inside Out",
+      "Kung Fu Panda"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Zootopia' ha vinto l'Oscar come miglior film d'animazione nel 2016."
+  },
+  {
+    "question": "Chi ha composto la celebre nona sinfonia, nota anche come 'Sinfonia Corale'?",
+    "options": [
+      "Mozart",
+      "Beethoven",
+      "Brahms",
+      "Bach"
+    ],
+    "correctIndex": 1,
+    "explanation": "La nona sinfonia di Beethoven è famosa per il suo ultimo movimento, che include l'inno 'Inno alla gioia'."
+  },
+  {
+    "question": "Qual è la capitale della Germania?",
+    "options": [
+      "Monaco",
+      "Berlino",
+      "Francoforte",
+      "Amburgo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Berlino è la capitale della Germania ed è anche la sua città più grande."
+  },
+  {
+    "question": "Quale sportivo è conosciuto come 'The Greatest' nel pugilato?",
+    "options": [
+      "Mike Tyson",
+      "Muhammad Ali",
+      "Joe Frazier",
+      "George Foreman"
+    ],
+    "correctIndex": 1,
+    "explanation": "Muhammad Ali è stato soprannominato 'The Greatest' per il suo straordinario talento nel pugilato."
+  },
+  {
+    "question": "Qual è la legge scientifica che enuncia che l'energia non può essere creata né distrutta?",
+    "options": [
+      "Legge della conservazione della massa",
+      "Legge di Hooke",
+      "Primo principio della termodinamica",
+      "Legge di gravità"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il primo principio della termodinamica afferma che l'energia totale in un sistema isolato rimane costante."
+  },
+  {
+    "question": "Chi ha scritto 'Don Chisciotte'?",
+    "options": [
+      "Miguel de Cervantes",
+      "Gabriel García Márquez",
+      "Jules Verne",
+      "Leo Tolstoy"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Don Chisciotte' è un romanzo di Miguel de Cervantes pubblicato nel 1605."
+  },
+  {
+    "question": "In quale film Leonardo DiCaprio ha vinto il suo primo Oscar?",
+    "options": [
+      "The Revenant",
+      "Titanic",
+      "Inception",
+      "The Wolf of Wall Street"
+    ],
+    "correctIndex": 0,
+    "explanation": "Leonardo DiCaprio ha vinto il suo primo Oscar come Miglior Attore per 'The Revenant' nel 2016."
+  },
+  {
+    "question": "Quale brano musicale è noto come 'il canto della libertà'?",
+    "options": [
+      "Imagine",
+      "Bohemian Rhapsody",
+      "Redemption Song",
+      "We Are the Champions"
+    ],
+    "correctIndex": 2,
+    "explanation": "'Redemption Song' di Bob Marley è considerata un inno alla libertà e alla lotta contro l'oppressione."
+  },
+  {
+    "question": "Qual è il primo elemento della tavola periodica?",
+    "options": [
+      "Elio",
+      "Litio",
+      "Idrogeno",
+      "Berillio"
+    ],
+    "correctIndex": 2,
+    "explanation": "L'idrogeno è il primo elemento della tavola periodica e il più abbondante nell'universo."
+  },
+  {
+    "question": "Chi ha scritto 'Il piccolo principe'?",
+    "options": [
+      "Antoine de Saint-Exupéry",
+      "Jules Verne",
+      "Victor Hugo",
+      "Marcel Proust"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il piccolo principe' è un racconto scritto da Antoine de Saint-Exupéry pubblicato nel 1943."
+  },
+  {
+    "question": "Quale film di Christopher Nolan esplora i sogni?",
+    "options": [
+      "Interstellar",
+      "The Dark Knight",
+      "Memento",
+      "Inception"
+    ],
+    "correctIndex": 3,
+    "explanation": "'Inception' è un film di Christopher Nolan che tratta del concetto di sogni e realtà onirica."
+  },
+  {
+    "question": "Quale band ha pubblicato 'Dark Side of the Moon'?",
+    "options": [
+      "Led Zeppelin",
+      "The Rolling Stones",
+      "The Who",
+      "Pink Floyd"
+    ],
+    "correctIndex": 3,
+    "explanation": "'Dark Side of the Moon' è un album iconico dei Pink Floyd, pubblicato nel 1973."
+  },
+  {
+    "question": "Qual è lo stadio di casa del FC Barcelona?",
+    "options": [
+      "Santiago Bernabeu",
+      "Old Trafford",
+      "Camp Nou",
+      "Allianz Arena"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il Camp Nou è lo stadio di casa del FC Barcelona e uno dei più grandi stadi d'Europa."
+  },
+  {
+    "question": "Quale organo umano è responsabile della circolazione del sangue?",
+    "options": [
+      "Polmoni",
+      "Cuore",
+      "Fegato",
+      "Reni"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il cuore è l'organo responsabile della pompa del sangue in tutto il corpo."
+  },
+  {
+    "question": "Chi ha scritto 'Le avventure di Alice nel Paese delle Meraviglie'?",
+    "options": [
+      "Lewis Carroll",
+      "J.R.R. Tolkien",
+      "Mark Twain",
+      "C.S. Lewis"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Le avventure di Alice nel Paese delle Meraviglie' è un romanzo scritto da Lewis Carroll nel 1865."
+  },
+  {
+    "question": "Qual è il più grande mammifero terrestre?",
+    "options": [
+      "Elefante",
+      "Balena",
+      "Rinoceronte",
+      "Orso"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'elefante è il più grande mammifero terrestre e può pesare fino a 12.000 kg."
+  },
+  {
+    "question": "Quale scrittore è famoso per i suoi romanzi thriller come 'Il silenzio degli innocenti'?",
+    "options": [
+      "Stephen King",
+      "Patricia Highsmith",
+      "Thomas Harris",
+      "Gillian Flynn"
+    ],
+    "correctIndex": 2,
+    "explanation": "Thomas Harris è noto per i suoi romanzi thriller, tra cui 'Il silenzio degli innocenti'."
+  },
+  {
+    "question": "Qual è la capitale del Giappone?",
+    "options": [
+      "Seoul",
+      "Tokyo",
+      "Pechino",
+      "Bangkok"
+    ],
+    "correctIndex": 1,
+    "explanation": "Tokyo è la capitale del Giappone e una delle città più popolose del mondo."
+  },
+  {
+    "question": "Chi ha vinto il pallone d'oro 2021?",
+    "options": [
+      "Cristiano Ronaldo",
+      "Lionel Messi",
+      "Robert Lewandowski",
+      "Kevin De Bruyne"
+    ],
+    "correctIndex": 1,
+    "explanation": "Lionel Messi ha vinto il Pallone d'Oro nel 2021, il suo settimo di sempre."
+  },
+  {
+    "question": "Qual è la formula chimica dell'acqua?",
+    "options": [
+      "H2O",
+      "CO2",
+      "O2",
+      "NaCl"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'acqua è composta da due atomi di idrogeno e uno di ossigeno, quindi la sua formula è H2O."
+  },
+  {
+    "question": "Chi ha scritto 'Il nome della rosa'?",
+    "options": [
+      "Umberto Eco",
+      "Gabriel García Márquez",
+      "Italo Calvino",
+      "Jean-Paul Sartre"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il nome della rosa' è un romanzo scritto da Umberto Eco, pubblicato nel 1980."
+  },
+  {
+    "question": "Qual è il nome del protagonista del film 'Titanic'?",
+    "options": [
+      "Jack Dawson",
+      "Noah Calhoun",
+      "Tony Stark",
+      "Edward Cullen"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il protagonista maschile del film 'Titanic' è Jack Dawson, interpretato da Leonardo DiCaprio."
+  },
+  {
+    "question": "Qual è la capitale della musica classica italiana?",
+    "options": [
+      "Milano",
+      "Roma",
+      "Venezia",
+      "Napoli"
+    ],
+    "correctIndex": 1,
+    "explanation": "Roma è storicamente conosciuta come la capitale della musica classica in Italia."
+  },
+  {
+    "question": "Quale sport è praticato nel Tour de France?",
+    "options": [
+      "Calcio",
+      "Ciclismo",
+      "Basket",
+      "Rugby"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il Tour de France è una famosa competizione di ciclismo che si svolge annualmente."
+  },
+  {
+    "question": "Qual è l'unità di misura della forza nel Sistema Internazionale?",
+    "options": [
+      "Newton",
+      "Pascal",
+      "Joule",
+      "Watt"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'unità di misura della forza nel Sistema Internazionale è il Newton (N)."
+  },
+  {
+    "question": "Chi ha scritto '1984'?",
+    "options": [
+      "George Orwell",
+      "Aldous Huxley",
+      "Ray Bradbury",
+      "Friedrich Nietzsche"
+    ],
+    "correctIndex": 0,
+    "explanation": "'1984' è un romanzo distopico scritto da George Orwell, pubblicato nel 1949."
+  },
+  {
+    "question": "Chi ha diretto il film 'Inception'?",
+    "options": [
+      "Christopher Nolan",
+      "Steven Spielberg",
+      "Quentin Tarantino",
+      "Martin Scorsese"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il film 'Inception' è stato diretto da Christopher Nolan, rilasciato nel 2010."
+  },
+  {
+    "question": "Chi ha composto 'La Traviata'?",
+    "options": [
+      "Giuseppe Verdi",
+      "Wolfgang Amadeus Mozart",
+      "Giacomo Puccini",
+      "Richard Wagner"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Traviata' è un'opera lirica di Giuseppe Verdi, composta nel 1853."
+  },
+  {
+    "question": "Qual è lo sport più praticato al mondo?",
+    "options": [
+      "Calcio",
+      "Basket",
+      "Tennis",
+      "Golf"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il calcio è considerato lo sport più praticato e popolare al mondo."
+  },
+  {
+    "question": "Qual è la velocità della luce nel vuoto?",
+    "options": [
+      "300.000 km/s",
+      "150.000 km/s",
+      "750.000 km/s",
+      "1.000.000 km/s"
+    ],
+    "correctIndex": 0,
+    "explanation": "La velocità della luce nel vuoto è di circa 300.000 km/s."
+  },
+  {
+    "question": "Chi ha scritto 'Il piccolo principe'?",
+    "options": [
+      "Antoine de Saint-Exupéry",
+      "Victor Hugo",
+      "Charles Dickens",
+      "Jane Austen"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il piccolo principe' è un libro scritto da Antoine de Saint-Exupéry, pubblicato nel 1943."
+  },
+  {
+    "question": "Qual è il film che ha vinto il premio Oscar come miglior film nel 1994?",
+    "options": [
+      "Forrest Gump",
+      "Pulp Fiction",
+      "Titanic",
+      "Schindler's List"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Forrest Gump' ha vinto l'Oscar per il miglior film nel 1994."
+  },
+  {
+    "question": "Qual è il compositore della 'Nona Sinfonia'?",
+    "options": [
+      "Ludwig van Beethoven",
+      "Johann Sebastian Bach",
+      "Frédéric Chopin",
+      "Pyotr Ilyich Tchaikovsky"
+    ],
+    "correctIndex": 0,
+    "explanation": "La 'Nona Sinfonia' è una delle opere più famose di Ludwig van Beethoven."
+  },
+  {
+    "question": "In quale sport si utilizza il termine 'hole-in-one'?",
+    "options": [
+      "Golf",
+      "Tennis",
+      "Baseball",
+      "Calcio"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il termine 'hole-in-one' è usato nel golf quando una palla viene colpita direttamente in buca dalla tee."
+  },
+  {
+    "question": "Qual è il principale gas serra prodotto dall'uomo?",
+    "options": [
+      "Anidride carbonica",
+      "Metano",
+      "Protossido di azoto",
+      "Ozono"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'anidride carbonica (CO2) è il principale gas serra emesso dalle attività umane."
+  },
+  {
+    "question": "Chi ha scritto 'Moby Dick'?",
+    "options": [
+      "Herman Melville",
+      "Mark Twain",
+      "Ernest Hemingway",
+      "F. Scott Fitzgerald"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Moby Dick' è un romanzo scritto da Herman Melville, pubblicato nel 1851."
+  },
+  {
+    "question": "Qual è il nome della famosa orchestra di Vienna?",
+    "options": [
+      "Vienna Philharmonic",
+      "Berlin Philharmonic",
+      "Royal Concertgebouw Orchestra",
+      "London Symphony Orchestra"
+    ],
+    "correctIndex": 0,
+    "explanation": "La Vienna Philharmonic è una delle orchestre più prestigiose al mondo."
+  },
+  {
+    "question": "Chi ha vinto il Pallone d'Oro nel 2021?",
+    "options": [
+      "Lionel Messi",
+      "Cristiano Ronaldo",
+      "Robert Lewandowski",
+      "Kylian Mbappé"
+    ],
+    "correctIndex": 0,
+    "explanation": "Lionel Messi ha vinto il Pallone d'Oro nel 2021, il suo settimo premio."
+  },
+  {
+    "question": "Qual è il nome dell'elemento chimico con simbolo 'Fe'?",
+    "options": [
+      "Ferro",
+      "Fosforo",
+      "Fluoro",
+      "Argento"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il simbolo chimico 'Fe' corrisponde al ferro, dall'elemento latino 'ferrum'."
+  },
+  {
+    "question": "Chi ha scritto 'Il ritratto di Dorian Gray'?",
+    "options": [
+      "Oscar Wilde",
+      "Virginia Woolf",
+      "James Joyce",
+      "F. Scott Fitzgerald"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il ritratto di Dorian Gray' è un romanzo scritto da Oscar Wilde, pubblicato nel 1890."
+  },
+  {
+    "question": "Qual è il film che ha lanciato Leonardo DiCaprio come star?",
+    "options": [
+      "Titanic",
+      "Romeo + Giulietta",
+      "The Wolf of Wall Street",
+      "Inception"
+    ],
+    "correctIndex": 0,
+    "explanation": "Leonardo DiCaprio è diventato una star internazionale grazie al film 'Titanic'."
+  },
+  {
+    "question": "Chi ha composto 'La Bohème'?",
+    "options": [
+      "Giacomo Puccini",
+      "Giuseppe Verdi",
+      "Wolfgang Amadeus Mozart",
+      "Richard Wagner"
+    ],
+    "correctIndex": 0,
+    "explanation": "'La Bohème' è un'opera lirica composta da Giacomo Puccini, debuttata nel 1896."
+  },
+  {
+    "question": "Qual è il record di medaglie d'oro vinte da un atleta alle Olimpiadi?",
+    "options": [
+      "Michael Phelps",
+      "Usain Bolt",
+      "Larisa Latynina",
+      "Mark Spitz"
+    ],
+    "correctIndex": 0,
+    "explanation": "Michael Phelps detiene il record con 23 medaglie d'oro vinte alle Olimpiadi."
+  },
+  {
+    "question": "Qual è la lunghezza del circuito di una maratona?",
+    "options": [
+      "42,195 km",
+      "26,2 km",
+      "21,097 km",
+      "50 km"
+    ],
+    "correctIndex": 0,
+    "explanation": "La lunghezza ufficiale di una maratona è di 42,195 km."
+  },
+  {
+    "question": "Qual è il gas che compone la maggior parte dell'atmosfera terrestre?",
+    "options": [
+      "Azoto",
+      "Ossigeno",
+      "Anidride carbonica",
+      "Argon"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'azoto costituisce circa il 78% dell'atmosfera terrestre."
+  },
+  {
+    "question": "Chi ha scritto 'Cime tempestose'?",
+    "options": [
+      "Emily Brontë",
+      "Charlotte Brontë",
+      "Jane Austen",
+      "Mary Shelley"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Cime tempestose' è un romanzo scritto da Emily Brontë, pubblicato nel 1847."
+  },
+  {
+    "question": "Quale film di Quentin Tarantino è ambientato durante la Seconda Guerra Mondiale?",
+    "options": [
+      "Inglourious Basterds",
+      "Pulp Fiction",
+      "Kill Bill",
+      "Django Unchained"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Inglourious Basterds' è un film di Quentin Tarantino ambientato durante la Seconda Guerra Mondiale."
+  },
+  {
+    "question": "Qual è la band britannica nota per il suo album 'Dark Side of the Moon'?",
+    "options": [
+      "The Beatles",
+      "The Rolling Stones",
+      "Pink Floyd",
+      "Led Zeppelin"
+    ],
+    "correctIndex": 2,
+    "explanation": "'Dark Side of the Moon' è un album iconico dei Pink Floyd, pubblicato nel 1973."
+  },
+  {
+    "question": "In quale anno è stato lanciato il primo satellite spaziale, Sputnik?",
+    "options": [
+      "1957",
+      "1961",
+      "1972",
+      "1969"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il primo satellite spaziale, Sputnik, è stato lanciato nel 1957 dall'Unione Sovietica."
+  },
+  {
+    "question": "Chi ha vinto il premio Nobel per la letteratura nel 2021?",
+    "options": [
+      "Abdulrazak Gurnah",
+      "Louise Glück",
+      "Bob Dylan",
+      "Kazuo Ishiguro"
+    ],
+    "correctIndex": 0,
+    "explanation": "Abdulrazak Gurnah ha vinto il premio Nobel per la letteratura nel 2021."
+  },
+  {
+    "question": "Quale pianeta del sistema solare è noto per i suoi anelli?",
+    "options": [
+      "Marte",
+      "Saturno",
+      "Giove",
+      "Venere"
+    ],
+    "correctIndex": 1,
+    "explanation": "Saturno è famoso per i suoi spettacolari anelli, composti da ghiaccio e particelle di roccia."
+  },
+  {
+    "question": "Chi ha scritto 'La Divina Commedia'?",
+    "options": [
+      "Petrarca",
+      "Boccaccio",
+      "Dante Alighieri",
+      "Carducci"
+    ],
+    "correctIndex": 2,
+    "explanation": "Dante Alighieri è l'autore della 'Divina Commedia', un poema epico della letteratura italiana."
+  },
+  {
+    "question": "Quale film ha vinto l'Oscar come miglior film nel 1994?",
+    "options": [
+      "Pulp Fiction",
+      "Forrest Gump",
+      "Titanic",
+      "Il padrino"
+    ],
+    "correctIndex": 1,
+    "explanation": "Forrest Gump ha vinto l'Oscar come miglior film nel 1995, per il 1994."
+  },
+  {
+    "question": "Quale delle seguenti band è originaria del Regno Unito?",
+    "options": [
+      "Nirvana",
+      "The Beatles",
+      "Metallica",
+      "Linkin Park"
+    ],
+    "correctIndex": 1,
+    "explanation": "The Beatles sono una band leggendaria originaria di Liverpool, Regno Unito."
+  },
+  {
+    "question": "Qual è il simbolo chimico dell'oro?",
+    "options": [
+      "Ag",
+      "Au",
+      "Pb",
+      "Fe"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il simbolo chimico dell'oro è Au, derivante dal latino 'aurum'."
+  },
+  {
+    "question": "Chi ha scritto 'Il processo'?",
+    "options": [
+      "Kafka",
+      "Hemingway",
+      "Orwell",
+      "Fitzgerald"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il processo' è un romanzo incompiuto di Franz Kafka, pubblicato postumo nel 1925."
+  },
+  {
+    "question": "Quale film della Marvel ha come protagonista Spider-Man?",
+    "options": [
+      "Iron Man",
+      "Guardiani della Galassia",
+      "Spider-Man: Homecoming",
+      "Thor"
+    ],
+    "correctIndex": 2,
+    "explanation": "Spider-Man: Homecoming è un film della Marvel che segue le avventure di Peter Parker, alias Spider-Man."
+  },
+  {
+    "question": "Chi ha composto la 'Nona Sinfonia'?",
+    "options": [
+      "Bach",
+      "Mozart",
+      "Beethoven",
+      "Chopin"
+    ],
+    "correctIndex": 2,
+    "explanation": "La Nona Sinfonia è una delle opere più celebri di Ludwig van Beethoven, nota anche per l'inno 'Inno alla gioia'."
+  },
+  {
+    "question": "Quale organismo è responsabile della produzione di insulina nel corpo umano?",
+    "options": [
+      "Fegato",
+      "Pancreas",
+      "Reni",
+      "Cuore"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il pancreas è l'organo che produce insulina, fondamentale per la regolazione del livello di zucchero nel sangue."
+  },
+  {
+    "question": "Chi ha scritto 'Il piccolo principe'?",
+    "options": [
+      "Antoine de Saint-Exupéry",
+      "Victor Hugo",
+      "Marcel Proust",
+      "Gustave Flaubert"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il piccolo principe' è un celebre libro scritto da Antoine de Saint-Exupéry, pubblicato nel 1943."
+  },
+  {
+    "question": "Qual è il titolo del primo film di Harry Potter?",
+    "options": [
+      "Harry Potter e la camera dei segreti",
+      "Harry Potter e il prigioniero di Azkaban",
+      "Harry Potter e la pietra filosofale",
+      "Harry Potter e i doni della morte"
+    ],
+    "correctIndex": 2,
+    "explanation": "Il primo film della serie è 'Harry Potter e la pietra filosofale', uscito nel 2001."
+  },
+  {
+    "question": "Qual è l'unità di misura della forza nel Sistema Internazionale?",
+    "options": [
+      "Watt",
+      "Newton",
+      "Joule",
+      "Pascal"
+    ],
+    "correctIndex": 1,
+    "explanation": "La forza è misurata in Newton, che è l'unità di misura della forza nel Sistema Internazionale."
+  },
+  {
+    "question": "Chi è l'autore del romanzo 'Moby Dick'?",
+    "options": [
+      "Mark Twain",
+      "Herman Melville",
+      "Ernest Hemingway",
+      "Jack London"
+    ],
+    "correctIndex": 1,
+    "explanation": "'Moby Dick' è un romanzo scritto da Herman Melville, pubblicato nel 1851."
+  },
+  {
+    "question": "Quale compositore è famoso per le sue opere come 'La Traviata'?",
+    "options": [
+      "Giuseppe Verdi",
+      "Wolfgang Amadeus Mozart",
+      "Giacomo Puccini",
+      "Richard Wagner"
+    ],
+    "correctIndex": 0,
+    "explanation": "Giuseppe Verdi è famoso per le sue opere, tra cui 'La Traviata', una delle più celebri del repertorio lirico."
+  },
+  {
+    "question": "In quale sport si esibisce un 'slam dunk'?",
+    "options": [
+      "Calcio",
+      "Basket",
+      "Tennis",
+      "Hockey"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il 'slam dunk' è un gesto tecnico nel basket in cui un giocatore salta e schiaccia la palla nel canestro."
+  },
+  {
+    "question": "Qual è l'elemento chimico con simbolo He?",
+    "options": [
+      "Elio",
+      "Idrogeno",
+      "Ossigeno",
+      "Azoto"
+    ],
+    "correctIndex": 0,
+    "explanation": "Il simbolo chimico He rappresenta l'elio, un gas nobile."
+  },
+  {
+    "question": "Chi è l'autore di 'Cent'anni di solitudine'?",
+    "options": [
+      "Gabriel García Márquez",
+      "Mario Vargas Llosa",
+      "Jorge Luis Borges",
+      "Pablo Neruda"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Cent'anni di solitudine' è un romanzo scritto da Gabriel García Márquez, pubblicato nel 1967."
+  },
+  {
+    "question": "Quale canzone dei Queen inizia con 'Is this the real life?'",
+    "options": [
+      "Bohemian Rhapsody",
+      "We Will Rock You",
+      "Somebody to Love",
+      "Don't Stop Me Now"
+    ],
+    "correctIndex": 0,
+    "explanation": "La canzone 'Bohemian Rhapsody' dei Queen inizia con la frase 'Is this the real life?'."
+  },
+  {
+    "question": "Chi ha inventato la teoria della relatività?",
+    "options": [
+      "Isaac Newton",
+      "Albert Einstein",
+      "Galileo Galilei",
+      "Niels Bohr"
+    ],
+    "correctIndex": 1,
+    "explanation": "La teoria della relatività è stata sviluppata da Albert Einstein nei primi del '900."
+  },
+  {
+    "question": "Qual è il titolo del celebre romanzo di Orson Scott Card?",
+    "options": [
+      "Il gioco di Ender",
+      "Fahrenheit 451",
+      "1984",
+      "Dune"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il gioco di Ender' è un romanzo di fantascienza scritto da Orson Scott Card nel 1985."
+  },
+  {
+    "question": "Qual è il significato dell'acronimo FIFA?",
+    "options": [
+      "Federazione Internazionale di Football",
+      "Federazione Italiana di Football Americano",
+      "Fédération Internationale de Football Association",
+      "Federazione Internazionale delle Associazioni calcistiche"
+    ],
+    "correctIndex": 2,
+    "explanation": "FIFA sta per 'Fédération Internationale de Football Association', l'organizzazione mondiale del calcio."
+  },
+  {
+    "question": "Chi ha scritto '1984'?",
+    "options": [
+      "Aldous Huxley",
+      "George Orwell",
+      "Ray Bradbury",
+      "Kurt Vonnegut"
+    ],
+    "correctIndex": 1,
+    "explanation": "'1984' è un romanzo distopico scritto da George Orwell, pubblicato nel 1949."
+  },
+  {
+    "question": "Qual è il più grande mammifero terrestre?",
+    "options": [
+      "Elefante",
+      "Rinoceronte",
+      "Bue",
+      "Orso"
+    ],
+    "correctIndex": 0,
+    "explanation": "L'elefante è il più grande mammifero terrestre, riconosciuto per la sua grandezza e intelligenza."
+  },
+  {
+    "question": "Chi ha scritto 'Orgoglio e pregiudizio'?",
+    "options": [
+      "Jane Austen",
+      "Charlotte Brontë",
+      "Emily Brontë",
+      "Mary Shelley"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Orgoglio e pregiudizio' è un romanzo scritto da Jane Austen, pubblicato nel 1813."
+  },
+  {
+    "question": "Quale cantante è noto per la canzone 'Like a Rolling Stone'?",
+    "options": [
+      "Bruce Springsteen",
+      "Bob Dylan",
+      "Johnny Cash",
+      "Elton John"
+    ],
+    "correctIndex": 1,
+    "explanation": "Bob Dylan è l'autore della celebre canzone 'Like a Rolling Stone', considerata una pietra miliare della musica rock."
+  },
+  {
+    "question": "In quale sport viene utilizzato il termine 'hole-in-one'?",
+    "options": [
+      "Calcio",
+      "Golf",
+      "Tennis",
+      "Basket"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il termine 'hole-in-one' si riferisce a quando un golfista riesce a mandare la palla direttamente in buca con un solo colpo."
+  },
+  {
+    "question": "Chi è l'autore di 'Il grande Gatsby'?",
+    "options": [
+      "F. Scott Fitzgerald",
+      "Ernest Hemingway",
+      "Mark Twain",
+      "John Steinbeck"
+    ],
+    "correctIndex": 0,
+    "explanation": "'Il grande Gatsby' è un romanzo scritto da F. Scott Fitzgerald, pubblicato nel 1925."
+  },
+  {
+    "question": "Quale genere musicale è associato a Mozart?",
+    "options": [
+      "Jazz",
+      "Rock",
+      "Classica",
+      "Pop"
+    ],
+    "correctIndex": 2,
+    "explanation": "Wolfgang Amadeus Mozart è noto principalmente per la sua musica classica."
+  },
+  {
+    "question": "Quale è il nome dell'elemento chimico con simbolo Na?",
+    "options": [
+      "Argento",
+      "Sodio",
+      "Oro",
+      "Piombo"
+    ],
+    "correctIndex": 1,
+    "explanation": "Il simbolo chimico Na rappresenta il sodio, un metallo alcalino."
+  },
+  {
+    "question": "Qual è la capitale del Giappone?",
+    "options": [
+      "Pechino",
+      "Seul",
+      "Tokyo",
+      "Bangkok"
+    ],
+    "correctIndex": 2,
+    "explanation": "Tokyo è la capitale del Giappone e una delle città più popolose del mondo."
+  },
+  {
+    "question": "Chi ha vinto il premio Nobel per la letteratura nel 1997?",
+    "options": [
+      "Gabriel García Márquez",
+      "Dario Fo",
+      "Toni Morrison",
+      "Orhan Pamuk"
+    ],
+    "correctIndex": 1,
+    "explanation": "Dario Fo ha vinto il premio Nobel per la letteratura nel 1997 per la sua opera teatrale e scrittoria."
+  }
+]

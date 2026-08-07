@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Dichiarazione degli host autorizzati a connettersi al CarAppService.
+      In produzione, qui vanno inserite le firme degli host (Android Auto, etc.).
+      Per ora inseriamo i package name comuni per permettere il build e il debug.
+    -->
+    <string-array name="hosts_allowlist">
+        <item>com.google.android.projection.gearhead</item>
+        <item>com.google.android.apps.enterprise.dmagent</item>
+    </string-array>
+</resources>

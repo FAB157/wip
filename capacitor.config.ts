@@ -1,0 +1,35 @@
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.itaintasca.app',
+  appName: 'WIP',
+  webDir: 'dist',
+  server: {
+    cleartext: true
+  },
+  plugins: {
+    LocalNotifications: {
+      smallIcon: "ic_stat_name",
+      iconColor: "#1e3a8a",
+      sound: "beep.wav",
+    },
+    CapacitorHttp: {
+      enabled: true
+    },
+    SplashScreen: {
+      launchShowDuration: 2500,
+      launchAutoHide: true,
+      backgroundColor: "#1e3a8a",
+      androidSplashResourceName: "splash",
+      androidScaleType: "CENTER_CROP",
+      showSpinner: true,
+      androidSpinnerStyle: "large",
+      iosSpinnerStyle: "small",
+      spinnerColor: "#ffffff",
+      splashFullScreen: true,
+      splashImmersive: true,
+    },
+  },
+};
+
+export default config;

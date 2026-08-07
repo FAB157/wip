@@ -1,0 +1,1 @@
+const fs = require('fs'); const content = fs.readFileSync('src/components/PlanScreen.tsx', 'utf8'); const lines = content.split('\n'); lines.splice(3477, 8); fs.writeFileSync('src/components/PlanScreen.tsx', lines.join('\n'));
