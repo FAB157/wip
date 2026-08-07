@@ -9,7 +9,8 @@ interface RoutePoisModalProps {
   /** Avvia la navigazione: POI selezionati lungo il percorso + origine scelta. */
   onStartNavigation: (selectedPois: any[], origin: { lat: number; lon: number } | null) => void;
   startCoords: { lat: number, lon: number } | null;
-  endCoords: { lat: number, lon: number };
+  /** Null finché nessuna navigazione è stata richiesta (il modal è chiuso). */
+  endCoords: { lat: number, lon: number } | null;
   destinationName: string;
   language: Language;
 }
@@ -95,7 +96,7 @@ export default function RoutePoisModal({
 
   // Scansione POI lungo il percorso: parte appena origine e destinazione sono note
   useEffect(() => {
-    if (!isOpen || !origin) {
+    if (!isOpen || !origin || !endCoords) {
       setRoutePois([]);
       return;
     }
@@ -124,9 +125,11 @@ export default function RoutePoisModal({
       .catch(err => { if (!cancelled) { console.error('[WIP Nav] route-pois:', err); setScanError(true); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [isOpen, origin?.lat, origin?.lon, endCoords.lat, endCoords.lon]);
+  // endCoords con optional chaining: App renderizza il modal SEMPRE (anche
+  // chiuso) e all'avvio endCoords è null — senza `?.` l'app crashava al mount.
+  }, [isOpen, origin?.lat, origin?.lon, endCoords?.lat, endCoords?.lon]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !endCoords) return null;
 
   const togglePoi = (id: string) => {
     const newSet = new Set(selectedIds);
