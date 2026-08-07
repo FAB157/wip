@@ -234,7 +234,7 @@ async function callUniversalAi(
     // user_id in colonna dedicata (il pannello admin lo usa per la ricerca
     // per email); resta anche nel context per i tool che parsano il testo.
     const realUserId = userId && userId !== 'mock-user-id' && userId !== 'anonymous' ? userId : null;
-    await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, {
+    await insertApiUsageLog({
       api_name: apiName,
       feature_context: `${featureContext} | Token: ${tokensUsed}${userPart}`,
       user_id: realUserId,
@@ -243,12 +243,64 @@ async function callUniversalAi(
       prompt_tokens: responseData.usage?.prompt_tokens || 0,
       completion_tokens: responseData.usage?.completion_tokens || 0,
       success: true
-    }, {
-      headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
     });
   } catch (e: any) {}
 
   return { ...responseData, data: textContent };
+}
+
+// ── TELEMETRIA API RESILIENTE ──────────────────────────────────────────
+// Il DB live è rimasto senza le colonne estese di api_usage_logs
+// (cost_estimation, user_id, prompt_tokens, completion_tokens, success):
+// l'insert completo falliva in silenzio da mesi → zero log e pannello
+// "API e costi" vuoto. Finché la migrazione
+// supabase/migrations/20260807120000_admin_observability.sql non viene
+// applicata, si ripiega automaticamente sulle sole colonne base.
+async function insertApiUsageLog(payload: any) {
+  const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+  try {
+    await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, payload, { headers });
+  } catch (e: any) {
+    try {
+      await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, {
+        api_name: payload.api_name,
+        feature_context: payload.feature_context,
+        tokens_used: payload.tokens_used ?? 0
+      }, { headers });
+    } catch (e2: any) { /* telemetria: mai bloccante */ }
+  }
+}
+
+// ── LOG ERRORI DI SISTEMA ──────────────────────────────────────────────
+// Scrive in system_errors (tab admin "Errori di Sistema"). La tabella nasce
+// con la migrazione 20260807120000_admin_observability.sql: finché non è
+// applicata (o su errore qualsiasi) fallisce IN SILENZIO — mai bloccare la
+// richiesta che sta loggando. `context` finisce nel jsonb `context`; source/
+// error_message/details vengono duplicati per compatibilità col pannello.
+async function logSystemError(level: 'critical' | 'error' | 'warning' | 'info', message: string, context: any = {}) {
+  try {
+    const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'return=minimal' };
+    const msg = String(message || 'Errore sconosciuto').slice(0, 2000);
+    const source = context?.source || 'server';
+    const payload: any = {
+      level,
+      message: msg,
+      stack: context?.stack ? String(context.stack).slice(0, 4000) : null,
+      context,
+      source
+    };
+    try {
+      await axios.post(`${supabaseUrl}/rest/v1/system_errors`, payload, { headers });
+    } catch {
+      // Schema legacy (source/error_message/details, creato da batch-ensure):
+      // secondo tentativo con le sole colonne storiche.
+      await axios.post(`${supabaseUrl}/rest/v1/system_errors`, {
+        source,
+        error_message: msg,
+        details: JSON.stringify(context || {}).slice(0, 2000)
+      }, { headers });
+    }
+  } catch { /* logging best-effort: mai propagare */ }
 }
 
 // ── ANTI-ALLUCINAZIONE ─────────────────────────────────────────────────
@@ -632,7 +684,7 @@ async function streamUniversalAi(
 
       const userPart = userId ? ` | User: ${userId}` : '';
       const realUserId = userId && userId !== 'mock-user-id' && userId !== 'anonymous' ? userId : null;
-      await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, {
+      await insertApiUsageLog({
         api_name: finalUsedModel,
         feature_context: `${featureContext} | Token: ${promptTokens + completionTokens}${userPart}`,
         user_id: realUserId,
@@ -641,8 +693,6 @@ async function streamUniversalAi(
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         success: true
-      }, {
-        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
       });
     } catch(telErr) {}
 
@@ -1004,11 +1054,11 @@ async function fetchPredictHQEvents(destination: string, mese?: string, radiusKm
 
     if (res.data && res.data.results && res.data.results.length > 0) {
       const events = res.data.results.map((e: any) => {
-        let macroCat = "ðŸŒŸ Altro";
-        if (e.category === "concerts") macroCat = "ðŸŽµ Musica";
-        else if (e.category === "performing-arts") macroCat = "ðŸŽ­ Arte & Teatro";
-        else if (e.category === "sports") macroCat = "âš½ Sport";
-        else if (["festivals", "expos"].includes(e.category)) macroCat = "ðŸŽª Fiere & Sagre";
+        let macroCat = "🌟 Altro";
+        if (e.category === "concerts") macroCat = "🎵 Musica";
+        else if (e.category === "performing-arts") macroCat = "🎭 Arte & Teatro";
+        else if (e.category === "sports") macroCat = "⚽ Sport";
+        else if (["festivals", "expos"].includes(e.category)) macroCat = "🎪 Fiere & Sagre";
         
         return `- [${macroCat}] ${e.title} (dal ${e.start.split('T')[0]} al ${e.end ? e.end.split('T')[0] : e.start.split('T')[0]}) presso ${e.entities && e.entities.length > 0 ? e.entities[0].name : e.location[0]+','+e.location[1]}`;
       });
@@ -1238,6 +1288,9 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
             console.log(`[Stripe Webhook] Generated ${codeCount} coupons for ${structureName}`);
           } catch (e: any) {
             console.error('[Stripe Webhook] Error generating coupons:', e.message);
+            await logSystemError('critical', `Stripe B2B: generazione coupon fallita dopo il pagamento: ${e.message}`, {
+              source: 'stripe-webhook', structureName, codeCount, stack: e.stack
+            });
           }
         }
       } else if (userId && amountStr) {
@@ -1263,6 +1316,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
           console.log(`[Stripe] Credited ${amount} to user ${userId}`);
         } catch (e: any) {
           console.error('[Stripe Webhook] Error updating credits:', e.message);
+          // Pagamento riuscito ma accredito fallito: il caso più grave da vedere in admin
+          await logSystemError('critical', `Stripe: pagamento OK ma accredito crediti fallito: ${e.message}`, {
+            source: 'stripe-webhook', userId, amount: amountStr, sessionId: session?.id, stack: e.stack
+          });
         }
       } else if (userId) {
         // Abbonamento premium (checkout senza metadata.amount): attivazione profilo.
@@ -1284,6 +1341,9 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
           });
         } catch (e: any) {
           console.error('[Stripe Webhook] Error activating subscription:', e.message);
+          await logSystemError('critical', `Stripe: attivazione abbonamento fallita: ${e.message}`, {
+            source: 'stripe-webhook', userId, sessionId: session?.id, stack: e.stack
+          });
         }
       }
     } else if (event.type === 'customer.subscription.deleted') {
@@ -1391,6 +1451,9 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       res.json({ received: true });
     } catch (e: any) {
       console.error('[RevenueCat Webhook] Errore critico:', e.message);
+      await logSystemError('critical', `RevenueCat: errore critico nel webhook acquisti Android: ${e.message}`, {
+        source: 'revenuecat-webhook', eventType: req.body?.event?.type, productId: req.body?.event?.product_id, stack: e.stack
+      });
       res.status(500).send('Error processing webhook');
     }
   });
@@ -1565,19 +1628,19 @@ function parseSafeJSON(text: string) {
 
   const groq = getGroqClient(); // Per retrocompatibilità con rotte esistenti
 
-  // â”€â”€ Startup API Key Validation â”€â”€
+  // ── Startup API Key Validation ──
   const deepseekKeyCheck = process.env.DEEPSEEK_API_KEY || process.env.VITE_DEEPSEEK_API_KEY;
   if (!deepseekKeyCheck) {
-    console.warn("âš ï¸ [STARTUP] DEEPSEEK_API_KEY non trovata nel .env! La curatela POI (foto + descrizioni) ricadrà su Groq come fallback.");
+    console.warn("⚠️ [STARTUP] DEEPSEEK_API_KEY non trovata nel .env! La curatela POI (foto + descrizioni) ricadrà su Groq come fallback.");
   } else {
-    console.log("âœ… [STARTUP] DeepSeek API Key configurata correttamente.");
+    console.log("✅ [STARTUP] DeepSeek API Key configurata correttamente.");
   }
 
   const viatorKeyCheck = process.env.VIATOR_API_KEY;
   if (!viatorKeyCheck) {
-    console.warn("âš ï¸ [STARTUP] VIATOR_API_KEY non trovata nel .env! Le esperienze e tour restituiranno dati fittizi.");
+    console.warn("⚠️ [STARTUP] VIATOR_API_KEY non trovata nel .env! Le esperienze e tour restituiranno dati fittizi.");
   } else {
-    console.log("âœ… [STARTUP] Viator API Key configurata correttamente.");
+    console.log("✅ [STARTUP] Viator API Key configurata correttamente.");
   }
 
   app.get("/api/wiki/pois", rateLimiter, async (req, res) => {
@@ -1687,7 +1750,7 @@ app.post("/api/generate-daily-podcast", async (req, res) => {
       .replace(/[#*_`~]/g, '')          // markdown
       .replace(/\[.*?\]/g, '')           // link markdown
       .replace(/\(.*?\)/g, '')           // parentesi
-      .replace(/^\s*[-â€¢]\s*/gm, '')      // bullet points
+      .replace(/^\s*[-•]\s*/gm, '')      // bullet points
       .replace(/\n{3,}/g, '\n\n')        // triple newlines
       .replace(/([.!?])\s*\n/g, '$1 ')  // newline dopo punteggiatura â†’ spazio
       .trim();
@@ -1809,9 +1872,9 @@ app.post("/api/groq/itinerary", rateLimiter, async (req, res) => {
       let ritmoTimingRule = agentTools.getRitmoTimingRule(ritmo);
 
       const hardRules = `
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 REGOLE GOLD STANDARD (PENA FALLIMENTO TOTALE SE VIOLATE)
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. TITOLO: Formato OBBLIGATORIO â†’ "[Tema/Interessi] a [Città]: Un Itinerario di [N] Giorni". NON usare titoli generici come "Visita a Roma".
 2. LUNGHEZZA "attivita": MINIMO 80-100 parole (4-5 righe). Deve essere narrativo, coinvolgente, ricco di dettagli visivi, storici e pratici specifici. VIETATI i riassuntini.
 3. CONSIGLI DOPPI OBBLIGATORI: "consiglio_guida" DEVE contenere ENTRAMBE le guide con le emoji:
@@ -1825,7 +1888,7 @@ REGOLE GOLD STANDARD (PENA FALLIMENTO TOTALE SE VIOLATE)
 8. INFO VIAGGIO IPER-SPECIFICHE: 4 sezioni (precauzioni, suggerimenti, raccomandazioni, zone_da_evitare) Ã— MINIMO 3 voci ciascuna. SOLO nomi propri, strade reali, orari, prezzi, tessere turistiche nominali. VIETATO ASSOLUTO: "Attenzione ai borseggiatori", "Rispettare le regole", "Godersi un caffè storico".
 9. TIMING MATEMATICAMENTE COERENTE: verifica che orario_tappa + tempo_necessario + spostamento = orario_prossima_tappa. Nessuna tappa può iniziare prima che quella precedente finisca.
 10. BUFFER TIME OBBLIGATORIO: Ogni tappa culturale (museo, chiesa, monumento) deve includere ALMENO 15-20 minuti di buffer extra oltre al tempo di visita stimato per gestire imprevisti, code e spostamenti minori non calcolati.
-11. TOTALE VIAGGIO: Campo "totale_viaggio" OBBLIGATORIO in fondo â†’ range min-max calcolato matematicamente dai costi (es. "â‚¬ 420 - â‚¬ 520 p.p.").
+11. TOTALE VIAGGIO: Campo "totale_viaggio" OBBLIGATORIO in fondo â†’ range min-max calcolato matematicamente dai costi (es. "€ 420 - € 520 p.p.").
 12. RITMO E TIMING: ${ritmoTimingRule}
 ${ANTI_HALLUCINATION_RULES}`;
 
@@ -1883,9 +1946,9 @@ Il tuo compito è generare itinerari di viaggio personalizzati, geograficamente 
 Ogni itinerario deve sembrare curato da un esperto locale, non generato da una macchina.
 FONDAMENTALE: È un REQUISITO ASSOLUTO (MUST) inserire SEMPRE il link al sito web (nel campo "link_info") per OGNI SINGOLA TAPPA dell'itinerario. MAI inventarsi il sito internet - usa SOLO siti verificati e reali. Se non esiste un sito web verificato, lascia il campo vuoto invece di inventarlo. I link devono essere estremamente accurati e funzionanti. Per tour ed esperienze, DEVI usare il link profondo specifico dell'esperienza, mai la homepage generica.
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. PARAMETRI DI INPUT
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DESTINAZIONE          : ${destination}
 DURATA                : ${days} giorni
 MESE/PERIODO          : ${mese || 'Generico'}
@@ -1900,22 +1963,22 @@ GUIDA                 : ${guida}
 ${lockedStopsInstruction}
 ${ragInstruction}
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 2. IDENTITÀ DELLE GUIDE E CONSIGLI
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✨ NICKY: Informale, entusiasta, focalizzata su atmosfera, selfie, caffè nascosti e dettagli visivi. (Es. "Non perdete la maestosa Aula... Catturate l'eleganza per un selfie storico!")
 📜 DANTE: Autorevole, preciso, focalizzato su storia, architettura e curiosità culturali. (Es. "Approfondite la sezione dedicata alla dinastia Savoia... un'esperienza ineguagliabile.")
 
 REGOLE PER I CONSIGLI:
-âœ“ Se l'utente non specifica, fornisci ENTRAMBI i consigli (Nicky e Dante) uniti nella stessa stringa, preceduti dalle rispettive emoji.
-âœ“ LUNGHEZZA: Ogni consiglio (sia Nicky che Dante) deve essere un paragrafo di ALMENO 4 o 5 RIGHE CORPOSE (circa 60-80 parole), ricchissimo di dettagli specifici della tappa.
-âœ“ MAI generico. Nessun "Godetevi il panorama", "luogo imperdibile", "visita il centro storico". Spiega esattamente COSA guardare, storia profonda, e dove posizionarsi per la foto perfetta.
-âœ“ ANCORAGGIO ALLA TAPPA: ogni consiglio DEVE citare almeno UN elemento concreto e verificabile di QUELLA precisa tappa (un'opera, una data, un dettaglio architettonico o geologico, un punto esatto dove posizionarsi, un aneddoto storico reale). Un consiglio trasferibile a un'altra tappa così com'è = fallimento.
-âœ“ NO RIPETIZIONI: vietato riproporre lo stesso schema di consiglio su tappe diverse dello stesso itinerario (es. "selfie all'ingresso" ovunque). Ogni tappa ha la sua chicca unica.
+✓ Se l'utente non specifica, fornisci ENTRAMBI i consigli (Nicky e Dante) uniti nella stessa stringa, preceduti dalle rispettive emoji.
+✓ LUNGHEZZA: Ogni consiglio (sia Nicky che Dante) deve essere un paragrafo di ALMENO 4 o 5 RIGHE CORPOSE (circa 60-80 parole), ricchissimo di dettagli specifici della tappa.
+✓ MAI generico. Nessun "Godetevi il panorama", "luogo imperdibile", "visita il centro storico". Spiega esattamente COSA guardare, storia profonda, e dove posizionarsi per la foto perfetta.
+✓ ANCORAGGIO ALLA TAPPA: ogni consiglio DEVE citare almeno UN elemento concreto e verificabile di QUELLA precisa tappa (un'opera, una data, un dettaglio architettonico o geologico, un punto esatto dove posizionarsi, un aneddoto storico reale). Un consiglio trasferibile a un'altra tappa così com'è = fallimento.
+✓ NO RIPETIZIONI: vietato riproporre lo stesso schema di consiglio su tappe diverse dello stesso itinerario (es. "selfie all'ingresso" ovunque). Ogni tappa ha la sua chicca unica.
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 3. ADATTAMENTO E VERIFICA DATI
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Le richieste particolari hanno priorità assoluta su tutto.
 Verifica che ogni attrazione sia aperta nel giorno previsto.
 RISTORANTI: Usa i dati di contesto (price_level e status) se disponibili, e assegna un badge di confidenza. Mai coordinate crude nel testo.
@@ -1923,30 +1986,30 @@ LOGICA GEOGRAFICA: Raggruppa le tappe per quartiere. Spostamento >20min a piedi 
 PAUSE: Almeno 1 pausa ogni 3 tappe culturali.
 COORDINATE GPS: Il campo "coordinate" (lat e lng) DEVE contenere le ESATTE coordinate geografiche reali del luogo. Cerca di inserire i valori reali con massima precisione (es. Colosseo: 41.8902, 12.4922). DIVIETO ASSOLUTO di inserire coordinate inventate, casuali, arrotondate (es. 45.0, 7.0) o fittizie. Usa i dati di contesto se presenti. Se non le sai con precisione, indaga nei tuoi dati di training per trovare il punto esatto sulla mappa. Questo è VITALE per il rendering della mappa dell'utente.
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 4. RITMO E TIMING (REGOLE TASSATIVE)
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ${ritmoTimingRule}
 - COERENZA ORARI: Verifica matematicamente i tempi di visita e di percorrenza. L'orario deve essere logico in base alla tappa precedente + "tempo_necessario" + "spostamento_precedente".
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 4.1 COERENZA FILTRI E INTERESSI (PRIORITÀ ALTA)
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 L'itinerario deve riflettere rigorosamente i filtri selezionati dall'utente:
 - Se negli Interessi o Richieste è presente "Shopping": includi ALMENO UNA tappa in un distretto commerciale, boutique o centro commerciale.
 - Se negli Interessi o Richieste è presente "Fotografia": includi ALMENO 2-3 tappe in punti panoramici (viewpoints), monumenti iconici o location con alta valenza estetica.
 - Qualsiasi altro interesse/richiesta (es. arte, avventura, enogastronomia) DEVE pesare profondamente sulla scelta delle tappe, modificando il 60-70% dell'itinerario per assecondare il tema.
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
-5. STRUTTURA BUDGET â€” TABELLA COSTI (MASSIMO REALISMO)
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. STRUTTURA BUDGET — TABELLA COSTI (MASSIMO REALISMO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Per ogni giorno genera questa tabella in fondo alla giornata. 
-È TASSATIVO che i prezzi siano REALI e AGGIORNATI. Ricerca nella tua memoria il VERO costo del biglietto del museo/attrazione. Ricerca il VERO costo medio del ristorante che hai scelto. Non inventare cifre tonde casuali. Se un museo costa â‚¬ 18, scrivi â‚¬ 18, non â‚¬ 10.
+È TASSATIVO che i prezzi siano REALI e AGGIORNATI. Ricerca nella tua memoria il VERO costo del biglietto del museo/attrazione. Ricerca il VERO costo medio del ristorante che hai scelto. Non inventare cifre tonde casuali. Se un museo costa € 18, scrivi € 18, non € 10.
 In fondo all'itinerario completo:
-TOTALE STIMATO VIAGGIO: â‚¬ XX - â‚¬ XX p.p. (range min-max per variazioni reali calcolato matematicamente sui costi inseriti).
+TOTALE STIMATO VIAGGIO: € XX - € XX p.p. (range min-max per variazioni reali calcolato matematicamente sui costi inseriti).
 
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 6. FORMATO JSON E REGOLE DI OUTPUT (IGNORARE QUESTA STRUTTURA È UN ERRORE FATALE)
-â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 REGOLE PER INFO VIAGGIO (TASSATIVE E CRITICHE):
 1. DIVIETO ASSOLUTO DI FRASI FATTE E GENERICHE: È severamente VIETATO scrivere ovvietà come "Godersi un caffè in un bar storico", "Acquistare specialità locali", "Visita al Mercato Centrale", "Attenzione ai borseggiatori", "Rispettare le regole dei monumenti", "Passeggiata sulle mura". Se usi una di queste frasi, l'itinerario è considerato un fallimento totale!
 2. IPER-SPECIFICITÀ LOCALE E REALE: Forzare l'uso esclusivo di nomi propri, strade reali, locali veri e orari specifici.
@@ -2007,16 +2070,16 @@ Struttura JSON ESATTA DA REPLICARE COME FORMATO E LUNGHEZZA (DEVI SOSTITUIRE I D
         }
       ],
       "tabella_budget": {
-        "attrazioni": { "dettaglio": "Museo Risorgimento: â‚¬10. Museo Egizio: â‚¬15.", "stima_pp": "â‚¬ 25" },
-        "trasporti": { "dettaglio": "Spostamenti a piedi nel centro, zero mezzi pubblici.", "stima_pp": "â‚¬ 0" },
-        "colazione": { "dettaglio": "Bicerin tradizionale e brioche in caffetteria storica.", "stima_pp": "â‚¬ 5" },
-        "pranzo": { "dettaglio": "Ristorante Del Cambio: 'Vitello Tonnato' storico.", "stima_pp": "â‚¬ 70" },
-        "cena": { "dettaglio": "Agnolotti del Plin in osteria tipica.", "stima_pp": "â‚¬ 40" },
-        "totale_giorno": "â‚¬ 140"
+        "attrazioni": { "dettaglio": "Museo Risorgimento: €10. Museo Egizio: €15.", "stima_pp": "€ 25" },
+        "trasporti": { "dettaglio": "Spostamenti a piedi nel centro, zero mezzi pubblici.", "stima_pp": "€ 0" },
+        "colazione": { "dettaglio": "Bicerin tradizionale e brioche in caffetteria storica.", "stima_pp": "€ 5" },
+        "pranzo": { "dettaglio": "Ristorante Del Cambio: 'Vitello Tonnato' storico.", "stima_pp": "€ 70" },
+        "cena": { "dettaglio": "Agnolotti del Plin in osteria tipica.", "stima_pp": "€ 40" },
+        "totale_giorno": "€ 140"
       }
     }
   ],
-  "totale_viaggio": "â‚¬ 220 - â‚¬ 250 p.p. (stima per 2 giorni, escluse cene libere e acquisti extra. Il range tiene conto di scelte personali di menu e bevande)."
+  "totale_viaggio": "€ 220 - € 250 p.p. (stima per 2 giorni, escluse cene libere e acquisti extra. Il range tiene conto di scelte personali di menu e bevande)."
 }
 
 Non aggiungere testo prima o dopo il JSON.`;
@@ -2954,18 +3017,14 @@ function isNameMatching(name1: string, name2: string): boolean {
         await incrementQuotaCount(quota.userId, 'vision').catch(e => console.error(e));
       }
 
-      // Log to api_usage_logs
+      // Log to api_usage_logs (insert resiliente: vedi insertApiUsageLog)
       try {
-        const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-        const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-        await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, {
+        await insertApiUsageLog({
           api_name: togetherKey ? 'together_vision' : 'gemini_vision',
           feature_context: 'camera_monument_scan',
           cost_estimation: 0.001,
           tokens_used: 1000,
           success: true
-        }, {
-          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
         });
       } catch (err) {
         console.debug("Failed to log vision api_usage_logs");
@@ -3105,18 +3164,14 @@ Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista
       // Rimuovi simboli markdown che disturbano il TTS
       cleanResult = cleanResult.replace(/[#*_~`]/g, '');
 
-      // Log to api_usage_logs
+      // Log to api_usage_logs (insert resiliente: vedi insertApiUsageLog)
       try {
-        const supabaseUrlLocal = process.env.VITE_SUPABASE_URL || '';
-        const supabaseServiceKeyLocal = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
-        await axios.post(`${supabaseUrlLocal}/rest/v1/api_usage_logs`, {
+        await insertApiUsageLog({
           api_name: 'deepseek_audioguide',
           feature_context: 'audio_guide_generation',
           cost_estimation: 0.001,
           tokens_used: 1500,
           success: true
-        }, {
-          headers: { apikey: supabaseServiceKeyLocal, Authorization: `Bearer ${supabaseServiceKeyLocal}` }
         });
       } catch (err) {
         console.debug("Failed to log audioguide api_usage_logs");
@@ -3172,13 +3227,15 @@ Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista
         const files = searchData.query.search.slice(0, 4).filter((s: any) => s.title.startsWith("File:"));
         await Promise.all(files.map(async (file: any) => {
           try {
-            const infoUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(file.title)}&prop=imageinfo&iiprop=url&format=json&origin=*`;
+            // iiurlwidth: thumbnail renderizzata a 1024px — l'URL originale può
+            // essere un TIFF da decine di MB che il tag <img> non mostra.
+            const infoUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(file.title)}&prop=imageinfo&iiprop=url&iiurlwidth=1024&format=json&origin=*`;
             const infoRes = await axios.get(infoUrl);
             const pages = infoRes.data.query.pages;
             const pageId = Object.keys(pages)[0];
             const imageInfo = pages[pageId].imageinfo;
             if (imageInfo && imageInfo.length > 0) {
-              results.push(imageInfo[0].url);
+              results.push(imageInfo[0].thumburl || imageInfo[0].url);
             }
           } catch(e) {}
         }));
@@ -3365,36 +3422,86 @@ Regole tassative di aderenza e anti-allucinazione:
       }
 
       if (type === 'image') {
-        const { name } = req.body;
+        // Foto REALI del luogo, mai stock generiche: prima si erano aggiunte
+        // 4 foto Unsplash hardcoded per categoria — finivano proposte (e
+        // salvate in image_url) per QUALSIASI POI. Ordine di preferenza:
+        // 1) Wikimedia Commons, 2) immagine della pagina Wikipedia,
+        // 3) SOLO come ultimo fallback Unsplash cercando "<nome poi> <città>".
+        const { name, lat, lon } = req.body;
         const searchQuery = name || poi_id;
-        
-        let imageOptions: string[] = [];
-        
-        // 1. Fetch from Wikimedia Commons
+
+        const imageOptions: { url: string; source: string; attribution: string }[] = [];
+        const seenUrls = new Set<string>();
+        const pushOption = (url: string | null | undefined, source: string, attribution: string) => {
+          if (!url || seenUrls.has(url)) return;
+          seenUrls.add(url);
+          imageOptions.push({ url, source, attribution });
+        };
+
+        // 1. Wikimedia Commons (foto reali del monumento)
         const wikiImages = await fetchWikimediaImages(searchQuery);
-        imageOptions = [...wikiImages];
-        
-        // 2. Add Unsplash Alternatives (using generic premium travel images since source.unsplash.com is deprecated)
-        // We add 4 generic variations to ensure they load correctly
-        const unsplashPlaceholders = [
-          "https://images.unsplash.com/photo-1564507592333-c60657eea523?auto=format&fit=crop&q=80&w=600", // monument
-          "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&q=80&w=600", // panorama
-          "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&q=80&w=600", // locali
-          "https://images.unsplash.com/photo-1548625361-ec85381a179f?auto=format&fit=crop&q=80&w=600"  // chiese
-        ];
-        
-        for(let i=0; i<4; i++) {
-            imageOptions.push(unsplashPlaceholders[i]);
+        wikiImages.forEach((u: string) => pushOption(u, 'wikimedia', 'Wikimedia Commons'));
+
+        // 2. Immagine principale della pagina Wikipedia (stessa fonte di /api/wiki/summary)
+        try {
+          const wRes = await axios.get(
+            `https://it.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(String(searchQuery).replace(/ /g, "_"))}`,
+            { headers: { "User-Agent": "ItaliaInTascaGuide/1.0" }, timeout: 5000 }
+          );
+          const pageImg = wRes.data?.originalimage?.source || wRes.data?.thumbnail?.source;
+          pushOption(pageImg, 'wikipedia', 'Wikipedia');
+        } catch (e) {
+          // Pagina Wikipedia assente: si prosegue con le altre fonti.
         }
-        
+
+        // 3. Unsplash SOLO se le fonti enciclopediche non hanno dato nulla,
+        //    cercando "<nome poi> <città>" (mai la categoria generica).
         if (imageOptions.length === 0) {
-          return res.status(404).json({ error: "Nessuna foto trovata sul Web o Wikimedia Commons." });
+          const unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
+          if (unsplashKey && name) {
+            let cityHint = "";
+            if (lat && lon) {
+              try {
+                const nomRes = await axios.get(
+                  `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=it`,
+                  { headers: { "User-Agent": "WIPWorldInPocket/1.0" }, timeout: 4000 }
+                );
+                const addr = nomRes.data?.address || {};
+                cityHint = addr.city || addr.town || addr.village || addr.municipality || "";
+              } catch (e) {
+                // Reverse geocoding fallito: si cerca col solo nome.
+              }
+            }
+            try {
+              const query = [name, cityHint].filter(Boolean).join(' ');
+              const uRes = await axios.get(
+                `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=4&orientation=landscape&content_filter=high`,
+                { headers: { Authorization: `Client-ID ${unsplashKey}` }, timeout: 6000 }
+              );
+              (uRes.data?.results || []).forEach((r: any) => {
+                const raw = r?.urls?.regular;
+                if (raw) {
+                  pushOption(
+                    `${raw.split('?')[0]}?w=800&h=600&fit=crop&q=80&auto=format`,
+                    'unsplash',
+                    `Unsplash · ${r?.user?.name || 'autore sconosciuto'}`
+                  );
+                }
+              });
+            } catch (e: any) {
+              console.warn('[Curator] Fallback Unsplash fallito:', e.message);
+            }
+          }
+        }
+
+        if (imageOptions.length === 0) {
+          return res.status(404).json({ error: "Nessuna foto reale trovata (Wikimedia Commons, Wikipedia o Unsplash)." });
         }
 
         // Return options without saving them immediately to Supabase
-        return res.json({ 
-          image_options: imageOptions, 
-          message: `Trovate ${imageOptions.length} opzioni fotografiche!` 
+        return res.json({
+          image_options: imageOptions,
+          message: `Trovate ${imageOptions.length} foto reali del luogo!`
         });
       }
 
@@ -3500,7 +3607,7 @@ Testo da tradurre (lingua originale: inglese):
 
         let description = '';
         try {
-          // â”€â”€ CACHE CHECK: cerca (poi_id, lang, guide_mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+          // ── CACHE CHECK: cerca (poi_id, lang, guide_mode) ──────────────
           const cacheRes = await axios.get(
             `${supabaseUrl}/rest/v1/shared_poi_audio_cache` +
             `?poi_id=eq.${poi_id}&lang=eq.${lang.toLowerCase()}&guide_mode=eq.${guide_mode}` +
@@ -3579,7 +3686,7 @@ Regole di aderenza e anti-allucinazione:
         const audioBuffer = await generateNeuralAudio(narrativeScript, selectedVoice);
         const audioBase64 = audioBuffer.toString('base64');
 
-        // â”€â”€ SALVA in cache con chiave (poi_id, lang, guide_mode) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ── SALVA in cache con chiave (poi_id, lang, guide_mode) ──────────
         await axios.post(`${supabaseUrl}/rest/v1/shared_poi_audio_cache`, {
           poi_id,
           lang:         lang.toLowerCase(),
@@ -4009,7 +4116,7 @@ Regole di aderenza e anti-allucinazione:
     return null;
   }
 
-  // â”€â”€ GET /api/poi/details â€” legge i dati arricchiti dal DB (generati dal trigger) â”€â”€
+  // ── GET /api/poi/details — legge i dati arricchiti dal DB (generati dal trigger) ──
   app.get("/api/poi/details", async (req, res) => {
     try {
       const { id, lat: qLat, lon: qLon } = req.query as { id?: string; lat?: string; lon?: string };
@@ -4277,6 +4384,70 @@ Regole di aderenza e anti-allucinazione:
       overpass: { status: 'passed' },
       wikipedia: { status: 'passed' }
     });
+  });
+
+  // --- ADMIN HEALTH CHECKS: ping REALI ai servizi esterni ---
+  // A differenza di /api/admin/diagnostics (solo presenza chiavi), qui si
+  // eseguono chiamate vere in parallelo, ciascuna con timeout di 5s.
+  // Risposta: { checks: [{ name, ok, ms, note }] } per il tab Diagnostica.
+  app.get("/api/admin/health-checks", rateLimiter, requireAdmin, async (req, res) => {
+    const TIMEOUT_MS = 5000;
+    const runCheck = async (name: string, fn: () => Promise<string | void>): Promise<{ name: string; ok: boolean; ms: number; note: string }> => {
+      const t0 = Date.now();
+      try {
+        const note = await Promise.race([
+          fn(),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout dopo 5s')), TIMEOUT_MS))
+        ]);
+        return { name, ok: true, ms: Date.now() - t0, note: (note as string) || 'OK' };
+      } catch (e: any) {
+        const note = e?.response?.status ? `HTTP ${e.response.status}` : (e?.message || 'errore sconosciuto');
+        return { name, ok: false, ms: Date.now() - t0, note };
+      }
+    };
+
+    const mapboxToken = process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN;
+    const geoapifyKey = process.env.GEOAPIFY_API_KEY || process.env.VITE_GEOAPIFY_API_KEY;
+    const azureKey = process.env.AZURE_SPEECH_KEY;
+    const azureRegion = process.env.AZURE_SPEECH_REGION || 'westeurope';
+
+    const checks = await Promise.all([
+      runCheck('Supabase (select di prova)', async () => {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id&limit=1`, {
+          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: TIMEOUT_MS
+        });
+        return `risposta ${Array.isArray(r.data) ? 'valida' : 'anomala'}`;
+      }),
+      runCheck('Mapbox (geocoding di prova)', async () => {
+        if (!mapboxToken) throw new Error('VITE_MAPBOX_TOKEN mancante');
+        await axios.get(`https://api.mapbox.com/geocoding/v5/mapbox.places/Roma.json?limit=1&access_token=${mapboxToken}`, { timeout: TIMEOUT_MS });
+      }),
+      runCheck('Geoapify (routing di prova)', async () => {
+        if (!geoapifyKey) throw new Error('GEOAPIFY_API_KEY mancante');
+        await axios.get(`https://api.geoapify.com/v1/routing?waypoints=41.8902,12.4922|41.9028,12.4964&mode=walk&apiKey=${geoapifyKey}`, { timeout: TIMEOUT_MS });
+      }),
+      runCheck('Nominatim (OpenStreetMap)', async () => {
+        await axios.get('https://nominatim.openstreetmap.org/search?q=Roma&format=json&limit=1', {
+          headers: { 'User-Agent': 'WorldInPocket/1.0' }, timeout: TIMEOUT_MS
+        });
+      }),
+      runCheck('OSRM (router.project-osrm.org)', async () => {
+        await axios.get('https://router.project-osrm.org/route/v1/driving/12.4922,41.8902;12.4964,41.9028?overview=false', { timeout: TIMEOUT_MS });
+      }),
+      runCheck('Azure TTS (elenco voci)', async () => {
+        if (!azureKey) throw new Error('AZURE_SPEECH_KEY mancante');
+        const r = await axios.get(`https://${azureRegion}.tts.speech.microsoft.com/cognitiveservices/voices/list`, {
+          headers: { 'Ocp-Apim-Subscription-Key': azureKey }, timeout: TIMEOUT_MS
+        });
+        return `${Array.isArray(r.data) ? r.data.length : 0} voci, regione ${azureRegion}`;
+      }),
+      runCheck('RevenueCat (webhook secret)', async () => {
+        if (!process.env.REVENUECAT_WEBHOOK_SECRET) throw new Error('REVENUECAT_WEBHOOK_SECRET mancante: il webhook rifiuta gli acquisti Android');
+        return 'secret configurato';
+      })
+    ]);
+
+    res.json({ checks });
   });
 
   // --- GET /api/poi/batch-enrich - Manual or Cron endpoint ---
@@ -5573,16 +5744,12 @@ out center tags;`;
         }
 
         try {
-          await axios.post(`${supabaseUrl}/rest/v1/api_usage_logs`, {
+          await insertApiUsageLog({
             api_name: 'azure',
             feature_context: 'sintesi_vocale_tts',
             cost_estimation: 0.001,
+            tokens_used: 0,
             success: true
-          }, {
-            headers: {
-              apikey: supabaseServiceKey,
-              Authorization: `Bearer ${supabaseServiceKey}`
-            }
           });
         } catch (logErr) {}
 
@@ -6351,7 +6518,7 @@ Usa SEMPRE E SOLO questo schema JSON:
   });
 
 
-  // â”€â”€ PREMIUM GUIDE GENERATION ENDPOINT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── PREMIUM GUIDE GENERATION ENDPOINT ────────────────────────────────────────
   // Multi-source: Wikipedia + Wikivoyage + Foursquare + TripAdvisor + Unsplash
   
   app.post("/api/premium-guide/generate-stream", async (req, res) => {
@@ -6435,7 +6602,7 @@ Non aggiungere testo prima o dopo il JSON.`;
       const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
       const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
-      // â”€â”€ QUOTA CHECK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── QUOTA CHECK ──────────────────────────────────────────────────────────
       const quotaRes = await axios.get(
         `${supabaseUrl}/rest/v1/user_quotas?user_id=eq.${userId}&select=premium_guide_used,premium_guide_limit`,
         { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
@@ -6450,7 +6617,7 @@ Non aggiungere testo prima o dopo il JSON.`;
         return res.status(403).json({ error: "QUOTA_EXCEEDED" });
       }
 
-      // â”€â”€ CACHE CHECK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── CACHE CHECK ──────────────────────────────────────────────────────────
       if (hash) {
         const cacheCheck = await axios.get(
           `${supabaseUrl}/rest/v1/itinerary_guides?itinerary_hash=eq.${hash}&status=eq.completed&limit=1`,
@@ -6463,11 +6630,11 @@ Non aggiungere testo prima o dopo il JSON.`;
         }
       }
 
-      // â”€â”€ FASE 1: EXTRACT DESTINATION FROM ITINERARY â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── FASE 1: EXTRACT DESTINATION FROM ITINERARY ──────────────────────────
       const destination: string = itinerary?.titolo || itinerary?.destinazione || "Italia";
       console.log(`[Premium Guide] Generating for destination: "${destination}", style: "${style}"`);
 
-      // â”€â”€ FASE 2: ENRICHMENT DA FONTI REALI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ── FASE 2: ENRICHMENT DA FONTI REALI ───────────────────────────────────
       console.log("[Premium Guide] Fetching multi-source context...");
       const enrichedItinerary = JSON.parse(JSON.stringify(itinerary));
       // Chiavi solo da env: le hardcoded in chiaro nel sorgente sono state rimosse
@@ -6786,7 +6953,10 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
 
       const parsedLat = parseFloat(lat) || 0;
       const parsedLon = parseFloat(lon) || 0;
-      const parsedRadius = Math.min(parseFloat(radius) || 50, 100);
+      // Il cap a 100 km troncava in silenzio i chip da 300 e 500 km: l'utente
+      // sceglieva un raggio e ne otteneva un altro. Ticketmaster accetta valori
+      // ben più ampi, teniamo 500 km come tetto ragionevole.
+      const parsedRadius = Math.min(parseFloat(radius) || 50, 500);
       const latlong = `${parsedLat},${parsedLon}`;
 
       const url = `https://app.ticketmaster.com/discovery/v2/events.json` +
@@ -6814,8 +6984,29 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
       const { lat, lon, radius, startDate, endDate, cityName } = req.body;
       const parsedLat = parseFloat(lat) || 0;
       const parsedLon = parseFloat(lon) || 0;
-      const parsedRadius = parseFloat(radius) || 100;
-      const activeCity = cityName || "Italia";
+      // Viator ragiona per destinazione, non per raggio: il tetto di 50 km
+      // serve a non proporre tour di un'altra provincia rispetto al punto
+      // che l'utente sta guardando sulla mappa.
+      const parsedRadius = Math.min(parseFloat(radius) || 50, 50);
+
+      // La destinazione deve seguire il CENTRO DELLA MAPPA. Se il client non è
+      // riuscito a risolverne il nome (rete lenta, reverse fallito) lo
+      // ricaviamo qui dalle coordinate, invece di ripiegare su "Italia" e
+      // restituire tour a caso.
+      let activeCity = cityName && cityName !== "Italia" ? cityName : "";
+      if (!activeCity && parsedLat && parsedLon) {
+        try {
+          const geoRes = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${parsedLat}&lon=${parsedLon}&format=json&accept-language=it`,
+            { headers: { "User-Agent": "AIAudioGuideApp/1.0" } }
+          );
+          const geo: any = await geoRes.json();
+          activeCity = geo?.address?.city || geo?.address?.town || geo?.address?.village || geo?.address?.county || "";
+        } catch (geoErr: any) {
+          console.warn("[Viator Proxy] Reverse geocoding fallito:", geoErr?.message);
+        }
+      }
+      if (!activeCity) activeCity = "Italia";
 
       console.log(`[Viator Proxy] Searching for ${activeCity} (${parsedLat}, ${parsedLon})`);
       const resultsString = await agentTools.searchViatorExperiences(parsedLat, parsedLon, parsedRadius, startDate, endDate, activeCity);
@@ -6984,20 +7175,36 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
       const apiKey = process.env.GEOAPIFY_API_KEY;
       if (!apiKey) return res.status(500).json({ error: "Missing Geoapify key" });
       
-      const routeUrl = `https://api.geoapify.com/v1/routing?waypoints=${startLat},${startLon}|${endLat},${endLon}&mode=drive&apiKey=${apiKey}`;
+      // mode=walk: il corridoio POI deve seguire il percorso PEDONALE, lo
+      // stesso su cui naviga WIP Nav (con drive i due tracciati divergevano e
+      // i POI selezionati potevano non trovarsi mai sul cammino reale).
+      const routeUrl = `https://api.geoapify.com/v1/routing?waypoints=${startLat},${startLon}|${endLat},${endLon}&mode=walk&apiKey=${apiKey}`;
       const routeRes = await axios.get(routeUrl);
       const geometry = routeRes.data?.features?.[0]?.geometry;
-      if (!geometry || geometry.type !== 'LineString') {
+      // Geoapify restituisce i percorsi come MultiLineString (una LineString
+      // per gamba): il vecchio check solo-LineString falliva SEMPRE — bug
+      // latente mai emerso perché il modal non passava mai le coordinate di
+      // partenza e questo endpoint non veniva mai davvero chiamato.
+      let lineCoords: any[] | null = null;
+      if (geometry?.type === 'LineString') {
+        lineCoords = geometry.coordinates;
+      } else if (geometry?.type === 'MultiLineString') {
+        lineCoords = geometry.coordinates.flat();
+      }
+      if (!lineCoords || lineCoords.length < 2) {
         return res.status(500).json({ error: "Could not calculate route" });
       }
 
       // 2. Query POIs around midpoint
       const midLat = (startLat + endLat) / 2;
       const midLon = (startLon + endLon) / 2;
-      const maxDist = Math.max(
+      // Math.round: la RPC nearby_pois vuole un INTERO — il prodotto dei
+      // gradi dava un raggio frazionario e Postgres rifiutava la chiamata
+      // ("invalid input syntax for type").
+      const maxDist = Math.round(Math.max(
         Math.abs(startLat - endLat),
         Math.abs(startLon - endLon)
-      ) * 111000 + 5000; // rough meters + 5km padding
+      ) * 111000 + 5000); // rough meters + 5km padding
 
       const { createClient } = await import('@supabase/supabase-js');
       const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
@@ -7012,7 +7219,7 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
 
       // 3. Filter POIs within radius_m of the Polyline using Turf
       const turf = await import('@turf/turf');
-      const line = turf.lineString(geometry.coordinates); // [lon, lat]
+      const line = turf.lineString(lineCoords); // [lon, lat]
 
       const routePois = (pois || []).filter((poi: any) => {
         const point = turf.point([poi.lon, poi.lat]);

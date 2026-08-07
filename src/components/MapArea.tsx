@@ -31,7 +31,7 @@ import { motion, AnimatePresence } from "motion/react";
 
 import { setCachedPoiDetails, getCachedPoiDetails, getCachedCityName } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
-import { gygSearchUrl, viatorSearchUrl } from "../lib/affiliates";
+import { gygSearchUrl, viatorSearchUrl, trackAffiliateClick } from "../lib/affiliates";
 import { supabase } from "../lib/supabase";
 import { Language, getTranslation } from "../lib/i18n";
 import { logApiCall } from "../lib/apiLogger";
@@ -255,6 +255,146 @@ export function subCategoryToFilterId(subCat?: string | null): string {
   return map[l] || l;
 }
 
+/**
+ * REGOLA FERREA DEL FILTRAGGIO — unica fonte di verità.
+ *
+ * Ogni POI appartiene a UNA sola macro-categoria (gli id delle chip principali)
+ * e a UNA sola sotto-categoria (gli id dei sub-chip). Un POI è visibile solo se
+ * la sua macro è selezionata E, quando l'utente ha scelto sub-chip DI QUELLA
+ * macro, se la sua sotto-categoria è tra quelli scelti. I sub-chip di altre
+ * macro non lo riguardano.
+ *
+ * Prima la stessa logica era sparsa in tre punti con liste divergenti e
+ * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
+ * anche da deselezionati.
+ */
+export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie"] as const;
+
+/** Sub-chip disponibili per ogni macro (ids esatti di CategoryChips). */
+export const SUBS_BY_MACRO: Record<string, string[]> = {
+  gemme: ["monumenti_sub", "chiese", "musei", "panorami"],
+  monumenti: ["monumenti_sub", "chiese", "musei", "panorami"],
+  locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
+  utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia"],
+  famiglie: ["parco_giochi", "parco_divertimenti", "acquario", "zoo"],
+};
+
+const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
+const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gallery"];
+const PANORAMI_TYPES = ["viewpoint", "panorami", "panorama", "park", "parchi", "garden", "nature_reserve"];
+const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
+const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
+const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
+const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
+
+/**
+ * Macro + sotto-categoria canoniche di un POI. `subId` usa gli id dei sub-chip
+ * ("chiese", "monumenti_sub", "farmacia", …), stringa vuota se non deducibile.
+ */
+export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: string } {
+  const raw = String(p.baseCategory || p.category || "").toLowerCase();
+  const sub = String(p.subCategory || "").toLowerCase();
+  const subCanonical = subCategoryToFilterId(sub);
+
+  // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
+  // ma conservano la sotto-categoria culturale per i sub-chip.
+  const isGem = p.is_gem === true || raw === "gemme";
+
+  const culturalSub = (value: string): string | null => {
+    if (CHIESE_TYPES.includes(value)) return "chiese";
+    if (MUSEI_TYPES.includes(value)) return "musei";
+    if (PANORAMI_TYPES.includes(value)) return "panorami";
+    if (MONUMENTI_TYPES.includes(value)) return "monumenti_sub";
+    return null;
+  };
+
+  const cultural = culturalSub(raw) || culturalSub(sub);
+  if (isGem) return { macro: "gemme", subId: cultural || "" };
+  if (cultural) return { macro: "monumenti", subId: cultural };
+
+  if (LOCALI_TYPES.includes(raw)) return { macro: "locali", subId: subCanonical };
+  if (FAMIGLIE_TYPES.includes(raw)) return { macro: "famiglie", subId: subCanonical || subCategoryToFilterId(raw) };
+  if (UTILITA_TYPES.includes(raw)) return { macro: "utilita", subId: subCanonical || subCategoryToFilterId(raw) };
+
+  return { macro: null, subId: subCanonical };
+}
+
+/**
+ * Molti POI da Overpass/Google arrivano senza subCategory: qui la deduciamo da
+ * nome e tag, ma solo per verificare se corrispondono a uno dei sub-chip
+ * ATTIVI. Non è mai un lasciapassare: se nulla combacia, il POI resta escluso.
+ */
+export function matchesSubByHeuristics(p: any, macro: string, activeSubs: string[]): boolean {
+  const name = (p.name || "").toLowerCase();
+  const amenity = (p.amenity || "").toLowerCase();
+  const railway = (p.railway || "").toLowerCase();
+  const types: string[] = p.types || [];
+  const has = (s: string) => activeSubs.includes(s);
+
+  if (macro === "locali") {
+    if (has("ristorante") && (amenity.includes("restaurant") || types.includes("restaurant") || name.includes("ristorante") || name.includes("osteria") || name.includes("trattoria"))) return true;
+    if (has("pizzeria") && (name.includes("pizz") || amenity.includes("pizza") || types.includes("pizza"))) return true;
+    if (has("pesce") && (name.includes("pesce") || name.includes("mare") || name.includes("sea") || name.includes("fish") || types.includes("seafood_restaurant"))) return true;
+    if (has("carne") && (name.includes("carne") || name.includes("steak") || name.includes("brace") || name.includes("grill") || types.includes("steak_house"))) return true;
+    if (has("vegetariano") && (name.includes("vega") || name.includes("bio") || name.includes("vegetariano") || name.includes("salad") || types.includes("vegetarian_restaurant"))) return true;
+    if ((has("glutenfree") || has("gluten_free_only") || has("gluten_free_options")) && (name.includes("senza glutine") || name.includes("gluten") || name.includes("celiac"))) return true;
+    if (has("bar") && (amenity.includes("bar") || amenity.includes("cafe") || types.includes("bar") || types.includes("cafe") || name.includes("bar ") || name.includes("caffé"))) return true;
+    if (has("gelateria") && (name.includes("gelat") || name.includes("ice cream"))) return true;
+    if (has("sushi") && (name.includes("sushi") || name.includes("giapponese") || name.includes("japanese") || types.includes("sushi_restaurant"))) return true;
+    return false;
+  }
+
+  if (macro === "utilita") {
+    if (has("taxi") && (amenity.includes("taxi") || name.includes("taxi") || name.includes("radiotaxi"))) return true;
+    if (has("stazione_ferroviaria") && (railway === "station" || name.includes("stazione fs") || name.includes("stazione ferrovia") || name.includes("gare ") || name.includes("bahnhof"))) return true;
+    if (has("casello_autostradale") && (name.includes("casello") || name.includes("toll booth") || amenity.includes("toll"))) return true;
+    if (has("ospedale") && (amenity.includes("hospital") || name.includes("ospedal") || name.includes("hospital") || name.includes("clinica"))) return true;
+    if (has("farmacia") && (amenity.includes("pharmacy") || name.includes("farmac") || name.includes("pharma") || name.includes("apothe"))) return true;
+    if (has("metropolitana") && (name.includes("metro") || amenity === "subway" || railway.includes("subway"))) return true;
+    if (has("polizia") && (amenity.includes("police") || name.includes("polizia") || name.includes("carabinier"))) return true;
+    if (has("fontanelle") && (amenity.includes("drinking_water") || name.includes("fontanell") || name.includes("drinking") || name.includes("fountain"))) return true;
+    if (has("mercato") && (amenity.includes("marketplace") || name.includes("mercat") || name.includes("market") || name.includes("souk") || name.includes("bazar"))) return true;
+    return false;
+  }
+
+  if (macro === "famiglie") {
+    if (has("parco_giochi") && (name.includes("parco giochi") || name.includes("playground"))) return true;
+    if (has("parco_divertimenti") && (name.includes("divertiment") || name.includes("theme park") || name.includes("luna park"))) return true;
+    if (has("acquario") && (name.includes("acquario") || name.includes("aquarium"))) return true;
+    if (has("zoo") && (name.includes("zoo") || name.includes("safari") || name.includes("bioparco"))) return true;
+    return false;
+  }
+
+  // Cultura (monumenti e gemme): il tipo è già risolto da resolvePoiTaxonomy;
+  // qui restano i POI con categoria generica ma nome parlante.
+  if (has("chiese") && (name.includes("chiesa") || name.includes("duomo") || name.includes("basilica") || name.includes("santuario") || name.includes("cattedrale") || name.includes("abbazia") || name.includes("church"))) return true;
+  if (has("musei") && (name.includes("museo") || name.includes("museum") || name.includes("pinacoteca") || name.includes("galleria"))) return true;
+  if (has("panorami") && (name.includes("panoram") || name.includes("belvedere") || name.includes("viewpoint") || name.includes("giardin"))) return true;
+  if (has("monumenti_sub") && (name.includes("monument") || name.includes("castello") || name.includes("torre") || name.includes("palazzo") || name.includes("rocca"))) return true;
+  return false;
+}
+
+/**
+ * Vero se il POI supera la regola ferrea per la selezione corrente di chip.
+ * `subFilter` è la lista piatta dei sub-chip attivi di TUTTE le macro.
+ */
+export function passesCategoryRule(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
+  const { macro, subId } = resolvePoiTaxonomy(p);
+  if (!macro) return false;
+  if (!selectedCategories.includes(macro)) return false;
+
+  const subsOfMacro = SUBS_BY_MACRO[macro] || [];
+  const activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
+  // Nessun sub-chip di questa macro selezionato ⇒ il chip "Tutti" è attivo.
+  if (activeSubs.length === 0) return true;
+
+  if (subId && activeSubs.includes(subId)) return true;
+  // glutenfree ha tre id equivalenti tra chip e dati.
+  const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
+  if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;
+  return false;
+}
+
 // Cache di sessione per le coordinate TripAdvisor: la search non le
 // restituisce (servono i /details, che consumano quota API) — ogni locale
 // viene risolto una sola volta per sessione.
@@ -416,6 +556,19 @@ function MapEventsHandler({
             onCenterChangeRef.current([center.lat, center.lng]);
           }
 
+          // Ancoraggio geografico delle ricerche esterne (Viator, GetYourGuide,
+          // Virgilio, Ticketmaster): il riferimento è ciò che l'utente sta
+          // guardando, non dove si trova fisicamente. Il raggio è quello del
+          // riquadro visibile, così ricerca e mappa coincidono.
+          const ne = bounds.getNorthEast();
+          const radiusKm = Math.max(
+            1,
+            Math.round(map.distance(center, ne) / 1000),
+          );
+          window.dispatchEvent(new CustomEvent('wip-map-center-change', {
+            detail: { lat: center.lat, lon: center.lng, radiusKm },
+          }));
+
           // Pre-cache del nome città per il nuovo centro. La coda globale
           // serializza a 1 req/1.2s, deduplica per cella e rispetta la
           // policy Nominatim anche con pan ripetuti.
@@ -510,6 +663,7 @@ function MapArea({
         city = await fetchCityNameQueued(c.lat, c.lng);
       } catch { /* senza città si apre la home del partner */ }
       const url = partner === 'viator' ? viatorSearchUrl(city) : gygSearchUrl(city);
+      trackAffiliateClick(url, `Ricerca esperienze ${city || 'zona corrente'}`, city, 'home_chip');
       if (win) {
         win.location.href = url;
       } else {
@@ -608,6 +762,10 @@ function MapArea({
     null,
   );
   const [followMode, setFollowMode] = useState(false);
+  // Copia in ref: fetchPois è memoizzata e non deve ricrearsi al toggle del
+  // follow-me (ricrearla farebbe ripartire i listener della mappa).
+  const followModeRef = useRef(false);
+  useEffect(() => { followModeRef.current = followMode; }, [followMode]);
   const [userHeading, setUserHeading] = useState<number | null>(null);
   const [mapRotation, setMapRotation] = useState(0);
   const compassListenerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
@@ -679,6 +837,9 @@ function MapArea({
   // Contatore di generazione dei fetch: le risposte di un fetch superato vengono scartate
   const fetchSeqRef = useRef(0);
   const lastFetchedStateRef = useRef<{ bounds: L.LatLngBounds; categoriesKey: string; subFilter: string[] | undefined } | null>(null);
+  // Ancora dell'ultimo fetch (centro + zoom): serve alla soglia di movimento
+  // che evita di rifare il fetch per i pan programmatici (follow-me, flyTo).
+  const lastFetchAnchorRef = useRef<{ lat: number; lon: number; zoom: number } | null>(null);
 
   // AbortController delle fetch POI, legati al ciclo di vita del componente.
   // Da variabili di modulo un remount (hot reload, error boundary) poteva
@@ -980,13 +1141,12 @@ function MapArea({
         const hasSpecificIcon = p.subCategory && SUB_CATEGORY_EMOJIS[p.subCategory];
         if (!hasSpecificIcon && !isUtility) return false;
       }
-      const cat = p.category;
-      const baseCat = p.baseCategory || p.category;
       if (activeCategories.length === 0) return true;
-      if (activeCategories.includes(cat) || activeCategories.includes(baseCat)) return true;
-      if (activeCategories.includes("gemme") && p.is_gem) return true;
-      if (activeCategories.includes("monumenti") && ["chiese", "musei", "panorami", "monumenti"].includes(cat)) return true;
-      return false;
+      // Stessa tassonomia del rendering (resolvePoiTaxonomy): qui filtriamo
+      // solo per macro — i sub-chip agiscono a valle in visiblePois, così
+      // cambiarli non impone un nuovo fetch di rete.
+      const { macro } = resolvePoiTaxonomy(p);
+      return !!macro && activeCategories.includes(macro);
     };
 
     // ✅ PAINT IMMEDIATO: i POI del DB sono già pronti — mostrarli SUBITO,
@@ -1549,28 +1709,14 @@ function MapArea({
       setPois((prev) => {
         const poiMap = new Map<string, Poi>();
         
-        const expandedActiveCats = new Set<string>();
-        activeCategories.forEach(cat => {
-          expandedActiveCats.add(cat);
-          if (cat === "monumenti" || cat === "gemme") {
-            expandedActiveCats.add("chiese");
-            expandedActiveCats.add("musei");
-            expandedActiveCats.add("panorami");
-            expandedActiveCats.add("monumenti");
-          }
-        });
-        
         // 1. Carica i POI precedenti attivi (solo se sono all'interno o nelle vicinanze della mappa corrente per ottimizzare Android)
         const paddedBounds = bounds.pad(0.5); // Tiene un margine del 50% fuori schermo per fluidità
         prev.forEach(p => {
-          let keep = false;
-          if (expandedActiveCats.has(p.category) || expandedActiveCats.has(p.baseCategory || "")) {
-            keep = true;
-          }
-          if (activeCategories.includes("gemme") && p.is_gem) {
-            keep = true;
-          }
-          
+          // Stessa tassonomia del rendering: niente più liste "espanse" che
+          // riammettevano chiese e musei deselezionati.
+          const { macro } = resolvePoiTaxonomy(p);
+          const keep = !!macro && activeCategories.includes(macro);
+
           if (keep && ((p.category === 'utilita' || p.category === 'famiglie') ? true : !isGenericUtilityName(p.name))) {
             // Android Perf: scarta i vecchi POI lontani dalla vista attuale
             try {
@@ -1593,12 +1739,28 @@ function MapArea({
         // Se la lista è identica alla precedente (stessi id), riusa l'array
         // esistente: evita di ricostruire tutti i <Marker> a ogni moveend
         // (era una delle cause dello sfarfallio dei pin).
-        if (merged.length === prev.length) {
-          const prevIds = new Set(prev.map(p => String(p.id)));
-          if (merged.every(p => prevIds.has(String(p.id)))) {
-            return prev;
-          }
+        // Confronto sull'INSIEME degli id, non solo sulla lunghezza: bastava
+        // che un POI entrasse e un altro uscisse per rigenerare l'array e far
+        // ricostruire tutti i marker (pin che sparivano e riapparivano).
+        const prevIds = new Set(prev.map(p => String(p.id)));
+        if (merged.length === prevIds.size && merged.every(p => prevIds.has(String(p.id)))) {
+          return prev;
         }
+
+        // Per i POI già presenti riusiamo l'oggetto precedente quando i campi
+        // che influenzano il marker (posizione, categoria, icona) non sono
+        // cambiati: identità stabile ⇒ react-leaflet non tocca il DOM.
+        const prevById = new Map<string, Poi>(prev.map(p => [String(p.id), p] as [string, Poi]));
+        merged = merged.map(p => {
+          const old = prevById.get(String(p.id));
+          if (!old) return p;
+          const same =
+            old.lat === p.lat && old.lon === p.lon &&
+            old.category === p.category && old.baseCategory === p.baseCategory &&
+            old.subCategory === p.subCategory && old.is_gem === p.is_gem &&
+            old.name === p.name;
+          return same ? old : p;
+        });
 
         // Safety cap per performance: max 500 marker su web (prioritiamo gemme e siti con wikidata)
         if (merged.length > 500) {
@@ -1634,9 +1796,26 @@ function MapArea({
       }
 
       debounceTimerRef.current = setTimeout(() => {
+        // `moveend` scatta anche per i movimenti PROGRAMMATICI (flyTo di
+        // MapController, panTo del follow-me a ogni fix GPS, centratura su un
+        // POI). Senza una soglia il follow-me lanciava un fetch al secondo:
+        // ogni risposta riscriveva la lista POI e i pin sfarfallavano.
+        try {
+          const center = bounds.getCenter();
+          const zoom = mapRef.current?.getZoom() ?? 13;
+          const last = lastFetchAnchorRef.current;
+          if (last && last.zoom === zoom) {
+            const movedM = getDistanceFromLatLonInM(last.lat, last.lon, center.lat, center.lng);
+            // In follow-me la mappa insegue il GPS: rinfreschiamo solo dopo uno
+            // spostamento reale, non a ogni aggiornamento di posizione.
+            const thresholdM = followModeRef.current ? 400 : 120;
+            if (movedM < thresholdM) return;
+          }
+          lastFetchAnchorRef.current = { lat: center.lat, lon: center.lng, zoom };
+        } catch { /* bounds non validi: procediamo comunque */ }
+
         performFetchPois(bounds);
-        // Remove onCenterChange from here to avoid recursive re-renders with flying map!
-      }, 150); // fast 150ms debounce so POIs appear instantly on map pan
+      }, 350);
     },
     [selectedCategories, subFilter],
   );
@@ -1671,128 +1850,23 @@ function MapArea({
         return isAccessible(p);
       }
 
-      const isGem = p.is_gem || p.category === 'gemme';
-      const effectiveCategory = p.baseCategory || p.category;
-
-      let subcatKey = effectiveCategory;
-      if (['church', 'chiese', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario'].includes(effectiveCategory)) subcatKey = 'chiese';
-      if (effectiveCategory === 'museum' || effectiveCategory === 'musei') subcatKey = 'musei';
-      // Castelli, archeo e attrazioni confluiscono tutti nella sub-categoria 'monumenti'
-      if (['monument', 'artwork', 'attraction', 'monumenti', 'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo'].includes(effectiveCategory)) subcatKey = 'monumenti';
-      if (effectiveCategory === 'viewpoint' || effectiveCategory === 'panorami') subcatKey = 'panorami';
-      if (effectiveCategory === 'restaurant' || effectiveCategory === 'ristoranti') subcatKey = 'ristoranti';
-      if (effectiveCategory === 'cafe' || effectiveCategory === 'bar') subcatKey = 'bar';
-      if (effectiveCategory === 'pharmacy' || effectiveCategory === 'farmacie') subcatKey = 'farmacie';
-      if (effectiveCategory === 'park' || effectiveCategory === 'parchi') subcatKey = 'parchi';
-
-      // Castelli, archeo e attrazioni: se gemme vanno SOLO sotto "gemme",
-      // altrimenti sono monumenti normali e vanno SOLO sotto "monumenti".
-      // I POI dal DB hanno baseCategory già mappata a 'monumenti': il tipo
-      // originale (castle/ruins/...) sopravvive in subCategory.
-      const HIST_TYPES = ["castle", "castelli", "ruins", "archaeological_site", "archeo", "attraction", "attrazioni", "artwork"];
-      if (HIST_TYPES.includes(effectiveCategory) || HIST_TYPES.includes((p.subCategory || '').toLowerCase())) {
-        if (isGem && !selectedCategories.includes("gemme")) return false;
-        if (!isGem && !selectedCategories.includes("monumenti")) return false;
+      // REGOLA FERREA: macro selezionata + (se ci sono sub-chip di quella
+      // macro) sotto-categoria selezionata. Vedi passesCategoryRule.
+      if (!passesCategoryRule(p, selectedCategories, subFilter)) {
+        // Molti POI da Overpass/Google non portano subCategory: prima di
+        // scartarli proviamo a dedurla dal nome/tag, ma SOLO tra i sub-chip
+        // effettivamente selezionati (mai un fall-through permissivo).
+        const { macro } = resolvePoiTaxonomy(p);
+        if (!macro || !selectedCategories.includes(macro)) return false;
+        const activeSubs = (subFilter || []).filter(s => (SUBS_BY_MACRO[macro] || []).includes(s));
+        if (activeSubs.length === 0) return false;
+        return matchesSubByHeuristics(p, macro, activeSubs);
       }
 
-      const isSubcatActive = selectedCategories.includes(subcatKey);
-      // STRICT CATEGORY FILTERING ("ogni categoria chiamata deve dare risultati solo della categoria stessa")
-      // Se selezionato "monumenti", accetta monumenti. Se "gemme", accetta gemme.
-      const isGemSelected = (p.category === "gemme" || p.is_gem) && selectedCategories.includes("gemme");
-      let isMacroSelected = selectedCategories.includes(effectiveCategory) || selectedCategories.includes(p.category) || isGemSelected;
-
-      if (selectedCategories.includes("monumenti") && ["chiese", "musei", "panorami", "monumenti", "attraction", "castle", "ruins", "archaeological_site", "artwork"].includes(effectiveCategory)) {
-        isMacroSelected = true;
-      }
-
-      // Stesso salvataggio per "locali": i POI con categoria grezza OSM
-      // (restaurant/cafe/bar/...) finivano su subcatKey 'ristoranti'/'bar'
-      // che non è un id chip e venivano scartati.
-      if (selectedCategories.includes("locali") && ["locali", "restaurant", "cafe", "bar", "fast_food", "pub", "ice_cream", "bakery", "ristoranti", "gelateria", "nightclub", "biergarten"].includes(effectiveCategory)) {
-        isMacroSelected = true;
-      }
-
-      const matchesCategory = isSubcatActive || isMacroSelected;
-
-      if (!matchesCategory) return false;
-
-      // Ensure subFilter exists and has items to filter by; otherwise show all
-      if (!subFilter || subFilter.length === 0) {
-        return true;
-      }
-
-      const LOCALI_SUBS = ["ristorante", "pizzeria", "pesce", "carne", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria", "sushi"];
-      const UTILITA_SUBS = ["taxi", "stazione_ferroviaria", "casello_autostradale", "ospedale", "farmacia", "metropolitana", "polizia", "fontanelle", "mercato"];
-      const FAMIGLIE_SUBS = ["parco_giochi", "parco_divertimenti", "acquario", "zoo"];
-      const CULTURA_SUBS = ["monumenti_sub", "chiese", "musei", "panorami"];
-
-      // Id canonico della subCategory (etichetta o tag) per il match coi chip
-      const subId = subCategoryToFilterId(p.subCategory);
-
-      // 2. Locale sub-filtering
-      if (p.category === "locali" && subFilter.some(s => LOCALI_SUBS.includes(s))) {
-        // Direct subCategory match
-        if (p.subCategory && (subFilter.includes(p.subCategory) || subFilter.includes(subId))) return true;
-
-        // gluten_free_only/options both map to the "glutenfree" subCategory assigned by code
-        if ((subFilter.includes("gluten_free_only") || subFilter.includes("gluten_free_options") || subFilter.includes("glutenfree")) &&
-            (p.subCategory === "glutenfree" || p.subCategory === "gluten_free_only" || p.subCategory === "gluten_free_options")) return true;
-
-        const nameLower = p.name?.toLowerCase() || "";
-        const amenity = (p.amenity || "").toLowerCase();
-        const types = p.types || [];
-        
-        if (subFilter.includes("ristorante") && (amenity.includes("restaurant") || types.includes("restaurant") || nameLower.includes("ristorante") || nameLower.includes("osteria") || nameLower.includes("trattoria"))) return true;
-        if (subFilter.includes("pizzeria") && (nameLower.includes("pizz") || amenity.includes("pizza") || types.includes("pizza"))) return true;
-        if (subFilter.includes("pesce") && (nameLower.includes("pesce") || nameLower.includes("mare") || nameLower.includes("sea") || nameLower.includes("fish") || types.includes("seafood_restaurant"))) return true;
-        if (subFilter.includes("carne") && (nameLower.includes("carne") || nameLower.includes("steak") || nameLower.includes("brace") || nameLower.includes("grill") || types.includes("steak_house"))) return true;
-        if (subFilter.includes("vegetariano") && (nameLower.includes("vega") || nameLower.includes("bio") || nameLower.includes("vegetariano") || nameLower.includes("salad") || types.includes("vegetarian_restaurant"))) return true;
-        if ((subFilter.includes("glutenfree") || subFilter.includes("gluten_free_only") || subFilter.includes("gluten_free_options")) && (nameLower.includes("senza glutine") || nameLower.includes("gluten") || nameLower.includes("celiac"))) return true;
-        if (subFilter.includes("bar") && (amenity.includes("bar") || amenity.includes("cafe") || types.includes("bar") || types.includes("cafe") || nameLower.includes("bar ") || nameLower.includes("caffé"))) return true;
-        if (subFilter.includes("gelateria") && (nameLower.includes("gelat") || nameLower.includes("ice cream"))) return true;
-        if (subFilter.includes("sushi") && (nameLower.includes("sushi") || nameLower.includes("giapponese") || nameLower.includes("japanese") || types.includes("sushi_restaurant"))) return true;
-        
-        return false;
-      }
-
-      // 3. Utilita sub-filtering
-      if (p.category === "utilita" && subFilter.some(s => UTILITA_SUBS.includes(s))) {
-        if (p.subCategory && (subFilter.includes(p.subCategory) || subFilter.includes(subId))) return true;
-        const nameLower = p.name?.toLowerCase() || "";
-        const amenity = (p.amenity || "").toLowerCase();
-        const railway = (p.railway || "").toLowerCase();
-
-        if (subFilter.includes("taxi") && (amenity.includes("taxi") || nameLower.includes("taxi") || nameLower.includes("radiotaxi"))) return true;
-        if (subFilter.includes("stazione_ferroviaria") && (railway === "station" || nameLower.includes("stazione fs") || nameLower.includes("stazione ferrovia") || nameLower.includes("gare ") || nameLower.includes("bahnhof"))) return true;
-        if (subFilter.includes("casello_autostradale") && (nameLower.includes("casello") || nameLower.includes("toll booth") || amenity.includes("toll"))) return true;
-        if (subFilter.includes("ospedale") && (amenity.includes("hospital") || nameLower.includes("ospedal") || nameLower.includes("hospital") || nameLower.includes("clinica"))) return true;
-        if (subFilter.includes("farmacia") && (amenity.includes("pharmacy") || nameLower.includes("farmac") || nameLower.includes("pharma") || nameLower.includes("apothe"))) return true;
-        if (subFilter.includes("metropolitana") && (nameLower.includes("metro") || amenity === "subway" || railway.includes("subway"))) return true;
-        if (subFilter.includes("fontanelle") && (amenity.includes("drinking_water") || nameLower.includes("fontanell") || nameLower.includes("drinking") || nameLower.includes("fountain"))) return true;
-        if (subFilter.includes("mercato") && (amenity.includes("marketplace") || nameLower.includes("mercat") || nameLower.includes("market") || nameLower.includes("souk") || nameLower.includes("bazar"))) return true;
-
-        return false;
-      }
-
-      // 4. Famiglie sub-filtering
-      if (p.category === "famiglie" && subFilter.some(s => FAMIGLIE_SUBS.includes(s))) {
-        if (p.subCategory && (subFilter.includes(p.subCategory) || subFilter.includes(subId))) return true;
-        return false;
-      }
-
-      // 5. Cultura sub-filtering (Gemme e Monumenti)
-      if (["monumenti", "chiese", "musei", "panorami", "gemme", "castle", "ruins", "archaeological_site", "attraction", "artwork"].includes(p.category) || ["monumenti", "chiese", "musei", "panorami"].includes(subcatKey)) {
-        if (subFilter.some(s => CULTURA_SUBS.includes(s))) {
-          if (subFilter.includes(subcatKey)) return true;
-          // Fix for 'monumenti_sub' which is the chip ID for Monumenti
-          if (subFilter.includes("monumenti_sub") && subcatKey === "monumenti") return true;
-
-          return false;
-        }
-      }
       return true;
     });
   }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
+
 
   // Initial fetch when map is ready
   useEffect(() => {
@@ -1951,7 +2025,15 @@ function MapArea({
         mapRef.current.flyTo(userLocation, 18, { duration: 1.2 });
       } else {
         // Fallback al locationService per richiedere la posizione attuale
-        import('@capacitor/geolocation').then(({ Geolocation }) => {
+        import('@capacitor/geolocation').then(async ({ Geolocation }) => {
+          // Su iOS/Android senza permesso concesso getCurrentPosition fallisce
+          // subito: chiediamolo qui, è il gesto esplicito dell'utente.
+          try {
+            const perm = await Geolocation.checkPermissions();
+            if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+              await Geolocation.requestPermissions({ permissions: ['location'] });
+            }
+          } catch { /* su web il check non esiste: si prosegue */ }
           Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 }).then(pos => {
             const lat = pos.coords.latitude;
             const lon = pos.coords.longitude;
@@ -2364,9 +2446,19 @@ function MapArea({
               // sotto il centro apposta per lasciare spazio al popup.
               autoPan={false}
               eventHandlers={{
-                remove: () => {
-                  setActivePopupId((cur) => (cur === activePoi.id ? null : cur));
-                  setActivePoi((cur) => (cur && cur.id === activePoi.id ? null : cur));
+                // Leaflet emette `remove` anche quando il popup viene solo
+                // ri-agganciato durante un re-render: chiudere la scheda in
+                // quel caso la faceva apparire e sparire in pochi millisecondi.
+                // Chiudiamo solo se, esaurito il ciclo di render, il popup non
+                // è più sulla mappa (chiusura vera dell'utente).
+                remove: (e: any) => {
+                  const closedId = activePoi.id;
+                  setTimeout(() => {
+                    const map = mapRef.current;
+                    if (map && e?.target && map.hasLayer(e.target)) return;
+                    setActivePopupId((cur) => (cur === closedId ? null : cur));
+                    setActivePoi((cur) => (cur && cur.id === closedId ? null : cur));
+                  }, 0);
                 },
               }}
             >

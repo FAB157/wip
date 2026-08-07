@@ -40,9 +40,12 @@ import ZeroCreditsBanner from "./components/ZeroCreditsBanner";
 import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
 
-// Reference stabile: un array inline come prop faceva ripartire i fetch di
-// EventsScreen a ogni render di App.
+// Centro iniziale finché l'utente non muove la mappa. Reference stabile: un
+// array inline come prop faceva ripartire i fetch di EventsScreen a ogni
+// render di App.
 const DEFAULT_EVENTS_CENTER: [number, number] = [44.07, 10.1];
+/** Raggio di ricerca iniziale (km) prima del primo movimento della mappa. */
+const DEFAULT_EVENTS_RADIUS_KM = 100;
 
 export default function App() {
   // --- 1. Basic App State ---
@@ -52,6 +55,12 @@ export default function App() {
   // refresh del token da un vero cambio account / logout.
   const sessionUserIdRef = useRef<string | null>(null);
   const [language, setLanguageState] = useState<Language>(() => (localStorage.getItem("wip_language") as Language) || "IT");
+  // Centro e raggio della mappa VISUALIZZATA: è il riferimento geografico di
+  // tutte le ricerche esterne (Viator, GetYourGuide, Virgilio, Ticketmaster).
+  // Prima erano ancorate a una costante, quindi spostare la mappa su un'altra
+  // città non cambiava i risultati.
+  const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_EVENTS_CENTER);
+  const [mapRadiusKm, setMapRadiusKm] = useState<number>(DEFAULT_EVENTS_RADIUS_KM);
   const [isRecovering, setIsRecovering] = useState(() => window.location.hash.includes('type=recovery'));
 
   const { bundleState, closeBundle, triggerBundleCheck } = usePredictiveDownload();
@@ -261,6 +270,26 @@ export default function App() {
 
     wipeLocalUserData();
   }, [language]);
+
+  // Centro mappa dal viewport (emesso da MapArea a fine movimento). Aggiorniamo
+  // lo stato solo oltre una soglia: EventsScreen rilancia 4 API a pagamento a
+  // ogni cambio di valore, non deve farlo per un pan di pochi metri.
+  useEffect(() => {
+    const onMapCenter = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (!Number.isFinite(d.lat) || !Number.isFinite(d.lon)) return;
+      setMapCenter((prev) =>
+        Math.abs(prev[0] - d.lat) > 0.02 || Math.abs(prev[1] - d.lon) > 0.02
+          ? [d.lat, d.lon]
+          : prev,
+      );
+      if (Number.isFinite(d.radiusKm)) {
+        setMapRadiusKm((prev) => (Math.abs(prev - d.radiusKm) > 5 ? d.radiusKm : prev));
+      }
+    };
+    window.addEventListener('wip-map-center-change', onMapCenter);
+    return () => window.removeEventListener('wip-map-center-change', onMapCenter);
+  }, []);
 
   // --- Initialization Effects ---
   useEffect(() => {
@@ -675,7 +704,7 @@ export default function App() {
             animate={{ opacity: 1, x: 0 }}
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
-            <EventsScreen mapCenter={DEFAULT_EVENTS_CENTER} onClose={() => setActiveTab("map")} language={language} />
+            <EventsScreen mapCenter={mapCenter} mapRadiusKm={mapRadiusKm} onClose={() => setActiveTab("map")} language={language} />
           </motion.div>
         )}
         {activeTab === "camera" && <CameraScreen onRecognize={(data) => {

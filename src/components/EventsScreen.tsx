@@ -15,7 +15,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { logApiCall } from "../lib/apiLogger";
 import { supabase } from "../lib/supabase";
 import { getApiUrl } from "../lib/api";
-import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl } from "../lib/affiliates";
+import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
 
 type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator";
@@ -41,13 +41,19 @@ interface EventData {
 
 import { Language, getTranslation } from "../lib/i18n";
 
+/** Viator: le esperienze hanno senso solo vicino al punto cercato. */
+const VIATOR_MAX_RADIUS_KM = 50;
+
 interface EventsScreenProps {
+  /** Centro della mappa VISUALIZZATA: riferimento di tutte le ricerche. */
   mapCenter?: [number, number];
+  /** Raggio del riquadro visibile: proposto come raggio di ricerca iniziale. */
+  mapRadiusKm?: number;
   onClose?: () => void;
   language: Language;
 }
 
-export default function EventsScreen({ mapCenter, onClose, language }: EventsScreenProps) {
+export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language }: EventsScreenProps) {
   const [sourceResults, setSourceResults] = useState<Record<EventSource, EventData[]>>({
     virgilio: [],
     ticketmaster: [],
@@ -72,7 +78,12 @@ export default function EventsScreen({ mapCenter, onClose, language }: EventsScr
   const [city, setCity] = useState("Italia");
   const [sortBy, setSortBy] = useState<'date' | 'relevance'>('date');
   const [deviceCoords, setDeviceCoords] = useState<[number, number] | null>(null);
-  const [radius, setRadius] = useState(100);
+  // Raggio iniziale = quello del riquadro visibile sulla mappa, così la prima
+  // ricerca copre esattamente ciò che l'utente sta guardando. I chip di
+  // distanza restano sovrani: una volta scelti, comandano loro.
+  const [radius, setRadius] = useState(() =>
+    Math.min(Math.max(Math.round(mapRadiusKm ?? 100), 10), 500),
+  );
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   // Date filters
@@ -382,11 +393,15 @@ export default function EventsScreen({ mapCenter, onClose, language }: EventsScr
       // getApiUrl: su Capacitor i path relativi puntano agli asset locali e la
       // fetch fallirebbe sempre (zero esperienze = zero commissioni su nativo).
       // Timeout esplicito: il fallimento resta confinato alla card Viator.
+      // Viator: raggio massimo 50 km dal centro della mappa visualizzata.
+      // I chip di distanza arrivano fino a 500 km, ma per le esperienze un
+      // raggio così ampio restituirebbe tour di un'altra regione.
+      const viatorRadius = Math.min(r || VIATOR_MAX_RADIUS_KM, VIATOR_MAX_RADIUS_KM);
       const res = await fetch(getApiUrl("/api/viator"), {
         signal: AbortSignal.timeout(12000),
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat, lon, radius: r, startDate: start, endDate: end, cityName })
+        body: JSON.stringify({ lat, lon, radius: viatorRadius, startDate: start, endDate: end, cityName })
       });
 
       if (!res.ok) {
@@ -598,13 +613,19 @@ export default function EventsScreen({ mapCenter, onClose, language }: EventsScr
       const dEnd = new Date(endDate);
       dEnd.setHours(23, 59, 59, 999);
       const inDateRange = dateObj >= dStart && dateObj <= dEnd;
-      if (!inDateRange && e.source !== "virgilio" && e.source !== "viator") return false;
+      // Virgilio ha una data vera quando il parsing dell'annuncio riesce: in
+      // quel caso il periodo scelto vale anche per lui. Restano esenti solo le
+      // esperienze Viator, che sono prenotabili su più date.
+      if (!inDateRange && e.source !== "viator") return false;
     }
 
-    // Distance Filter from Map Center
+    // Distanza dal CENTRO DELLA MAPPA VISUALIZZATA (non dalla posizione GPS)
     if (e.lat && e.lon && mapCenter) {
       const distInKm = getDistanceFromLatLonInM(mapCenter[0], mapCenter[1], e.lat, e.lon) / 1000;
-      if (distInKm > radius) {
+      // Viator ha il suo tetto: le esperienze oltre i 50 km non riguardano
+      // il luogo che l'utente sta guardando.
+      const maxKm = e.source === "viator" ? Math.min(radius, VIATOR_MAX_RADIUS_KM) : radius;
+      if (distInKm > maxKm) {
         return false;
       }
     }
@@ -845,6 +866,7 @@ export default function EventsScreen({ mapCenter, onClose, language }: EventsScr
                       href={ensureAffiliateUrl(event.url)}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={() => trackAffiliateClick(event.url, event.name, city, 'events_screen')}
                       className="flex-1 bg-primary hover:bg-primary/90 text-on-primary font-semibold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
                     >
                       <ExternalLink className="w-4 h-4" />

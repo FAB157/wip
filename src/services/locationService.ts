@@ -585,8 +585,14 @@ class LocationService {
     this.isHighAccuracy = highAccuracy;
 
     const handlePosition = async (position: any, isNative: boolean = false) => {
-      const coords = isNative ? position : position.coords;
-      if (!coords) return;
+      // @capacitor/geolocation restituisce { coords: {...}, timestamp } come il
+      // browser; il vecchio codice trattava il payload nativo come piatto
+      // (formato di background-geolocation) e leggeva latitude/longitude da un
+      // oggetto che non le ha: su iOS e Android la posizione era sempre
+      // undefined e il mirino/follow-me non funzionava. Accettiamo entrambe le
+      // forme invece di indovinare in base alla piattaforma.
+      const coords = position?.coords ?? position;
+      if (!coords || !Number.isFinite(coords.latitude) || !Number.isFinite(coords.longitude)) return;
       const now = Date.now();
       const update: LocationUpdate = {
         latitude: coords.latitude,
@@ -594,7 +600,7 @@ class LocationService {
         speed: coords.speed || 0,
         heading: coords.heading || 0,
         accuracy: coords.accuracy || 10,
-        timestamp: isNative ? (position.time || now) : (position.timestamp || now),
+        timestamp: position?.timestamp || position?.time || now,
       };
       this.lastLocation = update;
       this.listeners.forEach(l => l(update));
@@ -645,9 +651,30 @@ class LocationService {
 
     if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
       try {
+        // Il permesso va chiesto PRIMA del watch: su iOS e Android un
+        // watchPosition senza autorizzazione fallisce (o resta muto) e il
+        // mirino non riceveva mai un fix.
+        try {
+          const perm = await Geolocation.checkPermissions();
+          if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
+            await Geolocation.requestPermissions({ permissions: ['location'] });
+          }
+        } catch (permErr) {
+          console.warn('[LocationService] Permission check failed', permErr);
+        }
+
+        // Un fix immediato evita che il mirino resti inerte finché non arriva
+        // il primo update del watch (fino a diversi secondi a freddo).
+        Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 })
+          .then(pos => handlePosition(pos, true))
+          .catch(() => {});
+
         this.watchId = await Geolocation.watchPosition(
           { enableHighAccuracy: true, timeout: 10000 },
-          (position) => { if (position) handlePosition(position, true); }
+          (position, err) => {
+            if (err) { console.warn('[LocationService] watchPosition error', err); return; }
+            if (position) handlePosition(position, true);
+          }
         ) as any;
       } catch (e) {
         console.warn("[LocationService] Native watch failed, fallback to web", e);
