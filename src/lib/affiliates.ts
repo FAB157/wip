@@ -116,6 +116,52 @@ export function ensureAffiliateUrl(url: string): string {
   );
 }
 
+// ── TRACKING CLICK AFFILIATI ────────────────────────────────────────────
+// Registra il click in uscita nella tabella affiliate_clicks (letta dal
+// pannello admin "Statistiche Affiliazione"). Best-effort: NON deve mai
+// bloccare o ritardare l'apertura del link — chiamare senza await.
+
+export type AffiliateProvider = 'gyg' | 'viator' | 'ticketmaster' | 'other';
+
+/** Deduce il provider dall'URL di destinazione. */
+export function providerFromUrl(url: string): AffiliateProvider {
+  const u = (url || '').toLowerCase();
+  if (u.includes('getyourguide.')) return 'gyg';
+  if (u.includes('viator') || u.includes('vi.me')) return 'viator';
+  if (u.includes('ticketmaster.')) return 'ticketmaster';
+  return 'other';
+}
+
+/**
+ * Traccia l'apertura di un link affiliato in `affiliate_clicks` (statistiche
+ * admin). Fire-and-forget: mai bloccante per l'utente. Il provider viene
+ * dedotto dall'URL e codificato anche nel source_page ("gyg:EventsScreen"),
+ * così le statistiche per provider funzionano pure se la colonna dedicata
+ * `provider` non esiste ancora (migrazione 20260807120000 non applicata:
+ * in quel caso si ritenta l'insert senza).
+ */
+export function trackAffiliateClick(url: string, name: string, city: string, sourcePage: string): void {
+  try {
+    const provider = providerFromUrl(url);
+    // import dinamico: evita di trascinare supabase nei bundle che usano
+    // solo gli helper URL di questo modulo.
+    import('./supabase').then(({ supabase }) => {
+      const row: any = {
+        poi_name: name || provider,
+        poi_city: city || '',
+        source_page: `${provider}:${sourcePage}`,
+        provider
+      };
+      supabase.from('affiliate_clicks').insert(row).then(({ error }: any) => {
+        if (error) {
+          const { provider: _p, ...base } = row;
+          supabase.from('affiliate_clicks').insert(base).then(() => {});
+        }
+      });
+    }).catch(() => {});
+  } catch { /* telemetria: mai bloccante */ }
+}
+
 /** Pagina di ricerca GetYourGuide con la città già nel campo, tracciata. */
 export function gygSearchUrl(city: string): string {
   return ensureGygAffiliateUrl(
