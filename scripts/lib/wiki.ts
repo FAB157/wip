@@ -354,16 +354,27 @@ export async function findOfficialPhoto(
  * Testo di CONTESTO su una località da Wikivoyage: parla della città, non del
  * singolo POI, quindi non autorizza a citare date o architetti dell'edificio.
  */
-export async function fetchWikivoyageContext(city: string, maxChars = 1200): Promise<string> {
+export async function fetchWikivoyageContext(city: string, maxChars = 1500): Promise<string> {
   if (!city) return '';
+  // NIENTE exintro: su Wikivoyage l'introduzione è una riga sola ("Carrara è
+  // una città della Toscana"), mentre il contesto vero — storia, territorio,
+  // tradizioni — sta nella sezione "Da sapere" subito dopo. Si prende quindi
+  // l'estratto completo e se ne tiene l'inizio. `redirects` segue i rimandi
+  // (es. "Firenze città" → "Firenze").
   const data = await getJson(
     `https://it.wikivoyage.org/w/api.php?action=query&titles=${encodeURIComponent(city)}` +
-    `&prop=extracts&explaintext=1&exintro=1&format=json&origin=*`
+    `&prop=extracts&explaintext=1&redirects=1&format=json&origin=*`
   );
   const pages = data?.query?.pages;
   if (!pages) return '';
   const extract = (Object.values(pages)[0] as any)?.extract;
-  return typeof extract === 'string' ? extract.substring(0, maxChars) : '';
+  if (typeof extract !== 'string') return '';
+  return extract
+    // I titoli di sezione ("== Da sapere ==") sono rumore nel prompt.
+    .replace(/^=+\s*.*?\s*=+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .substring(0, maxChars);
 }
 
 export interface PoiSources {

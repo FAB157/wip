@@ -9,6 +9,7 @@ import {
   Fragment,
   memo,
 } from "react";
+import { getApiUrl } from "../lib/api";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -225,175 +226,19 @@ export function normalizeSubCategory(subCat: string): string {
   return map[subCat.toLowerCase()] || subCat.charAt(0).toUpperCase() + subCat.slice(1).replace(/_/g, ' ');
 }
 
-/**
- * Riconduce una subCategory (etichetta italiana da normalizeSubCategory, tag
- * OSM grezzo o id già canonico) all'id chip usato dai sub-filtri. Senza questa
- * mappa i confronti subFilter.includes(p.subCategory) non matchavano mai:
- * i chip usano id ("farmacia") mentre i POI portavano etichette ("Farmacia").
- */
-export function subCategoryToFilterId(subCat?: string | null): string {
-  if (!subCat) return "";
-  const l = subCat.toLowerCase();
-  const map: Record<string, string> = {
-    "farmacia": "farmacia", "pharmacy": "farmacia",
-    "ospedale": "ospedale", "hospital": "ospedale",
-    "taxi": "taxi",
-    "stazione": "stazione_ferroviaria", "station": "stazione_ferroviaria",
-    "fermata metro": "metropolitana", "subway_entrance": "metropolitana",
-    "casello autostradale": "casello_autostradale", "toll_booth": "casello_autostradale", "motorway_junction": "casello_autostradale",
-    "fontanella": "fontanelle", "drinking_water": "fontanelle",
-    "mercato locale": "mercato", "marketplace": "mercato",
-    "polizia": "polizia", "police": "polizia",
-    "parco giochi": "parco_giochi", "playground": "parco_giochi",
-    "parco a tema": "parco_divertimenti", "theme_park": "parco_divertimenti",
-    "acquario": "acquario", "aquarium": "acquario",
-    "zoo": "zoo",
-    "gelateria": "gelateria", "ice_cream": "gelateria",
-    "ristorante": "ristorante", "restaurant": "ristorante",
-    "bar caffè": "bar", "cafe": "bar", "bar": "bar",
-  };
-  return map[l] || l;
-}
+// La tassonomia dei POI (macro-categoria, sotto-categoria e regola ferrea del
+// filtro) vive in src/lib/poiTaxonomy.ts: e' logica pura e li' e' testabile,
+// mentre questo componente non e' importabile fuori dal browser.
+import {
+  subCategoryToFilterId,
+  SUBS_BY_MACRO,
+  resolvePoiTaxonomy,
+  matchesSubByHeuristics,
+  passesCategoryRule,
+} from "../lib/poiTaxonomy";
 
-/**
- * REGOLA FERREA DEL FILTRAGGIO — unica fonte di verità.
- *
- * Ogni POI appartiene a UNA sola macro-categoria (gli id delle chip principali)
- * e a UNA sola sotto-categoria (gli id dei sub-chip). Un POI è visibile solo se
- * la sua macro è selezionata E, quando l'utente ha scelto sub-chip DI QUELLA
- * macro, se la sua sotto-categoria è tra quelli scelti. I sub-chip di altre
- * macro non lo riguardano.
- *
- * Prima la stessa logica era sparsa in tre punti con liste divergenti e
- * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
- * anche da deselezionati.
- */
-export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie"] as const;
-
-/** Sub-chip disponibili per ogni macro (ids esatti di CategoryChips). */
-export const SUBS_BY_MACRO: Record<string, string[]> = {
-  gemme: ["monumenti_sub", "chiese", "musei", "panorami"],
-  monumenti: ["monumenti_sub", "chiese", "musei", "panorami"],
-  locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
-  utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia"],
-  famiglie: ["parco_giochi", "parco_divertimenti", "acquario", "zoo"],
-};
-
-const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
-const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gallery"];
-const PANORAMI_TYPES = ["viewpoint", "panorami", "panorama", "park", "parchi", "garden", "nature_reserve"];
-const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
-const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
-const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
-const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
-
-/**
- * Macro + sotto-categoria canoniche di un POI. `subId` usa gli id dei sub-chip
- * ("chiese", "monumenti_sub", "farmacia", …), stringa vuota se non deducibile.
- */
-export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: string } {
-  const raw = String(p.baseCategory || p.category || "").toLowerCase();
-  const sub = String(p.subCategory || "").toLowerCase();
-  const subCanonical = subCategoryToFilterId(sub);
-
-  // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
-  // ma conservano la sotto-categoria culturale per i sub-chip.
-  const isGem = p.is_gem === true || raw === "gemme";
-
-  const culturalSub = (value: string): string | null => {
-    if (CHIESE_TYPES.includes(value)) return "chiese";
-    if (MUSEI_TYPES.includes(value)) return "musei";
-    if (PANORAMI_TYPES.includes(value)) return "panorami";
-    if (MONUMENTI_TYPES.includes(value)) return "monumenti_sub";
-    return null;
-  };
-
-  const cultural = culturalSub(raw) || culturalSub(sub);
-  if (isGem) return { macro: "gemme", subId: cultural || "" };
-  if (cultural) return { macro: "monumenti", subId: cultural };
-
-  if (LOCALI_TYPES.includes(raw)) return { macro: "locali", subId: subCanonical };
-  if (FAMIGLIE_TYPES.includes(raw)) return { macro: "famiglie", subId: subCanonical || subCategoryToFilterId(raw) };
-  if (UTILITA_TYPES.includes(raw)) return { macro: "utilita", subId: subCanonical || subCategoryToFilterId(raw) };
-
-  return { macro: null, subId: subCanonical };
-}
-
-/**
- * Molti POI da Overpass/Google arrivano senza subCategory: qui la deduciamo da
- * nome e tag, ma solo per verificare se corrispondono a uno dei sub-chip
- * ATTIVI. Non è mai un lasciapassare: se nulla combacia, il POI resta escluso.
- */
-export function matchesSubByHeuristics(p: any, macro: string, activeSubs: string[]): boolean {
-  const name = (p.name || "").toLowerCase();
-  const amenity = (p.amenity || "").toLowerCase();
-  const railway = (p.railway || "").toLowerCase();
-  const types: string[] = p.types || [];
-  const has = (s: string) => activeSubs.includes(s);
-
-  if (macro === "locali") {
-    if (has("ristorante") && (amenity.includes("restaurant") || types.includes("restaurant") || name.includes("ristorante") || name.includes("osteria") || name.includes("trattoria"))) return true;
-    if (has("pizzeria") && (name.includes("pizz") || amenity.includes("pizza") || types.includes("pizza"))) return true;
-    if (has("pesce") && (name.includes("pesce") || name.includes("mare") || name.includes("sea") || name.includes("fish") || types.includes("seafood_restaurant"))) return true;
-    if (has("carne") && (name.includes("carne") || name.includes("steak") || name.includes("brace") || name.includes("grill") || types.includes("steak_house"))) return true;
-    if (has("vegetariano") && (name.includes("vega") || name.includes("bio") || name.includes("vegetariano") || name.includes("salad") || types.includes("vegetarian_restaurant"))) return true;
-    if ((has("glutenfree") || has("gluten_free_only") || has("gluten_free_options")) && (name.includes("senza glutine") || name.includes("gluten") || name.includes("celiac"))) return true;
-    if (has("bar") && (amenity.includes("bar") || amenity.includes("cafe") || types.includes("bar") || types.includes("cafe") || name.includes("bar ") || name.includes("caffé"))) return true;
-    if (has("gelateria") && (name.includes("gelat") || name.includes("ice cream"))) return true;
-    if (has("sushi") && (name.includes("sushi") || name.includes("giapponese") || name.includes("japanese") || types.includes("sushi_restaurant"))) return true;
-    return false;
-  }
-
-  if (macro === "utilita") {
-    if (has("taxi") && (amenity.includes("taxi") || name.includes("taxi") || name.includes("radiotaxi"))) return true;
-    if (has("stazione_ferroviaria") && (railway === "station" || name.includes("stazione fs") || name.includes("stazione ferrovia") || name.includes("gare ") || name.includes("bahnhof"))) return true;
-    if (has("casello_autostradale") && (name.includes("casello") || name.includes("toll booth") || amenity.includes("toll"))) return true;
-    if (has("ospedale") && (amenity.includes("hospital") || name.includes("ospedal") || name.includes("hospital") || name.includes("clinica"))) return true;
-    if (has("farmacia") && (amenity.includes("pharmacy") || name.includes("farmac") || name.includes("pharma") || name.includes("apothe"))) return true;
-    if (has("metropolitana") && (name.includes("metro") || amenity === "subway" || railway.includes("subway"))) return true;
-    if (has("polizia") && (amenity.includes("police") || name.includes("polizia") || name.includes("carabinier"))) return true;
-    if (has("fontanelle") && (amenity.includes("drinking_water") || name.includes("fontanell") || name.includes("drinking") || name.includes("fountain"))) return true;
-    if (has("mercato") && (amenity.includes("marketplace") || name.includes("mercat") || name.includes("market") || name.includes("souk") || name.includes("bazar"))) return true;
-    return false;
-  }
-
-  if (macro === "famiglie") {
-    if (has("parco_giochi") && (name.includes("parco giochi") || name.includes("playground"))) return true;
-    if (has("parco_divertimenti") && (name.includes("divertiment") || name.includes("theme park") || name.includes("luna park"))) return true;
-    if (has("acquario") && (name.includes("acquario") || name.includes("aquarium"))) return true;
-    if (has("zoo") && (name.includes("zoo") || name.includes("safari") || name.includes("bioparco"))) return true;
-    return false;
-  }
-
-  // Cultura (monumenti e gemme): il tipo è già risolto da resolvePoiTaxonomy;
-  // qui restano i POI con categoria generica ma nome parlante.
-  if (has("chiese") && (name.includes("chiesa") || name.includes("duomo") || name.includes("basilica") || name.includes("santuario") || name.includes("cattedrale") || name.includes("abbazia") || name.includes("church"))) return true;
-  if (has("musei") && (name.includes("museo") || name.includes("museum") || name.includes("pinacoteca") || name.includes("galleria"))) return true;
-  if (has("panorami") && (name.includes("panoram") || name.includes("belvedere") || name.includes("viewpoint") || name.includes("giardin"))) return true;
-  if (has("monumenti_sub") && (name.includes("monument") || name.includes("castello") || name.includes("torre") || name.includes("palazzo") || name.includes("rocca"))) return true;
-  return false;
-}
-
-/**
- * Vero se il POI supera la regola ferrea per la selezione corrente di chip.
- * `subFilter` è la lista piatta dei sub-chip attivi di TUTTE le macro.
- */
-export function passesCategoryRule(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
-  const { macro, subId } = resolvePoiTaxonomy(p);
-  if (!macro) return false;
-  if (!selectedCategories.includes(macro)) return false;
-
-  const subsOfMacro = SUBS_BY_MACRO[macro] || [];
-  const activeSubs = (subFilter || []).filter(s => subsOfMacro.includes(s));
-  // Nessun sub-chip di questa macro selezionato ⇒ il chip "Tutti" è attivo.
-  if (activeSubs.length === 0) return true;
-
-  if (subId && activeSubs.includes(subId)) return true;
-  // glutenfree ha tre id equivalenti tra chip e dati.
-  const GF = ["glutenfree", "gluten_free_only", "gluten_free_options"];
-  if (GF.includes(subId) && activeSubs.some(s => GF.includes(s))) return true;
-  return false;
-}
+// Ri-esportata: altri componenti la importano storicamente da qui.
+export { subCategoryToFilterId };
 
 // Cache di sessione per le coordinate TripAdvisor: la search non le
 // restituisce (servono i /details, che consumano quota API) — ogni locale
@@ -874,33 +719,28 @@ function MapArea({
     const abortCtrl = new AbortController();
     const timer = setTimeout(async () => {
       setIsSearching(true);
-      const token = import.meta.env.VITE_MAPBOX_TOKEN;
-      if (!token) {
-        console.warn("Mapbox token missing for search");
-        setIsSearching(false);
-        return;
-      }
-
       try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(searchQuery)}.json?access_token=${token}&language=${language.toLowerCase()}&limit=5`,
-          { signal: abortCtrl.signal }
-        );
+        // Proxy server-side (/api/geocode): il token Mapbox non è più esposto
+        // nel bundle client. `types` larghi: qui si cercano anche i luoghi.
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(searchQuery)}`
+          + `&lang=${language.toLowerCase()}&limit=5&types=place,locality,region,country,poi,address`
+        ), { signal: abortCtrl.signal });
         if (res.ok) {
           const data = await res.json();
           if (abortCtrl.signal.aborted) return;
           const feats = data.features || [];
           setSuggestions(feats.map((f: any) => ({
             id: f.id,
-            description: f.place_name,
-            lat: f.center[1],
-            lon: f.center[0],
+            description: f.description,
+            lat: f.lat,
+            lon: f.lon,
             isMapbox: true
           })));
           setSearchNoResults(feats.length === 0);
         }
       } catch (e) {
-        if (!abortCtrl.signal.aborted) console.error("Mapbox search error:", e);
+        if (!abortCtrl.signal.aborted) console.error("Geocode search error:", e);
       } finally {
         if (!abortCtrl.signal.aborted) setIsSearching(false);
       }
@@ -1850,20 +1690,10 @@ function MapArea({
         return isAccessible(p);
       }
 
-      // REGOLA FERREA: macro selezionata + (se ci sono sub-chip di quella
-      // macro) sotto-categoria selezionata. Vedi passesCategoryRule.
-      if (!passesCategoryRule(p, selectedCategories, subFilter)) {
-        // Molti POI da Overpass/Google non portano subCategory: prima di
-        // scartarli proviamo a dedurla dal nome/tag, ma SOLO tra i sub-chip
-        // effettivamente selezionati (mai un fall-through permissivo).
-        const { macro } = resolvePoiTaxonomy(p);
-        if (!macro || !selectedCategories.includes(macro)) return false;
-        const activeSubs = (subFilter || []).filter(s => (SUBS_BY_MACRO[macro] || []).includes(s));
-        if (activeSubs.length === 0) return false;
-        return matchesSubByHeuristics(p, macro, activeSubs);
-      }
-
-      return true;
+      // REGOLA FERREA: macro selezionata e, quando ci sono sub-chip attivi di
+      // quella macro, sotto-categoria selezionata. Tutta la regola sta in
+      // passesCategoryRule (src/lib/poiTaxonomy.ts), euristiche comprese.
+      return passesCategoryRule(p, selectedCategories, subFilter);
     });
   }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
 
