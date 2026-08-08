@@ -1,8 +1,8 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import OpenAI from 'openai';
-import axios from 'axios';
 import ws from 'ws';
+import { collectPoiSources } from './lib/wiki';
 
 (global as any).WebSocket = ws;
 dotenv.config();
@@ -35,6 +35,18 @@ let currentClientIndex = 0;
 const BATCH_SIZE = 30;
 const MODEL_NAME = "agnes-2.5-flash";
 
+// ── Parametri da riga di comando ────────────────────────────────────────────
+// Lo script riscrive POI già pubblicati: parte in simulazione e richiede
+// --apply per toccare il database.
+const argv = process.argv.slice(2);
+const DRY_RUN = !argv.includes('--apply');
+const getArg = (name: string, fallback: string) =>
+  (argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1] ?? fallback);
+const MAX_POIS = parseInt(getArg('limit', '0'), 10); // 0 = nessun limite
+const DELAY_MS = parseInt(getArg('delay', '300'), 10);
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 const CULTURAL_CATEGORIES = [
   'monumenti', 'monument', 'musei', 'museum', 'museo',
   'castle', 'castelli', 'archaeological_site', 'siti_archeologici',
@@ -43,76 +55,19 @@ const CULTURAL_CATEGORIES = [
   'nature_reserve', 'chiese', 'church', 'gemme'
 ];
 
-async function fetchWikidata(name: string): Promise<string> {
-  try {
-    const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(name)}&language=it&format=json`;
-    const searchRes = await axios.get(searchUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-    
-    if (searchRes.data?.search?.length > 0) {
-      const entityId = searchRes.data.search[0].id;
-      const entityDesc = searchRes.data.search[0].description || '';
-      const entityUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${entityId}&languages=it&props=claims&format=json`;
-      const entityRes = await axios.get(entityUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-      const claims = entityRes.data.entities[entityId]?.claims || {};
-      
-      const importantProps: any = {
-        'P571': 'Data di creazione', 'P84': 'Architetto/Creatore',
-        'P149': 'Stile', 'P186': 'Materiale', 'P31': 'Tipo'
-      };
-      
-      let facts: string[] = [];
-      if (entityDesc) facts.push(`Sommario: ${entityDesc}`);
-      
-      let idsToResolve: string[] = [];
-      for (const prop of Object.keys(importantProps)) {
-        if (claims[prop]) {
-          const valueObj = claims[prop][0].mainsnak.datavalue;
-          if (valueObj?.type === 'wikibase-entityid') {
-             idsToResolve.push(valueObj.value.id);
-          } else if (valueObj?.type === 'time') {
-             let timeStr = valueObj.value.time;
-             timeStr = timeStr.replace(/^\+/, '').split('T')[0];
-             facts.push(`${importantProps[prop]}: ${timeStr}`);
-          }
-        }
-      }
-      
-      if (idsToResolve.length > 0) {
-         const idsChunk = idsToResolve.slice(0, 50).join('|');
-         const valUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${idsChunk}&languages=it&props=labels&format=json`;
-         const valRes = await axios.get(valUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-         
-         for (const [prop, label] of Object.entries(importantProps)) {
-           if (claims[prop]) {
-             const valueObj = claims[prop as string][0].mainsnak.datavalue;
-             if (valueObj?.type === 'wikibase-entityid') {
-               const valLabel = valRes.data.entities[valueObj.value.id]?.labels?.it?.value;
-               if (valLabel) facts.push(`${label}: ${valLabel}`);
-             }
-           }
-         }
-      }
-      return facts.join(', ');
-    }
-  } catch(e: any) {}
-  return "";
-}
+// fetchWikidata e fetchWikipedia sono state sostituite da collectPoiSources
+// (scripts/lib/wiki.ts): identifica il POI dalle coordinate invece di
+// prendere il primo risultato di una ricerca testuale.
 
-async function fetchWikipedia(title: string): Promise<string> {
-  const headers = { 'User-Agent': 'ItaintaApp/1.0' };
-  try {
-    const res = await axios.get(`https://it.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&prop=extracts&exintro=false&explaintext=1&format=json`, { timeout: 3000, headers });
-    const pages = res.data?.query?.pages;
-    if (pages) {
-      const pageId = Object.keys(pages)[0];
-      if (pageId && pageId !== "-1" && pages[pageId].extract) return pages[pageId].extract.substring(0, 1500);
-    }
-  } catch (e) {}
-  return "";
+function finish(processed: number, updated: number) {
+  console.log(`\n🎉 Retro-enrichment terminato! Processati: ${processed}, Aggiornati: ${updated}${DRY_RUN ? ' (simulazione)' : ''}`);
+  if (DRY_RUN) console.log('Nessuna scrittura effettuata: rilancia con --apply per salvare.');
 }
 
 async function processRetroEnrichment() {
   console.log("🚀 Avvio Retro-Enrichment Wikidata...");
+  console.log(`   modalità: ${DRY_RUN ? 'SIMULAZIONE (usa --apply per salvare)' : 'SCRITTURA sul database'}`);
+  if (MAX_POIS > 0) console.log(`   limite: ${MAX_POIS} POI`);
   
   let lastId = '0';
   let processed = 0;
@@ -121,7 +76,8 @@ async function processRetroEnrichment() {
   while(true) {
     const { data: pois, error } = await supabase
       .from('shared_pois')
-      .select('id, name, city, category, description_ai')
+      .select('id, name, city, category, lat, lon, description_ai')
+      .not('lat', 'is', null)
       .not('enriched_at', 'is', null) // Prendi quelli GIA' arricchiti in passato
       .in('category', CULTURAL_CATEGORIES)
       // Evita di riprocessare all'infinito quelli appena rifatti da questo script
@@ -139,6 +95,10 @@ async function processRetroEnrichment() {
     console.log(`\n⏳ Analizzo batch da ${pois.length} POI (partendo da ${pois[0].name})...`);
 
     for (const poi of pois) {
+      if (MAX_POIS > 0 && processed >= MAX_POIS) {
+        console.log(`\nRaggiunto il limite di ${MAX_POIS} POI richiesto.`);
+        return finish(processed, updated);
+      }
       lastId = poi.id;
       processed++;
       
@@ -146,18 +106,23 @@ async function processRetroEnrichment() {
       // Se vuoi evitare loop futuri, potremmo aggiungere una flag nel JSON, ma per ora tiriamo dritto.
 
       const searchQuery = `${poi.name} ${poi.city || ''}`.trim();
-      
-      const wikiData = await fetchWikidata(searchQuery);
-      
-      if (!wikiData) {
-        // Niente Wikidata, passiamo oltre per risparmiare query AI
+
+      // Aggancio per COORDINATE (scripts/lib/wiki.ts). La versione precedente
+      // cercava per testo e prendeva il primo risultato: i dati di un omonimo
+      // lontano finivano nel testo di questo POI come "dati ufficiali".
+      const sources = await collectPoiSources(poi.name, poi.lat, poi.lon);
+      const wikiData = sources.wikidata;
+      const wikiRaw = sources.wikipedia;
+
+      if (!sources.match || (!wikiData && !wikiRaw)) {
+        // Nessuna fonte verificata per questo POI: il testo attuale resta.
+        // Riscriverlo sarebbe un peggioramento, non un aggiornamento.
+        await sleep(DELAY_MS);
         continue;
       }
-      
-      console.log(`-> 💡 TROVATO WIKIDATA per [${poi.name}]: ${wikiData}`);
-      
-      // Tiriamo giù anche Wikipedia per passarlo ad Agnes
-      const wikiRaw = await fetchWikipedia(searchQuery);
+
+      console.log(`-> 💡 [${poi.name}] agganciato a "${sources.match.title}" (${sources.match.distanceM}m${sources.match.qid ? `, ${sources.match.qid}` : ''})`);
+      if (wikiData) console.log(`      Wikidata: ${wikiData}`);
 
       const systemPrompt = `Sei un esperto di storia, cultura e turismo. Devi SOVRASCRIVERE e MIGLIORARE i contenuti turistici di questo luogo, sfruttando al massimo i nuovi "Dati Strutturati Ufficiali" (Wikidata) appena estratti.
 Devi restituire ESCLUSIVAMENTE un oggetto JSON valido.
@@ -203,42 +168,70 @@ Wikipedia: ${wikiRaw || 'Nessun testo discorsivo.'}`;
         let parsed;
         try { parsed = JSON.parse(resultJson); } catch (e) { continue; }
         
-        if (parsed.status === "OK") {
-          // Ricostruiamo l'oggetto JSON completo che usa l'app (aggiungendo la flag 'wikidata_retro_enriched')
-          parsed.wikidata_retro_enriched = true;
-          
-          await supabase
-            .from('shared_pois')
-            .update({
-              description_ai: JSON.stringify(parsed),
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', poi.id);
-
-          // Salva/aggiorna le audioguide per Nicky e Dante
-          const audioRecords = [
-            { poi_id: poi.id, profile: 'nicky', language: 'it', text_content: parsed.testo_nicky_it },
-            { poi_id: poi.id, profile: 'nicky', language: 'en', text_content: parsed.testo_nicky_en },
-            { poi_id: poi.id, profile: 'dante', language: 'it', text_content: parsed.testo_dante_it },
-            { poi_id: poi.id, profile: 'dante', language: 'en', text_content: parsed.testo_dante_en }
-          ];
-
-          for (const record of audioRecords) {
-            await supabase
-              .from('poi_audioguides')
-              .upsert(record, { onConflict: 'poi_id, profile, language' });
-          }
-
-          console.log(`      ✅ Upgrade completato per: ${poi.name}`);
-          updated++;
+        if (parsed.status !== "OK") {
+          console.log(`      ⏭️  Il modello ha risposto ${parsed.status || 'senza OK'}: testo esistente lasciato intatto.`);
+          continue;
         }
+
+        if (DRY_RUN) {
+          console.log(`      🔎 [simulazione] aggiornerei: ${String(parsed.descrizione_breve_it || '').slice(0, 90)}…`);
+          updated++;
+          continue;
+        }
+
+        // Gli stessi campi che scrive mass-enrich: aggiornare solo
+        // description_ai lasciava il resto dell'app (schede, teaser, info
+        // pratiche) fermo ai testi vecchi.
+        const { error: upErr } = await supabase
+          .from('shared_pois')
+          .update({
+            description_short: parsed.descrizione_breve_it,
+            description_long: parsed.descrizione_dettagliata_it,
+            teaser_text_it: parsed.teaser_it,
+            teaser_text_en: parsed.teaser_en,
+            practical_info: parsed.ulteriori_informazioni_it,
+            // Testo discorsivo, NON il JSON serializzato: la UI usa questo
+            // campo come fallback e mostrerebbe le graffe all'utente.
+            description_ai: parsed.descrizione_dettagliata_it,
+            enrichment_source: 'wikidata_retro',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', poi.id);
+        if (upErr) {
+          console.error(`      ❌ Update POI fallito: ${upErr.message}`);
+          continue;
+        }
+
+        // Colonne allineate a poiRepository.upsertAudioguide: la versione
+        // precedente scriveva profile/text_content, che nel database non
+        // esistono — le audioguide "salvate" non le leggeva nessuno.
+        const nowIso = new Date().toISOString();
+        const audioRecords = [
+          { poi_id: poi.id, language: 'IT', guide_character: 'nicky', audio_text: parsed.testo_nicky_it, generated_at: nowIso },
+          { poi_id: poi.id, language: 'EN', guide_character: 'nicky', audio_text: parsed.testo_nicky_en, generated_at: nowIso },
+          { poi_id: poi.id, language: 'IT', guide_character: 'dante', audio_text: parsed.testo_dante_it, generated_at: nowIso },
+          { poi_id: poi.id, language: 'EN', guide_character: 'dante', audio_text: parsed.testo_dante_en, generated_at: nowIso }
+        ].filter(r => r.audio_text);
+
+        if (audioRecords.length > 0) {
+          const { error: audioErr } = await supabase
+            .from('poi_audioguides')
+            .upsert(audioRecords, { onConflict: 'poi_id,language,guide_character' });
+          if (audioErr) console.error(`      ❌ Audioguide non salvate: ${audioErr.message}`);
+        }
+
+        console.log(`      ✅ Upgrade completato per: ${poi.name}`);
+        updated++;
       } catch (e: any) {
          console.error("Errore AI/DB:", e.message);
       }
+
+      // Le API Wikimedia sono gratuite: non tempestarle di richieste.
+      await sleep(DELAY_MS);
     }
   }
   
-  console.log(`\n🎉 Retro-enrichment terminato! Processati: ${processed}, Aggiornati: ${updated}`);
+  finish(processed, updated);
 }
 
 processRetroEnrichment();

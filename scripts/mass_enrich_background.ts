@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { collectPoiSources } from './lib/wiki';
 
 dotenv.config();
 
@@ -27,29 +28,67 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   global: { fetch: fetch.bind(globalThis) }
 });
 
+// ── Parametri da riga di comando ────────────────────────────────────────────
+const argv = process.argv.slice(2);
+const getArg = (name: string, fallback: string) =>
+  (argv.find(a => a.startsWith(`--${name}=`))?.split('=')[1] ?? fallback);
+
+/**
+ * Provider LLM. Agnes resta il motore predefinito di questo script; OpenRouter
+ * è opzionale (--provider=openrouter) per le campagne in cui serve un modello
+ * diverso o un fallback quando Agnes è satura.
+ */
+const PROVIDER = getArg('provider', 'agnes');
+/** Quanti POI elaborare in parallelo: era rigorosamente uno alla volta. */
+const CONCURRENCY = Math.max(1, Math.min(parseInt(getArg('concurrency', '1'), 10) || 1, 12));
+
 const agnesKey = process.env.AGNES_API_KEY;
 const agnesKey2 = process.env.AGNES_API_KEY_2;
-if (!agnesKey) {
-  console.error("Manca AGNES_API_KEY nel file .env");
-  process.exit(1);
-}
 
-const aiClients = [
-  new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey })
-];
+const aiClients: OpenAI[] = [];
+let MODEL_NAME: string;
 
-if (agnesKey2) {
-  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey2 }));
-  console.log("🚀 DOPPIO MOTORE AGNES AI ATTIVATO! (Load Balancing su 2 chiavi)");
+if (PROVIDER === 'openrouter') {
+  const orKey = process.env.OPENROUTER_API_KEY;
+  if (!orKey) {
+    console.error("Manca OPENROUTER_API_KEY nel file .env");
+    process.exit(1);
+  }
+  MODEL_NAME = getArg('model', 'google/gemini-2.0-flash-001');
+  aiClients.push(new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey: orKey,
+    // OpenRouter usa questi header per le statistiche di utilizzo.
+    defaultHeaders: { 'HTTP-Referer': 'https://itainta.vercel.app', 'X-Title': 'WIP World in Pocket' },
+  }));
+  console.log(`🌐 Motore OpenRouter attivo (modello: ${MODEL_NAME}).`);
 } else {
-  console.log("🚗 Singolo motore Agnes AI attivato.");
+  if (!agnesKey) {
+    console.error("Manca AGNES_API_KEY nel file .env");
+    process.exit(1);
+  }
+  MODEL_NAME = getArg('model', 'agnes-2.5-flash');
+  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey }));
+  if (agnesKey2) {
+    aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey2 }));
+    console.log("🚀 DOPPIO MOTORE AGNES AI ATTIVATO! (Load Balancing su 2 chiavi)");
+  } else {
+    console.log("🚗 Singolo motore Agnes AI attivato.");
+  }
 }
 
 let currentClientIndex = 0;
+/** Sceglie il client a rotazione: con più chiavi il carico si distribuisce. */
+function nextClient(): OpenAI {
+  const client = aiClients[currentClientIndex];
+  currentClientIndex = (currentClientIndex + 1) % aiClients.length;
+  return client;
+}
 
 const BATCH_SIZE = 30; // Alzato da 15 a 30 per raddoppiare la velocità
 const DELAY_BETWEEN_BATCHES = 100; // Abbassato da 1000 a 100 per ridurre i tempi morti tra batch
-const MODEL_NAME = "agnes-2.5-flash";
+/** Pausa dopo ogni POI, per worker: tiene a bada Wikimedia e il provider AI. */
+const POI_DELAY_MS = parseInt(getArg('delay', '2000'), 10);
 
 const CULTURAL_CATEGORIES = [
   'monumenti', 'monument', 
@@ -95,27 +134,9 @@ const REGIONS = [
 ];
 
 
-async function fetchWikipedia(title: string): Promise<string> {
-  const headers = { 'User-Agent': 'ItaintaApp/1.0 (contact@itainta.com)' };
-  try {
-    const res = await axios.get(`https://it.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&prop=extracts&exintro=false&explaintext=1&format=json`, { timeout: 3000, headers });
-    const pages = res.data?.query?.pages;
-    if (pages) {
-      const pageId = Object.keys(pages)[0];
-      if (pageId && pageId !== "-1" && pages[pageId].extract) return pages[pageId].extract.substring(0, 1500);
-    }
-  } catch (e) {}
-  
-  try {
-    const resEn = await axios.get(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(title)}&gsrlimit=1&prop=extracts&exintro=false&explaintext=1&format=json`, { timeout: 3000, headers });
-    const pagesEn = resEn.data?.query?.pages;
-    if (pagesEn) {
-      const pageId = Object.keys(pagesEn)[0];
-      if (pageId && pageId !== "-1" && pagesEn[pageId].extract) return pagesEn[pageId].extract.substring(0, 1500);
-    }
-  } catch (e) {}
-  return "";
-}
+// fetchWikipedia e fetchWikidata sono state sostituite da collectPoiSources
+// (scripts/lib/wiki.ts), che identifica il POI dalle coordinate invece di
+// prendere il primo risultato di una ricerca testuale.
 
 async function fetchWikivoyage(query: string): Promise<string> {
   try {
@@ -128,65 +149,6 @@ async function fetchWikivoyage(query: string): Promise<string> {
   return "";
 }
 
-async function fetchWikidata(name: string): Promise<string> {
-  try {
-    const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(name)}&language=it&format=json`;
-    const searchRes = await axios.get(searchUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-    
-    if (searchRes.data?.search?.length > 0) {
-      const entityId = searchRes.data.search[0].id;
-      const entityDesc = searchRes.data.search[0].description || '';
-      
-      const entityUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${entityId}&languages=it&props=claims&format=json`;
-      const entityRes = await axios.get(entityUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-      
-      const claims = entityRes.data.entities[entityId]?.claims || {};
-      
-      const importantProps: any = {
-        'P571': 'Data di creazione',
-        'P84': 'Architetto/Creatore',
-        'P149': 'Stile',
-        'P186': 'Materiale',
-        'P31': 'Tipo'
-      };
-      
-      let facts: string[] = [];
-      if (entityDesc) facts.push(`Sommario: ${entityDesc}`);
-      
-      let idsToResolve: string[] = [];
-      for (const prop of Object.keys(importantProps)) {
-        if (claims[prop]) {
-          const valueObj = claims[prop][0].mainsnak.datavalue;
-          if (valueObj?.type === 'wikibase-entityid') {
-             idsToResolve.push(valueObj.value.id);
-          } else if (valueObj?.type === 'time') {
-             let timeStr = valueObj.value.time;
-             timeStr = timeStr.replace(/^\+/, '').split('T')[0];
-             facts.push(`${importantProps[prop]}: ${timeStr}`);
-          }
-        }
-      }
-      
-      if (idsToResolve.length > 0) {
-         const idsChunk = idsToResolve.slice(0, 50).join('|');
-         const valUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${idsChunk}&languages=it&props=labels&format=json`;
-         const valRes = await axios.get(valUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
-         
-         for (const [prop, label] of Object.entries(importantProps)) {
-           if (claims[prop]) {
-             const valueObj = claims[prop as string][0].mainsnak.datavalue;
-             if (valueObj?.type === 'wikibase-entityid') {
-               const valLabel = valRes.data.entities[valueObj.value.id]?.labels?.it?.value;
-               if (valLabel) facts.push(`${label}: ${valLabel}`);
-             }
-           }
-         }
-      }
-      return facts.join(', ');
-    }
-  } catch(e: any) {}
-  return "";
-}
 
 async function fetchWikimediaImages(query: string): Promise<string[]> {
   try {
@@ -290,18 +252,34 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
 
   console.log(`\n📍 Trovati ${pois.length} Luoghi in ${region.name}. Inizio batch...`);
 
-  for (const poi of pois) {
+  // Elabora un singolo POI. Isolato in una funzione per poterne mandare
+  // avanti più d'uno in parallelo (vedi il pool più sotto): prima si andava
+  // rigorosamente uno alla volta, con il processo fermo ad aspettare la rete.
+  const processPoi = async (poi: any) => {
     const searchQuery = `${poi.name} ${poi.city || ''}`.trim();
     console.log(`-> Arricchimento di: ${searchQuery} [Cat: ${poi.category}]`);
 
-    const [wikiRaw, wvRaw, wikiData, wikiImages, fsqImages, unsplashImages] = await Promise.all([
-      fetchWikipedia(searchQuery),
-      fetchWikivoyage(searchQuery),
-      fetchWikidata(searchQuery),
+    // Fonti del POI agganciate alle COORDINATE (scripts/lib/wiki.ts): la
+    // vecchia ricerca per testo prendeva il primo risultato senza verifiche e
+    // poteva restituire l'omonimo dall'altra parte d'Italia, i cui dati
+    // finivano nel testo come se fossero di questo luogo.
+    const sources = await collectPoiSources(poi.name, poi.lat, poi.lon);
+    const wikiRaw = sources.wikipedia;
+    const wikiData = sources.wikidata;
+
+    const [wvRaw, wikiImages, fsqImages, unsplashImages] = await Promise.all([
+      // Wikivoyage resta una fonte di CONTESTO sulla località, non sul POI.
+      fetchWikivoyage(poi.city || region.name),
       fetchWikimediaImages(searchQuery),
       fetchFoursquareImages(poi.lat, poi.lon, poi.name),
       fetchUnsplashImages(searchQuery)
     ]);
+
+    if (sources.match) {
+      console.log(`      🔗 Agganciato a "${sources.match.title}" (${sources.match.distanceM}m${sources.match.qid ? `, ${sources.match.qid}` : ''})`);
+    } else {
+      console.log(`      🌍 Nessuna pagina enciclopedica su questo punto: testo di solo contesto.`);
+    }
 
     let images = wikiImages.length > 0 ? wikiImages : fsqImages;
     if (images.length === 0 && unsplashImages.length > 0) {
@@ -324,7 +302,9 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
     // con fonti si raccontano i FATTI di quel luogo, senza fonti si racconta
     // il CONTESTO reale (città, territorio, tipo di luogo) senza attribuire al
     // POI date, nomi o eventi che nessuno ha verificato.
-    const hasSources = !!(wikiRaw || wikiData || wvRaw);
+    // Solo Wikipedia/Wikidata parlano di QUESTO POI. Wikivoyage descrive la
+    // località: è contesto, non una fonte che autorizzi a citare date e nomi.
+    const hasSources = !!(wikiRaw || wikiData);
 
     const regoleComuni = `REGOLA ASSOLUTA 1 — NON INVENTARE NULLA DI SPECIFICO SU QUESTO LUOGO. È VIETATO attribuirgli date di costruzione, secoli, architetti, artisti, committenti, eventi storici o aneddoti che non siano scritti nelle fonti qui sotto. Vietato anche dedurli o ipotizzarli ("risalente probabilmente al Quattrocento", "opera della scuola di..."). Se non lo sai, non scriverlo.
 REGOLA ASSOLUTA 2 — VIETATE le frasi vuote da dépliant ("un viaggio nel tempo", "un mix di storia e bellezza", "un luogo magico", "sospeso tra passato e presente"): occupano spazio senza dire nulla.
@@ -372,8 +352,7 @@ Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
 
 
     try {
-      const activeClient = aiClients[currentClientIndex];
-      currentClientIndex = (currentClientIndex + 1) % aiClients.length;
+      const activeClient = nextClient();
 
       const response = await activeClient.chat.completions.create({
         model: MODEL_NAME,
@@ -461,21 +440,35 @@ Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
       const isTimeout = llmErr.status >= 500 || (llmErr.message && llmErr.message.includes('timed out'));
       
       if (isRateLimit || isTimeout) {
-         console.warn(`🚨 Errore temporaneo AI (Rate limit o Timeout)! Riposo di 10 secondi e riproverò al prossimo giro...`);
+         console.warn(`🚨 Errore temporaneo AI (Rate limit o Timeout)! Riposo di 10 secondi, il POI resta da fare.`);
          await sleep(10000);
-         continue; 
+         return;
       }
-      
+
       // Se è un errore grave non recuperabile (es. 400), lo scartiamo per non bloccare il loop all'infinito
       await supabase.from('shared_pois').update({
         enriched_at: new Date().toISOString(),
         enrichment_source: 'ai_error'
       }).eq('id', poi.id);
     }
-    
-    console.log(`⏳ Attesa ridotta a 4 secondi per sfruttare la doppia chiave Agnes...`);
-    await sleep(4000);
-  }
+  };
+
+  // Pool a concorrenza fissa: N POI in volo, e appena uno finisce parte il
+  // successivo. Con --concurrency=1 il comportamento resta quello sequenziale
+  // di prima, che è il default.
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(CONCURRENCY, pois.length) }, async () => {
+    while (cursor < pois.length) {
+      const poi = pois[cursor++];
+      try {
+        await processPoi(poi);
+      } catch (e: any) {
+        console.error(`   ❌ POI ${poi?.name} saltato:`, e?.message || e);
+      }
+      await sleep(POI_DELAY_MS);
+    }
+  });
+  await Promise.all(workers);
 
   return true;
 }
