@@ -1,5 +1,11 @@
 # Script di manutenzione dati
 
+> **Sul droplet gira solo `mass-enrich` in continuo.** Gli altri sono una
+> tantum: si lanciano, finiscono e vanno fermati. La configurazione pm2 è in
+> `ecosystem.config.cjs` nella radice del repo — un processo alla volta, la
+> macchina ha 1 vCPU e 512 MB.
+
+
 Script una tantum sui POI. Girano da riga di comando con le credenziali di
 `.env` / `.env.local` (serve `SUPABASE_SERVICE_ROLE_KEY`).
 
