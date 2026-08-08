@@ -206,6 +206,166 @@ export async function fetchWikidataFactsByQid(qid: string): Promise<string> {
   return facts.join(', ');
 }
 
+// ── FOTO UFFICIALI ──────────────────────────────────────────────────────────
+
+/**
+ * File che su Commons accompagnano i luoghi ma non li ritraggono: stemmi,
+ * bandiere, mappe, planimetrie, loghi. Vanno esclusi o si finisce con lo
+ * stemma comunale al posto della facciata.
+ */
+const BAD_FILE_PATTERNS = [
+  'coat_of_arms', 'stemma', 'wappen', 'blason', 'flag', 'bandiera',
+  'map', 'mappa', 'karte', 'plan', 'pianta', 'planimetria', 'location',
+  'logo', 'seal', 'sigillo', 'diagram', 'schema', 'chart', 'graph',
+  'icon', 'symbol', 'signature', 'firma',
+];
+
+export function looksLikeBadFile(fileName: string): boolean {
+  const f = fileName.toLowerCase().replace(/\s+/g, '_');
+  if (f.endsWith('.svg') || f.endsWith('.pdf') || f.endsWith('.ogv') || f.endsWith('.webm')) return true;
+  return BAD_FILE_PATTERNS.some(p => f.includes(p));
+}
+
+/** Toglie i parametri di tracciamento dalle thumbnail Wikimedia. */
+export function cleanImageUrl(url: string): string {
+  return url.split('?')[0];
+}
+
+export interface PhotoCandidate {
+  url: string;
+  source: string;
+  detail: string;
+}
+
+/**
+ * Da un nome file Commons alla miniatura renderizzata, con controllo di
+ * formato e dimensioni. L'originale può essere un TIFF da decine di MB che il
+ * tag <img> non mostra: si usa sempre la thumbnail.
+ */
+export async function commonsFileToUrl(fileName: string): Promise<string | null> {
+  const title = fileName.startsWith('File:') ? fileName : `File:${fileName}`;
+  if (looksLikeBadFile(title)) return null;
+
+  const data = await getJson(
+    `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}` +
+    `&prop=imageinfo&iiprop=url|size|mime&iiurlwidth=1024&format=json&origin=*`
+  );
+  const pages = data?.query?.pages;
+  if (!pages) return null;
+  const info = (Object.values(pages)[0] as any)?.imageinfo?.[0];
+  if (!info) return null;
+  if (!String(info.mime || '').startsWith('image/')) return null;
+  // Sotto i 500px è un'icona, non una foto utilizzabile.
+  if (info.width && info.width < 500) return null;
+  const url = info.thumburl || info.url;
+  return url ? cleanImageUrl(url) : null;
+}
+
+/** Immagine ufficiale (P18) o categoria Commons (P373) di un'entità Wikidata. */
+export async function fetchWikidataImage(qid: string): Promise<PhotoCandidate | null> {
+  const data = await getJson(`https://www.wikidata.org/wiki/Special:EntityData/${qid}.json`);
+  const claims = data?.entities?.[qid]?.claims;
+  if (!claims) return null;
+
+  const p18 = claims.P18?.[0]?.mainsnak?.datavalue?.value;
+  if (p18) {
+    const url = await commonsFileToUrl(String(p18));
+    if (url) return { url, source: 'wikidata-P18', detail: `${qid} · ${p18}` };
+  }
+
+  const category = claims.P373?.[0]?.mainsnak?.datavalue?.value;
+  if (category) {
+    const members = await getJson(
+      `https://commons.wikimedia.org/w/api.php?action=query&list=categorymembers` +
+      `&cmtitle=${encodeURIComponent(`Category:${category}`)}&cmtype=file&cmlimit=20&format=json&origin=*`
+    );
+    for (const f of (members?.query?.categorymembers || [])) {
+      if (looksLikeBadFile(f.title)) continue;
+      const url = await commonsFileToUrl(f.title);
+      if (url) return { url, source: 'wikidata-P373', detail: `${qid} · ${f.title}` };
+    }
+  }
+  return null;
+}
+
+/**
+ * File Commons georeferenziati a pochi metri dal POI (ultima risorsa).
+ *
+ * La sola vicinanza NON basta: in centro storico a 10 metri da un bar c'è la
+ * foto della piazza. E i file di Commons sono geotaggati dove stava il
+ * FOTOGRAFO, non il soggetto: si accetta solo se anche il nome combacia.
+ */
+export async function fetchCommonsNearby(lat: number, lon: number, name: string): Promise<PhotoCandidate | null> {
+  const data = await getJson(
+    `https://commons.wikimedia.org/w/api.php?action=query&list=geosearch` +
+    `&gscoord=${lat}|${lon}&gsradius=150&gslimit=25&gsnamespace=6&format=json&origin=*`
+  );
+  const ordered = (data?.query?.geosearch || [])
+    .filter((h: any) => !looksLikeBadFile(h.title))
+    .map((h: any) => ({ ...h, score: nameSimilarity(name, h.title) }))
+    .filter((h: any) => h.score >= MIN_NAME_SCORE)
+    .sort((a: any, b: any) => (b.score - a.score) || (a.dist - b.dist));
+
+  for (const h of ordered.slice(0, 6)) {
+    const url = await commonsFileToUrl(h.title);
+    if (url) return { url, source: 'commons-geo', detail: `${h.title} · ${Math.round(h.dist)}m` };
+  }
+  return null;
+}
+
+/**
+ * Foto ufficiale del POI, cercata in ordine di affidabilità: immagine scelta
+ * su Wikidata, categoria Commons del soggetto, immagine della pagina
+ * Wikipedia, file Commons georeferenziato col nome giusto.
+ * Ritorna null quando nessuna fonte è sicura: meglio nessuna foto che la foto
+ * del monumento accanto.
+ */
+export async function findOfficialPhoto(
+  name: string,
+  lat: number,
+  lon: number,
+  known?: ResolvedEntity | null,
+): Promise<PhotoCandidate | null> {
+  const entity = known ?? await resolveEntityByCoords(name, lat, lon);
+
+  if (entity) {
+    if (entity.qid) {
+      const fromWikidata = await fetchWikidataImage(entity.qid);
+      if (fromWikidata) {
+        return { ...fromWikidata, detail: `${entity.title} (${entity.distanceM}m) · ${fromWikidata.detail}` };
+      }
+    }
+    const page = await getJson(
+      `https://${entity.lang}.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(entity.title)}` +
+      `&prop=pageimages&piprop=original|thumbnail&pithumbsize=1024&format=json&origin=*`
+    );
+    const pages = page?.query?.pages;
+    const img = pages ? (Object.values(pages)[0] as any) : null;
+    const src = img?.original?.source || img?.thumbnail?.source;
+    if (src && !looksLikeBadFile(src)) {
+      return { url: cleanImageUrl(src), source: `wikipedia-${entity.lang}`, detail: `${entity.title} · ${entity.distanceM}m` };
+    }
+  }
+
+  return fetchCommonsNearby(lat, lon, name);
+}
+
+/**
+ * Testo di CONTESTO su una località da Wikivoyage: parla della città, non del
+ * singolo POI, quindi non autorizza a citare date o architetti dell'edificio.
+ */
+export async function fetchWikivoyageContext(city: string, maxChars = 1200): Promise<string> {
+  if (!city) return '';
+  const data = await getJson(
+    `https://it.wikivoyage.org/w/api.php?action=query&titles=${encodeURIComponent(city)}` +
+    `&prop=extracts&explaintext=1&exintro=1&format=json&origin=*`
+  );
+  const pages = data?.query?.pages;
+  if (!pages) return '';
+  const extract = (Object.values(pages)[0] as any)?.extract;
+  return typeof extract === 'string' ? extract.substring(0, maxChars) : '';
+}
+
 export interface PoiSources {
   /** Estratto Wikipedia del POI (vuoto se non identificato). */
   wikipedia: string;

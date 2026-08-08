@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
-import { collectPoiSources } from './lib/wiki';
+import { collectPoiSources, findOfficialPhoto, fetchWikivoyageContext } from './lib/wiki';
 
 dotenv.config();
 
@@ -138,68 +138,9 @@ const REGIONS = [
 // (scripts/lib/wiki.ts), che identifica il POI dalle coordinate invece di
 // prendere il primo risultato di una ricerca testuale.
 
-async function fetchWikivoyage(query: string): Promise<string> {
-  try {
-    const res = await axios.get(`https://it.wikivoyage.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json&srlimit=1`, { 
-      timeout: 3000,
-      headers: { 'User-Agent': 'ItaintaApp/1.0 (contact@itainta.com)' }
-    });
-    if (res.data?.query?.search?.[0]) return res.data.query.search[0].snippet.replace(/<\/?[^>]+(>|$)/g, "");
-  } catch (e) {}
-  return "";
-}
-
-
-async function fetchWikimediaImages(query: string): Promise<string[]> {
-  try {
-    const images: string[] = [];
-    const headers = { 'User-Agent': 'ItaintaApp/1.0 (contact@itainta.com)' };
-    
-    // 1. Prova Wikipedia IT page image
-    let url = `https://it.wikipedia.org/w/api.php?action=query&prop=pageimages&titles=${encodeURIComponent(query)}&format=json&pithumbsize=1200`;
-    let res = await axios.get(url, { timeout: 3000, headers });
-    let pages = res.data?.query?.pages;
-    if (pages) {
-      let page: any = Object.values(pages)[0];
-      if (page && page.thumbnail && page.thumbnail.source) {
-        images.push(page.thumbnail.source);
-      }
-    }
-
-    // 2. Wikimedia Commons
-    let commonsUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&gsrlimit=3&prop=imageinfo&iiprop=url&format=json`;
-    res = await axios.get(commonsUrl, { timeout: 3000, headers });
-    pages = res.data?.query?.pages;
-    if (pages) {
-      Object.values(pages).forEach((p: any) => {
-        if (p.imageinfo?.[0]?.url) images.push(p.imageinfo[0].url);
-      });
-    }
-
-    // 3. Wikipedia Search fallback
-    if (images.length === 0) {
-      let searchUrl = `https://it.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json&srlimit=1`;
-      res = await axios.get(searchUrl, { timeout: 3000, headers });
-      let search = res.data?.query?.search;
-      if (search && search.length > 0) {
-        let title = search[0].title;
-        let url2 = `https://it.wikipedia.org/w/api.php?action=query&prop=pageimages&titles=${encodeURIComponent(title)}&format=json&pithumbsize=1200`;
-        let res2 = await axios.get(url2, { timeout: 3000, headers });
-        let pages2 = res2.data?.query?.pages;
-        if (pages2) {
-          let page2: any = Object.values(pages2)[0];
-          if (page2 && page2.thumbnail && page2.thumbnail.source) {
-            images.push(page2.thumbnail.source);
-          }
-        }
-      }
-    }
-
-    return images.filter(Boolean);
-  } catch (e) {
-    return [];
-  }
-}
+// fetchWikivoyage e fetchWikimediaImages sono state sostituite da
+// fetchWikivoyageContext e findOfficialPhoto (scripts/lib/wiki.ts): cercavano
+// per testo e restituivano il primo risultato, spesso di un altro luogo.
 
 async function fetchFoursquareImages(lat: number, lon: number, name: string): Promise<string[]> {
   if (!FOURSQUARE_KEY) return [];
@@ -267,10 +208,12 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
     const wikiRaw = sources.wikipedia;
     const wikiData = sources.wikidata;
 
-    const [wvRaw, wikiImages, fsqImages, unsplashImages] = await Promise.all([
+    const [wvRaw, officialPhoto, fsqImages, unsplashImages] = await Promise.all([
       // Wikivoyage resta una fonte di CONTESTO sulla località, non sul POI.
-      fetchWikivoyage(poi.city || region.name),
-      fetchWikimediaImages(searchQuery),
+      fetchWikivoyageContext(poi.city || region.name),
+      // Foto ufficiale del luogo, identificata dalle coordinate: riusa
+      // l'entità già risolta, quindi non ripete la geosearch.
+      findOfficialPhoto(poi.name, poi.lat, poi.lon, sources.match),
       fetchFoursquareImages(poi.lat, poi.lon, poi.name),
       fetchUnsplashImages(searchQuery)
     ]);
@@ -281,17 +224,22 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
       console.log(`      🌍 Nessuna pagina enciclopedica su questo punto: testo di solo contesto.`);
     }
 
-    let images = wikiImages.length > 0 ? wikiImages : fsqImages;
-    if (images.length === 0 && unsplashImages.length > 0) {
+    // Ordine di preferenza delle foto: prima quella UFFICIALE del luogo
+    // (Wikidata/Commons/Wikipedia identificati per coordinate), poi le foto
+    // del posto da Foursquare, e solo in fondo Unsplash — che è generica per
+    // definizione e resta marcata come tale, così `fix-photos` la sostituirà
+    // appena il luogo avrà una foto vera.
+    let images: string[] = [];
+    if (officialPhoto) {
+      images = [officialPhoto.url];
+      console.log(`      📷 Foto ufficiale (${officialPhoto.source}): ${officialPhoto.detail}`);
+    } else if (fsqImages.length > 0) {
+      images = fsqImages;
+    } else if (unsplashImages.length > 0) {
+      console.log(`      [IMG] Nessuna foto del luogo: ripiego generico, sostituibile con fix-photos.`);
       images = unsplashImages;
     }
-    // Fallback: se ancora non ci sono foto, usiamo Unsplash con solo Città o Categoria
-    if (images.length === 0) {
-      console.log(`      [IMG] Fallback estremo per foto (ricerca generica per zona)...`);
-      const fallbackQuery = `${poi.city || region.name} ${poi.category}`;
-      images = await fetchUnsplashImages(fallbackQuery);
-    }
-    
+
     const photoUrl = images.length > 0 ? images[0] : null;
     const imagesJson = images.length > 0 ? images : null;
 

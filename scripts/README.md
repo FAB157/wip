@@ -33,6 +33,24 @@ solo per contesto restano riconoscibili da `enrichment_source =
 
 Opzioni utili: `--limit=N`, `--delay=ms`; `fix-photos` accetta anche
 `--near=lat,lon,km` e `--probe="lat,lon,nome"` per provare un singolo punto.
+`enrich` accetta `--concurrency=N` (default 1) e, per le campagne che lo
+richiedono, `--provider=openrouter --model=...` — Agnes resta il predefinito.
+
+## Bonifica del pregresso inventato
+
+I POI arricchiti prima di agosto 2026 con la vecchia regola "INVENTA" portano
+date e architetti mai verificati. Il vecchio codice li marcava con
+`enrichment_source = 'agnes_free_internal_json'` (nessun testo Wikipedia
+trovato), quindi sono individuabili con precisione:
+
+```
+npx tsx scripts/wikidata_retro_enrich.ts --redo-invented --limit=50
+npx tsx scripts/wikidata_retro_enrich.ts --redo-invented --apply
+```
+
+In questa modalità un POI senza fonti **non viene saltato**: viene riscritto
+sul solo contesto, perché lasciarlo com'è significherebbe tenersi la scheda
+inventata. Le schede così ricostruite restano marcate `agnes_context_only`.
 
 ## Script archiviati
 
