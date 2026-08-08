@@ -56,6 +56,19 @@ const DELAY_MS = parseInt(getArg('delay', '300'), 10);
 const REDO_INVENTED = argv.includes('--redo-invented');
 const INVENTED_SOURCE = 'agnes_free_internal_json';
 
+/**
+ * `--near=lat,lon,km`: limita l'elaborazione a una zona. Serve soprattutto per
+ * giudicare la qualità dei testi su posti che si conoscono, invece di trovarsi
+ * davanti POI presi in ordine di id da mezzo mondo.
+ */
+const NEAR = (() => {
+  const raw = getArg('near', '');
+  if (!raw) return null;
+  const [lat, lon, km] = raw.split(',').map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return { lat, lon, km: Number.isFinite(km) && km > 0 ? km : 20 };
+})();
+
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 const CULTURAL_CATEGORIES = [
@@ -82,6 +95,7 @@ async function processRetroEnrichment() {
     ? `bonifica dei POI col testo inventato (enrichment_source=${INVENTED_SOURCE})`
     : 'POI già arricchiti, riscritti solo dove esistono fonti verificate'}`);
   if (MAX_POIS > 0) console.log(`   limite: ${MAX_POIS} POI`);
+  if (NEAR) console.log(`   zona: ${NEAR.lat},${NEAR.lon} (${NEAR.km} km)`);
   
   let lastId = '0';
   let processed = 0;
@@ -101,6 +115,15 @@ async function processRetroEnrichment() {
 
     // In bonifica si lavora SOLO sui POI col testo inventato dal vecchio prompt.
     if (REDO_INVENTED) query = query.eq('enrichment_source', INVENTED_SOURCE);
+
+    if (NEAR) {
+      // Riquadro attorno al punto indicato: 1° di latitudine ≈ 111 km.
+      const dLat = NEAR.km / 111;
+      const dLon = NEAR.km / (111 * Math.max(0.2, Math.cos((NEAR.lat * Math.PI) / 180)));
+      query = query
+        .gte('lat', NEAR.lat - dLat).lte('lat', NEAR.lat + dLat)
+        .gte('lon', NEAR.lon - dLon).lte('lon', NEAR.lon + dLon);
+    }
 
     const { data: pois, error } = await query;
       

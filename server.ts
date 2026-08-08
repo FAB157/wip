@@ -1536,6 +1536,39 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     limitData.count++;
     next();
   }
+
+  // --- Auth helpers (dichiarazioni hoisted: usabili anche dalle route
+  //     registrate PRIMA di verifyAdminToken/const più in basso) ---
+  // Verifica un Bearer utente valido SENZA richiedere is_admin.
+  // Ritorna lo user id oppure null. Per route che devono solo garantire
+  // che il chiamante sia autenticato.
+  async function verifyUserToken(req: any): Promise<string | null> {
+    const authHeader = String(req.headers.authorization || '');
+    if (!authHeader.startsWith('Bearer ')) return null;
+    try {
+      const userRes = await axios.get(`${supabaseUrl}/auth/v1/user`, {
+        headers: { apikey: supabaseServiceKey, Authorization: authHeader }
+      });
+      return userRes.data?.id || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Come verifyUserToken ma richiede is_admin = true sul profilo.
+  async function verifyAdminBearer(req: any): Promise<string | null> {
+    const uid = await verifyUserToken(req);
+    if (!uid) return null;
+    try {
+      const profileRes = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${uid}&select=is_admin`, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
+      });
+      return profileRes.data?.[0]?.is_admin === true ? uid : null;
+    } catch {
+      return null;
+    }
+  }
+
   // Initialize Gemini with multiple keys support
   const geminiKeys = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_2, process.env.GEMINI_API_KEY_3].filter(Boolean);
   let ai: any = null;
@@ -2808,13 +2841,21 @@ function isNameMatching(name1: string, name2: string): boolean {
         return res.status(500).json({ error: "Gemini API key not configured" });
       }
 
+      // Validazione input PRIMA di consumare quota o toccare le API: senza
+      // imageBase64 il codice a valle andava in TypeError su .startsWith().
+      const { imageBase64, lat, lon } = req.body || {};
+      if (!imageBase64 || typeof imageBase64 !== 'string') {
+        return res.status(400).json({ error: "imageBase64 mancante o non valido" });
+      }
+
       // Quota Circuit Breaker Check
+      // checkAndIncrementQuota risolve lo userId dal Bearer opzionale (se il
+      // client lo invia); altrimenti degrada a un id anonimo per IP.
       const quota = await checkAndIncrementQuota(req, 'vision');
       if (!quota.allowed) {
         return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
       }
 
-      const { imageBase64, lat, lon } = req.body;
       let nearestPoi: any = null;
       let minDistance = Infinity;
       // POI entro ~300m dall'utente: servono sia come indizio per il prompt
@@ -2902,13 +2943,26 @@ function isNameMatching(name1: string, name2: string): boolean {
       };
 
       let result;
+      // Provider REALE che ha risposto: serve per una telemetria corretta.
+      let visionProvider: 'gemini' | 'together' = 'gemini';
       const openAiKey = process.env.OPENAI_API_KEY;
       const togetherKey = process.env.TOGETHER_API_KEY || process.env.VITE_TOGETHER_API_KEY;
       const visionImageBase64 = imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
 
+      // Timeout difensivo: senza di esso una chiamata Gemini/Together appesa
+      // teneva bloccata la request fino al maxDuration serverless (300s).
+      const VISION_TIMEOUT_MS = 30000;
+      const withTimeout = <T,>(p: Promise<T>, label: string): Promise<T> =>
+        Promise.race([
+          p,
+          new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`${label} timeout dopo ${VISION_TIMEOUT_MS}ms`)), VISION_TIMEOUT_MS)
+          )
+        ]);
+
       try {
         console.log("[Vision] Utilizzando Gemini per il riconoscimento immagine");
-        const geminiResponse = await ai.models.generateContent({
+        const geminiResponse = await withTimeout(ai.models.generateContent({
           model: "gemini-flash-latest",
           contents: [
               {
@@ -2922,8 +2976,9 @@ function isNameMatching(name1: string, name2: string): boolean {
           config: {
             responseMimeType: "application/json"
           }
-        });
+        }), 'Gemini');
         result = parseVisionJson(geminiResponse.text);
+        visionProvider = 'gemini';
       } catch (geminiErr: any) {
         console.warn("[Vision] Errore con Gemini, tentativo di fallback su Together AI:", geminiErr.message || geminiErr);
         
@@ -2947,6 +3002,7 @@ function isNameMatching(name1: string, name2: string): boolean {
                 response_format: { type: "json_object" }
               },
               {
+                timeout: VISION_TIMEOUT_MS,
                 headers: {
                   "Authorization": `Bearer ${togetherKey}`,
                   "Content-Type": "application/json"
@@ -2954,6 +3010,7 @@ function isNameMatching(name1: string, name2: string): boolean {
               }
             );
             result = parseVisionJson(response.data.choices[0].message.content);
+            visionProvider = 'together';
           } catch (togetherErr: any) {
             console.error("[Vision] Errore critico anche con Together AI:", togetherErr.response?.data || togetherErr.message);
             throw new Error("Impossibile analizzare l'immagine: Gemini e Together AI hanno fallito.");
@@ -3020,7 +3077,7 @@ function isNameMatching(name1: string, name2: string): boolean {
       // Log to api_usage_logs (insert resiliente: vedi insertApiUsageLog)
       try {
         await insertApiUsageLog({
-          api_name: togetherKey ? 'together_vision' : 'gemini_vision',
+          api_name: visionProvider === 'together' ? 'together_vision' : 'gemini_vision',
           feature_context: 'camera_monument_scan',
           cost_estimation: 0.001,
           tokens_used: 1000,
@@ -3037,8 +3094,17 @@ function isNameMatching(name1: string, name2: string): boolean {
     }
   });
 
-  app.post("/api/poi/batch-teaser", async (req, res) => {
+  app.post("/api/poi/batch-teaser", rateLimiter, async (req, res) => {
     try {
+      // Scrive su shared_pois con la service key: consentito solo ad admin
+      // (bottone pannello) o al cron Vercel (CRON_SECRET). Prima era APERTA.
+      const authHeader = String(req.headers.authorization || '');
+      const hasCronSecret = !!process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`;
+      if (!hasCronSecret) {
+        const adminId = await verifyAdminBearer(req);
+        if (!adminId) return res.status(403).json({ error: "Admin authorization required" });
+      }
+
       const { poiIds, lang = "it" } = req.body;
       if (!Array.isArray(poiIds) || poiIds.length === 0) return res.json({ success: true });
 
@@ -3805,6 +3871,53 @@ Regole di aderenza e anti-allucinazione:
     }
   });
 
+  /**
+   * Geocoding parametrico per il pianificatore.
+   *
+   * Le rotte /api/autocomplete e /api/placetextsearch hanno lingua e tipi
+   * fissi (it, poi/place/address) e non servono al planner, che deve cercare
+   * SOLO località amministrative nella lingua dell'utente. Prima il client
+   * chiamava api.mapbox.com direttamente, esponendo VITE_MAPBOX_TOKEN nel
+   * bundle: qui il token resta sul server, come per tutte le altre API.
+   */
+  app.get("/api/geocode", async (req, res) => {
+    try {
+      const { q, lang, limit, types } = req.query;
+      const token = process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN;
+
+      if (!token) return res.status(500).json({ error: "Mapbox token missing" });
+      if (!q || !String(q).trim()) return res.json({ features: [] });
+
+      const safeLimit = Math.min(10, Math.max(1, parseInt(String(limit || '5'), 10) || 5));
+      const safeLang = /^[a-z]{2}$/i.test(String(lang || '')) ? String(lang).toLowerCase() : 'it';
+      const safeTypes = /^[a-z,]+$/i.test(String(types || ''))
+        ? String(types)
+        : 'place,locality,region,country';
+
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(String(q))}.json`
+        + `?access_token=${token}&limit=${safeLimit}&types=${encodeURIComponent(safeTypes)}&language=${safeLang}`;
+
+      const mRes = await fetch(url);
+      if (!mRes.ok) return res.status(502).json({ error: "Geocoder unavailable", features: [] });
+      const mData = await mRes.json();
+
+      // Stesso formato già atteso dal planner (description/lat/lon/isMapbox)
+      const features = (mData.features || []).map((f: any) => ({
+        id: f.id,
+        description: f.place_name,
+        display_name: f.place_name,
+        lat: f.center?.[1],
+        lon: f.center?.[0],
+        isMapbox: true
+      }));
+
+      res.json({ features });
+    } catch (e: any) {
+      console.error("Geocode error:", e);
+      res.status(500).json({ error: e.message, features: [] });
+    }
+  });
+
   app.get("/api/placedetails", async (req, res) => {
     try {
       const { place_id } = req.query;
@@ -4276,6 +4389,31 @@ Regole di aderenza e anti-allucinazione:
     }
   });
 
+  // --- COUPON: elenco voucher di UNA struttura (pannello B2B) ---
+  // Sostituisce la SELECT client diretta su `coupons` (leggibile da CHIUNQUE
+  // con la vecchia policy RLS `using(true)` = furto crediti). Richiede un
+  // Bearer utente valido (NON serve admin) e ritorna SOLO i coupon della
+  // struttura richiesta, letti server-side con la service key.
+  app.post("/api/coupon/list-for-structure", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'Autenticazione richiesta.' });
+
+      const structureName = String(req.body?.structureName || '').trim();
+      if (!structureName) return res.status(400).json({ error: 'Nome struttura mancante.' });
+
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/coupons?structure_name=ilike.${encodeURIComponent(structureName)}&order=created_at.desc&select=*`,
+        { headers: svcHeaders }
+      );
+      res.json({ coupons: Array.isArray(data) ? data : [] });
+    } catch (e: any) {
+      console.error('[Coupon List] Errore:', e.message);
+      res.status(500).json({ error: 'Ricerca non riuscita, riprova.' });
+    }
+  });
+
   // --- GAMIFICATION: riscatto premi (livelli/sfide) ---
   // Il client NON può scrivere earned_credits (bloccato dalle policy di
   // security hardening): la validazione e l'accredito avvengono qui con la
@@ -4561,6 +4699,15 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
   // --- BATCH ENSURE POIS (From Itinerary) ---
   app.post("/api/poi/batch-ensure", rateLimiter, async (req, res) => {
     try {
+      // Richiede almeno un utente autenticato (o il cron): scrive su
+      // shared_pois con la service key, prima bastava passare il rateLimiter.
+      const authHeader = String(req.headers.authorization || '');
+      const hasCronSecret = !!process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`;
+      if (!hasCronSecret) {
+        const userId = await verifyUserToken(req);
+        if (!userId) return res.status(401).json({ error: "Autenticazione richiesta" });
+      }
+
       const { pois, lang = "it" } = req.body;
       if (!pois || !Array.isArray(pois)) {
         return res.status(400).json({ error: "Invalid POIs array" });
@@ -6976,6 +7123,45 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
     } catch (err: any) {
       console.error(`[Ticketmaster] Proxy Error:`, err.message);
       res.status(500).json({ error: `Ticketmaster service error`, message: err.message });
+    }
+  });
+
+  /**
+   * Eventi PredictHQ attorno a un punto. Finora la route non esisteva: il
+   * pannello Admin la interrogava comunque, quindi quel test risultava sempre
+   * fallito anche a chiave valida. Accetta le coordinate (non un nome di
+   * città), così può seguire il centro della mappa come gli altri provider.
+   */
+  app.get("/api/predicthq", async (req, res) => {
+    try {
+      const { lat, lon, radius, startStr, endStr } = req.query as Record<string, string>;
+      const phqKey = process.env.PREDICTHQ_API_KEY;
+      if (!phqKey) return res.status(500).json({ error: "PREDICTHQ_API_KEY not configured" });
+
+      const parsedLat = parseFloat(lat);
+      const parsedLon = parseFloat(lon);
+      if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLon)) {
+        return res.status(400).json({ error: "lat e lon sono obbligatori" });
+      }
+      const parsedRadius = Math.min(parseFloat(radius) || 50, 500);
+
+      const start = startStr || new Date().toISOString().split("T")[0];
+      const end = endStr || new Date(Date.now() + 45 * 86400000).toISOString().split("T")[0];
+
+      const url = `https://api.predicthq.com/v1/events` +
+        `?location_around.origin=${parsedLat},${parsedLon}` +
+        `&location_around.scale=${parsedRadius}km` +
+        `&active.gte=${start}&active.lte=${end}` +
+        `&sort=-rank&limit=20`;
+
+      const phqRes = await axios.get(url, {
+        headers: { Authorization: `Bearer ${phqKey}`, Accept: "application/json" },
+        timeout: 8000
+      });
+      res.json(phqRes.data);
+    } catch (err: any) {
+      console.error("[PredictHQ Proxy] Error:", err.message);
+      res.status(500).json({ error: "Failed to fetch from PredictHQ", message: err.message });
     }
   });
 
