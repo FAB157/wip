@@ -15,13 +15,21 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   global: { fetch: fetch.bind(globalThis) }
 });
 
-const openAIApiKeys = [
-  process.env.OPENAI_API_KEY,
-  process.env.OPENAI_API_KEY_2,
-  process.env.OPENAI_API_KEY_3,
-].filter(Boolean) as string[];
+const agnesKey = process.env.AGNES_API_KEY;
+const agnesKey2 = process.env.AGNES_API_KEY_2;
+const aiClients: OpenAI[] = [];
 
-const aiClients = openAIApiKeys.map(key => new OpenAI({ apiKey: key }));
+if (agnesKey) {
+  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey }));
+}
+if (agnesKey2) {
+  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey2 }));
+}
+if (aiClients.length === 0) {
+  console.error("Nessuna AGNES_API_KEY trovata!");
+  process.exit(1);
+}
+
 let currentClientIndex = 0;
 
 const BATCH_SIZE = 30;
