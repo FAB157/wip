@@ -16,27 +16,27 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
   global: { fetch: fetch.bind(globalThis) }
 });
 
-const agnesKey = process.env.AGNES_API_KEY;
-const agnesKey2 = process.env.AGNES_API_KEY_2;
-const aiClients: OpenAI[] = [];
-
-if (agnesKey) {
-  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey }));
-}
-if (agnesKey2) {
-  aiClients.push(new OpenAI({ baseURL: "https://apihub.agnes-ai.com/v1", apiKey: agnesKey2 }));
-}
-if (aiClients.length === 0) {
-  console.error("Nessuna AGNES_API_KEY trovata!");
+const openRouterKey = process.env.OPENROUTER_API_KEY;
+if (!openRouterKey) {
+  console.error("Nessuna OPENROUTER_API_KEY trovata nel file .env!");
   process.exit(1);
 }
 
-let currentClientIndex = 0;
+const openRouterClient = new OpenAI({ 
+  baseURL: "https://openrouter.ai/api/v1", 
+  apiKey: openRouterKey 
+});
+
+const FREE_MODELS = [
+  "google/gemini-2.5-flash:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "qwen/qwen-2.5-72b-instruct:free"
+];
+
 const BATCH_SIZE = 30; 
-const MODEL_NAME = "agnes-2.5-flash"; // Veloce e intelligente
 
 async function runBackfill() {
-  console.log("🚀 Inizio Backfill Chirurgico dei Teaser...");
+  console.log("🚀 Inizio Backfill Chirurgico dei Teaser con OpenRouter (GRATIS)...");
   let totalProcessed = 0;
 
   while (true) {
@@ -73,48 +73,55 @@ JSON da restituire:
 LUOGO: "${poi.name}" (${poi.city || 'Italia'}) — Categoria: "${poi.category}"
 CONTESTO GIA' NOTO (usalo per estrarre il fatto specifico): "${poi.description_short || 'Luogo di interesse storico e culturale.'}"`;
 
-      try {
-        const activeClient = aiClients[currentClientIndex];
-        currentClientIndex = (currentClientIndex + 1) % aiClients.length;
+      let success = false;
 
-        const response = await activeClient.chat.completions.create({
-          model: MODEL_NAME,
-          messages: [{ role: 'user', content: systemPrompt }],
-          temperature: 0.3,
-          response_format: { type: "json_object" }
-        });
-        
-        const rawText = response.choices[0]?.message?.content?.trim() || "{}";
-        let parsed;
+      // CICLO DI FALLBACK ROBUSTO
+      for (const modelName of FREE_MODELS) {
         try {
-          parsed = JSON.parse(rawText);
-        } catch (e) {
-          const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-          parsed = JSON.parse(cleanJson);
-        }
+          const response = await openRouterClient.chat.completions.create({
+            model: modelName,
+            messages: [{ role: 'user', content: systemPrompt }],
+            temperature: 0.3,
+            response_format: { type: "json_object" }
+          });
+          
+          const rawText = response.choices[0]?.message?.content?.trim() || "{}";
+          let parsed;
+          try {
+            parsed = JSON.parse(rawText);
+          } catch (e) {
+            const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+            parsed = JSON.parse(cleanJson);
+          }
 
-        if (parsed.teaser_it) {
-          const updatePayload = {
-            teaser_text_it: parsed.teaser_it,
-            teaser_text_en: parsed.teaser_en
-          };
-          await supabase.from('shared_pois').update(updatePayload).eq('id', poi.id);
-          console.log(`   ✅ Teaser salvato per: ${poi.name}`);
-        } else {
-          console.log(`   ⚠️ JSON non valido per: ${poi.name}`);
+          if (parsed.teaser_it) {
+            const updatePayload = {
+              teaser_text_it: parsed.teaser_it,
+              teaser_text_en: parsed.teaser_en
+            };
+            await supabase.from('shared_pois').update(updatePayload).eq('id', poi.id);
+            console.log(`   ✅ Teaser salvato per: ${poi.name} (Modello: ${modelName})`);
+            success = true;
+            break; // Ha funzionato! Usciamo dal ciclo di fallback
+          } else {
+            console.log(`   ⚠️ JSON sformattato da ${modelName} per: ${poi.name}. Passo al modello di riserva...`);
+          }
+        } catch (err: any) {
+          console.log(`   ❌ Errore 429 API da ${modelName} su ${poi.name}. Passo al modello di riserva...`);
         }
-      } catch (err: any) {
-        // Ignoriamo i timeout per non fermare il loop, al prossimo giro verranno ripescati se il campo è ancora null
-        console.log(`   ❌ Errore AI su ${poi.name}: ${err.message}`);
       }
-      // Pausa per evitare flood su Supabase
-      await new Promise(resolve => setTimeout(resolve, 150));
+
+      if (!success) {
+        console.log(`   🚫 Tutti i modelli hanno fallito su ${poi.name}. Verrà ripescato in futuro.`);
+      }
+
+      // Pausa per evitare flood su Supabase e OpenRouter
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
     
     totalProcessed += pois.length;
     console.log(`[Statistiche] Totale POI aggiornati col teaser finora: ${totalProcessed}`);
     
-    // Piccola pausa per non stressare eccessivamente Supabase in loop continuo
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
