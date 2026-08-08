@@ -16,7 +16,7 @@
     "generate-assets": "capacitor-assets generate --android --ios --iconBackgroundColor '#1e3a8a' --iconBackgroundColorDark '#1e3a8a' --splashBackgroundColor '#1e3a8a' --splashBackgroundColorDark '#1e3a8a'",
     "repair-carrara": "node scripts/repair_cararra_poi.js",
     "enrich": "npx tsx scripts/mass_enrich_background.ts",
-    "enrich-bg": "node --experimental-strip-types scripts/mass_enrich_background.ts",
+    "enrich-bg": "npx tsx scripts/mass_enrich_background.ts",
     "fix-photos": "npx tsx scripts/fix_poi_photos.ts",
     "test-google-tts": "node scratch/test_google_tts.cjs"
   },
