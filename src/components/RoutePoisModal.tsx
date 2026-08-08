@@ -100,6 +100,7 @@ export default function RoutePoisModal({
       setRoutePois([]);
       return;
     }
+    if (!origin || !endCoords) return;
     let cancelled = false;
     setLoading(true);
     setScanError(false);

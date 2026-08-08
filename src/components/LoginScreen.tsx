@@ -43,6 +43,11 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
 
   const friendlyError = (e: any): string => {
     const msg = e?.message || '';
+    // Timeout/abort di rete (wrapper supabase o browser): il messaggio grezzo
+    // "signal is aborted without reason" non deve arrivare all'utente.
+    if (e?.name === 'AbortError' || e?.name === 'TimeoutError' || msg.includes('aborted') || msg.includes('interrotta dopo')) {
+      return 'Connessione lenta o assente: la richiesta è scaduta. Controlla la rete e riprova.';
+    }
     if (msg.includes('Invalid login credentials')) {
       return 'Credenziali non valide. Verifica email e password o conferma l\'account se ti sei appena registrato.';
     }

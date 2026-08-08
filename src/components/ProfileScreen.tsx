@@ -109,6 +109,127 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const [itinerariSubTab, setItinerariSubTab] = useState<'ai' | 'premium'>('ai');
   const [guideToRender, setGuideToRender] = useState<any | null>(null);
   const [listeningHistory, setListeningHistory] = useState<ListeningHistoryEntry[]>([]);
+  // Archivio ascolti: dettagli POI (descrizione, coordinate) letti dal repository
+  // per arricchire le card. Chiave = poi_id; POI sparito dal DB → assente.
+  const [historyPoiDetails, setHistoryPoiDetails] = useState<Map<string, any>>(new Map());
+
+  // ── Test Azure TTS (pannello diagnostico voci) ──────────────────────────
+  // NB: 'DE' ha una voce Azure mappata anche se non è (ancora) nel type Language dell'app
+  const TTS_TEST_LANGS: string[] = ['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'];
+  const TTS_TEST_GUIDES: Array<'nicky' | 'dante'> = ['nicky', 'dante'];
+  const TTS_TEST_PHRASES: Record<string, string> = {
+    IT: 'Ciao! Sono la tua guida di World in Pocket.',
+    EN: 'Hi! I am your World in Pocket guide.',
+    FR: 'Bonjour ! Je suis votre guide World in Pocket.',
+    ES: '¡Hola! Soy tu guía de World in Pocket.',
+    DE: 'Hallo! Ich bin dein World in Pocket Guide.',
+    RU: 'Привет! Я ваш гид World in Pocket.',
+    ZH: '你好！我是你的World in Pocket向导。'
+  };
+  const [showTtsTestPanel, setShowTtsTestPanel] = useState(false);
+  const [ttsTestResults, setTtsTestResults] = useState<Record<string, { status: 'pending' | 'ok' | 'error'; message?: string }>>({});
+  const [isTtsTestingAll, setIsTtsTestingAll] = useState(false);
+  const ttsTestAudioRef = React.useRef<HTMLAudioElement | null>(null);
+
+  /**
+   * Testa UNA combinazione lingua+guida chiamando la route Azure reale
+   * (/api/tts/azure: niente cache né quota, l'errore emerge davvero).
+   * Con play=true riproduce anche l'MP3 ricevuto.
+   */
+  const runTtsVoiceTest = async (lang: string, character: 'nicky' | 'dante', play = false): Promise<boolean> => {
+    const key = `${lang}_${character}`;
+    setTtsTestResults(prev => ({ ...prev, [key]: { status: 'pending' } }));
+    try {
+      const { azureVoiceName, unlockSpeech } = await import('../services/ttsService');
+      unlockSpeech();
+      const voice = azureVoiceName(lang, character);
+      const res = await fetch(getApiUrl('/api/tts/azure'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: TTS_TEST_PHRASES[lang] || TTS_TEST_PHRASES.IT, voice })
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg += ': ' + ((await res.json())?.error || ''); } catch { /* body non JSON */ }
+        setTtsTestResults(prev => ({ ...prev, [key]: { status: 'error', message: `${voice} — ${msg}` } }));
+        return false;
+      }
+      const blob = await res.blob();
+      if (blob.size < 500 || blob.type.includes('json')) {
+        setTtsTestResults(prev => ({ ...prev, [key]: { status: 'error', message: `${voice} — audio non valido (${blob.size} byte)` } }));
+        return false;
+      }
+      setTtsTestResults(prev => ({ ...prev, [key]: { status: 'ok', message: voice } }));
+      if (play) {
+        try {
+          if (ttsTestAudioRef.current) { ttsTestAudioRef.current.pause(); ttsTestAudioRef.current = null; }
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          ttsTestAudioRef.current = audio;
+          audio.addEventListener('ended', () => URL.revokeObjectURL(url));
+          await audio.play();
+        } catch { /* autoplay bloccato: il risultato OK resta valido */ }
+      }
+      return true;
+    } catch (e: any) {
+      setTtsTestResults(prev => ({ ...prev, [key]: { status: 'error', message: e?.message || 'Errore di rete' } }));
+      return false;
+    }
+  };
+
+  /** Testa in sequenza tutte le combinazioni guida × lingua. */
+  const runAllTtsVoiceTests = async () => {
+    if (isTtsTestingAll) return;
+    setIsTtsTestingAll(true);
+    try {
+      for (const character of TTS_TEST_GUIDES) {
+        for (const lang of TTS_TEST_LANGS) {
+          await runTtsVoiceTest(lang, character, false);
+        }
+      }
+    } finally {
+      setIsTtsTestingAll(false);
+    }
+  };
+
+  // Arricchisce le card dell'archivio ascolti con i dati POI completi
+  // (descrizione, coordinate) letti dal repository. Fallback robusto:
+  // se il POI non esiste più (o si è offline) la card resta senza bottone
+  // "Riascolta" ma continua a mostrare nome/foto salvati nello storico.
+  useEffect(() => {
+    let cancelled = false;
+    if (listeningHistory.length === 0) { setHistoryPoiDetails(new Map()); return; }
+    (async () => {
+      try {
+        const { getPoisByIds } = await import('../services/poiRepository');
+        const map = await getPoisByIds(listeningHistory.map(h => h.poi_id));
+        if (!cancelled) setHistoryPoiDetails(map);
+      } catch (e) {
+        console.warn('[ProfileScreen] Arricchimento archivio ascolti fallito', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [listeningHistory]);
+
+  /**
+   * Riascolto dall'archivio: l'ascolto è già stato pagato (è nello storico),
+   * quindi riapriamo la scheda POI con alreadyPaid+autoPlay riusando l'evento
+   * centralizzato wip-poi-trigger (stesso payload dei dispatcher del geofencing).
+   * PoiDetailSheet riverifica comunque lo storico prima di addebitare.
+   */
+  const handleRelisten = (item: ListeningHistoryEntry, fullPoi: any) => {
+    import('../services/ttsService').then(({ unlockSpeech }) => unlockSpeech()).catch(() => {});
+    const poi = {
+      ...fullPoi,
+      id: fullPoi?.id ?? item.poi_id,
+      name: fullPoi?.name || item.poi_name,
+      category: fullPoi?.category || item.category,
+      image_url: fullPoi?.image_url || item.image_url,
+    };
+    window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+      detail: { poiId: String(poi.id), poi, alreadyPaid: true, autoPlay: true }
+    }));
+  };
   const [gamificationLevels, setGamificationLevels] = useState<any[]>(() => {
     try { return JSON.parse(localStorage.getItem('wip_gamification_levels') || '[]'); } catch { return []; }
   });
@@ -1453,15 +1574,19 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <div key={date}>
                         <h4 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
                         <div className="grid grid-cols-2 gap-3">
-                          {items.map((item, idx) => (
-                            <div 
-                              key={item.id || item.poi_id + idx} 
-                              className="group relative bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer aspect-square flex flex-col"
-                              onClick={() => onSelectPoi?.({ id: item.poi_id, name: item.poi_name, category: item.category })}
+                          {items.map((item, idx) => {
+                            // POI completo dal repository (null se sparito dal DB / offline)
+                            const fullPoi = historyPoiDetails.get(String(item.poi_id)) || null;
+                            const cardDescription = fullPoi?.description_ai || fullPoi?.description_short || fullPoi?.description || null;
+                            return (
+                            <div
+                              key={item.id || item.poi_id + idx}
+                              className="group relative bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col"
+                              onClick={() => onSelectPoi?.(fullPoi || { id: item.poi_id, name: item.poi_name, category: item.category })}
                             >
-                              <div className="relative flex-1 bg-gray-100 overflow-hidden">
-                                {item.image_url ? (
-                                  <img src={item.image_url} alt={item.poi_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522083111811-0985223abac3?auto=format&fit=crop&q=80&w=400'; }} />
+                              <div className="relative h-28 shrink-0 bg-gray-100 overflow-hidden">
+                                {(item.image_url || fullPoi?.image_url) ? (
+                                  <img src={item.image_url || fullPoi?.image_url} alt={item.poi_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522083111811-0985223abac3?auto=format&fit=crop&q=80&w=400'; }} />
                                 ) : (
                                   <div className="w-full h-full flex items-center justify-center bg-gray-100">
                                     <span className="text-4xl opacity-50">{getCardIcon({ category: item.category })}</span>
@@ -1495,15 +1620,37 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                   </span>
                                 </div>
                               </div>
-                              <div className="p-3 bg-white">
+                              <div className="p-3 bg-white flex-1 flex flex-col">
                                 <h4 title={item.poi_name} className="font-black text-gray-900 line-clamp-2 text-sm leading-tight">{item.poi_name}</h4>
-                                <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 mt-0.5">
-                                  <Volume2 className="w-3 h-3" />
-                                  {new Date(item.listened_at).toLocaleTimeString('it-IT', {hour: '2-digit', minute:'2-digit'})}
-                                </p>
+                                {cardDescription && (
+                                  <p className="text-[10px] text-gray-500 leading-snug line-clamp-3 mt-1">{cardDescription}</p>
+                                )}
+                                <div className="flex items-center justify-between gap-2 mt-auto pt-2">
+                                  <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1">
+                                    <Volume2 className="w-3 h-3" />
+                                    {new Date(item.listened_at).toLocaleTimeString('it-IT', {hour: '2-digit', minute:'2-digit'})}
+                                  </p>
+                                  {fullPoi ? (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRelisten(item, fullPoi);
+                                      }}
+                                      className="flex items-center gap-1 bg-primary text-white text-[9px] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-full shadow-sm hover:bg-primary/90 active:scale-95 transition-all"
+                                      title={language === 'IT' ? 'Riascolta (già acquistato)' : 'Listen again (already purchased)'}
+                                    >
+                                      <Headphones className="w-3 h-3" />
+                                      {language === 'IT' ? 'Riascolta' : 'Replay'}
+                                    </button>
+                                  ) : (
+                                    <span className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">
+                                      {language === 'IT' ? 'Non disponibile' : 'Unavailable'}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          ))}
+                          );})}
                         </div>
                       </div>
                     ))}
@@ -2227,14 +2374,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       {playedResetMsg ? 'Fatto ✓' : 'Azzera Storico'}
                     </button>
                     <button
-                      onClick={() => {
-                        import('../services/ttsService').then(({ unlockSpeech }) => unlockSpeech());
-                        window.dispatchEvent(
-                          new CustomEvent("wip-semi-play-audio", {
-                            detail: { text: "Ciao! Sono la tua guida turistica neurale alimentata da Microsoft Azure. Come posso aiutarti a scoprire questa fantastica città?" },
-                          })
-                        );
-                      }}
+                      onClick={() => setShowTtsTestPanel(v => !v)}
                       className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-primary border border-primary px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-sm hover:bg-primary/90 transition-all"
                     >
                       <Volume2 size={15} />
@@ -2242,8 +2382,73 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </button>
                   </div>
                   <p className="text-[9px] text-primary/55 ml-2 leading-tight">
-                    Azzera la memoria dei POI gia' ascoltati oppure fai un test vocale della tua connessione Azure.
+                    Azzera la memoria dei POI gia' ascoltati oppure testa le voci Azure per ogni guida e lingua.
                   </p>
+
+                  {/* Pannello test voci Azure: ogni combinazione guida × lingua chiama
+                      la route TTS reale (/api/tts/azure) e riporta ok/errore.
+                      Tap su una cella = test singolo con riproduzione audio. */}
+                  {showTtsTestPanel && (
+                    <div className="mt-3 bg-white border border-primary/15 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary/70">
+                          Voci neurali Azure
+                        </span>
+                        <button
+                          onClick={runAllTtsVoiceTests}
+                          disabled={isTtsTestingAll}
+                          className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-50"
+                        >
+                          {isTtsTestingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
+                          {isTtsTestingAll ? 'Test in corso…' : 'Testa tutte'}
+                        </button>
+                      </div>
+                      {TTS_TEST_GUIDES.map(g => (
+                        <div key={g}>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-primary/50 mb-1.5 ml-1">
+                            {g === 'nicky' ? 'Nicky (voce femminile)' : 'Dante (voce maschile)'}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {TTS_TEST_LANGS.map(l => {
+                              const r = ttsTestResults[`${l}_${g}`];
+                              const cls = !r
+                                ? 'bg-gray-50 border-gray-200 text-gray-500'
+                                : r.status === 'pending'
+                                  ? 'bg-amber-50 border-amber-300 text-amber-700 animate-pulse'
+                                  : r.status === 'ok'
+                                    ? 'bg-green-50 border-green-400 text-green-700'
+                                    : 'bg-red-50 border-red-400 text-red-700';
+                              return (
+                                <button
+                                  key={l}
+                                  onClick={() => runTtsVoiceTest(l, g, true)}
+                                  disabled={r?.status === 'pending'}
+                                  title={r?.message || `Prova ${l} · ${g}`}
+                                  className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-black tracking-wider flex items-center gap-1 transition-colors ${cls}`}
+                                >
+                                  {l}
+                                  {r?.status === 'ok' && <Check className="w-3 h-3" />}
+                                  {r?.status === 'error' && <X className="w-3 h-3" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                      {Object.keys(ttsTestResults).some(k => ttsTestResults[k].status === 'error') && (
+                        <div className="border-t border-red-100 pt-2 space-y-1">
+                          {Object.keys(ttsTestResults).filter(k => ttsTestResults[k].status === 'error').map(k => (
+                            <p key={k} className="text-[9px] font-bold text-red-600 leading-tight">
+                              {k.replace('_', ' · ')}: {ttsTestResults[k].message}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-[8px] text-primary/45 leading-tight">
+                        Tocca una lingua per sentire la voce. Il test chiama direttamente Azure Speech: verde = sintesi riuscita, rosso = errore (chiave/region/voce).
+                      </p>
+                    </div>
+                  )}
 
                   {/* Simplified Category Toggles */}
                   <div className="border-t border-primary/10 pt-4">

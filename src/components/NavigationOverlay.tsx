@@ -5,7 +5,8 @@
 // Si pilota con i valori restituiti da useWalkingNavigation.
 // =====================================================================
 
-import { Navigation2, Flag, Clock, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Navigation2, Flag, Clock, X, Volume2 } from 'lucide-react';
 import type { NavState } from '../hooks/useWalkingNavigation';
 
 interface NavigationOverlayProps {
@@ -17,6 +18,8 @@ interface NavigationOverlayProps {
   poiName?: string;
   onStop: () => void;
   onNextStop?: () => void;
+  /** Ripete a voce l'istruzione corrente. */
+  onRepeat?: () => void;
 }
 
 function fmtMeters(m: number | null): string {
@@ -39,12 +42,17 @@ export default function NavigationOverlay({
   poiName,
   onStop,
   onNextStop,
+  onRepeat,
 }: NavigationOverlayProps) {
   if (state === 'idle') return null;
 
   const arrived = state === 'arrived';
 
-  return (
+  // Portal su body: il banner vive dentro il tab "plan", che riceve
+  // display:none quando si apre la scheda POI (cambio tab automatico al
+  // trigger audio) — un fixed dentro un antenato nascosto sparisce. Col
+  // portal il banner resta visibile durante tutta la navigazione.
+  return createPortal(
     <div className="fixed top-0 left-0 right-0 z-[1200] p-3 pointer-events-none">
       <div className="mx-auto max-w-md rounded-2xl bg-primary/95 text-secondary shadow-2xl pointer-events-auto border border-secondary/20 backdrop-blur-md">
         <div className="flex items-center gap-3 p-4">
@@ -77,6 +85,15 @@ export default function NavigationOverlay({
               </div>
             )}
           </div>
+          {state === 'navigating' && onRepeat && (
+            <button
+              onClick={onRepeat}
+              aria-label="Ripeti istruzione"
+              className="shrink-0 rounded-full bg-white/10 p-2 hover:bg-white/20"
+            >
+              <Volume2 size={18} />
+            </button>
+          )}
           <button
             onClick={onStop}
             aria-label="Ferma navigazione"
@@ -97,6 +114,7 @@ export default function NavigationOverlay({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

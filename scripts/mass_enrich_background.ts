@@ -242,7 +242,7 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
       fetchUnsplashImages(searchQuery)
     ]);
 
-    let images = fsqImages.length > 0 ? fsqImages : wikiImages;
+    let images = wikiImages.length > 0 ? wikiImages : fsqImages;
     if (images.length === 0 && unsplashImages.length > 0) {
       images = unsplashImages;
     }
@@ -373,12 +373,15 @@ Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
       console.error(`   ❌ Errore AI su ${poi.name}:`, llmErr.message || llmErr);
       
       const isRateLimit = llmErr.status === 429;
-      if (isRateLimit) {
-         console.warn(`🚨 Rate limit Agnes AI! Riposo di 60 secondi...`);
-         await sleep(60000);
+      const isTimeout = llmErr.status >= 500 || (llmErr.message && llmErr.message.includes('timed out'));
+      
+      if (isRateLimit || isTimeout) {
+         console.warn(`🚨 Errore temporaneo AI (Rate limit o Timeout)! Riposo di 10 secondi e riproverò al prossimo giro...`);
+         await sleep(10000);
          continue; 
       }
       
+      // Se è un errore grave non recuperabile (es. 400), lo scartiamo per non bloccare il loop all'infinito
       await supabase.from('shared_pois').update({
         enriched_at: new Date().toISOString(),
         enrichment_source: 'ai_error'

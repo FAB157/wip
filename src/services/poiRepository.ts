@@ -60,6 +60,53 @@ export async function getPoiById(id: string): Promise<NearbyPoi | null> {
   return null;
 }
 
+/**
+ * Lettura batch di POI per id (Dexie prima, poi shared_pois con .in()).
+ * Usata dall'archivio ascolti per arricchire le card (descrizione, foto).
+ * Gli id non trovati (POI spariti dal DB) semplicemente mancano dalla mappa.
+ */
+export async function getPoisByIds(ids: string[]): Promise<Map<string, NearbyPoi>> {
+  const result = new Map<string, NearbyPoi>();
+  const wanted = Array.from(new Set((ids || []).map(String).filter(Boolean)));
+  if (wanted.length === 0) return result;
+
+  // 1. Dexie (offline-first)
+  try {
+    const locals = await db.pois.bulkGet(wanted);
+    locals.forEach((p: any) => { if (p && p.id != null) result.set(String(p.id), p as any); });
+  } catch (e) {}
+
+  // 2. Supabase per i mancanti
+  const missing = wanted.filter(id => !result.has(id));
+  if (missing.length > 0) {
+    try {
+      const { data, error } = await supabase
+        .from('shared_pois')
+        .select('id, name, lat, lon, category, status, description_ai, is_gem, photo_url, image_url')
+        .in('id', missing);
+      if (!error && Array.isArray(data)) {
+        data.forEach((d: any) => {
+          result.set(String(d.id), {
+            id: d.id,
+            name: d.name,
+            lat: d.lat,
+            lon: d.lon,
+            category: d.category || 'monumenti',
+            distance_meters: 0,
+            premium: d.is_gem ?? false,
+            is_gem: d.is_gem ?? false,
+            status: d.status,
+            description_ai: d.description_ai,
+            photo_url: d.photo_url || d.image_url,
+            image_url: d.image_url || d.photo_url,
+          } as NearbyPoi);
+        });
+      }
+    } catch (e) {}
+  }
+  return result;
+}
+
 export async function getNearbyPois(
   lat: number,
   lon: number,

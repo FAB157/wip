@@ -59,7 +59,10 @@ export default function AdminSystemErrors() {
           .range(from, from + step - 1);
 
         if (error) {
-          if (error.code !== '42P01') console.error('Error fetching system errors:', error);
+          // 42P01 = tabella inesistente (Postgres), PGRST205 = tabella non in
+          // schema cache (PostgREST): entrambi = migrazione
+          // 20260807120000_admin_observability.sql non ancora applicata.
+          if (error.code !== '42P01' && error.code !== 'PGRST205') console.error('Error fetching system errors:', error);
           hasMore = false;
         } else if (data && data.length > 0) {
           allData = [...allData, ...data];

@@ -126,11 +126,18 @@ export default function AdminApiStats() {
       let from = 0;
       const step = 1000;
       let hasMore = true;
+      // Il DB live può non avere le colonne estese (cost_estimation, user_id):
+      // in quel caso Postgres risponde 42703 e la tab restava completamente
+      // rotta. Si ripiega sulle sole colonne base; computeCost stima il costo
+      // e l'utente viene estratto dal feature_context come per i log storici.
+      let extendedCols = true;
 
       while (hasMore) {
         let query = supabase
           .from('api_usage_logs')
-          .select('id, api_name, feature_context, created_at, tokens_used, cost_estimation, user_id');
+          .select(extendedCols
+            ? 'id, api_name, feature_context, created_at, tokens_used, cost_estimation, user_id'
+            : 'id, api_name, feature_context, created_at, tokens_used');
 
         const now = new Date();
         if (timeFilter === 'oggi') {
@@ -145,7 +152,13 @@ export default function AdminApiStats() {
 
         query = query.order('created_at', { ascending: false }).range(from, from + step - 1);
         const { data, error: sbError } = await query;
-        if (sbError) throw sbError;
+        if (sbError) {
+          if (extendedCols && (sbError.code === '42703' || sbError.message?.includes('does not exist'))) {
+            extendedCols = false;
+            continue; // riprova la stessa pagina con le colonne base
+          }
+          throw sbError;
+        }
 
         if (data && data.length > 0) {
           allData = [...allData, ...data];
@@ -524,7 +537,7 @@ export default function AdminApiStats() {
                             </div>
                             <div>
                               <div className="text-[10px] font-black text-primary/50 uppercase tracking-wider mb-1">Costo Stimato DB</div>
-                              <div className="font-mono text-on-surface">{row.cost_estimation !== null ? `$${Number(row.cost_estimation).toFixed(8)}` : 'N/D'}</div>
+                              <div className="font-mono text-on-surface">{row.cost_estimation != null ? `$${Number(row.cost_estimation).toFixed(8)}` : 'N/D'}</div>
                             </div>
                             <div>
                               <div className="text-[10px] font-black text-primary/50 uppercase tracking-wider mb-1">Costo Calcolato (Frontend)</div>

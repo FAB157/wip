@@ -683,13 +683,60 @@ export default function AdminDiagnostics() {
     ? tests.filter(t => t.status === 'failed' || t.status === 'warning')
     : tests;
 
-  const emergencyReset = () => {
-    if (confirm("ATTENZIONE! Vuoi davvero svuotare tutta la memoria locale dell'app? Verrai disconnesso, e i dati offline verranno cancellati (itinerari scaricati, settings, etc). Premi OK per confermare.")) {
-      localStorage.clear();
-      sessionStorage.clear();
-      alert("Memoria Svuotata. L'app si riavvierà per applicare la pulizia.");
-      window.location.reload();
-    }
+  /**
+   * PANIC RESET: azzeramento completo dello stato LOCALE dell'app — l'ultima
+   * spiaggia quando cache o salvataggi su device sono corrotti.
+   * Cancella: localStorage/sessionStorage (impostazioni, sessione, mirror
+   * preferiti), IndexedDB (POI offline, aree mappa, audio scaricati) e le
+   * cache del service worker (tile mappa, audio, font).
+   * NON tocca i dati sul cloud: account, crediti acquistati, preferiti
+   * sincronizzati, itinerari salvati e cronologia restano intatti e tornano
+   * al login successivo. Prima della pulizia prova a svuotare la coda di
+   * sincronizzazione dei preferiti, per non perdere cuori messi offline.
+   */
+  const emergencyReset = async () => {
+    if (!confirm(
+      "PANIC RESET — leggi prima di confermare.\n\n" +
+      "VERRÀ CANCELLATO (solo su questo dispositivo):\n" +
+      "• impostazioni locali e sessione (dovrai rifare il login)\n" +
+      "• mappe offline, POI e audio scaricati\n" +
+      "• cache di mappa e contenuti\n\n" +
+      "NON VERRÀ TOCCATO (è sul cloud):\n" +
+      "• account, crediti acquistati e Day Pass\n" +
+      "• preferiti sincronizzati, itinerari salvati, cronologia\n\n" +
+      "Usalo solo se l'app è instabile o la diagnostica segnala file corrotti. Confermi?"
+    )) return;
+
+    // Salva sul cloud le sync dei preferiti rimaste in coda prima di distruggerla
+    try {
+      const { flushPendingFavSync } = await import('../lib/favorites');
+      await flushPendingFavSync();
+    } catch { /* offline o non loggato: la coda andrà persa, come avvisato */ }
+
+    localStorage.clear();
+    sessionStorage.clear();
+
+    // IndexedDB: database Dexie dei POI + store idb-keyval (aree/audio offline)
+    try {
+      const dbs: any[] = (indexedDB as any).databases ? await (indexedDB as any).databases() : [];
+      if (dbs.length > 0) {
+        dbs.forEach(d => { if (d?.name) indexedDB.deleteDatabase(d.name); });
+      } else {
+        // Fallback per browser senza indexedDB.databases()
+        ['ItaliaInTascaDB', 'keyval-store'].forEach(n => indexedDB.deleteDatabase(n));
+      }
+    } catch { /* best effort */ }
+
+    // Cache del service worker (tile mappa, audio, font)
+    try {
+      if (typeof caches !== 'undefined') {
+        const names = await caches.keys();
+        await Promise.all(names.map(n => caches.delete(n)));
+      }
+    } catch { /* best effort */ }
+
+    alert("Memoria locale svuotata. L'app si riavvierà pulita: fai di nuovo il login.");
+    window.location.reload();
   };
 
   return (
@@ -705,8 +752,9 @@ export default function AdminDiagnostics() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button 
+          <button
             onClick={emergencyReset}
+            title="Azzera TUTTA la memoria locale del dispositivo (cache, offline, sessione). Non tocca account, crediti e dati salvati sul cloud."
             className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm rounded-xl transition-colors flex items-center gap-2"
           >
             <Trash2 className="w-4 h-4" />

@@ -10,6 +10,10 @@ import './index.css';
 // Request, non solo le stringhe come faceva la versione inline qui.
 import { installNativeApiFetch } from './lib/api';
 installNativeApiFetch();
+// Logging errori runtime → tabella system_errors (tab admin "Errori di
+// sistema", che senza uno scrittore restava sempre vuota).
+import { installGlobalErrorLogger } from './lib/errorLogger';
+installGlobalErrorLogger();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

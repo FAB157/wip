@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { 
@@ -23,6 +23,13 @@ interface POI {
   hasPendingEdits?: boolean;
 }
 
+/** Opzione foto proposta dal curatore: URL + fonte reale + attribuzione. */
+interface ImageOption {
+  url: string;
+  source: string;
+  attribution?: string;
+}
+
 export default function AdminEditor() {
   const [pois, setPois] = useState<POI[]>([]);
   const [selectedPoi, setSelectedPoi] = useState<POI | null>(null);
@@ -44,7 +51,10 @@ export default function AdminEditor() {
   const [listLoading, setListLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editedText, setEditedText] = useState('');
-  const [imageOptions, setImageOptions] = useState<string[] | null>(null);
+  const [imageOptions, setImageOptions] = useState<ImageOption[] | null>(null);
+  // Cache di sessione delle ricerche foto per POI: evita di ripetere le
+  // chiamate a Wikimedia/Wikipedia/Unsplash per un POI già cercato.
+  const imageSearchCache = useRef<Record<string, ImageOption[]>>({});
   
   // Audio state
   const [audioLang, setAudioLang] = useState<'IT' | 'EN' | 'FR' | 'DE' | 'ES' | 'ZH'>('IT');
@@ -218,6 +228,18 @@ export default function AdminEditor() {
   // Perform AI operations via the backend API orchestrator
   const handleRegenerateAction = async (type: 'text' | 'audio' | 'image' | 'translate') => {
     if (!selectedPoi) return;
+
+    // Foto già cercate per questo POI in questa sessione: riusa i risultati
+    // senza richiamare il server (le fonti esterne non cambiano in minuti).
+    if (type === 'image') {
+      const cached = imageSearchCache.current[selectedPoi.id];
+      if (cached && cached.length > 0) {
+        setImageOptions(cached);
+        setMessage({ type: 'success', text: `${cached.length} foto già trovate in questa sessione (cache locale).` });
+        return;
+      }
+    }
+
     setIsLoading(true);
     setMessage(null);
     try {
@@ -235,6 +257,15 @@ export default function AdminEditor() {
         // We can pass current name and category to make it more precise
         payload.name = selectedPoi.name;
         payload.category = selectedPoi.category;
+        payload.lat = selectedPoi.lat;
+        payload.lon = selectedPoi.lon;
+      }
+
+      if (type === 'image') {
+        // Il server cerca foto REALI del luogo: serve il nome (Wikimedia
+        // Commons / pagina Wikipedia) e le coordinate, usate per ricavare la
+        // città nel fallback Unsplash "<nome poi> <città>".
+        payload.name = selectedPoi.name;
         payload.lat = selectedPoi.lat;
         payload.lon = selectedPoi.lon;
       }
@@ -276,7 +307,13 @@ export default function AdminEditor() {
           status: 'needs_revision' 
         });
       } else if (type === 'image' && result.image_options) {
-        setImageOptions(result.image_options);
+        // Compat: il server ora restituisce oggetti {url, source, attribution};
+        // le risposte legacy erano semplici stringhe URL.
+        const normalized: ImageOption[] = (result.image_options as any[]).map((opt: any) =>
+          typeof opt === 'string' ? { url: opt, source: 'web' } : opt
+        );
+        imageSearchCache.current[selectedPoi.id] = normalized;
+        setImageOptions(normalized);
       } else if (type === 'translate') {
         updateLocalPoiState(selectedPoi.id, { 
           status: 'needs_revision' 
@@ -920,7 +957,7 @@ export default function AdminEditor() {
                   <div className="space-y-4">
                     <div>
                       <h4 className="text-xs font-black text-primary uppercase tracking-wider">Curatore Foto & Copertina</h4>
-                      <p className="text-[10px] text-on-surface-variant font-medium">Controlla e rigenera l'immagine di copertina attingendo da fonti libere reali come Wikimedia Commons.</p>
+                      <p className="text-[10px] text-on-surface-variant font-medium">Foto reali del luogo da Wikimedia Commons e Wikipedia; Unsplash (cercando "nome + città") solo come ultimo fallback.</p>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
@@ -964,19 +1001,26 @@ export default function AdminEditor() {
 
                     {imageOptions && imageOptions.length > 0 && (
                       <div className="mt-4">
-                        <h4 className="text-[10px] font-black text-primary uppercase tracking-widest mb-2">Seleziona una foto:</h4>
+                        <h4 className="text-[10px] font-black text-primary uppercase tracking-widest mb-2">Seleziona una foto reale del luogo:</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          {imageOptions.map((url, i) => (
-                            <div 
-                              key={i} 
+                          {imageOptions.map((opt, i) => (
+                            <div
+                              key={opt.url}
                               onClick={() => {
-                                updateLocalPoiState(selectedPoi.id, { image_url: url, status: 'needs_revision' });
+                                updateLocalPoiState(selectedPoi.id, { image_url: opt.url, status: 'needs_revision' });
                                 setImageOptions(null);
                                 setMessage({ type: 'success', text: 'Foto impostata localmente. Salva le modifiche o pubblica per applicarla!' });
                               }}
-                              className="h-24 rounded-xl overflow-hidden cursor-pointer border-2 border-transparent hover:border-primary transition-all relative group"
+                              className="h-28 rounded-xl overflow-hidden cursor-pointer border-2 border-transparent hover:border-primary transition-all relative group bg-gray-100"
+                              title={opt.attribution || opt.source}
                             >
-                              <img src={url} alt={`Option ${i}`} className="w-full h-full object-cover" />
+                              <img src={opt.url} alt={`Opzione ${i + 1}`} loading="lazy" className="w-full h-full object-cover" />
+                              {/* Attribuzione sempre visibile: fonte reale della foto */}
+                              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/75 to-transparent px-1.5 pt-3 pb-1">
+                                <span className="block text-[8px] font-bold text-white truncate">
+                                  {opt.attribution || opt.source}
+                                </span>
+                              </div>
                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                                 <Check className="w-6 h-6 text-white" />
                               </div>

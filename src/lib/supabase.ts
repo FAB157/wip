@@ -139,9 +139,15 @@ const initMock = () => {
 };
 
         const fetchWithTimeout = (input: RequestInfo | URL, init?: RequestInit) => {
-          const timeout = 15000; // 15s: su 3G il vecchio limite di 8s abortiva query legittime
+          const timeout = 20000; // 20s: su reti lente 15s abortiva login/query legittime
           const controller = new AbortController();
-          const id = setTimeout(() => controller.abort(), timeout);
+          // abort CON motivo: senza, l'utente vedeva il messaggio grezzo del
+          // browser "signal is aborted without reason" (es. alla schermata di
+          // login su rete lenta) invece di un errore comprensibile.
+          const id = setTimeout(
+            () => controller.abort(new DOMException('Connessione lenta: richiesta interrotta dopo 20 secondi. Riprova.', 'TimeoutError')),
+            timeout
+          );
 
           // Copia dell'init: mutare l'oggetto del chiamante è un side effect
           // sull'SDK; se il chiamante ha già un signal, rispettiamo il suo.

@@ -10,7 +10,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
 import { getApiUrl } from '../lib/api';
-import { ensureAffiliateUrl } from '../lib/affiliates';
+import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { Language, getTranslation } from '../lib/i18n';
 import PrintView from './PrintView';
@@ -371,7 +371,13 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
   <div className="flex flex-col md:flex-row gap-4 p-4 bg-white rounded-2xl border border-gray-100 hover:shadow-md transition-all group/card relative">
     {/* ensureAffiliateUrl: senza, i click su queste card uscivano senza
         parametri di affiliazione e la commissione andava persa */}
-    <a href={ensureAffiliateUrl(exp.url)} target="_blank" rel="noopener noreferrer" className="flex gap-4 flex-1">
+    <a
+      href={ensureAffiliateUrl(exp.url)}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => trackAffiliateClick(exp.url, exp.name, '', 'itinerary_experience')}
+      className="flex gap-4 flex-1"
+    >
       {exp.imageUrl && (
         <div className="w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 bg-gray-100">
           <img src={exp.imageUrl} alt={exp.name} className="w-full h-full object-cover group-hover/card:scale-110 transition-transform duration-300" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
@@ -1112,15 +1118,17 @@ export default function PlanScreen({
     routeGeometry,
     startNavigation,
     stopNavigation,
+    repeatInstruction,
   } = useWalkingNavigation(language);
 
   // Avvio WIP Nav dal modal "Rotta Intelligente" (bottone per tappa in
-  // ItineraryStop → App → qui): destinazione e origine (GPS o indirizzo
-  // personalizzato) arrivano via evento, il percorso viene disegnato su
-  // PlanMap e le indicazioni vocali partono da useWalkingNavigation.
+  // ItineraryStop → App → qui): destinazione, origine (GPS o indirizzo
+  // personalizzato) e POI selezionati lungo il percorso arrivano via evento;
+  // il percorso viene disegnato su PlanMap, le indicazioni vocali e le
+  // audioguide automatiche partono da useWalkingNavigation.
   useEffect(() => {
     const handleInternalNavStart = (e: any) => {
-      const { endCoords, destinationName, origin } = e.detail || {};
+      const { endCoords, destinationName, origin, pois } = e.detail || {};
       if (!endCoords?.lat) return;
       startNavigation(
         {
@@ -1129,7 +1137,8 @@ export default function PlanScreen({
           poiId: `wipnav_${String(destinationName || '').slice(0, 40)}`,
           poiName: destinationName || '',
         },
-        origin || undefined
+        origin || undefined,
+        Array.isArray(pois) ? pois : []
       );
     };
     window.addEventListener('wip-internal-nav-start', handleInternalNavStart);
@@ -5107,20 +5116,26 @@ export default function PlanScreen({
       </AnimatePresence>
 
       <AnimatePresence>
-        {navState !== 'idle' && navDayIndex !== null && navStopIndex !== null && generatedPlan && (
+        {/* L'overlay appare per QUALSIASI navigazione attiva: prima era
+            vincolato a navDayIndex/navStopIndex, quindi il WIP Nav avviato
+            dalla singola tappa navigava "alla cieca" senza banner. */}
+        {navState !== 'idle' && (
           <NavigationOverlay
             state={navState}
             currentInstruction={currentInstruction}
             distanceToNext={distanceToNext}
             distanceToDestination={distanceToDestination}
             etaSeconds={etaSeconds}
-            poiName={generatedPlan.giorni[navDayIndex]?.tappe[navStopIndex]?.titolo_tappa}
+            poiName={navDayIndex !== null && navStopIndex !== null
+              ? generatedPlan?.giorni[navDayIndex]?.tappe[navStopIndex]?.titolo_tappa
+              : undefined}
             onStop={() => {
               stopNavigation();
               setNavDayIndex(null);
               setNavStopIndex(null);
             }}
-            onNextStop={(generatedPlan.giorni[navDayIndex]?.tappe.length || 0) > (navStopIndex || 0) + 1 ? handleNextStop : undefined}
+            onNextStop={navDayIndex !== null && navStopIndex !== null && (generatedPlan?.giorni[navDayIndex]?.tappe.length || 0) > (navStopIndex || 0) + 1 ? handleNextStop : undefined}
+            onRepeat={repeatInstruction}
           />
         )}
       </AnimatePresence>

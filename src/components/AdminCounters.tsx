@@ -420,7 +420,7 @@ export default function AdminCounters() {
 
       {isTableMissing && (
         <div className="p-4 bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100 flex items-start gap-3 text-xs font-medium transition-all animate-in slide-in-from-top duration-300">
-          <span className="text-lg">ðŸ’¡</span>
+          <span className="text-lg">💡</span>
           <div>
             <p className="font-black mb-1 text-emerald-950">Attivazione Telemetria in Tempo Reale</p>
             <p className="opacity-90 leading-relaxed">
@@ -466,14 +466,14 @@ export default function AdminCounters() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
         <CounterCard 
           icon={<Globe className="w-4 h-4 text-green-600" />} 
-          label="POI Approvati âœ…" 
+          label="POI Approvati ✅" 
           value={dbCounts.approvedPoisCount} 
           loading={isLoading}
           bg="bg-green-50/50"
         />
         <CounterCard 
           icon={<Database className="w-4 h-4 text-orange-500" />} 
-          label="POI Bozza ðŸš§" 
+          label="POI Bozza 🚧" 
           value={dbCounts.draftPoisCount} 
           loading={isLoading}
           bg="bg-orange-50/50"
@@ -496,7 +496,7 @@ export default function AdminCounters() {
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
         <CounterCard 
           icon={<AlertCircle className="w-4 h-4 text-amber-500" />} 
-          label="Gemme Totali â­" 
+          label="Gemme Totali ⭐" 
           value={dbCounts.gemPoisCount} 
           loading={isLoading}
           bg="bg-yellow-50/50"
@@ -597,7 +597,7 @@ export default function AdminCounters() {
       <div className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between border-b border-outline-variant pb-3">
           <h4 className="font-black text-sm text-[#FF5100] uppercase tracking-wider flex items-center gap-2">
-            <span className="text-xl">ðŸŽŸï¸</span>
+            <span className="text-xl">🎟️</span>
             Statistiche Affiliazione GetYourGuide
           </h4>
         </div>
