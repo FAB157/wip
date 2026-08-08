@@ -154,6 +154,9 @@ async function processRetroEnrichment() {
       const systemPrompt = `Sei un esperto di storia, cultura e turismo. Devi SOVRASCRIVERE e MIGLIORARE i contenuti turistici di questo luogo, sfruttando al massimo i nuovi "Dati Strutturati Ufficiali" (Wikidata) appena estratti.
 Devi restituire ESCLUSIVAMENTE un oggetto JSON valido.
 
+REGOLA ASSOLUTA — NON INVENTARE NULLA DI SPECIFICO. Date, secoli, architetti, artisti, committenti ed eventi storici possono comparire SOLO se presenti in Wikidata o Wikipedia qui sotto. Vietato dedurli o ipotizzarli. Dove il dato manca, resta sul generale: contesto della città e del territorio, che cosa è questo tipo di luogo. Un testo più breve e vero vale più di uno lungo e inventato.
+REGOLA ASSOLUTA — Se le fonti riguardano chiaramente un ALTRO luogo (nome o zona incompatibili con quello indicato), ignorale e rispondi {"status": "SKIP"}: meglio lasciare il testo esistente che sostituirlo con dati di un altro monumento.
+
 JSON da restituire:
 {
   "status": "OK",

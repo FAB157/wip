@@ -128,6 +128,66 @@ async function fetchWikivoyage(query: string): Promise<string> {
   return "";
 }
 
+async function fetchWikidata(name: string): Promise<string> {
+  try {
+    const searchUrl = `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(name)}&language=it&format=json`;
+    const searchRes = await axios.get(searchUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
+    
+    if (searchRes.data?.search?.length > 0) {
+      const entityId = searchRes.data.search[0].id;
+      const entityDesc = searchRes.data.search[0].description || '';
+      
+      const entityUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${entityId}&languages=it&props=claims&format=json`;
+      const entityRes = await axios.get(entityUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
+      
+      const claims = entityRes.data.entities[entityId]?.claims || {};
+      
+      const importantProps: any = {
+        'P571': 'Data di creazione',
+        'P84': 'Architetto/Creatore',
+        'P149': 'Stile',
+        'P186': 'Materiale',
+        'P31': 'Tipo'
+      };
+      
+      let facts: string[] = [];
+      if (entityDesc) facts.push(`Sommario: ${entityDesc}`);
+      
+      let idsToResolve: string[] = [];
+      for (const prop of Object.keys(importantProps)) {
+        if (claims[prop]) {
+          const valueObj = claims[prop][0].mainsnak.datavalue;
+          if (valueObj?.type === 'wikibase-entityid') {
+             idsToResolve.push(valueObj.value.id);
+          } else if (valueObj?.type === 'time') {
+             let timeStr = valueObj.value.time;
+             timeStr = timeStr.replace(/^\+/, '').split('T')[0];
+             facts.push(`${importantProps[prop]}: ${timeStr}`);
+          }
+        }
+      }
+      
+      if (idsToResolve.length > 0) {
+         const idsChunk = idsToResolve.slice(0, 50).join('|');
+         const valUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${idsChunk}&languages=it&props=labels&format=json`;
+         const valRes = await axios.get(valUrl, { headers: { 'User-Agent': 'ItaintaBot/1.0' }, timeout: 3000 });
+         
+         for (const [prop, label] of Object.entries(importantProps)) {
+           if (claims[prop]) {
+             const valueObj = claims[prop as string][0].mainsnak.datavalue;
+             if (valueObj?.type === 'wikibase-entityid') {
+               const valLabel = valRes.data.entities[valueObj.value.id]?.labels?.it?.value;
+               if (valLabel) facts.push(`${label}: ${valLabel}`);
+             }
+           }
+         }
+      }
+      return facts.join(', ');
+    }
+  } catch(e: any) {}
+  return "";
+}
+
 async function fetchWikimediaImages(query: string): Promise<string[]> {
   try {
     const images: string[] = [];
@@ -234,9 +294,10 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
     const searchQuery = `${poi.name} ${poi.city || ''}`.trim();
     console.log(`-> Arricchimento di: ${searchQuery} [Cat: ${poi.category}]`);
 
-    const [wikiRaw, wvRaw, wikiImages, fsqImages, unsplashImages] = await Promise.all([
+    const [wikiRaw, wvRaw, wikiData, wikiImages, fsqImages, unsplashImages] = await Promise.all([
       fetchWikipedia(searchQuery),
       fetchWikivoyage(searchQuery),
+      fetchWikidata(searchQuery),
       fetchWikimediaImages(searchQuery),
       fetchFoursquareImages(poi.lat, poi.lon, poi.name),
       fetchUnsplashImages(searchQuery)
@@ -256,34 +317,57 @@ async function processBatchForRegion(region: typeof REGIONS[0]) {
     const photoUrl = images.length > 0 ? images[0] : null;
     const imagesJson = images.length > 0 ? images : null;
 
-    // REGOLA ASSOLUTA: arricchisci SEMPRE tutti i POI, nessuno SKIP
-    const systemPrompt = `Sei un esperto di storia, cultura e turismo. Il tuo compito è generare contenuti turistici ESTREMAMENTE DETTAGLIATI per un'app di viaggio.
+    // Due modalità di scrittura. La versione precedente ne aveva una sola e
+    // ordinava al modello di INVENTARE date e architetti "verosimili" quando
+    // le fonti mancavano: fatti falsi salvati nel database e poi letti ad alta
+    // voce al turista come veri. Ora il testo c'è sempre, ma senza inventare:
+    // con fonti si raccontano i FATTI di quel luogo, senza fonti si racconta
+    // il CONTESTO reale (città, territorio, tipo di luogo) senza attribuire al
+    // POI date, nomi o eventi che nessuno ha verificato.
+    const hasSources = !!(wikiRaw || wikiData || wvRaw);
+
+    const regoleComuni = `REGOLA ASSOLUTA 1 — NON INVENTARE NULLA DI SPECIFICO SU QUESTO LUOGO. È VIETATO attribuirgli date di costruzione, secoli, architetti, artisti, committenti, eventi storici o aneddoti che non siano scritti nelle fonti qui sotto. Vietato anche dedurli o ipotizzarli ("risalente probabilmente al Quattrocento", "opera della scuola di..."). Se non lo sai, non scriverlo.
+REGOLA ASSOLUTA 2 — VIETATE le frasi vuote da dépliant ("un viaggio nel tempo", "un mix di storia e bellezza", "un luogo magico", "sospeso tra passato e presente"): occupano spazio senza dire nulla.
+REGOLA ASSOLUTA 3 — Scrivi in italiano e inglese naturali, mai tradotti alla lettera.`;
+
+    const modalitaConFonti = `MODALITÀ: FONTI DISPONIBILI.
+Racconta questo luogo usando i fatti delle fonti: date, nomi, stili e materiali che vi compaiono. Più sono concreti, meglio è. Se le fonti riguardano CHIARAMENTE un altro luogo (nome o zona incompatibili), ignorale del tutto e comportati come in assenza di fonti, descrivendo solo il contesto.`;
+
+    const modalitaContesto = `MODALITÀ: NESSUNA FONTE SPECIFICA SU QUESTO LUOGO.
+Non hai dati verificati su questo POI: NON inventarli. Scrivi comunque un testo utile e piacevole, ma parlando di ciò che è realmente noto e verificabile del CONTESTO:
+— il territorio e la città ("${poi.city || region.name}"): paesaggio, tradizioni, materiali locali, storia generale della zona;
+— che cosa è un "${poi.category}" e che ruolo ha di solito nella vita di un luogo così;
+— che cosa può aspettarsi chi ci arriva davanti, in termini generali.
+Parla del luogo al presente e in termini generali ("questa chiesa fa parte del tessuto storico di ${poi.city || region.name}"), MAI attribuendogli fatti precisi non verificati. Nessuna data, nessun nome proprio di architetto o artista riferito a questo edificio.`;
+
+    const systemPrompt = `Sei un esperto di storia, cultura e turismo che scrive per un'app di viaggio.
 Devi restituire ESCLUSIVAMENTE un oggetto JSON valido. NON aggiungere markdown (\`\`\`json).
 
-REGOLA ASSOLUTA 1: Usa dettagli REALI, unici e specifici (date, stili architettonici, personaggi storici). VIETATO usare frasi generiche e banali come "un viaggio nel tempo", "un mix di storia e bellezza", "un luogo magico", "simbolo della città". Se un dettaglio è nel testo di Wikipedia, USALO.
-REGOLA ASSOLUTA 2: Se NON hai dati reali (wiki vuoto), INVENTA dettagli storici o architettonici VEROSIMILI e SPECIFICI per la zona e la categoria, ma rendili credibili e concreti, non vaghi.
+${regoleComuni}
+
+${hasSources ? modalitaConFonti : modalitaContesto}
 
 JSON da restituire:
 {
   "status": "OK",
-  "descrizione_breve_it": "Max 25 parole (italiano). Includi un dettaglio unico reale (es. anno di costruzione o stile), vietate frasi generiche.",
-  "descrizione_breve_en": "Max 25 words (English). Include a specific unique detail.",
-  "descrizione_dettagliata_it": "Testo storico-turistico denso di informazioni, 1000-1500 caratteri (italiano). Nomi, date, curiosità storiche. Niente frasi fatte.",
-  "descrizione_dettagliata_en": "Historical-tourist text, dense with facts, 1000-1500 chars (English).",
-  "ulteriori_informazioni_it": "Info pratiche precise: stile, secolo, nome di un artista/architetto coinvolto.",
-  "teaser_it": "Un teaser invitante e con dettagli specifici di circa 5/6 secondi di lettura (circa 25-30 parole in italiano). Deve essere perfetto per essere letto ad alta voce da una voce guida. Includi un fatto specifico o un mistero del luogo.",
-  "teaser_en": "An inviting teaser with specific details, taking about 5/6 seconds to read (around 25-30 words in English), perfect for a voice guide. Include a specific fact.",
-  "testo_nicky_it": "120-150 parole. Stile informale e vivace, ma DEVE raccontare aneddoti specifici, dettagli visivi concreti (colori, materiali) e curiosità reali. Vietato il filler. (Inizia con ✨)",
-  "testo_nicky_en": "Nicky style in English, 120-150 words with concrete details (start with ✨).",
-  "testo_dante_it": "120-150 parole. Stile formale, storico, colto. Ricco di nomi, secoli, eventi storici tangibili. Niente retorica vuota. (Inizia con 📜)",
-  "testo_dante_en": "Dante style in English, 120-150 words full of tangible historical facts (start with 📜)."
+  "descrizione_breve_it": "Max 25 parole (italiano). Con fonti: il dettaglio più caratterizzante. Senza fonti: che cos'è e dove si trova, senza fatti inventati.",
+  "descrizione_breve_en": "Max 25 words (English), stesso criterio.",
+  "descrizione_dettagliata_it": "800-1500 caratteri (italiano). Con fonti: nomi, date, vicende. Senza fonti: contesto territoriale e culturale reale, senza attribuire nulla di preciso a questo edificio.",
+  "descrizione_dettagliata_en": "800-1500 chars (English), stesso criterio.",
+  "ulteriori_informazioni_it": "Info pratiche solo se ricavabili dalle fonti; altrimenti indicazioni generali sulla visita, senza inventare orari o prezzi.",
+  "teaser_it": "Teaser invitante di 25-30 parole, perfetto da leggere ad alta voce. Con fonti: un fatto concreto. Senza fonti: un invito legato al luogo e alla città, senza fatti inventati.",
+  "teaser_en": "Inviting teaser, 25-30 words (English), stesso criterio.",
+  "testo_nicky_it": "120-150 parole. Stile informale e vivace, dettagli visivi concreti di ciò che si vede. (Inizia con ✨)",
+  "testo_nicky_en": "Nicky style in English, 120-150 words (start with ✨).",
+  "testo_dante_it": "120-150 parole. Stile formale e colto. Con fonti: date ed eventi tangibili. Senza fonti: inquadramento storico del territorio, senza date attribuite a questo edificio. (Inizia con 📜)",
+  "testo_dante_en": "Dante style in English, 120-150 words (start with 📜)."
 }
 
 LUOGO DA ARRICCHIRE: "${searchQuery}" — Categoria: "${poi.category}"
 ZONA DEL LUOGO: "${region.name}" (Città: "${poi.city || 'N/A'}")
-ATTENZIONE: Se il testo Wikipedia sotto parla di un luogo famoso in un'altra regione italiana lontana da ${region.name}, è un errore! IGNORALO e scrivi un testo specifico e ricco di dettagli plausibili per un "${poi.category}" situato a ${region.name}.
 
-Wikipedia: ${wikiRaw || 'Nessun dato — inventa dettagli storici verosimili e concreti basandoti sulla zona e categoria.'}
+Wikidata (Dati Strutturati Ufficiali): ${wikiData || 'Nessun dato strutturato.'}
+Wikipedia: ${wikiRaw || 'Nessun dato enciclopedico.'}
 Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
 
 
@@ -308,10 +392,11 @@ Wikivoyage: ${wvRaw || 'Nessun dato.'}`;
         parsed = JSON.parse(cleanJson);
       }
 
-      // Rimosso il blocco skip: forziamo sempre lo status su OK
       parsed.status = "OK";
 
-      const sourceAI = wikiRaw ? 'agnes_free_wiki_json' : 'agnes_free_internal_json';
+      // Traccia con quale materiale è stato scritto il testo: i POI descritti
+      // solo per contesto vanno riprocessati quando compaiono fonti vere.
+      const sourceAI = hasSources ? 'agnes_wiki_sourced' : 'agnes_context_only';
 
       // Mapping dei campi del Database
       const updatePayload = {
