@@ -11,6 +11,7 @@ coverage/
 
 *.apk
 android/keystore.properties
+android/.kotlin/
 .idea/
 scratch/app.zip
 scratch/
