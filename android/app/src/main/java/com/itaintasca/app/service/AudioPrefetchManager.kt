@@ -115,7 +115,7 @@ object AudioPrefetchManager {
                 cleanup(appContext)
                 if (cachedFile(appContext, poiId, lang) != null) return@launch
                 if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return@launch
-                val text = resolveAudioText(appContext, poiId, lang, guideCharacter) ?: return@launch
+                val text = resolveAudioText(appContext, poiId, lang, guideCharacter ?: "nicky") ?: return@launch
                 downloadBlocking(appContext, poiId, lang, guideCharacter, text)
             } catch (e: Exception) {
                 Log.w(TAG, "prefetch failed for $poiId: ${e.message}")
