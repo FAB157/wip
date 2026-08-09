@@ -30,6 +30,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private let fetchRetryBackoffMs: Double = 20_000
     private let arrivalRetriggerTtlMs: Double = 24 * 60 * 60 * 1000
     private let exitArrivalGraceMs: Double = 30 * 60 * 1000
+    /// Cooldown prima di RI-annunciare l'avvicinamento a un POI già annunciato
+    /// e poi uscito dall'isteresi: il GPS che rimbalza dentro/fuori (pineta,
+    /// chiome fitte) non deve rifare banner+notifica ogni pochi metri.
+    private let approachRetriggerCooldownMs: Double = 30 * 60 * 1000
+    /// Dopo un'uscita recente anche l'ARRIVO aspetta: un rientro immediato nel
+    /// cerchio di arrivo è quasi sempre rumore GPS, non una nuova visita.
+    private let arrivalAfterExitCooldownMs: Double = 10 * 60 * 1000
 
     private let locationManager = CLLocationManager()
     private let store = PoiStore.shared
@@ -502,38 +509,50 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // verrebbe scartato qui prima di essere valutato).
             if c.dist > exitRad {
                 if state == .approachFired {
-                    store.deleteTriggerState(c.poi.id)
+                    // Niente cancellazione secca: EXITED col suo timestamp fa
+                    // da cooldown — cancellare permetteva un nuovo annuncio al
+                    // primo rientro nel raggio (banner ogni pochi metri).
+                    store.setTriggerState(c.poi.id, .exited)
                     sendPoiEvent("poiExited", poi: c.poi)
                     continue
                 }
                 if state == .arrivedFired {
                     if let rec = record, nowMs() - rec.updatedAt > exitArrivalGraceMs {
-                        store.deleteTriggerState(c.poi.id)
+                        store.setTriggerState(c.poi.id, .exited)
                         sendPoiEvent("poiExited", poi: c.poi)
                     }
                     continue
                 }
                 if state == .passed {
-                    // Fuori dall'isteresi e già superato: si libera per una
-                    // eventuale visita futura.
-                    store.deleteTriggerState(c.poi.id)
+                    // Fuori dall'isteresi e già superato: EXITED — si libera
+                    // per una visita futura ma solo dopo il cooldown (la
+                    // cancellazione secca riabilitava subito arrivo/annuncio).
+                    store.setTriggerState(c.poi.id, .exited)
                     continue
                 }
+                if state == .exited { continue }
                 // .pending → prosegue verso la valutazione predittiva.
             }
 
             // Sicurezza distanza (come Android: raggio × 2.5 + accuratezza)
             if c.dist <= arrivalRad {
-                let arrivedRecently = state == .arrivedFired && record != nil &&
-                    (nowMs() - record!.updatedAt) < arrivalRetriggerTtlMs
-                if !arrivedRecently {
+                // Il TTL 24h ora copre anche PASSED (prima lo bypassava e un
+                // POI superato ri-arrivava al primo rientro); EXITED recente
+                // blocca il rientro-da-rumore-GPS con un cooldown più corto.
+                let age = record != nil ? (nowMs() - record!.updatedAt) : Double.infinity
+                let blockedArrival =
+                    ((state == .arrivedFired || state == .passed) && age < arrivalRetriggerTtlMs) ||
+                    (state == .exited && age < arrivalAfterExitCooldownMs)
+                if !blockedArrival {
                     handleArrival(poi: c.poi)
                 }
             // Finestra allargata a 3× il raggio: il predittore deve poter
             // annunciare PRIMA dell'ingresso nel cerchio — è lì che si
             // recupera la latenza. Dentro `evaluate` il vincolo su t_cpa
             // impedisce comunque gli annunci troppo anticipati.
-            } else if c.dist <= alertRad * 3 && state == .pending {
+            } else if c.dist <= alertRad * 3 && (state == .pending ||
+                (state == .exited && record != nil &&
+                 (nowMs() - record!.updatedAt) > approachRetriggerCooldownMs)) {
                 // Predittore CPA al posto del vecchio filtro ±60°: valuta se
                 // l'utente è realmente IN ROTTA e se il momento è quello
                 // giusto, invece di limitarsi a vetare le direzioni sbagliate.
@@ -601,7 +620,32 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         default: approachMsg = "Ti stai avvicinando a \(poi.nome)"
         }
 
-        let prefix = poi.isFromItinerary ? "📍 Tappa: " : (poi.isGem ? "💎 " : "")
+        // Prefisso PARLATO: mai emoji qui — AVSpeechSynthesizer le legge per
+        // nome ("💎" → "pietra preziosa", "📍" → "puntina"). Solo parole.
+        let prefix: String
+        if poi.isFromItinerary {
+            switch appLanguage {
+            case "en": prefix = "Itinerary stop: "
+            case "fr": prefix = "Étape de l'itinéraire : "
+            case "es": prefix = "Parada del itinerario: "
+            case "de": prefix = "Etappe der Route: "
+            case "ru": prefix = "Остановка маршрута: "
+            case "zh": prefix = "行程站点："
+            default: prefix = "Tappa dell'itinerario: "
+            }
+        } else if poi.isGem {
+            switch appLanguage {
+            case "en": prefix = "A gem: "
+            case "fr": prefix = "Une gemme : "
+            case "es": prefix = "Una gema: "
+            case "de": prefix = "Ein Juwel: "
+            case "ru": prefix = "Жемчужина: "
+            case "zh": prefix = "瑰宝："
+            default: prefix = "Una gemma: "
+            }
+        } else {
+            prefix = ""
+        }
         let priority = poi.isFromItinerary ? 0 : (poi.isGem ? 1 : 2)
         if speak {
             SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(

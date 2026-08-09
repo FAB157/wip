@@ -268,7 +268,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
                     // Watchdog anti-blocco: se onDone non arriva mai (bug di alcuni engine),
                     // la coda non deve restare inchiodata su isSpeaking=true.
-                    val maxMs = (8000L + next.text.length * 120L).coerceAtMost(60000L)
+                    // Cap 15 min (non 60s): il tetto di 60s tagliava a metà le
+                    // audioguide COMPLETE (3-4 min) del Day Pass offline e di
+                    // ogni fallback TTS senza MP3. Il teaser (~200 char) resta
+                    // ben sotto e non è toccato.
+                    val maxMs = (8000L + next.text.length * 120L).coerceAtMost(15 * 60_000L)
                     val guard = Runnable {
                         Log.w(TAG, "Speech watchdog fired, resetting queue state")
                         try { ttsInstance?.stop() } catch (_: Exception) { }
@@ -745,6 +749,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         db.poiDao().deleteTriggerState(poiId)
                         sendEventToPlugin(context, "poiExited", poiId, "")
                     }
+                }
+                TriggerState.PASSED -> {
+                    // Prima cadeva nel ramo else: chi superava il monumento e
+                    // tornava indietro non lo risentiva finché non usciva da
+                    // 3× il raggio + nuovo fetch. iOS resettava già all'uscita:
+                    // ora anche Android libera lo stato PASSED.
+                    db.poiDao().deleteTriggerState(poiId)
+                    sendEventToPlugin(context, "poiExited", poiId, "")
                 }
                 else -> { }
             }

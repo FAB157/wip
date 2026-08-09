@@ -95,27 +95,60 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   const [navInstruction, setNavInstruction] = useState<string>('');
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number, heading?: number | null} | null>(null);
 
+  // Specchio delle entries per i listener (deps []) + memorie anti-ripetizione:
+  // - announcedAtRef: ultimo beep/vibrazione per POI (mai due annunci ravvicinati)
+  // - dismissedRef: POI chiusi con la X o già aperti in scheda — i distance-update
+  //   nativi (ogni ~5 m) non devono resuscitarli: era il banner della pineta
+  //   che ricompariva a ogni fix GPS.
+  const entriesRef = useRef<ApproachEntry[]>([]);
+  useEffect(() => { entriesRef.current = entries; }, [entries]);
+  const announcedAtRef = useRef<Map<string, number>>(new Map());
+  const dismissedRef = useRef<Map<string, number>>(new Map());
+  const ANNOUNCE_COOLDOWN_MS = 10 * 60 * 1000;
+  const DISMISS_COOLDOWN_MS = 30 * 60 * 1000;
+
+  const isDismissedRecently = (poiId: string) => {
+    const ts = dismissedRef.current.get(String(poiId)) || 0;
+    return Date.now() - ts < DISMISS_COOLDOWN_MS;
+  };
+
   useEffect(() => {
     /**
      * wip-poi-approach — aggiunge il POI nella lista del banner.
      * I dati arrivano da GeofenceAudioGuide con poi completo (lat, lon, image_url).
-     * Suono + vibrazione JS per il foreground.
+     * Suono + vibrazione JS per il foreground, SOLO alla prima comparsa.
      */
     const onApproach = (e: Event) => {
       const d = (e as CustomEvent).detail;
       const poi = d.poi || {};
-      const poiId = poi.id || d.poiId;
+      const poiId = String(poi.id || d.poiId || '');
       const name = poi.name || d.poiName || d.name || '';
       if (!poiId) return;
 
       const isArrival = !!d.isArrival;
+      const already = entriesRef.current.some(x => String(x.poiId) === poiId);
 
-      // Feedback JS se l'app è in foreground
+      if (already) {
+        // Aggiorna i dati dell'entry esistente senza rumore né ricreazione
+        setEntries(prev => prev.map(x => String(x.poiId) === poiId
+          ? { ...x, distance: d.distance ?? x.distance, poi: x.poi ?? poi, alreadyPaid: x.alreadyPaid ?? d.alreadyPaid }
+          : x));
+        return;
+      }
+
+      // Anti-ripetizione: un POI già annunciato da poco (o chiuso con la X)
+      // non torna a ogni oscillazione del GPS. L'ARRIVO passa sempre: è
+      // l'evento forte e raro, e aggiorna lui i timestamp.
+      const lastAnnounced = announcedAtRef.current.get(poiId) || 0;
+      const repeatedSoon = Date.now() - lastAnnounced < ANNOUNCE_COOLDOWN_MS;
+      if (!isArrival && (repeatedSoon || isDismissedRecently(poiId))) return;
+
+      announcedAtRef.current.set(poiId, Date.now());
       playBeep(isArrival ? 2 : 1);
       navigator.vibrate?.(isArrival ? [250, 100, 250] : [200]);
 
       setEntries(prev => {
-        if (prev.find(x => x.poiId === poiId)) return prev; // già presente
+        if (prev.find(x => String(x.poiId) === poiId)) return prev; // già presente
         return [...prev, {
           poiId,
           name,
@@ -135,30 +168,68 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
       });
     };
 
+    /**
+     * Aggiornamento distanze dal nativo (ogni ~5 m a piedi). MERGE, non
+     * rimpiazzo: il vecchio rimpiazzo integrale perdeva poi/alreadyPaid/
+     * enteredAt/alertRadius — il tasto "Ascolta" dispatchava poi undefined
+     * (click a vuoto) e la pulizia per età/distanza confrontava NaN.
+     */
     const onDistUpdate = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      if (d.entries) {
-        setEntries(d.entries.map((entry: any) => ({
-          ...entry,
-          poiId: entry.poi?.id || entry.poiId,
-          name: entry.poi?.name || entry.name,
-          category: entry.poi?.category || entry.category,
-          image: entry.poi?.image_url,
-          lat: entry.poi?.lat,
-          lon: entry.poi?.lon
-        })));
-      }
+      if (!d.entries) return;
+      const isCar = (localStorage.getItem('wip_transport_mode') || '') === 'car';
+      setEntries(prev => {
+        const prevById = new Map<string, any>(prev.map(x => [String(x.poiId), x] as [string, any]));
+        return (d.entries as any[])
+          .map((entry: any) => {
+            const id = String(entry.poi?.id ?? entry.poiId ?? '');
+            if (!id) return null;
+            const old = prevById.get(id);
+            if (old) {
+              return {
+                ...old,
+                distance: entry.distance ?? old.distance,
+                lat: old.lat ?? entry.lat ?? entry.poi?.lat,
+                lon: old.lon ?? entry.lon ?? entry.poi?.lon,
+              };
+            }
+            // Entry sconosciuta (approach perso mentre la WebView dormiva):
+            // entra solo se non è stata chiusa/aperta da poco.
+            if (isDismissedRecently(id)) return null;
+            return {
+              poiId: id,
+              name: entry.poi?.name || entry.name || '',
+              category: entry.poi?.category ?? entry.category ?? null,
+              distance: entry.distance ?? 0,
+              alertRadius: entry.alertRadius ?? (isCar ? 300 : 150),
+              triggerRadius: entry.triggerRadius ?? 30,
+              isCar,
+              queueNames: [],
+              enteredAt: Date.now(),
+              image: entry.poi?.image_url,
+              lat: entry.lat ?? entry.poi?.lat,
+              lon: entry.lon ?? entry.poi?.lon,
+              poi: entry.poi,
+              alreadyPaid: entry.alreadyPaid || false,
+            } as ApproachEntry;
+          })
+          .filter(Boolean) as ApproachEntry[];
+      });
     };
 
     const onExit = (e: Event) => {
       const poiId = (e as CustomEvent).detail?.poiId;
-      if (poiId) setEntries(prev => prev.filter(x => x.poiId !== poiId));
+      if (poiId) setEntries(prev => prev.filter(x => String(x.poiId) !== String(poiId)));
     };
 
     const onTrigger = (e: Event) => {
-      // Quando scatta il trigger, l'elemento sparisce dallo stack (si apre la scheda)
-      const poiId = (e as CustomEvent).detail?.poiId;
-      if (poiId) setEntries(prev => prev.filter(x => x.poiId !== poiId));
+      // Quando scatta il trigger, l'elemento sparisce dallo stack (si apre la
+      // scheda) e non deve tornare al prossimo distance-update.
+      const poiId = (e as CustomEvent).detail?.poiId ?? (e as CustomEvent).detail?.poi?.id;
+      if (poiId) {
+        dismissedRef.current.set(String(poiId), Date.now());
+        setEntries(prev => prev.filter(x => String(x.poiId) !== String(poiId)));
+      }
     };
 
     const onNavInstruction = (e: Event) => {
@@ -217,14 +288,20 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   }, []);
 
   const handleClose = (poiId: string) => {
+    // Chiusura esplicita: il POI non deve ricomparire al prossimo
+    // distance-update nativo (arrivava ogni ~5 m e resuscitava il banner).
+    dismissedRef.current.set(String(poiId), Date.now());
     window.dispatchEvent(new CustomEvent('wip-poi-exit-manual', { detail: { poiId } }));
     setEntries(prev => prev.filter(x => x.poiId !== poiId));
   };
 
   const handlePlayNow = (entry: ApproachEntry) => {
-    // Al clic su "Ascolta", apriamo la scheda completa tramite l'evento centralizzato con autoPlay=true
+    // Al clic su "Ascolta", apriamo la scheda completa tramite l'evento
+    // centralizzato con autoPlay=true. Si passa anche poiId: se l'oggetto poi
+    // manca (entry ricostruita da un distance-update) App.tsx lo ricarica dal
+    // repository invece di ignorare il click.
     window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
-      detail: { poi: entry.poi, alreadyPaid: entry.alreadyPaid, autoPlay: true },
+      detail: { poi: entry.poi, poiId: entry.poiId, alreadyPaid: entry.alreadyPaid, autoPlay: true },
     }));
     setEntries(prev => prev.filter(x => x.poiId !== entry.poiId));
   };

@@ -319,7 +319,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
           .lte('lat', centerLat + deltaLat)
           .gte('lon', centerLon - deltaLon)
           .lte('lon', centerLon + deltaLon)
-          .in('status', ['verified', 'auto', 'approved', 'draft'])
+          .in('status', ['verified', 'auto', 'approved'])
           .not('name', 'is', null)
           .limit(3000);
         if (!fullErr && fullRows && fullRows.length > 0) {

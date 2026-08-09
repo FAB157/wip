@@ -222,6 +222,13 @@ export async function speakAudioguide(
       if (res.ok) {
         const blob = await res.blob();
 
+        // Un MP3 vero non è mai sotto i 500 byte: un 200 con corpo vuoto
+        // (visto in produzione col test voci) non deve arrivare al player
+        // come file muto — si passa alla voce di sistema.
+        if (blob.size < 500 || (blob.type || '').includes('json')) {
+          throw new Error(`TTS neurale: audio non valido (${blob.size} byte)`);
+        }
+
         if (Capacitor.isNativePlatform()) {
           ensureNativeListeners();
           const nativeUri = await getNativeAudioUri(blob, `tts_guide_${Date.now()}.mp3`);

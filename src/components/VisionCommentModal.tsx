@@ -20,6 +20,8 @@ const TAG_OPTIONS = [
 interface VisionCommentModalProps {
   cardId: string | null;
   image: string;
+  /** Esito reale del rimborso server (non un messaggio fisso). */
+  refunded?: boolean;
   language: Language;
   onClose: () => void;
 }
@@ -30,7 +32,7 @@ interface VisionCommentModalProps {
  * Qui l'utente racconta perché il posto è speciale — il commento e i tag
  * finiscono sulla sua scheda e aiutano la revisione WIP Community.
  */
-export default function VisionCommentModal({ cardId, image, onClose }: VisionCommentModalProps) {
+export default function VisionCommentModal({ cardId, image, refunded = true, onClose }: VisionCommentModalProps) {
   const [tags, setTags] = useState<string[]>([]);
   const [comment, setComment] = useState('');
   const [sending, setSending] = useState(false);
@@ -95,9 +97,10 @@ export default function VisionCommentModal({ cardId, image, onClose }: VisionCom
             Non l'ho riconosciuta… ma di sicuro è speciale!
           </h2>
           <p className="text-xs text-gray-500 font-medium leading-relaxed mb-4">
-            I tuoi 5 crediti sono stati <span className="font-black text-emerald-600">rimborsati</span> e
-            la foto è salvata in My Vision. Raccontaci perché questo posto è speciale:
-            il tuo racconto aiuterà la revisione per WIP Community.
+            {refunded
+              ? <>I tuoi crediti sono stati <span className="font-black text-emerald-600">rimborsati</span> e la foto è salvata in My Vision. </>
+              : <>La foto è salvata in My Vision. </>}
+            Raccontaci perché questo posto è speciale: il tuo racconto aiuterà la revisione per WIP Community.
           </p>
 
           <div className="flex flex-wrap gap-2 mb-4">

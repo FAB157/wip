@@ -39,12 +39,19 @@ android {
     kotlinOptions {
         jvmTarget = '21'
     }
+    // Credenziali di firma lette da keystore.properties (gitignorato), MAI
+    // dal build.gradle versionato. Il blocco si attiva solo se il file esiste.
     signingConfigs {
         release {
-            storeFile file('C:\\KEYS APP ANDROID STUDIO\\itainta')
-            storePassword 'Carrara75!'
-            keyAlias 'key0'
-            keyPassword 'Carrara75!'
+            def ksPropsFile = rootProject.file('keystore.properties')
+            if (ksPropsFile.exists()) {
+                def ksProps = new Properties()
+                ksProps.load(new FileInputStream(ksPropsFile))
+                storeFile file(ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
         }
     }
     buildTypes {

@@ -297,13 +297,16 @@ export function isGenericUtilityName(name?: string | null): boolean {
 }
 
 export function isAccessible(poi: Poi): boolean {
+  // Solo segnali REALI: il tag OSM wheelchair (yes/limited/designated) o un
+  // nome parlante. Prima ~33% dei POI risultava accessibile da un hash
+  // dell'id → disinformazione sull'accessibilità (badge ♿, filtro "No
+  // Barriere", popup). Nel dubbio: nessun claim.
+  const wc = String((poi as any).wheelchair || (poi as any).accessible || "").toLowerCase();
+  if (wc === "yes" || wc === "limited" || wc === "designated" || wc === "true") return true;
   if (!poi.name) return false;
   const nameLower = poi.name.toLowerCase();
   if (nameLower.includes("accessib") || nameLower.includes("disabil") || nameLower.includes("wheelchair") || nameLower.includes("scivolo") || nameLower.includes("rampa") || nameLower.includes("carrozzin")) return true;
-  const idStr = String(poi.id);
-  let hash = 0;
-  for (let i = 0; i < idStr.length; i++) hash = ((hash << 5) - hash) + idStr.charCodeAt(i);
-  return Math.abs(hash) % 3 === 0; // ~33% of POIs are accessible
+  return false;
 }
 
 function MapController({
@@ -1439,12 +1442,15 @@ function MapArea({
             ...cached,
             id: poi.id, // Mantiene l'ID live per coerenza con i marker del client
             description: cached.description || poi.description || (poi as any).wikipedia_extract || null,
-            description_short: cached.description_short || null,
-            description_long: cached.description_long || null,
+            description_short: cached.description_short || (poi as any).description_short || null,
+            description_long: cached.description_long || (poi as any).description_long || null,
             image_url: cached.image_url || poi.image_url || (poi as any).imageUrl || null,
-            photo_url: cached.photo_url || null,
-            status: cached.status || null,
-            is_gem: cached.is_gem ?? null,
+            photo_url: cached.photo_url || (poi as any).photo_url || null,
+            status: cached.status || (poi as any).status || null,
+            // MAI azzerare is_gem quando la riga DB non ce l'ha: `?? null`
+            // buttava via il valore live e faceva oscillare key e icona del
+            // marker tra un fetch e l'altro (pin distrutto e ricreato).
+            is_gem: cached.is_gem ?? poi.is_gem ?? null,
             isFromDb: true
           });
         } else {
@@ -1497,8 +1503,11 @@ function MapArea({
                 lon: poi.lon,
                 name: poi.name || "Luogo d'interesse",
                 category: poi.baseCategory || poi.category,
-                status: "verified",
-                is_gem: !!poi.is_gem || poi.category === 'gemme',
+                // Cache crowdsourced dal client: SEMPRE 'auto' (mai 'verified',
+                // che spetta alla revisione/cron). La policy RLS accetta dai
+                // client solo INSERT con status='auto' e is_gem=false.
+                status: "auto",
+                is_gem: false,
                 description_ai: (poi as any).wikipedia_extract || (poi as any).description || null,
                 image_url: (poi as any).imageUrl || (poi as any).image_url || null,
                 created_at: new Date().toISOString()
@@ -1554,7 +1563,9 @@ function MapArea({
         const poiMap = new Map<string, Poi>();
         
         // 1. Carica i POI precedenti attivi (solo se sono all'interno o nelle vicinanze della mappa corrente per ottimizzare Android)
-        const paddedBounds = bounds.pad(0.5); // Tiene un margine del 50% fuori schermo per fluidità
+        // Margine 100%: col vecchio 50% bastava un pan modesto per far uscire
+        // ed eliminare pin che il fetch successivo riscaricava → blink ai bordi.
+        const paddedBounds = bounds.pad(1.0);
         prev.forEach(p => {
           // Stessa tassonomia del rendering: niente più liste "espanse" che
           // riammettevano chiese e musei deselezionati.
@@ -1596,24 +1607,50 @@ function MapArea({
         // cambiati: identità stabile ⇒ react-leaflet non tocca il DOM.
         const prevById = new Map<string, Poi>(prev.map(p => [String(p.id), p] as [string, Poi]));
         merged = merged.map(p => {
-          const old = prevById.get(String(p.id));
-          if (!old) return p;
+          let cur = p;
+          const old = prevById.get(String(cur.id));
+          if (!old) return cur;
+          // Upgrade MONOTONO dei campi che disegnano il marker: quando un giro
+          // di fetch non riceve la riga DB (raggio/limite 1000 della RPC), il
+          // POI torna "live-only" e is_gem/categoria regredirebbero cambiando
+          // key e icona → pin distrutto e ricreato (sfarfallio). La versione
+          // arricchita già mostrata vince finché il nuovo giro non porta
+          // anch'esso dati DB.
+          if ((old as any).isFromDb && !(cur as any).isFromDb) {
+            cur = {
+              ...cur,
+              category: old.category,
+              baseCategory: (old as any).baseCategory ?? (cur as any).baseCategory,
+              subCategory: (old as any).subCategory ?? (cur as any).subCategory,
+              is_gem: (old.is_gem ?? cur.is_gem) as any,
+              status: ((old as any).status ?? (cur as any).status) as any,
+              isFromDb: true,
+            } as Poi;
+          } else if ((cur.is_gem === null || cur.is_gem === undefined) && old.is_gem != null) {
+            cur = { ...cur, is_gem: old.is_gem };
+          }
           const same =
-            old.lat === p.lat && old.lon === p.lon &&
-            old.category === p.category && old.baseCategory === p.baseCategory &&
-            old.subCategory === p.subCategory && old.is_gem === p.is_gem &&
-            old.name === p.name;
-          return same ? old : p;
+            old.lat === cur.lat && old.lon === cur.lon &&
+            old.category === cur.category && old.baseCategory === cur.baseCategory &&
+            old.subCategory === cur.subCategory && old.is_gem === cur.is_gem &&
+            old.name === cur.name;
+          return same ? old : cur;
         });
 
-        // Safety cap per performance: max 500 marker su web (prioritiamo gemme e siti con wikidata)
+        // Safety cap per performance: max 500 marker su web (prioritiamo gemme e siti con wikidata).
+        // ISTERESI: a parità di score vincono i pin GIÀ visibili — col vecchio
+        // sort puro sulla distanza dal centro, un micro-pan cambiava quali 500
+        // sopravvivevano e a ogni ciclo un gruppo diverso di pin spariva e
+        // riappariva (sfarfallio a lotti).
         if (merged.length > 500) {
             const currentCenter = bounds.getCenter();
-            // Score: gemme/wikidata first, then by distance
             merged.sort((a: any, b: any) => {
                 const scoreA = (a.is_gem || a.wikidata || a.category === 'gemme') ? 0 : 1;
                 const scoreB = (b.is_gem || b.wikidata || b.category === 'gemme') ? 0 : 1;
                 if (scoreA !== scoreB) return scoreA - scoreB;
+                const keepA = prevIds.has(String(a.id)) ? 0 : 1;
+                const keepB = prevIds.has(String(b.id)) ? 0 : 1;
+                if (keepA !== keepB) return keepA - keepB;
                 const distA = getDistanceFromLatLonInM(currentCenter.lat, currentCenter.lng, a.lat, a.lon);
                 const distB = getDistanceFromLatLonInM(currentCenter.lat, currentCenter.lng, b.lat, b.lon);
                 return distA - distB;
@@ -1675,10 +1712,14 @@ function MapArea({
       const p = { ...originalPoi };
       const nameL = p.name?.toLowerCase() || '';
       const am = (p.amenity || '').toLowerCase();
-      const tagsL = JSON.stringify(p).toLowerCase();
+      // Niente JSON.stringify dell'intero POI (fino a 500 stringify per
+      // ricalcolo sul main thread = scatti visibili): controlli mirati.
+      const rawTags: any = (p as any).tags || {};
+      const railwayVal = String((p as any).railway ?? rawTags.railway ?? '').toLowerCase();
+      const hasPublicTransport = (p as any).public_transport != null || rawTags.public_transport != null;
       
       const isUtilityWord = nameL.includes('farmacia') || nameL.includes('farmacie') || nameL.includes('stazion') || nameL.includes('station') || nameL.includes('ospedal') || nameL.includes('hospital') || nameL.includes('fontanella') || nameL.includes('polizia') || nameL.includes('police') || nameL.includes('taxi') || nameL.includes('ufficio postale') || nameL.includes('post office') || nameL.includes('parcheggio') || nameL.includes('parking') || nameL.includes('fermata') || nameL.includes('bus stop') || nameL.includes('terminal') || /\basl\b/.test(nameL) || /\bserd\b/.test(nameL) || nameL.includes('consultorio') || nameL.includes('clinica') || nameL.includes('ambulatorio') || nameL.includes('pronto soccorso') || nameL.includes('veterinar') || nameL.includes('medico') || nameL.includes('centro salute');
-      const isUtilityTag = am === 'pharmacy' || am === 'hospital' || am === 'clinic' || am === 'doctors' || am === 'dentist' || am === 'social_facility' || am === 'veterinary' || am === 'police' || am === 'taxi' || am === 'drinking_water' || am === 'post_office' || am === 'parking' || tagsL.includes('"railway":"station"') || tagsL.includes('"public_transport"');
+      const isUtilityTag = am === 'pharmacy' || am === 'hospital' || am === 'clinic' || am === 'doctors' || am === 'dentist' || am === 'social_facility' || am === 'veterinary' || am === 'police' || am === 'taxi' || am === 'drinking_water' || am === 'post_office' || am === 'parking' || railwayVal === 'station' || hasPublicTransport;
       
       if (isUtilityWord || isUtilityTag) {
         p.category = 'utilita';
@@ -2155,7 +2196,7 @@ function MapArea({
     () =>
       markerData.map(({ poi, position, icon }) => (
         <Marker
-          key={`marker-${poi.id}-${poi.category}`}
+          key={`marker-${poi.id}`}
           ref={(r) => {
             if (r) {
               markerRefs.current[poi.id] = r;

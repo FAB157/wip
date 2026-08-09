@@ -119,6 +119,7 @@ export async function getNearbyPois(
       console.log('[Offline] Leggo POI da Dexie');
       const localPois = await db.pois.toArray();
       const filtered = localPois
+        .filter(isVisiblePoiStatus)
         .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
         .map(p => ({
           ...p,
@@ -265,6 +266,7 @@ export async function getNearbyPois(
   try {
     const localPois = await db.pois.toArray();
     const filtered = localPois
+      .filter(isVisiblePoiStatus)
       .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
       .map(p => ({
         ...p,
@@ -286,6 +288,15 @@ export async function getNearbyPois(
  * Categorie che possono avere un'audioguida: allineate a isCategoryAllowed
  * di useGeofencing.ts (le categorie commerciali/utilitarie non triggerano mai).
  */
+// Status che NON devono mai arrivare all'utente, ONLINE come OFFLINE: bozze,
+// allucinazioni Vision in bonifica, POI rifiutati/nascosti. Prima le letture
+// Dexie non filtravano nulla → offline (dove il geofencing parte da solo) un
+// draft poteva far scattare "Sei arrivato!". Stessa denylist di nearby_pois.
+const HIDDEN_POI_STATUSES = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
+function isVisiblePoiStatus(p: any): boolean {
+  return !HIDDEN_POI_STATUSES.has(String(p?.status || '').toLowerCase()) && p?.is_hidden !== true;
+}
+
 const AUDIOGUIDABLE_CATEGORIES = new Set([
   'monument', 'artwork', 'monumenti', 'attraction',
   'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo',
@@ -312,6 +323,7 @@ async function getGeofencePoisFromDexie(
   try {
     const localPois = await db.pois.toArray();
     const result = localPois
+      .filter(isVisiblePoiStatus)
       .filter(p => p.lat && p.lon && p.name)
       .filter(p =>
         p.is_gem ||
@@ -484,7 +496,10 @@ export async function insertAutoPois(rows: AutoPoiInput[]): Promise<number> {
     category: r.category,
     description: r.description || null,
     description_ai: r.description_ai || null,
-    status: 'verified',
+    // status='auto', non 'verified': è POI grezzo da Overpass/Foursquare,
+    // filtrato da una denylist di 12 parole — non curato. 'verified' spetta
+    // solo alla revisione admin. (Allineato al docstring della funzione.)
+    status: 'auto',
     alert_radius: 150,
     geofence_radius: 50
   }));

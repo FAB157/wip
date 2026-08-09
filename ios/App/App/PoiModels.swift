@@ -46,6 +46,11 @@ enum TriggerState: String, Codable {
     /// non fermava l'audio, e la voce continuava a raccontare un monumento
     /// già alle spalle. Stringa allineata a TriggerState.PASSED su Android.
     case passed = "PASSED"
+    /// Uscito dall'isteresi DOPO un annuncio: il timestamp del record fa da
+    /// cooldown anti-ripetizione. Prima l'uscita cancellava lo stato e il
+    /// primo rientro nel raggio ri-annunciava lo stesso POI: in pineta, col
+    /// GPS che balla sotto le chiome, il banner ricompariva ogni pochi metri.
+    case exited = "EXITED"
 }
 
 struct TriggerStateRecord: Codable {

@@ -408,8 +408,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         imageUrl: v.imageUrl || "https://images.unsplash.com/photo-1501785888041-af3ef285b470?auto=format&fit=crop&q=80&w=400",
         source: "viator" as EventSource,
         macroCategory: "🎟️ Tour & Esperienze",
-        lat: lat + (Math.random() * 0.004 - 0.002),
-        lon: lon + (Math.random() * 0.004 - 0.002)
+        // Le esperienze Viator sono di area, non hanno un punto esatto: le
+        // ancoriamo al centro dell'area cercata. Prima un Math.random le
+        // spargeva a caso, inventando pin e distanze false.
+        lat,
+        lon
       }));
       
       setSourceResults(prev => ({ ...prev, viator: mappedEvents }));
@@ -487,8 +490,10 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
             url: finalUrl,
             imageUrl: e.imageUrl || "https://images.unsplash.com/photo-1540039155732-6761b5f1e847?auto=format&fit=crop&q=80&w=400",
             source: "getyourguide" as EventSource,
-            lat: e.lat || lat + (Math.random() - 0.5) * 0.01,
-            lon: e.lon || lon + (Math.random() - 0.5) * 0.01,
+            // Coordinata reale se disponibile, altrimenti il centro area:
+            // niente più posizioni random che falsificavano le distanze.
+            lat: e.lat || lat,
+            lon: e.lon || lon,
             macroCategory: "🌍 Tour & Attività"
           };
         });

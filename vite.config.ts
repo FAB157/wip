@@ -140,17 +140,21 @@ export default defineConfig(({mode}) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
-      sourcemap: true,
+      // Mai pubblicare i sorgenti in produzione: sourcemap:true emetteva
+      // anche server.cjs.map (backend completo con commenti) servito
+      // pubblicamente da dist/. Attiva solo in sviluppo se serve debuggare.
+      sourcemap: mode !== 'production',
       rollupOptions: {
         external: ['html2pdf.js'],
         output: {
+          // Split vendor/main: senza React.lazy sui pannelli pesanti (il vero
+          // guadagno di first-paint, follow-up da testare a runtime) togliere
+          // del tutto manualChunks collassava in UN file da 2,16 MB
+          // ri-scaricato a ogni deploy. Con lo split, vendor (~0,9 MB, cambia
+          // di rado) resta in cache tra i deploy.
           manualChunks(id) {
-            if (id.includes('node_modules')) {
-              return 'vendor';
-            }
-            if (id.includes('/src/')) {
-              return 'main';
-            }
+            if (id.includes('node_modules')) return 'vendor';
+            if (id.includes('/src/')) return 'main';
           }
         }
       }

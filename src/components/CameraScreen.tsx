@@ -34,7 +34,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [shopUserId, setShopUserId] = useState<string | null>(null);
   // Foto NON riconosciuta: crediti già rimborsati dal server, la scheda resta
   // in My Vision → chiediamo all'utente di raccontare perché è speciale.
-  const [commentCard, setCommentCard] = useState<{ cardId: string | null; image: string } | null>(null);
+  const [commentCard, setCommentCard] = useState<{ cardId: string | null; image: string; refunded: boolean } | null>(null);
 
   const openCreditShop = async () => {
     const { data } = await supabase.auth.getSession();
@@ -181,10 +181,11 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         const enrichedData = { ...data, image: `data:image/jpeg;base64,${base64Image}` };
         onRecognize(enrichedData);
       } else {
-        // Il server ha già rimborsato i crediti e salvato comunque la foto
-        // in My Vision: chiediamo all'utente perché quel posto è speciale
-        // (il racconto aiuta la revisione WIP Community).
-        setCommentCard({ cardId: data.card_id || null, image: `data:image/jpeg;base64,${base64Image}` });
+        // Il server ha già (best-effort) rimborsato i crediti e salvato la
+        // foto in My Vision: chiediamo all'utente perché quel posto è speciale
+        // (il racconto aiuta la revisione WIP Community). `refunded` riflette
+        // l'esito reale del rimborso server, non un messaggio fisso.
+        setCommentCard({ cardId: data.card_id || null, image: `data:image/jpeg;base64,${base64Image}`, refunded: !!data.refunded });
       }
     } catch (err: any) {
       console.error(err);
@@ -344,6 +345,7 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         <VisionCommentModal
           cardId={commentCard.cardId}
           image={commentCard.image}
+          refunded={commentCard.refunded}
           language={language}
           onClose={() => setCommentCard(null)}
         />

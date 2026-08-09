@@ -3077,8 +3077,18 @@ function isNameMatching(name1: string, name2: string): boolean {
         }
       };
 
+      // ── GATE CREDITI SERVER-SIDE ───────────────────────────────────────
+      // Prima l'addebito photo_search viveva solo nel client (bypassabile
+      // via cURL, AUDIT A6). chargeOrReject risponde da solo 401/402/500.
+      // L'addebito sta PRIMA della cache GPS: il servizio reso (una scheda
+      // Vision) costa 5 crediti anche quando la risposta arriva dalla cache —
+      // col vecchio ordine chi riscattava vicino a una scansione precedente
+      // (entro 30 m) non pagava MAI e "Vision non scala i crediti".
+      charge = await chargeOrReject(req, res, 'photo_search');
+      if (!charge) return;
+
       // ── CACHE GPS CONDIVISA (ora SOLO server-side) ─────────────────────
-      // Hit entro 30 m = riconoscimento gratuito, nessun addebito. Prima il
+      // Hit entro 30 m = si risparmia la chiamata AI, non l'addebito. Prima il
       // controllo (e la scrittura!) vivevano nel client con la anon key: la
       // cache era avvelenabile da chiunque. La tabella è ora sotto RLS senza
       // policy: legge e scrive solo la service role.
@@ -3096,21 +3106,16 @@ function isNameMatching(name1: string, name2: string): boolean {
             if (d < minDist) { minDist = d; closest = item; }
           }
           if (closest?.data) {
-            console.log(`[Vision] Cache GPS condivisa: hit a ${Math.round(minDist)}m, riconoscimento gratuito`);
+            console.log(`[Vision] Cache GPS condivisa: hit a ${Math.round(minDist)}m (addebitati ${charge.cost} crediti)`);
+            if (realUserId) await incrementQuotaCount(realUserId, 'vision').catch(() => {});
             const saved = await saveVisionCard(closest.data, true);
             await grantVisionXp();
-            return res.json({ ...closest.data, card_id: saved.cardId, photo_url: saved.photoUrl, cached: true, charged: 0, refunded: false });
+            return res.json({ ...closest.data, card_id: saved.cardId, photo_url: saved.photoUrl, cached: true, charged: charge.cost, refunded: false });
           }
         } catch (cacheErr: any) {
           console.debug("[Vision] Lettura cache condivisa fallita/saltata:", cacheErr?.message);
         }
       }
-
-      // ── GATE CREDITI SERVER-SIDE ───────────────────────────────────────
-      // Prima l'addebito photo_search viveva solo nel client (bypassabile
-      // via cURL, AUDIT A6). chargeOrReject risponde da solo 401/402/500.
-      charge = await chargeOrReject(req, res, 'photo_search');
-      if (!charge) return;
 
       let nearestPoi: any = null;
       let minDistance = Infinity;
@@ -3349,7 +3354,13 @@ function isNameMatching(name1: string, name2: string): boolean {
         }
       }
 
-      await grantVisionXp();
+      // XP solo per un riconoscimento REALE e NON rimborsato: prima si
+      // guadagnavano 10 XP anche fotografando il pavimento (addebito + rimborso
+      // = costo zero) → farm XP→crediti, e ogni scansione non riconosciuta
+      // convertiva earned in purchased (il rimborso va su purchased).
+      if (result?.riconosciuto && !refunded) {
+        await grantVisionXp();
+      }
 
       if (quota.userId) {
         await incrementQuotaCount(quota.userId, 'vision').catch(e => console.error(e));
@@ -3492,7 +3503,10 @@ function isNameMatching(name1: string, name2: string): boolean {
       const [pending, approved, rejected] = await Promise.all(['pending', 'approved', 'rejected'].map(countFor));
 
       const cards = await Promise.all((data || []).map(async (c: any) => {
-        const { user_id: _hidden, ...rest } = c;
+        // ANONIMATO: mai esporre chi ha inviato. Si tolgono user_id,
+        // reviewed_by e i path grezzi (che contengono l'UUID autore, es.
+        // "<uuid>/vcard-….jpg"); l'admin vede solo gli URL firmati.
+        const { user_id: _u, reviewed_by: _r, photo_url: _p, clean_photo_url: _c, ...rest } = c;
         return {
           ...rest,
           photo_signed: await signVisionPhoto(c.photo_url),
@@ -3540,98 +3554,112 @@ function isNameMatching(name1: string, name2: string): boolean {
         return res.json({ success: true });
       }
 
-      // Campi eventualmente corretti dall'admin in revisione
-      const e = edits || {};
-      const name = e.name || card.name;
-      const city = e.city ?? card.city;
-      const descShort = e.description_short ?? card.description_short;
-      const descLong = e.description_long ?? card.description_long;
-      const history = e.history ?? card.history;
-      // Audioguida: testo AI della scheda; se l'AI non aveva riconosciuto,
-      // si compone dal racconto dell'utente ("audioguida in base a cosa
-      // dice l'utente") — sempre rifinibile poi dall'Editor POI.
-      const audioScript = (e.audio_script ?? card.audio_script)
-        || [descLong || descShort, card.user_comment ? `Un viaggiatore racconta: ${card.user_comment}` : '']
-             .filter(Boolean).join(' ')
-        || null;
-
-      // Foto pubblicata: preferisci la versione ripulita dall'AI. Copia nel
-      // bucket PUBBLICO vision-public: l'originale resta privato dell'utente.
-      const safeAttachId = String(attachPoiId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-      const publishName = action === 'attach' ? `${safeAttachId}__${card.id}.jpg` : `vision-${card.id}.jpg`;
-      let publicPhotoUrl: string | null = null;
-      const buf = await downloadVisionPhoto(card.clean_photo_url || card.photo_url);
-      if (buf) {
-        try {
-          await axios.post(`${supabaseUrl}/storage/v1/object/vision-public/${publishName}`, buf, {
-            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
-            maxBodyLength: Infinity
-          });
-          publicPhotoUrl = `${supabaseUrl}/storage/v1/object/public/vision-public/${publishName}`;
-        } catch (upErr: any) {
-          console.warn('[Vision Review] Copia foto pubblica fallita:', upErr?.message);
-        }
+      // VALIDAZIONE PRIMA DI QUALSIASI SCRITTURA (era dopo la copia foto):
+      // shared_pois.lat/lon è NOT NULL → approvare senza GPS dava 500 con la
+      // foto già pubblica e orfana. Ora si blocca prima.
+      if (action === 'approve' && (card.lat === null || card.lon === null || card.lat === undefined || card.lon === undefined)) {
+        return res.status(400).json({ error: 'coordinate_mancanti' });
       }
-
-      let publishedPoiId: string | null = null;
-      if (action === 'approve') {
-        publishedPoiId = `vision-${card.id}`;
-        // POI community: category='community' (pin/chip dedicati), il tipo
-        // reale va in poi_type. MAI is_gem=true (le gemme bypassano ogni
-        // filtro nativo e finirebbero nel geofencing di tutti).
-        const poiRow: any = {
-          id: publishedPoiId,
-          name,
-          lat: card.lat,
-          lon: card.lon,
-          category: 'community',
-          poi_type: e.poi_type || card.category || 'attraction',
-          status: 'verified',
-          verified: true,
-          is_hidden: false,
-          is_gem: false,
-          image_url: publicPhotoUrl,
-          photo_url: publicPhotoUrl,
-          description_short: descShort,
-          description_ai: descShort,
-          description_long: descLong,
-          full_description: history,
-          audio_script: audioScript,
-          city,
-          source: 'wip_community',
-          alert_radius: 150,
-          geofence_radius: 50
-        };
-        await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, poiRow,
-          { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
-      } else {
-        // ATTACH: la vision È il POI ufficiale (es. il Colosseo stesso) →
-        // niente pin doppio, la foto entra nella galleria images_json.
+      let attachTarget: any = null;
+      if (action === 'attach') {
         if (!attachPoiId) return res.status(400).json({ error: 'attachPoiId mancante' });
         const { data: pois } = await axios.get(
           `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}&select=id,images_json,image_url`,
           { headers: svcHeaders }
         );
-        const poi = pois?.[0];
-        if (!poi) return res.status(404).json({ error: 'POI ufficiale non trovato' });
-        let images: any[] = [];
-        try {
-          images = Array.isArray(poi.images_json) ? poi.images_json : JSON.parse(poi.images_json || '[]');
-        } catch { images = []; }
-        if (publicPhotoUrl) {
-          images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso });
-        }
-        await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}`,
-          { images_json: images }, { headers: svcHeaders });
-        publishedPoiId = attachPoiId;
+        attachTarget = pois?.[0];
+        if (!attachTarget) return res.status(404).json({ error: 'POI ufficiale non trovato' });
       }
 
-      await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`, {
-        review_status: 'approved', reviewed_at: nowIso, reviewed_by: adminId,
-        published_poi_id: publishedPoiId, published_photo_url: publicPhotoUrl,
-        name, city, description_short: descShort, description_long: descLong,
-        history, audio_script: audioScript
-      }, { headers: svcHeaders });
+      // LOCK ATOMICO: si "prende" la scheda passandola a 'reviewing' solo se
+      // è ancora pending/rejected. Due admin (o un doppio click) in parallelo:
+      // solo uno matcha e prosegue, l'altro riceve 0 righe → esce pulito.
+      const claim = await axios.patch(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}&review_status=in.(pending,rejected)`,
+        { review_status: 'reviewing' },
+        { headers: { ...svcHeaders, Prefer: 'return=representation' } }
+      );
+      if (!Array.isArray(claim.data) || claim.data.length === 0) {
+        return res.json({ success: true, alreadyReviewed: true });
+      }
+      const prevStatus = card.review_status || 'pending';
+
+      let publishedPoiId: string | null = null;
+      let publicPhotoUrl: string | null = null;
+      try {
+        // Campi eventualmente corretti dall'admin in revisione
+        const e = edits || {};
+        const name = e.name || card.name;
+        const city = e.city ?? card.city;
+        const descShort = e.description_short ?? card.description_short;
+        const descLong = e.description_long ?? card.description_long;
+        const history = e.history ?? card.history;
+        // Audioguida: testo AI della scheda; se l'AI non aveva riconosciuto,
+        // si compone dal racconto dell'utente, rifinibile poi dall'Editor POI.
+        const audioScript = (e.audio_script ?? card.audio_script)
+          || [descLong || descShort, card.user_comment ? `Un viaggiatore racconta: ${card.user_comment}` : '']
+               .filter(Boolean).join(' ')
+          || null;
+
+        // Copia foto nel bucket PUBBLICO solo ORA, a validazione superata:
+        // l'originale resta privato dell'utente.
+        const safeAttachId = String(attachPoiId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const publishName = action === 'attach' ? `${safeAttachId}__${card.id}.jpg` : `vision-${card.id}.jpg`;
+        const buf = await downloadVisionPhoto(card.clean_photo_url || card.photo_url);
+        if (buf) {
+          try {
+            await axios.post(`${supabaseUrl}/storage/v1/object/vision-public/${publishName}`, buf, {
+              headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+              maxBodyLength: Infinity
+            });
+            publicPhotoUrl = `${supabaseUrl}/storage/v1/object/public/vision-public/${publishName}`;
+          } catch (upErr: any) {
+            console.warn('[Vision Review] Copia foto pubblica fallita:', upErr?.message);
+          }
+        }
+
+        if (action === 'approve') {
+          publishedPoiId = `vision-${card.id}`;
+          // POI community: category='community', tipo reale in poi_type,
+          // MAI is_gem (bypasserebbe i filtri nativi).
+          const poiRow: any = {
+            id: publishedPoiId, name, lat: card.lat, lon: card.lon,
+            category: 'community', poi_type: e.poi_type || card.category || 'attraction',
+            status: 'verified', verified: true, is_hidden: false, is_gem: false,
+            image_url: publicPhotoUrl, photo_url: publicPhotoUrl,
+            description_short: descShort, description_ai: descShort, description_long: descLong,
+            full_description: history, audio_script: audioScript, city,
+            source: 'wip_community', alert_radius: 150, geofence_radius: 50
+          };
+          await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, poiRow,
+            { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
+        } else {
+          // ATTACH: la foto entra nella galleria del POI ufficiale.
+          let images: any[] = [];
+          try {
+            images = Array.isArray(attachTarget.images_json) ? attachTarget.images_json : JSON.parse(attachTarget.images_json || '[]');
+          } catch { images = []; }
+          if (publicPhotoUrl) images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso });
+          await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}`,
+            { images_json: images }, { headers: svcHeaders });
+          publishedPoiId = attachPoiId;
+        }
+
+        await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`, {
+          review_status: 'approved', reviewed_at: nowIso, reviewed_by: adminId,
+          published_poi_id: publishedPoiId, published_photo_url: publicPhotoUrl,
+          name, city, description_short: descShort, description_long: descLong,
+          history, audio_script: audioScript
+        }, { headers: svcHeaders });
+      } catch (workErr: any) {
+        // Ripristina lo stato: la scheda non resta bloccata in 'reviewing'.
+        await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`,
+          { review_status: prevStatus }, { headers: svcHeaders }).catch(() => {});
+        throw workErr;
+      }
+      // (il PATCH di approvazione vive DENTRO il try qui sopra: una copia
+      // duplicata qui fuori usava variabili di quel blocco → ReferenceError
+      // a lavoro già fatto: 500 all'admin e premio mai erogato)
 
       // Premio: +10 crediti earned all'autore, una sola volta per scheda.
       let rewarded = 0;
@@ -3659,6 +3687,95 @@ function isNameMatching(name1: string, name2: string): boolean {
     } catch (e: any) {
       console.error('[Vision Review] Errore:', e?.message);
       res.status(500).json({ error: 'review_failed' });
+    }
+  });
+
+  // Modifica di una scheda GIÀ pubblicata: aggiorna vision_cards e, se il POI
+  // è community (id 'vision-<card>'), propaga anche alla riga shared_pois.
+  // Serve una route dedicata: /review sulle approvate esce con alreadyReviewed.
+  app.post("/api/admin/vision/update", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      const { cardId, edits } = req.body || {};
+      if (!cardId || !edits || typeof edits !== 'object') {
+        return res.status(400).json({ error: 'Parametri non validi' });
+      }
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=*`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+
+      // Solo i campi editoriali: mai stato, foto o proprietario.
+      const cardPatch: any = {};
+      for (const k of ['name', 'city', 'description_short', 'description_long', 'history', 'audio_script']) {
+        if (edits[k] !== undefined) cardPatch[k] = edits[k];
+      }
+      if (!Object.keys(cardPatch).length) return res.status(400).json({ error: 'Nessun campo da aggiornare' });
+      await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`, cardPatch, { headers: svcHeaders });
+
+      // Propaga SOLO al POI community associato (mai a un ufficiale da attach).
+      let poiUpdated = false;
+      if (card.published_poi_id && card.published_poi_id === `vision-${card.id}`) {
+        const poiPatch: any = {};
+        if (cardPatch.name !== undefined) poiPatch.name = cardPatch.name;
+        if (cardPatch.city !== undefined) poiPatch.city = cardPatch.city;
+        if (cardPatch.description_short !== undefined) {
+          poiPatch.description_short = cardPatch.description_short;
+          poiPatch.description_ai = cardPatch.description_short;
+        }
+        if (cardPatch.description_long !== undefined) poiPatch.description_long = cardPatch.description_long;
+        if (cardPatch.history !== undefined) poiPatch.full_description = cardPatch.history;
+        if (cardPatch.audio_script !== undefined) poiPatch.audio_script = cardPatch.audio_script;
+        if (Object.keys(poiPatch).length) {
+          await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(card.published_poi_id)}`, poiPatch, { headers: svcHeaders });
+          poiUpdated = true;
+        }
+      }
+      res.json({ success: true, poi_updated: poiUpdated });
+    } catch (e: any) {
+      console.error('[Vision Update] Errore:', e?.message);
+      res.status(500).json({ error: 'update_failed' });
+    }
+  });
+
+  // Cancellazione del POI community nato da una vision approvata: via la riga
+  // shared_pois e la foto pubblica; la scheda torna 'rejected' (resta ricordo
+  // privato in My Vision). I POI UFFICIALI (attach) non si toccano.
+  app.post("/api/admin/vision/delete-poi", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      const { cardId } = req.body || {};
+      if (!cardId) return res.status(400).json({ error: 'cardId mancante' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=*`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+      if (!card.published_poi_id || card.published_poi_id !== `vision-${card.id}`) {
+        return res.status(400).json({ error: 'non_community_poi', detail: 'La scheda è allegata a un POI ufficiale: non si cancella da qui.' });
+      }
+
+      await axios.delete(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(card.published_poi_id)}`, { headers: svcHeaders });
+      // Foto pubblica: best-effort, l'oggetto potrebbe non esserci.
+      await axios.delete(`${supabaseUrl}/storage/v1/object/vision-public/vision-${card.id}.jpg`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }).catch(() => {});
+
+      await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`, {
+        review_status: 'rejected', reviewed_at: new Date().toISOString(), reviewed_by: adminId,
+        published_poi_id: null, published_photo_url: null
+      }, { headers: svcHeaders });
+
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('[Vision Delete POI] Errore:', e?.message);
+      res.status(500).json({ error: 'delete_failed' });
     }
   });
 
@@ -5273,10 +5390,17 @@ Regole di aderenza e anti-allucinazione:
 
       const structureName = String(req.body?.structureName || '').trim();
       if (!structureName) return res.status(400).json({ error: 'Nome struttura mancante.' });
+      // SICUREZZA: prima usava `ilike` con l'asterisco non escapato →
+      // {"structureName":"*"} scaricava TUTTI i coupon di tutte le strutture.
+      // Ora match ESATTO (eq) e rifiuto dei wildcard PostgREST: serve il nome
+      // esatto della propria struttura, niente dump di massa.
+      if (/[*%,]/.test(structureName)) {
+        return res.status(400).json({ error: 'Nome struttura non valido.' });
+      }
 
       const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
       const { data } = await axios.get(
-        `${supabaseUrl}/rest/v1/coupons?structure_name=ilike.${encodeURIComponent(structureName)}&order=created_at.desc&select=*`,
+        `${supabaseUrl}/rest/v1/coupons?structure_name=eq.${encodeURIComponent(structureName)}&order=created_at.desc&select=*`,
         { headers: svcHeaders }
       );
       res.json({ coupons: Array.isArray(data) ? data : [] });
@@ -5489,8 +5613,12 @@ Regole di aderenza e anti-allucinazione:
       
       if (!ai) return res.status(500).json({ error: "Gemini not configured" });
 
-      // Fetch up to 50 unenriched POIs SOLO per le categorie culturali
-      const { data } = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?description_short=is.null&category=in.(monumenti,chiese,musei,gemme)&limit=50&order=created_at.asc`, {
+      // Fetch up to 50 unenriched POIs SOLO per le categorie culturali.
+      // status=in.(auto,verified): NON toccare draft/needs_revision/rejected —
+      // prima il cron li leggeva e li scriveva 'verified', promuovendo le
+      // bozze (incluse le allucinazioni Vision) e annullando il denylist di
+      // nearby_pois.
+      const { data } = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?description_short=is.null&category=in.(monumenti,chiese,musei,gemme)&status=in.(auto,verified)&limit=50&order=created_at.asc`, {
         headers: {
           apikey: supabaseServiceKey,
           Authorization: `Bearer ${supabaseServiceKey}`
@@ -6908,11 +7036,39 @@ out center tags;`;
         }
       );
 
+      const audioBuffer = Buffer.from(response.data);
+      // Azure può rispondere 200 con corpo VUOTO (quota esaurita a metà
+      // richiesta, SSML rifiutato in silenzio): un MP3 vero non è mai sotto
+      // i 500 byte. Senza questo guard il client riceveva "audio non valido
+      // (0 byte)" su tutte le voci senza nessuna diagnosi.
+      if (audioBuffer.length < 500) {
+        throw new Error(`Azure ha risposto ${audioBuffer.length} byte (HTTP ${response.status})`);
+      }
       res.setHeader("Content-Type", "audio/mpeg");
-      res.send(Buffer.from(response.data));
+      res.send(audioBuffer);
     } catch (e: any) {
-      console.error("Azure TTS error:", e);
-      res.status(500).json({ error: e.message });
+      const azureMsg = e?.response?.status ? `HTTP ${e.response.status}` : (e?.message || 'errore sconosciuto');
+      console.error("Azure TTS error:", azureMsg);
+      // Fallback Google (voce di default della lingua): la guida parla
+      // comunque; il provider usato resta visibile nell'header.
+      try {
+        const gKey = process.env.GOOGLE_TTS_API_KEY;
+        if (!gKey) throw new Error("Google TTS Key missing");
+        const { text, voice = "it-IT-ElsaNeural" } = req.body || {};
+        const parts = typeof voice === 'string' ? voice.split('-') : [];
+        const locale = parts.length >= 2 ? `${parts[0]}-${parts[1]}` : 'it-IT';
+        const gRes = await axios.post(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${gKey}`, {
+          input: { text }, voice: { languageCode: locale }, audioConfig: { audioEncoding: 'MP3' }
+        });
+        const gBuf = Buffer.from(gRes.data?.audioContent || '', 'base64');
+        if (gBuf.length < 500) throw new Error(`Google ha risposto ${gBuf.length} byte`);
+        res.setHeader("Content-Type", "audio/mpeg");
+        res.setHeader("X-TTS-Provider", "Google-Fallback");
+        return res.send(gBuf);
+      } catch (g: any) {
+        const gMsg = g?.response?.status ? `HTTP ${g.response.status}` : (g?.message || 'errore sconosciuto');
+        return res.status(502).json({ error: `Azure: ${azureMsg} · Google fallback: ${gMsg}` });
+      }
     }
   });
 
@@ -7554,6 +7710,7 @@ Usa SEMPRE E SOLO questo schema JSON:
   // Multi-source: Wikipedia + Wikivoyage + Foursquare + TripAdvisor + Unsplash
   
   app.post("/api/premium-guide/generate-stream", async (req, res) => {
+    let pgsChargeRef: { userId: string; cost: number } | null = null;
     try {
       const { itinerary, style, userId, hash, language = "IT" } = req.body;
       if (!itinerary || !userId) return res.status(400).json({ error: "Missing required fields" });
@@ -7565,6 +7722,15 @@ Usa SEMPRE E SOLO questo schema JSON:
       if (!guideQuota.allowed) {
         return res.status(403).json({ error: "QUOTA_EXCEEDED" });
       }
+
+      // GATE CREDITI SERVER-SIDE: questa rotta generava guide GRATIS (solo
+      // quota). Ora addebita come la /generate non-stream. chargeOrReject
+      // risponde da solo 401/402/500. (Il rimborso su errore è best-effort:
+      // lo stream può fallire a metà.)
+      const pgsDays = Math.max(1, Array.isArray(itinerary?.giorni) ? itinerary.giorni.length : 1);
+      const pgsCharge = await chargeOrReject(req, res, 'premium_guide_daily', pgsDays);
+      if (!pgsCharge) return;
+      pgsChargeRef = pgsCharge;
       if (guideQuota.userId) incrementQuotaCount(guideQuota.userId, 'premium_guide').catch(() => {});
 
       const destination = itinerary?.titolo || itinerary?.destinazione || "Italia";
@@ -7618,6 +7784,8 @@ Non aggiungere testo prima o dopo il JSON.`;
 
     } catch (e: any) {
       console.error("[Premium Guide Stream Error]:", e.message);
+      // Rimborso best-effort se avevamo già addebitato.
+      if (pgsChargeRef) await refundServer(pgsChargeRef.userId, pgsChargeRef.cost).catch(() => {});
       res.write(`data: ${JSON.stringify({ error: e.message })}\n\n`);
       res.write(`data: [DONE]\n\n`);
       res.end();

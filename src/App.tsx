@@ -472,7 +472,16 @@ export default function App() {
           uniquePois.push(p);
         }
       }
-      setRadarPois(uniquePois);
+      setRadarPois(prev => {
+        // Stessa lista del giro precedente? Riusa l'array esistente: l'identità
+        // stabile tiene in piedi il memo di MapArea, altrimenti ogni evento
+        // 'pois-updated' ricostruiva tutti i marker (sfarfallio dei pin).
+        const idOf = (p: any) => String(p.id ?? p.poiId ?? `${p.lat},${p.lon}`);
+        if (prev.length === uniquePois.length && prev.every((p: any, i: number) => idOf(p) === idOf(uniquePois[i]))) {
+          return prev;
+        }
+        return uniquePois;
+      });
     };
 
     const handleItineraryCheckin = (e: any) => {
@@ -505,9 +514,13 @@ export default function App() {
   }, [permissionsGranted]);
 
   // --- Map Handlers ---
+  // Nonce dell'autoplay: incrementa a ogni trigger esplicito così PoiDetailSheet
+  // riparte anche se poi.id e autoPlay non cambiano (secondo click sul banner).
+  const [poiAutoPlayNonce, setPoiAutoPlayNonce] = useState(0);
   const handleSelectPoi = useCallback((poi: any, nearbyPois: any[], autoPlay = false) => {
     setSelectedPoi(poi);
     setPoiAutoPlay(autoPlay);
+    if (autoPlay) setPoiAutoPlayNonce(n => n + 1);
     setNearbyPoisForSelected(nearbyPois || []);
     setPreviousTab(prev => (activeTab !== "map" ? activeTab : prev));
     setActiveTab("map");
@@ -515,8 +528,17 @@ export default function App() {
 
   // Global UI Trigger - Opens POI sheet from background events (Geofencing, etc.)
   useEffect(() => {
-    const handleOpenPoiFromEvent = (e: any) => {
-      const { poi, autoPlay, guide } = e.detail;
+    const handleOpenPoiFromEvent = async (e: any) => {
+      let { poi, poiId, autoPlay, guide } = e.detail || {};
+      // Il banner può arrivare senza l'oggetto poi (entries ricostruite dai
+      // distance-update nativi): si ricarica dal repository invece di uscire
+      // in silenzio — era il "click a vuoto" sul tasto Ascolta.
+      if (!poi && poiId) {
+        try {
+          const { getPoiById } = await import('./services/poiRepository');
+          poi = await getPoiById(String(poiId));
+        } catch { /* repository non disponibile: si prosegue solo se poi esiste */ }
+      }
       if (poi) {
         console.log(`[App] Opening POI from trigger: ${poi.name || poi.id}, autoPlay=${autoPlay}`);
         // Il deep link della notifica porta il personaggio (itainta://poi/ID?guide=dante):
@@ -670,7 +692,7 @@ export default function App() {
 
           <CategoryChips selectedIds={selectedCategories} onToggle={(id) => setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])} onEventClick={() => setActiveTab("events")} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} />
 
-          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} guideMode={guideMode} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
+          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} autoPlayNonce={poiAutoPlayNonce} guideMode={guideMode} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
         </div>
         
         {/* ALTRE TAB — i container restano montati (stato preservato), la

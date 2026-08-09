@@ -117,6 +117,9 @@ interface PoiDetailSheetProps {
     isFromItinerary?: boolean;
   } | null;
   autoPlay?: boolean;
+  /** Cambia a ogni nuovo trigger esplicito (banner/notifica): senza, un secondo
+   *  click sullo stesso POI non riavviava l'effect di autoplay (deps invariate). */
+  autoPlayNonce?: number;
   guideMode: "nicky" | "dante";
   onClose: () => void;
   isSaved?: boolean;
@@ -152,6 +155,7 @@ const base64ToBlob = (base64Data: string): Blob => {
 export default function PoiDetailSheet({
   poi,
   autoPlay,
+  autoPlayNonce = 0,
   guideMode,
   onClose,
   isSaved,
@@ -428,8 +432,11 @@ export default function PoiDetailSheet({
   useEffect(() => {
     if (!autoPlay || !poi) return;
     const poiIdStr = String(poi.id);
-    if (hasAutoPlayedRef.current === poiIdStr) return; // Già eseguito per questo POI
-    hasAutoPlayedRef.current = poiIdStr;
+    // La chiave include il nonce: un nuovo trigger esplicito (secondo click su
+    // "Ascolta" dal banner) riparte, il doppio-run dello stesso trigger no.
+    const runKey = `${poiIdStr}:${autoPlayNonce}`;
+    if (hasAutoPlayedRef.current === runKey) return; // Già eseguito per questo trigger
+    hasAutoPlayedRef.current = runKey;
 
     let cancelled = false;
     let started = false;
@@ -507,7 +514,7 @@ export default function PoiDetailSheet({
       if (retryTimer) clearTimeout(retryTimer);
       window.removeEventListener('wip-teaser-finished', onTeaserFinished);
     };
-  }, [autoPlay, poi?.id]);
+  }, [autoPlay, poi?.id, autoPlayNonce]);
 
   useEffect(() => {
     let active = true;
@@ -908,23 +915,12 @@ export default function PoiDetailSheet({
               setIsStreaming(true);
               finalEnriched = { ...enriched };
 
+              // Disponibilità parcheggio: prima veniva "stimata" dall'ora del
+              // giorno (Alta/Media/Bassa + "Tariffa locale") — un dato inventato
+              // presentato come reale. Rimosso: senza una fonte vera non si
+              // mostra nulla.
               let parkingPayload = null;
-              if (poi.category === "utilita" && (poi.subCategory === "parcheggio" || poi.name?.toLowerCase().includes("parchegg"))) {
-                let availability = "Alta";
-                const now = new Date();
-                const hour = now.getHours();
-                const day = now.getDay();
-                if (day === 0 || day === 6) availability = hour >= 10 && hour <= 19 ? "Limitata" : "Media";
-                else {
-                  if ((hour >= 8 && hour <= 10) || (hour >= 17 && hour <= 19)) availability = "Bassa";
-                  else if (hour > 10 && hour < 17) availability = "Media";
-                  else availability = "Alta";
-                }
-                parkingPayload = { availability, fee: "Tariffa locale", type: "Pubblico" };
-                setParkingData(parkingPayload);
-              } else {
-                setParkingData(null);
-              }
+              setParkingData(null);
 
               // (la vecchia seconda chiamata "fast" a /api/poi/enrich era un
               // duplicato esatto della Fase 1 qui sopra: rimossa)

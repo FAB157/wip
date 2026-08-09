@@ -184,7 +184,7 @@ export const syncOfflineAreasIfStale = async (maxAgeMs = SYNC_MAX_AGE_MS) => {
         .lte('lat', area.center.lat + deltaLat)
         .gte('lon', area.center.lon - deltaLon)
         .lte('lon', area.center.lon + deltaLon)
-        .in('status', ['verified', 'auto', 'approved', 'draft'])
+        .in('status', ['verified', 'auto', 'approved'])
         .not('name', 'is', null)
         .limit(3000);
       if (error || !data) continue;

@@ -1,7 +1,8 @@
 ext {
     minSdkVersion = 24
     compileSdkVersion = 37
-    targetSdkVersion = 35
+    // targetSdk 36: da 31/08/2026 Google Play rifiuta gli update sotto API 36
+    targetSdkVersion = 36
     androidxActivityVersion = '1.13.0'
     androidxAppCompatVersion = '1.7.1'
     androidxCoordinatorLayoutVersion = '1.3.0'

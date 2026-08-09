@@ -28,6 +28,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+        // Il bridge Capacitor (NotificationRouter) si appropria del delegate
+        // di UNUserNotificationCenter alla creazione della WebView, DOPO
+        // didFinishLaunching: senza questa riassegnazione l'azione ▶ Ascolta
+        // e il tap sulla notifica finivano nel plugin LocalNotifications (che
+        // nessuno ascolta) e non arrivavano mai qui — niente audio, niente
+        // deep link. Insieme a ios.handleApplicationNotifications=false nella
+        // config Capacitor garantisce che il delegate resti questo.
+        UNUserNotificationCenter.current().delegate = self
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

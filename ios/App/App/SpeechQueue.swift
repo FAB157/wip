@@ -147,19 +147,34 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
             return
         }
 
-        guard !next.text.isEmpty else {
-            // Item solo-MP3 il cui file è fallito: chiudi e passa oltre,
-            // mai coda bloccata.
+        let spokenText = Self.speakableText(next.text)
+        guard !spokenText.isEmpty else {
+            // Item solo-MP3 il cui file è fallito (o testo solo-emoji):
+            // chiudi e passa oltre, mai coda bloccata.
             finishActiveSpeech(notifyJs: true)
             processNext()
             deactivateAudioSessionIfIdle()
             return
         }
 
-        let utterance = AVSpeechUtterance(string: next.text)
+        let utterance = AVSpeechUtterance(string: spokenText)
         utterance.voice = Self.voiceForLanguage(prefs.string(forKey: "language") ?? "it")
         utterance.volume = 1.0
         synthesizer.speak(utterance)
+    }
+
+    /// Toglie emoji e pittogrammi dal testo da leggere: AVSpeechSynthesizer
+    /// li pronuncia per nome ("💎" → "pietra preziosa"). Cifre e simboli
+    /// ASCII (che Unicode marca comunque isEmoji) restano intatti.
+    static func speakableText(_ text: String) -> String {
+        let filtered = text.unicodeScalars.filter { s in
+            if s.value == 0xFE0F || s.value == 0x200D { return false } // variation selector, ZWJ
+            if s.properties.isEmojiPresentation { return false }
+            if s.properties.isEmoji && s.value >= 0x1F000 { return false }
+            return true
+        }
+        return String(String.UnicodeScalarView(filtered))
+            .trimmingCharacters(in: .whitespaces)
     }
 
     /// Avvia la riproduzione dell'MP3 locale; true solo se è davvero partita.

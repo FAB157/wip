@@ -238,6 +238,27 @@ class LocationService {
             try { if (data?.data) detail = { ...detail, ...JSON.parse(data.data) }; } catch(e) { }
             window.dispatchEvent(new CustomEvent('wip-teaser-finished', { detail }));
           });
+
+          // Tap sul corpo della notifica con WebView già sveglia: il nativo
+          // emette 'deep-link-poi' live, ma nessuno lo bridgeava a window —
+          // funzionava solo il recupero del deep link pendente a cold start.
+          ItaintaBackgroundPoiPlugin.addListener('deep-link-poi', (data: any) => {
+            let detail: any = { poiId: data?.poiId || null, guide: 'nicky' };
+            try { if (data?.data) detail = { ...detail, ...JSON.parse(data.data) }; } catch (e) { }
+            if (detail.poiId) window.dispatchEvent(new CustomEvent('deep-link-poi', { detail }));
+          });
+
+          // Uscita/superamento del POI: chiudono il banner corrispondente.
+          // Prima non erano bridgeati e il banner restava (o veniva chiuso
+          // solo dalla pulizia per distanza).
+          ItaintaBackgroundPoiPlugin.addListener('poiExited', (data: any) => {
+            const detail = parseNativePoiEvent(data);
+            if (detail.poiId) window.dispatchEvent(new CustomEvent('wip-poi-exit', { detail }));
+          });
+          ItaintaBackgroundPoiPlugin.addListener('poiPassed', (data: any) => {
+            const detail = parseNativePoiEvent(data);
+            if (detail.poiId) window.dispatchEvent(new CustomEvent('wip-poi-exit', { detail }));
+          });
         } catch (e) {
           console.warn("[LocationService] Native listeners setup failed", e);
         }

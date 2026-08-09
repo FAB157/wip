@@ -202,12 +202,9 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           
           // Inizializza l'oggetto vuoto per lo stream
           const groqData: any = { ...preGroqData, subtext, isGroqEnriched: true };
-          if (!groqData.rating) {
-            const s = String(poi.id || poi.name || "0");
-            let h = 0;
-            for (let i = 0; i < s.length; i++) h = ((h << 5) - h) + s.charCodeAt(i);
-            groqData.rating = (4.0 + (Math.abs(h % 10) / 10)).toFixed(1);
-          }
+          // Nessun rating inventato: prima si generava 4.0-4.9 da un hash
+          // dell'id e si mostravano 5 stelline dorate false. Il rating appare
+          // solo se arriva da una fonte reale (es. Foursquare).
           if (!groqData.tags?.length) groqData.tags = poi.category === "locali" ? ["cibo", "ristorazione"] : ["cultura", "storia", "turismo"];
           
           if (isMounted) setData(groqData);

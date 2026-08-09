@@ -7,6 +7,13 @@ const config: CapacitorConfig = {
   server: {
     cleartext: true
   },
+  ios: {
+    // Le notifiche POI (azione ▶ Ascolta, tap = deep link) le gestisce
+    // AppDelegate: senza questo flag il NotificationRouter di Capacitor
+    // ruba il delegate di UNUserNotificationCenter e l'azione Ascolta
+    // non arriva mai al codice nativo.
+    handleApplicationNotifications: false,
+  },
   plugins: {
     LocalNotifications: {
       smallIcon: "ic_stat_name",

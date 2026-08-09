@@ -1465,8 +1465,11 @@ export default function PlanScreen({
 
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
-    // Costo per singola tappa suggerita (non l'intero itinerario)
-    const suggestCost = PRICING_LIST.audio_guide * 0.5;
+    // Costo per singola tappa suggerita (non l'intero itinerario).
+    // `audio_guide * 0.5` = 7,5 crediti FRAZIONARI: consume_credits vuole un
+    // integer → 22P02 → fallback bloccato → "crediti insufficienti" a wallet
+    // pieno. Voce intera dedicata (8), come già fa la sostituzione tappa.
+    const suggestCost = PRICING_LIST.replace_stop;
     const confirmed = await creditConfirm.requestConfirmation(suggestCost, "Suggerimento tappa AI", bal.total);
     if (!confirmed) {
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Camera, Loader2, MapPin, CheckCircle2, XCircle, Paperclip, Wand2,
-  RefreshCw, ChevronDown, ChevronUp, MessageSquare, Sparkles
+  RefreshCw, ChevronDown, ChevronUp, MessageSquare, Sparkles, Pencil, Trash2
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
@@ -76,6 +76,56 @@ export default function AdminVisionCommunity() {
       fetchQueue(status);
     } catch (e: any) {
       notify(`Revisione non riuscita: ${e?.message || 'riprova'}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Salva le modifiche editoriali di una scheda pubblicata (e del suo POI community). */
+  const doUpdate = async (card: any) => {
+    const pending = edits[card.id];
+    if (!pending || Object.keys(pending).length === 0) {
+      notify('Nessuna modifica da salvare.');
+      return;
+    }
+    setBusyId(card.id);
+    try {
+      const token = await getToken();
+      const res = await fetch(getApiUrl('/api/admin/vision/update'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ cardId: card.id, edits: pending }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'errore');
+      notify(data?.poi_updated ? 'Modifiche salvate su scheda e POI community.' : 'Modifiche salvate sulla scheda.');
+      setExpandedId(null);
+      fetchQueue(status);
+    } catch (e: any) {
+      notify(`Salvataggio non riuscito: ${e?.message || 'riprova'}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /** Cancella il POI community nato da questa vision (la scheda torna privata). */
+  const doDeletePoi = async (card: any) => {
+    if (!window.confirm(`Cancellare il POI community "${card.name}"? La foto pubblica viene rimossa e la scheda torna un ricordo privato dell'utente.`)) return;
+    setBusyId(card.id);
+    try {
+      const token = await getToken();
+      const res = await fetch(getApiUrl('/api/admin/vision/delete-poi'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ cardId: card.id }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.detail || data?.error || 'errore');
+      notify('POI community cancellato.');
+      notifyReviewed();
+      fetchQueue(status);
+    } catch (e: any) {
+      notify(`Cancellazione non riuscita: ${e?.message || 'riprova'}`);
     } finally {
       setBusyId(null);
     }
@@ -266,10 +316,33 @@ export default function AdminVisionCommunity() {
                 )}
 
                 {status === 'approved' && card.published_poi_id && (
-                  <div className="px-3 pb-3">
+                  <div className="px-3 pb-3 space-y-2">
                     <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-emerald-600">
                       <Sparkles className="w-3 h-3" /> Pubblicata → {card.published_poi_id}
                     </span>
+                    <div className="flex flex-wrap gap-2">
+                      {!isOpen && (
+                        <button disabled={busy} onClick={() => setExpandedId(card.id)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-[#f8f5f0] text-primary border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
+                          <Pencil className="w-3.5 h-3.5" />
+                          Modifica descrizioni
+                        </button>
+                      )}
+                      {isOpen && (
+                        <button disabled={busy} onClick={() => doUpdate(card)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm active:scale-95 transition-all disabled:opacity-50">
+                          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                          Salva modifiche
+                        </button>
+                      )}
+                      {card.published_poi_id === `vision-${card.id}` && (
+                        <button disabled={busy} onClick={() => doDeletePoi(card)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Elimina POI
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 

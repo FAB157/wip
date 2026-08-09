@@ -10,6 +10,7 @@ coverage/
 .vercel
 
 *.apk
+android/keystore.properties
 .idea/
 scratch/app.zip
 scratch/
