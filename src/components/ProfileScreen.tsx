@@ -1,4 +1,6 @@
-import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins } from 'lucide-react';
+// "Map as MapIcon": il nome nudo oscurava la Map NATIVA di JS in tutto il
+// modulo → "new Map()" (historyPoiDetails) esplodeva con "is not a constructor".
+import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { ReactNode, useState, useEffect } from 'react';
 import { useSwipeable } from 'react-swipeable';
@@ -11,6 +13,7 @@ import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings'
 import AdminPanel from './AdminPanel';
 import ShopScreen from './ShopScreen';
 import UserProfileSummary from './UserProfileSummary';
+import MyVisionTab from './MyVisionTab';
 import { getUserProfile, UserProfile } from '../lib/quotaManager';
 import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineStorage';
 import { Language, getTranslation, LANGUAGES } from '../lib/i18n';
@@ -109,7 +112,7 @@ const getCardIcon = (poi: any) => {
 };
 
 export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRemovePoi, onClearItinerary, onSelectPoi, defaultLocation, setDefaultLocation, userSession, onSignOut, language, setLanguage }: ProfileScreenProps) {
-  const [activeTab, setActiveTab] = useState<'diario' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'b2b' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
+  const [activeTab, setActiveTab] = useState<'diario' | 'myvision' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'b2b' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
   const [savedPois, setSavedPois] = useState<any[]>([]);
   const [savedItineraries, setSavedItineraries] = useState<any[]>([]);
   const [savedPremiumGuides, setSavedPremiumGuides] = useState<any[]>([]);
@@ -279,7 +282,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       musei: true,
       panorami: false,
       chiese: true,
-      consigli: false
+      consigli: false,
+      community: false
     };
   });
 
@@ -565,9 +569,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     }
   };
 
-  const TABS = profile?.is_admin 
-    ? (['diario', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy', 'admin'] as const)
-    : (['diario', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy'] as const);
+  const TABS = profile?.is_admin
+    ? (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy', 'admin'] as const)
+    : (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy'] as const);
 
   const handleSwipe = (e: any, direction: 'left' | 'right') => {
     if (e.event && e.event.target) {
@@ -1044,12 +1048,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
 
       {/* Header Profile - Minimalist Light Mode */}
       <div className="px-6 pt-16 pb-6 bg-white border-b border-gray-100 shrink-0">
-        <UserProfileSummary 
-          session={userSession} 
-          userName={userName} 
-          userAvatar={userAvatar} 
-          language={language} 
+        <UserProfileSummary
+          session={userSession}
+          userName={userName}
+          userAvatar={userAvatar}
+          language={language}
           onOpenFreeFeatures={() => setIsFreeFeaturesOpen(true)}
+          onOpenMyVision={() => setActiveTab('myvision')}
         />
 
         {/* Navigation Tabs - Minimalist Style */}
@@ -1061,11 +1066,17 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               icon={<BookOpen className="w-3.5 h-3.5" />} 
               label={getTranslation("diary", language)} 
             />
-            <TabButton 
-              active={activeTab === 'itinerari'} 
-              onClick={() => setActiveTab('itinerari')} 
-              icon={<Map className="w-3.5 h-3.5" />} 
-              label={getTranslation("itinerari_tab", language)} 
+            <TabButton
+              active={activeTab === 'myvision'}
+              onClick={() => setActiveTab('myvision')}
+              icon={<Camera className="w-3.5 h-3.5" />}
+              label="My Vision"
+            />
+            <TabButton
+              active={activeTab === 'itinerari'}
+              onClick={() => setActiveTab('itinerari')}
+              icon={<MapIcon className="w-3.5 h-3.5" />}
+              label={getTranslation("itinerari_tab", language)}
             />
             <TabButton 
               active={activeTab === 'missioni'} 
@@ -1252,7 +1263,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           <div className="flex items-center gap-2">
                             {(itineraryDb.dati_itinerario?.giorni?.length || 0) > 0 && (
                               <span className="text-[10px] bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full font-black uppercase tracking-widest flex items-center gap-1">
-                                <Map className="w-3 h-3" />
+                                <MapIcon className="w-3 h-3" />
                                 {itineraryDb.dati_itinerario.giorni.length} {itineraryDb.dati_itinerario.giorni.length === 1 ? 'Giorno' : 'Giorni'}
                               </span>
                             )}
@@ -1472,7 +1483,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
-                        <Map className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                        <MapIcon className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
                           <h5 className="text-xs font-black text-gray-800 mb-0.5">Esplora la Mappa</h5>
                           <p className="text-[10px] font-bold text-gray-500 leading-tight">Trova e scopri tutti i Punti di Interesse (POI) intorno a te senza alcun limite.</p>
@@ -1587,6 +1598,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               )}
             </motion.div>
+          )}
+
+          {activeTab === 'myvision' && (
+            <MyVisionTab language={language} />
           )}
 
           {activeTab === 'cronologia' && (
@@ -2513,26 +2528,22 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       </label>
                       <button
                         onClick={() => {
-                          const allChecked = activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli;
-                          setActiveSubcats({
+                          const allChecked = activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli && activeSubcats.community;
+                          const next = {
                             monumenti: !allChecked,
                             musei: !allChecked,
                             panorami: !allChecked,
                             chiese: !allChecked,
-                            consigli: !allChecked
-                          });
-                          localStorage.setItem('wip_active_subcategories', JSON.stringify({
-                            monumenti: !allChecked,
-                            musei: !allChecked,
-                            panorami: !allChecked,
-                            chiese: !allChecked,
-                            consigli: !allChecked
-                          }));
+                            consigli: !allChecked,
+                            community: !allChecked
+                          };
+                          setActiveSubcats(next);
+                          localStorage.setItem('wip_active_subcategories', JSON.stringify(next));
                           window.dispatchEvent(new CustomEvent('wip-settings-updated'));
                         }}
                         className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2 py-1 rounded-md active:scale-95 transition-transform"
                       >
-                        {activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli ? "Deseleziona Tutti" : "Seleziona Tutti"}
+                        {activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli && activeSubcats.community ? "Deseleziona Tutti" : "Seleziona Tutti"}
                       </button>
                     </div>
 
@@ -2565,6 +2576,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         <div className="border-t border-primary/10 mt-2 pt-2">
                            <SubcatItem label="Consigli & Info (Gratuiti)" isChecked={!!activeSubcats.consigli} onToggle={() => toggleSubcat('consigli')} />
                            <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">Questi POI speciali non consumano il credito delle audioguide.</p>
+                        </div>
+                        <div className="border-t border-primary/10 mt-2 pt-2">
+                           <SubcatItem label="WIP Community 📸" isChecked={!!activeSubcats.community} onToggle={() => toggleSubcat('community')} />
+                           <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">I luoghi scoperti dalle foto dei viaggiatori WIP: pin magenta sulla mappa e audioguida dal loro racconto.</p>
                         </div>
                      </div>
                   </div>

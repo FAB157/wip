@@ -8,6 +8,7 @@ import { notify } from '../lib/toast';
 import ShopScreen from './ShopScreen';
 import { PRICING_LIST, getWalletBalance, consumeCredits, refundCredits } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
+import PoiContactButtons from './PoiContactButtons';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
@@ -2459,6 +2460,26 @@ export default function PoiDetailSheet({
           </div>
 
           <div className="px-6 pt-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+            {/* Contatti strutturati (telefono / sito / orari) da OSM+Wikidata,
+                resi come bottoni d'azione — SOLO per le categorie turistico-
+                culturali (musei, monumenti, chiese, archeo, teatri, attrazioni),
+                MAI per bar/ristoranti/negozi/utilità. Il filtro è nel componente. */}
+            <PoiContactButtons
+              poi={{
+                id: String(poi.id),
+                lat: poi.lat,
+                lon: poi.lon,
+                name: poi.name,
+                category: poi.category,
+                poiType: (poi as any).poi_type || (poi as any).poiType,
+                isGem: (poi as any).is_gem ?? (poi as any).isGem,
+                wikidata: (poi as any).wikidata,
+                contact_phone: (poi as any).contact_phone,
+                contact_website: (poi as any).contact_website,
+                opening_hours_json: (poi as any).opening_hours_json,
+              }}
+              language={language}
+            />
             {/* New Speciality Tags Section - Expanded for Romantico, Vista, Pet, Family */}
             {tripData?.tags && tripData.tags.length > 0 && (
               <div className="flex flex-wrap gap-2.5 mb-6">

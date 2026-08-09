@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
-import { 
+import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
-  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell
+  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera
 } from 'lucide-react';
+import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
 import AdminEditor from './AdminEditor';
 import AdminDiagnostics from './AdminDiagnostics';
@@ -12,6 +13,7 @@ import AdminApiStats from './AdminApiStats';
 import AdminEnrichedPois from './AdminEnrichedPois';
 import AdminSystemErrors from './AdminSystemErrors';
 import AdminReports from './AdminReports';
+import AdminVisionCommunity from './AdminVisionCommunity';
 import CouponForm from './admin/CouponForm';
 import CouponList from './admin/CouponList';
 import ChallengeForm from './admin/ChallengeForm';
@@ -19,8 +21,9 @@ import LevelForm from './admin/LevelForm';
 import UserEditModal from './admin/UserEditModal';
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'gamification' | 'health' | 'api_stats' | 'enriched_pois' | 'system_errors' | 'reports'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'gamification' | 'health' | 'api_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
   const [pendingReports, setPendingReports] = useState<number>(0);
+  const [pendingVisions, setPendingVisions] = useState<number>(0);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
   const [gamificationChallenges, setGamificationChallenges] = useState<any[]>([]);
@@ -51,6 +54,7 @@ export default function AdminPanel() {
   useEffect(() => {
     fetchData();
     fetchPendingReports();
+    fetchPendingVisions();
 
     const handleCircuitBreaker = (e: Event) => {
       const customEvent = e as CustomEvent;
@@ -63,9 +67,13 @@ export default function AdminPanel() {
     // si aggiorna subito invece di restare al conteggio del mount.
     const handleReportsUpdated = () => fetchPendingReports();
     window.addEventListener('wip-reports-updated', handleReportsUpdated);
+    // Badge del tab WIP Community: si riallinea a ogni revisione conclusa.
+    const handleVisionUpdated = () => fetchPendingVisions();
+    window.addEventListener('wip-vision-review-updated', handleVisionUpdated);
     return () => {
       window.removeEventListener('enrichment-circuit-breaker', handleCircuitBreaker);
       window.removeEventListener('wip-reports-updated', handleReportsUpdated);
+      window.removeEventListener('wip-vision-review-updated', handleVisionUpdated);
     };
   }, []);
 
@@ -78,6 +86,23 @@ export default function AdminPanel() {
       setPendingReports(count || 0);
     } catch (e) {
       console.error('Error fetching pending reports count', e);
+    }
+  };
+
+  // La RLS di vision_cards è select-own: il conteggio della coda passa dal
+  // server (route admin), non da una count client.
+  const fetchPendingVisions = async () => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      if (!token) return;
+      const res = await fetch(getApiUrl('/api/admin/vision/queue?status=pending'), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (json?.counts) setPendingVisions(json.counts.pending || 0);
+    } catch (e) {
+      console.error('Error fetching pending visions count', e);
     }
   };
 
@@ -514,12 +539,28 @@ export default function AdminPanel() {
               </span>
             )}
           </button>
+          {/* WIP COMMUNITY (Vision) CON BADGE */}
+          <button
+            onClick={() => { setActiveTab('vision'); fetchPendingVisions(); }}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all relative ${
+              activeTab === 'vision' ? 'bg-white text-pink-600 shadow-sm' : 'text-primary/60 hover:text-pink-600'
+            }`}
+          >
+            <Camera className="w-4 h-4" />
+            WIP Community
+            {pendingVisions > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-pink-500 text-white text-[9px] font-black rounded-full flex items-center justify-center px-1 shadow-md animate-pulse">
+                {pendingVisions > 99 ? '99+' : pendingVisions}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
       {activeTab === 'api_stats' && <AdminApiStats />}
       {activeTab === 'enriched_pois' && <AdminEnrichedPois />}
       {activeTab === 'system_errors' && <AdminSystemErrors />}
+      {activeTab === 'vision' && <AdminVisionCommunity />}
 
       {activeTab === 'users' && (
         <div className="space-y-4">

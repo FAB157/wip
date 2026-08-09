@@ -118,7 +118,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // Toggle "Consigli" del setup GeoControl: presente in SupabaseClient.kt
             // e PoiModels.swift (iOS) — senza questa riga i POI consigli venivano
             // scaricati ma il receiver li scartava al trigger.
-            "consigli" to listOf("information", "tourism_information", "office", "consigli")
+            "consigli" to listOf("information", "tourism_information", "office", "consigli"),
+            // WIP Community (Vision approvate): default OFF, MAI in culturalCats
+            // — si attiva solo col toggle dedicato. Sync: SupabaseClient.kt,
+            // PoiModels.swift, isCategoryAllowed (useGeofencing.ts).
+            "community" to listOf("community")
         )
 
         /**
@@ -910,7 +914,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 if (fullText.isNullOrBlank() && mp3File == null &&
                     com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
                 ) {
-                    fullText = SupabaseClient().fetchPoiAudioText(poiId)
+                    // Testo NELLA LINGUA dell'utente (get-or-create per-lingua),
+                    // non i campi italiani grezzi di shared_pois.
+                    fullText = SupabaseClient().fetchAudioguideText(poiId, lang, poi?.guideDefault ?: "nicky")
                 }
                 if (mp3File == null && !fullText.isNullOrBlank() &&
                     com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)

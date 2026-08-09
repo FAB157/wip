@@ -35,7 +35,9 @@ class SupabaseClient {
         "locali" to listOf("restaurant", "cafe", "bar", "fast_food", "pub", "locali"),
         "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
         "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
-        "consigli" to listOf("information", "tourism_information", "office", "consigli")
+        "consigli" to listOf("information", "tourism_information", "office", "consigli"),
+        // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
+        "community" to listOf("community")
     )
 
     suspend fun fetchPoisNearby(
@@ -108,6 +110,40 @@ class SupabaseClient {
      * Testo integrale dell'audioguida di un POI (per il Day Pass online quando
      * il POI non è in un pacchetto offline). Stessa catena di fallback della
      * RPC area_bundle_pois.
+     */
+    /**
+     * Testo integrale dell'audioguida NELLA LINGUA dell'utente (get-or-create).
+     * Chiama /api/poi/audioguide (cache-first su poi_audioguides per lingua; se
+     * manca traduce/rigenera dai campi italiani di shared_pois e salva). Prima
+     * il nativo leggeva i campi italiani grezzi: un utente straniero, in auto
+     * col Day Pass, sentiva testo italiano con voce nella sua lingua.
+     */
+    suspend fun fetchAudioguideText(poiId: String, lang: String, character: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val body = JSONObject().apply {
+                put("poiId", poiId)
+                put("lang", lang)
+                put("character", character)
+            }.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url("https://itainta.vercel.app/api/poi/audioguide")
+                .post(body)
+                .addHeader("Content-Type", "application/json")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val obj = JSONObject(response.body?.string() ?: "{}")
+                val text = obj.optString("text", "")
+                if (text.isNotBlank()) text else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Fallback mono-lingua dai campi grezzi di shared_pois (tipicamente
+     * italiano). Rete di sicurezza quando l'endpoint per-lingua non risponde.
      */
     suspend fun fetchPoiAudioText(poiId: String): String? = withContext(Dispatchers.IO) {
         val url = "${BuildConfig.SUPABASE_URL}/rest/v1/shared_pois?id=eq.$poiId" +

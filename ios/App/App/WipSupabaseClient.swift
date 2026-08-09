@@ -77,8 +77,38 @@ final class WipSupabaseClient {
         }.resume()
     }
 
-    /// Testo integrale dell'audioguida (Day Pass online). Stessa catena di
-    /// fallback di Android: audio_script → description_long → description_ai → description.
+    /// Testo integrale dell'audioguida NELLA LINGUA dell'utente (get-or-create).
+    /// Chiama /api/poi/audioguide, che fa cache-check su poi_audioguides per
+    /// lingua e — se manca — traduce/rigenera dai campi (spesso italiani) di
+    /// shared_pois e salva. Prima il nativo leggeva i campi italiani grezzi:
+    /// un utente straniero, in auto col Day Pass, sentiva testo italiano letto
+    /// con voce nella sua lingua. Ora il testo è già nella lingua giusta.
+    func fetchAudioguideText(poiId: String, lang: String, character: String, completion: @escaping (String?) -> Void) {
+        guard let url = URL(string: "https://itainta.vercel.app/api/poi/audioguide") else {
+            completion(nil); return
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30
+        req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "poiId": poiId, "lang": lang, "character": character
+        ])
+        session.dataTask(with: req) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data = data,
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let text = obj["text"] as? String,
+                  !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+                completion(nil)
+                return
+            }
+            completion(text)
+        }.resume()
+    }
+
+    /// Testo integrale dai campi grezzi di shared_pois (fallback mono-lingua,
+    /// tipicamente italiano). Tenuto come rete di sicurezza offline/di errore.
     func fetchPoiAudioText(_ poiId: String, completion: @escaping (String?) -> Void) {
         let sel = "audio_script,description_long,description_ai,description"
         guard let req = request(path: "/rest/v1/shared_pois?id=eq.\(poiId)&select=\(sel)", method: "GET") else {

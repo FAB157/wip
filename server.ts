@@ -2972,9 +2972,17 @@ function isNameMatching(name1: string, name2: string): boolean {
   });
 
   app.post("/api/vision", rateLimiter, async (req, res) => {
+    // Addebito effettuato: vive fuori dal try perché il catch deve poter
+    // rimborsare se qualcosa fallisce DOPO il prelievo crediti.
+    let charge: { userId: string; cost: number } | null = null;
+    let refunded = false;
     try {
-      if (!ai) {
-        return res.status(500).json({ error: "Gemini API key not configured" });
+      // Serve ALMENO un motore vision: OpenAI (primario), Together (fallback)
+      // o Gemini (ultima riserva).
+      if (!process.env.OPENAI_API_KEY && !process.env.VITE_OPENAI_API_KEY
+          && !process.env.TOGETHER_VISION_API_KEY && !process.env.TOGETHER_API_KEY
+          && !process.env.VITE_TOGETHER_API_KEY && !ai) {
+        return res.status(500).json({ error: "Nessun provider vision configurato" });
       }
 
       // Validazione input PRIMA di consumare quota o toccare le API: senza
@@ -2991,6 +2999,118 @@ function isNameMatching(name1: string, name2: string): boolean {
       if (!quota.allowed) {
         return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
       }
+
+      // quota.userId può essere il fallback anonimo per IP: per schede, XP e
+      // addebito serve lo userId REALE (uuid) risolto dal Bearer.
+      const realUserId = quota.userId && !String(quota.userId).startsWith('anonymous-') ? String(quota.userId) : null;
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" };
+
+      // ── SALVATAGGIO SCHEDA ─────────────────────────────────────────────
+      // La scheda si salva SEMPRE (anche se non riconosciuta): My Vision è
+      // l'album personale dell'utente e la coda di revisione WIP Community
+      // riceve tutte le foto. review_status: pending → approved/rejected.
+      const saveVisionCard = async (data: any, recognized: boolean): Promise<{ cardId: string | null; photoUrl: string | null }> => {
+        if (!realUserId) return { cardId: null, photoUrl: null };
+        try {
+          const cardId = `vcard-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+          let photoUrl: string | null = null;
+          try {
+            const imgBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+            // Cartella per-utente nel bucket (privato dopo la migration
+            // fase 2): la policy storage "vision_photos_owner_read" permette
+            // il signed URL solo al proprietario. In photo_url si salva il
+            // PATH, non l'URL — il client lo risolve (signed o public).
+            const photoPath = `${realUserId}/${cardId}.jpg`;
+            await axios.post(`${supabaseUrl}/storage/v1/object/vision-photos/${photoPath}`, imgBuffer, {
+              headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "image/jpeg" },
+              maxBodyLength: Infinity
+            });
+            photoUrl = photoPath;
+          } catch (upErr: any) {
+            console.warn("[Vision] Upload foto fallito (la scheda viene salvata senza foto remota):", upErr?.message);
+          }
+
+          const row: any = {
+            id: cardId,
+            user_id: realUserId,
+            name: data?.nome || `Vision ${new Date().toLocaleDateString('it-IT')}`,
+            artist: data?.autore || null,
+            year: data?.anno_produzione || null,
+            style: data?.stile || null,
+            city: data?.citta || null,
+            category: data?.categoria || null,
+            curiosity: data?.curiosita || null,
+            description_short: data?.descrizione_breve || null,
+            description_long: data?.descrizione_dettagliata || null,
+            history: data?.storia || null,
+            audio_script: data?.spiegazione_audio || null,
+            lat: lat ?? null,
+            lon: lon ?? null,
+            photo_url: photoUrl
+          };
+          try {
+            await axios.post(`${supabaseUrl}/rest/v1/vision_cards`, { ...row, recognized, review_status: 'pending' }, { headers: svcHeaders });
+          } catch (colErr: any) {
+            // Colonne recognized/review_status assenti finché la migration
+            // 20260809150000_wip_community_vision.sql non viene applicata:
+            // retry con le sole colonne storiche (stesso pattern di MapArea).
+            await axios.post(`${supabaseUrl}/rest/v1/vision_cards`, row, { headers: svcHeaders });
+          }
+          console.log(`[Vision] Scheda salvata in vision_cards: ${cardId} (${row.name})`);
+          return { cardId, photoUrl };
+        } catch (cardErr: any) {
+          console.warn("[Vision] Salvataggio scheda vision fallito:", cardErr?.message);
+          return { cardId: null, photoUrl: null };
+        }
+      };
+
+      // Ogni Vision creata vale +10 XP (alimenta i livelli e i loro premi in
+      // crediti). Server-side: i contatori non sono scrivibili dal client.
+      const grantVisionXp = async () => {
+        if (!realUserId) return;
+        try {
+          const prof = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${realUserId}&select=xp_points`, { headers: svcHeaders });
+          const xp = (prof.data?.[0]?.xp_points || 0) + 10;
+          await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${realUserId}`, { xp_points: xp }, { headers: svcHeaders });
+        } catch (xpErr: any) {
+          console.warn("[Vision] Assegnazione XP fallita:", xpErr?.message);
+        }
+      };
+
+      // ── CACHE GPS CONDIVISA (ora SOLO server-side) ─────────────────────
+      // Hit entro 30 m = riconoscimento gratuito, nessun addebito. Prima il
+      // controllo (e la scrittura!) vivevano nel client con la anon key: la
+      // cache era avvelenabile da chiunque. La tabella è ora sotto RLS senza
+      // policy: legge e scrive solo la service role.
+      if (lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
+        try {
+          const m = 0.0003;
+          const cacheRes = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_vision_cache?lat=gte.${(lat - m).toFixed(6)}&lat=lte.${(lat + m).toFixed(6)}&lon=gte.${(lon - m).toFixed(6)}&lon=lte.${(lon + m).toFixed(6)}&select=*`,
+            { headers: svcHeaders }
+          );
+          let closest: any = null;
+          let minDist = 30;
+          for (const item of cacheRes.data || []) {
+            const d = getHaversineDistance(lat, lon, item.lat, item.lon);
+            if (d < minDist) { minDist = d; closest = item; }
+          }
+          if (closest?.data) {
+            console.log(`[Vision] Cache GPS condivisa: hit a ${Math.round(minDist)}m, riconoscimento gratuito`);
+            const saved = await saveVisionCard(closest.data, true);
+            await grantVisionXp();
+            return res.json({ ...closest.data, card_id: saved.cardId, photo_url: saved.photoUrl, cached: true, charged: 0, refunded: false });
+          }
+        } catch (cacheErr: any) {
+          console.debug("[Vision] Lettura cache condivisa fallita/saltata:", cacheErr?.message);
+        }
+      }
+
+      // ── GATE CREDITI SERVER-SIDE ───────────────────────────────────────
+      // Prima l'addebito photo_search viveva solo nel client (bypassabile
+      // via cURL, AUDIT A6). chargeOrReject risponde da solo 401/402/500.
+      charge = await chargeOrReject(req, res, 'photo_search');
+      if (!charge) return;
 
       let nearestPoi: any = null;
       let minDistance = Infinity;
@@ -3080,9 +3200,10 @@ function isNameMatching(name1: string, name2: string): boolean {
 
       let result;
       // Provider REALE che ha risposto: serve per una telemetria corretta.
-      let visionProvider: 'gemini' | 'together' = 'gemini';
-      const openAiKey = process.env.OPENAI_API_KEY;
-      const togetherKey = process.env.TOGETHER_API_KEY || process.env.VITE_TOGETHER_API_KEY;
+      let visionProvider: 'openai' | 'together' | 'gemini' = 'openai';
+      const openAiKey = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+      // Chiave Together DEDICATA alla vision: budget separato dagli itinerari.
+      const togetherKey = process.env.TOGETHER_VISION_API_KEY || process.env.TOGETHER_API_KEY || process.env.VITE_TOGETHER_API_KEY;
       const visionImageBase64 = imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`;
 
       // Timeout difensivo: senza di esso una chiamata Gemini/Together appesa
@@ -3096,115 +3217,139 @@ function isNameMatching(name1: string, name2: string): boolean {
           )
         ]);
 
-      try {
-        console.log("[Vision] Utilizzando Gemini per il riconoscimento immagine");
-        const geminiResponse = await withTimeout(ai.models.generateContent({
-          model: "gemini-flash-latest",
-          contents: [
-              {
-                 role: "user",
-                 parts: [
-                    { text: promptText },
-                    { inlineData: { mimeType: "image/jpeg", data: imageBase64.replace(/^data:image\/\w+;base64,/, '') } }
-                 ]
-              }
-          ],
-          config: {
-            responseMimeType: "application/json"
-          }
-        }), 'Gemini');
-        result = parseVisionJson(geminiResponse.text);
-        visionProvider = 'gemini';
-      } catch (geminiErr: any) {
-        console.warn("[Vision] Errore con Gemini, tentativo di fallback su Together AI:", geminiErr.message || geminiErr);
-        
-        if (togetherKey) {
-          console.log("[Vision] Fallback: Utilizzando Together AI meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo");
-          try {
-            const response = await axios.post(
-              'https://api.together.xyz/v1/chat/completions',
-              {
-                model: "meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
-                messages: [
-                  {
-                    role: "user",
-                    content: [
-                      { type: "text", text: promptText },
-                      { type: "image_url", image_url: { url: visionImageBase64 } }
-                    ]
-                  }
-                ],
-                temperature: 0.2,
-                response_format: { type: "json_object" }
-              },
-              {
-                timeout: VISION_TIMEOUT_MS,
-                headers: {
-                  "Authorization": `Bearer ${togetherKey}`,
-                  "Content-Type": "application/json"
+      // ── CATENA MOTORI: OpenAI → Together → Gemini ──────────────────────
+      // Ogni fallimento per fondi/quota esauriti genera un avviso CRITICO
+      // in Errori Sistema (tab admin) via reportVisionFundsIssue.
+      let lastEngineErr: any = null;
+
+      if (openAiKey) {
+        try {
+          console.log("[Vision] Motore primario: OpenAI gpt-4o-mini");
+          const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o-mini',
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: promptText },
+                { type: 'image_url', image_url: { url: visionImageBase64 } }
+              ]
+            }],
+            temperature: 0.2,
+            max_tokens: 2000,
+            response_format: { type: 'json_object' }
+          }, {
+            timeout: VISION_TIMEOUT_MS,
+            headers: { Authorization: `Bearer ${openAiKey}`, 'Content-Type': 'application/json' }
+          });
+          result = parseVisionJson(r.data.choices[0].message.content);
+          visionProvider = 'openai';
+        } catch (openaiErr: any) {
+          lastEngineErr = openaiErr;
+          console.warn("[Vision] OpenAI fallito, fallback su Together:", openaiErr.response?.data?.error?.message || openaiErr.message);
+          await reportVisionFundsIssue('OpenAI (vision)', openaiErr);
+        }
+      }
+
+      if (!result && togetherKey) {
+        try {
+          console.log("[Vision] Fallback: Together AI meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo");
+          const response = await axios.post(
+            'https://api.together.xyz/v1/chat/completions',
+            {
+              model: "meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: promptText },
+                    { type: "image_url", image_url: { url: visionImageBase64 } }
+                  ]
                 }
+              ],
+              temperature: 0.2,
+              response_format: { type: "json_object" }
+            },
+            {
+              timeout: VISION_TIMEOUT_MS,
+              headers: {
+                "Authorization": `Bearer ${togetherKey}`,
+                "Content-Type": "application/json"
               }
-            );
-            result = parseVisionJson(response.data.choices[0].message.content);
-            visionProvider = 'together';
-          } catch (togetherErr: any) {
-            console.error("[Vision] Errore critico anche con Together AI:", togetherErr.response?.data || togetherErr.message);
-            throw new Error("Impossibile analizzare l'immagine: Gemini e Together AI hanno fallito.");
-          }
-        } else {
-          console.error("[Vision] Nessun fallback configurato per Together AI.");
-          throw new Error("Errore con Gemini e nessun fallback Together AI disponibile.");
+            }
+          );
+          result = parseVisionJson(response.data.choices[0].message.content);
+          visionProvider = 'together';
+        } catch (togetherErr: any) {
+          lastEngineErr = togetherErr;
+          console.error("[Vision] Errore anche con Together AI:", togetherErr.response?.data || togetherErr.message);
+          await reportVisionFundsIssue('Together AI (vision)', togetherErr);
         }
       }
 
-      // ── SCHEDA VISION ────────────────────────────────────────────────────
-      // Il riconoscimento NON crea più un POI in shared_pois: produce una
-      // scheda enciclopedica (foto, artista, anno, stile, storia, curiosità)
-      // salvata in vision_cards, con la foto dell'utente nel bucket pubblico
-      // vision-photos. La scheda è personale (user_id) e riconsultabile.
-      try {
-        if (result?.riconosciuto && result?.nome) {
-          const cardId = `vcard-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" };
+      if (!result && ai) {
+        try {
+          console.log("[Vision] Ultima riserva: Gemini");
+          const geminiResponse = await withTimeout(ai.models.generateContent({
+            model: "gemini-flash-latest",
+            contents: [
+                {
+                   role: "user",
+                   parts: [
+                      { text: promptText },
+                      { inlineData: { mimeType: "image/jpeg", data: imageBase64.replace(/^data:image\/\w+;base64,/, '') } }
+                   ]
+                }
+            ],
+            config: {
+              responseMimeType: "application/json"
+            }
+          }), 'Gemini');
+          result = parseVisionJson(geminiResponse.text);
+          visionProvider = 'gemini';
+        } catch (geminiErr: any) {
+          lastEngineErr = geminiErr;
+          console.error("[Vision] Errore anche con Gemini:", geminiErr.message || geminiErr);
+        }
+      }
 
-          let photoUrl: string | null = null;
-          try {
-            const imgBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-            await axios.post(`${supabaseUrl}/storage/v1/object/vision-photos/${cardId}.jpg`, imgBuffer, {
-              headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "image/jpeg" },
-              maxBodyLength: Infinity
-            });
-            photoUrl = `${supabaseUrl}/storage/v1/object/public/vision-photos/${cardId}.jpg`;
-          } catch (upErr: any) {
-            console.warn("[Vision] Upload foto fallito (la scheda viene salvata senza foto remota):", upErr?.message);
-          }
+      if (!result) {
+        throw new Error(`Impossibile analizzare l'immagine: tutti i provider vision hanno fallito (${lastEngineErr?.response?.data?.error?.message || lastEngineErr?.message || 'errore sconosciuto'})`);
+      }
 
-          await axios.post(`${supabaseUrl}/rest/v1/vision_cards`, {
-            id: cardId,
-            user_id: quota.userId || null,
-            name: result.nome,
-            artist: result.autore || null,
-            year: result.anno_produzione || null,
-            style: result.stile || null,
-            city: result.citta || city || null,
-            category: result.categoria || null,
-            curiosity: result.curiosita || null,
-            description_short: result.descrizione_breve || null,
-            description_long: result.descrizione_dettagliata || null,
-            history: result.storia || null,
-            audio_script: result.spiegazione_audio || null,
-            lat: lat ?? null,
-            lon: lon ?? null,
-            photo_url: photoUrl
+      // Riconoscimento fallito = nessun servizio erogato → rimborso
+      // automatico SERVER-side (prima il rimborso viveva nel client ed era
+      // bypassabile). La scheda si salva comunque: resta in My Vision come
+      // ricordo e arriva alla coda di revisione WIP Community.
+      if (!result?.riconosciuto && charge) {
+        await refundServer(charge.userId, charge.cost);
+        refunded = true;
+      }
+
+      if (result && !result.citta && city) result.citta = city;
+      const saved = await saveVisionCard(result, !!result?.riconosciuto);
+      if (saved.cardId) {
+        result.card_id = saved.cardId;
+        result.photo_url = saved.photoUrl;
+      }
+
+      // Cache condivisa: SOLO riconoscimenti riusciti, e SENZA i campi
+      // personali (card_id/photo_url del primo utente non devono finire
+      // nelle risposte servite ai successivi).
+      if (result?.riconosciuto && lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
+        try {
+          const { card_id: _cid, photo_url: _pu, ...shareable } = result;
+          await axios.post(`${supabaseUrl}/rest/v1/shared_vision_cache`, {
+            id: `vision_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            lat, lon,
+            data: shareable,
+            created_at: new Date().toISOString()
           }, { headers: svcHeaders });
-
-          result.card_id = cardId;
-          result.photo_url = photoUrl;
-          console.log(`[Vision] Scheda salvata in vision_cards: ${cardId} (${result.nome})`);
+        } catch (shareErr: any) {
+          console.warn("[Vision] Scrittura cache condivisa fallita:", shareErr?.message);
         }
-      } catch (cardErr: any) {
-        console.warn("[Vision] Salvataggio scheda vision fallito:", cardErr?.message);
       }
+
+      await grantVisionXp();
 
       if (quota.userId) {
         await incrementQuotaCount(quota.userId, 'vision').catch(e => console.error(e));
@@ -3213,7 +3358,7 @@ function isNameMatching(name1: string, name2: string): boolean {
       // Log to api_usage_logs (insert resiliente: vedi insertApiUsageLog)
       try {
         await insertApiUsageLog({
-          api_name: visionProvider === 'together' ? 'together_vision' : 'gemini_vision',
+          api_name: visionProvider === 'together' ? 'together_vision' : visionProvider === 'openai' ? 'openai_vision' : 'gemini_vision',
           feature_context: 'camera_monument_scan',
           cost_estimation: 0.001,
           tokens_used: 1000,
@@ -3223,10 +3368,412 @@ function isNameMatching(name1: string, name2: string): boolean {
         console.debug("Failed to log vision api_usage_logs");
       }
 
-      res.json(result);
+      res.json({ ...result, refunded, charged: refunded || !charge ? 0 : charge.cost });
     } catch (e: any) {
       console.error("Vision error:", e);
+      // Errore dopo l'addebito → crediti indietro (best-effort, come le
+      // altre rotte col gate: podcast e premium guide).
+      if (charge && !refunded) {
+        await refundServer(charge.userId, charge.cost).catch(() => {});
+      }
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Commento dell'utente su una PROPRIA scheda Vision ("perché è speciale"):
+  // arricchisce la coda di revisione WIP Community, soprattutto per le foto
+  // che l'AI non ha riconosciuto. Il filtro user_id=eq.<token> garantisce
+  // che si possa scrivere solo sulle proprie schede.
+  app.post("/api/vision/comment", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const { cardId, comment, tags } = req.body || {};
+      if (!cardId || typeof cardId !== 'string') {
+        return res.status(400).json({ error: 'cardId mancante' });
+      }
+      const patch: any = { user_comment: String(comment || '').slice(0, 2000) || null };
+      if (Array.isArray(tags)) {
+        patch.comment_tags = tags.map((t: any) => String(t).slice(0, 60)).slice(0, 10);
+      }
+      const r = await axios.patch(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&user_id=eq.${userId}`,
+        patch,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json", Prefer: "return=representation" } }
+      );
+      if (!Array.isArray(r.data) || r.data.length === 0) {
+        return res.status(404).json({ error: 'scheda non trovata' });
+      }
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("Vision comment error:", e?.message);
+      res.status(500).json({ error: 'comment_failed' });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // WIP COMMUNITY — revisione admin delle schede Vision, pubblicazione come
+  // POI community, premio crediti e feed anonimo.
+  // ═══════════════════════════════════════════════════════════════════════
+  const VISION_REWARD_CREDITS = 10;
+
+  /** URL firmato (1h) per una foto del bucket privato vision-photos.
+   *  Accetta un PATH ("<uid>/<file>.jpg") o un URL legacy già completo. */
+  async function signVisionPhoto(path: string | null): Promise<string | null> {
+    if (!path) return null;
+    if (/^https?:\/\//i.test(path)) return path;
+    try {
+      const r = await axios.post(`${supabaseUrl}/storage/v1/object/sign/vision-photos/${path}`,
+        { expiresIn: 3600 },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } });
+      return r.data?.signedURL ? `${supabaseUrl}/storage/v1${r.data.signedURL}` : null;
+    } catch { return null; }
+  }
+
+  /** Un provider AI risponde "fondi/quota esauriti" → avviso CRITICO in
+   *  Errori Sistema (tab admin), così il problema si vede subito senza
+   *  aspettare le lamentele degli utenti. Mai bloccante per la richiesta. */
+  async function reportVisionFundsIssue(provider: string, err: any): Promise<void> {
+    try {
+      const status = err?.response?.status;
+      const detail = JSON.stringify(err?.response?.data || err?.message || '').slice(0, 400);
+      const isFunds = status === 402
+        || /insufficient_quota|exceeded your current quota|billing|not enough credits|credit balance|payment required|quota exceeded|account.*(fund|balance)/i.test(detail);
+      if (!isFunds) return;
+      await logSystemError('critical', `Fondi/quota API esauriti: ${provider}`, {
+        source: 'vision', provider, http_status: status, detail
+      });
+    } catch { /* l'avviso non deve mai rompere la vision */ }
+  }
+
+  /** Scarica i byte di una foto Vision (path privato o URL legacy). */
+  async function downloadVisionPhoto(path: string | null): Promise<Buffer | null> {
+    if (!path) return null;
+    try {
+      if (/^https?:\/\//i.test(path)) {
+        const r = await axios.get(path, { responseType: 'arraybuffer' });
+        return Buffer.from(r.data);
+      }
+      const r = await axios.get(`${supabaseUrl}/storage/v1/object/vision-photos/${path}`, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
+        responseType: 'arraybuffer'
+      });
+      return Buffer.from(r.data);
+    } catch (e: any) {
+      console.warn('[Vision] Download foto fallito:', e?.message);
+      return null;
+    }
+  }
+
+  // Coda di revisione per il tab admin "WIP Community". ANONIMATO: la
+  // risposta non contiene MAI user_id — l'admin giudica la foto, non l'utente.
+  app.get("/api/admin/vision/queue", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+
+      const status = ['pending', 'approved', 'rejected', 'all'].includes(String(req.query.status))
+        ? String(req.query.status) : 'pending';
+      const statusFilter = status === 'all' ? '' : `&review_status=eq.${status}`;
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?select=*${statusFilter}&order=created_at.desc&limit=200`,
+        { headers: svcHeaders }
+      );
+
+      const countFor = async (s: string): Promise<number> => {
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/vision_cards?review_status=eq.${s}&select=id`, {
+            headers: { ...svcHeaders, Prefer: 'count=exact', 'Range-Unit': 'items', Range: '0-0' }
+          });
+          return parseInt(String(r.headers['content-range'] || '0/0').split('/')[1] || '0', 10);
+        } catch { return 0; }
+      };
+      const [pending, approved, rejected] = await Promise.all(['pending', 'approved', 'rejected'].map(countFor));
+
+      const cards = await Promise.all((data || []).map(async (c: any) => {
+        const { user_id: _hidden, ...rest } = c;
+        return {
+          ...rest,
+          photo_signed: await signVisionPhoto(c.photo_url),
+          clean_signed: await signVisionPhoto(c.clean_photo_url)
+        };
+      }));
+
+      res.json({ cards, counts: { pending, approved, rejected } });
+    } catch (e: any) {
+      console.error('[Vision Queue] Errore:', e?.message);
+      res.status(500).json({ error: 'queue_failed' });
+    }
+  });
+
+  // Revisione di una scheda: approva (nuovo POI community), allega a un POI
+  // ufficiale (foto nella sua galleria images_json) o rifiuta (resta un
+  // ricordo privato in My Vision). All'approvazione: +10 crediti REALI
+  // all'autore, idempotente su user_rewards_claimed (type 'vision').
+  app.post("/api/admin/vision/review", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      const { cardId, action, edits, attachPoiId } = req.body || {};
+      if (!cardId || !['approve', 'reject', 'attach'].includes(action)) {
+        return res.status(400).json({ error: 'Parametri non validi' });
+      }
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=*`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+      if (card.review_status === 'approved') {
+        return res.json({ success: true, alreadyReviewed: true, published_poi_id: card.published_poi_id });
+      }
+
+      const nowIso = new Date().toISOString();
+
+      if (action === 'reject') {
+        await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`,
+          { review_status: 'rejected', reviewed_at: nowIso, reviewed_by: adminId },
+          { headers: svcHeaders });
+        return res.json({ success: true });
+      }
+
+      // Campi eventualmente corretti dall'admin in revisione
+      const e = edits || {};
+      const name = e.name || card.name;
+      const city = e.city ?? card.city;
+      const descShort = e.description_short ?? card.description_short;
+      const descLong = e.description_long ?? card.description_long;
+      const history = e.history ?? card.history;
+      // Audioguida: testo AI della scheda; se l'AI non aveva riconosciuto,
+      // si compone dal racconto dell'utente ("audioguida in base a cosa
+      // dice l'utente") — sempre rifinibile poi dall'Editor POI.
+      const audioScript = (e.audio_script ?? card.audio_script)
+        || [descLong || descShort, card.user_comment ? `Un viaggiatore racconta: ${card.user_comment}` : '']
+             .filter(Boolean).join(' ')
+        || null;
+
+      // Foto pubblicata: preferisci la versione ripulita dall'AI. Copia nel
+      // bucket PUBBLICO vision-public: l'originale resta privato dell'utente.
+      const safeAttachId = String(attachPoiId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const publishName = action === 'attach' ? `${safeAttachId}__${card.id}.jpg` : `vision-${card.id}.jpg`;
+      let publicPhotoUrl: string | null = null;
+      const buf = await downloadVisionPhoto(card.clean_photo_url || card.photo_url);
+      if (buf) {
+        try {
+          await axios.post(`${supabaseUrl}/storage/v1/object/vision-public/${publishName}`, buf, {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+            maxBodyLength: Infinity
+          });
+          publicPhotoUrl = `${supabaseUrl}/storage/v1/object/public/vision-public/${publishName}`;
+        } catch (upErr: any) {
+          console.warn('[Vision Review] Copia foto pubblica fallita:', upErr?.message);
+        }
+      }
+
+      let publishedPoiId: string | null = null;
+      if (action === 'approve') {
+        publishedPoiId = `vision-${card.id}`;
+        // POI community: category='community' (pin/chip dedicati), il tipo
+        // reale va in poi_type. MAI is_gem=true (le gemme bypassano ogni
+        // filtro nativo e finirebbero nel geofencing di tutti).
+        const poiRow: any = {
+          id: publishedPoiId,
+          name,
+          lat: card.lat,
+          lon: card.lon,
+          category: 'community',
+          poi_type: e.poi_type || card.category || 'attraction',
+          status: 'verified',
+          verified: true,
+          is_hidden: false,
+          is_gem: false,
+          image_url: publicPhotoUrl,
+          photo_url: publicPhotoUrl,
+          description_short: descShort,
+          description_ai: descShort,
+          description_long: descLong,
+          full_description: history,
+          audio_script: audioScript,
+          city,
+          source: 'wip_community',
+          alert_radius: 150,
+          geofence_radius: 50
+        };
+        await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, poiRow,
+          { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
+      } else {
+        // ATTACH: la vision È il POI ufficiale (es. il Colosseo stesso) →
+        // niente pin doppio, la foto entra nella galleria images_json.
+        if (!attachPoiId) return res.status(400).json({ error: 'attachPoiId mancante' });
+        const { data: pois } = await axios.get(
+          `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}&select=id,images_json,image_url`,
+          { headers: svcHeaders }
+        );
+        const poi = pois?.[0];
+        if (!poi) return res.status(404).json({ error: 'POI ufficiale non trovato' });
+        let images: any[] = [];
+        try {
+          images = Array.isArray(poi.images_json) ? poi.images_json : JSON.parse(poi.images_json || '[]');
+        } catch { images = []; }
+        if (publicPhotoUrl) {
+          images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso });
+        }
+        await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}`,
+          { images_json: images }, { headers: svcHeaders });
+        publishedPoiId = attachPoiId;
+      }
+
+      await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`, {
+        review_status: 'approved', reviewed_at: nowIso, reviewed_by: adminId,
+        published_poi_id: publishedPoiId, published_photo_url: publicPhotoUrl,
+        name, city, description_short: descShort, description_long: descLong,
+        history, audio_script: audioScript
+      }, { headers: svcHeaders });
+
+      // Premio: +10 crediti earned all'autore, una sola volta per scheda.
+      let rewarded = 0;
+      if (card.user_id) {
+        const { data: claimed } = await axios.get(
+          `${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${card.user_id}&reward_source_type=eq.vision&reward_source_id=eq.${encodeURIComponent(card.id)}&select=id`,
+          { headers: svcHeaders }
+        );
+        if (!claimed?.length) {
+          await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`,
+            { user_id: card.user_id, reward_source_type: 'vision', reward_source_id: card.id },
+            { headers: svcHeaders });
+          const { data: prof } = await axios.get(
+            `${supabaseUrl}/rest/v1/user_profiles?id=eq.${card.user_id}&select=earned_credits`,
+            { headers: svcHeaders }
+          );
+          await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${card.user_id}`,
+            { earned_credits: (prof?.[0]?.earned_credits || 0) + VISION_REWARD_CREDITS },
+            { headers: svcHeaders });
+          rewarded = VISION_REWARD_CREDITS;
+        }
+      }
+
+      res.json({ success: true, published_poi_id: publishedPoiId, rewarded, public_photo_url: publicPhotoUrl });
+    } catch (e: any) {
+      console.error('[Vision Review] Errore:', e?.message);
+      res.status(500).json({ error: 'review_failed' });
+    }
+  });
+
+  // Pulizia foto con AI (volti, targhe, dati personali) per la revisione.
+  // Usa l'editing immagini di Gemini; il risultato va accanto all'originale
+  // (privato) come clean_photo_url e diventa la foto pubblicata di default.
+  app.post("/api/admin/vision/clean-photo", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      // Editing immagini: OpenRouter primario (DeepSeek NON edita immagini),
+      // Gemini diretto come riserva se configurato.
+      const openRouterKey = process.env.OPENROUTER_API_KEY;
+      if (!openRouterKey && !ai) {
+        return res.status(500).json({ error: 'Nessun provider di editing immagini configurato (OPENROUTER_API_KEY o GEMINI_API_KEY)' });
+      }
+      const { cardId, instruction } = req.body || {};
+      if (!cardId) return res.status(400).json({ error: 'cardId mancante' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=*`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+      const buf = await downloadVisionPhoto(card.photo_url);
+      if (!buf) return res.status(404).json({ error: 'Foto non disponibile' });
+
+      const prompt = String(instruction || '').trim() ||
+        "Rimuovi o sfoca in modo naturale volti riconoscibili, targhe di veicoli e altri dati personali visibili in questa foto. Non alterare il monumento, l'opera o il paesaggio. Restituisci SOLO l'immagine modificata.";
+
+      let outB64: string | null = null;
+
+      // Motore primario: OpenRouter (modello immagini Gemini via API unificata)
+      if (openRouterKey) {
+        try {
+          const r = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+            model: 'google/gemini-2.5-flash-image',
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${buf.toString('base64')}` } }
+              ]
+            }],
+            modalities: ['image', 'text']
+          }, {
+            timeout: 60000,
+            headers: { Authorization: `Bearer ${openRouterKey}`, 'Content-Type': 'application/json' }
+          });
+          const imgUrl = r.data?.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+          if (typeof imgUrl === 'string' && imgUrl.startsWith('data:')) {
+            outB64 = imgUrl.split(',')[1] || null;
+          }
+          if (!outB64) console.warn('[Vision Clean] OpenRouter ha risposto senza immagine');
+        } catch (orErr: any) {
+          console.warn('[Vision Clean] OpenRouter fallito:', orErr?.response?.data?.error?.message || orErr?.message);
+          await reportVisionFundsIssue('OpenRouter (editing foto)', orErr);
+        }
+      }
+
+      // Riserva: Gemini diretto (se configurato)
+      const models = ['gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview'];
+      for (const model of models) {
+        if (outB64 || !ai) break;
+        try {
+          const r = await ai.models.generateContent({
+            model,
+            contents: [{ role: 'user', parts: [
+              { text: prompt },
+              { inlineData: { mimeType: 'image/jpeg', data: buf.toString('base64') } }
+            ] }]
+          });
+          const parts = r?.candidates?.[0]?.content?.parts || [];
+          const img = parts.find((p: any) => p.inlineData?.data);
+          if (img) { outB64 = img.inlineData.data; break; }
+        } catch (mErr: any) {
+          console.warn(`[Vision Clean] ${model} fallito:`, mErr?.message);
+        }
+      }
+      if (!outB64) return res.status(502).json({ error: 'Editing AI non riuscito, riprova' });
+
+      const basePath = /^https?:/i.test(card.photo_url || '')
+        ? `${card.user_id || 'legacy'}/${card.id}`
+        : String(card.photo_url).replace(/\.jpg$/i, '');
+      const cleanPath = `${basePath}-clean.jpg`;
+      await axios.post(`${supabaseUrl}/storage/v1/object/vision-photos/${cleanPath}`, Buffer.from(outB64, 'base64'), {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+        maxBodyLength: Infinity
+      });
+      await axios.patch(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(card.id)}`,
+        { clean_photo_url: cleanPath }, { headers: svcHeaders });
+
+      res.json({ success: true, clean_photo_url: cleanPath, preview: await signVisionPhoto(cleanPath) });
+    } catch (e: any) {
+      console.error('[Vision Clean] Errore:', e?.message);
+      res.status(500).json({ error: 'clean_failed' });
+    }
+  });
+
+  // Feed pubblico "WIP Community": le Vision approvate di tutti, in forma
+  // ANONIMA per costruzione (user_id non è nemmeno nella select).
+  app.get("/api/vision/community", rateLimiter, async (req, res) => {
+    try {
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const limit = Math.min(100, parseInt(String(req.query.limit || '60'), 10) || 60);
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.approved&select=id,name,city,category,description_short,curiosity,published_photo_url,published_poi_id,created_at&order=created_at.desc&limit=${limit}`,
+        { headers: svcHeaders }
+      );
+      res.json({ cards: data || [] });
+    } catch (e: any) {
+      console.error('[Vision Community Feed] Errore:', e?.message);
+      res.status(500).json({ error: 'feed_failed' });
     }
   });
 
@@ -3309,6 +3856,45 @@ Regole:
     }
   });
 
+  // Cuore della generazione audioguida, ESTRATTO da /api/regenerate così che
+  // anche l'endpoint get-or-create per-lingua (/api/poi/audioguide, usato dal
+  // nativo) produca la narrazione con la STESSA logica e lo stesso prompt.
+  // Riscrive `text` (base, spesso in italiano) nella lingua target.
+  const LANG_NAMES: Record<string, string> = {
+    it: "italiano", en: "inglese (English)", fr: "francese (French)",
+    es: "spagnolo (Spanish)", de: "tedesco (German)", ru: "russo (Russian)", zh: "cinese (Chinese)"
+  };
+  async function regenerateAudioguideText(opts: { text: string; poiName: string; mode?: string; location?: string; previousText?: string; lang?: string; }): Promise<string> {
+    const { text, poiName, mode, location, previousText, lang = "it" } = opts;
+    const targetLangName = LANG_NAMES[String(lang).toLowerCase()] || "italiano";
+    const locContext = location ? ` situato a ${location}` : "";
+    const basePrompt = mode === 'nicky'
+      ? `Sei una guida locale fashion, moderna, trendy e amichevole di nome Nicky. Crea una narrazione per una audioguida su "${poiName}"${locContext} in lingua ${targetLangName}.
+           Regole tassative di aderenza al contesto e anti-allucinazione:
+           1. Parla del luogo basandoti esclusivamente e rigidamente sul testo originale fornito. NON inventare assolutamente storie storiche drammatiche o fatti cronaca nera se non sono esplicitamente citati nel testo originale.
+           2. Usa un tono da "local guide" amichevole ed entusiasta. Fai RIFERIMENTI SPECIFICI ma dal taglio più LIFESTYLE, FASHION o TRENDY. Usa espressioni naturali come "vibe", "top", "must-see".
+           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown, poiché il testo sarà letto da una voce sintetizzata e questi simboli disturbano l'ascolto. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`
+      : `Sei una guida turistica esperta, professionale e autorevole di nome Dante. Crea una narrazione su "${poiName}"${locContext} in lingua ${targetLangName}.
+           Regole tassative di aderenza al contesto e anti-allucinazione:
+           1. Fornisci informazioni reali e storicamente provate basandoti sul testo originale fornito. NON inventare leggende o associazioni errate con monumenti famosi estranei se non sono citati nel testo.
+           2. Fai RIFERIMENTI e DETTAGLI SPECIFICI storico-culturali o architettonici precisi. Scendi nel dettaglio tecnico/storico in modo affascinante.
+           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`;
+    let prompt = `${basePrompt}\n\nUsa le informazioni da questo testo originale: ${text}`;
+    if (previousText) {
+      prompt += `\n\nIMPORTANTE: L'utente ha chiesto ULTERIORI INFORMAZIONI e dettagli per questo luogo.
+Devi generare un NUOVO testo della stessa lunghezza (circa 40-120 secondi di parlato, ovvero tra le 100 e 250 parole) focalizzandoti su DETTAGLI SPECIFICI, curiosità o aneddoti non citati prima.
+Quello che hai GIA' detto in precedenza (DA NON RIPETERE o riassumere): "${previousText}"
+Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista, mantenendo lo stile richiesto e restando nei limiti di lunghezza stabiliti.`;
+    }
+    const sUrl = process.env.VITE_SUPABASE_URL || '';
+    const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+    const response = await callUniversalAi(
+      "groq", [{ role: "user", content: prompt }], { temperature: 0.7 },
+      "rigenerazione_audio", sUrl, sKey, getGroqClient()
+    );
+    return (response.data || response.text || "").trim().replace(/[#*_~`]/g, '');
+  }
+
   app.post("/api/regenerate", async (req, res) => {
     try {
       // NIENTE guardia su `ai`: questa route genera con callUniversalAi (Groq/
@@ -3316,55 +3902,8 @@ Regole:
       // faceva fallire TUTTE le audioguide quando mancava GEMINI_API_KEY,
       // anche con gli altri motori perfettamente configurati.
       const { text, poiName, mode, location, previousText, lang = "it" } = req.body;
-      
-      const langNames: Record<string, string> = {
-        it: "italiano",
-        en: "inglese (English)",
-        fr: "francese (French)",
-        es: "spagnolo (Spanish)",
-        ru: "russo (Russian)",
-        zh: "cinese (Chinese)"
-      };
-      const targetLangName = langNames[String(lang).toLowerCase()] || "italiano";
-      
-      const locContext = location ? ` situato a ${location}` : "";
-      const basePrompt = mode === 'nicky' 
-        ? `Sei una guida locale fashion, moderna, trendy e amichevole di nome Nicky. Crea una narrazione per una audioguida su "${poiName}"${locContext} in lingua ${targetLangName}.
-           Regole tassative di aderenza al contesto e anti-allucinazione:
-           1. Parla del luogo basandoti esclusivamente e rigidamente sul testo originale fornito. NON inventare assolutamente storie storiche drammatiche o fatti cronaca nera se non sono esplicitamente citati nel testo originale.
-           2. Usa un tono da "local guide" amichevole ed entusiasta. Fai RIFERIMENTI SPECIFICI ma dal taglio più LIFESTYLE, FASHION o TRENDY. Usa espressioni naturali come "vibe", "top", "must-see".
-           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown, poiché il testo sarà letto da una voce sintetizzata e questi simboli disturbano l'ascolto. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`
-        : `Sei una guida turistica esperta, professionale e autorevole di nome Dante. Crea una narrazione su "${poiName}"${locContext} in lingua ${targetLangName}.
-           Regole tassative di aderenza al contesto e anti-allucinazione:
-           1. Fornisci informazioni reali e storicamente provate basandoti sul testo originale fornito. NON inventare leggende o associazioni errate con monumenti famosi estranei se non sono citati nel testo.
-           2. Fai RIFERIMENTI e DETTAGLI SPECIFICI storico-culturali o architettonici precisi. Scendi nel dettaglio tecnico/storico in modo affascinante.
-           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`;
 
-      let prompt = `${basePrompt}\n\nUsa le informazioni da questo testo originale: ${text}`;
-      
-      if (previousText) {
-        prompt += `\n\nIMPORTANTE: L'utente ha chiesto ULTERIORI INFORMAZIONI e dettagli per questo luogo.
-Devi generare un NUOVO testo della stessa lunghezza (circa 40-120 secondi di parlato, ovvero tra le 100 e 250 parole) focalizzandoti su DETTAGLI SPECIFICI, curiosità o aneddoti non citati prima.
-Quello che hai GIA' detto in precedenza (DA NON RIPETERE o riassumere): "${previousText}"
-Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista, mantenendo lo stile richiesto e restando nei limiti di lunghezza stabiliti.`;
-      }
-
-      // Usa Groq per le operazioni On The Fly (Opzione A)
-      const response = await callUniversalAi(
-        "groq",
-        [
-          { role: "user", content: prompt }
-        ],
-        { temperature: 0.7 },
-        "rigenerazione_audio",
-        supabaseUrl,
-        supabaseServiceKey,
-        groq
-      );
-
-      let cleanResult = (response.data || response.text || "").trim();
-      // Rimuovi simboli markdown che disturbano il TTS
-      cleanResult = cleanResult.replace(/[#*_~`]/g, '');
+      let cleanResult = await regenerateAudioguideText({ text, poiName, mode, location, previousText, lang });
 
       // Log to api_usage_logs (insert resiliente: vedi insertApiUsageLog)
       try {
@@ -3382,6 +3921,203 @@ Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista
       res.json({ result: cleanResult });
     } catch (e: any) {
       console.error("Regeneration error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * GET-OR-CREATE audioguida NELLA LINGUA dell'utente (cache-first).
+   *
+   * Espone server-side la logica di getOrCreateAudioguideText (finora solo JS,
+   * quindi invisibile al servizio nativo in background): il nativo la chiama al
+   * PREFETCH (avvicinamento) invece di leggere i campi ITALIANI di shared_pois.
+   * Così l'MP3 prefetchato e la guida completa del Day Pass sono nella lingua
+   * dell'utente anche in auto a schermo bloccato, e la traduzione è cachata in
+   * poi_audioguides (per lingua) e condivisa fra web e nativo — la paga il
+   * primo utente di quella lingua, la riusano tutti.
+   */
+  app.post("/api/poi/audioguide", rateLimiter, async (req, res) => {
+    try {
+      const { poiId, lang = 'it', character = 'nicky' } = req.body;
+      if (!poiId) return res.status(400).json({ error: 'missing poiId' });
+      const sUrl = process.env.VITE_SUPABASE_URL || '';
+      const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+      const H = { apikey: sKey, Authorization: `Bearer ${sKey}` };
+      // FORMATO LINGUA: poi_audioguides usa il codice MAIUSCOLO (IT/EN/…), come
+      // getAudioguide/upsertAudioguide del web (tipo Language). Il DB ha 56k+
+      // righe in "IT" e altrettante nelle altre lingue maiuscole: cercare "it"
+      // minuscolo mancherebbe la cache e rigenererebbe tutto in duplicato.
+      // La mappa langNames di regenerate usa invece le chiavi minuscole.
+      const languageDb = String(lang).toUpperCase();   // cache/save poi_audioguides
+      const langLower = String(lang).toLowerCase();     // prompt regenerate
+      const guideChar = character === 'dante' ? 'dante' : 'nicky';
+
+      // 1. CACHE per-lingua: se esiste già la traduzione, ritornala subito.
+      const cacheRes = await axios.get(
+        `${sUrl}/rest/v1/poi_audioguides?poi_id=eq.${encodeURIComponent(poiId)}&language=eq.${languageDb}&guide_character=eq.${guideChar}&select=audio_text&limit=1`,
+        { headers: H }
+      ).catch(() => null);
+      const cachedText = cacheRes?.data?.[0]?.audio_text;
+      if (cachedText && String(cachedText).trim()) {
+        return res.json({ text: cachedText, cached: true });
+      }
+
+      // 2. BASE INFO: prima i dettagli nella lingua (se già arricchiti),
+      //    altrimenti i campi di shared_pois (spesso in italiano: è solo la
+      //    materia prima, il passo 3 la traduce). poi_details può usare l'uno
+      //    o l'altro formato: si tenta il maiuscolo, la fonte shared_pois copre.
+      const detRes = await axios.get(
+        `${sUrl}/rest/v1/poi_details?poi_id=eq.${encodeURIComponent(poiId)}&language=eq.${languageDb}&select=summary,wiki_extract&limit=1`,
+        { headers: H }
+      ).catch(() => null);
+      let base = detRes?.data?.[0]?.summary || detRes?.data?.[0]?.wiki_extract || '';
+
+      const spRes = await axios.get(
+        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=name,audio_script,description_long,description_ai,description_short,description&limit=1`,
+        { headers: H }
+      ).catch(() => null);
+      const sp = spRes?.data?.[0] || {};
+      const poiName = sp.name || 'questo luogo';
+      if (!base) {
+        base = sp.audio_script || sp.description_long || sp.description_ai || sp.description_short || sp.description || poiName;
+      }
+
+      // 3. Genera/traduce nella lingua target (stessa logica di /api/regenerate).
+      const text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower });
+      if (!text || !text.trim()) {
+        return res.json({ text: base }); // mai silenzio: almeno la base
+      }
+
+      // 4. Salva in poi_audioguides per lingua (formato MAIUSCOLO come il web:
+      //    cache condivisa e riusabile da entrambi).
+      await axios.post(
+        `${sUrl}/rest/v1/poi_audioguides`,
+        { poi_id: poiId, language: languageDb, guide_character: guideChar, audio_text: text, generated_at: new Date().toISOString() },
+        { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' } }
+      ).catch((e: any) => console.warn('[api/poi/audioguide] save failed:', e?.message));
+
+      res.json({ text });
+    } catch (e: any) {
+      console.error('[api/poi/audioguide] error:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * CONTATTI STRUTTURATI di un POI (telefono / sito / orari) da OpenStreetMap
+   * (Overpass, gratis) e Wikidata (P856 sito, P1329 telefono). Cache-first su
+   * shared_pois: se contact_enriched_at è già valorizzato ritorna quel che c'è,
+   * altrimenti scarica UNA volta, salva nelle colonne dedicate e ritorna.
+   * On-demand (apertura POI) o via script batch: MAI scraping globale.
+   */
+  app.post("/api/poi/contacts", rateLimiter, async (req, res) => {
+    try {
+      const { poiId, lat, lon, name, wikidata, force } = req.body || {};
+      if (!poiId) return res.status(400).json({ error: 'missing poiId' });
+      const sUrl = process.env.VITE_SUPABASE_URL || '';
+      const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+      const H = { apikey: sKey, Authorization: `Bearer ${sKey}` };
+
+      // 1. CACHE: già arricchito? ritorna dal DB (a meno di force).
+      const cur = await axios.get(
+        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=contact_phone,contact_website,opening_hours_json,contact_enriched_at,lat,lon,name,wikidata,category,poi_type,is_gem&limit=1`,
+        { headers: H }
+      ).catch(() => null);
+      const row = cur?.data?.[0] || {};
+      if (!force && row.contact_enriched_at) {
+        return res.json({
+          phone: row.contact_phone || null,
+          website: row.contact_website || null,
+          opening_hours: row.opening_hours_json?.raw || null,
+          cached: true,
+        });
+      }
+
+      // Solo categorie turistico-culturali: bar/ristoranti/negozi/utilità NON
+      // vengono arricchiti (telefono/orari lì non servono alla scoperta e
+      // sprecherebbero chiamate Overpass). Blocklist del commerciale/servizio.
+      const NON_TOURISTIC_CAT = new Set(['locali', 'utilita']);
+      const NON_TOURISTIC_TYPE = new Set(['restaurant','cafe','bar','pub','fast_food','pharmacy','hospital','police','taxi','station','subway_entrance','toll_booth','drinking_water','marketplace','mercato','playground','information','tourism_information','office']);
+      const isTouristic = (row.is_gem === true)
+        || (!NON_TOURISTIC_CAT.has(String(row.category || '').toLowerCase())
+            && !NON_TOURISTIC_TYPE.has(String(row.poi_type || '').toLowerCase()));
+      if (!isTouristic) {
+        // Marca come processato (vuoto) per non riprovare a ogni apertura.
+        await axios.patch(
+          `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}`,
+          { contact_enriched_at: new Date().toISOString() },
+          { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'return=minimal' } }
+        ).catch(() => {});
+        return res.json({ phone: null, website: null, opening_hours: null, skipped: 'not_touristic' });
+      }
+
+      const plat = typeof lat === 'number' ? lat : row.lat;
+      const plon = typeof lon === 'number' ? lon : row.lon;
+      const pname = (name || row.name || '').toLowerCase().trim();
+      const wd = wikidata || row.wikidata;
+
+      let phone: string | null = null;
+      let website: string | null = null;
+      let openingHours: string | null = null;
+
+      // 2. OVERPASS (OSM): elementi con contatti attorno alle coordinate.
+      if (typeof plat === 'number' && typeof plon === 'number') {
+        const q = `[out:json][timeout:15];(nwr(around:45,${plat},${plon})["phone"];nwr(around:45,${plat},${plon})["contact:phone"];nwr(around:45,${plat},${plon})["website"];nwr(around:45,${plat},${plon})["contact:website"];nwr(around:45,${plat},${plon})["opening_hours"];);out tags center 40;`;
+        try {
+          const ov = await axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(q)}`, {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 20000,
+          });
+          const els = (ov.data?.elements || []) as any[];
+          // Preferisci l'elemento col nome più simile; altrimenti il primo utile.
+          const scored = els.map(e => {
+            const t = e.tags || {};
+            const nm = String(t.name || '').toLowerCase().trim();
+            const nameMatch = pname && nm && (nm === pname || nm.includes(pname) || pname.includes(nm));
+            const hasContact = t.phone || t['contact:phone'] || t.website || t['contact:website'] || t.opening_hours;
+            return { t, score: (nameMatch ? 2 : 0) + (hasContact ? 1 : 0) };
+          }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+          const best = scored[0]?.t;
+          if (best) {
+            phone = best.phone || best['contact:phone'] || null;
+            website = best.website || best['contact:website'] || null;
+            openingHours = best.opening_hours || null;
+          }
+        } catch (e: any) {
+          console.warn('[contacts] Overpass failed:', e?.message);
+        }
+      }
+
+      // 3. WIKIDATA: completa ciò che manca (sito ufficiale, telefono).
+      if (wd && (!website || !phone)) {
+        try {
+          const wdRes = await axios.get(`https://www.wikidata.org/wiki/Special:EntityData/${encodeURIComponent(wd)}.json`, { timeout: 12000 });
+          const claims = wdRes.data?.entities?.[wd]?.claims || {};
+          if (!website && claims.P856?.[0]?.mainsnak?.datavalue?.value) {
+            website = String(claims.P856[0].mainsnak.datavalue.value);
+          }
+          if (!phone && claims.P1329?.[0]?.mainsnak?.datavalue?.value) {
+            phone = String(claims.P1329[0].mainsnak.datavalue.value);
+          }
+        } catch (e: any) {
+          console.warn('[contacts] Wikidata failed:', e?.message);
+        }
+      }
+
+      // 4. Salva SEMPRE contact_enriched_at (anche se vuoto: non riprovare a
+      //    ogni apertura un POI che semplicemente non ha contatti pubblici).
+      const patch: any = { contact_enriched_at: new Date().toISOString() };
+      if (phone) patch.contact_phone = phone;
+      if (website) patch.contact_website = website;
+      if (openingHours) patch.opening_hours_json = { raw: openingHours, source: 'osm' };
+      await axios.patch(
+        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}`,
+        patch,
+        { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'return=minimal' } }
+      ).catch((e: any) => console.warn('[contacts] save failed:', e?.message));
+
+      res.json({ phone, website, opening_hours: openingHours });
+    } catch (e: any) {
+      console.error('[api/poi/contacts] error:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
@@ -4594,6 +5330,17 @@ Regole di aderenza e anti-allucinazione:
         );
         if ((prof?.[0]?.xp_points || 0) < (reward.xp_required || 0)) {
           return res.status(403).json({ error: 'Requisito XP non raggiunto' });
+        }
+      } else if (reward.category_trigger === 'vision') {
+        // Sfide WIP Community: il progresso è il numero di schede My Vision
+        // create (vision_cards), non gli ascolti.
+        const cntRes = await axios.get(
+          `${supabaseUrl}/rest/v1/vision_cards?user_id=eq.${userId}&select=id`,
+          { headers: { ...svcHeaders, Prefer: 'count=exact', 'Range-Unit': 'items', Range: '0-0' } }
+        );
+        const total = parseInt(String(cntRes.headers['content-range'] || '0/0').split('/')[1] || '0', 10);
+        if (total < (reward.threshold || 0)) {
+          return res.status(403).json({ error: 'Missione non ancora completata' });
         }
       } else {
         const catFilter = reward.category_trigger && reward.category_trigger !== 'all'
@@ -7737,21 +8484,50 @@ out body;`;
         return res.status(400).json({ error: "poiId and poiName are required." });
       }
 
-      // Check DB for existing text
-      const url = `${supabaseUrl}/rest/v1/poi_audioguides?poi_id=eq.${poiId}&language=eq.${lang}&character=eq.${mode}&select=audio_text`;
+      // Check DB per lingua. FIX: la colonna è `guide_character` (non
+      // `character`) e `language` è in MAIUSCOLO (IT/EN…) — prima non trovava
+      // mai la cache e ricadeva su un "Benvenuto a X" banale.
+      const languageDb = String(lang).toUpperCase();
+      const guideChar = mode === 'dante' ? 'dante' : 'nicky';
+      const url = `${supabaseUrl}/rest/v1/poi_audioguides?poi_id=eq.${encodeURIComponent(poiId)}&language=eq.${languageDb}&guide_character=eq.${guideChar}&select=audio_text&limit=1`;
       const dbRes = await axios.get(url, {
         headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-      });
-      
-      let text = dbRes.data && dbRes.data.length > 0 ? dbRes.data[0].audio_text : null;
+      }).catch(() => null);
 
-      // Fallback text if not found
+      let text = dbRes?.data?.[0]?.audio_text || null;
+
+      // Non in cache: genera/traduce nella lingua (stessa logica del web) dai
+      // campi di shared_pois, invece del placeholder, e salva per i prossimi.
       if (!text) {
-        text = `Benvenuto a ${poiName}!`; 
-        // Generazione semplificata per il background
+        const spRes = await axios.get(
+          `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=audio_script,description_long,description_ai,description_short,description&limit=1`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+        ).catch(() => null);
+        const sp = spRes?.data?.[0] || {};
+        const base = sp.audio_script || sp.description_long || sp.description_ai || sp.description_short || sp.description || poiName;
+        text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: String(lang).toLowerCase() });
+        if (text && text.trim()) {
+          await axios.post(
+            `${supabaseUrl}/rest/v1/poi_audioguides`,
+            { poi_id: poiId, language: languageDb, guide_character: guideChar, audio_text: text, generated_at: new Date().toISOString() },
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' } }
+          ).catch(() => {});
+        } else {
+          text = `Benvenuto a ${poiName}!`;
+        }
       }
 
-      const voiceName = lang === "it" ? (mode === "nicky" ? "it-IT-ElsaNeural" : "it-IT-DiegoNeural") : "en-US-JennyNeural";
+      // Voce nella lingua giusta (prima tutto ciò che non era 'it' → inglese).
+      const VOICES: Record<string, { nicky: string; dante: string }> = {
+        it: { nicky: "it-IT-ElsaNeural", dante: "it-IT-DiegoNeural" },
+        en: { nicky: "en-US-JennyNeural", dante: "en-US-GuyNeural" },
+        fr: { nicky: "fr-FR-DeniseNeural", dante: "fr-FR-HenriNeural" },
+        es: { nicky: "es-ES-ElviraNeural", dante: "es-ES-AlvaroNeural" },
+        de: { nicky: "de-DE-KatjaNeural", dante: "de-DE-ConradNeural" },
+        ru: { nicky: "ru-RU-SvetlanaNeural", dante: "ru-RU-DmitryNeural" },
+        zh: { nicky: "zh-CN-XiaoxiaoNeural", dante: "zh-CN-YunxiNeural" },
+      };
+      const voiceName = (VOICES[String(lang).toLowerCase()] || VOICES.it)[guideChar];
       
       const host = req.headers.host || 'localhost:3000';
       const protocol = req.protocol || 'http';

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, User, CalendarDays, Palette, MapPin, BookOpen, Landmark, Sparkles, Volume2, Pause, Loader2 } from 'lucide-react';
+import { X, User, CalendarDays, Palette, MapPin, BookOpen, Landmark, Sparkles, Volume2, Pause, Loader2, Download, Share2 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Language } from '../lib/i18n';
+import { notify } from '../lib/toast';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 
@@ -19,6 +22,7 @@ interface VisionCardSheetProps {
 export default function VisionCardSheet({ card, language, onClose }: VisionCardSheetProps) {
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -26,6 +30,87 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
   }, []);
 
   const photo = card.image || card.photo_url || null;
+
+  const photoFileName = `wip-vision-${String(card.nome || 'foto').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'foto'}.jpg`;
+
+  // La foto può essere un data URL (appena scattata) o l'URL remoto del
+  // bucket: in entrambi i casi serve il Blob per scaricare/condividere.
+  const getPhotoBlob = async (): Promise<Blob | null> => {
+    if (!photo) return null;
+    try {
+      const res = await fetch(photo);
+      return await res.blob();
+    } catch {
+      return null;
+    }
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(new Error('lettura foto fallita'));
+      reader.readAsDataURL(blob);
+    });
+
+  const handleDownload = async () => {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      const blob = await getPhotoBlob();
+      if (!blob) { notify('Foto non disponibile per il download.'); return; }
+      if (Capacitor.isNativePlatform()) {
+        // Su app nativa il tag <a download> non salva nulla: si scrive nei
+        // Documenti del telefono col plugin Filesystem (già in bundle).
+        await Filesystem.writeFile({
+          path: `WIP Vision/${photoFileName}`,
+          data: await blobToBase64(blob),
+          directory: Directory.Documents,
+          recursive: true,
+        });
+        notify('Foto salvata in Documenti/WIP Vision.');
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = photoFileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      notify('Salvataggio non riuscito, riprova.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const handleShare = async () => {
+    if (photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      const shareText = [card.nome, card.citta].filter(Boolean).join(' · ');
+      const blob = await getPhotoBlob();
+      if (blob && typeof navigator.share === 'function') {
+        const file = new File([blob], photoFileName, { type: blob.type || 'image/jpeg' });
+        // canShare({files}) è il percorso ricco (foto vera); se il device non
+        // lo supporta si condivide testo+link, altrimenti si salva in locale.
+        if ((navigator as any).canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file], title: card.nome, text: shareText } as any);
+          return;
+        }
+        await navigator.share({ title: card.nome, text: shareText, url: card.photo_url || undefined });
+        return;
+      }
+      await handleDownload();
+    } catch (e: any) {
+      // AbortError = utente ha chiuso il foglio di condivisione: silenzio.
+      if (e?.name !== 'AbortError') notify('Condivisione non disponibile: foto salvata in locale.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
 
   const chips = [
     { icon: User, label: card.autore, hide: !card.autore || card.autore === 'Ignoto' },
@@ -91,6 +176,26 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
           >
             <X className="w-5 h-5" />
           </button>
+          {photo && (
+            <div className="absolute top-4 left-4 flex gap-2">
+              <button
+                onClick={handleDownload}
+                disabled={photoBusy}
+                title="Salva la foto sul dispositivo"
+                className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-50"
+              >
+                {photoBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              </button>
+              <button
+                onClick={handleShare}
+                disabled={photoBusy}
+                title="Condividi la foto"
+                className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-50"
+              >
+                <Share2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <div className="absolute bottom-3 left-4 right-16">
             <h2 className="text-white text-xl font-black leading-tight drop-shadow">{card.nome}</h2>
           </div>

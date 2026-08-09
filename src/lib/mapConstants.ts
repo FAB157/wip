@@ -14,6 +14,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   famiglie:          "bg-[#b45309]",
   esperienze_locali: "bg-[#ea580c]",
   eventi:            "bg-[#7e22ce]",
+  community:         "bg-[#ec4899]",
   church:            "bg-[#4338ca]",
   museum:            "bg-[#7c3aed]",
   viewpoint:         "bg-[#0369a1]",
@@ -47,10 +48,12 @@ export const CATEGORY_HEX: Record<string, string> = {
   famiglie:          "#b45309",
   esperienze_locali: "#ea580c",
   attraction:        "#16a34a",
+  community:         "#ec4899",
 };
 
 export const CATEGORY_EMOJIS: Record<string, string> = {
   gemme: "💎",
+  community: "📸",
   monumenti: "🏛️",
   chiese: "⛪",
   musei: "🖼️",
@@ -179,4 +182,5 @@ export const CATEGORY_GRADIENT: Record<string, string> = {
   esperienze_locali: "from-orange-800 via-amber-700 to-yellow-700",
   artwork: "from-pink-900 via-pink-800 to-rose-700",
   attraction: "from-green-900 via-green-800 to-emerald-700",
+  community: "from-pink-900 via-pink-800 to-fuchsia-800",
 };

@@ -1,31 +1,41 @@
-export type Language = "IT" | "EN" | "FR" | "ES" | "RU" | "ZH";
+export type Language = "IT" | "EN" | "FR" | "ES" | "DE" | "RU" | "ZH";
 
 export const LANGUAGES: Record<Language, { label: string; flag: string }> = {
   IT: { label: "Italiano", flag: "🇮🇹" },
   EN: { label: "English", flag: "🇬🇧" },
   FR: { label: "Français", flag: "🇫🇷" },
   ES: { label: "Español", flag: "🇪🇸" },
+  DE: { label: "Deutsch", flag: "🇩🇪" },
   RU: { label: "Русский", flag: "🇷🇺" },
   ZH: { label: "中文 (Zhōngwén)", flag: "🇨🇳" },
 };
 
-export const TRANSLATIONS: Record<string, Record<Language, string>> = {
+// Partial: il tedesco (DE) è stato aggiunto come 7ª lingua ma le centinaia di
+// stringhe UI storiche non sono ancora tradotte in DE — getTranslation fa
+// fallback su EN dove manca. Le chiavi nuove (nav_*, offline_*) hanno già DE.
+// Il CONTENUTO generato (audioguide, dettagli, teaser) è invece in tedesco
+// vero, perché prodotto dall'AI nella lingua richiesta.
+export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   // Navigazione a piedi (NavigationOverlay) — prima erano hardcoded in IT
-  nav_calculating: { IT: "Calcolo del percorso…", EN: "Calculating route…", FR: "Calcul de l'itinéraire…", ES: "Calculando la ruta…", RU: "Расчёт маршрута…", ZH: "正在计算路线…" },
-  nav_proceed: { IT: "Prosegui", EN: "Continue", FR: "Continuez", ES: "Continúa", RU: "Продолжайте", ZH: "继续前行" },
-  nav_in: { IT: "tra", EN: "in", FR: "dans", ES: "en", RU: "через", ZH: "还有" },
-  nav_arrived: { IT: "Sei arrivato!", EN: "You've arrived!", FR: "Vous êtes arrivé !", ES: "¡Has llegado!", RU: "Вы прибыли!", ZH: "您已到达！" },
-  nav_arrived_at: { IT: "Sei arrivato a", EN: "You arrived at", FR: "Vous êtes arrivé à", ES: "Has llegado a", RU: "Вы прибыли в", ZH: "您已到达" },
-  nav_next_stop: { IT: "Vai alla prossima tappa", EN: "Go to next stop", FR: "Aller à l'étape suivante", ES: "Ir a la siguiente parada", RU: "К следующей точке", ZH: "前往下一站" },
-  nav_repeat: { IT: "Ripeti istruzione", EN: "Repeat instruction", FR: "Répéter l'instruction", ES: "Repetir instrucción", RU: "Повторить указание", ZH: "重复指令" },
-  nav_stop: { IT: "Ferma navigazione", EN: "Stop navigation", FR: "Arrêter la navigation", ES: "Detener navegación", RU: "Остановить навигацию", ZH: "停止导航" },
+  nav_calculating: { IT: "Calcolo del percorso…", EN: "Calculating route…", FR: "Calcul de l'itinéraire…", ES: "Calculando la ruta…", DE: "Route wird berechnet…", RU: "Расчёт маршрута…", ZH: "正在计算路线…" },
+  nav_proceed: { IT: "Prosegui", EN: "Continue", FR: "Continuez", ES: "Continúa", DE: "Weiter", RU: "Продолжайте", ZH: "继续前行" },
+  nav_in: { IT: "tra", EN: "in", FR: "dans", ES: "en", DE: "in", RU: "через", ZH: "还有" },
+  nav_arrived: { IT: "Sei arrivato!", EN: "You've arrived!", FR: "Vous êtes arrivé !", ES: "¡Has llegado!", DE: "Sie sind angekommen!", RU: "Вы прибыли!", ZH: "您已到达！" },
+  nav_arrived_at: { IT: "Sei arrivato a", EN: "You arrived at", FR: "Vous êtes arrivé à", ES: "Has llegado a", DE: "Sie sind angekommen in", RU: "Вы прибыли в", ZH: "您已到达" },
+  nav_next_stop: { IT: "Vai alla prossima tappa", EN: "Go to next stop", FR: "Aller à l'étape suivante", ES: "Ir a la siguiente parada", DE: "Zum nächsten Halt", RU: "К следующей точке", ZH: "前往下一站" },
+  nav_repeat: { IT: "Ripeti istruzione", EN: "Repeat instruction", FR: "Répéter l'instruction", ES: "Repetir instrucción", DE: "Anweisung wiederholen", RU: "Повторить указание", ZH: "重复指令" },
+  nav_stop: { IT: "Ferma navigazione", EN: "Stop navigation", FR: "Arrêter la navigation", ES: "Detener navegación", DE: "Navigation beenden", RU: "Остановить навигацию", ZH: "停止导航" },
   // Itinerari offline (lista) — prima hardcoded in IT
-  offline_itineraries_title: { IT: "Itinerari Offline", EN: "Offline Itineraries", FR: "Itinéraires hors ligne", ES: "Itinerarios sin conexión", RU: "Офлайн-маршруты", ZH: "离线行程" },
-  offline_saved_count: { IT: "salvati", EN: "saved", FR: "enregistrés", ES: "guardados", RU: "сохранено", ZH: "已保存" },
-  offline_none: { IT: "Nessun itinerario scaricato", EN: "No downloaded itineraries", FR: "Aucun itinéraire téléchargé", ES: "Ningún itinerario descargado", RU: "Нет загруженных маршрутов", ZH: "没有已下载的行程" },
-  offline_none_hint: { IT: "Usa il bottone 'Offline' dentro un itinerario generato", EN: "Use the 'Offline' button inside a generated itinerary", FR: "Utilisez le bouton « Hors ligne » dans un itinéraire généré", ES: "Usa el botón 'Sin conexión' dentro de un itinerario generado", RU: "Нажмите «Офлайн» внутри созданного маршрута", ZH: "在已生成的行程中使用“离线”按钮" },
-  offline_saved_on: { IT: "Salvato il:", EN: "Saved on:", FR: "Enregistré le :", ES: "Guardado el:", RU: "Сохранено:", ZH: "保存于：" },
-  offline_open: { IT: "Apri Offline", EN: "Open Offline", FR: "Ouvrir hors ligne", ES: "Abrir sin conexión", RU: "Открыть офлайн", ZH: "离线打开" },
+  offline_itineraries_title: { IT: "Itinerari Offline", EN: "Offline Itineraries", FR: "Itinéraires hors ligne", ES: "Itinerarios sin conexión", DE: "Offline-Reiserouten", RU: "Офлайн-маршруты", ZH: "离线行程" },
+  offline_saved_count: { IT: "salvati", EN: "saved", FR: "enregistrés", ES: "guardados", DE: "gespeichert", RU: "сохранено", ZH: "已保存" },
+  offline_none: { IT: "Nessun itinerario scaricato", EN: "No downloaded itineraries", FR: "Aucun itinéraire téléchargé", ES: "Ningún itinerario descargado", DE: "Keine heruntergeladenen Reiserouten", RU: "Нет загруженных маршрутов", ZH: "没有已下载的行程" },
+  offline_none_hint: { IT: "Usa il bottone 'Offline' dentro un itinerario generato", EN: "Use the 'Offline' button inside a generated itinerary", FR: "Utilisez le bouton « Hors ligne » dans un itinéraire généré", ES: "Usa el botón 'Sin conexión' dentro de un itinerario generado", DE: "Nutze die Schaltfläche „Offline“ in einer erstellten Reiseroute", RU: "Нажмите «Офлайн» внутри созданного маршрута", ZH: "在已生成的行程中使用“离线”按钮" },
+  offline_saved_on: { IT: "Salvato il:", EN: "Saved on:", FR: "Enregistré le :", ES: "Guardado el:", DE: "Gespeichert am:", RU: "Сохранено:", ZH: "保存于：" },
+  offline_open: { IT: "Apri Offline", EN: "Open Offline", FR: "Ouvrir hors ligne", ES: "Abrir sin conexión", DE: "Offline öffnen", RU: "Открыть офлайн", ZH: "离线打开" },
+  // Contatti POI (bottoni scheda)
+  contact_call: { IT: "Chiama", EN: "Call", FR: "Appeler", ES: "Llamar", DE: "Anrufen", RU: "Позвонить", ZH: "拨打电话" },
+  contact_site: { IT: "Sito web", EN: "Website", FR: "Site web", ES: "Sitio web", DE: "Webseite", RU: "Сайт", ZH: "网站" },
+  contact_hours: { IT: "Orari", EN: "Hours", FR: "Horaires", ES: "Horario", DE: "Öffnungszeiten", RU: "Часы работы", ZH: "营业时间" },
   // Navigation & Core Tabs
   explore: {
     IT: "Esplora",

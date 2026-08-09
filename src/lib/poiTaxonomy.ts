@@ -49,7 +49,7 @@ export function subCategoryToFilterId(subCat?: string | null): string {
  * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
  * anche da deselezionati.
  */
-export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie"] as const;
+export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community"] as const;
 
 /** Sub-chip disponibili per ogni macro (ids esatti di CategoryChips). */
 export const SUBS_BY_MACRO: Record<string, string[]> = {
@@ -58,6 +58,9 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
   utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia"],
   famiglie: ["parco_giochi", "parco_divertimenti", "acquario", "zoo"],
+  // WIP Community: i POI nati dalle foto Vision approvate. Nessun sub-chip:
+  // il tipo reale (chiesa, statua...) vive in poi_type/subCategory.
+  community: [],
 };
 
 const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
@@ -76,6 +79,11 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   const raw = String(p.baseCategory || p.category || "").toLowerCase();
   const sub = String(p.subCategory || "").toLowerCase();
   const subCanonical = subCategoryToFilterId(sub);
+
+  // I POI WIP Community sono una macro a sé (pin e chip dedicati): la natura
+  // reale (chiesa, statua, panorama) resta in subCategory ma non li sposta
+  // mai in un'altra macro.
+  if (raw === "community") return { macro: "community", subId: "" };
 
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
   // ma conservano la sotto-categoria culturale per i sub-chip.

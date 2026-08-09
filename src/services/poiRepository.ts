@@ -296,6 +296,7 @@ const AUDIOGUIDABLE_CATEGORIES = new Set([
   'museum', 'gallery', 'musei',
   'information', 'tourism_information', 'office', 'consigli',
   'gemme',
+  'community',
 ]);
 
 /**

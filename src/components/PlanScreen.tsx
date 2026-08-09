@@ -1,4 +1,6 @@
-import { Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, Coins, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
+// "Map as MapIcon": il nome nudo oscurava la Map NATIVA di JS in tutto il
+// modulo → "new Map()" (linkByName) esplodeva con "is not a constructor".
+import { Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, Coins, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
@@ -1524,7 +1526,7 @@ export default function PlanScreen({
     lng: ''
   });
 
-  const INTERESTS_TRANSLATIONS: Record<string, Record<Language, string>> = {
+  const INTERESTS_TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     arte: { IT: "🏛️ Arte e Storia", EN: "🏛️ Art & History", FR: "🏛️ Art & Histoire", ES: "🏛️ Arte e Historia", RU: "🏛️ Искусство и история", ZH: "🏛️ 艺术与历史" },
     gastronomia: { IT: "🍕 Gastronomia", EN: "🍕 Gastronomy", FR: "🍕 Gastronomie", ES: "🍕 Gastronomía", RU: "🍕 Гастрономия", ZH: "🍕 美食" },
     natura: { IT: "🌿 Natura e Relax", EN: "🌿 Nature & Relax", FR: "🌿 Nature & Détente", ES: "🌿 Naturaleza y Relax", RU: "🌿 Природа и отдых", ZH: "🌿 自然与休闲" },
@@ -4027,7 +4029,7 @@ export default function PlanScreen({
                         onClick={() => window.dispatchEvent(new CustomEvent('wip-open-map-area'))}
                         className="px-5 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-sm hover:bg-primary/90 transition-colors flex items-center gap-2"
                       >
-                        <Map className="w-4 h-4" /> {getTranslation('explore_map', language)}
+                        <MapIcon className="w-4 h-4" /> {getTranslation('explore_map', language)}
                       </button>
                    </div>
                 )}

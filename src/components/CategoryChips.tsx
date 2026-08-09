@@ -24,10 +24,12 @@ export const CATEGORIES: Category[] = [
   { id: "locali", label: "Locali", icon: <span className="text-sm">🍕</span> },
   { id: "utilita", label: "Utilità", icon: <span className="text-sm">🛠️</span> },
   { id: "famiglie", label: "Famiglie", icon: <span className="text-sm">🛝</span> },
+  // Le Vision approvate dei viaggiatori (pin magenta 📸). Spenta di default.
+  { id: "community", label: "WIP Community", icon: <span className="text-sm">📸</span> },
   { id: "eventi", label: "Eventi", icon: <span className="text-sm">🎪</span> }
 ];
 
-const SUB_FILTER_TRANSLATIONS: Record<string, Record<Language, string>> = {
+const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   all_f: { IT: "Tutte", EN: "All", FR: "Toutes", ES: "Todas", RU: "Все", ZH: "全部" },
   all_m: { IT: "Tutti", EN: "All", FR: "Tous", ES: "Todos", RU: "Все", ZH: "全部" },
   // locali
@@ -142,6 +144,9 @@ export default function CategoryChips({
           }
 
           const isActive = selectedIds.includes(cat.id);
+          // Chip WIP Community: colore proprio (magenta come i suoi pin), il
+          // nome è un marchio e non si traduce.
+          const isCommunity = cat.id === "community";
           return (
             <button
               key={cat.id}
@@ -149,15 +154,15 @@ export default function CategoryChips({
               className={`flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
                 ${
                   isActive
-                    ? "bg-primary text-secondary border-secondary shadow-md scale-105"
+                    ? (isCommunity ? "bg-[#ec4899] text-white border-pink-300 shadow-md scale-105" : "bg-primary text-secondary border-secondary shadow-md scale-105")
                     : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"
                 }
               `}
             >
-              <div className={`w-4 h-4 flex items-center justify-center shrink-0 ${isActive ? 'brightness-0 invert' : ''}`}>
+              <div className={`w-4 h-4 flex items-center justify-center shrink-0 ${isActive && !isCommunity ? 'brightness-0 invert' : ''}`}>
                 {cat.icon}
               </div>
-              <span className="whitespace-nowrap">{getTranslation(cat.id, language)}</span>
+              <span className="whitespace-nowrap">{isCommunity ? 'WIP Community' : getTranslation(cat.id, language)}</span>
             </button>
           );
         })}

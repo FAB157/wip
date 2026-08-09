@@ -115,7 +115,7 @@ object AudioPrefetchManager {
                 cleanup(appContext)
                 if (cachedFile(appContext, poiId, lang) != null) return@launch
                 if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return@launch
-                val text = resolveAudioText(appContext, poiId) ?: return@launch
+                val text = resolveAudioText(appContext, poiId, lang, guideCharacter) ?: return@launch
                 downloadBlocking(appContext, poiId, lang, guideCharacter, text)
             } catch (e: Exception) {
                 Log.w(TAG, "prefetch failed for $poiId: ${e.message}")
@@ -151,12 +151,14 @@ object AudioPrefetchManager {
      * audio_script → description_long → description_ai → description del
      * Day Pass in GeofenceBroadcastReceiver).
      */
-    private suspend fun resolveAudioText(context: Context, poiId: String): String? {
+    private suspend fun resolveAudioText(context: Context, poiId: String, lang: String, character: String): String? {
         return try {
             val local = com.itaintasca.app.db.PoiDatabase.getInstance(context)
                 .offlineDao().getPoiById(poiId)?.audioText
             if (!local.isNullOrBlank()) local
-            else SupabaseClient().fetchPoiAudioText(poiId)?.takeIf { it.isNotBlank() }
+            // Testo NELLA LINGUA dell'utente (get-or-create per-lingua): così
+            // l'MP3 prefetchato è già tradotto, non italiano.
+            else SupabaseClient().fetchAudioguideText(poiId, lang, character)?.takeIf { it.isNotBlank() }
         } catch (_: Exception) {
             null
         }

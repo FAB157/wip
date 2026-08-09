@@ -634,7 +634,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         if let localText = store.getOfflinePoi(poi.id)?.audioText, !localText.isEmpty {
             AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: localText)
         } else {
-            supabase.fetchPoiAudioText(poi.id) { text in
+            // Testo NELLA LINGUA dell'utente (get-or-create per-lingua), non i
+            // campi italiani grezzi: così l'MP3 prefetchato è già tradotto.
+            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault) { text in
                 AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: text)
             }
         }
@@ -763,7 +765,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         playFullText(localText, nil)
                     }
                 } else if self.isOnline {
-                    self.supabase.fetchPoiAudioText(poi.id) { fetched in
+                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault) { fetched in
                         self.workQueue.async {
                             guard let fetched = fetched, !fetched.isEmpty else {
                                 playFullText(nil, nil) // → notifica col tasto Ascolta
@@ -1130,7 +1132,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 play(localText, nil)
             }
         } else if isOnline {
-            supabase.fetchPoiAudioText(poiId) { fetched in
+            supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: guideCharacter) { fetched in
                 self.workQueue.async {
                     guard let fetched = fetched, !fetched.isEmpty else {
                         play(nil, nil) // → notifica "non disponibile"

@@ -2005,10 +2005,18 @@ function MapArea({
       famiglie:          "#b45309",
       esperienze_locali: "#ea580c",
       attraction:        "#16a34a",
+      community:         "#ec4899",
     };
 
+    // I POI WIP Community hanno SEMPRE il pin magenta: il colore della
+    // sotto-categoria (monument, church...) non deve mai vincere, altrimenti
+    // il pin community diventa indistinguibile da quello ufficiale accanto.
+    const isCommunity = effectiveCat === "community";
+
     let bgHex: string;
-    if (isGem) {
+    if (isCommunity) {
+      bgHex = CAT_HEX.community;
+    } else if (isGem) {
       bgHex = (CAT_HEX as any)[osmSubCat] || (CAT_HEX as any)[effectiveCat] || "#0f766e";
     } else {
       bgHex = (CAT_HEX as any)[osmSubCat] || (CAT_HEX as any)[effectiveCat] || "#6b7280";
@@ -2020,7 +2028,7 @@ function MapArea({
     const subIcon = getSubCategoryEmoji(poi.subCategory);
 
     const isCultural = effectiveCat === "monumenti" || effectiveCat === "chiese" || effectiveCat === "musei" || effectiveCat === "panorami" || effectiveCat === "gemme";
-    const subRightBadge = isGem ? "💎" : (isCultural ? "" : subIcon);
+    const subRightBadge = isGem ? "💎" : (isCommunity ? "📸" : (isCultural ? "" : subIcon));
     const subLeftBadge = accessible ? "♿" : "";
 
     const html = `

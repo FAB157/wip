@@ -237,6 +237,10 @@ function isCategoryAllowed(poi: GeofencePoi, activeSubcats: Record<string, boole
   // SupabaseClient.kt / PoiModels.swift che lo supportano già lato nativo.
   if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))
     return activeSubcats.consigli ?? false;
+  // WIP Community (Vision approvate): default OFF, si attiva dal setup o
+  // dalla chip mappa. Stessa chiave nelle 3 mappe native.
+  if (cat === 'community')
+    return activeSubcats.community ?? false;
   return false; // categorie commerciali/utilitarie → mai audioguida
 }
 

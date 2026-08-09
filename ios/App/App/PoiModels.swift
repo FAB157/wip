@@ -138,7 +138,9 @@ enum PoiCategories {
         "locali": ["restaurant", "cafe", "bar", "fast_food", "pub", "locali"],
         "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"],
         "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie"],
-        "consigli": ["information", "tourism_information", "office", "consigli"]
+        "consigli": ["information", "tourism_information", "office", "consigli"],
+        // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
+        "community": ["community"]
     ]
 
     static let culturalCats = [

@@ -4,16 +4,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
-import { consumeCredits, refundCredits, PRICING_LIST, getWalletBalance } from '../lib/pricing';
+import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import ShopScreen from './ShopScreen';
 import { logApiCall } from '../lib/apiLogger';
 import { getApiUrl } from '../lib/api';
 import { locationService } from '../services/locationService';
 import AROverlay from './AROverlay';
+import VisionCommentModal from './VisionCommentModal';
 
 interface CameraScreenProps {
   onRecognize: (data: any) => void;
@@ -32,6 +32,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const creditConfirm = useCreditConfirmation();
   const [currentBalance, setCurrentBalance] = useState(0);
   const [shopUserId, setShopUserId] = useState<string | null>(null);
+  // Foto NON riconosciuta: crediti già rimborsati dal server, la scheda resta
+  // in My Vision → chiediamo all'utente di raccontare perché è speciale.
+  const [commentCard, setCommentCard] = useState<{ cardId: string | null; image: string } | null>(null);
 
   const openCreditShop = async () => {
     const { data } = await supabase.auth.getSession();
@@ -122,70 +125,19 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       console.debug("Could not get GPS coordinates for Camera Vision cache:", e);
     }
 
-    // Se abbiamo le coordinate GPS, controlla prima il database di cache globale condivisa
-    if (gpsLat !== null && gpsLon !== null) {
-      try {
-        const latMargin = 0.0003;
-        const lonMargin = 0.0003;
-        const { data: list, error: err } = await supabase
-          .from("shared_vision_cache")
-          .select("*")
-          .gte("lat", gpsLat - latMargin)
-          .lte("lat", gpsLat + latMargin)
-          .gte("lon", gpsLon - lonMargin)
-          .lte("lon", gpsLon + lonMargin);
-
-        if (list && list.length > 0 && !err) {
-          const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-            const R = 6371e3;
-            const phi1 = (lat1 * Math.PI) / 180;
-            const phi2 = (lat2 * Math.PI) / 180;
-            const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
-            const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
-            const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
-            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          };
-
-          let closestItem: any = null;
-          let minDistance = 30; // Massimo 30 metri di tolleranza
-
-          for (const item of list) {
-            const dist = calculateDistance(gpsLat, gpsLon, item.lat, item.lon);
-            if (dist < minDistance) {
-              minDistance = dist;
-              closestItem = item;
-            }
-          }
-
-          if (closestItem) {
-            console.log("[Global Vision Cache] Hit: Landmark recognized via GPS within", Math.round(minDistance), "meters!");
-            onRecognize(closestItem.data);
-            setIsScanning(false);
-            return; // Successo immediato a costo zero!
-          }
-        }
-      } catch (e) {
-        console.debug("Supabase vision cache query skipped/failed:", e);
-      }
-    }
-
-    // Check photo_search quota before executing AI recognition
+    // La cache GPS condivisa e l'addebito ora vivono SOLO nel server
+    // (/api/vision): la cache era scrivibile con la anon key (avvelenabile)
+    // e il prelievo crediti client-side era bypassabile via cURL. Qui resta
+    // solo la conferma UX del costo: hit di cache = il server non addebita.
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-    
+
     setIsScanning(false); // Pausa per mostrare il modale
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
     const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.photo_search, "Visione AI");
     if (!confirmed) return;
     setIsScanning(true);
-    
-    const payRes = await consumeCredits(currentUserId, PRICING_LIST.photo_search);
-    if (!payRes) {
-      notify("Crediti insufficienti. Visita lo store per ricaricare.");
-      setIsScanning(false);
-      return;
-    }
 
     // Telemetry log API use
     logApiCall('gemini_vision', 'scansione_fotocamera');
@@ -193,8 +145,8 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
     try {
       // getApiUrl: su app nativa il path relativo puntava agli asset locali
       // e la scansione falliva SEMPRE su telefono.
-      // Bearer della sessione: fa risolvere lo userId reale lato server (quota
-      // e vision_cards corrette) invece del fallback anonimo per IP.
+      // Bearer della sessione: OBBLIGATORIO per l'addebito server-side (401
+      // senza login) e per intestare la scheda My Vision all'utente giusto.
       const visionHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       const accessToken = sessionData?.session?.access_token;
       if (accessToken) visionHeaders['Authorization'] = `Bearer ${accessToken}`;
@@ -208,44 +160,34 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
           lon: gpsLon
         })
       });
-      
+
+      if (res.status === 401) {
+        setError("Accedi con il tuo account per usare la Visione AI.");
+        return;
+      }
+      if (res.status === 402) {
+        notify("Crediti insufficienti. Visita lo store per ricaricare.");
+        openCreditShop();
+        return;
+      }
       if (!res.ok) {
         const errData = await res.json().catch(() => null);
         throw new Error(errData?.error || "Errore durante l'analisi");
       }
-      
+
       const data = await res.json();
-      
+
       if (data.riconosciuto) {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-        await incrementUserQuota(currentUserId, "photo_search");
         const enrichedData = { ...data, image: `data:image/jpeg;base64,${base64Image}` };
         onRecognize(enrichedData);
-        
-        // Salva in background l'analisi geolocalizzata su Supabase per condividerla
-        if (gpsLat !== null && gpsLon !== null) {
-          try {
-            const cacheId = `vision_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-            await supabase.from("shared_vision_cache").insert({
-              id: cacheId,
-              lat: gpsLat,
-              lon: gpsLon,
-              data: data,
-              created_at: new Date().toISOString()
-            });
-            console.log("[Global Vision Cache] Successfully saved analysis details for GPS coords:", gpsLat, gpsLon);
-          } catch(e) {}
-        }
       } else {
-        // Nessun riconoscimento = nessun servizio erogato: crediti indietro
-        await refundCredits(currentUserId, PRICING_LIST.photo_search);
-        setError(getTranslation("camera_error_not_recognized", language));
+        // Il server ha già rimborsato i crediti e salvato comunque la foto
+        // in My Vision: chiediamo all'utente perché quel posto è speciale
+        // (il racconto aiuta la revisione WIP Community).
+        setCommentCard({ cardId: data.card_id || null, image: `data:image/jpeg;base64,${base64Image}` });
       }
     } catch (err: any) {
       console.error(err);
-      await refundCredits(currentUserId, PRICING_LIST.photo_search)
-        .catch(e => console.error('[Vision] Rimborso fallito:', e));
       // Match case-insensitive: il server risponde "Quota Exceeded" (maiuscolo).
       const errMsg = (err.message || '').toLowerCase();
       if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('rate limit')) {
@@ -255,6 +197,10 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       }
     } finally {
       setIsScanning(false);
+      // Addebito/rimborso sono avvenuti server-side: aggiorna i widget saldo
+      // e il contatore My Vision.
+      notifyCreditsChanged({ userId: currentUserId });
+      try { window.dispatchEvent(new CustomEvent('wip-vision-updated')); } catch {}
     }
   };
 
@@ -302,7 +248,7 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
           Analizza il Mondo
         </h2>
         <p className="text-xs text-secondary/40 font-medium max-w-[200px] text-center mx-auto">
-          Scansiona per riconoscere il punto di interesse e sbloccare 5 XP.
+          Scansiona per riconoscere il punto di interesse: la scheda finisce in My Vision e sblocchi 10 XP.
         </p>
 
         <div className="flex flex-col gap-4 w-full max-w-xs">
@@ -392,6 +338,16 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         serviceName={creditConfirm.serviceName}
         language={language}
       />
+
+      {/* Foto non riconosciuta: racconto "perché è speciale" (WIP Community) */}
+      {commentCard && (
+        <VisionCommentModal
+          cardId={commentCard.cardId}
+          image={commentCard.image}
+          language={language}
+          onClose={() => setCommentCard(null)}
+        />
+      )}
 
       {/* SHOP CREDITI (dal ramo "Crediti Insufficienti") */}
       {shopUserId && (

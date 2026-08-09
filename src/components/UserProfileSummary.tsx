@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
-import { User, Crown, Loader2, MapPin, X, Coins, TrendingUp, Gift } from 'lucide-react';
+import { User, Crown, Loader2, Camera, Coins, TrendingUp, Gift } from 'lucide-react';
 
-import { Language, getTranslation } from '../lib/i18n';
+import { Language } from '../lib/i18n';
 
 interface UserProfileSummaryProps {
   session: any;
@@ -11,9 +11,11 @@ interface UserProfileSummaryProps {
   userAvatar?: string;
   language: Language;
   onOpenFreeFeatures?: () => void;
+  /** Apre la pagina My Vision (tab del profilo) dal contatore in header. */
+  onOpenMyVision?: () => void;
 }
 
-export default function UserProfileSummary({ session, userName, userAvatar, language, onOpenFreeFeatures }: UserProfileSummaryProps) {
+export default function UserProfileSummary({ session, userName, userAvatar, language, onOpenFreeFeatures, onOpenMyVision }: UserProfileSummaryProps) {
   const [profile, setProfile] = useState<UserProfile | null>(() => {
     try {
       const stored = localStorage.getItem('wip_user_profile');
@@ -24,8 +26,9 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
   });
   const [loading, setLoading] = useState(!profile);
   const [challenges, setChallenges] = useState<any[]>([]);
-  const [visitedNames, setVisitedNames] = useState<string[]>([]);
-  const [showVisitedModal, setShowVisitedModal] = useState(false);
+  // Contatore My Vision: schede in vision_cards dell'utente (la RLS
+  // select-own limita già la count alle proprie).
+  const [visionCount, setVisionCount] = useState(0);
 
   // Still supporting the local storage avatars just to not break existing user customization if not passed
   const [localUserName, setLocalUserName] = useState(() => localStorage.getItem('userProfileName') || '');
@@ -73,19 +76,18 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
         } else if (data) {
           setProfile(data);
           localStorage.setItem('wip_user_profile', JSON.stringify(data));
-          
-          // Fetch POI names for visited_pois
-          if (data.visited_pois && data.visited_pois.length > 0) {
-            const { data: poisData } = await supabase
-              .from('shared_pois')
-              .select('name')
-              .in('id', data.visited_pois);
-            if (poisData) {
-              setVisitedNames(poisData.map((p: any) => p.name));
-            }
-          }
         }
-        
+
+        // Contatore My Vision (head: solo la count, niente righe)
+        try {
+          const { count } = await supabase
+            .from('vision_cards')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', session.user.id);
+          setVisionCount(count || 0);
+        } catch { /* tabella assente o offline: il contatore resta com'è */ }
+
+
         // Fetch gamification challenges dynamically
         const { data: challengesData } = await supabase
           .from('gamification_challenges')
@@ -109,13 +111,14 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
     // JSON stale in localStorage) finché non cambiava la sessione.
     const onCreditsUpdated = () => fetchProfile();
     window.addEventListener('wip-credits-updated', onCreditsUpdated);
-    // "Luoghi Visti" si aggiorna appena esplori un nuovo POI (l'evento parte
-    // da recordPoiVision): prima il contatore restava fermo al valore del
-    // mount finché non riavviavi l'app.
+    // XP e contatori si aggiornano appena esplori un POI o scansioni una
+    // foto: prima restavano fermi al valore del mount fino al riavvio.
     window.addEventListener('wip-gamification-badge', onCreditsUpdated);
+    window.addEventListener('wip-vision-updated', onCreditsUpdated);
     return () => {
       window.removeEventListener('wip-credits-updated', onCreditsUpdated);
       window.removeEventListener('wip-gamification-badge', onCreditsUpdated);
+      window.removeEventListener('wip-vision-updated', onCreditsUpdated);
     };
   }, [session]);
 
@@ -193,18 +196,15 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
               )}
             </div>
 
-            {/* Places Visited Small */}
+            {/* My Vision: album delle foto scansionate (era "Luoghi Visti") */}
             <button
-              onClick={() => setShowVisitedModal(true)}
+              onClick={() => onOpenMyVision?.()}
               className="flex-1 bg-white rounded-[1.5rem] p-4 border border-gray-100 shadow-sm flex flex-col justify-center hover:border-gray-200 transition-all"
             >
-              <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1 leading-none text-center">Luoghi Visti</span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1 leading-none text-center">My Vision</span>
               <div className="flex items-center justify-center gap-1.5">
-                <MapPin className="w-3 h-3 text-rose-500" />
-                {/* Fonte di verità: visited_pois del profilo. Il vecchio
-                    visitedNames.length mostrava 0 quando i nomi non si
-                    risolvevano da shared_pois (POI rimossi o id non trovati). */}
-                <span className="text-xl font-black text-gray-900 leading-none">{profile?.visited_pois?.length || 0}</span>
+                <Camera className="w-3 h-3 text-rose-500" />
+                <span className="text-xl font-black text-gray-900 leading-none">{visionCount}</span>
               </div>
             </button>
 
@@ -222,42 +222,6 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
         </div>
       </div>
 
-      {showVisitedModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-[#f8f5f0] w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white">
-              <h3 className="font-black text-[#1e3a8a] text-sm flex items-center gap-2 uppercase tracking-widest">
-                <MapPin className="w-4 h-4 text-secondary" />
-                {getTranslation("explored_places", language)}
-              </h3>
-              <button onClick={() => setShowVisitedModal(false)} className="p-1.5 bg-gray-100 text-gray-500 rounded-full">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 max-h-[50dvh] overflow-y-auto bg-[#f8f5f0]">
-              {(profile?.visited_pois?.length || 0) === 0 ? (
-                <div className="text-center text-gray-500 text-xs py-6 font-medium">
-                  {getTranslation("explored_empty", language)}
-                </div>
-              ) : (
-                <ul className="space-y-2">
-                  {visitedNames.map((name, idx) => (
-                    <li key={idx} className="bg-white p-3 rounded-xl shadow-sm text-sm font-bold text-[#1e3a8a] flex items-center gap-2 border border-gray-100">
-                      <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></div>
-                      {name}
-                    </li>
-                  ))}
-                  {(profile?.visited_pois?.length || 0) > visitedNames.length && (
-                    <li className="text-center text-gray-400 text-xs py-2 font-medium">
-                      + {(profile?.visited_pois?.length || 0) - visitedNames.length} altri luoghi esplorati
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 }
