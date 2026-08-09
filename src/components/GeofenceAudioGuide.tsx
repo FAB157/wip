@@ -20,24 +20,9 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
   }, [isActive, isMuted, itinerary, guideMode, language]);
 
   useEffect(() => {
-    // Custom window listener to manually play a guide in Semi-Automatic mode
-    const handleSemiPlay = (e: any) => {
-      const { text, poi } = e.detail;
-      if (text) {
-        locationService.playAudio(text);
-        if (poi) {
-          import('../lib/supabase').then(({ supabase }) => {
-            supabase.auth.getSession().then(({ data: sessionData }) => {
-              const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-              import('../lib/listeningHistory').then(({ recordListening }) => {
-                recordListening(poi, currentUserId);
-              });
-            });
-          });
-        }
-      }
-    };
-    window.addEventListener("wip-semi-play-audio", handleSemiPlay);
+    // NB: il listener 'wip-semi-play-audio' vive SOLO in useGeofencing
+    // (userTriggeredPlay → executePlay → pagamenti): quello duplicato qui
+    // riproduceva l'audio bypassando crediti/Day Pass ed è stato rimosso.
 
     // Tour di gruppo: feedback visivo per i follower quando il leader
     // sblocca un luogo o termina la sessione (riusa il banner di stato).
@@ -53,7 +38,6 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
     window.addEventListener('wip-live-tour-ended', handleLiveEnded);
 
     return () => {
-      window.removeEventListener("wip-semi-play-audio", handleSemiPlay);
       window.removeEventListener('wip-live-audio', handleLiveAudio);
       window.removeEventListener('wip-live-tour-ended', handleLiveEnded);
     };
@@ -217,9 +201,22 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
      * - Modalità semi-automatica: mostra banner "Ascolta ora".
      * Entrambe le modalità mostrano il banner con metri = 0.
      */
+    /**
+     * Gli eventi nativi vengono trattenuti mentre la WebView dorme e
+     * consegnati tutti insieme allo sblocco: senza questo filtro comparivano
+     * scheda e banner "Ascolta" per POI superati da minuti (test in auto).
+     * Gli eventi senza ts (build native vecchie) passano come prima.
+     */
+    const isStaleNativeEvent = (detail: any): boolean => {
+      const ts = Number(detail?.ts);
+      if (!Number.isFinite(ts) || ts <= 0) return false;
+      return Date.now() - ts > 3 * 60_000;
+    };
+
     const handlePoiArrived = async (e: any) => {
       const { poiId, poiName, lat, lon } = e.detail || {};
       if (!poiId) return;
+      if (isStaleNativeEvent(e.detail)) return;
 
       let poiData = await fetchPoiFull(poiId);
       const poi = poiData || { id: poiId, name: poiName, lat, lon };
@@ -269,12 +266,25 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
     const handlePoiApproaching = async (e: any) => {
       const { poiId, poiName, lat, lon } = e.detail || {};
       if (!poiId) return;
+      if (isStaleNativeEvent(e.detail)) return;
 
       const poiData = await fetchPoiFull(poiId);
       const poi = poiData || { id: poiId, name: poiName, lat, lon };
 
+      // La distanza NON è 150 fissa: il raggio di alert è 150 m a piedi ma
+      // 300 m in auto, e il banner mostrava "150m" anche per POI molto più
+      // lontani. Se il nativo la fornisce si usa quella; altrimenti si parte
+      // dal raggio corretto per la modalità e il primo fix GPS la corregge.
+      const isCar = (localStorage.getItem('wip_transport_mode') || '') === 'car';
+      const nativeDist = Number((e.detail || {}).distance);
       window.dispatchEvent(new CustomEvent('wip-poi-approach', {
-        detail: { poi, distance: 150, isCar: false, isArrival: false }
+        detail: {
+          poi,
+          distance: Number.isFinite(nativeDist) && nativeDist > 0 ? nativeDist : (isCar ? 300 : 150),
+          alertRadius: isCar ? 300 : 150,
+          isCar,
+          isArrival: false,
+        }
       }));
     };
 

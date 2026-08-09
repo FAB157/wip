@@ -108,6 +108,11 @@ export function mapToItaintaCategory(
   // --- fallback storico generico ---
   if (historic && historic !== 'no') return 'monument';
 
+  // --- piazze ---
+  if (tags.place === 'square' || (tags.highway === 'pedestrian' && tags.area === 'yes')) {
+    return 'monument';
+  }
+
   return null;
 }
 

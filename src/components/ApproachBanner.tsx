@@ -39,6 +39,13 @@ interface Props {
   language?: Language;
 }
 
+// ─── Costanti di pulizia ──────────────────────────────────────────
+/** Oltre `alertRadius × questo fattore` il banner si rimuove da solo. */
+const BANNER_DISMISS_FACTOR = 2.5;
+/** Rete di sicurezza temporale: se il GPS tace (galleria, app congelata)
+ *  una voce non può restare a schermo per sempre. */
+const BANNER_MAX_AGE_MS = 10 * 60 * 1000;
+
 // ─── Helpers ──────────────────────────────────────────────────────
 
 function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -168,11 +175,27 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
       setUserLocation(loc);
       if (loc.lat == null || loc.lon == null) return;
       setEntries(prev =>
-        prev.map(entry =>
-          entry.lat != null && entry.lon != null
-            ? { ...entry, distance: haversineMeters(loc.lat, loc.lon, entry.lat, entry.lon) }
-            : entry
-        )
+        prev
+          .map(entry =>
+            entry.lat != null && entry.lon != null
+              ? { ...entry, distance: haversineMeters(loc.lat, loc.lon, entry.lat, entry.lon) }
+              : entry
+          )
+          // AUTO-PULIZIA per distanza e per età.
+          //
+          // Prima le voci uscivano SOLO su `wip-poi-exit`, sul trigger o
+          // chiudendole a mano. In auto, attraversando un centro storico,
+          // se ne accumulavano a decine e restavano lì: sbloccando lo
+          // schermo comparivano banner con il tasto "Ascolta" per luoghi
+          // ormai a chilometri di distanza. Peggio: in background la
+          // WebView è congelata, quindi l'evento di uscita nativo spesso
+          // non arrivava mai e nessuno le rimuoveva.
+          .filter(entry => {
+            if (entry.lat == null || entry.lon == null) return true;
+            const outOfRange = entry.distance > entry.alertRadius * BANNER_DISMISS_FACTOR;
+            const tooOld = Date.now() - entry.enteredAt > BANNER_MAX_AGE_MS;
+            return !outOfRange && !tooOld;
+          })
       );
     };
 
@@ -206,8 +229,13 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     setEntries(prev => prev.filter(x => x.poiId !== entry.poiId));
   };
 
+  // top con safe-area: su iPhone il banner finiva sotto il notch e la X
+  // di chiusura non era cliccabile.
   return (
-    <div className="absolute top-4 left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none">
+    <div
+      className="absolute left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none"
+      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+    >
       <AnimatePresence>
         {entries.slice(0, 2).map((entry, index) => {
           const isGem = entry.poi?.premium || entry.poi?.is_gem || entry.poi?.category === 'gemme';
@@ -236,7 +264,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
               </button>
 
               {entry.image ? (
-                <img src={entry.image} alt={entry.name} className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                <img src={entry.image} alt={entry.name} loading="lazy" decoding="async" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
               ) : (
                 <div className={`w-12 h-12 rounded-lg ${isGem ? 'bg-amber-100 text-amber-600' : 'bg-primary/10 text-primary'} flex items-center justify-center text-xl flex-shrink-0`}>
                   {isGem ? '💎' : (CATEGORY_EMOJI[entry.category as PoiCategory] ?? '🗺️')}

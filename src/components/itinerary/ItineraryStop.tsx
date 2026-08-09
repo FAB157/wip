@@ -24,6 +24,10 @@ interface ItineraryStopProps {
   onReplace: () => void;
   onDelete: () => void;
   onSelectPoi?: (tappa: any) => void;
+  /** Sostituzioni gratuite ancora disponibili sul giorno di questa tappa. */
+  freeReplacementsLeft?: number;
+  /** Costo in crediti quando le gratuite sono esaurite. */
+  replaceCost?: number;
 }
 
 export default function ItineraryStop({
@@ -39,8 +43,16 @@ export default function ItineraryStop({
   onToggleLock,
   onReplace,
   onDelete,
-  onSelectPoi
+  onSelectPoi,
+  freeReplacementsLeft,
+  replaceCost
 }: ItineraryStopProps) {
+  // Il pulsante deve dire in anticipo se la sostituzione è gratis o costa:
+  // prima l'unico segnale era il modale crediti che compariva a sorpresa.
+  const replaceIsFree = (freeReplacementsLeft ?? 0) > 0;
+  const replaceLabel = replaceIsFree
+    ? `${getTranslation("replace_action", language)} — ${getTranslation("free_label", language)} (${freeReplacementsLeft})`
+    : `${getTranslation("replace_action", language)} — ${replaceCost ?? 0} ${getTranslation("credits_label", language)}`;
   return (
     <div className="relative">
       {/* Dot on line */}
@@ -55,53 +67,81 @@ export default function ItineraryStop({
               {tappa.ora} • {tappa.tipo}
             </span>
             {tappa.visited && (
-              <span className="flex items-center gap-1 text-[10px] font-black text-green-600 bg-green-50 px-2.5 py-1 rounded-full border border-green-100 uppercase animate-in fade-in zoom-in duration-300">
-                <Check className="w-3 h-3" /> Visitato
+              <span className="flex items-center gap-1 text-[10px] font-black text-green-700 bg-green-50 px-2.5 py-1 rounded-full border border-green-100 uppercase animate-in fade-in zoom-in duration-300">
+                <Check className="w-3 h-3" /> {getTranslation("badge_visited", language)}
               </span>
             )}
             {tappa.verifica === 'verificata' && (
-              <span className="flex items-center gap-1 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 uppercase" title="Tappa confermata dalla verifica AI incrociata">
-                <Check className="w-3 h-3" /> Verificata
+              <span className="flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-100 uppercase" title={getTranslation("badge_verified_tooltip", language)}>
+                <Check className="w-3 h-3" /> {getTranslation("badge_verified", language)}
               </span>
             )}
             {(tappa.verifica === 'da_verificare' || tappa.verifica === 'non_conforme') && (
-              <span className="flex items-center gap-1 text-[10px] font-black text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 uppercase" title={tappa.nota_verifica || ''}>
-                ⚠ Da verificare
+              <span className="flex items-center gap-1 text-[10px] font-black text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100 uppercase" title={tappa.nota_verifica || ''}>
+                ⚠ {getTranslation("badge_to_verify", language)}
               </span>
             )}
           </div>
-          <div className="flex gap-1 transition-opacity print:hidden">
+          {/* Target tattili 44×44 (min-w/min-h): l'icona resta piccola ma
+              l'area cliccabile rispetta le linee guida touch. */}
+          <div className="flex gap-0.5 print:hidden">
             <button
               onClick={() => onMove('up')}
               disabled={tIdx === 0}
-              className="p-2 bg-gray-50 text-on-surface-variant/40 hover:text-secondary disabled:opacity-30 disabled:cursor-not-allowed rounded-full transition-colors"
+              aria-label={getTranslation("move_up", language)}
+              title={getTranslation("move_up", language)}
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-gray-50 text-on-surface-variant/60 hover:text-secondary disabled:opacity-30 disabled:cursor-not-allowed rounded-full transition-colors"
             >
-              <ArrowUp className="w-3.5 h-3.5" />
+              <ArrowUp className="w-4 h-4" />
             </button>
             <button
               onClick={() => onMove('down')}
               disabled={isLast}
-              className="p-2 bg-gray-50 text-on-surface-variant/40 hover:text-secondary disabled:opacity-30 disabled:cursor-not-allowed rounded-full transition-colors"
+              aria-label={getTranslation("move_down", language)}
+              title={getTranslation("move_down", language)}
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-gray-50 text-on-surface-variant/60 hover:text-secondary disabled:opacity-30 disabled:cursor-not-allowed rounded-full transition-colors"
             >
-              <ArrowDown className="w-3.5 h-3.5" />
+              <ArrowDown className="w-4 h-4" />
             </button>
             <button
               onClick={onToggleLock}
-              className={`p-2 rounded-full transition-colors ${isLocked ? 'bg-secondary/10 text-secondary' : 'bg-gray-50 text-on-surface-variant/40 hover:text-secondary'}`}
+              aria-pressed={isLocked}
+              aria-label={getTranslation("lock_stop", language)}
+              title={getTranslation("lock_stop", language)}
+              className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${isLocked ? 'bg-secondary/10 text-secondary' : 'bg-gray-50 text-on-surface-variant/60 hover:text-secondary'}`}
             >
-              {isLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+              {isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
             </button>
+            {/* Badge sul pulsante: quante gratuite restano su questo giorno,
+                oppure il costo quando sono finite. */}
             <button
               onClick={onReplace}
-              className="p-2 bg-gray-50 text-on-surface-variant/40 hover:text-secondary rounded-full transition-colors"
+              aria-label={replaceLabel}
+              title={replaceLabel}
+              className={`relative min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full transition-colors ${
+                replaceIsFree
+                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                  : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+              }`}
             >
-              <RotateCcw className="w-3.5 h-3.5" />
+              <RotateCcw className="w-4 h-4" />
+              <span className={`absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-black leading-4 text-white ${
+                replaceIsFree ? 'bg-emerald-600' : 'bg-amber-600'
+              }`}>
+                {replaceIsFree ? freeReplacementsLeft : '€'}
+              </span>
             </button>
             <button
-              onClick={onDelete}
-              className="p-2 bg-gray-50 text-on-surface-variant/40 hover:text-red-500 rounded-full transition-colors"
+              onClick={() => {
+                // La cancellazione era immediata e persistita subito su
+                // Supabase: nessun undo, un tap accidentale perdeva la tappa.
+                if (window.confirm(getTranslation("confirm_delete_stop", language))) onDelete();
+              }}
+              aria-label={getTranslation("remove_action", language)}
+              title={getTranslation("remove_action", language)}
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-gray-50 text-on-surface-variant/60 hover:text-red-500 rounded-full transition-colors"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -148,8 +188,8 @@ export default function ItineraryStop({
                   </div>
                 )}
                 {tappa.fonte && (
-                  <div className="mb-3 text-[10px] font-bold italic text-on-surface-variant/60">
-                    Fonte: {tappa.fonte}
+                  <div className="mb-3 text-[10px] font-bold italic text-on-surface-variant/70">
+                    {getTranslation("source_label", language)}: {tappa.fonte}
                   </div>
                 )}
 
@@ -210,7 +250,7 @@ export default function ItineraryStop({
                       onClick={(e) => e.stopPropagation()}
                       className="flex items-center gap-2 text-[10px] font-black uppercase text-white bg-[#FF5100] hover:bg-[#E04700] px-3 py-2 rounded-xl shrink-0 transition-colors shadow-sm"
                     >
-                      🎟️ Acquista / Vedi Tour
+                      🎟️ {getTranslation("buy_see_tour", language)}
                     </a>
                   )}
                 </div>

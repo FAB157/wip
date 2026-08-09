@@ -31,23 +31,52 @@ export default function B2BPartner({ userSession, language }: B2BPartnerProps) {
     if (!name) return;
     setLoading(true);
     setFetchError(null);
-    // Errore gestito e lista sempre aggiornata: prima un errore veniva
-    // ignorato e con 0 risultati restava a video l'elenco della ricerca
-    // precedente, senza alcun "nessun coupon trovato".
-    const { data, error } = await supabase
-      .from('coupons')
-      .select('*')
-      .ilike('structure_name', name)
-      .order('created_at', { ascending: false });
+    // SICUREZZA: la lettura NON avviene più con una SELECT client diretta su
+    // `coupons` (la vecchia policy RLS `using(true)` lasciava leggere TUTTI i
+    // coupon a qualunque utente loggato = furto crediti). Ora passa da una
+    // route server autenticata che ritorna SOLO i coupon di questa struttura.
+    // Degrada in modo pulito se la route non è ancora deployata in produzione.
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) {
+        setFetchError('Accedi per consultare i tuoi voucher.');
+        setHotelCoupons([]);
+        setSearched(true);
+        return;
+      }
 
-    if (error) {
+      const res = await fetch(getApiUrl('/api/coupon/list-for-structure'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ structureName: name }),
+      });
+
+      if (res.status === 404) {
+        // Route non ancora disponibile in prod: degrada pulito (nessun coupon,
+        // niente errore rumoroso) invece di ricadere sulla SELECT insicura.
+        setHotelCoupons([]);
+        setSearched(true);
+        return;
+      }
+
+      if (!res.ok) {
+        setFetchError('Ricerca non riuscita, riprova.');
+        setHotelCoupons([]);
+      } else {
+        const data = await res.json().catch(() => null);
+        setHotelCoupons(Array.isArray(data?.coupons) ? data.coupons : []);
+      }
+    } catch {
       setFetchError('Ricerca non riuscita, riprova.');
       setHotelCoupons([]);
-    } else {
-      setHotelCoupons(data || []);
+    } finally {
+      setSearched(true);
+      setLoading(false);
     }
-    setSearched(true);
-    setLoading(false);
   };
 
   const purchasePackage = async (packageType: string) => {

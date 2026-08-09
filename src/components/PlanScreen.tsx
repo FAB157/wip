@@ -7,9 +7,10 @@ import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { supabase } from '../lib/supabase';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
-import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits } from '../lib/pricing';
+import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
 import { getApiUrl } from '../lib/api';
+import { notify as sharedNotify } from '../lib/toast';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { Language, getTranslation } from '../lib/i18n';
@@ -32,6 +33,69 @@ import { mapItineraryCategoryToMapCategory } from '../services/poiRepository';
 import BudgetTable from './itinerary/BudgetTable';
 import ItineraryStop from './itinerary/ItineraryStop';
 import TravelInfo from './itinerary/TravelInfo';
+/** Valori inviati al server (restano in italiano, è il contratto dell'API);
+ *  le etichette mostrate arrivano da i18n (`month_1`…`month_12`). */
+/** Tetto ai campi destinazione: prima se ne potevano aggiungere all'infinito. */
+const MAX_DESTINATIONS = 5;
+
+const RADIUS_PRESETS = ['100', '300', '500'] as const;
+
+/** Slot "giorno" fittizio per le esperienze proposte durante lo Swip, quando
+ *  i giorni reali non esistono ancora. */
+const PREMIUM_DAY_SLOT = 999;
+
+/**
+ * Sostituzioni tappa gratuite per OGNI giorno dell'itinerario.
+ * Oltre questa soglia la sostituzione costa `PRICING_LIST.replace_stop`.
+ * Un itinerario di 3 giorni ha quindi 9 sostituzioni gratuite in totale,
+ * ma non più di 3 sullo stesso giorno.
+ */
+const FREE_REPLACEMENTS_PER_DAY = 3;
+
+/** Oltre questa distanza dal centroide, i preferiti scelti sono troppo
+ *  sparsi per un itinerario sensato: si avvisa prima di far pagare. */
+const MAX_FAVORITES_SPREAD_KM = 150;
+
+/** Distanza in km fra due coordinate (formula dell'emisenoverso). */
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Interessi della modalità Raggio: le etichette vengono da i18n
+ *  (`interest_*`), i valori restano gli id attesi dal server. */
+const RADIUS_INTERESTS = [
+  { id: 'arte', icon: '🏛️' },
+  { id: 'famiglia', icon: '👨‍👩‍👧' },
+  { id: 'enogastronomia', icon: '🍷' },
+  { id: 'mare', icon: '🌊' },
+  { id: 'montagna', icon: '⛰️' },
+  { id: 'natura', icon: '🌳' },
+  { id: 'relax', icon: '💆' },
+  { id: 'avventura', icon: '🧗' }
+] as const;
+
+/** Categorie della modalità Swip (etichette da i18n `cat_*`). */
+const SWIP_CATEGORIES = [
+  { id: 'musei', icon: '🏛️' },
+  { id: 'monumenti', icon: '🗿' },
+  { id: 'chiese', icon: '⛪' },
+  { id: 'attrazioni', icon: '📍' },
+  { id: 'gastronomia', icon: '🍕' },
+  { id: 'natura', icon: '🌿' },
+  { id: 'shopping', icon: '🛍️' }
+] as const;
+
+const MONTH_VALUES = [
+  'Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno',
+  'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'
+] as const;
+
 async function processItineraryStream(
   url: string,
   body: any,
@@ -79,7 +143,16 @@ async function processItineraryStream(
   const streamTimeout = 120000;
   const streamStart = Date.now();
 
-  while (true) {
+  // BUFFER DI RIGA: il server emette un evento SSE per token, ma i confini dei
+  // chunk HTTP NON coincidono con quelli degli eventi. Con chunk.split('\n')
+  // secco, un evento spezzato a metà tra due chunk andava perso in ENTRAMBE le
+  // metà → JSON corrotto, "Risposta AI incompleta", tappe perse. Ora si
+  // accumula il testo e si processano solo le righe COMPLETE, tenendo da parte
+  // l'ultima riga parziale per il giro successivo.
+  let buffer = '';
+  let streamDone = false;
+
+  while (!streamDone) {
     if (Date.now() - streamStart > streamTimeout) {
       reader.cancel();
       throw new Error("Timeout stream: L'IA ha impiegato troppo tempo a completare la risposta.");
@@ -87,30 +160,33 @@ async function processItineraryStream(
 
     const { done, value } = await reader.read();
     if (done) break;
-    
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split('\n');
-    
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    // L'ultimo elemento è la riga (eventualmente) incompleta: la si conserva.
+    buffer = lines.pop() ?? '';
+
     for (const line of lines) {
-      if (line.trim().startsWith('data: ')) {
-        const dataStr = line.trim().slice(6);
-        if (dataStr === '[DONE]') break;
-        if (dataStr) {
-          try {
-            const parsed = JSON.parse(dataStr);
-            if (parsed.error) {
-              hasError = true;
-              errorMessage = parsed.error;
-            } else if (parsed.text) {
-              fullJson += parsed.text;
-              const partialObj = parsePartialJSON(fullJson);
-              if (partialObj && partialObj.giorni) {
-                onPartialData(partialObj);
-              }
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+      const dataStr = trimmed.slice(6);
+      if (dataStr === '[DONE]') { streamDone = true; break; }
+      if (dataStr) {
+        try {
+          const parsed = JSON.parse(dataStr);
+          if (parsed.error) {
+            hasError = true;
+            errorMessage = parsed.error;
+          } else if (parsed.text) {
+            fullJson += parsed.text;
+            const partialObj = parsePartialJSON(fullJson);
+            if (partialObj && partialObj.giorni) {
+              onPartialData(partialObj);
             }
-          } catch (e) {
-            // Ignoriamo errori di parsing sui singoli chunk se l'intero JSON non è pronto
           }
+        } catch (e) {
+          // Riga completa ma JSON non ancora chiudibile: si ignora (il testo
+          // è già accumulato in fullJson).
         }
       }
     }
@@ -424,6 +500,25 @@ export default function PlanScreen({
   const [currentBalance, setCurrentBalance] = useState(0);
   // Shop crediti raggiungibile anche dal tab Plan (prima "Ricarica" era un alert)
   const [showShop, setShowShop] = useState(false);
+  // Notifiche in-app: sostituiscono gli alert() nativi dei 4 flussi di
+  // pianificazione (bloccanti, non stilizzati, non traducibili e su PWA iOS
+  // mostrano il dominio nel titolo).
+  // Delega al canale condiviso (lib/toast.ts), renderizzato da <ToastHost/>
+  // in App.tsx: prima questa schermata aveva un proprio toast locale, con il
+  // risultato di due sistemi di notifica diversi nella stessa app.
+  const notify = useCallback(
+    (text: string, tone: 'error' | 'info' | 'success' = 'error') => sharedNotify(text, tone),
+    []
+  );
+  // Acquisizione GPS (Form C): può durare parecchi secondi e prima non dava
+  // alcun segnale, il bottone sembrava semplicemente non funzionare.
+  const [gpsLoading, setGpsLoading] = useState(false);
+  // Il quiz d'attesa è un overlay opaco a tutto schermo: chiudendolo si vede
+  // l'itinerario costruirsi in streaming. Si riapre a ogni nuova generazione.
+  const [quizDismissed, setQuizDismissed] = useState(false);
+  // Crediti restituiti perché l'itinerario è arrivato dalla libreria condivisa
+  // invece di essere generato: alimenta il banner nella schermata risultato.
+  const [cacheDiscount, setCacheDiscount] = useState<number | null>(null);
   // Guardie per l'arricchimento POI in background (vedi enrichSequentially)
   const enrichInFlightRef = useRef(false);
   const enrichedPoiIdsRef = useRef<Set<string>>(new Set());
@@ -436,6 +531,8 @@ export default function PlanScreen({
   const [focusedDestIdx, setFocusedDestIdx] = useState<number | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
+  // Opzione evidenziata nella tendina (navigazione con le frecce).
+  const [activeSuggestIdx, setActiveSuggestIdx] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(false);
   const [activeQuizLength, setActiveQuizLength] = useState<number>(7);
@@ -458,7 +555,15 @@ export default function PlanScreen({
   const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [currentCardIdx, setCurrentCardIdx] = useState(0);
   const [swipeDir, setSwipeDir] = useState<'left' | 'right' | null>(null);
-  const [tinderActiveDay, setTinderActiveDay] = useState(0);
+  // Storico degli swipe per l'Undo: il gesto "scorri per scartare" implica
+  // poter tornare indietro, ma l'unico rimedio era "Ricomincia" (che azzerava
+  // anche tutti i like). Ogni voce dice se la carta era stata messa nei like.
+  const [swipeHistory, setSwipeHistory] = useState<Array<{ idx: number; liked: boolean }>>([]);
+  // Foto che hanno fallito il caricamento: si ricade sul medaglione tematico
+  // invece di lasciare una banda vuota alta 208px.
+  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+  // Card con descrizione espansa (il line-clamp-3 non era apribile).
+  const [expandedCard, setExpandedCard] = useState<string | null>(null);
   const [tinderSelectedCategories, setTinderSelectedCategories] = useState<string[]>([]);
   const [activeReplacingIdx, setActiveReplacingIdx] = useState<number | null>(null);
   // ── Favorites & UI ──
@@ -499,10 +604,19 @@ export default function PlanScreen({
   };
 
   // Sincronizza lo stato locale con quello globale (App.tsx)
-  const setGeneratedPlan = (p: GeneratedItinerary | null) => {
-    const deduped = dedupTappaIds(p);
-    setGeneratedPlanState(deduped);
-    if (setExternalPlan) setExternalPlan(deduped);
+  // Accetta sia un valore sia un updater funzionale (prev => next): serve agli
+  // handler che devono partire dallo stato CORRENTE e non da una closure
+  // stantia (es. handleCheckin). Dedup e sync di externalPlan restano applicati
+  // in entrambi i casi.
+  const setGeneratedPlan = (
+    p: GeneratedItinerary | null | ((prev: GeneratedItinerary | null) => GeneratedItinerary | null)
+  ) => {
+    setGeneratedPlanState((prev) => {
+      const next = typeof p === 'function' ? (p as any)(prev) : p;
+      const deduped = dedupTappaIds(next);
+      if (setExternalPlan) setExternalPlan(deduped);
+      return deduped;
+    });
   };
 
   useEffect(() => {
@@ -544,27 +658,27 @@ export default function PlanScreen({
   const [navAddrCoords, setNavAddrCoords] = useState<{ lat: number; lon: number } | null>(null);
 
   useEffect(() => {
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token || navOrigin !== 'custom' || navCustomAddress.trim().length < 3 || navAddrCoords) {
+    if (navOrigin !== 'custom' || navCustomAddress.trim().length < 3 || navAddrCoords) {
       if (!navAddrCoords) setNavAddrSuggestions([]);
       return;
     }
     const abortCtrl = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(navCustomAddress)}.json` +
-          `?access_token=${token}&language=${language.toLowerCase()}&limit=5`,
-          { signal: abortCtrl.signal }
-        );
+        // Proxy server-side: qui serve anche l'indirizzo civico, non solo la
+        // località, quindi si allargano i `types`.
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(navCustomAddress)}`
+          + `&lang=${language.toLowerCase()}&limit=5&types=address,poi,place,locality,neighborhood`
+        ), { signal: abortCtrl.signal });
         if (!res.ok) return;
         const data = await res.json();
         if (abortCtrl.signal.aborted) return;
         setNavAddrSuggestions((data.features || []).map((f: any) => ({
           id: f.id,
-          description: f.place_name,
-          lat: f.center[1],
-          lon: f.center[0],
+          description: f.description,
+          lat: f.lat,
+          lon: f.lon,
         })));
       } catch { /* abort o rete */ }
     }, 600);
@@ -614,6 +728,54 @@ export default function PlanScreen({
   // Refs per controllo playback senza closure stale
   const podcastCancelRef = useRef(false);
   const podcastRestartFnRef = useRef<(() => void) | null>(null);
+  // Timer della catena TTS: va cancellato in stop/replay, altrimenti un
+  // setTimeout(doSpeak) già schedulato faceva ripartire la vecchia catena
+  // sopra la nuova (doppia voce).
+  const podcastTimerRef = useRef<any>(null);
+  // Token di sessione incrementale: ogni avvio ne prende uno; la catena
+  // procede solo finché è la sessione corrente. Sostituisce il solo booleano
+  // podcastCancelRef, che veniva rimesso a false dal nuovo avvio e riabilitava
+  // la catena vecchia ancora in volo.
+  const podcastSessionRef = useRef(0);
+
+  /**
+   * Le 4 modalità condividevano UN SOLO set di campi (destinazioni, giorni,
+   * mese, interessi, orari, raggio, categorie): impostare 7 giorni in
+   * Automatica e poi aprire Preferiti faceva pagare 70 crediti per un
+   * itinerario che non li usava, e gli interessi di una modalità si
+   * mescolavano con quelli dell'altra (i due set hanno id diversi).
+   * Tornando al menù di scelta si riparte puliti.
+   */
+  // Ogni nuova generazione riapre il quiz (che l'utente può richiudere).
+  useEffect(() => {
+    if (loading || candidatesLoading) setQuizDismissed(false);
+  }, [loading, candidatesLoading]);
+
+  useEffect(() => {
+    if (plannerMode !== 'selection') return;
+    setDestinations(['']);
+    setDestCoords(null);
+    setFocusedDestIdx(null);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setDays(2);
+    setMese('');
+    setStartTime('09:00');
+    setEndTime('20:00');
+    setSelectedInterests([]);
+    setSpecialRequests('');
+    setRadius('300');
+    setSelectedFavoriteIds([]);
+    setAlternatives([]);
+    setTinderSelectedCategories([]);
+    setCandidates([]);
+    setLikedCandidates([]);
+    setCurrentCardIdx(0);
+    setSwipeHistory([]);
+    setActiveReplacingIdx(null);
+    setSwipeDir(null);
+    setCacheDiscount(null);
+  }, [plannerMode]);
   // Addebito podcast in sospeso: se la generazione non produce testo, i
   // crediti vanno restituiti (prima non venivano rimborsati in alcun ramo).
   const podcastChargeRef = useRef<{ userId: string; amount: number } | null>(null);
@@ -807,7 +969,7 @@ export default function PlanScreen({
     if (!confirmed) return;
     const bundlePayRes = await consumeCredits(bundleUserId, bundleCost);
     if (!bundlePayRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
+      notify(getTranslation('err_insufficient_credits', language));
       return;
     }
 
@@ -831,10 +993,18 @@ export default function PlanScreen({
         );
         
         if (!tappa) continue;
-        
+
         const lat = tappa.coordinate?.lat || 0;
         const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-        
+
+        // CHIAVE OFFLINE CANONICA: identica a handleSelectItineraryPoi, cioè
+        // ciò che PoiDetailSheet userà per LEGGERE (poi.id). Prima il bundle
+        // salvava con `iti-<slug>` mentre la scheda leggeva `id_tappa`/`ai_...`:
+        // audio e testo pagati (20 crediti/tappa) restavano introvabili.
+        const stableId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
+          ? tappa.id_tappa
+          : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+
         // 1. Otteniamo il testo
         // Per gli itinerari salviamo il POI in shared_pois, quindi simuliamo lo stesso fetch di PoiDetailSheet
         // Route corretta: `/api/poi-details` non è mai esistita (la vera è
@@ -850,7 +1020,7 @@ export default function PlanScreen({
 
         // Scheda testuale offline: PoiDetailSheet la legge quando manca la
         // rete (chiave offline_poi_<id>), così testo e guida restano fruibili.
-        saveOfflinePoiSheet(poiId, {
+        saveOfflinePoiSheet(stableId, {
           wikiData: {
             extract: textToSpeak,
             thumbnail: details?.image_url || details?.photo_url || undefined,
@@ -885,7 +1055,7 @@ export default function PlanScreen({
         const url = URL.createObjectURL(blob);
 
         // 3. Salviamo offline con la stessa chiave usata in PoiDetailSheet
-        const audioKey = `${poiId}_${guideMode}`;
+        const audioKey = `${stableId}_${guideMode}`;
         try {
           await saveOfflineAudio(url, audioKey);
           okCount++;
@@ -1014,7 +1184,7 @@ export default function PlanScreen({
 
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
-    alert("Esperienza aggiunta all'itinerario!");
+    notify(getTranslation('experience_added', language), 'success');
   };
 
   const handleAddGygToDay = (dayIdx: number, exp: any) => {
@@ -1046,7 +1216,7 @@ export default function PlanScreen({
 
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
-    alert(`Esperienza GYG aggiunta al giorno ${dayIdx + 1}!`);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
   };
 
   const handleAddTicketmasterToDay = (dayIdx: number, exp: any) => {
@@ -1075,7 +1245,7 @@ export default function PlanScreen({
 
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
-    alert(`Evento aggiunto al giorno ${dayIdx + 1}!`);
+    notify(`${getTranslation('event_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
   };
 
   // Quota limit toast
@@ -1224,15 +1394,12 @@ export default function PlanScreen({
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
     const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
     if (!confirmed) {
-
-
        return;
     }
     const payRes = await consumeCredits(currentUserId, totalItineraryCost);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
-
-
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
       return;
     }
 
@@ -1258,7 +1425,11 @@ export default function PlanScreen({
         guida,
         lockedStops: Object.values(lockedStops),
         radius: parseInt(radius),
-        language
+        language,
+        // Quota per-UTENTE, non per-IP: senza userId il server ricadeva su
+        // anonymous-fallback-<ip> e più utenti sotto la stessa NAT si
+        // consumavano a vicenda il tetto 30/giorno.
+        userId: currentUserId
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
@@ -1270,12 +1441,12 @@ export default function PlanScreen({
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
         await refundCredits(currentUserId, totalItineraryCost);
-        alert("Errore durante la rigenerazione dell'itinerario. I crediti ti sono stati restituiti.");
+        notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Regeneration with locks error:", err);
       await refundCredits(currentUserId, totalItineraryCost);
-      alert("Errore durante la rigenerazione dell'itinerario. I crediti ti sono stati restituiti.");
+      notify(getTranslation('err_generation_refunded', language));
     } finally {
       setLoading(false);
     }
@@ -1302,7 +1473,7 @@ export default function PlanScreen({
     }
     const payRes = await consumeCredits(currentUserId, suggestCost);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
+      notify(getTranslation('err_insufficient_credits', language));
 
 
       return;
@@ -1331,12 +1502,12 @@ export default function PlanScreen({
       } else {
         // Nessun suggerimento valido: rimborsiamo i crediti addebitati
         await refundCredits(currentUserId, suggestCost);
-        alert("L'AI non ha trovato un suggerimento valido. I crediti ti sono stati restituiti.");
+        notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Suggest Stop Error:", err);
       await refundCredits(currentUserId, suggestCost);
-      alert("Errore durante il suggerimento della tappa. I crediti ti sono stati restituiti.");
+      notify(getTranslation('err_generation_refunded', language));
     } finally {
       setSuggestLoading(false);
     }
@@ -1379,24 +1550,34 @@ export default function PlanScreen({
       fetchSavedPois();
     };
 
-    // Issue 18 Fix: Ascolta check-in e arrivo a destinazione per marcare le tappe
+    // Issue 18 Fix: Ascolta check-in e arrivo a destinazione per marcare le tappe.
+    // UPDATER FUNZIONALE: prima l'handler catturava `generatedPlan` per closure
+    // con dipendenza [generatedPlan?.id]; poiché l'id non cambia durante le
+    // modifiche (spostamenti, cancellazioni, aggiunte), la closure restava
+    // ferma a uno snapshot STANTIO e il save lo ripersisteva, cancellando le
+    // modifiche di sessione. Con `prev` si parte sempre dallo stato corrente.
+    // MATCHING ESATTO: prima `includes` faceva sì che "t1" combaciasse con
+    // t1/t10/t11/t21 → una tappa raggiunta ne marcava mezzo itinerario.
     const handleCheckin = (e: any) => {
-      const { poiId, poiName } = e.detail;
-      if (!generatedPlan) return;
-
-      const newPlan = {
-        ...generatedPlan,
-        giorni: generatedPlan.giorni.map(g => ({
-          ...g,
-          tappe: g.tappe.map(t => {
-            const isMatch = (poiId && String(t.id_tappa).includes(String(poiId))) ||
-                          (poiName && t.titolo_tappa === poiName);
-            return isMatch ? { ...t, visited: true } : t;
-          })
-        }))
-      };
-      setGeneratedPlan(newPlan);
-      savePlanToSupabase(newPlan);
+      const { poiId, poiName } = e.detail || {};
+      setGeneratedPlan(prev => {
+        if (!prev) return prev;
+        let changed = false;
+        const newPlan = {
+          ...prev,
+          giorni: prev.giorni.map(g => ({
+            ...g,
+            tappe: g.tappe.map(t => {
+              const isMatch = (poiId != null && String(t.id_tappa) === String(poiId)) ||
+                            (poiName && t.titolo_tappa === poiName);
+              if (isMatch && !(t as any).visited) { changed = true; return { ...t, visited: true }; }
+              return t;
+            })
+          }))
+        };
+        if (changed) savePlanToSupabase(newPlan);
+        return changed ? newPlan : prev;
+      });
     };
 
     window.addEventListener(FAVORITES_EVENT, handleFavoritesUpdate);
@@ -1416,33 +1597,25 @@ export default function PlanScreen({
   useEffect(() => {
     if (focusedDestIdx === null || !destinations[focusedDestIdx] || destinations[focusedDestIdx].length < 3 || !showSuggestions) {
       setSuggestions([]);
+      setActiveSuggestIdx(-1);
       return;
     }
+    setActiveSuggestIdx(-1);
 
     const timer = setTimeout(async () => {
       setIsSearching(true);
-      const token = import.meta.env.VITE_MAPBOX_TOKEN;
-      if (!token) {
-        setIsSearching(false);
-        return;
-      }
-
       try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(destinations[focusedDestIdx])}.json?access_token=${token}&language=${language.toLowerCase()}&limit=5`
-        );
+        // Proxy server-side: il token Mapbox non sta più nel bundle client.
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(destinations[focusedDestIdx])}`
+          + `&lang=${language.toLowerCase()}&limit=5`
+        ));
         if (res.ok) {
           const data = await res.json();
-          setSuggestions(data.features.map((f: any) => ({
-            id: f.id,
-            description: f.place_name,
-            lat: f.center[1],
-            lon: f.center[0],
-            isMapbox: true
-          })) || []);
+          setSuggestions(Array.isArray(data.features) ? data.features : []);
         }
       } catch (e) {
-        console.error("Mapbox search error:", e);
+        console.error("Geocode search error:", e);
       } finally {
         setIsSearching(false);
       }
@@ -1532,13 +1705,22 @@ export default function PlanScreen({
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const currentUserId = sessionData?.session?.user?.id;
-      if (!currentUserId) { setMyItineraries([]); return; }
+      if (!currentUserId) {
+        // Utente non loggato: mostra il mirror locale invece di una lista
+        // vuota (prima il return secco nascondeva itinerari salvati offline).
+        const localData = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]');
+        setMyItineraries(localData);
+        return;
+      }
       const { data, error } = await supabase
         .from('user_itineraries')
         .select('id, titolo, updated_at, dati_itinerario')
         .eq('user_id', currentUserId)
         .order('updated_at', { ascending: false })
-        .limit(20);
+        // Tetto alzato da 20 a 200: senza paginazione, 20 nascondeva gli
+        // itinerari più vecchi (irraggiungibili dalla UI). 200 copre l'uso
+        // reale; oltre serve una paginazione vera.
+        .limit(200);
       if (!error && data) {
         setMyItineraries(data);
       } else {
@@ -1582,7 +1764,7 @@ export default function PlanScreen({
       if (uid) {
         const { error } = await supabase.from('user_itineraries').delete().eq('id', id).eq('user_id', uid);
         if (error) {
-          alert("Errore durante l'eliminazione dell'itinerario: " + error.message);
+          notify(getTranslation('err_delete_itinerary', language));
           return;
         }
       }
@@ -1644,14 +1826,20 @@ export default function PlanScreen({
   const handleGenerateAutomatic = async () => {
     if (loading) return; // anti doppio-click: doppio addebito
     const activeDestinations = destinations.filter(d => d.trim().length > 0);
-    if (activeDestinations.length === 0) return alert("Inserisci almeno una destinazione!");
+    if (activeDestinations.length === 0) { notify(getTranslation('err_no_destination', language)); return; }
+    if (!validateTimes()) return;
 
     const destination = activeDestinations.join(" e ");
 
     // Coordinate certe della destinazione PRIMA di addebitare: è questo il
     // flusso classico dove "Tallinn" diventava "Olbia".
     const coords = await resolveDestCoords();
-    if (!coords && import.meta.env.VITE_MAPBOX_TOKEN) {
+    // Guardia INCONDIZIONATA: il geocoding è server-side (/api/geocode, che usa
+    // anche MAPBOX_TOKEN non-VITE). Legarla a VITE_MAPBOX_TOKEN significava che
+    // un build senza quella variabile client generava senza lat/lon, senza
+    // ancora geografica e senza verifica anti-allucinazione (20 crediti per un
+    // itinerario nella città sbagliata).
+    if (!coords) {
       alertDestNotFound();
       return;
     }
@@ -1661,27 +1849,28 @@ export default function PlanScreen({
     
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
-    const numDaysForPricing = Math.max(1, days);
+    const numDaysForPricing = clampDays(days);
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
     const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
     if (!confirmed) {
-       
-       
        return;
     }
     const payRes = await consumeCredits(currentUserId, totalItineraryCost);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
-      
-      
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
       return;
     }
 
+    // Lunghezza quiz esplicita: restava al valore impostato dall'ultima
+    // sessione Raggio (4) anche nelle altre modalità.
+    setActiveQuizLength(7);
     setLoading(true);
     setLockedStops({});
     setExpandedStops({});
+    setCacheDiscount(null);
 
     // Chiave cache: include tutti i parametri che influenzano il risultato
     // (budget, ritmo, viaggiatori, interessi ordinati), altrimenti utenti con
@@ -1692,12 +1881,20 @@ export default function PlanScreen({
       // voci generate prima del fix geografico (es. "Tallinn" → Olbia), che
       // altrimenti continuerebbero a essere servite dalla cache.
       coords ? `${coords.lat.toFixed(1)}_${coords.lon.toFixed(1)}` : 'nogeo',
-      days,
+      numDaysForPricing,
       language.toLowerCase(),
       budget,
       ritmo,
       viaggiatori,
-      [...selectedInterests].sort().join('-') || 'nessuno'
+      [...selectedInterests].sort().join('-') || 'nessuno',
+      // Questi parametri cambiano il risultato tanto quanto gli altri ma non
+      // erano nella chiave: chi sceglieva Dicembre riceveva — a prezzo pieno —
+      // l'itinerario cachato di chi aveva scelto Luglio, e gli orari o gli
+      // eventi/tour richiesti venivano ignorati del tutto.
+      mese || 'anymonth',
+      `${startTime}-${endTime}`,
+      includeEvents ? 'ev1' : 'ev0',
+      includeTours ? 'tr1' : 'tr0'
     ].join('_');
     // Le richieste speciali sono libere e personali: niente cache (né lettura né scrittura)
     const cacheUsable = specialRequests.trim().length === 0;
@@ -1716,6 +1913,28 @@ export default function PlanScreen({
         // che l'ha popolata, e l'upsert su user_itineraries riassegnerebbe la sua riga.
         const plan = structuredClone(cachedData.dati_itinerario);
         plan.id = crypto.randomUUID();
+
+        // Sconto libreria: l'itinerario esiste già nella cache condivisa,
+        // quindi qui non c'è NESSUNA chiamata AI e il costo per noi è zero.
+        // Prima si incassava il prezzo pieno in silenzio: l'utente pagava
+        // fino a 70 crediti per una risposta arrivata in mezzo secondo.
+        // Ora metà torna subito nel portafoglio e glielo diciamo.
+        const discount = Math.round(totalItineraryCost / 2);
+        if (discount > 0) {
+          try {
+            await refundCredits(currentUserId, discount);
+            setCacheDiscount(discount);
+            notify(
+              `${getTranslation('cache_hit_discount', language)} — ${discount} ${getTranslation('credits_refunded', language)}`,
+              'success'
+            );
+          } catch (e) {
+            // Rimborso fallito: l'itinerario si consegna comunque, ma non
+            // dichiariamo uno sconto che non è stato accreditato.
+            console.warn('[Library discount] rimborso non riuscito:', e);
+          }
+        }
+
         setGeneratedPlan(plan);
         savePlanToSupabase(plan); // Salva nei personali dell'utente
         setPlannerMode('view');
@@ -1726,11 +1945,15 @@ export default function PlanScreen({
       console.debug("Global itinerary cache fetch skipped/failed:", e);
     }
 
+    // Si passa subito alla vista risultato: lo streaming popola l'itinerario
+    // tappa per tappa e, chiudendo il quiz, lo si vede costruire in diretta.
+    setPlannerMode('view');
+
     try {
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination,
         ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
-        days,
+        days: numDaysForPricing,
         startTime,
         endTime,
         interests: selectedInterests,
@@ -1742,13 +1965,13 @@ export default function PlanScreen({
         ritmo,
         guida,
         mese,
-        radius: parseInt(radius),
+        radius: safeRadius(),
         language,
         userId: currentUserId
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
-      
+
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
@@ -1761,7 +1984,7 @@ export default function PlanScreen({
           await supabase.from("shared_itinerary_cache").upsert({
             id: cacheId,
             destination: destination.trim(),
-            days: days,
+            days: numDaysForPricing,
             dati_itinerario: cachePayload,
             created_at: new Date().toISOString()
           }, { onConflict: "id" });
@@ -1772,18 +1995,26 @@ export default function PlanScreen({
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
         await refundCredits(currentUserId, totalItineraryCost);
-        alert("Errore durante la generazione dell'itinerario. I crediti ti sono stati restituiti.");
+        notify(getTranslation('err_generation_refunded', language));
+        setPlannerMode('form_a');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
       await refundCredits(currentUserId, totalItineraryCost);
-      alert("Errore durante la generazione dell'itinerario: " + (err.message || "Verifica la console") + "\nI crediti ti sono stati restituiti.");
+      notify(getTranslation('err_generation_refunded', language));
+      setPlannerMode('form_a');
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * FASE B del Raggio: qui — e solo qui — si paga, perché è qui che nasce
+   * l'itinerario vero. Stesso schema degli altri flussi: conferma, addebito,
+   * rimborso su qualunque fallimento, conguaglio sui giorni effettivi.
+   */
   const handleGenerateFromAlternative = async (alt: any) => {
+    if (loading) return; // anti doppio-click: doppio addebito
     const activeDestinations = destinations.filter(d => d.trim().length > 0);
     const baseLocation = activeDestinations[0] || "Destinazione sconosciuta";
     const destinationStr = alt.titolo; // DeepSeek will generate the itinerary for this alternative title
@@ -1793,6 +2024,19 @@ export default function PlanScreen({
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
+
+    const bal = await getWalletBalance(currentUserId);
+    setCurrentBalance(bal.total);
+    const numDaysForPricing = clampDays(alt?.dati_itinerario?.giorni?.length || days);
+    const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
+    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
+    if (!confirmed) return;
+    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
+    if (!payRes) {
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
+      return;
+    }
 
     setActiveQuizLength(7);
     setLoading(true);
@@ -1816,67 +2060,67 @@ export default function PlanScreen({
         ritmo,
         guida,
         mese,
-        radius: parseInt(radius),
+        radius: safeRadius(),
         language,
         userId: currentUserId
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
-      
+
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
+        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+      } else {
+        await refundCredits(currentUserId, totalItineraryCost);
+        notify(getTranslation('err_generation_refunded', language));
+        setPlannerMode('alternatives_view');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      alert("Errore durante la generazione dell'itinerario: " + (err.message || "Verifica la console"));
+      // Prima questo ramo non rimborsava nulla: si tornava alle alternative
+      // con un alert e i crediti persi.
+      await refundCredits(currentUserId, totalItineraryCost);
+      notify(getTranslation('err_generation_refunded', language));
       setPlannerMode('alternatives_view');
     } finally {
       setLoading(false);
     }
   };
 
+  /**
+   * FASE A del Raggio: propone 3 idee di viaggio. È GRATUITA.
+   *
+   * Prima si addebitava qui l'intero itinerario (fino a 70 crediti per 7
+   * giorni) per ottenere solo 3 titoli con descrizione breve: chi tornava
+   * indietro senza scegliere — o premeva "Genera altre 3 idee" — pagava una
+   * o più volte senza ricevere alcun itinerario. Ora si paga una volta sola,
+   * al momento della scelta, dentro handleGenerateFromAlternative.
+   */
   const handleGenerateRadius = async () => {
-    if (loading) return; // anti doppio-click: doppio addebito
+    if (loading) return;
     const activeDestinations = destinations.filter(d => d.trim().length > 0);
-    if (activeDestinations.length === 0) return alert("Inserisci una città di partenza!");
+    if (activeDestinations.length === 0) { notify(getTranslation('err_no_base', language)); return; }
+    if (!validateTimes()) return;
 
     const baseLocation = activeDestinations[0]; // Take the first one as base
 
     // Anche il raggio parte da una città: senza coordinate certe le
     // alternative venivano cercate attorno al posto sbagliato.
     const coords = await resolveDestCoords();
-    if (!coords && import.meta.env.VITE_MAPBOX_TOKEN) {
+    // Guardia INCONDIZIONATA: il geocoding è server-side (/api/geocode, che usa
+    // anche MAPBOX_TOKEN non-VITE). Legarla a VITE_MAPBOX_TOKEN significava che
+    // un build senza quella variabile client generava senza lat/lon, senza
+    // ancora geografica e senza verifica anti-allucinazione (20 crediti per un
+    // itinerario nella città sbagliata).
+    if (!coords) {
       alertDestNotFound();
-      return;
-    }
-
-    const { data: sessionData } = await supabase.auth.getSession();
-    const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-    
-    const bal = await getWalletBalance(currentUserId);
-    setCurrentBalance(bal.total);
-    const numDaysForPricing = Math.max(1, days);
-    // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
-    // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
-    const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
-    const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
-    if (!confirmed) {
-       
-       
-       return;
-    }
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
-      
-      
       return;
     }
 
     setActiveQuizLength(4);
     setLoading(true);
-    
+
     try {
       const res = await fetch('/api/groq/radius-alternatives', {
         method: 'POST',
@@ -1884,8 +2128,8 @@ export default function PlanScreen({
         body: JSON.stringify({
           baseLocation,
           ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
-          radius,
-          days,
+          radius: safeRadius(),
+          days: clampDays(days),
           startTime,
           endTime,
           interests: [...selectedInterests, includeEvents ? "Eventi Locali" : null, includeTours ? "Tour e Attività" : null].filter(Boolean),
@@ -1902,13 +2146,11 @@ export default function PlanScreen({
         setAlternatives(data.alternative);
         setPlannerMode('alternatives_view');
       } else {
-        await refundCredits(currentUserId, totalItineraryCost);
-        alert("L'agente non ha trovato alternative. I crediti ti sono stati restituiti.");
+        notify(getTranslation('err_no_alternatives', language));
       }
     } catch (err) {
-      console.error("Generation error:", err);
-      await refundCredits(currentUserId, totalItineraryCost);
-      alert("L'agente non ha trovato alternative. I crediti ti sono stati restituiti.");
+      console.error("Radius alternatives error:", err);
+      notify(getTranslation('err_no_alternatives', language));
     } finally {
       setLoading(false);
     }
@@ -1923,14 +2165,19 @@ export default function PlanScreen({
     dayNum: number | string,
     startIdx = 0
   ) => {
+    // Nuova sessione: invalida qualunque catena precedente ancora schedulata.
+    const mySession = ++podcastSessionRef.current;
     podcastCancelRef.current = false;
+    if (podcastTimerRef.current) clearTimeout(podcastTimerRef.current);
     setIsPodcastPaused(false);
     setPlayingDay(dayNum);
     let idx = startIdx;
 
+    const isActive = () => mySession === podcastSessionRef.current && !podcastCancelRef.current;
+
     const doSpeak = () => {
-      if (podcastCancelRef.current || idx >= chunks.length) {
-        if (!podcastCancelRef.current) setPlayingDay(null);
+      if (!isActive() || idx >= chunks.length) {
+        if (isActive()) setPlayingDay(null);
         return;
       }
       const utt = new SpeechSynthesisUtterance(chunks[idx]);
@@ -1939,23 +2186,24 @@ export default function PlanScreen({
       utt.pitch = pitch;
       utt.volume = 1.0;
       if (chosenVoice) utt.voice = chosenVoice;
-      utt.onend = () => { if (!podcastCancelRef.current) { idx++; setTimeout(doSpeak, 50); } };
+      utt.onend = () => { if (isActive()) { idx++; podcastTimerRef.current = setTimeout(doSpeak, 50); } };
       utt.onerror = (e) => {
         if (e.error === 'interrupted' || e.error === 'canceled') return;
         console.warn(`[Podcast] chunk ${idx} error: ${e.error}`);
-        if (!podcastCancelRef.current) { idx++; setTimeout(doSpeak, 100); }
+        if (isActive()) { idx++; podcastTimerRef.current = setTimeout(doSpeak, 100); }
       };
       window.speechSynthesis.speak(utt);
     };
 
     // Salva funzione per replay
     podcastRestartFnRef.current = () => {
-      window.speechSynthesis.cancel();
-      setTimeout(() => startTtsPlayback(chunks, utteranceLang, chosenVoice, pitch, dayNum, 0), 250);
+      const s = window.speechSynthesis;
+      if (s) { s.resume(); s.cancel(); } // resume prima di cancel: fix muto Chrome
+      podcastTimerRef.current = setTimeout(() => startTtsPlayback(chunks, utteranceLang, chosenVoice, pitch, dayNum, 0), 250);
     };
 
     // ⚠️ Chrome fix: aspetta dopo cancel()
-    setTimeout(doSpeak, 250);
+    podcastTimerRef.current = setTimeout(doSpeak, 250);
   }, []);
 
   const handlePlayDailyPodcast = async (dayNum: number | string, tappe: any[], isLastDay: boolean = false) => {
@@ -1963,6 +2211,11 @@ export default function PlanScreen({
       console.warn('[Podcast] Nessuna tappa disponibile');
       return;
     }
+    // iOS Safari/PWA: il TTS va "sbloccato" DENTRO il gesto utente. Il primo
+    // speak() reale parte solo dopo il fetch (~10 s), fuori dal contesto del
+    // tap: senza questo, crediti scalati e zero audio. unlockSpeech emette una
+    // utterance muta ora, mentre il gesto è ancora valido.
+    import('../services/ttsService').then(({ unlockSpeech }) => unlockSpeech()).catch(() => {});
 
     // ── STOP se già in play (toggle) ──
     if (playingDay === dayNum) {
@@ -2003,15 +2256,11 @@ export default function PlanScreen({
           return;
         }
         
-        const payRes = await consumeCredits(currentUserId, podcastCost);
-        if (!payRes) {
-          alert("Crediti insufficienti. Visita lo store per ricaricare.");
-          setIsGeneratingPodcast(null);
-          return;
-        }
-        // Da qui in poi i crediti sono già stati scalati: ogni uscita senza
-        // podcast deve rimborsarli (prima non lo faceva in nessun ramo).
-        podcastChargeRef.current = { userId: currentUserId, amount: podcastCost };
+        // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta scala 15 crediti in
+        // modo atomico (cache-first: niente addebito se già generato) e li
+        // restituisce se la generazione fallisce. Il client non addebita più
+        // (niente slot podcastChargeRef unico e niente crediti persi al
+        // refresh); passa solo il token. La modale di conferma sopra resta.
         // Normalizza tappe per diversi formati salvati
         const tappeNorm = tappe.map(t => ({
           name: t.titolo_tappa || t.name || t.title || t.nome || 'Tappa',
@@ -2019,11 +2268,15 @@ export default function PlanScreen({
         })).filter(t => t.name !== 'Tappa' || t.description);
 
         const destination = generatedPlan?.titolo || generatedPlan?.citta || 'la tua destinazione';
-        console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`); 
+        console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
 
+        const { data: podSess } = await supabase.auth.getSession();
         const res = await fetch('/api/generate-daily-podcast', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${podSess?.session?.access_token || ''}`,
+          },
           body: JSON.stringify({
             destination,
             dayNum,
@@ -2033,18 +2286,22 @@ export default function PlanScreen({
           })
         });
 
+        if (res.status === 402) {
+          notify(getTranslation('err_insufficient_credits', language));
+          setIsGeneratingPodcast(null);
+          return;
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         podcastText = data.text?.trim();
 
         if (!podcastText) {
-          await refundPodcastCharge();
-          alert('Nessun testo ricevuto dal server per il podcast. I crediti ti sono stati restituiti.');
+          notify(getTranslation('err_generation_refunded', language));
           setIsGeneratingPodcast(null);
           return;
         }
-        // Contenuto ricevuto: l'addebito è legittimo, niente rimborso
-        podcastChargeRef.current = null;
+        // Il saldo è cambiato lato server (tranne cache hit): riallinea le viste.
+        notifyCreditsChanged({ userId: currentUserId });
 
         // Salva in cache locale (sessione corrente)
         setPodcastCache(prev => ({ ...prev, [cacheKey]: podcastText! }));
@@ -2060,7 +2317,7 @@ export default function PlanScreen({
       setIsGeneratingPodcast(null);
 
       if (!('speechSynthesis' in window)) {
-        alert('Sintesi vocale non supportata su questo browser.');
+        notify(getTranslation('err_tts_unsupported', language));
         return;
       }
 
@@ -2131,7 +2388,7 @@ export default function PlanScreen({
       await refundPodcastCharge();
       setPlayingDay(null);
       setIsGeneratingPodcast(null);
-      alert(`Errore podcast: ${e.message || 'Riprova.'}\nI crediti ti sono stati restituiti.`);
+      notify(getTranslation('err_generation_refunded', language));
     }
   };
 
@@ -2150,16 +2407,24 @@ export default function PlanScreen({
   };
 
   const handleStopPodcast = () => {
+    podcastSessionRef.current++;      // invalida la catena corrente
     podcastCancelRef.current = true;
-    window.speechSynthesis?.cancel();
+    if (podcastTimerRef.current) clearTimeout(podcastTimerRef.current);
+    const s = window.speechSynthesis;
+    // resume() PRIMA di cancel(): se il motore era in pausa, un cancel secco
+    // lo lasciava in stato paused e le utterance successive restavano mute.
+    if (s) { s.resume(); s.cancel(); }
     setPlayingDay(null);
     setIsPodcastPaused(false);
   };
 
   const handleReplayPodcast = () => {
     if (podcastRestartFnRef.current) {
+      podcastSessionRef.current++;
       podcastCancelRef.current = true;
-      window.speechSynthesis?.cancel();
+      if (podcastTimerRef.current) clearTimeout(podcastTimerRef.current);
+      const s = window.speechSynthesis;
+      if (s) { s.resume(); s.cancel(); }
       setIsPodcastPaused(false);
       podcastRestartFnRef.current();
     }
@@ -2191,16 +2456,16 @@ export default function PlanScreen({
     }
 
     if (destCoords && destCoords.label === dest) return destCoords;
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token) return null;
     try {
-      const res = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(dest)}.json?access_token=${token}&limit=1&types=place,locality,region,country&language=${language.toLowerCase()}`
-      );
+      // Geocoding rigoroso via proxy server (solo località amministrative).
+      const res = await fetch(getApiUrl(
+        `/api/geocode?q=${encodeURIComponent(dest)}&limit=1`
+        + `&types=place,locality,region,country&lang=${language.toLowerCase()}`
+      ));
       if (!res.ok) return null;
       const f = (await res.json()).features?.[0];
-      if (!f?.center) return null;
-      const coords = { lat: f.center[1], lon: f.center[0], label: dest };
+      if (!f || !Number.isFinite(f.lat) || !Number.isFinite(f.lon)) return null;
+      const coords = { lat: f.lat, lon: f.lon, label: dest };
       setDestCoords(coords);
       return coords;
     } catch {
@@ -2209,18 +2474,96 @@ export default function PlanScreen({
   };
 
   const alertDestNotFound = () => {
-    alert(language === 'IT'
-      ? `Località "${destinations[0]}" non trovata. Controlla il nome e riprova.`
-      : `Location "${destinations[0]}" not found. Check the name and try again.`);
+    notify(`"${destinations[0]}" — ${getTranslation('err_location_not_found', language)}`);
+  };
+
+  /** Giorni sempre entro [1, 30]: l'input numerico ignorava min/max e un "99"
+   *  digitato a mano portava la conferma a 990 crediti. */
+  const clampDays = (v: number) => Math.min(30, Math.max(1, Math.floor(v) || 1));
+
+  /** Orario di fine successivo a quello di inizio (prima nessun vincolo). */
+  const validateTimes = (): boolean => {
+    if (startTime && endTime && endTime <= startTime) {
+      notify(getTranslation('err_end_before_start', language));
+      return false;
+    }
+    return true;
+  };
+
+  /** Raggio numerico valido: l'onFocus dell'input custom azzerava `radius` a
+   *  stringa vuota, che diventava `NaN` → `null` nel JSON inviato al server. */
+  const safeRadius = (): number => {
+    const n = parseInt(radius, 10);
+    return Number.isFinite(n) && n > 0 ? Math.min(5000, n) : 300;
+  };
+
+  // ── Autocomplete destinazione: apertura, selezione e tastiera ──────────
+  /** La tendina è aperta solo per il campo che ha il fuoco. */
+  const isSuggestOpen = (idx: number) =>
+    showSuggestions && focusedDestIdx === idx && (destinations[idx]?.trim().length >= 3);
+
+  /** Applica un suggerimento al campo `idx` fissando anche le coordinate. */
+  const pickSuggestion = (suggestion: any, idx: number) => {
+    const name = suggestion.isMapbox
+      ? String(suggestion.description || '').split(',')[0]
+      : (suggestion.display_name || suggestion.description || suggestion.name || '');
+    const newDests = [...destinations];
+    newDests[idx] = name;
+    setDestinations(newDests);
+    // Solo il primo campo definisce la posizione di riferimento del viaggio.
+    if (idx === 0 && suggestion.lat != null && suggestion.lon != null) {
+      setDestCoords({ lat: suggestion.lat, lon: suggestion.lon, label: name });
+    }
+    setShowSuggestions(false);
+    setFocusedDestIdx(null);
+    setActiveSuggestIdx(-1);
+  };
+
+  /**
+   * Navigazione da tastiera del combobox: prima non esisteva (né frecce, né
+   * Invio, né Escape) e con un solo campo di testo sciolto premere Invio non
+   * faceva assolutamente nulla.
+   */
+  const handleSuggestKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, idx: number, onSubmit?: () => void) => {
+    if (!isSuggestOpen(idx) || suggestions.length === 0) {
+      if (e.key === 'Escape') setShowSuggestions(false);
+      // Con la tendina chiusa, Invio avvia l'azione principale della
+      // modalità: prima non faceva assolutamente nulla (nessun <form>).
+      if (e.key === 'Enter' && onSubmit) {
+        e.preventDefault();
+        e.currentTarget.blur();
+        onSubmit();
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveSuggestIdx(i => (i + 1) % suggestions.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveSuggestIdx(i => (i <= 0 ? suggestions.length - 1 : i - 1));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      pickSuggestion(suggestions[activeSuggestIdx >= 0 ? activeSuggestIdx : 0], idx);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setShowSuggestions(false);
+      setActiveSuggestIdx(-1);
+    }
   };
 
   const handleFetchCandidates = async () => {
     if (!destinations[0] || destinations[0].trim().length < 3) {
-      alert(language === 'IT' ? 'Inserisci una destinazione valida' : 'Please enter a valid destination');
+      notify(getTranslation('err_valid_destination', language));
       return;
     }
     const coords = await resolveDestCoords();
-    if (!coords && import.meta.env.VITE_MAPBOX_TOKEN) {
+    // Guardia INCONDIZIONATA: il geocoding è server-side (/api/geocode, che usa
+    // anche MAPBOX_TOKEN non-VITE). Legarla a VITE_MAPBOX_TOKEN significava che
+    // un build senza quella variabile client generava senza lat/lon, senza
+    // ancora geografica e senza verifica anti-allucinazione (20 crediti per un
+    // itinerario nella città sbagliata).
+    if (!coords) {
       alertDestNotFound();
       return;
     }
@@ -2229,7 +2572,10 @@ export default function PlanScreen({
     setCandidates([]);
     setLikedCandidates([]);
     setCurrentCardIdx(0);
-    setTinderActiveDay(1);
+    setSwipeHistory([]);
+    setSwipeDir(null);
+    setBrokenImages({});
+    setExpandedCard(null);
     try {
       const res = await fetch('/api/groq/candidates', {
         method: 'POST',
@@ -2237,7 +2583,7 @@ export default function PlanScreen({
         body: JSON.stringify({
           destination: destinations[0],
           ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
-          days,
+          days: clampDays(days),
           categories: tinderSelectedCategories,
           includeEvents,
           includeTours,
@@ -2245,32 +2591,116 @@ export default function PlanScreen({
         })
       });
       const data = await res.json();
-      if (data && Array.isArray(data.candidates)) {
-        setCandidates(data.candidates);
+      if (data && Array.isArray(data.candidates) && data.candidates.length > 0) {
+        // Id stabile e univoco per ogni carta: il render usava
+        // `id_tappa || titolo_tappa` come key React e due attrazioni omonime
+        // senza id facevano riusare il nodo sbagliato durante l'animazione.
+        setCandidates(data.candidates.map((c: any, i: number) => ({
+          ...c,
+          _uid: c.id_tappa ? `c_${c.id_tappa}` : `c_${i}_${String(c.titolo_tappa || '').slice(0, 24)}`
+        })));
       } else {
-        alert(language === 'IT' ? 'Nessuna attrazione trovata. Riprova.' : 'No attractions found. Please try again.');
+        notify(getTranslation('no_attractions_found', language));
         setPlannerMode('tinder_form');
       }
     } catch (err) {
       console.error(err);
-      alert(language === 'IT' ? 'Errore durante il recupero dei candidati.' : 'Error retrieving candidates.');
+      notify(getTranslation('err_candidates', language));
       setPlannerMode('tinder_form');
     } finally {
       setCandidatesLoading(false);
     }
   };
 
+  /**
+   * Unico punto di verità per lo swipe (bottoni e gesto drag).
+   *
+   * Prima ogni bottone schedulava direttamente un setTimeout(300ms) leggendo
+   * `currentCardIdx` dalla closure: due tap ravvicinati programmavano due
+   * callback con lo STESSO indice, così la carta finiva due volte nei like e
+   * l'indice avanzava di 2 (una carta mai mostrata). La guardia su `swipeDir`
+   * blocca il secondo tap finché l'animazione è in corso.
+   */
+  const commitSwipe = useCallback((liked: boolean) => {
+    if (swipeDir) return;
+    const idx = currentCardIdx;
+    const card = candidates[idx];
+    if (!card) return;
+    setSwipeDir(liked ? 'right' : 'left');
+    setTimeout(() => {
+      if (liked) setLikedCandidates(prev => [...prev, card]);
+      setSwipeHistory(prev => [...prev, { idx, liked }]);
+      setCurrentCardIdx(i => i + 1);
+      setSwipeDir(null);
+    }, 300);
+  }, [swipeDir, currentCardIdx, candidates]);
+
+  // ── Quota gratuita sostituzioni (3 per ogni giorno dell'itinerario) ────
+  /** Quante gratuite sono già state usate su quel giorno. */
+  const getFreeReplacementsUsed = (dayKey: string): number => {
+    const map = (generatedPlan as any)?.free_replacements;
+    const n = map?.[dayKey];
+    return Number.isFinite(n) ? Number(n) : 0;
+  };
+
+  /** Gratuite ancora disponibili sul giorno (usata anche dalla UI). */
+  const freeReplacementsLeft = (dayNum: number | string): number =>
+    Math.max(0, FREE_REPLACEMENTS_PER_DAY - getFreeReplacementsUsed(String(dayNum)));
+
+  /** Giorno a cui appartiene una tappa, quando il chiamante non lo passa. */
+  const findGiornoOfTappa = (tappaId: string): number | null => {
+    const giorni = (generatedPlan as any)?.giorni;
+    if (!Array.isArray(giorni)) return null;
+    for (const g of giorni) {
+      if ((g?.tappe || []).some((t: any) => t?.id_tappa === tappaId)) return g.giorno;
+    }
+    return null;
+  };
+
+  /** Candidati non ancora selezionati, usati come alternative in revisione.
+   *  Prima lo stesso filtro veniva ricalcolato due volte per ogni tappa. */
+  const availableAlternatives = candidates.filter(
+    alt => !likedCandidates.some(lc => (lc._uid || lc.id_tappa || lc.titolo_tappa) === (alt._uid || alt.id_tappa || alt.titolo_tappa))
+  );
+
+  /** Annulla l'ultimo swipe (il gesto lo implica, ma non esisteva). */
+  const undoSwipe = useCallback(() => {
+    if (swipeDir) return;
+    setSwipeHistory(prev => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (last.liked) {
+        const card = candidates[last.idx];
+        const key = card?._uid;
+        setLikedCandidates(likes => {
+          // Rimuove solo l'ULTIMA occorrenza, non tutte le omonime.
+          const pos = key
+            ? likes.map(l => l._uid).lastIndexOf(key)
+            : likes.length - 1;
+          return pos >= 0 ? likes.filter((_, i) => i !== pos) : likes;
+        });
+      }
+      setCurrentCardIdx(last.idx);
+      return prev.slice(0, -1);
+    });
+  }, [swipeDir, candidates]);
+
   const handleGenerateTinderItinerary = async () => {
     if (loading) return; // anti doppio-click: doppio addebito
     if (likedCandidates.length === 0) {
-      alert(language === 'IT' ? "Seleziona almeno un'attrazione col cuore per generare l'itinerario." : 'Select at least one attraction with a heart to generate the itinerary.');
+      notify(getTranslation('err_no_liked', language));
       return;
     }
 
     // Coordinate certe PRIMA di addebitare: se la località non esiste ci si
     // ferma qui, senza consumare crediti.
     const coords = await resolveDestCoords();
-    if (!coords && import.meta.env.VITE_MAPBOX_TOKEN) {
+    // Guardia INCONDIZIONATA: il geocoding è server-side (/api/geocode, che usa
+    // anche MAPBOX_TOKEN non-VITE). Legarla a VITE_MAPBOX_TOKEN significava che
+    // un build senza quella variabile client generava senza lat/lon, senza
+    // ancora geografica e senza verifica anti-allucinazione (20 crediti per un
+    // itinerario nella città sbagliata).
+    if (!coords) {
       alertDestNotFound();
       return;
     }
@@ -2281,7 +2711,7 @@ export default function PlanScreen({
 
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
-    const numDaysForPricing = Math.max(1, days);
+    const numDaysForPricing = clampDays(days);
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
@@ -2291,21 +2721,37 @@ export default function PlanScreen({
     }
     const payRes = await consumeCredits(currentUserId, totalItineraryCost);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
       return;
     }
 
+    setActiveQuizLength(7);
     setLoading(true);
     setLockedStops({});
     setExpandedStops({});
+    setPlannerMode('view');
     try {
+      // Prima si inviava solo `titolo_tappa`: coordinate, tipo e soprattutto
+      // il link affiliato delle esperienze Viator/GYG/Ticketmaster aggiunte
+      // con "+" andavano persi, e con loro la commissione.
       const poisList = likedCandidates.map(c => c.titolo_tappa);
+      const poisDetailed = likedCandidates.map(c => ({
+        nome: c.titolo_tappa,
+        tipo: c.tipo || 'attrazione',
+        descrizione: c.attivita || '',
+        ...(Number.isFinite(Number(c?.coordinate?.lat)) && Number(c?.coordinate?.lat) !== 0
+          ? { lat: Number(c.coordinate.lat), lon: Number(c.coordinate.lng ?? c.coordinate.lon) }
+          : {}),
+        ...(c.link_info ? { link_info: c.link_info } : {})
+      }));
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination: destinations[0],
         ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
-        days,
+        days: numDaysForPricing,
         interests: selectedInterests.length > 0 ? selectedInterests : ['generale'],
         pois: poisList,
+        poisDetailed,
         lockedStops: [],
         specialRequests: specialRequests || 'Usa rigorosamente le attrazioni selezionate per strutturare le tappe principali.',
         includeEvents,
@@ -2314,13 +2760,28 @@ export default function PlanScreen({
         viaggiatori,
         ritmo,
         guida,
-        radius: parseInt(radius),
-        language
+        radius: safeRadius(),
+        language,
+        // Quota per-utente (non più per-IP): vedi handleRegenerateWithLocks.
+        userId: currentUserId
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
-      
+
       if (data && data.giorni) {
+        // Reinnesta i link affiliato che il modello non riporta nel JSON:
+        // il match è sul titolo della tappa, senza toccare il resto.
+        const linkByName = new Map(
+          likedCandidates.filter(c => c.link_info).map(c => [String(c.titolo_tappa || '').toLowerCase().trim(), c.link_info])
+        );
+        if (linkByName.size > 0 && Array.isArray(data.giorni)) {
+          for (const g of data.giorni) {
+            for (const t of (g.tappe || [])) {
+              const hit = linkByName.get(String(t.titolo_tappa || '').toLowerCase().trim());
+              if (hit && !t.link_info) t.link_info = hit;
+            }
+          }
+        }
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -2328,12 +2789,14 @@ export default function PlanScreen({
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
         await refundCredits(currentUserId, totalItineraryCost);
-        alert(language === 'IT' ? "Errore nella generazione dell'itinerario. I crediti ti sono stati restituiti." : 'Error generating itinerary. Your credits have been refunded.');
+        notify(getTranslation('err_generation_refunded', language));
+        setPlannerMode('tinder_review');
       }
     } catch (err) {
       console.error(err);
       await refundCredits(currentUserId, totalItineraryCost);
-      alert(language === 'IT' ? 'Errore durante la generazione. I crediti ti sono stati restituiti.' : 'Error during generation. Your credits have been refunded.');
+      notify(getTranslation('err_generation_refunded', language));
+      setPlannerMode('tinder_review');
     } finally {
       setLoading(false);
     }
@@ -2341,49 +2804,83 @@ export default function PlanScreen({
 
   const handleGenerateFromFavorites = async () => {
     if (loading) return; // anti doppio-click: doppio addebito
-    if (selectedFavoriteIds.length === 0) return alert("Seleziona almeno un luogo!");
+    if (selectedFavoriteIds.length === 0) { notify(getTranslation('err_no_favorites', language)); return; }
+    if (!validateTimes()) return;
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-    
+
+    // I POI vanno risolti PRIMA del prezzo: questo form non ha un selettore
+    // giorni, e il costo veniva calcolato su `days` (ereditato dalle altre
+    // modalità, default 2) mentre il server ne generava ceil(nPoi/3). Il
+    // modale annunciava quindi un numero di giorni che non c'entrava nulla
+    // con l'itinerario prodotto.
+    const allPois = [...itinerary.map(p => ({ id: p.id, poi: p })), ...savedPois.map(s => ({ id: s.poi_id || s.id, poi: s.data || s }))]
+      .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i); // Deduplicate
+
+    const selectedPoiObjs = allPois.filter(s => selectedFavoriteIds.includes(s.id));
+    const selectedPoisFull = selectedPoiObjs.map(s => {
+      const lat = s.poi.lat || s.poi.location?.lat || 0;
+      const lon = s.poi.lon || s.poi.location?.lng || 0;
+      return `${s.poi.name || s.poi.title} (Coordinate: ${lat}, ${lon}) - ${s.poi.description || s.poi.editorial_summary?.overview || s.poi.attivita || ""}`;
+    });
+
+    const effectiveDays = clampDays(Math.ceil(selectedPoisFull.length / 3) || 1);
+
+    // Ancoraggio geografico: la destinazione era la stringa fissa "Tappe
+    // Selezionate", quindi il modello non aveva nessun riferimento di zona.
+    // Passiamo il centroide dei preferiti scelti e un nome di località reale.
+    const coordsList = selectedPoiObjs
+      .map(s => ({ lat: Number(s.poi.lat ?? s.poi.location?.lat), lon: Number(s.poi.lon ?? s.poi.location?.lng) }))
+      .filter(c => Number.isFinite(c.lat) && Number.isFinite(c.lon) && (c.lat !== 0 || c.lon !== 0));
+    const centroid = coordsList.length
+      ? { lat: coordsList.reduce((a, c) => a + c.lat, 0) / coordsList.length,
+          lon: coordsList.reduce((a, c) => a + c.lon, 0) / coordsList.length }
+      : null;
+    const anchorName = selectedPoiObjs[0]?.poi?.city || selectedPoiObjs[0]?.poi?.comune
+      || selectedPoiObjs[0]?.poi?.name || selectedPoiObjs[0]?.poi?.title || "Tappe Selezionate";
+
+    // Controllo di prossimità: si potevano selezionare Palermo e Bolzano
+    // nello stesso itinerario di un giorno e l'AI produceva un piano
+    // geograficamente impossibile — pagato per intero. Qui si avvisa PRIMA
+    // dell'addebito, lasciando comunque la scelta all'utente.
+    if (centroid && coordsList.length > 1) {
+      const maxKm = Math.max(...coordsList.map(c => haversineKm(centroid.lat, centroid.lon, c.lat, c.lon)));
+      if (maxKm > MAX_FAVORITES_SPREAD_KM) {
+        const proceed = window.confirm(
+          `${getTranslation('warn_favorites_spread', language)} (~${Math.round(maxKm)} km).\n\n${getTranslation('warn_continue_anyway', language)}`
+        );
+        if (!proceed) return;
+      }
+    }
+
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
-    const numDaysForPricing = Math.max(1, days);
+    const numDaysForPricing = effectiveDays;
     // 10 crediti/giorno per la pianificazione; le audioguide si pagano a
     // parte (per luogo a prezzo pieno, oppure Day Pass 24h).
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
     const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
     if (!confirmed) {
-       
-       
        return;
     }
     const payRes = await consumeCredits(currentUserId, totalItineraryCost);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
-      
-      
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
       return;
     }
 
+    setActiveQuizLength(7);
     setLoading(true);
     setLockedStops({});
     setExpandedStops({});
+    setPlannerMode('view');
     try {
-      const allPois = [...itinerary.map(p => ({ id: p.id, poi: p })), ...savedPois.map(s => ({ id: s.poi_id || s.id, poi: s.data || s }))]
-        .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i); // Deduplicate
-
-      const selectedPoisFull = allPois
-        .filter(s => selectedFavoriteIds.includes(s.id))
-        .map(s => {
-          const lat = s.poi.lat || s.poi.location?.lat || 0;
-          const lon = s.poi.lon || s.poi.location?.lng || 0;
-          return `${s.poi.name || s.poi.title} (Coordinate: ${lat}, ${lon}) - ${s.poi.description || s.poi.editorial_summary?.overview || s.poi.attivita || ""}`;
-        });
-
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
-        destination: "Tappe Selezionate",
-        days: Math.ceil(selectedPoisFull.length / 3) || 1,
+        destination: anchorName,
+        ...(centroid ? { lat: centroid.lat, lon: centroid.lon } : {}),
+        days: effectiveDays,
         startTime,
         endTime,
         specialRequests,
@@ -2395,28 +2892,32 @@ export default function PlanScreen({
         guida,
         mese,
         pois: selectedPoisFull,
-        radius: parseInt(radius),
-        language
+        radius: safeRadius(),
+        language,
+        // Quota per-utente (non più per-IP): vedi handleRegenerateWithLocks.
+        userId: currentUserId
       }, (partialData) => {
         setGeneratedPlan(partialData);
       });
-      
+
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
-        // Qui la discrepanza era doppia: si addebitava sui giorni del form ma
-        // si generava ceil(tappe/3) giorni — il conguaglio riallinea al reale.
+        // Il prezzo è già allineato a ceil(tappe/3); il conguaglio copre il
+        // caso in cui l'AI restituisca meno giorni di quelli richiesti.
         await settleItineraryCost(currentUserId, numDaysForPricing, data);
       } else {
          // Nessun itinerario valido: rimborsiamo i crediti addebitati
          await refundCredits(currentUserId, totalItineraryCost);
-         alert("Impossibile generare l'itinerario. Assicurati che i luoghi includano un minimo di informazioni coerenti. I crediti ti sono stati restituiti.");
+         notify(getTranslation('err_generation_refunded', language));
+         setPlannerMode('form_b');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
       await refundCredits(currentUserId, totalItineraryCost);
-      alert("Errore durante la generazione dell'itinerario: " + (err.message || "Verifica la console") + "\nI crediti ti sono stati restituiti.");
+      notify(getTranslation('err_generation_refunded', language));
+      setPlannerMode('form_b');
     } finally {
       setLoading(false);
     }
@@ -2627,12 +3128,20 @@ export default function PlanScreen({
     try {
       const salvataggio = {
         ...generatedPlan,
+        // I podcast già pagati vanno salvati offline: senza, riaprendo da
+        // "Itinerari Offline" la cache era vuota e il bottone tornava a
+        // "Podcast" (15 crediti) invece di "Riascolta". Il merge esisteva solo
+        // in savePlanToSupabase.
+        podcast_cache: { ...(generatedPlan as any).podcast_cache, ...podcastCache },
         data_salvataggio: new Date().toISOString(),
         citta: generatedPlan.titolo || 'Città Personalizzata',
         descrizione: `Itinerario di ${generatedPlan.giorni.length} giorni con ${generatedPlan.giorni.reduce((acc, g) => acc + g.tappe.length, 0)} tappe.`
       };
-      
-      const id = (generatedPlan.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+
+      // Id offline stabile: prima derivava dal solo titolo → due "Weekend a
+      // Roma" si sovrascrivevano. Includiamo l'id del piano se presente.
+      const titleSlug = (generatedPlan.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+      const id = generatedPlan.id ? `${titleSlug}_${String(generatedPlan.id).slice(0, 8)}` : titleSlug;
       await saveOfflineItinerary(id, salvataggio);
       
       setOfflineStatus("Disponibile Offline ✓");
@@ -2683,28 +3192,41 @@ export default function PlanScreen({
     savePlanToSupabase(newPlan);
   };
 
-  const handleReplaceTappa = async (tappaId: string) => {
+  const handleReplaceTappa = async (tappaId: string, giornoNum?: number) => {
     if (!generatedPlan) return;
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-    
-    const bal = await getWalletBalance(currentUserId);
-    setCurrentBalance(bal.total);
-    // Costo per la sostituzione di una singola tappa (non l'intero itinerario)
-    const replaceCost = PRICING_LIST.audio_guide * 0.5;
-    const confirmed = await creditConfirm.requestConfirmation(replaceCost, "Sostituzione tappa AI", bal.total);
-    if (!confirmed) {
 
+    // ── Quota gratuita: FREE_REPLACEMENTS_PER_DAY sostituzioni per ogni
+    // giorno dell'itinerario. Il contatore vive dentro il piano (come
+    // podcast_cache), quindi viene salvato su Supabase e sopravvive al
+    // ricaricamento e al cambio dispositivo.
+    const dayKey = String(giornoNum ?? findGiornoOfTappa(tappaId) ?? 1);
+    const usedFree = getFreeReplacementsUsed(dayKey);
+    const isFree = usedFree < FREE_REPLACEMENTS_PER_DAY;
 
-       return;
-    }
-    const payRes = await consumeCredits(currentUserId, replaceCost);
-    if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
-
-
-      return;
+    let replaceCost = 0;
+    if (!isFree) {
+      const bal = await getWalletBalance(currentUserId);
+      setCurrentBalance(bal.total);
+      // Costo per la sostituzione di una singola tappa (non l'intero itinerario).
+      // Voce intera dedicata: `audio_guide * 0.5` produceva 7,5 crediti.
+      replaceCost = PRICING_LIST.replace_stop;
+      const confirmed = await creditConfirm.requestConfirmation(
+        replaceCost,
+        `${getTranslation('replace_action', language)} — ${getTranslation('day', language)} ${dayKey}`,
+        bal.total
+      );
+      if (!confirmed) {
+         return;
+      }
+      const payRes = await consumeCredits(currentUserId, replaceCost);
+      if (!payRes) {
+        notify(getTranslation('err_insufficient_credits', language));
+        setShowShop(true);
+        return;
+      }
     }
 
     setLoading(true);
@@ -2719,6 +3241,21 @@ export default function PlanScreen({
       });
       const data = await res.json();
       if (data.giorni) {
+        // Il contatore delle gratuite si incrementa SOLO a sostituzione
+        // riuscita, e viaggia dentro il piano salvato.
+        if (isFree) {
+          data.free_replacements = {
+            ...(generatedPlan as any).free_replacements,
+            [dayKey]: usedFree + 1
+          };
+          const left = FREE_REPLACEMENTS_PER_DAY - (usedFree + 1);
+          notify(
+            `${getTranslation('free_replacement_done', language)} — ${left}/${FREE_REPLACEMENTS_PER_DAY} ${getTranslation('remaining_today', language)}`,
+            'success'
+          );
+        } else {
+          data.free_replacements = (generatedPlan as any).free_replacements;
+        }
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         // Anche la tappa sostituita passa dalla verifica anti-allucinazione
@@ -2735,14 +3272,15 @@ export default function PlanScreen({
           }
         }).catch(() => {});
       } else {
-        // Nessuna sostituzione valida: rimborsiamo i crediti addebitati
-        await refundCredits(currentUserId, replaceCost);
-        alert("L'AI non è riuscita a sostituire la tappa. I crediti ti sono stati restituiti.");
+        // Nessuna sostituzione valida: si rimborsa solo se si era pagato
+        // (una gratuita fallita non consuma la quota, gestita sopra).
+        if (replaceCost > 0) await refundCredits(currentUserId, replaceCost);
+        notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Replace error:", err);
-      await refundCredits(currentUserId, replaceCost);
-      alert("Errore durante la sostituzione della tappa. I crediti ti sono stati restituiti.");
+      if (replaceCost > 0) await refundCredits(currentUserId, replaceCost);
+      notify(getTranslation('err_generation_refunded', language));
     } finally {
       setLoading(false);
     }
@@ -2750,7 +3288,7 @@ export default function PlanScreen({
 
   const handleAddTappa = (giornoIdx: number) => {
     if (!generatedPlan || !newStop.titolo_tappa || !newStop.ora) {
-      alert("Compila almeno 'Nome Tappa' e 'Ora'");
+      notify(getTranslation('err_stop_required_fields', language));
       return;
     }
 
@@ -2848,21 +3386,165 @@ export default function PlanScreen({
     );
   };
 
+  /**
+   * Select dei mesi condivisa dalle 3 modalità che la mostrano. Prima erano
+   * tre blocchi identici con le opzioni scritte a mano in italiano, servite
+   * così com'erano anche a chi usava FR/ES/RU/ZH.
+   */
+  const renderMonthSelect = (focusRing = 'focus:ring-primary/20') => (
+    <div className="space-y-3">
+      <label htmlFor="wip-month" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">
+        {getTranslation('period_month', language)}
+      </label>
+      <select
+        id="wip-month"
+        value={mese}
+        onChange={(e) => setMese(e.target.value)}
+        className={`w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm ${focusRing} focus:ring-2 outline-none font-bold text-on-surface text-sm appearance-none`}
+      >
+        <option value="">{getTranslation('month_any', language)}</option>
+        {MONTH_VALUES.map((m, i) => (
+          <option key={m} value={m}>{getTranslation(`month_${i + 1}`, language)}</option>
+        ))}
+      </select>
+    </div>
+  );
+
+  /**
+   * Fascia oraria condivisa. Il vincolo fine > inizio non esisteva: si poteva
+   * chiedere un itinerario dalle 20:00 alle 09:00 e il segnale d'errore
+   * arrivava solo (se arrivava) dal modello.
+   */
+  const renderTimeRange = () => {
+    const invalid = !!startTime && !!endTime && endTime <= startTime;
+    return (
+      <div className="space-y-1">
+        <div className="flex gap-4">
+          <div className="flex-1 space-y-3">
+            <label htmlFor="wip-start-time" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("start_time", language)}</label>
+            <input
+              id="wip-start-time"
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className={`w-full px-4 py-4 bg-white rounded-2xl border shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm ${invalid ? 'border-red-300' : 'border-outline-variant/10'}`}
+            />
+          </div>
+          <div className="flex-1 space-y-3">
+            <label htmlFor="wip-end-time" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("end_time", language)}</label>
+            <input
+              id="wip-end-time"
+              type="time"
+              value={endTime}
+              aria-invalid={invalid}
+              onChange={(e) => setEndTime(e.target.value)}
+              className={`w-full px-4 py-4 bg-white rounded-2xl border shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm ${invalid ? 'border-red-300' : 'border-outline-variant/10'}`}
+            />
+          </div>
+        </div>
+        {invalid && (
+          <p className="text-[11px] font-bold text-red-600 pl-1 pt-1" aria-live="polite">
+            {getTranslation('err_end_before_start', language)}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * Esperienze partner mostrate durante lo Swip. Era lo stesso blocco di ~85
+   * righe copiato in `tinder_swipe` e in `tinder_review`, con due variabili
+   * `lat`/`lon` calcolate e mai usate.
+   *
+   * `PREMIUM_DAY_SLOT` è lo slot fittizio usato per la fase di selezione, che
+   * non ha ancora giorni veri.
+   */
+  const renderPremiumExperiences = () => {
+    if (!includeTours) return null;
+    const addLiked = (exp: any, tipo: 'esperienza' | 'evento') => {
+      setLikedCandidates(prev => [...prev, {
+        _uid: `x_${tipo}_${prev.length}_${String(exp.name || '').slice(0, 24)}`,
+        titolo_tappa: exp.name,
+        attivita: (tipo === 'evento' ? exp.venue : exp.description) || exp.name,
+        tipo,
+        link_info: ensureAffiliateUrl(exp.url),
+        coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
+      }]);
+      notify(getTranslation(tipo === 'evento' ? 'event_added' : 'experience_added', language), 'success');
+    };
+    return (
+      <div className="mt-8 space-y-4">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-5 h-5 text-primary" />
+          <h3 className="text-sm font-black text-primary uppercase tracking-widest">{getTranslation('premium_experiences', language)}</h3>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => loadViatorForDay(PREMIUM_DAY_SLOT)}
+            className="flex-1 p-3 min-h-[44px] bg-orange-50 border border-orange-100 rounded-xl text-[10px] font-black text-[#FF5100] uppercase tracking-wider flex items-center justify-center gap-2"
+          >
+            {viatorLoadingDay === PREMIUM_DAY_SLOT ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ticket className="w-3.5 h-3.5" />} Viator
+          </button>
+          <button
+            type="button"
+            onClick={() => loadGygForDay(PREMIUM_DAY_SLOT)}
+            className="flex-1 p-3 min-h-[44px] bg-blue-50 border border-blue-100 rounded-xl text-[10px] font-black text-blue-700 uppercase tracking-wider flex items-center justify-center gap-2"
+          >
+            {gygLoadingDay === PREMIUM_DAY_SLOT ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Globe className="w-3.5 h-3.5" />} GetYourGuide
+          </button>
+          <button
+            type="button"
+            onClick={() => loadTicketmasterForDay(PREMIUM_DAY_SLOT)}
+            className="flex-1 p-3 min-h-[44px] bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] font-black text-indigo-700 uppercase tracking-wider flex items-center justify-center gap-2"
+          >
+            {ticketmasterLoadingDay === PREMIUM_DAY_SLOT ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Music className="w-3.5 h-3.5" />} Ticketmaster
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {viatorExpandedDay === PREMIUM_DAY_SLOT && (
+            <div className="space-y-3">
+              {viatorByDay[PREMIUM_DAY_SLOT]?.map((exp: any, eIdx: number) => (
+                <ExperienceCard key={eIdx} exp={exp} color="#FF5100" onAdd={() => addLiked(exp, 'esperienza')} />
+              ))}
+            </div>
+          )}
+          {gygExpandedDay === PREMIUM_DAY_SLOT && (
+            <div className="space-y-3">
+              {gygByDay[PREMIUM_DAY_SLOT]?.map((exp: any, eIdx: number) => (
+                <ExperienceCard key={eIdx} exp={exp} color="#0071eb" onAdd={() => addLiked(exp, 'esperienza')} />
+              ))}
+            </div>
+          )}
+          {ticketmasterExpandedDay === PREMIUM_DAY_SLOT && (
+            <div className="space-y-3">
+              {ticketmasterByDay[PREMIUM_DAY_SLOT]?.map((exp: any, eIdx: number) => (
+                <ExperienceCard key={eIdx} exp={exp} color="#1e3a8a" onAdd={() => addLiked(exp, 'evento')} />
+              ))}
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  };
+
   const renderAdvancedSettings = () => (
     <>
       <div className="space-y-2 pt-2">
         <label className="flex items-center gap-3 cursor-pointer bg-[#F8FAFC] p-4 rounded-2xl border border-outline-variant/10 hover:border-blue-200 transition-colors">
           <input type="checkbox" checked={includeEvents} onChange={e => setIncludeEvents(e.target.checked)} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
           <div className="flex flex-col">
-            <span className="text-sm font-bold text-primary">🎵 Includi Eventi Locali</span>
-            <span className="text-xs text-gray-500">Concerti, sport, fiere nelle vicinanze</span>
+            <span className="text-sm font-bold text-primary">🎵 {getTranslation('include_events', language)}</span>
+            <span className="text-xs text-gray-600">{getTranslation('include_events_desc', language)}</span>
           </div>
         </label>
         <label className="flex items-center gap-3 cursor-pointer bg-[#F8FAFC] p-4 rounded-2xl border border-outline-variant/10 hover:border-blue-200 transition-colors">
           <input type="checkbox" checked={includeTours} onChange={e => setIncludeTours(e.target.checked)} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
           <div className="flex flex-col">
-            <span className="text-sm font-bold text-primary">🗺️ Includi Tour e Attività</span>
-            <span className="text-xs text-gray-500">Esperienze Viator con commissione affiliato</span>
+            <span className="text-sm font-bold text-primary">🗺️ {getTranslation('include_tours', language)}</span>
+            <span className="text-xs text-gray-600">{getTranslation('include_tours_desc', language)}</span>
           </div>
         </label>
       </div>
@@ -2886,55 +3568,59 @@ export default function PlanScreen({
           >
             <div className="flex gap-4">
               <div className="flex-1 space-y-3">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">Budget</label>
-                <select 
+                <label htmlFor="wip-budget" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('budget_label', language)}</label>
+                <select
+                  id="wip-budget"
                   value={budget}
                   onChange={(e) => setBudget(e.target.value)}
                   className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                 >
-                  <option value="economico">Economico</option>
-                  <option value="standard">Standard</option>
-                  <option value="lusso">Lusso</option>
+                  <option value="economico">{getTranslation('budget_economico', language)}</option>
+                  <option value="standard">{getTranslation('budget_standard', language)}</option>
+                  <option value="lusso">{getTranslation('budget_lusso', language)}</option>
                 </select>
               </div>
               <div className="flex-1 space-y-3">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">Viaggiatori</label>
-                <select 
+                <label htmlFor="wip-travelers" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('travelers_label', language)}</label>
+                <select
+                  id="wip-travelers"
                   value={viaggiatori}
                   onChange={(e) => setViaggiatori(e.target.value)}
                   className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                 >
-                  <option value="solo">Solo</option>
-                  <option value="coppia">Coppia</option>
-                  <option value="famiglia">Famiglia</option>
-                  <option value="gruppo">Gruppo</option>
+                  <option value="solo">{getTranslation('travelers_solo', language)}</option>
+                  <option value="coppia">{getTranslation('travelers_coppia', language)}</option>
+                  <option value="famiglia">{getTranslation('travelers_famiglia', language)}</option>
+                  <option value="gruppo">{getTranslation('travelers_gruppo', language)}</option>
                 </select>
               </div>
             </div>
 
             <div className="flex gap-4">
               <div className="flex-1 space-y-3">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">Ritmo</label>
-                <select 
+                <label htmlFor="wip-pace" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('pace_label', language)}</label>
+                <select
+                  id="wip-pace"
                   value={ritmo}
                   onChange={(e) => setRitmo(e.target.value)}
                   className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                 >
-                  <option value="rilassato">Rilassato</option>
-                  <option value="standard">Standard</option>
-                  <option value="intenso">Intenso</option>
+                  <option value="rilassato">{getTranslation('pace_rilassato', language)}</option>
+                  <option value="standard">{getTranslation('pace_standard', language)}</option>
+                  <option value="intenso">{getTranslation('pace_intenso', language)}</option>
                 </select>
               </div>
               <div className="flex-1 space-y-3">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">Guida</label>
-                <select 
+                <label htmlFor="wip-guide" className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('guide_label', language)}</label>
+                <select
+                  id="wip-guide"
                   value={guida}
                   onChange={(e) => setGuida(e.target.value)}
                   className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                 >
-                  <option value="NICKY">Nicky (Locale)</option>
-                  <option value="DANTE">Dante (Storico)</option>
-                  <option value="ENTRAMBI">Entrambi</option>
+                  <option value="NICKY">{getTranslation('guide_nicky', language)}</option>
+                  <option value="DANTE">{getTranslation('guide_dante', language)}</option>
+                  <option value="ENTRAMBI">{getTranslation('guide_entrambi', language)}</option>
                 </select>
               </div>
             </div>
@@ -2945,10 +3631,12 @@ export default function PlanScreen({
   );
 
   return (
-    <div className="flex-1 flex flex-col bg-[#f8f5f0] overflow-y-auto overflow-x-hidden print:overflow-visible pb-32 print:pb-0 no-scrollbar">
+    // Scrollbar visibile: `no-scrollbar` sull'intera schermata toglieva
+    // l'unico indicatore che il contenuto continua sotto la piega.
+    <div className="flex-1 flex flex-col bg-[#f8f5f0] overflow-y-auto overflow-x-hidden print:overflow-visible pb-32 print:pb-0">
       {quotaToast && <QuotaLimitToast feature={quotaToast} onClose={closeQuotaToast} />}
-      {/* Header */}
-      <div className="px-6 pt-12 pb-8 bg-primary text-white relative overflow-hidden print:hidden">
+      {/* Header — pt rispetta la notch/status bar su PWA e app nativa */}
+      <div className="px-6 pt-[max(3rem,env(safe-area-inset-top))] pb-8 bg-primary text-white relative overflow-hidden print:hidden">
         <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -mr-20 -mt-20 blur-3xl"></div>
         <div className="relative z-10">
           <h1 className="text-3xl font-black tracking-tight mb-2">{getTranslation("planner_title", language)}</h1>
@@ -2967,60 +3655,64 @@ export default function PlanScreen({
               exit={{ opacity: 0, y: -20 }}
               className="space-y-4 pt-4"
             >
-              <div className="grid grid-cols-2 gap-4">
+              {/* 2 colonne su mobile, 4 da tablet in su: nel guscio desktop
+                  (max-w-1200) le card restavano larghe ~560px con testo 10px.
+                  `items-stretch` + h-full pareggia le altezze, che prima
+                  variavano con la lunghezza della descrizione. */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-stretch">
                 {/* Form A: Itinerario su Misura */}
-                <button 
+                <button
                   onClick={() => setPlannerMode('form_a')}
-                  className="p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-primary/50 transition-all"
+                  className="h-full p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary/40 outline-none transition-all"
                 >
-                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shrink-0">
                     <Sparkles className="w-6 h-6 text-primary" />
                   </div>
                   <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{getTranslation("auto_mode", language)}</h3>
-                  <p className="text-[10px] text-gray-500 font-bold leading-snug">
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">
                     {getTranslation("auto_mode_desc", language)}
                   </p>
                 </button>
 
                 {/* Form B: Basato sui Preferiti */}
-                <button 
+                <button
                   onClick={() => setPlannerMode('form_b')}
-                  className="p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-secondary/50 transition-all"
+                  className="h-full p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-secondary/50 focus-visible:ring-2 focus-visible:ring-secondary/40 outline-none transition-all"
                 >
-                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shrink-0">
                     <Star className="w-6 h-6 text-secondary" />
                   </div>
                   <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{getTranslation("favorites_mode", language)}</h3>
-                  <p className="text-[10px] text-gray-500 font-bold leading-snug">
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">
                     {getTranslation("favorites_mode_desc", language)}
                   </p>
                 </button>
 
                 {/* Form C: Esplorazione a Raggio */}
-                <button 
+                <button
                   onClick={() => setPlannerMode('form_c')}
-                  className="p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-tertiary/50 transition-all"
+                  className="h-full p-5 bg-white rounded-2xl border border-outline-variant/30 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-tertiary/50 focus-visible:ring-2 focus-visible:ring-tertiary/40 outline-none transition-all"
                 >
-                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="w-14 h-14 bg-surface-container-low rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shrink-0">
                     <Compass className="w-6 h-6 text-tertiary" />
                   </div>
-                  <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{language === 'IT' ? 'Raggio' : 'Radius'}</h3>
-                  <p className="text-[10px] text-gray-500 font-bold leading-snug">
-                    {language === 'IT' ? 'Scegli base e raggio per 3 alternative' : 'Choose base, radius for 3 options'}
+                  <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{getTranslation('radius_mode', language)}</h3>
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">
+                    {getTranslation('radius_mode_desc', language)}
                   </p>
                 </button>
 
                 {/* Form Swip */}
                 <button
                   onClick={() => setPlannerMode('tinder_form')}
-                  className="p-5 bg-gradient-to-br from-rose-50 to-pink-50 rounded-2xl border border-rose-200/60 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-rose-400/50 transition-all"
+                  className="h-full p-5 bg-gradient-to-br from-rose-50 to-pink-50 rounded-2xl border border-rose-200/60 shadow-sm flex flex-col items-center text-center group hover:shadow-md hover:border-rose-400/50 focus-visible:ring-2 focus-visible:ring-rose-400/40 outline-none transition-all"
                 >
-                  <div className="w-14 h-14 bg-gradient-to-br from-rose-100 to-pink-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <div className="w-14 h-14 bg-gradient-to-br from-rose-100 to-pink-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shrink-0">
                     <Heart className="w-6 h-6 text-rose-500 fill-rose-500" />
                   </div>
-                  <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{language === 'IT' ? 'Swip' : 'Swip'}</h3>
-                  <p className="text-[10px] text-gray-500 font-bold leading-snug">
-                    {language === 'IT' ? 'Scorri e scegli le attrazioni' : 'Swipe to choose attractions'}
+                  <h3 className="text-sm font-black text-gray-900 mb-1.5 leading-tight">{getTranslation('swip_mode', language)}</h3>
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">
+                    {getTranslation('swip_mode_desc', language)}
                   </p>
                 </button>
               </div>
@@ -3036,7 +3728,7 @@ export default function PlanScreen({
                   </div>
                   <div className="text-left">
                     <h3 className="text-xs font-black text-gray-900">{getTranslation('my_itineraries', language)}</h3>
-                    <p className="text-[9px] text-gray-500 font-bold">{language === 'IT' ? 'Viaggi salvati' : 'Saved trips'}</p>
+                    <p className="text-[10px] text-gray-600 font-bold">{getTranslation('saved_trips', language)}</p>
                   </div>
                 </button>
                 <button 
@@ -3048,7 +3740,7 @@ export default function PlanScreen({
                   </div>
                   <div className="text-left">
                     <h3 className="text-xs font-black text-white">{getTranslation("offline_mode", language)}</h3>
-                    <p className="text-[9px] text-gray-300 font-bold">{language === 'IT' ? 'Senza internet' : 'No internet'}</p>
+                    <p className="text-[10px] text-white/70 font-bold">{getTranslation('no_internet', language)}</p>
                   </div>
                 </button>
               </div>
@@ -3072,9 +3764,14 @@ export default function PlanScreen({
                       <div key={idx} className="relative flex items-center gap-2">
                         <div className="relative flex-1 border-b border-outline focus-within:border-primary transition-colors pb-1">
                           <MapPin className="absolute left-1 top-1/2 -translate-y-1/2 w-4 h-4 text-outline" />
-                          <input 
-                            type="text" 
-                            placeholder={idx === 0 ? "Es: Firenze, Roma..." : "Aggiungi altra destinazione..."}
+                          <input
+                            type="text"
+                            role="combobox"
+                            aria-expanded={isSuggestOpen(idx)}
+                            aria-controls={`wip-dest-list-${idx}`}
+                            aria-autocomplete="list"
+                            autoComplete="off"
+                            placeholder={idx === 0 ? "Es: Firenze, Roma..." : getTranslation('add_destination', language)}
                             className="w-full pl-8 pr-4 py-3 bg-transparent outline-none font-medium text-on-surface text-base placeholder:text-outline-variant"
                             value={dest}
                             onChange={(e) => {
@@ -3089,6 +3786,7 @@ export default function PlanScreen({
                               setFocusedDestIdx(idx);
                               setShowSuggestions(true);
                             }}
+                            onKeyDown={(e) => handleSuggestKeyDown(e, idx, handleGenerateAutomatic)}
                             onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                           />
                         </div>
@@ -3096,89 +3794,88 @@ export default function PlanScreen({
                         {destinations.length > 1 && (
                           <button
                             type="button"
+                            aria-label={getTranslation('remove_action', language)}
                             onClick={() => {
                               const newDests = destinations.filter((_, i) => i !== idx);
                               setDestinations(newDests);
+                              setFocusedDestIdx(null);
+                              setShowSuggestions(false);
                             }}
-                            className="p-3 bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors shrink-0"
+                            className="min-w-[44px] min-h-[44px] flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-colors shrink-0"
                           >
                             <X className="w-4 h-4" />
                           </button>
                         )}
+
+                        {/* La tendina vive DENTRO la riga (che è `relative`):
+                            prima era un absolute senza antenato posizionato nel
+                            blocco, quindi finiva sotto il pulsante "Aggiungi
+                            destinazione" e restava lì anche digitando nel 2°/3°
+                            campo, staccata da quello attivo. */}
+                        <AnimatePresence>
+                          {isSuggestOpen(idx) && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -10 }}
+                              id={`wip-dest-list-${idx}`}
+                              role="listbox"
+                              aria-label={getTranslation("destination", language)}
+                              className="absolute top-full left-0 right-0 mt-2 bg-surface rounded-2xl shadow-xl border border-outline-variant/10 overflow-hidden z-50 max-h-72 overflow-y-auto"
+                            >
+                              {isSearching ? (
+                                <div className="p-4 text-center text-sm font-semibold text-on-surface-variant flex items-center justify-center gap-2" aria-live="polite">
+                                  <Loader2 className="w-4 h-4 animate-spin" /> {getTranslation('searching', language)}
+                                </div>
+                              ) : suggestions.length > 0 ? (
+                                /* Ordine naturale: la tendina si apre verso il BASSO, il
+                                   risultato migliore deve stare in cima (il vecchio
+                                   reverse() lo spingeva in fondo alla lista). */
+                                suggestions.map((suggestion, index) => {
+                                  const full = suggestion.display_name || suggestion.description || '';
+                                  const main = full.split(',')[0];
+                                  const rest = full.split(',').slice(1).join(',').trim();
+                                  return (
+                                  <button
+                                    key={index}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={index === activeSuggestIdx}
+                                    className={`w-full text-left px-4 py-3.5 min-h-[52px] transition-colors border-b border-outline-variant/5 last:border-0 flex items-start gap-3 ${index === activeSuggestIdx ? 'bg-primary/10' : 'hover:bg-primary/5 active:bg-primary/10'}`}
+                                    onMouseEnter={() => setActiveSuggestIdx(index)}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => pickSuggestion(suggestion, idx)}
+                                  >
+                                    <div className="mt-0.5 p-1.5 bg-primary/5 rounded-lg shrink-0">
+                                      <MapPin className="w-4 h-4 text-primary" />
+                                    </div>
+                                    <span className="flex flex-col min-w-0">
+                                      <span className="text-[15px] font-bold text-on-surface leading-tight break-words">{main}</span>
+                                      {rest && <span className="text-xs text-on-surface-variant leading-snug mt-0.5 break-words">{rest}</span>}
+                                    </span>
+                                  </button>
+                                  );
+                                })
+                              ) : (
+                                <div className="p-4 text-center text-sm font-semibold text-on-surface-variant" aria-live="polite">
+                                  {getTranslation('no_results', language)}
+                                </div>
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                       </div>
                     ))}
                   </div>
 
                   <button
                     type="button"
+                    disabled={destinations.length >= MAX_DESTINATIONS}
                     onClick={() => setDestinations([...destinations, ''])}
-                    className="mt-2 text-xs font-black text-primary hover:text-primary-hover flex items-center gap-1.5 px-3 py-1.5 bg-primary/5 rounded-xl border border-primary/10 transition-all active:scale-95"
+                    className="mt-2 text-xs font-black text-primary hover:text-primary-hover flex items-center gap-1.5 px-3 py-1.5 bg-primary/5 rounded-xl border border-primary/10 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <span>➕</span> {language === 'IT' ? 'Aggiungi destinazione' : 'Add destination'}
+                    <span>➕</span> {getTranslation('add_destination', language)}
                   </button>
-
-                  {/* Suggestions Dropdown */}
-                  <AnimatePresence>
-                    {showSuggestions && focusedDestIdx !== null && (destinations[focusedDestIdx]?.length >= 3) && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        role="listbox"
-                        aria-label={getTranslation("destination", language)}
-                        className="absolute left-6 right-6 mt-2 bg-surface rounded-2xl shadow-xl border border-outline-variant/10 overflow-hidden z-50 max-h-72 overflow-y-auto"
-                      >
-                        {isSearching ? (
-                          <div className="p-4 text-center text-sm font-semibold text-on-surface-variant flex items-center justify-center gap-2" aria-live="polite">
-                            <Loader2 className="w-4 h-4 animate-spin" /> {language === 'IT' ? 'Ricerca...' : 'Searching...'}
-                          </div>
-                        ) : suggestions.length > 0 ? (
-                          /* Ordine naturale: la tendina si apre verso il BASSO, il
-                             risultato migliore deve stare in cima (il vecchio
-                             reverse() lo spingeva in fondo alla lista). */
-                          suggestions.map((suggestion, index) => {
-                            const full = suggestion.display_name || suggestion.description || '';
-                            const main = full.split(',')[0];
-                            const rest = full.split(',').slice(1).join(',').trim();
-                            return (
-                            <button
-                              key={index}
-                              type="button"
-                              role="option"
-                              aria-selected={false}
-                              className="w-full text-left px-4 py-3.5 min-h-[52px] hover:bg-primary/5 active:bg-primary/10 transition-colors border-b border-outline-variant/5 last:border-0 flex items-start gap-3"
-                              onClick={() => {
-                                const name = suggestion.isMapbox
-                                  ? suggestion.description.split(",")[0]
-                                  : (suggestion.display_name || suggestion.description);
-                                const newDests = [...destinations];
-                                newDests[focusedDestIdx] = name;
-                                setDestinations(newDests);
-                                if (focusedDestIdx === 0 && suggestion.lat != null && suggestion.lon != null) {
-                                  setDestCoords({ lat: suggestion.lat, lon: suggestion.lon, label: name });
-                                }
-                                setShowSuggestions(false);
-                                setFocusedDestIdx(null);
-                              }}
-                            >
-                              <div className="mt-0.5 p-1.5 bg-primary/5 rounded-lg shrink-0">
-                                <MapPin className="w-4 h-4 text-primary" />
-                              </div>
-                              <span className="flex flex-col min-w-0">
-                                <span className="text-[15px] font-bold text-on-surface leading-tight break-words">{main}</span>
-                                {rest && <span className="text-xs text-on-surface-variant leading-snug mt-0.5 break-words">{rest}</span>}
-                              </span>
-                            </button>
-                            );
-                          })
-                        ) : (
-                          <div className="p-4 text-center text-sm font-semibold text-on-surface-variant" aria-live="polite">
-                            {language === 'IT' ? 'Nessun risultato trovato.' : 'No results found.'}
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </div>
 
                 <div className="space-y-3">
@@ -3200,8 +3897,12 @@ export default function PlanScreen({
                         type="number"
                         min="1"
                         max="30"
+                        aria-label={getTranslation('duration', language)}
                         value={days}
-                        onChange={(e) => setDays(parseInt(e.target.value) || 1)}
+                        // min/max su un input number non vincolano il valore
+                        // digitato: un "99" battuto a mano portava la conferma
+                        // crediti a 990. Ora si tronca subito a [1, 30].
+                        onChange={(e) => setDays(clampDays(parseInt(e.target.value, 10)))}
                         className="w-full text-center font-black text-primary text-sm bg-transparent outline-none"
                       />
                       <span className="text-xs font-bold text-primary/40 pr-2">gg</span>
@@ -3209,58 +3910,20 @@ export default function PlanScreen({
                   </div>
                 </div>
 
-                <div className="space-y-3">
-                  <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('period_month', language)}</label>
-                  <select 
-                    value={mese}
-                    onChange={(e) => setMese(e.target.value)}
-                    className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm appearance-none"
-                  >
-                    <option value="">{getTranslation('generic_any', language)}</option>
-                    <option value="Gennaio">Gennaio</option>
-                    <option value="Febbraio">Febbraio</option>
-                    <option value="Marzo">Marzo</option>
-                    <option value="Aprile">Aprile</option>
-                    <option value="Maggio">Maggio</option>
-                    <option value="Giugno">Giugno</option>
-                    <option value="Luglio">Luglio</option>
-                    <option value="Agosto">Agosto</option>
-                    <option value="Settembre">Settembre</option>
-                    <option value="Ottobre">Ottobre</option>
-                    <option value="Novembre">Novembre</option>
-                    <option value="Dicembre">Dicembre</option>
-                  </select>
-                </div>
+                {renderMonthSelect()}
 
-                <div className="flex gap-4">
-                  <div className="flex-1 space-y-3">
-                    <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("start_time", language)}</label>
-                    <input 
-                      type="time" 
-                      value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
-                      className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
-                    />
-                  </div>
-                  <div className="flex-1 space-y-3">
-                    <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("end_time", language)}</label>
-                    <input 
-                      type="time" 
-                      value={endTime}
-                      onChange={(e) => setEndTime(e.target.value)}
-                      className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
-                    />
-                  </div>
-                </div>
+                {renderTimeRange()}
 
                 <div className="space-y-3">
                   <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("interests", language)}</label>
                   <div className="flex flex-wrap gap-3">
                     {interests.map(i => (
-                      <button 
+                      <button
                         key={i.id}
+                        type="button"
+                        aria-pressed={selectedInterests.includes(i.id)}
                         onClick={() => toggleInterest(i.id)}
-                        className={`px-6 py-3 rounded-full font-black text-xs transition-all border ${selectedInterests.includes(i.id) ? 'bg-primary text-white border-primary shadow-lg shadow-primary/20' : 'bg-white border-outline-variant/10 text-primary/60 hover:border-primary/30'}`}
+                        className={`px-6 py-3 rounded-full font-black text-xs transition-all border ${selectedInterests.includes(i.id) ? 'bg-primary text-white border-primary shadow-lg shadow-primary/20' : 'bg-white border-outline-variant/10 text-primary/70 hover:border-primary/30'}`}
                       >
                         {i.label}
                       </button>
@@ -3289,13 +3952,23 @@ export default function PlanScreen({
                 >
                   <X className="w-6 h-6" />
                 </button>
-                <button 
+                <button
+                  type="button"
                   onClick={handleGenerateAutomatic}
                   disabled={loading || !isOnline || !destinations.some(d => d.trim().length >= 3)}
-                  className="flex-1 h-16 bg-primary text-white rounded-3xl font-black tracking-tight shadow-xl shadow-primary/20 flex items-center justify-center gap-3 active:scale-95 transition-transform disabled:opacity-50 px-2"
+                  className="flex-1 h-16 bg-primary text-white rounded-3xl font-black tracking-tight shadow-xl shadow-primary/20 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform disabled:opacity-50 px-2"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <img src="/avatar.png" alt="Avatar" className="w-8 h-8 rounded-full border border-white/20 object-cover" />}
-                  <span className="text-sm">{isOnline ? "WIP, Genera l'itinerario" : getTranslation("offline_btn", language)}</span>
+                  <span className="flex items-center gap-3">
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <img src="/avatar.png" alt="" className="w-8 h-8 rounded-full border border-white/20 object-cover" />}
+                    <span className="text-sm">{isOnline ? "WIP, Genera l'itinerario" : getTranslation("offline_btn", language)}</span>
+                  </span>
+                  {/* Trasparenza sullo sconto libreria dichiarata PRIMA di
+                      pagare, non solo dopo. */}
+                  {isOnline && (
+                    <span className="text-[10px] font-bold text-white/75 normal-case tracking-normal leading-tight text-center px-2">
+                      {getTranslation('library_note', language)}
+                    </span>
+                  )}
                 </button>
               </div>
             </motion.div>
@@ -3306,6 +3979,7 @@ export default function PlanScreen({
               key="form_b"
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
               className="space-y-6 pt-4"
             >
               <div className="flex justify-between items-center mb-4 px-1">
@@ -3315,55 +3989,52 @@ export default function PlanScreen({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 max-h-[50dvh] overflow-y-auto pr-2 no-scrollbar">
+              {/* Scrollbar visibile: con `no-scrollbar` e 30+ preferiti nulla
+                  segnalava che la lista proseguiva sotto il bordo. */}
+              <div className="grid grid-cols-1 gap-4 max-h-[50dvh] overflow-y-auto pr-2">
                 {[...itinerary.map(p => ({ id: p.id, poi: p })), ...savedPois.map(s => ({ id: s.poi_id || s.id, poi: s.data || s }))]
                   .filter((v, i, a) => a.findIndex(t => t.id === v.id) === i) // Deduplicate
                   .map(item => (
-                  <button 
+                  <button
                     key={item.id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={selectedFavoriteIds.includes(item.id)}
                     onClick={() => toggleFavorite(item.id)}
-                    className={`p-4 rounded-[2rem] border transition-all flex items-center gap-4 text-left ${selectedFavoriteIds.includes(item.id) ? 'bg-secondary/5 border-secondary shadow-md' : 'bg-white border-outline-variant/10 shadow-sm opacity-60'}`}
+                    className={`p-4 rounded-[2rem] border transition-all flex items-center gap-4 text-left ${selectedFavoriteIds.includes(item.id) ? 'bg-secondary/5 border-secondary shadow-md' : 'bg-white border-outline-variant/10 shadow-sm opacity-75'}`}
                   >
                     <FavoriteImageOrIcon poi={item.poi || {}} />
-                    <div className="flex-1">
-                      <h4 className="font-black text-on-surface text-sm">{item.poi?.name || item.poi?.title || 'Monumento'}</h4>
-                      <p className="text-[10px] font-bold text-on-surface-variant opacity-60 uppercase">{item.poi?.category || 'Migliore Scelta'}</p>
+                    {/* min-w-0 + line-clamp: senza, un nome lungo mandava a capo
+                        e sfondava l'altezza fissa della riga. */}
+                    <div className="flex-1 min-w-0">
+                      <h4 title={item.poi?.name || item.poi?.title || ''} className="font-black text-on-surface text-sm line-clamp-2 break-words">{item.poi?.name || item.poi?.title || 'Monumento'}</h4>
+                      <p className="text-[10px] font-bold text-on-surface-variant/70 uppercase truncate">{item.poi?.category || ''}</p>
                     </div>
-                    <div className={`w-6 h-6 rounded-full flex items-center justify-center transition-all ${selectedFavoriteIds.includes(item.id) ? 'bg-secondary text-white' : 'border-2 border-outline-variant/20'}`}>
+                    <div className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center transition-all ${selectedFavoriteIds.includes(item.id) ? 'bg-secondary text-white' : 'border-2 border-outline-variant/30'}`}>
                       {selectedFavoriteIds.includes(item.id) && <Check className="w-4 h-4" />}
                     </div>
                   </button>
                 ))}
                 
                 {itinerary.length === 0 && savedPois.length === 0 && (
-                   <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
-                      <Heart className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">{getTranslation("no_gems", language)}</p>
+                   <div className="p-10 border-2 border-dashed border-outline-variant/40 rounded-[2.5rem] flex flex-col items-center text-center text-on-surface-variant/70">
+                      <Heart className="w-12 h-12 mb-4 opacity-60" />
+                      <p className="text-sm font-bold mb-4">{getTranslation("no_gems", language)}</p>
+                      {/* Prima era un vicolo cieco: nessuna via per andare ad
+                          aggiungere preferiti. */}
+                      <button
+                        type="button"
+                        onClick={() => window.dispatchEvent(new CustomEvent('wip-open-map-area'))}
+                        className="px-5 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-sm hover:bg-primary/90 transition-colors flex items-center gap-2"
+                      >
+                        <Map className="w-4 h-4" /> {getTranslation('explore_map', language)}
+                      </button>
                    </div>
                 )}
               </div>
 
-              <div className="space-y-3 pt-4">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('period_month', language)}</label>
-                <select 
-                  value={mese}
-                  onChange={(e) => setMese(e.target.value)}
-                  className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm appearance-none"
-                >
-                  <option value="">{getTranslation('generic_any', language)}</option>
-                  <option value="Gennaio">Gennaio</option>
-                  <option value="Febbraio">Febbraio</option>
-                  <option value="Marzo">Marzo</option>
-                  <option value="Aprile">Aprile</option>
-                  <option value="Maggio">Maggio</option>
-                  <option value="Giugno">Giugno</option>
-                  <option value="Luglio">Luglio</option>
-                  <option value="Agosto">Agosto</option>
-                  <option value="Settembre">Settembre</option>
-                  <option value="Ottobre">Ottobre</option>
-                  <option value="Novembre">Novembre</option>
-                  <option value="Dicembre">Dicembre</option>
-                </select>
+              <div className="pt-4">
+                {renderMonthSelect()}
               </div>
 
               <div className="space-y-3 pt-4">
@@ -3408,10 +4079,15 @@ export default function PlanScreen({
                   <div className="relative flex items-center gap-2">
                     <div className="relative flex-1">
                       <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-primary/30" />
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
+                        role="combobox"
+                        aria-expanded={isSuggestOpen(0)}
+                        aria-controls="wip-base-list"
+                        aria-autocomplete="list"
+                        autoComplete="off"
                         placeholder={getTranslation('starting_point_placeholder', language)}
-                        className="w-full pl-12 pr-12 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
+                        className="w-full pl-12 pr-14 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                         value={destinations[0] || ''}
                         onChange={(e) => {
                           const newDests = [...destinations];
@@ -3425,84 +4101,89 @@ export default function PlanScreen({
                           setFocusedDestIdx(0);
                           setShowSuggestions(true);
                         }}
+                        onKeyDown={(e) => handleSuggestKeyDown(e, 0, handleGenerateRadius)}
                         onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                       />
-                      <button 
+                      {/* Il GPS può metterci diversi secondi: senza stato di
+                          attesa il bottone sembrava non fare nulla. */}
+                      <button
+                        type="button"
+                        disabled={gpsLoading}
                         onClick={() => {
-                          if (navigator.geolocation) {
-                            navigator.geolocation.getCurrentPosition((pos) => {
-                              const newDests = [...destinations];
-                              newDests[0] = `GPS: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
-                              setDestinations(newDests);
-                            }, () => alert("Impossibile ottenere la posizione."));
-                          }
+                          if (!navigator.geolocation) { notify(getTranslation('err_gps_failed', language)); return; }
+                          setGpsLoading(true);
+                          navigator.geolocation.getCurrentPosition((pos) => {
+                            const newDests = [...destinations];
+                            newDests[0] = `GPS: ${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)}`;
+                            setDestinations(newDests);
+                            // Coordinate note con certezza: niente geocoding sul testo.
+                            setDestCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude, label: newDests[0] });
+                            setShowSuggestions(false);
+                            setGpsLoading(false);
+                          }, () => { setGpsLoading(false); notify(getTranslation('err_gps_failed', language)); },
+                          { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
                         }}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-primary hover:text-primary-hover p-1"
-                        title={getTranslation('use_my_location', language)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-primary hover:text-primary-hover disabled:opacity-50 rounded-xl"
+                        aria-label={getTranslation('use_my_location', language)}
+                        title={gpsLoading ? getTranslation('getting_location', language) : getTranslation('use_my_location', language)}
                       >
-                        <LocateFixed className="w-5 h-5" />
+                        {gpsLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <LocateFixed className="w-5 h-5" />}
                       </button>
                     </div>
+
+                    {/* Tendina ancorata al campo (il wrapper è `relative`):
+                        prima era un absolute agganciato al contenitore del tab. */}
+                    <AnimatePresence>
+                      {isSuggestOpen(0) && !destinations[0]?.startsWith("GPS:") && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          id="wip-base-list"
+                          role="listbox"
+                          aria-label={getTranslation('starting_point_placeholder', language)}
+                          className="absolute top-full left-0 right-0 mt-2 bg-surface rounded-2xl shadow-xl border border-outline-variant/10 overflow-hidden z-50 max-h-72 overflow-y-auto"
+                        >
+                          {isSearching ? (
+                            <div className="p-4 text-center text-sm font-semibold text-on-surface-variant flex items-center justify-center gap-2" aria-live="polite">
+                              <Loader2 className="w-4 h-4 animate-spin" /> {getTranslation('searching', language)}
+                            </div>
+                          ) : suggestions.length > 0 ? (
+                            /* Ordine naturale (niente reverse): miglior risultato in cima */
+                            suggestions.map((suggestion, index) => {
+                              const full = suggestion.display_name || suggestion.description || '';
+                              const main = full.split(',')[0];
+                              const rest = full.split(',').slice(1).join(',').trim();
+                              return (
+                              <button
+                                key={index}
+                                type="button"
+                                role="option"
+                                aria-selected={index === activeSuggestIdx}
+                                className={`w-full text-left px-4 py-3.5 min-h-[52px] transition-colors border-b border-outline-variant/5 last:border-0 flex items-start gap-3 ${index === activeSuggestIdx ? 'bg-primary/10' : 'hover:bg-primary/5 active:bg-primary/10'}`}
+                                onMouseEnter={() => setActiveSuggestIdx(index)}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => pickSuggestion(suggestion, 0)}
+                              >
+                                <div className="mt-0.5 p-1.5 bg-primary/5 rounded-lg shrink-0">
+                                  <MapPin className="w-4 h-4 text-primary" />
+                                </div>
+                                <span className="flex flex-col min-w-0">
+                                  <span className="text-[15px] font-bold text-on-surface leading-tight break-words">{main}</span>
+                                  {rest && <span className="text-xs text-on-surface-variant leading-snug mt-0.5 break-words">{rest}</span>}
+                                </span>
+                              </button>
+                              );
+                            })
+                          ) : (
+                            <div className="p-4 text-center text-sm font-semibold text-on-surface-variant" aria-live="polite">
+                              {getTranslation('no_results', language)}
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
-                  
-                  {/* Suggestions per Form C */}
-                  <AnimatePresence>
-                    {showSuggestions && focusedDestIdx === 0 && (destinations[0]?.length >= 3) && !destinations[0]?.startsWith("GPS:") && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -10 }}
-                        role="listbox"
-                        aria-label={getTranslation('starting_point_placeholder', language)}
-                        className="absolute left-6 right-6 mt-2 bg-surface rounded-2xl shadow-xl border border-outline-variant/10 overflow-hidden z-50 max-h-72 overflow-y-auto"
-                      >
-                        {isSearching ? (
-                          <div className="p-4 text-center text-sm font-semibold text-on-surface-variant flex items-center justify-center gap-2" aria-live="polite">
-                            <Loader2 className="w-4 h-4 animate-spin" /> Ricerca...
-                          </div>
-                        ) : suggestions.length > 0 ? (
-                          /* Ordine naturale (niente reverse): miglior risultato in cima */
-                          suggestions.map((suggestion, index) => {
-                            const full = suggestion.display_name || suggestion.description || '';
-                            const main = full.split(',')[0];
-                            const rest = full.split(',').slice(1).join(',').trim();
-                            return (
-                            <button
-                              key={index}
-                              type="button"
-                              role="option"
-                              aria-selected={false}
-                              className="w-full text-left px-4 py-3.5 min-h-[52px] hover:bg-primary/5 active:bg-primary/10 transition-colors border-b border-outline-variant/5 last:border-0 flex items-start gap-3"
-                              onClick={() => {
-                                const label = suggestion.display_name || suggestion.description;
-                                const newDests = [...destinations];
-                                newDests[0] = label;
-                                setDestinations(newDests);
-                                if (suggestion.lat != null && suggestion.lon != null) {
-                                  setDestCoords({ lat: suggestion.lat, lon: suggestion.lon, label });
-                                }
-                                setShowSuggestions(false);
-                                setFocusedDestIdx(null);
-                              }}
-                            >
-                              <div className="mt-0.5 p-1.5 bg-primary/5 rounded-lg shrink-0">
-                                <MapPin className="w-4 h-4 text-primary" />
-                              </div>
-                              <span className="flex flex-col min-w-0">
-                                <span className="text-[15px] font-bold text-on-surface leading-tight break-words">{main}</span>
-                                {rest && <span className="text-xs text-on-surface-variant leading-snug mt-0.5 break-words">{rest}</span>}
-                              </span>
-                            </button>
-                            );
-                          })
-                        ) : (
-                          <div className="p-4 text-center text-sm font-semibold text-on-surface-variant" aria-live="polite">
-                            Nessun risultato trovato.
-                          </div>
-                        )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </div>
 
                 {/* Raggio chilometrico */}
@@ -3511,33 +4192,41 @@ export default function PlanScreen({
                     {getTranslation('radius_km', language)}
                   </label>
                   <div className="flex items-center gap-2 bg-white p-2 rounded-3xl border border-outline-variant/10 shadow-sm">
-                    {['100', '300', '500'].map(r => (
-                      <button 
+                    {/* La vecchia catena di ternari conteneva una condizione mai
+                        vera (`!['custom'].includes(radius)`) e si riduceva a
+                        questo confronto. */}
+                    {RADIUS_PRESETS.map(r => (
+                      <button
                         key={r}
+                        type="button"
+                        aria-pressed={radius === r}
                         onClick={() => setRadius(r)}
-                        className={`flex-1 py-3 rounded-2xl font-black text-sm transition-all ${radius === r && !['custom'].includes(radius) ? 'bg-emerald-600 text-white shadow-lg' : !['100','300','500'].includes(radius) ? 'text-primary/40 hover:bg-primary/5' : radius === r ? 'bg-emerald-600 text-white shadow-lg' : 'text-primary/40 hover:bg-primary/5'}`}
+                        className={`flex-1 py-3 rounded-2xl font-black text-sm transition-all ${radius === r ? 'bg-emerald-600 text-white shadow-lg' : 'text-primary/70 hover:bg-primary/5'}`}
                       >
                         {r} km
                       </button>
                     ))}
                     {/* Input personalizzato */}
-                    <div className={`flex items-center gap-1 px-3 py-2 rounded-2xl border-2 transition-all ${!['100','300','500'].includes(radius) ? 'border-emerald-500 bg-emerald-50' : 'border-gray-100 bg-gray-50'}`}>
+                    <div className={`flex items-center gap-1 px-3 py-2 rounded-2xl border-2 transition-all ${!RADIUS_PRESETS.includes(radius as any) ? 'border-emerald-500 bg-emerald-50' : 'border-gray-100 bg-gray-50'}`}>
                       <input
                         type="number"
-                        min="0"
+                        min="1"
                         max="5000"
                         placeholder="0"
-                        value={!['100','300','500'].includes(radius) ? radius : ''}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setRadius(v);
-                        }}
+                        aria-label={getTranslation('radius_km', language)}
+                        value={!RADIUS_PRESETS.includes(radius as any) ? radius : ''}
+                        onChange={(e) => setRadius(e.target.value)}
                         onFocus={() => {
-                          if (['100','300','500'].includes(radius)) setRadius('');
+                          if (RADIUS_PRESETS.includes(radius as any)) setRadius('');
                         }}
-                        className="w-14 bg-transparent text-sm font-black text-emerald-700 placeholder-gray-300 outline-none text-center"
+                        // Uscendo dal campo senza aver digitato nulla, `radius`
+                        // restava stringa vuota e finiva al server come `null`
+                        // (parseInt('') → NaN → null in JSON). Si ripristina il
+                        // preset di default.
+                        onBlur={() => { if (!radius || !(parseInt(radius, 10) > 0)) setRadius('300'); }}
+                        className="w-14 bg-transparent text-sm font-black text-emerald-700 placeholder-gray-400 outline-none text-center"
                       />
-                      <span className="text-[10px] font-black text-gray-400">km</span>
+                      <span className="text-[10px] font-black text-gray-500">km</span>
                     </div>
                   </div>
                 </div>
@@ -3546,51 +4235,23 @@ export default function PlanScreen({
                 <div className="space-y-3">
                   <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("interests", language)}</label>
                   <div className="flex flex-wrap gap-2">
-                    {[
-                      { id: 'arte', label: 'Arte & Cultura', icon: '🏛️' },
-                      { id: 'famiglia', label: 'Famiglie', icon: '👨‍👩‍👧' },
-                      { id: 'enogastronomia', label: 'Enogastronomia', icon: '🍷' },
-                      { id: 'mare', label: 'Mare', icon: '🌊' },
-                      { id: 'montagna', label: 'Montagna', icon: '⛰️' },
-                      { id: 'natura', label: 'Natura', icon: '🌳' },
-                      { id: 'relax', label: 'Relax', icon: '💆' },
-                      { id: 'avventura', label: 'Avventura', icon: '🧗' }
-                    ].map(interest => (
-                      <button 
+                    {RADIUS_INTERESTS.map(interest => (
+                      <button
                         key={interest.id}
+                        type="button"
+                        aria-pressed={selectedInterests.includes(interest.id)}
                         onClick={() => toggleInterest(interest.id)}
-                        className={`px-4 py-2.5 rounded-2xl text-sm font-black transition-all flex items-center gap-2 border-2 ${selectedInterests.includes(interest.id) ? 'bg-primary text-white border-primary shadow-md' : 'bg-white text-on-surface border-outline-variant/10 hover:border-primary/30'}`}
+                        className={`px-4 py-2.5 min-h-[44px] rounded-2xl text-sm font-black transition-all flex items-center gap-2 border-2 ${selectedInterests.includes(interest.id) ? 'bg-primary text-white border-primary shadow-md' : 'bg-white text-on-surface border-outline-variant/10 hover:border-primary/30'}`}
                       >
-                        <span>{interest.icon}</span>
-                        {interest.label}
+                        <span aria-hidden="true">{interest.icon}</span>
+                        {getTranslation(`interest_${interest.id}`, language)}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 {/* Periodo / Mese */}
-                <div className="space-y-3">
-                  <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation('period_month', language)}</label>
-                  <select 
-                    value={mese}
-                    onChange={(e) => setMese(e.target.value)}
-                    className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-emerald-600/20 outline-none font-bold text-on-surface text-sm appearance-none"
-                  >
-                    <option value="">{getTranslation('generic_any', language)}</option>
-                    <option value="Gennaio">Gennaio</option>
-                    <option value="Febbraio">Febbraio</option>
-                    <option value="Marzo">Marzo</option>
-                    <option value="Aprile">Aprile</option>
-                    <option value="Maggio">Maggio</option>
-                    <option value="Giugno">Giugno</option>
-                    <option value="Luglio">Luglio</option>
-                    <option value="Agosto">Agosto</option>
-                    <option value="Settembre">Settembre</option>
-                    <option value="Ottobre">Ottobre</option>
-                    <option value="Novembre">Novembre</option>
-                    <option value="Dicembre">Dicembre</option>
-                  </select>
-                </div>
+                {renderMonthSelect('focus:ring-emerald-600/20')}
 
                 {/* Durata in Giorni */}
                 <div className="space-y-3">
@@ -3612,8 +4273,12 @@ export default function PlanScreen({
                         type="number"
                         min="1"
                         max="30"
+                        aria-label={getTranslation('duration', language)}
                         value={days}
-                        onChange={(e) => setDays(parseInt(e.target.value) || 1)}
+                        // min/max su un input number non vincolano il valore
+                        // digitato: un "99" battuto a mano portava la conferma
+                        // crediti a 990. Ora si tronca subito a [1, 30].
+                        onChange={(e) => setDays(clampDays(parseInt(e.target.value, 10)))}
                         className="w-full text-center font-black text-primary text-sm bg-transparent outline-none"
                       />
                       <span className="text-xs font-bold text-primary/40 pr-2">gg</span>
@@ -3621,45 +4286,39 @@ export default function PlanScreen({
                   </div>
                 </div>
 
-                <div className="flex gap-4">
-                  <div className="flex-1 space-y-3">
-                    <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("start_time", language)}</label>
-                    <input 
-                      type="time" 
-                      value={startTime}
-                      onChange={(e) => setStartTime(e.target.value)}
-                      className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
-                    />
-                  </div>
-                  <div className="flex-1 space-y-3">
-                    <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("end_time", language)}</label>
-                    <input 
-                      type="time" 
-                      value={endTime}
-                      onChange={(e) => setEndTime(e.target.value)}
-                      className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
-                    />
-                  </div>
-                </div>
+                {renderTimeRange()}
 
                 {renderAdvancedSettings()}
 
               </div>
 
               <div className="flex gap-4 pt-4">
-                <button 
+                <button
+                  type="button"
+                  aria-label={getTranslation('cancel', language)}
                   onClick={() => setPlannerMode('selection')}
-                  className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/40 hover:text-red-500 transition-colors shadow-sm shrink-0"
+                  className="w-16 h-16 rounded-3xl bg-white border border-outline-variant/10 flex items-center justify-center text-primary/60 hover:text-red-500 transition-colors shadow-sm shrink-0"
                 >
                   <X className="w-6 h-6" />
                 </button>
-                <button 
+                {/* Il disabled ora rispecchia le stesse condizioni della
+                    Modalità 1: prima il bottone era attivo anche senza città e
+                    il click apriva soltanto un alert. */}
+                <button
+                  type="button"
                   onClick={handleGenerateRadius}
-                  disabled={loading || !isOnline}
-                  className="flex-1 h-16 bg-emerald-600 text-white rounded-3xl font-black tracking-tight shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 active:scale-95 transition-transform disabled:opacity-50"
+                  disabled={loading || !isOnline || !(destinations[0]?.trim().length >= 3)}
+                  className="flex-1 h-16 bg-emerald-600 text-white rounded-3xl font-black tracking-tight shadow-xl shadow-emerald-500/20 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform disabled:opacity-50"
                 >
-                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                  {isOnline ? (getTranslation('find_3_alts', language)) : getTranslation("offline_btn", language)}
+                  <span className="flex items-center gap-3">
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
+                    {isOnline ? (getTranslation('find_3_alts', language)) : getTranslation("offline_btn", language)}
+                  </span>
+                  {isOnline && (
+                    <span className="text-[10px] font-bold text-white/80 normal-case tracking-normal">
+                      {getTranslation('free_no_credits', language)}
+                    </span>
+                  )}
                 </button>
               </div>
             </motion.div>
@@ -3679,8 +4338,8 @@ export default function PlanScreen({
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <div>
-                  <h2 className="text-lg font-black text-primary tracking-tight">❤️ Swip</h2>
-                  <p className="text-xs text-gray-500 font-bold">{language === 'IT' ? 'Scegli le attrazioni che ti piacciono' : 'Choose attractions you like'}</p>
+                  <h2 className="text-lg font-black text-primary tracking-tight">❤️ {getTranslation('swip_mode', language)}</h2>
+                  <p className="text-xs text-gray-600 font-bold">{getTranslation('swip_subtitle', language)}</p>
                 </div>
               </div>
 
@@ -3689,14 +4348,24 @@ export default function PlanScreen({
                 <label className="block text-xs font-black text-primary uppercase tracking-widest mb-2">{getTranslation('destination', language)}</label>
                 <input
                   type="text"
+                  role="combobox"
+                  aria-expanded={isSuggestOpen(0)}
+                  aria-controls="wip-swip-list"
+                  aria-autocomplete="list"
+                  autoComplete="off"
                   value={destinations[0]}
                   onChange={(e) => { const d = [...destinations]; d[0] = e.target.value; setDestinations(d); setDestCoords(null); setShowSuggestions(true); setFocusedDestIdx(0); }}
                   onFocus={() => { setShowSuggestions(true); setFocusedDestIdx(0); }}
+                  onKeyDown={(e) => handleSuggestKeyDown(e, 0, handleFetchCandidates)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                   placeholder="Es: Firenze, Roma..."
-                  className="w-full px-5 py-4 rounded-3xl border-2 border-amber-100 bg-white/80 text-sm font-bold placeholder-gray-300 focus:outline-none focus:border-primary/30 shadow-sm"
+                  // Bordo ambra su una schermata rosa/rosso: allineato alla
+                  // palette della modalità.
+                  className="w-full px-5 py-4 rounded-3xl border-2 border-rose-100 bg-white/80 text-sm font-bold placeholder-gray-400 focus:outline-none focus:border-rose-300 shadow-sm"
                 />
-                {showSuggestions && focusedDestIdx === 0 && suggestions.length > 0 && (
+                {isSuggestOpen(0) && suggestions.length > 0 && (
                   <div
+                    id="wip-swip-list"
                     role="listbox"
                     aria-label={getTranslation('destination', language)}
                     className="absolute z-50 top-full left-0 right-0 mt-1 bg-white rounded-2xl border border-gray-100 shadow-xl overflow-hidden max-h-72 overflow-y-auto"
@@ -3706,17 +4375,22 @@ export default function PlanScreen({
                       const main = full.split(',')[0];
                       const rest = full.split(',').slice(1).join(',').trim();
                       return (
-                      <button key={i} type="button" role="option" aria-selected={false} onMouseDown={() => {
-                        const name = s.isMapbox ? s.description.split(",")[0] : (s.description || s.structured_formatting?.main_text || s.name || '');
-                        const d = [...destinations]; d[0] = name; setDestinations(d); setShowSuggestions(false); setFocusedDestIdx(null);
-                        if (s.lat != null && s.lon != null) setDestCoords({ lat: s.lat, lon: s.lon, label: name });
-                      }} className="w-full text-left px-4 py-3.5 min-h-[52px] hover:bg-primary/5 active:bg-primary/10 flex items-start gap-3 border-b border-gray-50 last:border-0">
+                      <button
+                        key={i}
+                        type="button"
+                        role="option"
+                        aria-selected={i === activeSuggestIdx}
+                        onMouseEnter={() => setActiveSuggestIdx(i)}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickSuggestion(s, 0)}
+                        className={`w-full text-left px-4 py-3.5 min-h-[52px] flex items-start gap-3 border-b border-gray-50 last:border-0 ${i === activeSuggestIdx ? 'bg-primary/10' : 'hover:bg-primary/5 active:bg-primary/10'}`}
+                      >
                         <div className="mt-0.5 p-1.5 bg-primary/5 rounded-lg shrink-0">
                           <MapPin className="w-4 h-4 text-primary" />
                         </div>
                         <span className="flex flex-col min-w-0">
                           <span className="text-[15px] font-bold text-gray-800 leading-tight break-words">{main}</span>
-                          {rest && <span className="text-xs text-gray-500 leading-snug mt-0.5 break-words">{rest}</span>}
+                          {rest && <span className="text-xs text-gray-600 leading-snug mt-0.5 break-words">{rest}</span>}
                         </span>
                       </button>
                       );
@@ -3737,27 +4411,22 @@ export default function PlanScreen({
 
               {/* Categorie */}
               <div>
-                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{language === 'IT' ? 'Tipo di Attrazioni' : 'Attraction Types'}</label>
+                <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('attraction_types', language)}</label>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    { id: 'musei', label: '🏛️ Musei' },
-                    { id: 'monumenti', label: '🗿 Monumenti' },
-                    { id: 'chiese', label: '⛪ Chiese' },
-                    { id: 'attrazioni', label: '📍 Attrazioni' },
-                    { id: 'gastronomia', label: '🍕 Gastronomia' },
-                    { id: 'natura', label: '🌿 Natura' },
-                    { id: 'shopping', label: '🛍️ Shopping' },
-                  ].map(cat => (
+                  {SWIP_CATEGORIES.map(cat => (
                     <button
                       key={cat.id}
+                      type="button"
+                      aria-pressed={tinderSelectedCategories.includes(cat.id)}
                       onClick={() => setTinderSelectedCategories(prev => prev.includes(cat.id) ? prev.filter(c => c !== cat.id) : [...prev, cat.id])}
-                      className={`px-3 py-2 rounded-full text-xs font-black transition-all border ${
+                      className={`px-3.5 py-2 min-h-[44px] rounded-full text-xs font-black transition-all border flex items-center gap-1.5 ${
                         tinderSelectedCategories.includes(cat.id)
                           ? 'bg-primary text-white border-primary shadow-md'
-                          : 'bg-white text-gray-600 border-gray-100 hover:border-primary/30'
+                          : 'bg-white text-gray-700 border-gray-200 hover:border-primary/30'
                       }`}
                     >
-                      {cat.label}
+                      <span aria-hidden="true">{cat.icon}</span>
+                      {getTranslation(`cat_${cat.id}`, language)}
                     </button>
                   ))}
                 </div>
@@ -3767,11 +4436,16 @@ export default function PlanScreen({
 
               <button
                 onClick={handleFetchCandidates}
-                disabled={!destinations[0] || destinations[0].trim().length < 3 || !isOnline}
-                className="w-full h-16 bg-gradient-to-r from-rose-400 to-pink-500 text-white rounded-3xl font-black tracking-tight shadow-xl shadow-pink-400/30 flex items-center justify-center gap-3 active:scale-95 transition-transform disabled:opacity-50"
+                disabled={candidatesLoading || !destinations[0] || destinations[0].trim().length < 3 || !isOnline}
+                className="w-full h-16 bg-gradient-to-r from-rose-400 to-pink-500 text-white rounded-3xl font-black tracking-tight shadow-xl shadow-pink-400/30 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform disabled:opacity-50"
               >
-                <Heart className="w-5 h-5 fill-white" />
-                {language === 'IT' ? 'Inizia lo Swip!' : 'Start Swip!'}
+                <span className="flex items-center gap-3">
+                  {candidatesLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Heart className="w-5 h-5 fill-white" />}
+                  {getTranslation('start_swip', language)}
+                </span>
+                <span className="text-[10px] font-bold text-white/85 normal-case tracking-normal">
+                  {getTranslation('free_no_credits', language)}
+                </span>
               </button>
             </motion.div>
           )}
@@ -3786,12 +4460,17 @@ export default function PlanScreen({
               className="space-y-4 pt-4 pb-24"
             >
               <div className="flex items-center justify-between">
-                <button onClick={() => setPlannerMode('tinder_form')} className="w-9 h-9 bg-white rounded-xl border border-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-50 shadow-sm">
+                <button
+                  type="button"
+                  aria-label={getTranslation('go_back', language)}
+                  onClick={() => setPlannerMode('tinder_form')}
+                  className="min-w-[44px] min-h-[44px] bg-white rounded-xl border border-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-50 shadow-sm"
+                >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
-                <div className="text-center">
-                  <p className="text-xs font-black text-gray-500 uppercase tracking-widest">
-                    {currentCardIdx + 1} / {candidates.length > 0 ? candidates.length : '...'}
+                <div className="text-center" aria-live="polite">
+                  <p className="text-xs font-black text-gray-600 uppercase tracking-widest">
+                    {Math.min(currentCardIdx + 1, candidates.length || 1)} / {candidates.length > 0 ? candidates.length : '...'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 bg-rose-50 rounded-2xl px-3 py-1.5">
@@ -3803,75 +4482,79 @@ export default function PlanScreen({
               {candidatesLoading ? (
                 <div className="flex flex-col items-center justify-center py-20 gap-4">
                   <Loader2 className="w-10 h-10 text-primary animate-spin" />
-                  <p className="text-sm font-black text-gray-500">{language === 'IT' ? 'Carico le attrazioni...' : 'Loading attractions...'}</p>
+                  <p className="text-sm font-black text-gray-600">{getTranslation('loading_attractions', language)}</p>
                 </div>
               ) : candidates.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 gap-4">
-                  <p className="text-4xl">😕</p>
-                  <p className="text-sm font-black text-gray-500">{language === 'IT' ? 'Nessuna attrazione trovata' : 'No attractions found'}</p>
-                  <button onClick={() => setPlannerMode('tinder_form')} className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-sm">{language === 'IT' ? 'Riprova' : 'Try Again'}</button>
+                  <p className="text-4xl" aria-hidden="true">😕</p>
+                  <p className="text-sm font-black text-gray-600">{getTranslation('no_attractions_found', language)}</p>
+                  <button type="button" onClick={() => setPlannerMode('tinder_form')} className="px-6 py-3 min-h-[44px] bg-primary text-white rounded-2xl font-black text-sm">{getTranslation('try_again', language)}</button>
                 </div>
               ) : currentCardIdx >= candidates.length ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-5 text-center">
-                  <span className="text-5xl">🎉</span>
-                  <h3 className="text-xl font-black text-primary">{language === 'IT' ? 'Hai visto tutte le attrazioni!' : 'You\'ve seen all attractions!'}</h3>
-                  <p className="text-sm text-gray-500 font-bold">{language === 'IT' ? `${likedCandidates.length} tappe selezionate` : `${likedCandidates.length} stops selected`}</p>
+                  <span className="text-5xl" aria-hidden="true">🎉</span>
+                  <h3 className="text-xl font-black text-primary">{getTranslation('seen_all_attractions', language)}</h3>
+                  <p className="text-sm text-gray-600 font-bold">{likedCandidates.length} {getTranslation('stops_selected', language)}</p>
                   {likedCandidates.length > 0 ? (
                     <button
+                      type="button"
                       onClick={() => setPlannerMode('tinder_review')}
                       className="w-full h-16 bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-3xl font-black shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-transform"
                     >
                       <ListChecks className="w-5 h-5" />
-                      {language === 'IT' ? 'Rivedi le Tappe' : 'Review Stops'}
+                      {getTranslation('review_stops', language)}
                     </button>
                   ) : (
-                    <button onClick={() => { setCurrentCardIdx(0); setLikedCandidates([]); }} className="px-6 py-3 bg-gray-100 text-gray-700 rounded-2xl font-black text-sm">
-                      {language === 'IT' ? 'Ricomincia' : 'Start Over'}
+                    <button type="button" onClick={() => { setCurrentCardIdx(0); setLikedCandidates([]); setSwipeHistory([]); }} className="px-6 py-3 min-h-[44px] bg-gray-100 text-gray-700 rounded-2xl font-black text-sm">
+                      {getTranslation('start_over', language)}
+                    </button>
+                  )}
+                  {/* Anche a mazzo finito si può tornare sull'ultima carta. */}
+                  {swipeHistory.length > 0 && (
+                    <button type="button" onClick={undoSwipe} className="px-5 py-2.5 min-h-[44px] text-gray-600 font-black text-xs uppercase tracking-widest flex items-center gap-2 hover:text-primary transition-colors">
+                      <RotateCcw className="w-4 h-4" /> {getTranslation('undo_last', language)}
                     </button>
                   )}
                 </div>
               ) : (
                 <div className="relative">
-                  {/* Stack di card */}
-                  {[candidates[currentCardIdx + 1], candidates[currentCardIdx]].filter(Boolean).map((card, stackIdx, arr) => {
-                    const isTop = stackIdx === arr.length - 1;
+                  {/* Stack di card. La carta IN PRIMO PIANO è quella in flusso
+                      (`relative`), quella di sfondo è sovrapposta in absolute:
+                      prima era il contrario e l'altezza del contenitore la
+                      dettava la carta di sfondo, così un testo più lungo su
+                      quella attiva usciva dal riquadro. */}
+                  {[candidates[currentCardIdx], candidates[currentCardIdx + 1]].filter(Boolean).map((card, stackIdx) => {
+                    const isTop = stackIdx === 0;
                     return (
                       <motion.div
-                        key={card.id_tappa || card.titolo_tappa}
+                        key={card._uid || card.id_tappa || `${card.titolo_tappa}-${stackIdx}`}
                         drag={isTop ? "x" : false}
                         dragConstraints={{ left: 0, right: 0 }}
                         dragElastic={0.7}
                         onDragEnd={(e, { offset }) => {
-                          if (offset.x > 80) {
-                            setSwipeDir('right');
-                            setTimeout(() => {
-                              setLikedCandidates(prev => [...prev, candidates[currentCardIdx]]);
-                              setCurrentCardIdx(i => i + 1);
-                              setSwipeDir(null);
-                            }, 300);
-                          } else if (offset.x < -80) {
-                            setSwipeDir('left');
-                            setTimeout(() => { setCurrentCardIdx(i => i + 1); setSwipeDir(null); }, 300);
-                          }
+                          if (offset.x > 80) commitSwipe(true);
+                          else if (offset.x < -80) commitSwipe(false);
                         }}
                         initial={isTop ? false : { scale: 0.95, y: 12, opacity: 0.6 }}
                         animate={isTop
                           ? { scale: 1, y: 0, opacity: 1, x: swipeDir === 'left' ? -300 : swipeDir === 'right' ? 300 : 0, rotate: swipeDir === 'left' ? -10 : swipeDir === 'right' ? 10 : 0 }
                           : { scale: 0.95, y: 12, opacity: 0.6 }
                         }
-                        className={`absolute inset-0 bg-white rounded-[2rem] border border-gray-100 shadow-xl overflow-hidden ${isTop ? 'z-10 cursor-grab active:cursor-grabbing' : 'z-0'}`}
-                        style={{ position: stackIdx === 0 ? 'relative' : 'absolute', top: 0, left: 0, right: 0 }}
+                        className={`bg-white rounded-[2rem] border border-gray-100 shadow-xl overflow-hidden ${isTop ? 'relative z-10 cursor-grab active:cursor-grabbing' : 'absolute inset-x-0 top-0 z-0 pointer-events-none'}`}
                       >
                         {/* Card content: foto reale se disponibile, altrimenti
                             sfondo tematico per categoria con medaglione. */}
-                        {(card.image_url || card.imageUrl || card.photo_url) ? (
+                        {(card.image_url || card.imageUrl || card.photo_url) && !brokenImages[card._uid] ? (
                           <div className="h-52 relative bg-gradient-to-br from-blue-200 via-sky-100 to-slate-50">
                             <img
                               src={card.image_url || card.imageUrl || card.photo_url}
                               alt={card.titolo_tappa}
                               className="w-full h-full object-cover"
                               draggable={false}
-                              onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                              loading="lazy"
+                              // Nascondere l'immagine lasciava una banda vuota di
+                              // 208px: si ricade sul medaglione tematico.
+                              onError={() => setBrokenImages(prev => ({ ...prev, [card._uid]: true }))}
                             />
                             <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/40 to-transparent" />
                           </div>
@@ -3896,15 +4579,29 @@ export default function PlanScreen({
                             </div>
                           </div>
                         )}
-                        <div className="p-6 space-y-3 pointer-events-none">
-                          <div className="flex items-center gap-2">
+                        <div className="p-6 space-y-3">
+                          <div className="flex items-center gap-2 pointer-events-none">
                             <span className="px-2.5 py-1 bg-primary/10 text-primary rounded-full text-[10px] font-black uppercase tracking-wider">{card.tipo || 'attrazione'}</span>
-                            <span className="text-[10px] text-gray-400 font-bold">{card.ora}</span>
+                            <span className="text-[10px] text-gray-500 font-bold">{card.ora}</span>
                           </div>
-                          <h3 className="text-lg font-black text-gray-900 leading-tight">{card.titolo_tappa}</h3>
-                          <p className="text-sm text-gray-600 font-medium leading-relaxed line-clamp-3">{card.attivita}</p>
+                          <h3 className="text-lg font-black text-gray-900 leading-tight pointer-events-none">{card.titolo_tappa}</h3>
+                          {/* La descrizione era troncata a 3 righe dentro un
+                              blocco `pointer-events-none`: illeggibile e
+                              impossibile da espandere. Ora si può aprire. */}
+                          <p className={`text-sm text-gray-700 font-medium leading-relaxed ${expandedCard === card._uid ? '' : 'line-clamp-3'}`}>
+                            {card.attivita}
+                          </p>
+                          {isTop && (card.attivita || '').length > 140 && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setExpandedCard(expandedCard === card._uid ? null : card._uid); }}
+                              className="text-[11px] font-black text-primary uppercase tracking-widest hover:underline"
+                            >
+                              {expandedCard === card._uid ? getTranslation('read_less', language) : getTranslation('read_more', language)}
+                            </button>
+                          )}
                           {card.consiglio_guida && (
-                            <p className="text-xs text-primary/70 font-bold italic">{card.consiglio_guida}</p>
+                            <p className="text-xs text-primary/80 font-bold italic pointer-events-none">{card.consiglio_guida}</p>
                           )}
                         </div>
                       </motion.div>
@@ -3912,133 +4609,59 @@ export default function PlanScreen({
                   })}
 
                   {/* Pulsanti swipe */}
-                  <div className="relative z-20 flex justify-center gap-6 mt-4" style={{ marginTop: '24px' }}>
+                  <div className="relative z-20 flex justify-center items-center gap-5 mt-6">
                     <button
-                      onClick={() => {
-                        setSwipeDir('left');
-                        setTimeout(() => { setCurrentCardIdx(i => i + 1); setSwipeDir(null); }, 300);
-                      }}
-                      className="w-16 h-16 bg-white border-2 border-gray-200 rounded-full flex items-center justify-center text-gray-400 shadow-lg hover:border-red-300 hover:text-red-400 hover:scale-110 transition-all active:scale-95"
+                      type="button"
+                      onClick={() => commitSwipe(false)}
+                      disabled={!!swipeDir}
+                      aria-label={getTranslation('remove_action', language)}
+                      className="w-16 h-16 bg-white border-2 border-gray-200 rounded-full flex items-center justify-center text-gray-500 shadow-lg hover:border-red-300 hover:text-red-500 hover:scale-110 transition-all active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
                     >
                       <X className="w-7 h-7" />
                     </button>
+                    {/* Undo: il gesto di swipe lo dà per scontato, ma prima
+                        l'unico rimedio era "Ricomincia" (che azzerava i like). */}
                     <button
-                      onClick={() => {
-                        setSwipeDir('right');
-                        setTimeout(() => {
-                          setLikedCandidates(prev => [...prev, candidates[currentCardIdx]]);
-                          setCurrentCardIdx(i => i + 1);
-                          setSwipeDir(null);
-                        }, 300);
-                      }}
-                      className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-300/40 hover:scale-110 transition-all active:scale-95"
+                      type="button"
+                      onClick={undoSwipe}
+                      disabled={swipeHistory.length === 0 || !!swipeDir}
+                      aria-label={getTranslation('undo_last', language)}
+                      title={getTranslation('undo_last', language)}
+                      className="w-12 h-12 bg-white border-2 border-gray-200 rounded-full flex items-center justify-center text-gray-500 shadow-md hover:border-amber-300 hover:text-amber-600 transition-all active:scale-95 disabled:opacity-30"
+                    >
+                      <RotateCcw className="w-5 h-5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => commitSwipe(true)}
+                      disabled={!!swipeDir}
+                      aria-label={getTranslation('selected_label', language)}
+                      className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center text-white shadow-lg shadow-pink-300/40 hover:scale-110 transition-all active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
                     >
                       <Heart className="w-7 h-7 fill-white" />
                     </button>
                   </div>
 
-                  {/* Liked list preview */}
-                  {/* ESPERIENZE PREMIUM CONSIGLIATE (PRIMA DELLA CREAZIONE) */}
-              {includeTours && (
-                <div className="mt-8 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <h3 className="text-sm font-black text-primary uppercase tracking-widest">{language === 'IT' ? 'Esperienze Premium consigliate' : 'Recommended Premium Experiences'}</h3>
-                  </div>
+                  {renderPremiumExperiences()}
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        // Prendi coordinate dalla prima tappa dei liked se possibile
-                        const first = likedCandidates[0];
-                        const lat = first?.coordinate?.lat || 0;
-                        const lon = first?.coordinate?.lng || 0;
-                        // Usiamo una versione fittizia di dayIdx 999 per la review
-                        loadViatorForDay(999);
-                      }}
-                      className="flex-1 p-3 bg-orange-50 border border-orange-100 rounded-xl text-[10px] font-black text-[#FF5100] uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Ticket className="w-3.5 h-3.5" /> Viator
-                    </button>
-                    <button
-                      onClick={() => loadGygForDay(999)}
-                      className="flex-1 p-3 bg-blue-50 border border-blue-100 rounded-xl text-[10px] font-black text-blue-600 uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Globe className="w-3.5 h-3.5" /> GetYourGuide
-                    </button>
-                    <button
-                      onClick={() => loadTicketmasterForDay(999)}
-                      className="flex-1 p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] font-black text-indigo-700 uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Music className="w-3.5 h-3.5" /> Ticketmaster
-                    </button>
-                  </div>
-
-                  <AnimatePresence>
-                    {viatorExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {viatorByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#FF5100" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.description || exp.name,
-                              tipo: 'esperienza',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                    {gygExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {gygByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#0071eb" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.description || exp.name,
-                              tipo: 'esperienza',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                    {ticketmasterExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {ticketmasterByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#1e3a8a" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.venue || exp.name,
-                              tipo: 'evento',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              )}
-
-              {likedCandidates.length > 0 && (
+                  {likedCandidates.length > 0 && (
                     <div className="mt-6 p-4 bg-rose-50 rounded-2xl border border-rose-100">
-                      <p className="text-xs font-black text-rose-600 uppercase tracking-widest mb-2">{language === 'IT' ? '❤️ Selezionati' : '❤️ Selected'}</p>
-                      <div className="flex flex-wrap gap-1.5">
+                      <p className="text-xs font-black text-rose-700 uppercase tracking-widest mb-2">❤️ {getTranslation('selected_label', language)}</p>
+                      <div className="flex flex-wrap gap-2">
                         {likedCandidates.map((c, i) => (
-                          <span key={i} className="px-2.5 py-1 bg-white rounded-full text-[10px] font-black text-rose-700 border border-rose-200 shadow-sm inline-flex items-center gap-1.5">
-                            {c.titolo_tappa}
-                            <button 
+                          <span key={c._uid || `${c.titolo_tappa}-${i}`} className="pl-3 pr-1 py-1 bg-white rounded-full text-[11px] font-black text-rose-700 border border-rose-200 shadow-sm inline-flex items-center gap-1.5 max-w-full">
+                            <span className="truncate max-w-[160px]" title={c.titolo_tappa}>{c.titolo_tappa}</span>
+                            {/* Il target era 8×8 px: impossibile da centrare col dito. */}
+                            <button
+                              type="button"
+                              aria-label={`${getTranslation('remove_action', language)}: ${c.titolo_tappa}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setLikedCandidates(prev => prev.filter((_, idx) => idx !== i));
                               }}
-                              className="bg-rose-100 hover:bg-rose-200 rounded-full p-0.5 transition-colors"
+                              className="w-7 h-7 shrink-0 bg-rose-100 hover:bg-rose-200 rounded-full flex items-center justify-center transition-colors"
                             >
-                              <X className="w-2 h-2" />
+                              <X className="w-3.5 h-3.5" />
                             </button>
                           </span>
                         ))}
@@ -4048,14 +4671,16 @@ export default function PlanScreen({
                 </div>
               )}
 
-              {/* Genera itinerario se ci sono liked e non siamo alla fine */}
-              {likedCandidates.length >= 3 && currentCardIdx < candidates.length && (
+              {/* Si può passare alla revisione con almeno UNA tappa: la vecchia
+                  soglia di 3 costringeva a esaurire tutto il mazzo. */}
+              {likedCandidates.length >= 1 && currentCardIdx < candidates.length && (
                 <button
+                  type="button"
                   onClick={() => setPlannerMode('tinder_review')}
-                  className="w-full py-4 bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-3xl font-black shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform"
+                  className="w-full py-4 min-h-[52px] bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-3xl font-black shadow-lg flex items-center justify-center gap-2 active:scale-95 transition-transform"
                 >
                   <ListChecks className="w-4 h-4" />
-                  {language === 'IT' ? `Rivedi ${likedCandidates.length} tappe` : `Review ${likedCandidates.length} stops`}
+                  {getTranslation('review_stops', language)} ({likedCandidates.length})
                 </button>
               )}
             </motion.div>
@@ -4071,49 +4696,60 @@ export default function PlanScreen({
               className="space-y-5 pt-4 pb-24"
             >
               <div className="flex items-center gap-3 mb-2">
-                <button onClick={() => setPlannerMode('tinder_swipe')} className="w-9 h-9 bg-white rounded-xl border border-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-50 shadow-sm transition-colors">
+                <button
+                  type="button"
+                  aria-label={getTranslation('go_back', language)}
+                  onClick={() => setPlannerMode('tinder_swipe')}
+                  className="min-w-[44px] min-h-[44px] bg-white rounded-xl border border-gray-100 flex items-center justify-center text-gray-600 hover:bg-gray-50 shadow-sm transition-colors"
+                >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <div>
-                  <h2 className="text-lg font-black text-primary tracking-tight">📋 {language === 'IT' ? 'Rivedi le Tappe' : 'Review Stops'}</h2>
-                  <p className="text-xs text-gray-500 font-bold">{language === 'IT' ? 'Rimuovi o sostituisci prima di generare' : 'Remove or replace before generating'}</p>
+                  <h2 className="text-lg font-black text-primary tracking-tight">📋 {getTranslation('review_stops', language)}</h2>
+                  <p className="text-xs text-gray-600 font-bold">{getTranslation('review_stops_subtitle', language)}</p>
                 </div>
               </div>
 
               {likedCandidates.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-                  <span className="text-4xl">🤷</span>
-                  <p className="text-sm font-black text-gray-500">{language === 'IT' ? 'Nessuna tappa selezionata' : 'No stops selected'}</p>
-                  <button onClick={() => setPlannerMode('tinder_swipe')} className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-sm">
-                    {language === 'IT' ? 'Torna allo Swip' : 'Back to Swip'}
+                  <span className="text-4xl" aria-hidden="true">🤷</span>
+                  <p className="text-sm font-black text-gray-600">{getTranslation('no_stops_selected', language)}</p>
+                  <button type="button" onClick={() => setPlannerMode('tinder_swipe')} className="px-6 py-3 min-h-[44px] bg-primary text-white rounded-2xl font-black text-sm">
+                    {getTranslation('back_to_swip', language)}
                   </button>
                 </div>
               ) : (
                 <div className="space-y-3">
                   {likedCandidates.map((c, i) => (
-                    <div key={c.id_tappa || c.titolo_tappa + i} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div key={c._uid || (c.id_tappa || c.titolo_tappa) + i} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
                       <div className="flex items-center gap-3 p-4">
-                        <span className="text-2xl shrink-0">
+                        <span className="text-2xl shrink-0" aria-hidden="true">
                           {c.tipo === 'museo' ? '🏛️' : c.tipo === 'chiesa' ? '⛪' : c.tipo === 'monumento' ? '🗿' : c.tipo === 'ristorante' ? '🍕' : c.tipo === 'parco' ? '🌿' : '📍'}
                         </span>
                         <div className="flex-1 min-w-0">
                           <h4 title={c.titolo_tappa} className="text-sm font-black text-gray-900 line-clamp-2">{c.titolo_tappa}</h4>
-                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{c.tipo || 'attrazione'} {c.ora ? `• ${c.ora}` : ''}</p>
+                          <p className="text-[10px] text-gray-600 font-bold uppercase tracking-wider">{c.tipo || 'attrazione'} {c.ora ? `• ${c.ora}` : ''}</p>
                         </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Target portati a 44px (erano 32). */}
+                        <div className="flex items-center gap-1 shrink-0">
                           <button
+                            type="button"
+                            aria-expanded={activeReplacingIdx === i}
                             onClick={() => setActiveReplacingIdx(activeReplacingIdx === i ? null : i)}
-                            className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center hover:bg-amber-100 transition-colors"
-                            title={language === 'IT' ? 'Sostituisci' : 'Replace'}
+                            className="min-w-[44px] min-h-[44px] bg-amber-50 text-amber-700 rounded-lg flex items-center justify-center hover:bg-amber-100 transition-colors"
+                            aria-label={getTranslation('replace_action', language)}
+                            title={getTranslation('replace_action', language)}
                           >
-                            <RefreshCw className="w-3.5 h-3.5" />
+                            <RefreshCw className="w-4 h-4" />
                           </button>
                           <button
+                            type="button"
                             onClick={() => { setLikedCandidates(prev => prev.filter((_, idx) => idx !== i)); if (activeReplacingIdx === i) setActiveReplacingIdx(null); }}
-                            className="w-8 h-8 bg-red-50 text-red-500 rounded-lg flex items-center justify-center hover:bg-red-100 transition-colors"
-                            title={language === 'IT' ? 'Rimuovi' : 'Remove'}
+                            className="min-w-[44px] min-h-[44px] bg-red-50 text-red-500 rounded-lg flex items-center justify-center hover:bg-red-100 transition-colors"
+                            aria-label={getTranslation('remove_action', language)}
+                            title={getTranslation('remove_action', language)}
                           >
-                            <X className="w-3.5 h-3.5" />
+                            <X className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
@@ -4128,14 +4764,13 @@ export default function PlanScreen({
                             className="border-t border-gray-100 bg-gray-50 overflow-hidden"
                           >
                             <p className="px-4 pt-3 pb-1 text-[10px] font-black text-primary uppercase tracking-widest">
-                              {language === 'IT' ? '🔄 Scegli un\'alternativa' : '🔄 Choose an alternative'}
+                              🔄 {getTranslation('choose_alternative', language)}
                             </p>
                             <div className="max-h-48 overflow-y-auto px-2 pb-3 space-y-1">
-                              {candidates
-                                .filter(alt => !likedCandidates.some(lc => (lc.id_tappa || lc.titolo_tappa) === (alt.id_tappa || alt.titolo_tappa)))
-                                .map((alt, ai) => (
+                              {availableAlternatives.map((alt, ai) => (
                                   <button
-                                    key={alt.id_tappa || alt.titolo_tappa + ai}
+                                    type="button"
+                                    key={alt._uid || (alt.id_tappa || alt.titolo_tappa) + ai}
                                     onClick={() => {
                                       setLikedCandidates(prev => {
                                         const copy = [...prev];
@@ -4144,22 +4779,22 @@ export default function PlanScreen({
                                       });
                                       setActiveReplacingIdx(null);
                                     }}
-                                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-white transition-colors text-left"
+                                    className="w-full min-h-[52px] flex items-center gap-2.5 px-3 py-2.5 rounded-xl hover:bg-white transition-colors text-left"
                                   >
-                                    <span className="text-lg shrink-0">
+                                    <span className="text-lg shrink-0" aria-hidden="true">
                                       {alt.tipo === 'museo' ? '🏛️' : alt.tipo === 'chiesa' ? '⛪' : alt.tipo === 'monumento' ? '🗿' : alt.tipo === 'ristorante' ? '🍕' : alt.tipo === 'parco' ? '🌿' : '📍'}
                                     </span>
                                     <div className="flex-1 min-w-0">
                                       <p title={alt.titolo_tappa} className="text-xs font-black text-gray-800 line-clamp-2">{alt.titolo_tappa}</p>
-                                      <p className="text-[10px] text-gray-400 font-bold">{alt.tipo || 'attrazione'}</p>
+                                      <p className="text-[10px] text-gray-600 font-bold">{alt.tipo || 'attrazione'}</p>
                                     </div>
                                     <span className="text-[10px] font-black text-primary bg-primary/10 px-2 py-1 rounded-lg shrink-0">
-                                      {language === 'IT' ? 'Usa' : 'Use'}
+                                      {getTranslation('use_alternative', language)}
                                     </span>
                                   </button>
                                 ))}
-                              {candidates.filter(alt => !likedCandidates.some(lc => (lc.id_tappa || lc.titolo_tappa) === (alt.id_tappa || alt.titolo_tappa))).length === 0 && (
-                                <p className="text-xs text-gray-400 font-bold text-center py-4">{language === 'IT' ? 'Nessuna alternativa disponibile' : 'No alternatives available'}</p>
+                              {availableAlternatives.length === 0 && (
+                                <p className="text-xs text-gray-500 font-bold text-center py-4">{getTranslation('no_alternatives', language)}</p>
                               )}
                             </div>
                           </motion.div>
@@ -4170,100 +4805,17 @@ export default function PlanScreen({
                 </div>
               )}
 
-              {/* ESPERIENZE PREMIUM CONSIGLIATE (PRIMA DELLA CREAZIONE) */}
-              {includeTours && (
-                <div className="mt-8 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-primary" />
-                    <h3 className="text-sm font-black text-primary uppercase tracking-widest">{language === 'IT' ? 'Esperienze Premium consigliate' : 'Recommended Premium Experiences'}</h3>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => {
-                        // Prendi coordinate dalla prima tappa dei liked se possibile
-                        const first = likedCandidates[0];
-                        const lat = first?.coordinate?.lat || 0;
-                        const lon = first?.coordinate?.lng || 0;
-                        // Usiamo una versione fittizia di dayIdx 999 per la review
-                        loadViatorForDay(999);
-                      }}
-                      className="flex-1 p-3 bg-orange-50 border border-orange-100 rounded-xl text-[10px] font-black text-[#FF5100] uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Ticket className="w-3.5 h-3.5" /> Viator
-                    </button>
-                    <button
-                      onClick={() => loadGygForDay(999)}
-                      className="flex-1 p-3 bg-blue-50 border border-blue-100 rounded-xl text-[10px] font-black text-blue-600 uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Globe className="w-3.5 h-3.5" /> GetYourGuide
-                    </button>
-                    <button
-                      onClick={() => loadTicketmasterForDay(999)}
-                      className="flex-1 p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] font-black text-indigo-700 uppercase tracking-wider flex items-center justify-center gap-2"
-                    >
-                      <Music className="w-3.5 h-3.5" /> Ticketmaster
-                    </button>
-                  </div>
-
-                  <AnimatePresence>
-                    {viatorExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {viatorByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#FF5100" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.description || exp.name,
-                              tipo: 'esperienza',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                    {gygExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {gygByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#0071eb" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.description || exp.name,
-                              tipo: 'esperienza',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                    {ticketmasterExpandedDay === 999 && (
-                      <div className="space-y-3">
-                        {ticketmasterByDay[999]?.map((exp, eIdx) => (
-                          <ExperienceCard key={eIdx} exp={exp} color="#1e3a8a" onAdd={() => {
-                            setLikedCandidates(prev => [...prev, {
-                              titolo_tappa: exp.name,
-                              attivita: exp.venue || exp.name,
-                              tipo: 'evento',
-                              link_info: ensureAffiliateUrl(exp.url),
-                              coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 }
-                            }]);
-                          }} />
-                        ))}
-                      </div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              )}
+              {renderPremiumExperiences()}
 
               {likedCandidates.length > 0 && (
                 <button
+                  type="button"
                   onClick={handleGenerateTinderItinerary}
-                  disabled={loading}
+                  disabled={loading || !isOnline}
                   className="w-full h-16 bg-gradient-to-r from-rose-500 to-pink-600 text-white rounded-3xl font-black shadow-xl shadow-pink-400/30 flex items-center justify-center gap-3 active:scale-95 transition-transform disabled:opacity-50"
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
-                  {language === 'IT' ? `Genera Itinerario con ${likedCandidates.length} tappe!` : `Generate Itinerary with ${likedCandidates.length} stops!`}
+                  {getTranslation('generate_itinerary_with', language)} {likedCandidates.length} {getTranslation('stops_word', language)}
                 </button>
               )}
             </motion.div>
@@ -4287,10 +4839,12 @@ export default function PlanScreen({
 
               <div className="space-y-4">
                 {alternatives.map((alt, index) => (
-                  <button 
+                  <button
+                    type="button"
                     key={alt.id_alternativa || index}
+                    disabled={loading}
                     onClick={() => handleGenerateFromAlternative(alt)}
-                    className="w-full bg-white p-6 rounded-[2rem] border border-outline-variant/10 shadow-sm text-left hover:shadow-xl hover:scale-[1.02] transition-all relative overflow-hidden group"
+                    className="w-full bg-white p-6 rounded-[2rem] border border-outline-variant/10 shadow-sm text-left hover:shadow-xl hover:scale-[1.02] active:scale-[0.99] transition-all relative overflow-hidden group disabled:opacity-60"
                   >
                     <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full -mr-10 -mt-10 blur-2xl group-hover:bg-emerald-500/10 transition-colors"></div>
                     <div className="relative z-10">
@@ -4313,13 +4867,21 @@ export default function PlanScreen({
                 ))}
               </div>
 
-              <button 
+              {/* Rigenerare le idee è gratis: l'addebito avviene solo quando
+                  si sceglie un'alternativa e nasce l'itinerario vero. */}
+              <button
+                type="button"
                 onClick={handleGenerateRadius}
                 disabled={loading}
-                className="w-full py-4 mt-8 bg-emerald-100/50 text-emerald-700 font-black rounded-3xl flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                className="w-full py-4 mt-8 bg-emerald-100/60 text-emerald-800 font-black rounded-3xl flex flex-col items-center justify-center gap-0.5 hover:bg-emerald-100 transition-colors disabled:opacity-50"
               >
-                {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
-                {language === 'IT' ? 'Genera altre 3 idee' : 'Generate 3 more ideas'}
+                <span className="flex items-center gap-2">
+                  {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
+                  {getTranslation('generate_3_more', language)}
+                </span>
+                <span className="text-[10px] font-bold text-emerald-700/80 normal-case">
+                  {getTranslation('free_no_credits', language)}
+                </span>
               </button>
 
               <button 
@@ -4383,7 +4945,24 @@ export default function PlanScreen({
                     </div>
                   ) : (
                     [...myItineraries].sort((a, b) => new Date(b.updated_at || b.created_at || 0).getTime() - new Date(a.updated_at || a.created_at || 0).getTime()).map((item: any) => {
-                      const parsedDati = typeof item.dati_itinerario === 'string' ? JSON.parse(item.dati_itinerario) : item.dati_itinerario;
+                      // JSON.parse PROTETTO: prima una sola riga corrotta (save
+                      // parziale) faceva crashare l'INTERA lista in render, e
+                      // l'utente non poteva nemmeno cancellarla. Ora la riga
+                      // corrotta mostra solo il cestino.
+                      let parsedDati: any = null;
+                      try {
+                        parsedDati = typeof item.dati_itinerario === 'string' ? JSON.parse(item.dati_itinerario) : item.dati_itinerario;
+                      } catch { parsedDati = null; }
+                      if (!parsedDati) {
+                        return (
+                          <div key={item.id} className="p-5 rounded-[2rem] bg-white border border-red-100 shadow-sm flex justify-between items-center">
+                            <span className="text-xs font-bold text-red-400">{item.titolo || 'Itinerario'} — dati non leggibili</span>
+                            <button onClick={() => deleteMyItinerary(item.id)} className="w-9 h-9 rounded-full bg-red-50 text-red-400 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      }
                       const giorniRaw = parsedDati?.giorni || [];
                       const giorni = Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw);
                       const tappeTotal = giorni.reduce((acc: number, g: any) => acc + (g.tappe?.length || 0), 0);
@@ -4398,10 +4977,10 @@ export default function PlanScreen({
                               <h4 className="font-black text-primary text-base leading-tight mb-1">{item.titolo || 'Itinerario'}</h4>
                               <div className="flex gap-2 flex-wrap">
                                 <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📅 {giorni.length} {language === 'IT' ? 'giorni' : 'days'}
+                                  📅 {giorni.length} {getTranslation('days_count', language)}
                                 </span>
                                 <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                                  📍 {tappeTotal} {language === 'IT' ? 'tappe' : 'stops'}
+                                  📍 {tappeTotal} {getTranslation('stops_count', language)}
                                 </span>
                                 {date && <span className="text-[10px] font-bold text-gray-400">{date}</span>}
                               </div>
@@ -4415,7 +4994,13 @@ export default function PlanScreen({
                           </div>
                           <button
                             onClick={() => {
-                              setGeneratedPlan(parsedDati);
+                              // Normalizza giorni (a volte oggetto invece di array)
+                              // così la vista non resta bianca senza uscita.
+                              setGeneratedPlan({ ...parsedDati, giorni });
+                              // Aggancia la riga DB reale: senza, il primo edit
+                              // creava un itinerario duplicato e l'agente AI non
+                              // era disponibile finché non si salvava.
+                              setDbItineraryId(item.itinerary_id || null);
                               // Stato blocchi/espansioni appartiene al vecchio itinerario: azzeriamo
                               setLockedStops({});
                               setExpandedStops({});
@@ -4497,9 +5082,9 @@ export default function PlanScreen({
               className="space-y-6 pt-4"
             >
               <div className="flex justify-between items-center mb-4 px-1">
-                <h3 className="text-xl font-black text-primary">Itinerari Offline</h3>
+                <h3 className="text-xl font-black text-primary">{getTranslation('offline_itineraries_title', language)}</h3>
                 <span className="text-[10px] font-black text-on-surface-variant/40 uppercase tracking-widest bg-white px-3 py-1 rounded-full border border-outline-variant/10 shadow-sm">
-                  {offlinePlans.length} salvati
+                  {offlinePlans.length} {getTranslation('offline_saved_count', language)}
                 </span>
               </div>
 
@@ -4507,8 +5092,8 @@ export default function PlanScreen({
                 {offlinePlans.length === 0 ? (
                    <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
                       <Download className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">Nessun itinerario scaricato</p>
-                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">Usa il bottone 'Offline' dentro un itinerario generato</p>
+                      <p className="text-sm font-bold">{getTranslation('offline_none', language)}</p>
+                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">{getTranslation('offline_none_hint', language)}</p>
                    </div>
                 ) : (
                   offlinePlans.map((plan: any, i: number) => (
@@ -4523,7 +5108,7 @@ export default function PlanScreen({
                             Offline
                           </h5>
                           <p className="text-[10px] text-on-surface-variant/60 font-bold mt-2">
-                            Salvato il: {new Date(plan.date || plan.data_salvataggio).toLocaleDateString('it-IT')}
+                            {getTranslation('offline_saved_on', language)} {new Date(plan.date || plan.data_salvataggio).toLocaleDateString(language.toLowerCase())}
                           </p>
                         </div>
                         <button
@@ -4557,7 +5142,7 @@ export default function PlanScreen({
                         }}
                         className="w-full mt-2 py-3 bg-primary/5 text-primary rounded-xl font-bold text-sm border border-primary/10 hover:bg-primary hover:text-white transition-colors"
                       >
-                        Apri Offline
+                        {getTranslation('offline_open', language)}
                       </button>
                     </div>
                   ))
@@ -4638,6 +5223,25 @@ export default function PlanScreen({
                 </div>
               </div>
 
+              {/* Sconto libreria dichiarato: l'itinerario esisteva già nella
+                  cache condivisa, quindi è arrivato subito e a metà prezzo.
+                  Prima l'incasso pieno su un cache hit era silenzioso. */}
+              {cacheDiscount !== null && (
+                <div className="print:hidden flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                    <Coins className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-black text-emerald-900 leading-snug">
+                      {getTranslation('cache_hit_discount', language)}
+                    </p>
+                    <p className="text-[11px] font-bold text-emerald-700 mt-0.5">
+                      {cacheDiscount} {getTranslation('credits_refunded', language)}
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Punto strategico: chi ha appena generato un itinerario è il
                   candidato perfetto per il Day Pass (sostituisce la vecchia
                   offerta bundle al 50%). */}
@@ -4675,6 +5279,13 @@ export default function PlanScreen({
                         {giorno.giorno}
                       </div>
                       <h3 className="font-black text-primary uppercase tracking-widest text-xs shrink-0">{getTranslation("day", language)} {giorno.giorno}</h3>
+                      {/* Quota gratuita di sostituzioni residua su questo giorno */}
+                      {freeReplacementsLeft(giorno.giorno) > 0 && (
+                        <span className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-[9px] font-black uppercase tracking-widest print:hidden">
+                          <RotateCcw className="w-2.5 h-2.5" />
+                          {freeReplacementsLeft(giorno.giorno)} {getTranslation('free_replacements_left', language)}
+                        </span>
+                      )}
                       <div className="flex-1 h-px bg-primary/10 min-w-[12px]"></div>
                       <div className="flex flex-wrap gap-1.5 shrink-0">
                         {setIsAudioGuideActive && (
@@ -4713,12 +5324,12 @@ export default function PlanScreen({
                           <button
                             onClick={() => handlePlayDailyPodcast(giorno.giorno, giorno.tappe, gIdx === generatedPlan.giorni.length - 1)}
                             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all print:hidden ${
-                              podcastCache[`${generatedPlan?.titolo || 'plan'}_day${giorno.giorno}`]
+                              podcastCache[`${generatedPlan?.id || generatedPlan?.titolo || 'plan'}_day${giorno.giorno}`]
                                 ? 'bg-amber-200 text-amber-800 hover:bg-amber-300'
                                 : 'bg-amber-100 text-amber-700 hover:bg-amber-200 hover:scale-105'
                             }`}
                           >
-                            {podcastCache[`${generatedPlan?.titolo || 'plan'}_day${giorno.giorno}`] ? (
+                            {podcastCache[`${generatedPlan?.id || generatedPlan?.titolo || 'plan'}_day${giorno.giorno}`] ? (
                               <><Play className="w-3 h-3 shrink-0" /> Riascolta</>
                             ) : (
                               <><Radio className="w-3 h-3 shrink-0" /> Podcast</>
@@ -4749,7 +5360,9 @@ export default function PlanScreen({
                           onToggleExpand={() => setExpandedStops(prev => ({...prev, [tappa.id_tappa]: !prev[tappa.id_tappa]}))}
                           onMove={(dir) => handleMoveTappa(gIdx, tIdx, dir)}
                           onToggleLock={() => toggleLockTappa(tappa, giorno.giorno)}
-                          onReplace={() => handleReplaceTappa(tappa.id_tappa)}
+                          onReplace={() => handleReplaceTappa(tappa.id_tappa, giorno.giorno)}
+                          freeReplacementsLeft={freeReplacementsLeft(giorno.giorno)}
+                          replaceCost={PRICING_LIST.replace_stop}
                           onDelete={() => handleDeleteTappa(gIdx, tappa.id_tappa)}
                           onSelectPoi={onSelectPoi ? handleSelectItineraryPoi : undefined}
                         />
@@ -4763,10 +5376,10 @@ export default function PlanScreen({
                             <div className="grid grid-cols-2 gap-4">
                               <input type="time" className="col-span-1 p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none" value={newStop.ora} onChange={e => setNewStop({...newStop, ora: e.target.value})} placeholder={getTranslation("placeholder_time", language)} />
                               <select className="col-span-1 p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none" value={newStop.tipo} onChange={e => setNewStop({...newStop, tipo: e.target.value})}>
-                                <option value="visita">Azione/Visita</option>
-                                <option value="ristorante">Ristorante</option>
+                                <option value="visita">{getTranslation("stop_type_visita", language)}</option>
+                                <option value="ristorante">{getTranslation("stop_type_ristorante", language)}</option>
                                 <option value="pausa">{getTranslation("action_break", language)}</option>
-                                <option value="spostamento">Spostamento</option>
+                                <option value="spostamento">{getTranslation("stop_type_spostamento", language)}</option>
                               </select>
                             </div>
                             <input type="text" className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none" value={newStop.titolo_tappa} onChange={e => setNewStop({...newStop, titolo_tappa: e.target.value})} placeholder={getTranslation("placeholder_stop_name", language)} />
@@ -4784,12 +5397,12 @@ export default function PlanScreen({
                                 className="px-4 py-2 text-sm font-bold text-secondary bg-secondary/10 hover:bg-secondary/20 rounded-xl transition-colors flex items-center gap-2"
                               >
                                 {suggestLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                                Suggerisci con AI
+                                {getTranslation("suggest_with_ai", language)}
                               </button>
                               <div className="flex gap-2">
-                                <button onClick={() => setAddingStopDay(null)} className="px-4 py-2 text-sm font-bold text-gray-400 hover:text-gray-600 transition-colors">{getTranslation("cancel", language)}</button>
-                                <button onClick={() => handleAddTappa(gIdx)} className="px-5 py-2 text-sm font-black text-white bg-primary rounded-xl hover:bg-primary/90 shadow-sm transition-colors flex items-center gap-2">
-                                  <Plus className="w-4 h-4" /> Salva
+                                <button type="button" onClick={() => setAddingStopDay(null)} className="px-4 py-2 min-h-[44px] text-sm font-bold text-gray-500 hover:text-gray-700 transition-colors">{getTranslation("cancel", language)}</button>
+                                <button type="button" onClick={() => handleAddTappa(gIdx)} className="px-5 py-2 min-h-[44px] text-sm font-black text-white bg-primary rounded-xl hover:bg-primary/90 shadow-sm transition-colors flex items-center gap-2">
+                                  <Plus className="w-4 h-4" /> {getTranslation("save_btn", language)}
                                 </button>
                               </div>
                             </div>
@@ -4803,8 +5416,8 @@ export default function PlanScreen({
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
-                          <div className="text-sm font-bold text-primary/40 pt-4 pl-[4px] cursor-pointer group-hover:text-primary transition-colors" onClick={() => setAddingStopDay(giorno.giorno)}>
-                            Aggiungi una tappa manuale...
+                          <div className="text-sm font-bold text-primary/60 pt-4 pl-[4px] cursor-pointer group-hover:text-primary transition-colors" onClick={() => setAddingStopDay(giorno.giorno)}>
+                            {getTranslation("add_manual_stop", language)}
                           </div>
                         </div>
                       )}
@@ -4980,7 +5593,7 @@ export default function PlanScreen({
             >
               <div className="flex items-center justify-between">
                 <h3 className="font-black text-primary text-lg">
-                  {language === 'IT' ? '🧭 Punto di Partenza' : '🧭 Starting Point'}
+                  🧭 {getTranslation('starting_point', language)}
                 </h3>
                 <button onClick={() => setNavModal({ open: false, gIdx: null })} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition">
                   <X className="w-4 h-4" />
@@ -5122,6 +5735,7 @@ export default function PlanScreen({
         {navState !== 'idle' && (
           <NavigationOverlay
             state={navState}
+            language={language}
             currentInstruction={currentInstruction}
             distanceToNext={distanceToNext}
             distanceToDestination={distanceToDestination}
@@ -5153,14 +5767,28 @@ export default function PlanScreen({
       {/* Quiz anche durante il caricamento delle attrazioni da swippare
           (candidatesLoading): l'attesa dell'AI è lunga e prima restava un
           semplice spinner. */}
-      {(loading || candidatesLoading) && (
+      {(loading || candidatesLoading) && !quizDismissed && (
         <LoadingQuiz
           destination={destinations[0] || 'la tua destinazione'}
           quizLength={candidatesLoading && !loading ? 4 : activeQuizLength}
           userId={currentUserId || ''}
           language={language}
+          onDismiss={() => setQuizDismissed(true)}
         />
       )}
+
+      {/* Barra di avanzamento quando il quiz è stato chiuso: l'utente vede
+          l'itinerario costruirsi ma deve comunque sapere che sta lavorando. */}
+      {(loading || candidatesLoading) && quizDismissed && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          <span className="text-xs font-black uppercase tracking-widest">
+            {getTranslation('wip_working', language)}
+          </span>
+        </div>
+      )}
+
+      {/* Le notifiche sono renderizzate da <ToastHost/> in App.tsx */}
 
       {/* Premium Guide Modal (richiede un utente loggato) */}
       {showPremiumGuideModal && generatedPlan && currentUserId && (

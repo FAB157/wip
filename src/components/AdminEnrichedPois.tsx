@@ -151,15 +151,25 @@ export default function AdminEnrichedPois() {
     if (!confirm(`Sei sicuro di voler azzerare la foto di ${name}? Al prossimo tap l'app cercherà una vera foto da Wikipedia o Google Places.`)) return;
     
     try {
-      await supabase
+      // Supabase non lancia: l'errore (es. RLS che nega l'update) torna in
+      // `error`. Prima non veniva controllato e l'alert dava sempre "successo"
+      // anche quando nessuna riga era stata modificata.
+      const { error } = await supabase
         .from('shared_pois')
         .update({ image_url: '', photo_url: '' })
         .eq('id', id);
-        
+
+      if (error) {
+        console.error("Error resetting photo", error);
+        alert('Impossibile azzerare la foto: ' + (error.message || 'permesso negato o errore DB.'));
+        return;
+      }
+
       alert('Foto azzerata. Verrà riscaricata al prossimo caricamento.');
       fetchPois();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error resetting photo", err);
+      alert('Impossibile azzerare la foto: ' + (err?.message || 'errore imprevisto.'));
     }
   };
 
@@ -197,7 +207,7 @@ export default function AdminEnrichedPois() {
            >
              <option value="today">Oggi</option>
              <option value="month">Questo Mese</option>
-             <option value="all">Sempre (max 500)</option>
+             <option value="all">Sempre</option>
            </select>
            <button 
             onClick={fetchPois} 

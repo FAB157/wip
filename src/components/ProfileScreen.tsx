@@ -2,7 +2,8 @@ import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, V
 import { motion, AnimatePresence } from 'motion/react';
 import React, { ReactNode, useState, useEffect } from 'react';
 import { useSwipeable } from 'react-swipeable';
-import { Capacitor } from '@capacitor/core';
+import { notify } from '../lib/toast';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
@@ -47,6 +48,12 @@ import OfflineMapsTab from './OfflineMapsTab';
 import ProminentDisclosure from './ProminentDisclosure';
 import { PRICING_LIST } from '../lib/pricing';
 import LiveTourPanel from './LiveTourPanel';
+
+// Bridge al plugin nativo (solo su device): serve per azzerare in Room lo stato
+// dei trigger di geofencing quando l'utente resetta lo storico.
+const NativeBgPoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
+  ? registerPlugin<any>('ItaintaBackgroundPoiPlugin')
+  : null;
 
 const getCardIcon = (poi: any) => {
   const cat = (poi.category || '').toLowerCase();
@@ -309,9 +316,39 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const handleResetPlayed = () => {
     resetAllPlayed();
     window.dispatchEvent(new CustomEvent('wip-played-reset'));
+    // Azzera anche lo stato dei trigger nativi (tabella trigger_state in Room):
+    // senza, il servizio in background non riannuncerebbe i POI già visti.
+    // Il web continua comunque a cancellare wip_played_pois via resetAllPlayed().
+    if (NativeBgPoiPlugin) {
+      NativeBgPoiPlugin.resetTriggerHistory().catch((e: any) =>
+        console.warn('[ProfileScreen] reset trigger nativi fallito', e));
+    }
     setPlayedResetMsg(true);
     setTimeout(() => setPlayedResetMsg(false), 2500);
   };
+
+  // Toast globale dei badge di gamification: l'evento 'wip-gamification-badge'
+  // veniva emesso (recordPoiVision / addTriviaRewards) ma nessun componente lo
+  // renderizzava, quindi i badge non comparivano mai.
+  const [badgeToasts, setBadgeToasts] = useState<Array<{ id: number; name: string; icon: string; description?: string }>>([]);
+  useEffect(() => {
+    const onBadge = (e: Event) => {
+      const badges = (e as CustomEvent).detail?.badges;
+      if (!Array.isArray(badges) || badges.length === 0) return;
+      const items = badges.map((b: any, i: number) => ({
+        id: Date.now() + i,
+        name: b?.name || 'Traguardo!',
+        icon: b?.icon || '🏆',
+        description: b?.description
+      }));
+      setBadgeToasts(prev => [...prev, ...items]);
+      items.forEach(it => {
+        setTimeout(() => setBadgeToasts(prev => prev.filter(t => t.id !== it.id)), 4500);
+      });
+    };
+    window.addEventListener('wip-gamification-badge', onBadge);
+    return () => window.removeEventListener('wip-gamification-badge', onBadge);
+  }, []);
 
   const handleDeleteAccount = async () => {
     if (deleteConfirmText.toLowerCase() !== 'elimina') return;
@@ -334,7 +371,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       if (onSignOut) onSignOut();
     } catch (e) {
       console.error(e);
-      alert("Errore durante l'eliminazione dell'account.");
+      notify("Errore durante l'eliminazione dell'account.");
     } finally {
       setIsDeleting(false);
       setShowDeleteModal(false);
@@ -575,20 +612,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       // Disattivazione = rimozione immediata delle credenziali dal keystore
       await deleteBiometricCredentials?.().catch?.(() => {});
     } else {
-      alert('Sblocco biometrico attivo: verrà configurato al prossimo accesso con email e password.');
+      notify('Sblocco biometrico attivo: verrà configurato al prossimo accesso con email e password.');
     }
   };
 
   const handleChangePassword = async () => {
     const emailAddr = userSession?.user?.email;
     if (!emailAddr) return;
-    if (!secNewPw || secNewPw.length < 6) { alert('La nuova password deve avere almeno 6 caratteri.'); return; }
-    if (secNewPw !== secConfirmPw) { alert('Le password non coincidono.'); return; }
+    if (!secNewPw || secNewPw.length < 6) { notify('La nuova password deve avere almeno 6 caratteri.'); return; }
+    if (secNewPw !== secConfirmPw) { notify('Le password non coincidono.'); return; }
     setSecLoading(true);
     try {
       // Re-autenticazione: mai cambiare password senza verificare quella attuale
       const { error: verifyErr } = await supabase.auth.signInWithPassword({ email: emailAddr, password: secCurrentPw });
-      if (verifyErr) { alert('Password attuale non corretta.'); return; }
+      if (verifyErr) { notify('Password attuale non corretta.'); return; }
       const { error } = await supabase.auth.updateUser({ password: secNewPw });
       if (error) throw error;
       // Aggiorna le credenziali biometriche, altrimenti lo sblocco con
@@ -597,9 +634,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         await saveBiometricCredentials(emailAddr, secNewPw).catch(() => {});
       }
       setSecCurrentPw(''); setSecNewPw(''); setSecConfirmPw('');
-      alert('Password aggiornata con successo ✅');
+      notify('Password aggiornata con successo', 'success');
     } catch (e: any) {
-      alert(e?.message || 'Errore durante il cambio password.');
+      notify(e?.message || 'Errore durante il cambio password.');
     } finally {
       setSecLoading(false);
     }
@@ -632,28 +669,23 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const searchCityLocation = async () => {
     if (!citySearch.trim()) return;
     setIsSearchingCity(true);
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token) {
-      alert("Ricerca città non disponibile in questa build (token mappe mancante).");
-      setIsSearchingCity(false);
-      return;
-    }
     try {
-      const response = await fetch(
-        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(citySearch.trim())}.json?access_token=${token}&limit=1`
-      );
+      // Proxy server-side (/api/geocode): il token Mapbox non è più nel bundle.
+      const response = await fetch(getApiUrl(
+        `/api/geocode?q=${encodeURIComponent(citySearch.trim())}&limit=1&lang=${(language || 'IT').toLowerCase()}`
+      ));
       if (!response.ok) throw new Error("Errore nella ricerca");
       const data = await response.json();
       if (data && data.features && data.features.length > 0) {
         const feat = data.features[0];
-        setDefaultLocation([feat.center[1], feat.center[0]]);
-        alert(`Posizione aggiornata a: ${feat.place_name.split(',')[0]} ✅`);
+        setDefaultLocation([feat.lat, feat.lon]);
+        notify(`Posizione aggiornata a: ${String(feat.description || '').split(',')[0]}`, 'success');
       } else {
-        alert("Città non trovata.");
+        notify("Città non trovata.");
       }
     } catch (e) {
       console.error(e);
-      alert("Errore durante la ricerca.");
+      notify("Errore durante la ricerca.");
     } finally {
       setIsSearchingCity(false);
     }
@@ -704,11 +736,11 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     // fotocamera (5-10MB) in base64 supera la quota localStorage (~5MB) e
     // QuotaExceededError faceva sparire l'avatar al riavvio senza messaggi.
     if (!file.type.startsWith('image/')) {
-      alert('Seleziona un file immagine valido.');
+      notify('Seleziona un file immagine valido.');
       return;
     }
     if (file.size > 1024 * 1024) {
-      alert('Immagine troppo grande (max 1 MB). Scegli una foto più piccola.');
+      notify('Immagine troppo grande (max 1 MB). Scegli una foto più piccola.');
       return;
     }
     const reader = new FileReader();
@@ -718,7 +750,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         localStorage.setItem('userProfileAvatar', base64String);
         setUserAvatar(base64String);
       } catch {
-        alert('Impossibile salvare la foto: spazio locale esaurito.');
+        notify('Impossibile salvare la foto: spazio locale esaurito.');
       }
     };
     reader.readAsDataURL(file);
@@ -987,6 +1019,29 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
 
   return (
     <div className="flex-1 flex flex-col bg-[#FAFAFA] overflow-y-scroll pb-32 no-scrollbar">
+      {/* Toast badge gamification (in alto, sopra tutto) */}
+      {badgeToasts.length > 0 && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[300] flex flex-col gap-2 items-center pointer-events-none">
+          <AnimatePresence>
+            {badgeToasts.map(t => (
+              <motion.div
+                key={t.id}
+                initial={{ opacity: 0, y: -20, scale: 0.9 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -20, scale: 0.9 }}
+                className="bg-white rounded-2xl shadow-2xl border border-amber-100 px-4 py-3 flex items-center gap-3 max-w-xs"
+              >
+                <span className="text-3xl shrink-0">{t.icon}</span>
+                <div className="text-left">
+                  <p className="text-sm font-black text-[#1e3a8a] leading-tight">{t.name}</p>
+                  {t.description && <p className="text-[11px] font-bold text-gray-500 leading-tight mt-0.5">{t.description}</p>}
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
+
       {/* Header Profile - Minimalist Light Mode */}
       <div className="px-6 pt-16 pb-6 bg-white border-b border-gray-100 shrink-0">
         <UserProfileSummary 
@@ -1603,7 +1658,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                         // e la lista viene ricaricata (prima la voce spariva
                                         // dalla UI ma restava nel DB).
                                         deleteListeningHistory(item.poi_id, currentUserId).catch(() => {
-                                          alert('Rimozione non riuscita, riprova.');
+                                          notify('Rimozione non riuscita, riprova.');
                                           fetchListeningHistoryData();
                                         });
                                       }
@@ -2117,16 +2172,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           navigator.geolocation.getCurrentPosition(
                             (position) => {
                               setDefaultLocation([position.coords.latitude, position.coords.longitude]);
-                              alert(getTranslation('loc_updated', language));
+                              notify(getTranslation('loc_updated', language), 'success');
                             },
                             (error) => {
                               console.error("Error getting location", error);
-                              alert(getTranslation('loc_error', language));
+                              notify(getTranslation('loc_error', language));
                             },
                             { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
                           );
                         } else {
-                          alert(getTranslation('loc_unsupported', language));
+                          notify(getTranslation('loc_unsupported', language));
                         }
                      }}
                      className="w-full flex items-center justify-center gap-2 py-3 bg-primary text-white rounded-xl font-black text-sm hover:opacity-90 active:scale-95 transition-all shadow-md"
@@ -2659,7 +2714,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   await fetchQuotaCounters();
                 } catch (e: any) {
                   console.error("Error claiming reward:", e);
-                  alert(e?.message || 'Riscatto non riuscito, riprova.');
+                  notify(e?.message || 'Riscatto non riuscito, riprova.');
                 } finally {
                   setIsClaiming(false);
                 }
@@ -2693,7 +2748,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     } catch (e) {
                       console.error("PDF Download failed", e);
                       // Prima falliva in silenzio (specie su Android WebView)
-                      alert('Generazione PDF non riuscita su questo dispositivo. Puoi leggere la guida qui nel visualizzatore.');
+                      notify('Generazione PDF non riuscita su questo dispositivo. Puoi leggere la guida qui nel visualizzatore.');
                     } finally {
                       const container = document.getElementById('premium-guide-viewer-container');
                       if (container) container.style.overflow = 'auto';

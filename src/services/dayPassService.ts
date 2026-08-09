@@ -82,29 +82,22 @@ export async function activateDayPass(): Promise<DayPassState> {
   const userId = userData?.user?.id;
   if (!userId) throw new Error('Accedi per attivare il Day Pass.');
 
-  const existing = await getDayPassState();
-  if (existing.active) throw new Error('Hai già un Day Pass attivo.');
-
-  if (!(await hasEnoughCredits(userId, DAY_PASS_COST))) {
-    throw new Error(`Crediti insufficienti: il Day Pass costa ${DAY_PASS_COST} crediti.`);
+  // ATTIVAZIONE ATOMICA VIA RPC: l'INSERT diretto su user_passes è stato
+  // rimosso (permetteva un pass gratis con cap arbitrario). activate_day_pass
+  // verifica "nessun pass attivo", addebita 200 crediti e inserisce con
+  // cap=40/24h lato server, tutto in una transazione.
+  const { data: passRow, error: rpcError } = await supabase.rpc('activate_day_pass');
+  if (rpcError) {
+    const m = rpcError.message || '';
+    if (m.includes('insufficient_credits')) {
+      throw new Error(`Crediti insufficienti: il Day Pass costa ${DAY_PASS_COST} crediti.`);
+    }
+    if (m.includes('pass_already_active')) throw new Error('Hai già un Day Pass attivo.');
+    if (m.includes('login_required')) throw new Error('Accedi per attivare il Day Pass.');
+    throw new Error('Attivazione non riuscita. Riprova.');
   }
-  const charged = await consumeCredits(userId, DAY_PASS_COST);
-  if (!charged) throw new Error('Addebito crediti non riuscito. Riprova.');
-
-  const expiresAtMs = Date.now() + 24 * 60 * 60 * 1000;
-  try {
-    const { error } = await supabase.from('user_passes').insert({
-      user_id: userId,
-      pass_type: 'day',
-      expires_at: new Date(expiresAtMs).toISOString(),
-      guides_used: 0,
-      guides_cap: DAY_PASS_CAP,
-    });
-    if (error) throw new Error(error.message);
-  } catch (e) {
-    await refundCredits(userId, DAY_PASS_COST).catch(() => {});
-    throw new Error('Attivazione non riuscita, crediti rimborsati. Riprova.');
-  }
+  const expiresAtMs = passRow?.expires_at ? new Date(passRow.expires_at).getTime() : Date.now() + 24 * 60 * 60 * 1000;
+  notifyCreditsChanged({ userId });
 
   // Mirror nativo: da qui in poi receiver e service lo applicano da soli,
   // anche a display spento e senza rete.
@@ -130,6 +123,18 @@ export async function reconcileOfflineBilling(): Promise<void> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData?.user?.id;
   if (!userId) return;
+
+  // 0) Identità utente → nativo: serve al check "già ascoltato = già
+  // acquistato" del trigger in background e all'insert dello storico ascolti
+  // nativo (user_listening_history). Il token permette le RLS; se scade, il
+  // nativo resta best-effort.
+  try {
+    const { data: sess } = await supabase.auth.getSession();
+    await plugin.setUserContext({
+      userId,
+      accessToken: sess?.session?.access_token || '',
+    });
+  } catch { /* metodo assente su build vecchie: best-effort */ }
 
   // 1) Registro spese per-listen offline
   try {

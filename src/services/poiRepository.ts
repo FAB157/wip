@@ -150,9 +150,17 @@ export async function getNearbyPois(
     const [sharedRes, utilityRes] = await Promise.all([fetchShared, fetchUtility]);
     
     let allPois: NearbyPoi[] = [];
-    // La RPC nearby_pois deployata espone il nome nella colonna "nome"
+    // La RPC nearby_pois deployata espone il nome nella colonna "nome".
+    // La RPC NON filtra per status: bozze e POI in bonifica (status draft/
+    // needs_revision, es. allucinazioni Vision) non devono arrivare al radar.
+    // Stesso filtro nei parser nativi (WipSupabaseClient.swift, SupabaseClient.kt).
+    const hiddenStatuses = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
     if (!sharedRes.error && sharedRes.data) {
-      allPois = allPois.concat((sharedRes.data as any[]).map(p => ({ ...p, name: p.name ?? p.nome })) as NearbyPoi[]);
+      allPois = allPois.concat(
+        (sharedRes.data as any[])
+          .filter(p => !hiddenStatuses.has(String(p.status || '').toLowerCase()) && p.is_hidden !== true)
+          .map(p => ({ ...p, name: p.name ?? p.nome })) as NearbyPoi[]
+      );
     }
     if (!utilityRes.error && utilityRes.data) {
        // Map utility_pois fields to match NearbyPoi
@@ -200,7 +208,7 @@ export async function getNearbyPois(
       .lte('lat', lat + delta)
       .gte('lon', lon - delta)
       .lte('lon', lon + delta)
-      .in('status', ['verified', 'auto', 'approved', 'draft'])
+      .in('status', ['verified', 'auto', 'approved'])
       .not('name', 'is', null)
       .limit(400);
 
@@ -274,6 +282,70 @@ export async function getNearbyPois(
 }
 
 
+/**
+ * Categorie che possono avere un'audioguida: allineate a isCategoryAllowed
+ * di useGeofencing.ts (le categorie commerciali/utilitarie non triggerano mai).
+ */
+const AUDIOGUIDABLE_CATEGORIES = new Set([
+  'monument', 'artwork', 'monumenti', 'attraction',
+  'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo',
+  'church', 'chiese', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale',
+  'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia',
+  'shrine', 'santuario',
+  'viewpoint', 'park', 'panorami',
+  'museum', 'gallery', 'musei',
+  'information', 'tourism_information', 'office', 'consigli',
+  'gemme',
+]);
+
+/**
+ * Fallback offline per il geofencing (stesso pattern del fallback finale di
+ * getNearbyPois): legge Dexie e filtra alle sole categorie audioguidabili,
+ * con raggi geofence di default. Sblocca i trigger PWA senza rete.
+ */
+async function getGeofencePoisFromDexie(
+  lat: number,
+  lon: number,
+  radiusMeters: number,
+): Promise<GeofencePoi[]> {
+  try {
+    const localPois = await db.pois.toArray();
+    const result = localPois
+      .filter(p => p.lat && p.lon && p.name)
+      .filter(p =>
+        p.is_gem ||
+        AUDIOGUIDABLE_CATEGORIES.has(String(p.category || '').toLowerCase()))
+      .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
+      .map(p => ({
+        id: String(p.id),
+        osm_id: null,
+        name: p.name,
+        lat: p.lat,
+        lon: p.lon,
+        category: p.category || 'monumenti',
+        city: null,
+        premium: p.is_gem ?? false,
+        is_gem: p.is_gem ?? false,
+        source: 'offline',
+        status: p.status || 'auto',
+        // Raggi di default: useGeofencing li ricalcola comunque con
+        // radiiForTransport, questi valgono solo come fallback coerente.
+        eff_alert_radius: 150,
+        eff_geofence_radius: 50,
+        alert_enabled: true,
+        audio_enabled: true,
+        distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
+      })) as GeofencePoi[];
+    if (result.length > 0) {
+      console.log(`[poiRepository] getGeofencePois fallback Dexie: ${result.length} POI offline`);
+    }
+    return result;
+  } catch (e) {
+    console.warn('[poiRepository] getGeofencePois Dexie fallback fail:', e);
+    return [];
+  }
+}
+
 /** POI vicini con raggi geofence effettivi gia' risolti (override utente). */
 export async function getGeofencePois(
   lat: number,
@@ -281,7 +353,18 @@ export async function getGeofencePois(
   userId: string | null,
   radiusMeters = 500,
 ): Promise<GeofencePoi[]> {
-  if (!hasRpc()) return [];
+  // Offline dichiarato: inutile tentare la RPC, vai diretto su Dexie
+  // (stesso criterio di getNearbyPois).
+  try {
+    const status = await Network.getStatus();
+    if (!status.connected) {
+      return await getGeofencePoisFromDexie(lat, lon, radiusMeters);
+    }
+  } catch (e) {
+    // Plugin Network non disponibile (web puro): prosegui con la RPC.
+  }
+
+  if (!hasRpc()) return getGeofencePoisFromDexie(lat, lon, radiusMeters);
   try {
     const data = await supabaseCircuitBreaker.execute(async () => {
       const { data, error } = await supabase.rpc('get_geofence_pois', {
@@ -296,7 +379,8 @@ export async function getGeofencePois(
     return (data ?? []) as GeofencePoi[];
   } catch (error: any) {
     console.warn('[poiRepository] get_geofence_pois (circuit breaker):', error.message);
-    return [];
+    // RPC fallita (rete zombie, circuit breaker aperto): ultima spiaggia Dexie.
+    return getGeofencePoisFromDexie(lat, lon, radiusMeters);
   }
 }
 

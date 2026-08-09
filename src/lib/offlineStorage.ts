@@ -228,13 +228,24 @@ if (typeof window !== 'undefined') {
  */
 export const clearOrphanedAudioFiles = async (activePoiIds: string[]) => {
   try {
+    // GUARDIA COLD START: se non conosciamo i POI attivi (activePlan ancora
+    // null all'avvio, App.tsx) NON cancelliamo nulla, altrimenti spazzeremmo
+    // via TUTTE le audioguide acquistate. La pulizia va fatta solo con una
+    // lista di POI attivi reale.
+    if (!Array.isArray(activePoiIds) || activePoiIds.length === 0) return;
+
     const allKeys = await keys();
     const audioKeys = allKeys.filter(k => typeof k === 'string' && k.startsWith('audio_'));
 
     let deletedCount = 0;
     for (const key of audioKeys) {
-      // La chiave è tipo 'audio_poiId_guideMode'
-      const poiId = (key as string).split('_')[1];
+      // Chiave = `audio_${poiId}_${guideMode}`. Il poiId PUÒ contenere
+      // underscore (POI AI `ai_<lat>_<lon>`, tappe `iti-...`): estrarlo con
+      // split('_')[1] prendeva solo 'ai' e cancellava i file acquistati al
+      // primo restart. Si toglie il prefisso e l'ultimo segmento (guideMode).
+      const withoutPrefix = (key as string).slice('audio_'.length);
+      const lastSep = withoutPrefix.lastIndexOf('_');
+      const poiId = lastSep > 0 ? withoutPrefix.slice(0, lastSep) : withoutPrefix;
       if (poiId && !activePoiIds.includes(poiId)) {
         await del(key);
         deletedCount++;

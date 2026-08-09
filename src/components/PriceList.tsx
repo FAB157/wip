@@ -2,10 +2,11 @@ import React from 'react';
 import { motion } from 'motion/react';
 import {
   Coins, MessageSquare, Info, Camera, Map,
-  Headphones, Volume2, BookOpen, ShieldCheck, Zap
+  Headphones, Volume2, BookOpen, ShieldCheck, Zap,
+  Ticket, RefreshCw
 } from 'lucide-react';
 import { Language } from '../lib/i18n';
-import { PRICING_LIST } from '../lib/pricing';
+import { PRICING_LIST, DAY_PASS_GUIDE_CAP } from '../lib/pricing';
 
 interface PriceListProps {
   language: Language;
@@ -66,6 +67,20 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             price={String(PRICING_LIST.audio_guide)}
             unit="per luogo"
             desc={isItalian ? "Narrazione vocale immersiva (Nicky o Dante) del punto di interesse." : "Immersive voice narration (Nicky or Dante) of the POI."}
+          />
+          <PriceItem
+            icon={<Ticket className="w-5 h-5" />}
+            name="WIP Day Pass"
+            price={String(PRICING_LIST.day_pass)}
+            unit={isItalian ? "24 ore" : "24 hours"}
+            desc={isItalian ? `24 ore hands-free: avvisi, teaser e audioguide automatiche, fino a ${DAY_PASS_GUIDE_CAP} guide. Mappe offline incluse.` : `24 hours hands-free: alerts, teasers and automatic audio guides, up to ${DAY_PASS_GUIDE_CAP} guides. Offline maps included.`}
+          />
+          <PriceItem
+            icon={<RefreshCw className="w-5 h-5" />}
+            name={isItalian ? "Sostituzione tappa" : "Replace stop"}
+            price={String(PRICING_LIST.replace_stop)}
+            unit={isItalian ? "per tappa" : "per stop"}
+            desc={isItalian ? "Sostituisci una singola tappa dell'itinerario con un'alternativa suggerita dall'AI." : "Replace a single itinerary stop with an AI-suggested alternative."}
           />
           <PriceItem
             icon={<Volume2 className="w-5 h-5" />}

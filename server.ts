@@ -886,15 +886,17 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.
 // --- HELPER FOR SAAS USER QUOTA CHECK & CIRCUIT BREAKER ---
 async function checkAndIncrementQuota(req: any, feature: 'itinerari' | 'audioguide' | 'vision' | 'premium_guide'): Promise<{ allowed: boolean; error?: string; limit?: number; userId?: string }> {
   const authHeader = req.headers.authorization;
-  let userId = req.body?.userId || req.body?.user_id;
+  let userId: string | undefined;
 
-  if (!userId && authHeader && authHeader.startsWith("Bearer ")) {
+  // IL TOKEN VINCE SUL BODY: prima l'identità si prendeva da req.body.userId
+  // e il token era solo un ripiego → bastava uno UUID random per chiamata per
+  // aggirare la quota (o consumare quella altrui). Ora il token verificato è
+  // l'autorità; il body resta solo come fallback per le chiamate interne
+  // senza sessione.
+  if (authHeader && authHeader.startsWith("Bearer ")) {
     try {
       const userRes = await axios.get(`${supabaseUrl}/auth/v1/user`, {
-        headers: {
-          apikey: supabaseServiceKey,
-          Authorization: authHeader
-        }
+        headers: { apikey: supabaseServiceKey, Authorization: authHeader }
       });
       if (userRes.data && userRes.data.id) {
         userId = userRes.data.id;
@@ -902,6 +904,9 @@ async function checkAndIncrementQuota(req: any, feature: 'itinerari' | 'audiogui
     } catch (e: any) {
       console.warn("Quota auth user retrieval failed:", e.message);
     }
+  }
+  if (!userId) {
+    userId = req.body?.userId || req.body?.user_id;
   }
 
   // Fallback: se proprio manca lo userId (es. test locali), NON usiamo l'ID
@@ -1116,8 +1121,11 @@ async function fetchGeographicContext(destination: string): Promise<{context: st
   node(around:5000,${nLat},${nLon})["tourism"~"attraction|museum|artwork|viewpoint|gallery"];
   node(around:5000,${nLat},${nLon})["historic"~"monument|castle|church|memorial|archaeological_site|ruins"];
   node(around:5000,${nLat},${nLon})["amenity"~"restaurant|cafe|bar"];
+  node(around:5000,${nLat},${nLon})["place"="square"];
   way(around:5000,${nLat},${nLon})["tourism"~"attraction|museum|artwork|viewpoint|gallery"];
   way(around:5000,${nLat},${nLon})["historic"~"monument|castle|church|memorial|archaeological_site|ruins"];
+  way(around:5000,${nLat},${nLon})["place"="square"];
+  way(around:5000,${nLat},${nLon})["highway"="pedestrian"]["area"="yes"];
 );
 out tags center 60;`;
       const overpassRes = await axios.post(
@@ -1233,7 +1241,72 @@ async function saveAudioToStorageAndCache(cacheKey: string, audioBuffer: Buffer)
 export const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+  // --- CORS CON ALLOWLIST DINAMICA ---
+  // Prima vercel.json rispondeva Access-Control-Allow-Origin: * a tutti: un
+  // qualsiasi sito poteva bruciare le API (Groq/DeepSeek/Azure/Unsplash) dal
+  // browser dei suoi visitatori. Non si può però mettere un origin FISSO:
+  // romperebbe le app native (WebView Capacitor con origin capacitor://localhost
+  // o https://localhost). Si riflette quindi l'origin SOLO se in allowlist;
+  // le richieste senza Origin (server-to-server, Stripe/RevenueCat, curl) non
+  // sono soggette a CORS e passano comunque. L'header statico è stato tolto da
+  // vercel.json (questo middleware è l'unica autorità).
+  const CORS_ALLOWLIST = new Set([
+    'https://itainta.vercel.app',
+    'capacitor://localhost',
+    'ionic://localhost',
+    'http://localhost',
+    'https://localhost',
+  ]);
+  const isAllowedOrigin = (origin?: string): boolean => {
+    if (!origin) return false; // nessun Origin = non una richiesta browser CORS
+    if (CORS_ALLOWLIST.has(origin)) return true;
+    // localhost con porta (dev: 3000/5173) e preview *.vercel.app del progetto
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return true;
+    if (/^https:\/\/itainta[a-z0-9-]*\.vercel\.app$/.test(origin)) return true;
+    return false;
+  };
+  app.use((req, res, next) => {
+    const origin = req.headers.origin as string | undefined;
+    if (isAllowedOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin as string);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, apikey, X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+    }
+    if (req.method === 'OPTIONS') { res.status(204).end(); return; }
+    next();
+  });
+
   // --- STRIPE WEBHOOK (Must be before express.json) ---
+  // Prezzario autorevole lato server: il client NON deve poter dettare
+  // quanti crediti riceve per quanti euro. `cents` = importo Stripe reale,
+  // `credits` = crediti accreditati. Prima unit_amount era limitato a 3 casi
+  // ma metadata.amount (il valore accreditato) veniva dal body → amount:100000
+  // costava 19,99€ e accreditava 100.000 crediti. Tenere allineato a
+  // src/lib/pricing.ts e al mapping RevenueCat.
+  const CREDIT_PACKS: Record<string, { credits: number; cents: number }> = {
+    package_500:  { credits: 500,  cents: 499 },
+    package_1100: { credits: 1100, cents: 999 },
+    package_2600: { credits: 2600, cents: 1999 },
+    package_2500: { credits: 2500, cents: 1999 }, // storico Google Play
+  };
+  const packFromAmount = (amt: number) =>
+    Object.values(CREDIT_PACKS).find(p => p.credits === amt);
+
+  // Accredito atomico e idempotente (RPC credit_purchase): rimpiazza il
+  // GET purchased_credits + PATCH (current+amount) che era soggetto a lost
+  // update contro i consumi concorrenti. L'idempotenza vive nell'unique
+  // index (source, event_id), non più nel marker su api_cache.
+  const creditPurchase = async (userId: string, amount: number, source: string, eventId: string | null, description?: string): Promise<boolean> => {
+    const rpc = await axios.post(
+      `${supabaseUrl}/rest/v1/rpc/credit_purchase`,
+      { p_user_id: userId, p_amount: amount, p_source: source, p_event_id: eventId, p_description: description || null },
+      { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
+    );
+    return rpc.data === true;
+  };
+
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -1250,13 +1323,15 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Idempotenza: Stripe rispedisce gli eventi non confermati (e a volte li
-    // duplica) — senza questo guard un retry accreditava i crediti due volte.
+    // Idempotenza a due livelli: l'accredito crediti è protetto atomicamente
+    // dall'unique index (source, event_id) dentro credit_purchase; per i rami
+    // NON-crediti (coupon B2B, subscription) resta il marker su api_cache, ma
+    // scritto SOLO a fine elaborazione riuscita (vedi in coda) così un
+    // fallimento non blocca per sempre il retry di Stripe.
     const evtKey = `stripe_evt_${event.id}`;
     if (await getFromCache(evtKey)) {
       return res.json({ received: true, duplicate: true });
     }
-    await saveToCache(evtKey, 'webhook_event', event.type);
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as any;
@@ -1296,30 +1371,20 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       } else if (userId && amountStr) {
         const amount = parseInt(amountStr, 10);
         try {
-          const { data } = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=purchased_credits`, {
-            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-          });
-          const currentCredits = data?.[0]?.purchased_credits || 0;
-          await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`, {
-            purchased_credits: currentCredits + amount
-          }, {
-            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-          });
-          // Storico acquisti: da qui in poi il cumulato è ricostruibile
-          // (purchased_credits è solo un saldo, decrementato dai consumi)
-          await axios.post(`${supabaseUrl}/rest/v1/credit_transactions`, {
-            user_id: userId, amount, type: 'purchase', source: 'stripe',
-            description: `Checkout ${session.id || ''}`.trim()
-          }, {
-            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'return=minimal' }
-          }).catch((e: any) => console.warn('[Stripe] credit_transactions log failed:', e.message));
+          // Accredito atomico e idempotente. Non serve marker: il retry di
+          // Stripe che rientra qui trova la riga (source,event_id) già scritta
+          // e credit_purchase ritorna true senza raddoppiare.
+          const ok = await creditPurchase(userId, amount, 'stripe', event.id, `Checkout ${session.id || ''}`.trim());
+          if (!ok) throw new Error('credit_purchase returned false');
           console.log(`[Stripe] Credited ${amount} to user ${userId}`);
         } catch (e: any) {
           console.error('[Stripe Webhook] Error updating credits:', e.message);
-          // Pagamento riuscito ma accredito fallito: il caso più grave da vedere in admin
+          // Pagamento riuscito ma accredito fallito: NON scrivere il marker e
+          // rispondere 500, così Stripe ritenta (l'accredito è idempotente).
           await logSystemError('critical', `Stripe: pagamento OK ma accredito crediti fallito: ${e.message}`, {
             source: 'stripe-webhook', userId, amount: amountStr, sessionId: session?.id, stack: e.stack
           });
+          return res.status(500).json({ error: 'credit_grant_failed' });
         }
       } else if (userId) {
         // Abbonamento premium (checkout senza metadata.amount): attivazione profilo.
@@ -1376,6 +1441,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       }
     }
 
+    // Marker scritto SOLO ora, a elaborazione riuscita: il ramo crediti che
+    // fallisce è già uscito con 500 sopra, quindi il retry di Stripe non lo
+    // trova e riprova (l'accredito è comunque idempotente lato RPC).
+    await saveToCache(evtKey, 'webhook_event', event.type);
     res.json({ received: true });
   });
 
@@ -1410,44 +1479,32 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       // l'acquisto verrebbe ricevuto ma accreditato 0.
       const productId = String(event.product_id || '').split(':')[0];
 
-      // Idempotenza: RevenueCat fa retry del webhook finché non riceve 2xx —
-      // un timeout dopo l'accredito produceva un secondo accredito al retry.
-      if (event.id) {
-        const rcKey = `rc_evt_${event.id}`;
-        if (await getFromCache(rcKey)) {
-          return res.json({ received: true, duplicate: true });
+      // Prezzario autorevole (stesso di Stripe): mai fidarsi del prodotto per
+      // dedurre l'importo se non è mappato.
+      const rcAmount = CREDIT_PACKS[productId]?.credits
+        ?? (productId === 'crediti_500' ? 500 : 0);
+
+      if (userId && rcAmount > 0) {
+        try {
+          // Accredito atomico e idempotente su (source='revenuecat', event_id).
+          const ok = await creditPurchase(userId, rcAmount, 'revenuecat', event.id || null, `IAP ${productId || ''}`.trim());
+          if (!ok) throw new Error('credit_purchase returned false');
+          console.log(`[RevenueCat Webhook] Accreditati ${rcAmount} crediti all'utente ${userId} per acquisto Android di ${productId}`);
+        } catch (e: any) {
+          // Pagato su Google Play ma accredito fallito: 500 → RevenueCat ritenta.
+          await logSystemError('critical', `RevenueCat: acquisto OK ma accredito fallito: ${e.message}`, {
+            source: 'revenuecat-webhook', userId, productId, amount: rcAmount, stack: e.stack
+          });
+          return res.status(500).json({ error: 'credit_grant_failed' });
         }
-        await saveToCache(rcKey, 'webhook_event', event.type);
+      } else if (userId && event.type !== 'INITIAL_PURCHASE') {
+        // Prodotto non mappato incassato: prima veniva accreditato 0 in
+        // silenzio. Ora lascia traccia per l'admin (non blocca il 2xx).
+        await logSystemError('warning', `RevenueCat: product_id non mappato, accredito 0`, {
+          source: 'revenuecat-webhook', userId, productId
+        });
       }
 
-      let amount = 0;
-      if (productId === 'package_500' || productId === 'crediti_500') amount = 500;
-      else if (productId === 'package_1100') amount = 1100;
-      // Il prodotto reale su Google Play è package_2600 (2000 + 600 bonus);
-      // package_2500 resta per compatibilità con eventuali acquisti storici.
-      else if (productId === 'package_2600') amount = 2600;
-      else if (productId === 'package_2500') amount = 2500;
-      
-      if (userId && amount > 0) {
-        const { data } = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=purchased_credits`, {
-          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-        });
-        const currentCredits = data?.[0]?.purchased_credits || 0;
-        await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`, {
-          purchased_credits: currentCredits + amount
-        }, {
-          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-        });
-        // Storico acquisti (vedi webhook Stripe)
-        await axios.post(`${supabaseUrl}/rest/v1/credit_transactions`, {
-          user_id: userId, amount, type: 'purchase', source: 'revenuecat',
-          description: `IAP ${productId || ''}`.trim()
-        }, {
-          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'return=minimal' }
-        }).catch((e: any) => console.warn('[RevenueCat] credit_transactions log failed:', e.message));
-        console.log(`[RevenueCat Webhook] Accreditati ${amount} crediti all'utente ${userId} per acquisto Android di ${productId}`);
-      }
-      
       res.json({ received: true });
     } catch (e: any) {
       console.error('[RevenueCat Webhook] Errore critico:', e.message);
@@ -1472,15 +1529,29 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       // pacchetto RevenueCat ('package_500' ecc.), che Stripe non conosce:
       // prima finivano in `line_items: [{ price: 'package_500' }]` e la
       // creazione della sessione falliva SEMPRE ("No such price").
+      //
+      // PREZZO E CREDITI DAL SERVER, MAI DAL BODY: prima unit_amount era
+      // limitato a 3 casi ma metadata.amount (ciò che il webhook accredita)
+      // veniva da req.body.amount → amount:100000 costava 19,99€ e dava
+      // 100.000 crediti. Ora si deriva tutto dal pacchetto autorevole.
       let line_items = [];
+      let creditedAmount: number;
       if (priceId && String(priceId).startsWith('price_') && priceId !== 'price_test') {
+        // Price Stripe reale: i crediti restano quelli del pacchetto noto (se
+        // riconducibile), altrimenti si rifiuta invece di indovinare.
+        const pack = CREDIT_PACKS[String(priceId)] || packFromAmount(Number(amount));
+        if (!pack) return res.status(400).json({ error: 'Pacchetto non valido' });
+        creditedAmount = pack.credits;
         line_items = [{ price: priceId, quantity: 1 }];
       } else {
+        const pack = CREDIT_PACKS[String(priceId)] || packFromAmount(Number(amount));
+        if (!pack) return res.status(400).json({ error: 'Pacchetto non valido' });
+        creditedAmount = pack.credits;
         line_items = [{
           price_data: {
             currency: 'eur',
-            product_data: { name: `Pacchetto ${amount} Crediti` },
-            unit_amount: amount === 500 ? 499 : amount === 1100 ? 999 : 1999,
+            product_data: { name: `Pacchetto ${pack.credits} Crediti` },
+            unit_amount: pack.cents,
           },
           quantity: 1,
         }];
@@ -1500,7 +1571,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
         cancel_url: `${protocol}://${host}/?payment=cancel`,
         client_reference_id: userId,
         metadata: {
-          amount: amount.toString()
+          // Valore AUTOREVOLE derivato dal pacchetto, non dal body.
+          amount: creditedAmount.toString()
         }
       });
 
@@ -1552,6 +1624,53 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       return userRes.data?.id || null;
     } catch {
       return null;
+    }
+  }
+
+  // Prezzario autorevole server-side per il GATE CREDITI. Prima nessuna rotta
+  // costosa (tranne la chat) verificava i crediti: la sequenza consumeCredits
+  // → fetch viveva solo nel client, quindi ogni servizio era gratis via cURL.
+  // Allineare a src/lib/pricing.ts.
+  const SERVER_PRICING: Record<string, number> = {
+    premium_guide_daily: 20, audio_guide: 15, itinerary_daily: 10,
+    photo_search: 5, poi_detail: 5, podcast_daily: 15,
+  };
+
+  /**
+   * Verifica il TOKEN (mai il body) e addebita `feature × units` crediti in
+   * modo atomico via consume_credits. Ritorna {userId, cost} o null avendo
+   * già inviato la risposta d'errore (401 login, 402 crediti, 500). Il
+   * chiamante genera e, in caso di fallimento, rimborsa con refundServer.
+   */
+  async function chargeOrReject(req: any, res: any, feature: string, units: number = 1): Promise<{ userId: string; cost: number } | null> {
+    const userId = await verifyUserToken(req);
+    if (!userId) { res.status(401).json({ error: 'login_required' }); return null; }
+    const unit = SERVER_PRICING[feature];
+    if (!unit) { res.status(500).json({ error: 'unknown_feature' }); return null; }
+    const cost = unit * Math.max(1, Math.floor(units));
+    try {
+      const rpc = await axios.post(
+        `${supabaseUrl}/rest/v1/rpc/consume_credits`,
+        { p_user_id: userId, p_amount: cost },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
+      );
+      if (rpc.data !== true) { res.status(402).json({ error: 'insufficient_credits', cost }); return null; }
+    } catch (e: any) {
+      res.status(500).json({ error: 'charge_failed' }); return null;
+    }
+    return { userId, cost };
+  }
+
+  /** Rimborso server-side (generazione fallita dopo l'addebito). Best-effort. */
+  async function refundServer(userId: string, amount: number): Promise<void> {
+    try {
+      await axios.post(
+        `${supabaseUrl}/rest/v1/rpc/refund_credits_service`,
+        { p_user_id: userId, p_amount: amount },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
+      );
+    } catch (e: any) {
+      await logSystemError('critical', `Rimborso server-side fallito: ${e.message}`, { source: 'chargeOrReject', userId, amount });
     }
   }
 
@@ -1699,12 +1818,28 @@ function parseSafeJSON(text: string) {
 
   
 // --- PODCAST GIORNALIERO ITINERARI ---
-app.post("/api/generate-daily-podcast", async (req, res) => {
+app.post("/api/generate-daily-podcast", rateLimiter, async (req, res) => {
   try {
     const { destination, dayNum, tappe, language, isLastDay } = req.body;
     if (!destination || !dayNum || !tappe || !Array.isArray(tappe)) {
       return res.status(400).json({ error: "Dati mancanti" });
     }
+
+    // CACHE-FIRST (prima dell'addebito): due utenti sullo stesso giorno della
+    // stessa città non pagano due generazioni DeepSeek, e chi riascolta non
+    // ripaga. Chiave deterministica su destinazione+giorno+lingua+tappe.
+    const podcastCacheKey = `podcast_${crypto.createHash('md5')
+      .update(`${destination}|${dayNum}|${String(language || 'IT').toUpperCase()}|${tappe.map((t: any) => t.name).join('|')}`)
+      .digest('hex')}`;
+    const cachedPodcast = await getFromCache(podcastCacheKey);
+    if (cachedPodcast?.text_content) {
+      return res.json({ text: cachedPodcast.text_content, cached: true });
+    }
+
+    // GATE CREDITI SERVER-SIDE: prima la rotta era anonima e gratuita (8k
+    // token DeepSeek via cURL). Ora richiede token e addebita 15 crediti.
+    const charge = await chargeOrReject(req, res, 'podcast_daily', 1);
+    if (!charge) return; // risposta d'errore già inviata (401/402/500)
 
     // Tutte le lingue supportate dal client, non solo IT/EN
     const PODCAST_LANGS: Record<string, string> = { EN: 'English', FR: 'francese (français)', ES: 'spagnolo (español)', DE: 'tedesco (Deutsch)', RU: 'russo (русский)', ZH: 'cinese semplificato (简体中文)', IT: 'italiano' };
@@ -1769,9 +1904,8 @@ app.post("/api/generate-daily-podcast", async (req, res) => {
 
     } catch (e: any) {
       console.error("[Podcast] AI Error:", e.message);
-      // Fallimento esplicito invece di un placeholder di due frasi spacciato
-      // per podcast riuscito: il client ha già addebitato 15 crediti/giorno e
-      // senza questo 502 non poteva accorgersene né rimborsare.
+      // Generazione fallita dopo l'addebito: rimborso server-side atomico.
+      await refundServer(charge.userId, charge.cost);
       return res.status(502).json({
         error: "PODCAST_GENERATION_FAILED",
         message: "Il motore AI non è riuscito a generare il podcast. Riprova."
@@ -1789,6 +1923,8 @@ app.post("/api/generate-daily-podcast", async (req, res) => {
       .trim();
 
     console.log(`[Podcast] Day ${dayNum} | ${tappe.length} stops | ${podcastText.length} chars`);
+    // In cache per i prossimi ascolti / altri utenti (best-effort).
+    await saveToCache(podcastCacheKey, 'podcast', podcastText).catch(() => {});
     res.json({ text: podcastText });
   } catch (err: any) {
     console.error("[Podcast] Error:", err);
@@ -5646,6 +5782,8 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
   nwr["leisure"~"^(park|playground)$"](around:${radius},${nLat},${nLon});
   nwr["heritage"]["place"!~".*"]["boundary"!~".*"](around:${radius},${nLat},${nLon});
   nwr["building"~"^(church|cathedral|chapel|temple|castle|tower|monument)$"](around:${radius},${nLat},${nLon});
+  nwr["place"="square"](around:${radius},${nLat},${nLon});
+  nwr["highway"="pedestrian"]["area"="yes"](around:${radius},${nLat},${nLon});
 );
 out center tags;`;
 
@@ -6739,10 +6877,11 @@ Non aggiungere testo prima o dopo il JSON.`;
     }
   });
 
-  app.post("/api/premium-guide/generate", async (req, res) => {
+  app.post("/api/premium-guide/generate", rateLimiter, async (req, res) => {
+    let pmCharge: { userId: string; cost: number } | null = null;
     try {
       const { itinerary, style, userId, hash, language = "IT" } = req.body;
-      if (!itinerary || !userId) {
+      if (!itinerary) {
         return res.status(400).json({ error: "Missing required fields" });
       }
 
@@ -6773,9 +6912,18 @@ Non aggiungere testo prima o dopo il JSON.`;
         if (cacheCheck?.data?.length > 0) {
           const cached = cacheCheck.data[0];
           console.log("[Premium Guide] Cache hit! Returning cached guide.");
-          return res.json({ content: cached.content_data, media_manifest: cached.media_manifest || {} });
+          // Cache hit PRIMA dell'addebito: la guida già in libreria non ripaga.
+          return res.json({ content: cached.content_data, media_manifest: cached.media_manifest || {}, cached: true });
         }
       }
+
+      // ── GATE CREDITI SERVER-SIDE (20 × giorni) ───────────────────────────────
+      // Prima l'addebito viveva solo nel client (PremiumGuideModal): la rotta
+      // era gratuita e anonima (userId dal body). Ora il token è obbligatorio
+      // e l'addebito è atomico; il rimborso su fallimento è nel catch finale.
+      const numDaysGuide = Math.max(1, (itinerary?.giorni?.length) || 1);
+      pmCharge = await chargeOrReject(req, res, 'premium_guide_daily', numDaysGuide);
+      if (!pmCharge) return; // 401/402/500 già inviato
 
       // ── FASE 1: EXTRACT DESTINATION FROM ITINERARY ──────────────────────────
       const destination: string = itinerary?.titolo || itinerary?.destinazione || "Italia";
@@ -7064,7 +7212,7 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
       const safeHash = hash || `pg_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
       await axios.post(`${supabaseUrl}/rest/v1/itinerary_guides`, {
         itinerary_hash: safeHash,
-        user_id: userId,
+        user_id: pmCharge.userId,
         content_data: generatedContent,
         media_manifest: mediaManifest,
         source_itinerary: itinerary,
@@ -7087,6 +7235,8 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
 
     } catch (error: any) {
       console.error("Premium Guide Error:", error);
+      // Generazione fallita dopo l'addebito: rimborso server-side.
+      if (pmCharge) await refundServer(pmCharge.userId, pmCharge.cost);
       res.status(500).json({ error: error.message || "GENERATION_ERROR" });
     }
   });

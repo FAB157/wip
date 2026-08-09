@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Download, MapPin, Zap, CheckCircle2 } from 'lucide-react';
 import { consumeCredits, refundCredits, PRICING_LIST } from '../lib/pricing';
 import { saveOfflineMapArea, saveOfflineAudio } from '../lib/offlineStorage';
+import { notify } from '../lib/toast';
 import { ensurePoiDetails } from '../services/enrichmentService';
 import { azureVoiceName } from '../services/ttsService';
 import { getApiUrl } from '../lib/api';
@@ -45,7 +46,7 @@ export default function PredictiveBundleModal({
     const success = await consumeCredits(session.user.id, cost);
     if (!success) {
       setDownloading(false);
-      alert("Crediti insufficienti. Ricarica il tuo portafoglio.");
+      notify("Crediti insufficienti. Ricarica il tuo portafoglio.");
       return;
     }
 
@@ -123,7 +124,7 @@ export default function PredictiveBundleModal({
       if (downloadedCount === 0) {
         // Nessun audio scaricato = servizio non erogato: crediti indietro
         await refundCredits(session.user.id, cost).catch(e => console.error('[Bundle] Rimborso fallito:', e));
-        alert("Non è stato possibile scaricare le audioguide. I crediti ti sono stati restituiti.");
+        notify("Non è stato possibile scaricare le audioguide. I crediti ti sono stati restituiti.");
         return;
       }
 
@@ -136,9 +137,9 @@ export default function PredictiveBundleModal({
       console.error("Errore download bundle:", e);
       if (downloadedCount === 0) {
         await refundCredits(session.user.id, cost).catch(err => console.error('[Bundle] Rimborso fallito:', err));
-        alert("Si è verificato un errore durante il download. I crediti ti sono stati restituiti.");
+        notify("Si è verificato un errore durante il download. I crediti ti sono stati restituiti.");
       } else {
-        alert("Download interrotto: alcune audioguide potrebbero mancare.");
+        notify("Download interrotto: alcune audioguide potrebbero mancare.");
       }
     } finally {
       setDownloading(false);

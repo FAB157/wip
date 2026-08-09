@@ -30,7 +30,8 @@ export default function AdminCounters() {
   // Stats States
   const [apiLogs, setApiLogs] = useState<ApiLogGroup[]>([]);
   const [affiliateClicks, setAffiliateClicks] = useState<{poiName: string, count: number}[]>([]);
-  const [dbCounts, setDbCounts] = useState({
+  // null = conteggio non disponibile (errore/permessi), distinto dallo 0 reale.
+  const [dbCounts, setDbCounts] = useState<Record<string, number | null>>({
     usersCount: 0,
     itinerariesCount: 0,
     poisCount: 0,
@@ -289,7 +290,9 @@ export default function AdminCounters() {
   };
 
   const fetchDatabaseCounters = async (start: string, end: string) => {
-    const fetchCount = async (table: string, builderModifier?: (query: any) => any): Promise<number> => {
+    // Ritorna null (NON 0) quando la query fallisce: un errore RLS/permessi
+    // non deve mascherarsi da "0 utenti". La UI mostra "—" per il null.
+    const fetchCount = async (table: string, builderModifier?: (query: any) => any): Promise<number | null> => {
       try {
         let query = supabase.from(table).select('*', { count: 'exact', head: true });
         if (builderModifier) {
@@ -300,7 +303,7 @@ export default function AdminCounters() {
         return res.count || 0;
       } catch (err: any) {
         console.warn(`[AdminCounters] Error fetching count for ${table}:`, err.message || err);
-        return 0;
+        return null;
       }
     };
 
@@ -323,7 +326,7 @@ export default function AdminCounters() {
       fetchCount('user_quotas', (q) => q.gte('updated_at', start).lte('updated_at', end)),
       (async () => {
         let c = await fetchCount('user_itineraries', (q) => q.gte('created_at', start).lte('created_at', end));
-        if (c === 0) {
+        if (!c) { // null (errore) o 0: prova il fallback su api_cache
           c = await fetchCount('api_cache', (q) => q.eq('content_type', 'itinerary').gte('created_at', start).lte('created_at', end));
         }
         return c;
@@ -337,7 +340,7 @@ export default function AdminCounters() {
       (async () => {
         let c = await fetchCount('shared_poi_audio_cache', (q) =>
           q.not('generated_text', 'is', null).gte('created_at', start).lte('created_at', end));
-        if (c === 0) {
+        if (!c) { // null (errore) o 0: prova il fallback su api_cache
           c = await fetchCount('api_cache', (q) => q.eq('content_type', 'audio_guide').gte('created_at', start).lte('created_at', end));
         }
         return c;
@@ -583,9 +586,11 @@ export default function AdminCounters() {
                   </div>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-outline-variant/40 flex items-center justify-between text-[9px] font-black uppercase text-on-surface-variant/60 tracking-wider">
-                  <span>TELEMETRIA ATTIVA</span>
-                  <span>OK</span>
+                <div className={`mt-4 pt-3 border-t border-outline-variant/40 flex items-center justify-between text-[9px] font-black uppercase tracking-wider ${isTableMissing ? 'text-amber-600/80' : 'text-on-surface-variant/60'}`}>
+                  {/* Sui dati seed (tabella telemetria assente) non spacciare la
+                      card per telemetria reale: etichettala come dimostrativa. */}
+                  <span>{isTableMissing ? 'DATI DIMOSTRATIVI' : 'TELEMETRIA ATTIVA'}</span>
+                  <span>{isTableMissing ? 'DEMO' : 'OK'}</span>
                 </div>
               </div>
             ))}
@@ -723,7 +728,7 @@ function CounterCard({
 }: { 
   icon: React.ReactNode; 
   label: string; 
-  value: number; 
+  value: number | null;
   loading?: boolean;
   bg?: string;
 }) {
@@ -742,6 +747,9 @@ function CounterCard({
         <p className="text-xl font-black text-primary mt-0.5">
           {loading ? (
             <span className="inline-block animate-pulse opacity-40">...</span>
+          ) : value === null ? (
+            // Conteggio non disponibile (errore/permessi): "—", non uno 0 finto.
+            <span className="text-on-surface-variant/50" title="Conteggio non disponibile (errore o permessi)">—</span>
           ) : (
             value.toLocaleString('it-IT')
           )}

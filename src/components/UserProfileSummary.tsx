@@ -184,9 +184,9 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
               {nextLevel && (
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-[9px] font-bold text-gray-400">Obiettivo: {nextLevel.title}</span>
-                  {nextLevel.reward_amount > 0 && (
+                  {nextLevel.reward_credits > 0 && (
                     <span className="flex items-center gap-1 bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border border-amber-200">
-                      🏆 {nextLevel.reward_amount} 🪙
+                      🏆 {nextLevel.reward_credits} 🪙
                     </span>
                   )}
                 </div>

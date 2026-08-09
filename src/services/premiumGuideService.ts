@@ -156,6 +156,12 @@ export async function generatePremiumGuide(
     throw new Error(body.error || 'QUOTA_EXCEEDED');
   }
 
+  // 402: crediti insufficienti (addebito ora server-side). Il client non ha
+  // scalato nulla, quindi non deve rimborsare — solo segnalarlo.
+  if (response.status === 402) {
+    throw new Error('INSUFFICIENT_CREDITS');
+  }
+
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || 'GENERATION_ERROR');
@@ -375,7 +381,7 @@ export async function uploadPdfToStorage(
 }
 
 // ── Helper: get current Supabase access token ────────────────────────────────
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
   try {
     const { data } = await supabase.auth.getSession();
     return data?.session?.access_token || '';

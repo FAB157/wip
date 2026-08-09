@@ -248,6 +248,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
     }
 
     /**
+     * Azzera lo storico dei trigger di geofencing (tabella trigger_state in Room):
+     * dopo il reset ogni POI verrà riannunciato come la prima volta. Chiamato dal
+     * JS (ProfileScreen → "Azzera storico") in parallelo alla cancellazione web
+     * di wip_played_pois. Senza, il servizio in background continuava a saltare i
+     * POI già annunciati anche dopo il reset lato web.
+     */
+    @PluginMethod
+    fun resetTriggerHistory(call: PluginCall) {
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                com.itaintasca.app.db.PoiDatabase.getInstance(context).poiDao().clearTriggerStates()
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject("resetTriggerHistory failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Ferma il teaser vocale nativo. Il JS lo chiama un attimo prima di avviare
      * l'audioguida completa: mai due voci sovrapposte, senza timer ciechi.
      */
@@ -477,6 +496,28 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * Identità utente per lo storico ascolti nativo: il JS la spinge a ogni
+     * sessione online (dayPassService.reconcileOfflineBilling). Il token
+     * serve per le RLS su user_listening_history; se scade, insert e sync
+     * restano best-effort. Alla ricezione sincronizza subito il mirror.
+     */
+    @PluginMethod
+    fun setUserContext(call: PluginCall) {
+        val userId = call.getString("userId") ?: ""
+        val accessToken = call.getString("accessToken") ?: ""
+        context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).edit()
+            .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_USER_ID, userId)
+            .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, accessToken)
+            .apply()
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            try {
+                com.itaintasca.app.service.ListeningHistoryStore.syncFromCloud(context)
+            } catch (_: Exception) { /* best-effort */ }
+        }
+        call.resolve()
+    }
+
     /** Mirror nativo del Day Pass: scadenza, cap e contatore in prefs. */
     @PluginMethod
     fun setDayPass(call: PluginCall) {
@@ -572,8 +613,14 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 val db = com.itaintasca.app.db.PoiDatabase.getInstance(context)
                 val offlinePoi = db.offlineDao().getPoiById(poiId)
                 val text = offlinePoi?.audioText
+                val lang = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                    .getString("language", "it") ?: "it"
+                // MP3 prefetchato: parte istantaneo e copre anche il caso
+                // audio_text assente nel pacchetto (catena fallback offline).
+                val mp3 = com.itaintasca.app.service.AudioPrefetchManager
+                    .cachedFile(context, poiId, lang)
                 val ret = JSObject()
-                if (offlinePoi == null || text.isNullOrBlank()) {
+                if (text.isNullOrBlank() && mp3 == null) {
                     ret.put("ok", false)
                     ret.put("reason", "no_text")
                     call.resolve(ret)
@@ -586,7 +633,13 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
                     nowMs, prefs.getLong("daypass_expires_at", 0L), passUsed, prefs.getInt("daypass_cap", 0)
                 )
-                if (passActive) {
+                // Già nello storico ascolti = già acquistato: gratis, non
+                // consuma né pass né crediti (come authorizeGuidePlayback web)
+                val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
+                    .isAlreadyPurchased(context, poiId)
+                if (alreadyPurchased) {
+                    ret.put("mode", "purchased")
+                } else if (passActive) {
                     prefs.edit().putInt("daypass_used", passUsed + 1).apply()
                     ret.put("mode", "day_pass")
                 } else {
@@ -609,13 +662,18 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 com.itaintasca.app.geofence.GeofenceBroadcastReceiver.enqueue(
                     context,
                     com.itaintasca.app.geofence.GeofenceBroadcastReceiver.Companion.SpeechItem(
-                        text = text,
-                        isGem = offlinePoi.isGem,
+                        text = text ?: "",
+                        isGem = offlinePoi?.isGem ?: false,
                         isItinerary = false,
                         poiId = poiId,
                         priority = 1,
-                        kind = "arrival"
+                        kind = "arrival",
+                        audioFile = mp3?.absolutePath
                     )
+                )
+                // Storico ascolti: mirror subito + cloud best-effort
+                com.itaintasca.app.service.ListeningHistoryStore.recordListening(
+                    context, poiId, offlinePoi?.nome, offlinePoi?.category, null
                 )
                 ret.put("ok", true)
                 call.resolve(ret)

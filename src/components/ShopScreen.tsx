@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { ShoppingCart, Coins, ShieldCheck, Ticket } from 'lucide-react';
 import { getWalletBalance, WalletBalance } from '../lib/pricing';
 import { supabase } from '../lib/supabase';
+import { notify } from '../lib/toast';
 import { getTranslation } from '../lib/i18n';
 import { Capacitor } from '@capacitor/core';
 import { Purchases } from '@revenuecat/purchases-capacitor';
@@ -41,7 +42,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     // condiviso "mock-user-id" (o a nessuno): soldi veri persi. Meglio
     // chiedere il login prima di incassare.
     if (!userId || userId === 'mock-user-id') {
-      alert(language === 'EN'
+      notify(language === 'EN'
         ? 'Please sign in to your account before purchasing credits.'
         : 'Accedi al tuo account prima di acquistare crediti.');
       return;
@@ -57,7 +58,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
 
         const offerings = await Purchases.getOfferings();
         if (!offerings.current) {
-          alert("Nessun pacchetto disponibile al momento. Riprova più tardi.");
+          notify("Nessun pacchetto disponibile al momento. Riprova più tardi.");
           setLoading(false);
           return;
         }
@@ -73,14 +74,14 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
         );
         
         if (!pkgToBuy) {
-          alert(`Prodotto ${priceId} non trovato nello store. Configurazione Google Play mancante?`);
+          notify(`Prodotto ${priceId} non trovato nello store. Configurazione Google Play mancante?`);
           setLoading(false);
           return;
         }
 
         await Purchases.purchasePackage({ aPackage: pkgToBuy });
         
-        alert("Acquisto completato con successo! I crediti verranno aggiornati a breve.");
+        notify("Acquisto completato con successo! I crediti verranno aggiornati a breve.");
         
         // Polling leggero per aggiornare la UI quando il webhook accreditato i crediti
         setTimeout(() => fetchBalance(), 3000);
@@ -89,7 +90,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       } catch (e: any) {
         if (!e.userCancelled) {
           console.error('RevenueCat Error:', e);
-          alert("Errore durante l'acquisto: " + e.message);
+          notify("Errore durante l'acquisto: " + e.message);
         }
       } finally {
         setLoading(false);
@@ -124,7 +125,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       } catch (e) {
         console.error('Stripe Error:', e);
         setLoading(false);
-        alert("Errore durante la creazione del pagamento Stripe.");
+        notify("Errore durante la creazione del pagamento Stripe.");
       }
     }
   };
@@ -141,7 +142,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) {
-        alert('Accedi al tuo account per riscattare il voucher.');
+        notify('Accedi al tuo account per riscattare il voucher.');
         return;
       }
       const res = await fetch(getApiUrl('/api/coupon/redeem'), {
@@ -152,12 +153,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Riscatto non riuscito.');
 
-      alert(`Voucher${data.structureName ? ` ${data.structureName}` : ''} riscattato! Hai ricevuto ${data.credits} crediti omaggio.`);
+      notify(`Voucher${data.structureName ? ` ${data.structureName}` : ''} riscattato! Hai ricevuto ${data.credits} crediti omaggio.`);
       setVoucherCode('');
       await fetchBalance();
     } catch (e: any) {
       console.error(e);
-      alert(e?.message || "Errore durante il riscatto del voucher.");
+      notify(e?.message || "Errore durante il riscatto del voucher.");
     } finally {
       setLoading(false);
     }

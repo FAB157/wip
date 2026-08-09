@@ -229,8 +229,14 @@ function isCategoryAllowed(poi: GeofencePoi, activeSubcats: Record<string, boole
   if (['church', 'chiese', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale',
        'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia',
        'shrine', 'santuario'].includes(cat))                             return activeSubcats.chiese ?? true;
-  if (['viewpoint', 'panorami'].includes(cat))                           return activeSubcats.panorami ?? true;
-  if (['museum', 'musei'].includes(poi.category))                                 return activeSubcats.musei ?? true;
+  // 'park' e 'gallery' sono nelle mappe native (CATEGORY_MAP Android /
+  // PoiCategories.map iOS): senza di loro il nativo triggerava e il web no.
+  if (['viewpoint', 'park', 'panorami'].includes(cat))                   return activeSubcats.panorami ?? true;
+  if (['museum', 'gallery', 'musei'].includes(cat))                      return activeSubcats.musei ?? true;
+  // Toggle "Consigli" del setup GeoControl (default OFF): allineato a
+  // SupabaseClient.kt / PoiModels.swift che lo supportano già lato nativo.
+  if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))
+    return activeSubcats.consigli ?? false;
   return false; // categorie commerciali/utilitarie → mai audioguida
 }
 
@@ -256,6 +262,10 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
     alertAt: number;     // timestamp quando è scattato l'avviso iniziale
   }>>({});
 
+  // Watchdog GPS: timestamp ultimo fix + flag "avviso già mostrato" (no spam)
+  const lastFixRef   = useRef(Date.now());
+  const gpsWarnedRef = useRef(false);
+
   // Ascolta evento STOP utente → avanza la coda
   useEffect(() => {
     const handleStop = () => audioQueueManager.userStoppedAudio();
@@ -274,8 +284,32 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
   useEffect(() => {
     if (!enabled) return;
 
+    // ── Watchdog GPS web: tour attivo ma nessun fix da >60s → avviso (una
+    // volta sola); al fix successivo il flag si resetta con messaggio di
+    // ripristino. Copre permessi revocati / GPS spento a guida in corso.
+    lastFixRef.current   = Date.now();
+    gpsWarnedRef.current = false;
+    const gpsWatchdog = window.setInterval(() => {
+      if (!locationService.getIsTourActive()) return;
+      if (!gpsWarnedRef.current && Date.now() - lastFixRef.current > 60_000) {
+        gpsWarnedRef.current = true;
+        window.dispatchEvent(new CustomEvent('audioguide-status', {
+          detail: 'GPS perso: controlla i permessi di localizzazione'
+        }));
+      }
+    }, 15_000);
+
     const unsubscribe = locationService.subscribe((loc) => {
       if (!locationService.getIsTourActive()) return;
+
+      // Watchdog GPS: fix ricevuto → ripristino
+      lastFixRef.current = Date.now();
+      if (gpsWarnedRef.current) {
+        gpsWarnedRef.current = false;
+        window.dispatchEvent(new CustomEvent('audioguide-status', {
+          detail: 'Segnale GPS ripristinato.'
+        }));
+      }
 
       const { language: lang, character: char } = optsRef.current;
       const here = { lat: loc.latitude, lon: loc.longitude };
@@ -527,6 +561,7 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
 
     return () => {
       unsubscribe();
+      window.clearInterval(gpsWatchdog);
       window.removeEventListener('wip-speak-approach', handleSpeakApproach);
       window.removeEventListener('wip-poi-trigger', handleTrigger);
       window.removeEventListener('wip-poi-exit', handleExit);

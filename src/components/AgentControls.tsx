@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Send, Loader2, Info, X, Bot, User, Mic, Coins } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { PRICING_LIST, getWalletBalance } from '../lib/pricing';
+import { notify } from '../lib/toast';
 import CreditConfirmationModal from './CreditConfirmationModal';
 
 interface AgentControlsProps {
@@ -52,7 +53,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
 
   const handleMicrophoneClick = () => {
     if (!recognition) {
-      alert("Il tuo browser non supporta il riconoscimento vocale. Usa Chrome o Edge.");
+      notify("Il tuo browser non supporta il riconoscimento vocale. Usa Chrome o Edge.");
       return;
     }
     
@@ -195,7 +196,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         setMessages(prev => prev.slice(0, -1));
         setIsLoading(false);
         if (info?.error === 'insufficient_credits') {
-          alert('Crediti insufficienti. Ricarica nel WIP Shop.');
+          notify('Crediti insufficienti. Ricarica nel WIP Shop.');
         } else if (userId) {
           setCustomEvent(eventMessage);
           const bal = await getWalletBalance(userId);

@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import LoadingQuiz from './LoadingQuiz';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Download, RefreshCw, AlertTriangle, Star, Loader2 } from 'lucide-react';
+import { notify } from '../lib/toast';
 import {
   GuideStyle,
   PremiumGuideContent,
@@ -9,11 +10,12 @@ import {
   downloadGuideAsPdf,
   uploadPdfToStorage,
   GUIDE_STYLE_META,
+  getAccessToken,
 } from '../services/premiumGuideService';
-import { checkUserQuota, incrementUserQuota, getUserProfile, isUserPremium } from '../lib/quotaManager';
+import { getUserProfile, isUserPremium } from '../lib/quotaManager';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
-import { consumeCredits, refundCredits, PRICING_LIST, getWalletBalance } from '../lib/pricing';
+import { PRICING_LIST, getWalletBalance, notifyCreditsChanged } from '../lib/pricing';
 import { Language, getTranslation } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
 import ShopScreen from './ShopScreen';
@@ -102,26 +104,16 @@ export default function PremiumGuideModal({
     setPhase('generating');
     startStepCycle();
 
-    let charged = 0;
     try {
-      const payRes = await consumeCredits(userId, premiumCost);
-      if (!payRes) {
-        alert("Crediti insufficienti.");
-        setPhase('error');
-        stopStepCycle();
-        return;
-      }
-      charged = premiumCost;
-
       setStreamingText('');
-      // Route non-stream: genera intro + un giorno per chiamata, così le tappe
-      // hanno il loro budget di token dedicato (la vecchia route stream
-      // esauriva l'output sull'introduzione e restituiva "giorni" vuoto),
-      // e recupera anche il media_manifest con le immagini.
+      // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta /premium-guide/generate
+      // scala i crediti in modo atomico e li restituisce se la generazione
+      // fallisce. Il client non addebita più (niente doppio addebito), passa
+      // solo il token; la modale di conferma sopra resta come UX.
       const result = await generatePremiumGuide(itinerary, selectedStyle, userId, language);
 
-      // Validazione d'esito: una guida senza giorni o senza alcun contenuto
-      // per tappa è un fallimento mascherato, non un successo da far pagare.
+      // Validazione d'esito: una guida senza giorni è un fallimento mascherato.
+      // In quel caso il server ha già rimborsato (throw → catch server).
       const giorni = (result.content as any)?.giorni;
       if (!Array.isArray(giorni) || giorni.length === 0) {
         throw new Error('GUIDE_INCOMPLETE');
@@ -132,21 +124,22 @@ export default function PremiumGuideModal({
       setMediaManifest(result.media_manifest);
       setGuideHash(result.hash);
       setPhase('preview');
+      // Il saldo è cambiato lato server: aggiorna le viste che mostrano i crediti.
+      notifyCreditsChanged({ userId });
     } catch (err: any) {
       stopStepCycle();
-      // Qualunque sia il fallimento, i crediti addebitati tornano indietro.
-      if (charged > 0) {
-        await refundCredits(userId, charged).catch(e =>
-          console.error('[PremiumGuide] Rimborso fallito:', e));
-        charged = 0;
-      }
       const msg = err?.message || '';
-      if (msg === 'QUOTA_EXCEEDED') {
+      if (msg === 'INSUFFICIENT_CREDITS') {
+        setErrorMsg(getTranslation('err_insufficient_credits', language));
+      } else if (msg === 'QUOTA_EXCEEDED') {
         setErrorMsg(getTranslation('premium_guide_quota_exceeded', language));
       } else {
         setErrorMsg(getTranslation('premium_guide_error', language));
       }
       setPhase('error');
+      // Se il server aveva addebitato e poi fallito, ha già rimborsato:
+      // riallinea comunque il saldo mostrato.
+      notifyCreditsChanged({ userId });
     }
   };
 
@@ -170,7 +163,7 @@ export default function PremiumGuideModal({
       }
     } else {
       navigator.clipboard.writeText(shareText + " " + shareUrl);
-      alert("Link copiato negli appunti!");
+      notify("Link copiato negli appunti!");
     }
   };
 
@@ -184,38 +177,35 @@ export default function PremiumGuideModal({
       language === 'IT' ? 'Podcast della Guida' : 'Guide Podcast'
     );
     if (!confirmed) return;
-    const paid = await consumeCredits(userId, PRICING_LIST.podcast_daily);
-    if (!paid) {
-      alert(language === 'IT'
-        ? "Crediti insufficienti. Ricarica dallo shop per continuare."
-        : "Not enough credits. Please top up to continue.");
-      return;
-    }
-    let podcastCharged = PRICING_LIST.podcast_daily;
-    const refundPodcast = async () => {
-      if (podcastCharged > 0) {
-        await refundCredits(userId, podcastCharged).catch(e => console.error('[GuidePodcast] Rimborso fallito:', e));
-        podcastCharged = 0;
-      }
-    };
 
     setPlayingPodcast(true);
     try {
       const tappe = guideContent.giorni.flatMap(g => g.pois).map(p => ({ name: p.titolo, description: p.descrizione_lunga }));
+      // ADDEBITO SERVER-SIDE: la rotta scala/rimborsa i crediti e richiede il
+      // token. Il client non addebita più (niente doppio addebito). Un giorno
+      // reale, non "Intera Guida": dayNum va usato come numero per la cache.
       const res = await fetch(getApiUrl('/api/generate-daily-podcast'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await getAccessToken()}`,
+        },
         body: JSON.stringify({
           destination: guideContent.guida_titolo,
-          dayNum: "Intera Guida",
-          tappe: tappe.slice(0, 10), // Limit to top 10 for guide podcast
+          dayNum: 1,
+          tappe: tappe.slice(0, 10),
           language: language || 'it'
         })
       });
+      if (res.status === 402) {
+        setPlayingPodcast(false);
+        notify(getTranslation('err_insufficient_credits', language));
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      notifyCreditsChanged({ userId });
       if (data.text) {
-        podcastCharged = 0; // contenuto ricevuto: addebito legittimo
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(data.text);
@@ -225,16 +215,14 @@ export default function PremiumGuideModal({
           window.speechSynthesis.speak(utterance);
         }
       } else {
-        await refundPodcast();
         setPlayingPodcast(false);
       }
     } catch (e) {
       console.error(e);
-      await refundPodcast();
       setPlayingPodcast(false);
-      alert(language === 'IT'
-        ? "Errore nella generazione del podcast. I crediti ti sono stati restituiti."
-        : "Podcast generation failed. Your credits have been refunded.");
+      notify(language === 'IT'
+        ? "Errore nella generazione del podcast. Nessun credito è stato scalato."
+        : "Podcast generation failed. No credits were charged.");
     }
   };
 

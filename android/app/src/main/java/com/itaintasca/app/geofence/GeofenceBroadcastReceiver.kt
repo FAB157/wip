@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.location.Location
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -87,8 +88,18 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             val isItinerary: Boolean = false,
             val poiId: String? = null,
             val priority: Int, // 0 = massima (itinerario), 1 = gemma, 2 = normale
-            val kind: String = "arrival" // arrival | approach
+            val kind: String = "arrival", // arrival | approach
+            // MP3 prefetchato in cache locale (AudioPrefetchManager): se
+            // presente e valido si riproduce quello (partenza istantanea,
+            // voce neurale) invece del TTS di sistema; se la riproduzione
+            // fallisce si torna al TTS del campo text.
+            val audioFile: String? = null
         )
+
+        // Player per gli MP3 prefetchati: vive accanto al TTS nella stessa coda
+        // sequenziale, mai due voci insieme.
+        @Volatile
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
 
         // Mappa tra categorie UI (del setup) e categorie DB reali
         // Tenere allineata a isCategoryAllowed (src/hooks/useGeofencing.ts) e a
@@ -103,7 +114,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // Sync con CategoryChips/MapArea web: esperienze_locali eliminata,
             // i mercati (marketplace) confluiscono in utilita
             "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
-            "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie")
+            "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
+            // Toggle "Consigli" del setup GeoControl: presente in SupabaseClient.kt
+            // e PoiModels.swift (iOS) — senza questa riga i POI consigli venivano
+            // scaricati ma il receiver li scartava al trigger.
+            "consigli" to listOf("information", "tourism_information", "office", "consigli")
         )
 
         /**
@@ -118,9 +133,63 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             finishActiveSpeech(context.applicationContext, notifyJs = true)
         }
 
+        /**
+         * Ferma SOLO la voce del POI indicato (superamento): via i suoi item
+         * dalla coda; se la voce attiva è la sua si interrompe e si prosegue
+         * con la coda. Le voci degli altri POI non si toccano — superare A
+         * mentre suona la guida di B non deve uccidere B. Lo stop globale
+         * resta per il plugin (audioguida completa in partenza dal JS).
+         */
+        fun stopSpeakingForPoi(context: Context, poiId: String) {
+            if (poiId.isBlank()) return
+            speechQueue.removeAll { it.poiId == poiId }
+            if (activeItem?.poiId != poiId) return
+            try { ttsInstance?.stop() } catch (_: Exception) { }
+            // finishActiveSpeech rilascia anche l'eventuale MediaPlayer attivo
+            finishActiveSpeech(context.applicationContext, notifyJs = true)
+            processNextSpeech(context.applicationContext)
+        }
+
         fun enqueue(context: Context, item: SpeechItem) {
             speechQueue.add(item)
             processNextSpeech(context.applicationContext)
+        }
+
+        /**
+         * Avvio dell'approach dal PREDITTORE, non dal geofence dell'OS.
+         *
+         * È il punto in cui si recupera davvero la latenza: il servizio in
+         * foreground valuta il CPA a ogni fix e può annunciare PRIMA che
+         * l'OS consegni la transizione ENTER (che può arrivare con secondi
+         * di ritardo, e su alcuni OEM molti di più in Doze).
+         *
+         * Delega alla stessa `handleApproach` del percorso geofence: unico
+         * punto di verità per teaser, prefetch MP3, TTS e notifica. Room
+         * (stato PENDING → APPROACH_FIRED) impedisce il doppio annuncio se
+         * poi arriva anche la transizione dell'OS.
+         */
+        /**
+         * Filtro categorie riusabile dal valutatore predittivo del servizio.
+         * Unico punto di verità: CATEGORY_MAP vive qui, e duplicarla altrove
+         * è esattamente il difetto che il CLAUDE.md del progetto segnala.
+         */
+        fun isCategoryActive(poi: PoiEntity, selected: List<String>): Boolean =
+            GeofenceBroadcastReceiver().isPoiCategoryActive(poi, selected)
+
+        suspend fun firePredictedApproach(
+            context: Context,
+            poiId: String,
+            name: String,
+            guide: String,
+            isGem: Boolean,
+            isItinerary: Boolean,
+            db: PoiDatabase,
+            speak: Boolean
+        ) {
+            // Il companion può accedere ai membri privati della propria classe.
+            GeofenceBroadcastReceiver().handleApproach(
+                context, poiId, name, guide, isGem, isItinerary, db, speak
+            )
         }
 
         private fun processNextSpeech(appContext: Context) {
@@ -150,6 +219,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
 
             Handler(Looper.getMainLooper()).post {
+                // MP3 prefetchato disponibile? Partenza istantanea senza TTS.
+                val mp3 = next.audioFile?.let { path ->
+                    try {
+                        java.io.File(path).takeIf { it.exists() && it.length() > 0 }
+                    } catch (_: Exception) { null }
+                }
+                if (mp3 != null) {
+                    startMp3Playback(appContext, next, mp3, prefs)
+                    return@post
+                }
+
                 initTtsIfNeeded(appContext) {
                     requestFocus(appContext)
 
@@ -197,6 +277,80 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
         }
 
+        /**
+         * Riproduzione dell'MP3 prefetchato al posto del TTS. Stessa liturgia
+         * del ramo TTS (focus, chime, prefs teaser, eventi JS, watchdog); su
+         * QUALUNQUE errore il file viene scartato e l'item torna in coda in
+         * versione solo-testo, così il fallback resta il TTS di sistema.
+         */
+        private fun startMp3Playback(
+            appContext: Context,
+            item: SpeechItem,
+            file: java.io.File,
+            prefs: SharedPreferences
+        ) {
+            requestFocus(appContext)
+
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                RingtoneManager.getRingtone(appContext, uri).play()
+            } catch (_: Exception) { }
+
+            prefs.edit()
+                .putBoolean(PREF_TEASER_SPEAKING, true)
+                .putString(PREF_TEASER_SPEAKING_POI, item.poiId ?: "")
+                .apply()
+            broadcastTeaserEvent(appContext, "teaserStarted", item)
+
+            val fallbackToTts = {
+                try { file.delete() } catch (_: Exception) { }
+                if (item.text.isNotBlank()) speechQueue.add(item.copy(audioFile = null))
+                finishActiveSpeech(appContext, notifyJs = true)
+                processNextSpeech(appContext)
+            }
+
+            try {
+                val mp = android.media.MediaPlayer()
+                activeMediaPlayer = mp
+                mp.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                mp.setDataSource(file.absolutePath)
+                mp.setOnCompletionListener { onUtteranceFinished(appContext) }
+                mp.setOnErrorListener { _, what, extra ->
+                    Log.w(TAG, "MP3 playback error ($what/$extra), fallback TTS")
+                    fallbackToTts()
+                    true
+                }
+                mp.setOnPreparedListener { player ->
+                    try {
+                        player.start()
+                        // Watchdog come per il TTS: se onCompletion non arriva
+                        // mai, la coda non deve restare bloccata.
+                        val maxMs = (player.duration.toLong() + 15_000L)
+                            .coerceIn(15_000L, 15 * 60_000L)
+                        val guard = Runnable {
+                            Log.w(TAG, "MP3 watchdog fired, resetting queue state")
+                            finishActiveSpeech(appContext, notifyJs = true)
+                            processNextSpeech(appContext)
+                        }
+                        safetyRunnable = guard
+                        safetyHandler.postDelayed(guard, maxMs)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "MP3 start failed: ${e.message}")
+                        fallbackToTts()
+                    }
+                }
+                mp.prepareAsync()
+            } catch (e: Exception) {
+                Log.w(TAG, "MP3 setup failed: ${e.message}")
+                fallbackToTts()
+            }
+        }
+
         /** Chiusura idempotente dell'item corrente: focus, prefs, evento JS. */
         private fun finishActiveSpeech(appContext: Context, notifyJs: Boolean) {
             val item: SpeechItem?
@@ -206,6 +360,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 isSpeaking = false
                 safetyRunnable?.let { safetyHandler.removeCallbacks(it) }
                 safetyRunnable = null
+            }
+            // Rilascio del player MP3 (idempotente: null se era un item TTS)
+            activeMediaPlayer?.let { mp ->
+                activeMediaPlayer = null
+                try { mp.stop() } catch (_: Exception) { }
+                try { mp.release() } catch (_: Exception) { }
             }
             abandonFocus(appContext)
 
@@ -500,9 +660,29 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
 
             if (info.type == "approach" && triggerState == TriggerState.PENDING) {
-                if (checkBearingFilter(currentLoc, poi.lat, poi.lon)) {
+                // Predittore CPA al posto del vecchio filtro ±60°: valuta se
+                // l'utente è realmente IN ROTTA verso il POI e se il momento
+                // è quello giusto (t_cpa dentro la finestra di anticipo),
+                // invece di limitarsi a vetare le direzioni sbagliate.
+                // Fail-open interno: con fix impreciso o utente fermo ricade
+                // sul comportamento radiale di prima.
+                val pred = PredictiveTrigger.evaluate(
+                    location = currentLoc,
+                    poiLat = poi.entranceLat ?: poi.lat,
+                    poiLon = poi.entranceLon ?: poi.lon,
+                    radiusM = alertRad.toDouble(),
+                    isDriving = isDrivingMode
+                )
+                TriggerTelemetry.log(
+                    context, poiId = info.poiId, poiName = poi.nome,
+                    phase = "approach", result = pred, location = currentLoc,
+                    isDriving = isDrivingMode, radiusM = alertRad
+                )
+                if (pred.decision == PredictiveTrigger.Decision.FIRE) {
                     handleApproach(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, db, speak = !approachSpokenInBatch)
                     approachSpokenInBatch = true
+                } else {
+                    Log.d(TAG, "Approach non emesso per ${poi.nome}: ${pred.decision} (${pred.reason})")
                 }
             } else if (info.type == "arrival") {
                 // ARRIVED_FIRED scade dopo 24h: un POI rivisitato il giorno dopo
@@ -581,22 +761,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun checkBearingFilter(location: Location, poiLat: Double, poiLon: Double): Boolean {
-        // Usa il fix preciso già ottenuto in handleEnterTransitions: la vecchia
-        // versione leggeva Task.result in modo sincrono, che lancia eccezione se
-        // il task non è completo — il filtro risultava quasi sempre un no-op.
-        try {
-            // Accuratezza: Se la posizione è troppo imprecisa (> 50m), ignoriamo il bearing filter
-            if (location.accuracy > 50) return true
-
-            if (!location.hasBearing() || location.speed < 0.3f) return true
-            val bearingToPoi = location.bearingTo(Location("").apply { latitude = poiLat; longitude = poiLon })
-            val userBearing = location.bearing
-            var angleDiff = Math.abs(bearingToPoi - userBearing)
-            if (angleDiff > 180) angleDiff = 360 - angleDiff
-            return angleDiff <= 60
-        } catch (e: Exception) { return true }
-    }
+    // checkBearingFilter RIMOSSO: sostituito da PredictiveTrigger.evaluate().
+    //
+    // Il vecchio filtro confrontava il bearing con ±60° come VETO. Due difetti:
+    //   1. poteva solo sopprimere un annuncio, mai anticiparlo — quindi non
+    //      toccava il problema del "notifica quando l'ho già superato";
+    //   2. si disattivava (`return true`) con accuracy > 50 m o speed < 0.3 m/s,
+    //      cioè nei centri storici e col turista che rallenta avvicinandosi:
+    //      nella pratica non filtrava quasi nulla.
+    // Il predittore CPA copre entrambi i casi e mantiene lo stesso fail-open
+    // dove i dati non consentono una predizione. Vedi PredictiveTrigger.kt.
 
     private suspend fun handleApproach(
         context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, db: PoiDatabase, speak: Boolean = true
@@ -612,6 +786,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         if (com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)) {
             triggerTeaserGeneration(poiId, lang)
         }
+
+        // ✅ [PREFETCH MP3] - Al primo avviso scarichiamo in background l'MP3
+        // dell'audioguida nella cache locale: al trigger di arrivo la
+        // riproduzione parte istantanea (best-effort, mai bloccante).
+        com.itaintasca.app.service.AudioPrefetchManager.prefetch(context, poiId, lang, guide)
 
         // Messaggio localizzato: prima era italiano fisso anche per utenti EN/FR/ES/DE
         val approachMsg = when (lang) {
@@ -631,7 +810,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
         vibrate(context, if (isItinerary || isGem) longArrayOf(0, 300, 100, 500) else longArrayOf(0, 500))
         val notifTitle = if (isItinerary) "📍 Tappa Itinerario" else "Esplorazione"
-        showNotification(context, "$notifTitle: $name", "Distanza: circa 150m. Tocca per i dettagli.", poiId, guide, false)
+        // Raggio reale della modalità corrente, non "150m" fisso: in auto
+        // l'alert scatta a 300 m e la notifica mentiva (stesso fix di iOS).
+        val guideModeNow = prefs.getString("guideMode", "walking") ?: "walking"
+        val alertRadNow = if (guideModeNow == "driving") prefs.getFloat("alertRadiusCar", 300f)
+                          else prefs.getFloat("alertRadiusWalk", 150f)
+        showNotification(context, "$notifTitle: $name", "A circa ${alertRadNow.toInt()}m. Tocca per i dettagli.", poiId, guide, false)
     }
 
     private suspend fun handleArrival(
@@ -695,11 +879,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // l'audioguida COMPLETA (+ info aggiuntive) in coda TTS, online e
         // offline, senza mai aprire l'app. Il contatore vive in prefs, quindi
         // il cap regge anche a display spento e senza rete.
+        // GIÀ ACQUISTATO: un POI presente nello storico ascolti (mirror locale
+        // sincronizzato dal cloud) è riprodotto GRATIS, senza consumare il pass
+        // — stesso ordine del web (dayPassService.authorizeGuidePlayback).
         // Senza pass il teaser resta gratuito; l'ascolto completo passa dal
         // tasto "Ascolta" (per-listen a crediti, plugin playOfflineGuide).
         // Solo con app NON in foreground: in foreground se ne occupa il JS
         // (mai due voci sovrapposte).
         if (isAutomaticMode && !isAppInForeground(context)) {
+            val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
+                .isAlreadyPurchased(context, poiId)
             val passUsed = prefs.getInt("daypass_used", 0)
             val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
                 System.currentTimeMillis(),
@@ -707,22 +896,46 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 passUsed,
                 prefs.getInt("daypass_cap", 0)
             )
-            if (passActive) {
+            if (alreadyPurchased || passActive) {
+                // CATENA FALLBACK GUIDA COMPLETA:
+                // 1) MP3 prefetchato in cache locale (partenza istantanea)
+                // 2) MP3 scaricabile ORA (online; il server è caldo grazie al
+                //    prefetch dell'approach → di solito solo un redirect)
+                // 3) testo integrale audio_text letto dal TTS di sistema
+                // Il teaser (già in coda sopra) e la notifica (sotto) sono i
+                // gradini 4 e 5: mai silenzio totale.
                 var fullText = db.offlineDao().getPoiById(poiId)?.audioText
-                if (fullText.isNullOrBlank() &&
+                var mp3File = com.itaintasca.app.service.AudioPrefetchManager
+                    .cachedFile(context, poiId, lang)
+                if (fullText.isNullOrBlank() && mp3File == null &&
                     com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
                 ) {
                     fullText = SupabaseClient().fetchPoiAudioText(poiId)
                 }
-                if (!fullText.isNullOrBlank()) {
-                    prefs.edit().putInt("daypass_used", passUsed + 1).apply()
-                    enqueue(context, SpeechItem(fullText, isGem, isItinerary, poiId, priority, kind = "arrival"))
+                if (mp3File == null && !fullText.isNullOrBlank() &&
+                    com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
+                ) {
+                    mp3File = com.itaintasca.app.service.AudioPrefetchManager
+                        .downloadNow(context, poiId, lang, poi?.guideDefault, fullText)
+                }
+                if (mp3File != null || !fullText.isNullOrBlank()) {
+                    // Il pass si consuma solo se il POI NON era già acquistato
+                    if (!alreadyPurchased) {
+                        prefs.edit().putInt("daypass_used", passUsed + 1).apply()
+                    }
+                    enqueue(context, SpeechItem(fullText ?: "", isGem, isItinerary, poiId, priority, kind = "arrival", audioFile = mp3File?.absolutePath))
                     // Info aggiuntive incluse nel pass (1 livello): la descrizione
                     // breve se distinta dal testo guida.
                     val extra = db.offlineDao().getPoiById(poiId)?.descriptionShort
-                    if (!extra.isNullOrBlank() && extra != fullText && !fullText.contains(extra)) {
+                    if (!extra.isNullOrBlank() && extra != fullText && fullText?.contains(extra) != true) {
                         enqueue(context, SpeechItem(extra, isGem, isItinerary, poiId, priority, kind = "arrival"))
                     }
+                    // Ogni ascolto completo in background finisce nello storico
+                    // (mirror subito, cloud best-effort): il web lo vedrà in
+                    // ProfileScreen e i prossimi trigger saranno gratis.
+                    com.itaintasca.app.service.ListeningHistoryStore.recordListening(
+                        context, poiId, name, poi?.poiType, null
+                    )
                 }
             }
         }
@@ -796,11 +1009,29 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     }
 
     private fun showNotification(context: Context, title: String, text: String, poiId: String, guide: String, isArrival: Boolean = false) {
-        val channelId = "geofencing_channel"
+        // DUE CANALI DISTINTI, non uno con importanza variabile.
+        //
+        // Prima si usava lo stesso id "geofencing_channel" ricreandolo con
+        // importanza diversa a seconda di isArrival: Android IGNORA i cambi
+        // di importanza su un canale già esistente (solo l'utente può
+        // abbassarla), quindi vinceva la primissima creazione e da lì in poi
+        // avvicinamento e arrivo avevano lo stesso peso — di solito
+        // l'avvicinamento urlava come un arrivo.
+        //
+        // Gerarchia voluta:
+        //   avvicinamento → silenzioso, senza heads-up (è un'informazione)
+        //   arrivo        → sonoro e in primo piano (è l'evento)
+        val channelId = if (isArrival) "wip_poi_arrival" else "wip_poi_approach"
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val importance = if (isArrival) NotificationManager.IMPORTANCE_HIGH else NotificationManager.IMPORTANCE_DEFAULT
-            val chan = NotificationChannel(channelId, "Eventi POI", importance)
+            val chan = if (isArrival) {
+                NotificationChannel(channelId, "Arrivo al luogo", NotificationManager.IMPORTANCE_HIGH)
+            } else {
+                NotificationChannel(channelId, "Luogo in avvicinamento", NotificationManager.IMPORTANCE_LOW).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                }
+            }
             nm.createNotificationChannel(chan)
         }
         val uri = Uri.parse("itainta://poi/$poiId?guide=$guide")
@@ -814,8 +1045,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(text)
-            .setPriority(if (isArrival) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_HIGH)
-            .setCategory(if (isArrival) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_EVENT)
+            // PRIORITY_HIGH sull'avvicinamento produceva un heads-up che
+            // copre lo schermo per un semplice "ci stai arrivando".
+            .setPriority(if (isArrival) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
+            .setSilent(!isArrival)
+            .setCategory(if (isArrival) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setContentIntent(pIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -852,6 +1086,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             put("poiName", poiName)
             put("lat", lat)
             put("lon", lon)
+            // ts: il WebView può ricevere l'evento in ritardo (risveglio dopo
+            // sblocco) — il JS scarta i banner stantii. Allineato a iOS.
+            put("ts", System.currentTimeMillis())
         }.toString()
         val intent = Intent("com.itaintasca.POI_EVENT").apply {
             setPackage(context.packageName)

@@ -18,10 +18,7 @@ export async function recordPoiVision(poiId: string | number, currentUserId?: st
   try {
     const { data: profile } = await supabase
       .from('user_profiles')
-      // earned_credits è indispensabile: senza, il calcolo del bonus di
-      // livello partiva da 0 e l'update AZZERAVA i crediti guadagnati
-      // dell'utente invece di sommarci il premio.
-      .select('visited_pois, xp_points, earned_credits')
+      .select('visited_pois, xp_points')
       .eq('id', currentUserId)
       .single();
 
@@ -29,54 +26,24 @@ export async function recordPoiVision(poiId: string | number, currentUserId?: st
 
     const visited = profile.visited_pois || [];
     if (!visited.includes(String(poiId))) {
-      // Non è mai stato visitato: aggiungiamo 5 XP e salviamo nella lista
+      // Non è mai stato visitato: aggiungiamo 5 XP e salviamo nella lista.
       const newVisited = [...visited, String(poiId)];
-      const oldXp = profile.xp_points || 0;
-      const newXp = oldXp + 5;
-      
-      const newLevel = Math.floor(newXp / 100);
-      const oldLevel = Math.floor(oldXp / 100);
-      
-      let updatePayload: any = {
-        visited_pois: newVisited,
-        xp_points: newXp
-      };
-
-      let earnedCreditsBonus = 0;
-      if (newLevel > oldLevel) {
-        const targetLevel = newLevel + 1; // since 0-based XP logic maps 0->level 1
-        const { data: levelData } = await supabase
-          .from('gamification_levels')
-          .select('reward_credits')
-          .eq('level', targetLevel)
-          .single();
-        
-        earnedCreditsBonus = levelData?.reward_credits || 30; // Fallback a 30
-
-        const currentEarned = profile.earned_credits || 0;
-        updatePayload.earned_credits = currentEarned + earnedCreditsBonus;
-      }
+      const newXp = (profile.xp_points || 0) + 5;
 
       await supabase
         .from('user_profiles')
-        .update(updatePayload)
+        .update({ visited_pois: newVisited, xp_points: newXp })
         .eq('id', currentUserId);
 
-      if (earnedCreditsBonus > 0) notifyCreditsChanged({ userId: currentUserId, delta: earnedCreditsBonus });
-
-      // Mostriamo un piccolo feedback nell'app
+      // Il premio di livello NON viene più accreditato "al volo" qui: l'unico
+      // accredito è il riscatto esplicito dal popup Missioni
+      // (/api/gamification/claim, dedup su user_rewards_claimed). Così si evita
+      // il doppio accredito. I livelli si calcolano solo sul modello dinamico
+      // (gamification_levels.xp_required), non più con la soglia fissa xp/100.
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('wip-gamification-badge', { 
-          detail: { badges: [{ name: 'Luogo Esplorato!', icon: '👁️', description: '+5 XP per aver esplorato questo luogo.' }] } 
+        window.dispatchEvent(new CustomEvent('wip-gamification-badge', {
+          detail: { badges: [{ name: 'Luogo Esplorato!', icon: '👁️', description: '+5 XP per aver esplorato questo luogo.' }] }
         }));
-        
-        if (earnedCreditsBonus > 0) {
-           setTimeout(() => {
-             window.dispatchEvent(new CustomEvent('wip-gamification-badge', { 
-               detail: { badges: [{ name: 'Level Up!', icon: '🏆', description: `Livello ${newLevel + 1} raggiunto! +30 Crediti Vinti!` }] } 
-             }));
-           }, 3000);
-        }
       }
     }
   } catch (e) {
@@ -129,26 +96,13 @@ export async function addTriviaRewards(currentUserId: string | null | undefined,
 
     if (!profile) return;
 
-    const oldXp = profile.xp_points || 0;
-    const newXp = oldXp + (correctAnswers * 20); // 20 XP per risposta
-    
-    const newLevel = Math.floor(newXp / 100);
-    const oldLevel = Math.floor(oldXp / 100);
-    
-    let earnedCreditsBonus = correctAnswers; // 1 Credito per risposta
+    const newXp = (profile.xp_points || 0) + (correctAnswers * 20); // 20 XP per risposta
 
-    if (newLevel > oldLevel) {
-      const targetLevel = newLevel + 1;
-      const { data: levelData } = await supabase
-        .from('gamification_levels')
-        .select('reward_credits')
-        .eq('level', targetLevel)
-        .single();
-      
-      const levelUpBonus = levelData?.reward_credits || 30;
-      earnedCreditsBonus += levelUpBonus; // Bonus per leveling up
-    }
-
+    // Ricompensa immediata del quiz: 1 credito per risposta corretta. Il bonus
+    // di livello NON viene sommato qui: evita il doppio accredito con il
+    // riscatto esplicito dei livelli (popup Missioni → user_rewards_claimed).
+    // I livelli usano solo il modello dinamico (gamification_levels.xp_required).
+    const earnedCreditsBonus = correctAnswers;
     const currentEarned = profile.earned_credits || 0;
 
     await supabase
@@ -163,21 +117,13 @@ export async function addTriviaRewards(currentUserId: string | null | undefined,
 
     // Feedback visuale per l'utente
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('wip-gamification-badge', { 
-        detail: { badges: [{ 
-          name: 'Quiz Master!', 
-          icon: '🧠', 
-          description: `+${correctAnswers * 20} XP e +${correctAnswers} Crediti vinti!` 
-        }] } 
+      window.dispatchEvent(new CustomEvent('wip-gamification-badge', {
+        detail: { badges: [{
+          name: 'Quiz Master!',
+          icon: '🧠',
+          description: `+${correctAnswers * 20} XP e +${correctAnswers} Crediti vinti!`
+        }] }
       }));
-      
-      if (newLevel > oldLevel) {
-         setTimeout(() => {
-           window.dispatchEvent(new CustomEvent('wip-gamification-badge', { 
-             detail: { badges: [{ name: 'Level Up!', icon: '🏆', description: `Livello ${newLevel + 1} raggiunto! +30 Crediti Vinti!` }] } 
-           }));
-         }, 3000);
-      }
     }
   } catch (e) {
     console.warn("Error recording trivia rewards:", e);

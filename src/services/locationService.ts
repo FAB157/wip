@@ -70,7 +70,14 @@ class LocationService {
   private speechPlayer: HTMLAudioElement | null = null;
   private activeGuideAudio: HTMLAudioElement | null = null;
   private audioUnlocked = false;
-  private audioQueue: Array<{ text?: string, url?: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante' }> = [];
+  private audioQueue: Array<{ text?: string, url?: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean> }> = [];
+  /** Personaggio della traccia corrente (per i metadati Media Session). */
+  private currentCharacter: 'nicky' | 'dante' = 'nicky';
+  /** Utterance Web Speech del fallback degradato (TTS server irraggiungibile). */
+  private fallbackUtterance: SpeechSynthesisUtterance | null = null;
+  /** Guardia anti-rientranza per stopGuideAudio (l'evento wip-audio-stopped
+   *  può a sua volta richiamare stopGuideAudio via AudioQueueManager). */
+  private isStoppingGuide = false;
 
   /** true quando la riproduzione corrente e' gestita dal player nativo (ExoPlayer). */
   private isNativePlayback = false;
@@ -174,10 +181,26 @@ class LocationService {
             }
           });
 
+          // Il payload ricco (lat/lon/ts/distanceM) viaggia nel JSON "data":
+          // ts serve a scartare gli eventi trattenuti dal nativo e consegnati
+          // solo al risveglio della WebView (banner di POI ormai superati).
+          const parseNativePoiEvent = (data: any) => {
+            let extra: any = {};
+            try { if (data?.data) extra = JSON.parse(data.data) || {}; } catch (e) { }
+            return {
+              poiId: data.poiId ?? extra.poiId,
+              poiName: data.poiName ?? extra.poiName,
+              lat: extra.lat ?? data.lat,
+              lon: extra.lon ?? data.lon,
+              distance: Number(extra.distanceM),
+              ts: Number(extra.ts),
+            };
+          };
+
           ItaintaBackgroundPoiPlugin.addListener('poiApproaching', (data: any) => {
             if (data) {
                window.dispatchEvent(new CustomEvent('poi-approaching', {
-                  detail: { poiId: data.poiId, poiName: data.poiName, lat: data.lat, lon: data.lon }
+                  detail: parseNativePoiEvent(data)
                }));
             }
           });
@@ -185,7 +208,7 @@ class LocationService {
           ItaintaBackgroundPoiPlugin.addListener('poiArrived', (data: any) => {
             if (data) {
                window.dispatchEvent(new CustomEvent('poi-arrived', {
-                  detail: { poiId: data.poiId, poiName: data.poiName, lat: data.lat, lon: data.lon, teaser: data.teaser }
+                  detail: { ...parseNativePoiEvent(data), teaser: data.teaser }
                }));
             }
           });
@@ -292,7 +315,7 @@ class LocationService {
 
   /** true se una guida e' caricata (in play o in pausa), nativa o web. */
   private isGuidePlaybackActive(): boolean {
-    return this.isNativePlayback || this.activeGuideAudio !== null;
+    return this.isNativePlayback || this.activeGuideAudio !== null || this.fallbackUtterance !== null;
   }
 
   public getIsGuideMuted(): boolean { return this.isGuideMuted; }
@@ -399,8 +422,14 @@ class LocationService {
 
       this.startAmbientMusic();
       if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
-        // Sempre rinfresca le impostazioni se il servizio è attivo o deve esserlo
-        this.startNativeBackgroundService();
+        // Sempre rinfresca le impostazioni se il servizio è attivo o deve esserlo.
+        // Poi INOLTRA LE TAPPE al geofencing nativo: prima syncSettings riceveva
+        // l'itinerario e lo ignorava, quindi le tappe non erano mai registrate
+        // come geofence prioritari (isFromItinerary) e la notifica di check-in
+        // nativa non poteva scattare. Ora le tappe arrivano allo store nativo.
+        this.startNativeBackgroundService().then(() => {
+          this.syncItineraryToNative(itinerary);
+        }).catch(() => {});
       } else if (this.lastLocation) {
         // Su PWA, se abbiamo già una posizione, triggeriamo subito il fetch
         this.triggerWebPoiFetch(this.lastLocation);
@@ -438,6 +467,37 @@ class LocationService {
     } catch (e) {
       console.warn("[LocationService] Instant fetch failed", e);
     }
+  }
+
+  /**
+   * Inoltra le tappe dell'itinerario al servizio nativo come selezione
+   * manuale (isFromItinerary=true): sono i geofence prioritari su cui scatta
+   * la notifica di check-in "Tappa completata!". Mappa il formato tappa del
+   * piano AI ({id_tappa, titolo_tappa, coordinate:{lat,lng}}) al formato Poi
+   * atteso dal nativo ({id, nome, lat, lon}). Best-effort.
+   */
+  private syncItineraryToNative(itinerary: any[]) {
+    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(itinerary) || itinerary.length === 0) return;
+    try {
+      const pois = itinerary
+        .map((t: any) => {
+          const lat = t?.coordinate?.lat ?? t?.lat;
+          const lon = t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon;
+          if (typeof lat !== 'number' || typeof lon !== 'number' || (!lat && !lon)) return null;
+          return {
+            id: String(t.id_tappa || t.id || `iti_${lat.toFixed(5)}_${lon.toFixed(5)}`),
+            nome: t.titolo_tappa || t.name || t.nome || 'Tappa',
+            lat, lon,
+            isFromItinerary: true,
+            isGem: false,
+            guideDefault: (this.guideMode as any) || 'nicky',
+            teaserText: t.descrizione || t.attivita || t.descrizione_breve || ''
+          };
+        })
+        .filter(Boolean);
+      if (pois.length === 0) return;
+      ItaintaBackgroundPoiPlugin.syncManualSelection({ poisJson: JSON.stringify(pois) });
+    } catch (e) { /* best-effort */ }
   }
 
   private async startNativeBackgroundService() {
@@ -598,7 +658,10 @@ class LocationService {
         latitude: coords.latitude,
         longitude: coords.longitude,
         speed: coords.speed || 0,
-        heading: coords.heading || 0,
+        // heading REALE o null: `|| 0` faceva credere al marker di avere
+        // sempre una direzione → freccia sempre puntata a Nord anche da fermo.
+        // Alcuni device usano -1/NaN per "assente": in quei casi → null (pallino).
+        heading: (Number.isFinite(coords.heading) && coords.heading >= 0) ? coords.heading : null,
         accuracy: coords.accuracy || 10,
         timestamp: position?.timestamp || position?.time || now,
       };
@@ -707,7 +770,7 @@ class LocationService {
     }
   }
 
-  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante'): Promise<boolean> {
+  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>): Promise<boolean> {
     if (this.isGuideMuted || !text) return false;
 
     // Se stiamo già riproducendo questo specifico POI, facciamo solo toggle play/pause se richiesto esternamente
@@ -718,8 +781,22 @@ class LocationService {
     }
 
     if (this.isGuidePlaybackActive()) {
-      this.audioQueue.push({ text, poiName, poiCategory, poiId, character });
+      // NB: l'eventuale autorizzazione/addebito NON avviene all'accodamento,
+      // ma quando la traccia parte davvero (vedi sotto).
+      this.audioQueue.push({ text, poiName, poiCategory, poiId, character, authorize });
       return true;
+    }
+
+    // Autorizzazione pagamento SOLO al vero avvio della traccia: se fallisce
+    // (crediti finiti, Day Pass esaurito) la traccia viene scartata e la coda
+    // avanza; l'evento needsPayment lo emette il chiamante nel callback.
+    if (authorize) {
+      let allowed = false;
+      try { allowed = await authorize(); } catch { allowed = false; }
+      if (!allowed) {
+        this.checkAudioQueue();
+        return false;
+      }
     }
 
     // Interrompe l'eventuale narrazione avviata da ttsService (PoiCard / popup mappa)
@@ -733,6 +810,7 @@ class LocationService {
 
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
+    this.currentCharacter = character || this.guideMode;
     this.notifyAudioState();
 
     try {
@@ -766,6 +844,15 @@ class LocationService {
       return started;
     } catch (e) {
       console.error("[LocationService] Generazione audio TTS fallita:", e);
+      // Degradazione: se c'è un testo da leggere non falliamo mai in silenzio.
+      // Web Speech (voce di sistema, lingua corrente) legge il testo già pronto.
+      const spoken = this.speakWithWebSpeech(text);
+      if (spoken) {
+        window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
+          detail: { textToSpeak: text, poiName }
+        }));
+        return true;
+      }
       if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
       this.audioState.isPlaying = false;
       this.notifyAudioState();
@@ -773,9 +860,51 @@ class LocationService {
     }
   }
 
+  /**
+   * Fallback degradato quando /api/tts/smart è irraggiungibile (offline, TTS
+   * server giù): Web Speech API con la lingua corrente dell'app.
+   */
+  private speakWithWebSpeech(text: string): boolean {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return false;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      const prefix = (this.language || 'IT').toLowerCase().slice(0, 2);
+      const localeMap: Record<string, string> = {
+        it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES',
+        de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN',
+      };
+      u.lang = localeMap[prefix] || `${prefix}-${prefix.toUpperCase()}`;
+      u.rate = this.audioState.playbackSpeed || 1;
+      const finish = () => {
+        // Se nel frattempo è partita un'altra traccia, non toccare lo stato.
+        if (this.fallbackUtterance !== u) return;
+        this.fallbackUtterance = null;
+        this.handlePlaybackFinished();
+      };
+      u.onend = finish;
+      u.onerror = finish;
+      window.speechSynthesis.cancel();
+      this.fallbackUtterance = u;
+      window.speechSynthesis.speak(u);
+      this.audioState.isPlaying = true;
+      this.audioState.isActive = true;
+      this.notifyAudioState();
+      this.recordPlaybackStart().catch(() => {});
+      return true;
+    } catch {
+      this.fallbackUtterance = null;
+      return false;
+    }
+  }
+
   public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<boolean> {
     if (this.isGuideMuted || !url) return false;
-    if (this.isGuidePlaybackActive()) return false;
+    if (this.isGuidePlaybackActive()) {
+      // Player occupato: accoda invece di scartare (la traccia partirà a fine
+      // riproduzione via checkAudioQueue, come per playAudio).
+      this.audioQueue.push({ url, poiId, poiName });
+      return true;
+    }
 
     this.stopExternalSpeech();
     this.initAudioContext();
@@ -870,6 +999,7 @@ class LocationService {
       await audio.play();
       this.audioState.isPlaying = true;
       this.audioState.isActive = true;
+      this.setupMediaSession(audio);
       this.notifyAudioState();
 
       await this.recordPlaybackStart();
@@ -882,6 +1012,36 @@ class LocationService {
       this.notifyAudioState();
       return false;
     }
+  }
+
+  /**
+   * Media Session API (solo percorso web/PWA): metadati e controlli sulla
+   * lock screen / notifica media del browser. Su nativo ci pensa ExoPlayer.
+   */
+  private setupMediaSession(audio: HTMLAudioElement) {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    try {
+      const characterName = this.currentCharacter === 'dante' ? 'Dante' : 'Nicky';
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: this.audioState.poiName || 'Audioguida',
+        artist: `WIP — ${characterName}`,
+        album: 'World in Pocket',
+      });
+      navigator.mediaSession.setActionHandler('play', () => this.resumeGuideAudio());
+      navigator.mediaSession.setActionHandler('pause', () => this.pauseGuideAudio());
+      navigator.mediaSession.setActionHandler('stop', () => this.stopGuideAudio());
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (details && typeof details.seekTime === 'number' && this.activeGuideAudio) {
+          this.activeGuideAudio.currentTime = details.seekTime;
+        }
+      });
+      navigator.mediaSession.playbackState = 'playing';
+    } catch { /* API parzialmente supportata: mai bloccare la riproduzione */ }
+  }
+
+  private setMediaSessionPlaybackState(state: 'none' | 'paused' | 'playing') {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    try { navigator.mediaSession.playbackState = state; } catch { /* ignore */ }
   }
 
   /** Quota + storico ascolti: non deve mai far fallire la riproduzione. */
@@ -918,7 +1078,9 @@ class LocationService {
     if (next.url) {
       this.playAudioUrl(next.url, next.poiId, next.poiName);
     } else if (next.text) {
-      this.playAudio(next.text, next.poiName, next.poiCategory, next.poiId, next.character);
+      // authorize viene passato oltre: l'addebito avviene solo ORA che la
+      // traccia parte davvero, non quando era stata accodata.
+      this.playAudio(next.text, next.poiName, next.poiCategory, next.poiId, next.character, next.authorize);
     }
   }
 
@@ -940,41 +1102,71 @@ class LocationService {
 
   public pauseGuideAudio() {
     if (this.activeGuideAudio) this.activeGuideAudio.pause();
+    if (this.fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.pause(); } catch { /* ignore */ }
+    }
     if (this.isNativePlayback) {
       WipBackgroundAudio.pause().catch(() => {});
     }
     this.audioState.isPlaying = false;
+    this.setMediaSessionPlaybackState('paused');
     this.notifyAudioState();
   }
 
   public resumeGuideAudio() {
     if (this.activeGuideAudio) this.activeGuideAudio.play().catch(() => {});
+    if (this.fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.resume(); } catch { /* ignore */ }
+    }
     if (this.isNativePlayback) {
       WipBackgroundAudio.resume().catch(() => {});
     }
     this.audioState.isPlaying = true;
+    this.setMediaSessionPlaybackState('playing');
     this.notifyAudioState();
   }
 
   public stopGuideAudio() {
-    if (this.activeGuideAudio) {
-      this.activeGuideAudio.pause();
-      this.activeGuideAudio.src = "";
+    // Guardia anti-rientranza: il dispatch di 'wip-audio-stopped' fa avanzare
+    // la coda in AudioQueueManager, che a sua volta richiama stopGuideAudio.
+    if (this.isStoppingGuide) return;
+    this.isStoppingGuide = true;
+    try {
+      if (this.activeGuideAudio) {
+        this.activeGuideAudio.pause();
+        this.activeGuideAudio.src = "";
+      }
+      if (this.fallbackUtterance) {
+        // Azzerato PRIMA del cancel: il finish() dell'utterance controlla
+        // l'identità e così non richiama handlePlaybackFinished.
+        this.fallbackUtterance = null;
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+        }
+      }
+      if (this.isNativePlayback || Capacitor.isNativePlatform()) {
+        WipBackgroundAudio.stop().catch(() => {});
+      }
+      this.releaseCurrentTrack();
+      this.audioQueue = [];
+      this.audioState.isPlaying = false;
+      this.audioState.isActive = false;
+      this.audioState.poiId = null;
+      this.audioState.poiName = null;
+      this.audioState.progress = 0;
+      this.audioState.currentTime = 0;
+      this.audioState.duration = 0;
+      this.setMediaSessionPlaybackState('none');
+      this.notifyAudioState();
+      if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
+      // Notifica lo stop ai listener esterni: useGeofencing lo usa per far
+      // avanzare la coda geofence quando l'utente preme STOP.
+      if (typeof window !== 'undefined') {
+        try { window.dispatchEvent(new CustomEvent('wip-audio-stopped')); } catch { /* ignore */ }
+      }
+    } finally {
+      this.isStoppingGuide = false;
     }
-    if (this.isNativePlayback || Capacitor.isNativePlatform()) {
-      WipBackgroundAudio.stop().catch(() => {});
-    }
-    this.releaseCurrentTrack();
-    this.audioQueue = [];
-    this.audioState.isPlaying = false;
-    this.audioState.isActive = false;
-    this.audioState.poiId = null;
-    this.audioState.poiName = null;
-    this.audioState.progress = 0;
-    this.audioState.currentTime = 0;
-    this.audioState.duration = 0;
-    this.notifyAudioState();
-    if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
   }
 
   public seek(seconds: number) {

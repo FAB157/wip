@@ -73,6 +73,8 @@ const LAYER_QUERIES: Record<string, (bbox: string, around?: string) => string> =
         nwr["amenity"="place_of_worship"](${south},${west},${north},${east});
         nwr["amenity"~"^(restaurant|cafe|bar|pub|pharmacy|drinking_water|hospital|toilets|marketplace)$"](${south},${west},${north},${east});
         nwr["leisure"~"^(park|playground)$"](${south},${west},${north},${east});
+        nwr["place"="square"](${south},${west},${north},${east});
+        nwr["highway"="pedestrian"]["area"="yes"](${south},${west},${north},${east});
         nwr["railway"="station"](${south},${west},${north},${east});
         nwr["craft"](${south},${west},${north},${east});
         nwr["shop"="bakery"](${south},${west},${north},${east});
@@ -83,6 +85,8 @@ const LAYER_QUERIES: Record<string, (bbox: string, around?: string) => string> =
   monumenti: (bbox) => `
     nwr["historic"~"^(monument|castle|ruins|archaeological_site|city_gate|fort|fortress|tower|memorial|milestone|manor|wayside_cross|boundary_stone|tomb|rune_stone|building)$"](${bbox});
     nwr["tourism"="attraction"](${bbox});
+    nwr["place"="square"](${bbox});
+    nwr["highway"="pedestrian"]["area"="yes"](${bbox});
     nwr["heritage"](${bbox});
     nwr["historic"="monument"](${bbox});
     nwr["historic"="ruins"](${bbox});

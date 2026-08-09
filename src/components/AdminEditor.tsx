@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { 
-  Search, RefreshCw, CheckCircle2, AlertTriangle, Sparkles, Volume2, 
-  Image as ImageIcon, Globe, Check, Edit, HelpCircle, MapPin, Plus, Ban
+  Search, RefreshCw, CheckCircle2, AlertTriangle, Sparkles, Volume2,
+  Image as ImageIcon, Globe, Check, Edit, HelpCircle, MapPin, Plus, Ban, Info
 } from 'lucide-react';
 
 interface POI {
@@ -49,7 +49,7 @@ export default function AdminEditor() {
   // State for curation operations
   const [isLoading, setIsLoading] = useState(false);
   const [listLoading, setListLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [editedText, setEditedText] = useState('');
   const [imageOptions, setImageOptions] = useState<ImageOption[] | null>(null);
   // Cache di sessione delle ricerche foto per POI: evita di ripetere le
@@ -143,21 +143,41 @@ export default function AdminEditor() {
     setListLoading(true);
     setMessage(null);
     try {
-      let query = supabase.from('shared_pois').select('*').limit(999999);
+      let query = supabase.from('shared_pois').select('*').limit(2000);
 
-      // Ricerca server-side per bypassare il limite dei 1000 risultati totali
-      if (debouncedSearchTerm.trim().length > 0) {
-        query = query.or(`name.ilike.%${debouncedSearchTerm}%,category.ilike.%${debouncedSearchTerm}%`);
+      // Ricerca server-side (trova anche i POI oltre i primi 1000). I caratteri
+      // virgola/parentesi/asterisco rompono la SINTASSI del filtro .or() di
+      // PostgREST — es. "Museo (MART)" o "chiese, musei" facevano fallire la
+      // query e comparire il messaggio d'errore. Li neutralizziamo; l'apostrofo
+      // resta valido dentro ilike ma lo tolleriamo cercando la parte restante.
+      const term = debouncedSearchTerm.trim();
+      if (term.length > 0) {
+        const safe = term.replace(/[,()*']/g, ' ').replace(/\s+/g, ' ').trim();
+        if (safe.length > 0) {
+          query = query.or(`name.ilike.%${safe}%,category.ilike.%${safe}%,description_short.ilike.%${safe}%`);
+        }
       }
 
       if (statusFilter === 'draft') {
         query = query.eq('verified', false);
       } else if (statusFilter === 'needs_revision') {
-        // Usa una query che supporti sia la colonna status sia fallback
+        // Colonna `status`: potrebbe non esistere su tutti i DB → gestita col
+        // retry sotto.
         query = query.eq('status', 'needs_revision');
       }
 
-      const poisResponse = await query.order('created_at', { ascending: false });
+      let poisResponse = await query.order('created_at', { ascending: false });
+
+      // Retry difensivo: se il filtro status/search rompe la query (colonna
+      // mancante 42703, sintassi .or), riprova con la SOLA ricerca sul nome
+      // così l'editor resta usabile invece di svuotarsi con un errore.
+      if (poisResponse.error) {
+        console.warn('[AdminEditor] query completa fallita, retry minimale:', poisResponse.error?.message);
+        let retry = supabase.from('shared_pois').select('*').limit(2000);
+        const t = debouncedSearchTerm.trim().replace(/[,()*']/g, ' ').replace(/\s+/g, ' ').trim();
+        if (t.length > 0) retry = retry.ilike('name', `%${t}%`);
+        poisResponse = await retry.order('created_at', { ascending: false });
+      }
       if (poisResponse.error) throw poisResponse.error;
 
       const mappedPois = (poisResponse.data || []).map((p: any) => ({
@@ -167,7 +187,12 @@ export default function AdminEditor() {
       }));
 
       setPois(mappedPois);
-      
+
+      // "Nessun risultato" NON è un errore: distinguo per non allarmare l'admin.
+      if (mappedPois.length === 0 && debouncedSearchTerm.trim().length > 0) {
+        setMessage({ type: 'info', text: `Nessun POI trovato per "${debouncedSearchTerm.trim()}". Prova con meno parole o un termine più breve.` });
+      }
+
       // Auto-select first POI if nothing selected yet
       if (mappedPois.length > 0 && !selectedPoi) {
         selectPoiItem(mappedPois[0]);
@@ -180,36 +205,13 @@ export default function AdminEditor() {
       }
     } catch (err: any) {
       console.error('Error fetching POIs:', err);
-      // Resilient fallback seeding for great out-of-the-box demo if table or columns fail
-      const fallbackPois: POI[] = [
-        {
-          id: '44.07920,10.10000',
-          lat: 44.0792,
-          lon: 10.1000,
-          name: 'Accademia di Belle Arti di Carrara',
-          category: 'monumenti',
-          description_ai: 'L’Accademia di Belle Arti di Carrara è un’istituzione artistica pubblica ospitata nel maestoso Palazzo Cybo-Malaspina.',
-          image_url: 'https://upload.wikimedia.org/wikipedia/commons/4/41/Palazzo_cybo_malaspina_carrara_03.jpg',
-          is_gem: true,
-          status: 'draft'
-        },
-        {
-          id: '44.08100,10.09800',
-          lat: 44.0810,
-          lon: 10.0980,
-          name: 'Santuario della Madonna delle Grazie',
-          category: 'chiese',
-          description_ai: 'Storico santuario di Carrara edificato nel XVII secolo, noto per i pregiati interni in marmo e affreschi barocchi.',
-          image_url: 'https://upload.wikimedia.org/wikipedia/commons/e/e4/Massa%2C_santuario_della_madonna_delle_grazie_02.jpg',
-          is_gem: false,
-          status: 'needs_revision'
-        }
-      ];
-      setPois(fallbackPois);
-      if (!selectedPoi) selectPoiItem(fallbackPois[0]);
-      setMessage({ 
-        type: 'error', 
-        text: 'Nota: Connessione al database o colonne mancanti. Caricamento fallbacks di sicurezza per la demo locale.' 
+      // Niente POI demo fittizi: mostrerebbero dati inesistenti nel pannello
+      // admin. Meglio uno stato di errore reale con lista vuota.
+      setPois([]);
+      setSelectedPoi(null);
+      setMessage({
+        type: 'error',
+        text: 'Errore nel caricamento dei POI dal database: ' + (err?.message || 'connessione non disponibile.')
       });
     } finally {
       setListLoading(false);
@@ -355,6 +357,9 @@ export default function AdminEditor() {
     try {
       const updates = {
         description_ai: editedText,
+        // La foto scelta ("Cerca Foto sul Web") vive solo in selectedPoi finché
+        // non la si persiste: senza questo campo non veniva MAI salvata.
+        image_url: selectedPoi.image_url,
         verified: false,
         status: 'needs_revision'
       };
@@ -370,7 +375,7 @@ export default function AdminEditor() {
         description_ai: editedText,
         status: 'needs_revision'
       };
-      
+
       updateLocalPoiState(selectedPoi.id, localUpdates);
       setMessage({ type: 'success', text: 'Modifiche salvate in bozza con successo!' });
     } catch (err: any) {
@@ -389,6 +394,8 @@ export default function AdminEditor() {
     try {
       const updates = {
         description_ai: editedText,
+        // Come sopra: pubblichiamo anche la foto scelta dal curatore.
+        image_url: selectedPoi.image_url,
         verified: true,
         status: 'verified',
         is_hidden: false
@@ -457,14 +464,14 @@ export default function AdminEditor() {
   const [currentPage, setCurrentPage] = useState(0);
   const [pageSize, setPageSize] = useState<10 | 50 | 100>(10);
 
-  // Il filtraggio client-side rimane per la ricerca immediata e fallback
+  // Filtro client-side per feedback immediato mentre si digita. Deve essere
+  // ALMENO permissivo quanto la ricerca server-side (nome/categoria/descrizione),
+  // altrimenti nasconde POI che il server ha già trovato (es. match sulla
+  // descrizione). Ignora virgola/parentesi come lato server.
+  const cleanTerm = searchTerm.toLowerCase().replace(/[,()*']/g, ' ').trim();
   const filteredPois = pois.filter(p => {
-    const safeName = p.name || '';
-    const safeCat = p.category || '';
-    const matchesSearch = safeName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          safeCat.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    // Status filter è già applicato server-side, ma lo manteniamo qui per la cache client-side se cambia al volo
+    const hay = `${p.name || ''} ${p.category || ''} ${p.description_short || ''}`.toLowerCase();
+    const matchesSearch = cleanTerm.length === 0 || hay.includes(cleanTerm);
     if (statusFilter === 'all') return matchesSearch;
     return p.status === statusFilter && matchesSearch;
   });
@@ -666,9 +673,11 @@ export default function AdminEditor() {
 
                 {message && (
                   <div className={`p-3.5 rounded-2xl flex items-center gap-3 text-xs font-bold ${
-                    message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' : 'bg-red-50 text-red-800 border border-red-100'
+                    message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100'
+                    : message.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-100'
+                    : 'bg-red-50 text-red-800 border border-red-100'
                   }`}>
-                    {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                    {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : message.type === 'info' ? <Info className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
                     <span>{message.text}</span>
                   </div>
                 )}
@@ -721,13 +730,13 @@ export default function AdminEditor() {
                         onChange={e => setNewPoiForm({ ...newPoiForm, category: e.target.value })}
                         className="w-full bg-surface border-none rounded-xl p-3 text-xs font-bold focus:ring-2 focus:ring-primary/20 focus:bg-surface outline-none"
                       >
-                        <option value="monument">Monumenti</option>
-                        <option value="church">Chiese</option>
-                        <option value="viewpoint">Panorami</option>
-                        <option value="museum">Musei</option>
-                        <option value="artwork">Opere d'arte</option>
-                        <option value="restaurant">Ristoranti</option>
-                        <option value="esperienze_locali">Esperienze Locali</option>
+                        <option value="monumenti">Monumenti</option>
+                        <option value="musei">Musei</option>
+                        <option value="chiese">Chiese</option>
+                        <option value="panorami">Panorami</option>
+                        <option value="locali">Locali</option>
+                        <option value="utilita">Utilità</option>
+                        <option value="famiglie">Famiglie</option>
                         <option value="gemme">Gemme</option>
                       </select>
                     </div>
@@ -841,9 +850,11 @@ export default function AdminEditor() {
               {/* Status Message Alerts inside the panel */}
               {message && (
                 <div className={`p-3.5 rounded-2xl flex items-center gap-3 text-xs font-bold ${
-                  message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' : 'bg-red-50 text-red-800 border border-red-100'
+                  message.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-100'
+                  : message.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-100'
+                  : 'bg-red-50 text-red-800 border border-red-100'
                 }`}>
-                  {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+                  {message.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : message.type === 'info' ? <Info className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
                   <span>{message.text}</span>
                 </div>
               )}

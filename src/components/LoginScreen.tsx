@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
+import { notify } from '../lib/toast';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
 
 interface LoginScreenProps {
@@ -25,7 +26,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  // Stato in-page del reset (niente più alert()): messaggio persistente +
+  // Stato in-page del reset (niente più notify()): messaggio persistente +
   // cooldown 60s sul reinvio per non far sbattere l'utente sul rate limit.
   const [resetSent, setResetSent] = useState(false);
   const [resetCooldown, setResetCooldown] = useState(0);
@@ -93,7 +94,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
           }
           onLoginSuccess(data.session);
         } else {
-          alert('Registrazione avvenuta! Controlla la tua casella email (anche nello Spam) per confermare l\'account.');
+          notify('Registrazione avvenuta! Controlla la tua casella email (anche nello Spam) per confermare l\'account.');
           setIsRegistering(false);
         }
       } else {
@@ -200,7 +201,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       if (isBiometricAvailable && isBiometricPrefEnabled() && session?.user?.email) {
         await saveCredentials(session.user.email, newPassword).catch(() => {});
       }
-      alert('Password aggiornata con successo! Ora puoi usare la tua nuova password.');
+      notify('Password aggiornata con successo! Ora puoi usare la tua nuova password.');
       onLoginSuccess(session);
     } catch (e: any) {
       setError(friendlyError(e));

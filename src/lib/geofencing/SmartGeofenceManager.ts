@@ -9,7 +9,8 @@
 
 import { TransportDetector, type TransportMode } from './transportDetector';
 import { WaypointTracker } from './waypointTracker';
-import { TriggerManager, type TriggerEvent } from './triggerManager';
+import { TriggerManager, TRIGGER_THRESHOLDS, type TriggerEvent } from './triggerManager';
+import { evaluatePredictive, type PredictiveInput } from './predictive';
 import { handleTriggerAudio } from './audioDirector';
 import { filterGeofencePOIs, type POI } from './categoryFilter';
 import type { LatLng } from './routeEngine';
@@ -140,7 +141,7 @@ export class SmartGeofenceManager {
   // ─── Handlers interni ────────────────────────────────────────────────────
 
   private async onPosition(pos: GeolocationPosition) {
-    const { latitude, longitude, accuracy, speed } = pos.coords;
+    const { latitude, longitude, accuracy, speed, heading } = pos.coords;
 
     // Filtra posizioni con GPS troppo impreciso
     if (accuracy > MIN_GPS_ACCURACY) {
@@ -155,9 +156,38 @@ export class SmartGeofenceManager {
 
     // 2. Pre-filtra POI per distanza in linea d'aria (economico)
     const prefilterDist = HAVERSINE_PREFILTER[mode];
-    const nearbyPOIs = this.allPOIs.filter(poi => {
+    const inRange = this.allPOIs.filter(poi => {
       const d = haversine(userPos, { lat: poi.lat, lng: poi.lng });
       return d < prefilterDist;
+    });
+
+    // 2b. Filtro predittivo (CPA) PRIMA del routing: scarta i POI verso cui
+    // l'utente non è in rotta — via parallela, altro lato della piazza, o
+    // già superati. Doppio vantaggio: elimina i falsi positivi direzionali
+    // e risparmia una chiamata OSRM per ogni POI scartato.
+    // Vedi predictive.ts; fail-open quando i dati non bastano.
+    const predictiveInput: PredictiveInput = {
+      lat: latitude,
+      lon: longitude,
+      speed,
+      heading,
+      accuracy,
+      timestamp: pos.timestamp,
+    };
+    const isDriving = mode === 'driving';
+    const nearbyPOIs = inRange.filter(poi => {
+      const r = evaluatePredictive(
+        predictiveInput,
+        poi.lat,
+        poi.lng,
+        TRIGGER_THRESHOLDS[mode].banner,
+        isDriving,
+      );
+      if (r.decision === 'reject') {
+        console.debug(`[Geofence] scartato ${poi.name ?? poi.id}: ${r.reason}`);
+        return false;
+      }
+      return true;
     });
 
     if (nearbyPOIs.length === 0) return;

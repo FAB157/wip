@@ -3,6 +3,7 @@ import { Download, Trash2, MapPin, Search, Loader2, RefreshCw, Radar } from 'luc
 import { OfflineMapArea, saveOfflineMapArea, getOfflineMapAreasList, deleteOfflineMapArea } from '../lib/offlineStorage';
 import { prefetchTilesForArea, removeTilesForArea, planTilesForArea } from '../lib/offlineTiles';
 import { getApiUrl } from '../lib/api';
+import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import { getTranslation, Language } from '../lib/i18n';
 import { insertAutoPois } from '../services/poiRepository';
@@ -50,24 +51,24 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
   }, []);
 
   useEffect(() => {
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token || !showSuggestions || searchCity.trim().length < 3) {
+    if (!showSuggestions || searchCity.trim().length < 3) {
       setSuggestions([]);
       return;
     }
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(searchCity)}.json` +
-          `?access_token=${token}&language=${language.toLowerCase()}&limit=5&types=place,locality,region`
-        );
+        // Proxy server-side (/api/geocode): niente token Mapbox nel bundle.
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(searchCity)}`
+          + `&lang=${language.toLowerCase()}&limit=5&types=place,locality,region`
+        ));
         const data = await res.json();
         setSuggestions(
           (data.features || []).map((f: any) => ({
             id: f.id,
-            description: f.place_name,
-            lat: f.center[1],
-            lon: f.center[0],
+            description: f.description,
+            lat: f.lat,
+            lon: f.lon,
           }))
         );
       } catch {
@@ -93,20 +94,18 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     if (selectedPlace && selectedPlace.name === query) {
       return selectedPlace;
     }
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (token) {
-      try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json` +
-          `?access_token=${token}&language=${language.toLowerCase()}&limit=1&types=place,locality,region,country`
-        );
-        const data = await res.json();
-        const f = data.features?.[0];
-        if (f) {
-          return { lat: f.center[1], lon: f.center[0], name: String(f.place_name).split(',')[0] };
-        }
-      } catch { /* fallback Nominatim sotto */ }
-    }
+    try {
+      // Proxy server-side; se non risponde si prosegue col fallback Nominatim.
+      const res = await fetch(getApiUrl(
+        `/api/geocode?q=${encodeURIComponent(query)}`
+        + `&lang=${language.toLowerCase()}&limit=1&types=place,locality,region,country`
+      ));
+      const data = await res.json();
+      const f = data.features?.[0];
+      if (f && Number.isFinite(f.lat) && Number.isFinite(f.lon)) {
+        return { lat: f.lat, lon: f.lon, name: String(f.description || query).split(',')[0] };
+      }
+    } catch { /* fallback Nominatim sotto */ }
     // getApiUrl: su app nativa l'URL relativo punta a https://localhost → 404.
     const res = await fetch(getApiUrl(`/api/nominatim/search?q=${encodeURIComponent(query)}&format=json&limit=1`));
     const data = await res.json();
@@ -118,6 +117,43 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       lon: parseFloat(data[0].lon),
       name: data[0].display_name.split(',')[0],
     };
+  };
+
+  /**
+   * Storage: chiede la persistenza (evita che il browser spazzi via tile e
+   * POI offline sotto pressione di spazio) e stima lo spazio richiesto
+   * (~tile × 30KB + 5MB di dati POI). Se supera quello disponibile, avvisa
+   * l'utente e chiede conferma. Ritorna false solo se l'utente annulla.
+   */
+  const ensureStorageForDownload = async (lat: number, lon: number): Promise<boolean> => {
+    try {
+      if (typeof navigator === 'undefined' || !navigator.storage) return true;
+
+      // persist(): best effort, il browser può rifiutare senza errore.
+      if (navigator.storage.persist) {
+        try {
+          const already = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+          if (!already) await navigator.storage.persist();
+        } catch { /* best effort */ }
+      }
+
+      if (navigator.storage.estimate) {
+        const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+        const tileCount = planTilesForArea(lat, lon, radiusKm).length;
+        const estimatedBytes = tileCount * 30 * 1024 + 5 * 1024 * 1024;
+        const available = quota - usage;
+        if (quota > 0 && estimatedBytes > available) {
+          return confirm(
+            `Spazio quasi esaurito: il download richiede circa ${formatBytes(estimatedBytes)} ` +
+            `ma sul dispositivo ne restano ${formatBytes(Math.max(0, available))}. ` +
+            'Il download potrebbe risultare incompleto. Vuoi procedere comunque?'
+          );
+        }
+      }
+    } catch {
+      // Una stima fallita non deve mai bloccare il download.
+    }
+    return true;
   };
 
   /** Scarica lo sfondo mappa (tile) dell'area nella cache del service worker:
@@ -146,6 +182,9 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     let unsub: (() => void) | null = null;
     try {
       const city = await geocodeCity();
+
+      // Persistenza storage + verifica spazio (l'utente può annullare qui).
+      if (!(await ensureStorageForDownload(city.lat, city.lon))) return;
 
       // Verifica voce TTS ORA, con la rete ancora viva: offline la voce di
       // sistema è l'unica sorgente audio.
@@ -187,14 +226,14 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       await loadAreas();
       setSearchCity('');
       setSelectedPlace(null);
-      alert(
+      notify(
         `Pacchetto "${pkg.name}" pronto: ${pkg.poiCount} luoghi (${formatBytes(pkg.sizeBytes)}).\n\n` +
         'Offline l\'app userà la vista radar e la voce di sistema: download istantaneo e zero ingombro. ' +
         'L\'audioguida parte da sola quando ti avvicini a un luogo, anche a schermo spento.'
       );
     } catch (e: any) {
       console.error(e);
-      alert(e?.message || 'Errore durante il download del pacchetto');
+      notify(e?.message || 'Errore durante il download del pacchetto');
     } finally {
       unsub?.();
       setIsDownloading(false);
@@ -207,9 +246,9 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     try {
       const pkg = await syncOfflinePackage(id);
       await loadAreas();
-      alert(`Aggiornato: ${pkg.poiCount} luoghi nel pacchetto.`);
+      notify(`Aggiornato: ${pkg.poiCount} luoghi nel pacchetto.`);
     } catch (e: any) {
-      alert(e?.message || 'Sincronizzazione fallita. Riprova quando sei online.');
+      notify(e?.message || 'Sincronizzazione fallita. Riprova quando sei online.');
     } finally {
       setSyncingId(null);
     }
@@ -241,6 +280,9 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       const centerLat = city.lat;
       const centerLon = city.lon;
       const cityName = city.name;
+
+      // Persistenza storage + verifica spazio (l'utente può annullare qui).
+      if (!(await ensureStorageForDownload(centerLat, centerLon))) return;
 
       setDownloadProgress(`Scaricamento POI nel raggio di ${radiusKm}km da ${cityName}...`);
 
@@ -312,6 +354,8 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
             nwr["historic"](${south},${west},${north},${east});
             nwr["amenity"="place_of_worship"](${south},${west},${north},${east});
             nwr["amenity"~"^(restaurant|cafe|bar|pub|pharmacy|drinking_water|hospital|toilets|marketplace)$"](${south},${west},${north},${east});
+            nwr["place"="square"](${south},${west},${north},${east});
+            nwr["highway"="pedestrian"]["area"="yes"](${south},${west},${north},${east});
           );
           out center;
         `;
@@ -417,7 +461,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       await loadAreas();
       setSearchCity('');
       setSelectedPlace(null);
-      alert(
+      notify(
         `Mappa di ${cityName} scaricata con successo!\n` +
         `${poiList.length} POI salvati offline` +
         (tiles.total > 0 ? ` + ${tiles.done} tile di sfondo mappa.` : '.') +
@@ -426,7 +470,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
     } catch (e: any) {
       console.error(e);
-      alert(e.message || "Errore durante il download");
+      notify(e.message || "Errore durante il download");
     } finally {
       setIsDownloading(false);
       setDownloadProgress('');

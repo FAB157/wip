@@ -8,6 +8,7 @@
 import { createPortal } from 'react-dom';
 import { Navigation2, Flag, Clock, X, Volume2 } from 'lucide-react';
 import type { NavState } from '../hooks/useWalkingNavigation';
+import { getTranslation, type Language } from '../lib/i18n';
 
 interface NavigationOverlayProps {
   state: NavState;
@@ -20,6 +21,8 @@ interface NavigationOverlayProps {
   onNextStop?: () => void;
   /** Ripete a voce l'istruzione corrente. */
   onRepeat?: () => void;
+  /** Lingua UI: l'overlay era l'unica schermata del cammino hardcoded in IT. */
+  language?: Language;
 }
 
 function fmtMeters(m: number | null): string {
@@ -43,10 +46,12 @@ export default function NavigationOverlay({
   onStop,
   onNextStop,
   onRepeat,
+  language = 'IT',
 }: NavigationOverlayProps) {
   if (state === 'idle') return null;
 
   const arrived = state === 'arrived';
+  const t = (k: string) => getTranslation(k, language);
 
   // Portal su body: il banner vive dentro il tab "plan", che riceve
   // display:none quando si apre la scheda POI (cambio tab automatico al
@@ -60,26 +65,26 @@ export default function NavigationOverlay({
             {arrived ? <Flag size={22} /> : <Navigation2 size={22} />}
           </div>
           <div className="min-w-0 flex-1">
-            {state === 'routing' && <p className="text-sm text-secondary/80">Calcolo del percorso…</p>}
+            {state === 'routing' && <p className="text-sm text-secondary/80">{t('nav_calculating')}</p>}
             {state === 'navigating' && (
               <>
                 <p className="truncate text-base font-semibold">
-                  {currentInstruction || 'Procedi'}
+                  {currentInstruction || t('nav_proceed')}
                 </p>
                 {distanceToNext != null && (
-                  <p className="text-xs text-secondary/60">tra {fmtMeters(distanceToNext)}</p>
+                  <p className="text-xs text-secondary/60">{t('nav_in')} {fmtMeters(distanceToNext)}</p>
                 )}
               </>
             )}
             {arrived && (
               <div className="flex flex-col items-start gap-2">
-                <p className="text-base font-semibold">Sei arrivato{poiName ? ` a ${poiName}` : ''} 🎉</p>
+                <p className="text-base font-semibold">{poiName ? `${t('nav_arrived_at')} ${poiName} 🎉` : `${t('nav_arrived')} 🎉`}</p>
                 {onNextStop && (
                   <button
                     onClick={onNextStop}
                     className="mt-1 bg-secondary hover:bg-secondary/90 text-primary font-bold py-1.5 px-3 rounded-lg text-xs transition-colors"
                   >
-                    Vai alla prossima tappa
+                    {t('nav_next_stop')}
                   </button>
                 )}
               </div>
@@ -88,7 +93,7 @@ export default function NavigationOverlay({
           {state === 'navigating' && onRepeat && (
             <button
               onClick={onRepeat}
-              aria-label="Ripeti istruzione"
+              aria-label={t('nav_repeat')}
               className="shrink-0 rounded-full bg-white/10 p-2 hover:bg-white/20"
             >
               <Volume2 size={18} />
@@ -96,7 +101,7 @@ export default function NavigationOverlay({
           )}
           <button
             onClick={onStop}
-            aria-label="Ferma navigazione"
+            aria-label={t('nav_stop')}
             className="shrink-0 rounded-full bg-white/10 p-2 hover:bg-white/20"
           >
             <X size={18} />

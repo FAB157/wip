@@ -93,6 +93,8 @@ export default function AttractionImage({ src, alt, category, className = "" }: 
       <img
         src={src}
         alt={alt}
+        loading="lazy"
+        decoding="async"
         className={`w-full h-full object-cover transition-opacity duration-500 ${loading ? 'opacity-0' : 'opacity-100'}`}
         onError={() => setError(true)}
         onLoad={() => setLoading(false)}

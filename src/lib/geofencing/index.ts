@@ -20,6 +20,18 @@ export type { TriggerEvent, TriggerType } from './triggerManager';
 
 export { handleTriggerAudio, speak, stopAudio } from './audioDirector';
 
+// Nucleo predittivo (CPA). Le costanti sono da tarare sul campo: tenerle
+// allineate a PredictiveTrigger.kt e PredictiveTrigger.swift.
+export {
+  evaluatePredictive,
+  hasPassed,
+  T_LEAD_WALKING_S,
+  T_LEAD_DRIVING_S,
+  CORRIDOR_WALKING_M,
+  CORRIDOR_DRIVING_M,
+} from './predictive';
+export type { PredictiveResult, PredictiveInput, Decision } from './predictive';
+
 export { getRoute, getRemainingDistance } from './routeEngine';
 export type { RouteResult, RouteStep, LatLng } from './routeEngine';
 

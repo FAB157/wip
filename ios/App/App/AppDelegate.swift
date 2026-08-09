@@ -64,10 +64,25 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 
     /// Tap sulla notifica → deep link pendente (lettura destruttiva dal JS)
     /// + evento live se la WebView è già sveglia.
+    /// Azione ▶ Ascolta → riproduzione nativa in background SENZA aprire la
+    /// UI: è il percorso pensato per l'auto a schermo bloccato.
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let userInfo = response.notification.request.content.userInfo
-        if let poiId = userInfo["poiId"] as? String, !poiId.isEmpty {
-            let guide = userInfo["guide"] as? String ?? "nicky"
+        let poiId = userInfo["poiId"] as? String ?? ""
+        let guide = userInfo["guide"] as? String ?? "nicky"
+
+        if response.actionIdentifier == BackgroundPoiManager.listenActionId {
+            if !poiId.isEmpty {
+                // L'azione può rilanciare l'app da zero: il manager riparte
+                // dai prefs prima di cercare il POI nella cache persistita.
+                BackgroundPoiManager.shared.restartFromPrefsIfActive()
+                BackgroundPoiManager.shared.playGuideFromNotificationAction(poiId: poiId)
+            }
+            completionHandler()
+            return
+        }
+
+        if !poiId.isEmpty {
             savePendingDeepLink(poiId: poiId, guide: guide)
             BackgroundPoiManager.shared.sendEvent(
                 "deep-link-poi",

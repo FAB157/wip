@@ -1,0 +1,796 @@
+
+> react-example@0.0.0 build
+> vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs
+
+[36mvite v6.4.3 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 2368 modules transformed.
+rendering chunks...
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/supabase.ts is dynamically imported by C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/services/locationService.ts, C:/progetti/itainta/src/services/locationService.ts but also statically imported by C:/progetti/itainta/src/App.tsx, C:/progetti/itainta/src/components/AROverlay.tsx, C:/progetti/itainta/src/components/AdminApiStats.tsx, C:/progetti/itainta/src/components/AdminCounters.tsx, C:/progetti/itainta/src/components/AdminDiagnostics.tsx, C:/progetti/itainta/src/components/AdminEditor.tsx, C:/progetti/itainta/src/components/AdminEnrichedPois.tsx, C:/progetti/itainta/src/components/AdminPanel.tsx, C:/progetti/itainta/src/components/AdminReports.tsx, C:/progetti/itainta/src/components/AdminSystemErrors.tsx, C:/progetti/itainta/src/components/AgentControls.tsx, C:/progetti/itainta/src/components/B2BPartner.tsx, C:/progetti/itainta/src/components/CameraScreen.tsx, C:/progetti/itainta/src/components/EventsScreen.tsx, C:/progetti/itainta/src/components/LiveTourPanel.tsx, C:/progetti/itainta/src/components/LoginScreen.tsx, C:/progetti/itainta/src/components/MapArea.tsx, C:/progetti/itainta/src/components/OfflineMapsTab.tsx, C:/progetti/itainta/src/components/PlanScreen.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/components/PoiPopupContent.tsx, C:/progetti/itainta/src/components/ProfileScreen.tsx, C:/progetti/itainta/src/components/ShopScreen.tsx, C:/progetti/itainta/src/components/UserProfileSummary.tsx, C:/progetti/itainta/src/components/ZeroCreditsBanner.tsx, C:/progetti/itainta/src/components/admin/ChallengeForm.tsx, C:/progetti/itainta/src/components/admin/CouponForm.tsx, C:/progetti/itainta/src/components/admin/CouponList.tsx, C:/progetti/itainta/src/components/admin/LevelForm.tsx, C:/progetti/itainta/src/components/admin/UserEditModal.tsx, C:/progetti/itainta/src/hooks/useItinerary.ts, C:/progetti/itainta/src/hooks/useLiveTour.ts, C:/progetti/itainta/src/hooks/usePredictiveDownload.ts, C:/progetti/itainta/src/lib/apiLogger.ts, C:/progetti/itainta/src/lib/favorites.ts, C:/progetti/itainta/src/lib/gamification.ts, C:/progetti/itainta/src/lib/listeningHistory.ts, C:/progetti/itainta/src/lib/offlineStorage.ts, C:/progetti/itainta/src/lib/pricing.ts, C:/progetti/itainta/src/lib/quotaManager.ts, C:/progetti/itainta/src/services/dayPassService.ts, C:/progetti/itainta/src/services/locationService.ts, C:/progetti/itainta/src/services/poiRepository.ts, C:/progetti/itainta/src/services/premiumGuideService.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/services/dayPassService.ts is dynamically imported by C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/lib/AudioQueueManager.ts but also statically imported by C:/progetti/itainta/src/App.tsx, C:/progetti/itainta/src/components/DayPassBadge.tsx, C:/progetti/itainta/src/components/DayPassCard.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/hooks/usePredictiveDownload.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/i18n.ts is dynamically imported by C:/progetti/itainta/src/components/AdminDiagnostics.tsx but also statically imported by C:/progetti/itainta/src/components/ApproachBanner.tsx, C:/progetti/itainta/src/components/B2BPartner.tsx, C:/progetti/itainta/src/components/BottomNav.tsx, C:/progetti/itainta/src/components/CameraScreen.tsx, C:/progetti/itainta/src/components/CategoryChips.tsx, C:/progetti/itainta/src/components/EventsScreen.tsx, C:/progetti/itainta/src/components/LoadingQuiz.tsx, C:/progetti/itainta/src/components/MapArea.tsx, C:/progetti/itainta/src/components/PlanScreen.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/components/PoiPopupContent.tsx, C:/progetti/itainta/src/components/PremiumGuideModal.tsx, C:/progetti/itainta/src/components/PremiumGuideRenderer.tsx, C:/progetti/itainta/src/components/ProfileScreen.tsx, C:/progetti/itainta/src/components/RoutePoisModal.tsx, C:/progetti/itainta/src/components/UserProfileSummary.tsx, C:/progetti/itainta/src/components/itinerary/BudgetTable.tsx, C:/progetti/itainta/src/components/itinerary/ItineraryStop.tsx, C:/progetti/itainta/src/components/itinerary/TravelInfo.tsx, C:/progetti/itainta/src/components/poi/PoiAudioPlayer.tsx, C:/progetti/itainta/src/components/poi/PoiExtraDetails.tsx, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/offlineStorage.ts is dynamically imported by C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/PlanScreen.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx but also statically imported by C:/progetti/itainta/src/App.tsx, C:/progetti/itainta/src/components/OfflineMapsTab.tsx, C:/progetti/itainta/src/components/PlanScreen.tsx, C:/progetti/itainta/src/components/ProfileScreen.tsx, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/listeningHistory.ts is dynamically imported by C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/GeofenceAudioGuide.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/services/dayPassService.ts but also statically imported by C:/progetti/itainta/src/components/ProfileScreen.tsx, C:/progetti/itainta/src/services/locationService.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/services/poiRepository.ts is dynamically imported by C:/progetti/itainta/src/services/locationService.ts, C:/progetti/itainta/src/services/locationService.ts, C:/progetti/itainta/src/services/locationService.ts but also statically imported by C:/progetti/itainta/src/components/OfflineMapsTab.tsx, C:/progetti/itainta/src/components/PlanScreen.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/services/audioguideService.ts, C:/progetti/itainta/src/services/enrichmentService.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/capacitor/nativeAudioHelper.ts is dynamically imported by C:/progetti/itainta/src/services/locationService.ts but also statically imported by C:/progetti/itainta/src/services/ttsService.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/services/ttsService.ts is dynamically imported by C:/progetti/itainta/src/components/ProfileScreen.tsx but also statically imported by C:/progetti/itainta/src/components/AudioPlayerBanner.tsx, C:/progetti/itainta/src/components/PoiPopupContent.tsx, C:/progetti/itainta/src/components/VisionCardSheet.tsx, C:/progetti/itainta/src/hooks/useWalkingNavigation.ts, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/printScoped.ts is dynamically imported by C:/progetti/itainta/src/components/AppGuide.tsx, C:/progetti/itainta/src/services/premiumGuideService.ts but also statically imported by C:/progetti/itainta/src/components/PlanScreen.tsx, dynamic import will not move module into another chunk.
+[39m
+[33m[plugin vite:reporter] 
+(!) C:/progetti/itainta/src/lib/gamification.ts is dynamically imported by C:/progetti/itainta/src/components/AdminDiagnostics.tsx, C:/progetti/itainta/src/components/PoiDetailSheet.tsx, C:/progetti/itainta/src/lib/listeningHistory.ts but also statically imported by C:/progetti/itainta/src/components/LoadingQuiz.tsx, dynamic import will not move module into another chunk.
+[39m
+computing gzip size...
+[2mdist/[22m[32mregisterSW.js               [39m[1m[2m    0.13 kB[22m[1m[22m
+[2mdist/[22m[32mmanifest.webmanifest        [39m[1m[2m    0.64 kB[22m[1m[22m
+[2mdist/[22m[32mindex.html                  [39m[1m[2m    1.10 kB[22m[1m[22m[2m │ gzip:   0.50 kB[22m
+[2mdist/[22m[35massets/vendor-CIGW-MKW.css  [39m[1m[2m   15.61 kB[22m[1m[22m[2m │ gzip:   6.46 kB[22m
+[2mdist/[22m[35massets/main-DKuZW55D.css    [39m[1m[2m  210.15 kB[22m[1m[22m[2m │ gzip:  30.84 kB[22m
+[2mdist/[22m[36massets/index-DhSLywf4.js    [39m[1m[2m    0.81 kB[22m[1m[22m[2m │ gzip:   0.48 kB[22m[2m │ map:     0.10 kB[22m
+[2mdist/[22m[36massets/vendor-6aAXYWVr.js   [39m[1m[33m  926.78 kB[39m[22m[2m │ gzip: 273.22 kB[22m[2m │ map: 4,173.39 kB[22m
+[2mdist/[22m[36massets/main-IIzHUQ1e.js     [39m[1m[33m1,187.36 kB[39m[22m[2m │ gzip: 319.91 kB[22m[2m │ map: 2,752.00 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 34.98s[39m
+
+PWA v1.3.0
+mode      generateSW
+precache  15 entries (3994.08 KiB)
+files generated
+  dist/sw.js.map
+  dist/sw.js
+  dist/workbox-7334f08a.js.map
+  dist/workbox-7334f08a.js
+▲ [WARNING] "import.meta" is not available with the "cjs" output format and will be empty [empty-import-meta]
+
+    src/lib/supabase.ts:4:24:
+      4 │ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '...
+        ╵                         ~~~~~~~~~~~
+
+  You need to set the output format to "esm" for "import.meta" to work correctly.
+
+▲ [WARNING] "import.meta" is not available with the "cjs" output format and will be empty [empty-import-meta]
+
+    src/lib/supabase.ts:158:32:
+      158 │         if (usingPlaceholder && import.meta.env.PROD) {
+          ╵                                 ~~~~~~~~~~~
+
+  You need to set the output format to "esm" for "import.meta" to work correctly.
+
+2 warnings
+
+  dist\server.cjs      343.8kb
+  dist\server.cjs.map  614.8kb
+
+Done in 3164ms
+./gradlew: line 245: /usr/bin/tr: Permission denied
+Starting a Gradle Daemon, 1 incompatible and 1 stopped Daemons could not be reused, use --status for details
+
+> Configure project :app
+WARNING: The option setting 'android.usesSdkInManifest.disallowed=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.sdk.defaultTargetSdkToCompileSdkIfUnset=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.enableAppCompileTimeRClass=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.builtInKotlin=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.newDsl=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.r8.optimizedResourceShrinking=false' is deprecated.
+The current default is 'true'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: The option setting 'android.defaults.buildfeatures.resvalues=true' is deprecated.
+The current default is 'false'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+WARNING: API 'applicationVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding 
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling applicationVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+WARNING: API 'testVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding 
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling testVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+WARNING: API 'unitTestVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding 
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling unitTestVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The multidex library is included as a dependency, but it is not needed for apps
+with minSdk >= 21. Please remove dependency 'androidx.multidex:multidex:2.0.1' from ':app'.
+See https://developer.android.com/build/multidex for more information.
+w: [33m[1mDeprecated 'org.jetbrains.kotlin.android' plugin usage[0m[0m
+The 'org.jetbrains.kotlin.android' plugin in project ':app' is no longer required for Kotlin support since AGP 9.0.
+[32m[1mSolution:[0m[0m
+[32m[3mRemove both `android.builtInKotlin=true` and `android.newDsl=false` from `gradle.properties`, then migrate to built-in Kotlin.[0m[0m
+[36mSee [0m[34mhttps://kotl.in/gradle/agp-built-in-kotlin[0m[36m for more details.[0m
+
+
+> Configure project :capacitor-android
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-app
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-community-background-geolocation
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-community-native-audio
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-cordova-android-plugins
+WARNING: Using flatDir should be avoided because it doesn't support any meta-data formats.
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-filesystem
+WARNING: API 'libraryVariants' is obsolete and has been replaced with 'AndroidComponentsExtension'.
+It will be removed in version 10.0 of the Android Gradle plugin.
+The legacy variant API is disabled by default in AGP 9.0, but can be re-enabled by adding 
+    android.newDsl=false
+to this project's gradle.properties file.
+For more information, see http://developer.android.com/build/r/new-dsl.
+
+To determine what is calling libraryVariants, use -Pandroid.debug.obsoleteApi=true on the command line to display more information.
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+w: [33m[1mDeprecated 'org.jetbrains.kotlin.android' plugin usage[0m[0m
+The 'org.jetbrains.kotlin.android' plugin in project ':capacitor-filesystem' is no longer required for Kotlin support since AGP 9.0.
+[32m[1mSolution:[0m[0m
+[32m[3mRemove both `android.builtInKotlin=true` and `android.newDsl=false` from `gradle.properties`, then migrate to built-in Kotlin.[0m[0m
+[36mSee [0m[34mhttps://kotl.in/gradle/agp-built-in-kotlin[0m[36m for more details.[0m
+
+
+> Configure project :capacitor-geolocation
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+w: [33m[1mDeprecated 'org.jetbrains.kotlin.android' plugin usage[0m[0m
+The 'org.jetbrains.kotlin.android' plugin in project ':capacitor-geolocation' is no longer required for Kotlin support since AGP 9.0.
+[32m[1mSolution:[0m[0m
+[32m[3mRemove both `android.builtInKotlin=true` and `android.newDsl=false` from `gradle.properties`, then migrate to built-in Kotlin.[0m[0m
+[36mSee [0m[34mhttps://kotl.in/gradle/agp-built-in-kotlin[0m[36m for more details.[0m
+
+
+> Configure project :capacitor-haptics
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-local-notifications
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capacitor-network
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :capgo-capacitor-native-biometric
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+
+> Configure project :revenuecat-purchases-capacitor
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+WARNING: The property android.dependency.excludeLibraryComponentsFromConstraints improves project import performance for very large projects. It should be enabled to improve performance.
+To suppress this warning, add android.generateSyncIssueWhenLibraryConstraintsAreEnabled=false to gradle.properties
+w: [33m[1mDeprecated 'org.jetbrains.kotlin.android' plugin usage[0m[0m
+The 'org.jetbrains.kotlin.android' plugin in project ':revenuecat-purchases-capacitor' is no longer required for Kotlin support since AGP 9.0.
+[32m[1mSolution:[0m[0m
+[32m[3mRemove both `android.builtInKotlin=true` and `android.newDsl=false` from `gradle.properties`, then migrate to built-in Kotlin.[0m[0m
+[36mSee [0m[34mhttps://kotl.in/gradle/agp-built-in-kotlin[0m[36m for more details.[0m
+
+
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :capacitor-android:preBuild UP-TO-DATE
+> Task :capacitor-android:preDebugBuild UP-TO-DATE
+> Task :capacitor-android:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-app:preBuild UP-TO-DATE
+> Task :capacitor-app:preDebugBuild UP-TO-DATE
+> Task :capacitor-app:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-community-background-geolocation:preBuild UP-TO-DATE
+> Task :capacitor-community-background-geolocation:preDebugBuild UP-TO-DATE
+> Task :capacitor-community-background-geolocation:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-community-native-audio:preBuild UP-TO-DATE
+> Task :capacitor-community-native-audio:preDebugBuild UP-TO-DATE
+> Task :capacitor-community-native-audio:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:preDebugBuild UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-filesystem:preBuild UP-TO-DATE
+> Task :capacitor-filesystem:preDebugBuild UP-TO-DATE
+> Task :capacitor-filesystem:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-geolocation:preBuild UP-TO-DATE
+> Task :capacitor-geolocation:preDebugBuild UP-TO-DATE
+> Task :capacitor-geolocation:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-haptics:preBuild UP-TO-DATE
+> Task :capacitor-haptics:preDebugBuild UP-TO-DATE
+> Task :capacitor-haptics:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-local-notifications:preBuild UP-TO-DATE
+> Task :capacitor-local-notifications:preDebugBuild UP-TO-DATE
+> Task :capacitor-local-notifications:writeDebugAarMetadata UP-TO-DATE
+> Task :capacitor-network:preBuild UP-TO-DATE
+> Task :capacitor-network:preDebugBuild UP-TO-DATE
+> Task :capacitor-network:writeDebugAarMetadata UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:preBuild UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:preDebugBuild UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:writeDebugAarMetadata UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:preBuild UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:preDebugBuild UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:writeDebugAarMetadata UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-android:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-app:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-community-background-geolocation:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-community-native-audio:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-filesystem:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-geolocation:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-haptics:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-local-notifications:processDebugNavigationResources UP-TO-DATE
+> Task :capacitor-network:processDebugNavigationResources UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:processDebugNavigationResources UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:processDebugNavigationResources UP-TO-DATE
+> Task :app:processDebugNavigationResources UP-TO-DATE
+> Task :app:compileDebugNavigationResources UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :capacitor-android:generateDebugResValues UP-TO-DATE
+> Task :capacitor-android:generateDebugResources UP-TO-DATE
+> Task :capacitor-android:packageDebugResources UP-TO-DATE
+> Task :capacitor-app:generateDebugResValues UP-TO-DATE
+> Task :capacitor-app:generateDebugResources UP-TO-DATE
+> Task :capacitor-app:packageDebugResources UP-TO-DATE
+> Task :capacitor-community-background-geolocation:generateDebugResValues UP-TO-DATE
+> Task :capacitor-community-background-geolocation:generateDebugResources UP-TO-DATE
+> Task :capacitor-community-background-geolocation:packageDebugResources UP-TO-DATE
+> Task :capacitor-community-native-audio:generateDebugResValues UP-TO-DATE
+> Task :capacitor-community-native-audio:generateDebugResources UP-TO-DATE
+> Task :capacitor-community-native-audio:packageDebugResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugResValues UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:packageDebugResources UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugResValues UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugResources UP-TO-DATE
+> Task :capacitor-filesystem:packageDebugResources UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugResValues UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugResources UP-TO-DATE
+> Task :capacitor-geolocation:packageDebugResources UP-TO-DATE
+> Task :capacitor-haptics:generateDebugResValues UP-TO-DATE
+> Task :capacitor-haptics:generateDebugResources UP-TO-DATE
+> Task :capacitor-haptics:packageDebugResources UP-TO-DATE
+> Task :capacitor-local-notifications:generateDebugResValues UP-TO-DATE
+> Task :capacitor-local-notifications:generateDebugResources UP-TO-DATE
+> Task :capacitor-local-notifications:packageDebugResources UP-TO-DATE
+> Task :capacitor-network:generateDebugResValues UP-TO-DATE
+> Task :capacitor-network:generateDebugResources UP-TO-DATE
+> Task :capacitor-network:packageDebugResources UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:generateDebugResValues UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:generateDebugResources UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:packageDebugResources UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:generateDebugResValues UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:generateDebugResources UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:packageDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-android:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-android:processDebugManifest UP-TO-DATE
+> Task :capacitor-app:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-app:processDebugManifest UP-TO-DATE
+> Task :capacitor-community-background-geolocation:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:processDebugManifest UP-TO-DATE
+> Task :capacitor-community-native-audio:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:processDebugManifest UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:processDebugManifest UP-TO-DATE
+> Task :capacitor-filesystem:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-filesystem:processDebugManifest UP-TO-DATE
+> Task :capacitor-geolocation:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-geolocation:processDebugManifest UP-TO-DATE
+> Task :capacitor-haptics:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-haptics:processDebugManifest UP-TO-DATE
+> Task :capacitor-local-notifications:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-local-notifications:processDebugManifest UP-TO-DATE
+> Task :capacitor-network:extractDeepLinksDebug UP-TO-DATE
+> Task :capacitor-network:processDebugManifest UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:extractDeepLinksDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:processDebugManifest UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:extractDeepLinksDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:processDebugManifest UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :capacitor-android:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-android:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-android:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-android:generateDebugRFile UP-TO-DATE
+> Task :capacitor-app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-app:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-app:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-app:generateDebugRFile UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-community-background-geolocation:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-community-background-geolocation:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-community-background-geolocation:generateDebugRFile UP-TO-DATE
+> Task :capacitor-community-native-audio:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-community-native-audio:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-community-native-audio:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-community-native-audio:generateDebugRFile UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugRFile UP-TO-DATE
+> Task :capacitor-filesystem:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-filesystem:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-filesystem:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugRFile UP-TO-DATE
+> Task :capacitor-geolocation:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-geolocation:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-geolocation:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugRFile UP-TO-DATE
+> Task :capacitor-haptics:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-haptics:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-haptics:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-haptics:generateDebugRFile UP-TO-DATE
+> Task :capacitor-local-notifications:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-local-notifications:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-local-notifications:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-local-notifications:generateDebugRFile UP-TO-DATE
+> Task :capacitor-network:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capacitor-network:compileDebugLibraryResources UP-TO-DATE
+> Task :capacitor-network:parseDebugLocalResources UP-TO-DATE
+> Task :capacitor-network:generateDebugRFile UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mapDebugSourceSetPaths UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:compileDebugLibraryResources UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:parseDebugLocalResources UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:generateDebugRFile UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mapDebugSourceSetPaths UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:compileDebugLibraryResources UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:parseDebugLocalResources UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:generateDebugRFile UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :capacitor-android:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-android:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-android:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-app:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-app:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-community-background-geolocation:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-community-native-audio:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:compileDebugJavaWithJavac NO-SOURCE
+> Task :capacitor-cordova-android-plugins:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-filesystem:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :capacitor-filesystem:compileDebugKotlin UP-TO-DATE
+> Task :capacitor-filesystem:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-filesystem:compileDebugJavaWithJavac NO-SOURCE
+> Task :capacitor-filesystem:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-geolocation:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :capacitor-geolocation:compileDebugKotlin UP-TO-DATE
+> Task :capacitor-geolocation:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-geolocation:compileDebugJavaWithJavac NO-SOURCE
+> Task :capacitor-geolocation:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-haptics:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-haptics:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-haptics:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-local-notifications:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-local-notifications:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-local-notifications:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capacitor-network:javaPreCompileDebug UP-TO-DATE
+> Task :capacitor-network:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capacitor-network:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:javaPreCompileDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:compileDebugJavaWithJavac UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :revenuecat-purchases-capacitor:compileDebugKotlin UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:javaPreCompileDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:compileDebugJavaWithJavac NO-SOURCE
+> Task :revenuecat-purchases-capacitor:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :app:kaptGenerateStubsDebugKotlin UP-TO-DATE
+> Task :app:kaptDebugKotlin UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :capacitor-android:generateDebugAssets UP-TO-DATE
+> Task :capacitor-android:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-app:generateDebugAssets UP-TO-DATE
+> Task :capacitor-app:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-community-background-geolocation:generateDebugAssets UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-community-native-audio:generateDebugAssets UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:generateDebugAssets UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-filesystem:generateDebugAssets UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-geolocation:generateDebugAssets UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-haptics:generateDebugAssets UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-local-notifications:generateDebugAssets UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugAssets UP-TO-DATE
+> Task :capacitor-network:generateDebugAssets UP-TO-DATE
+> Task :capacitor-network:mergeDebugAssets UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:generateDebugAssets UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugAssets UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:generateDebugAssets UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:generateDebugGlobalSynthetics UP-TO-DATE
+> Task :app:processDebugJavaRes UP-TO-DATE
+> Task :capacitor-android:processDebugJavaRes NO-SOURCE
+> Task :capacitor-app:processDebugJavaRes NO-SOURCE
+> Task :capacitor-community-background-geolocation:processDebugJavaRes NO-SOURCE
+> Task :capacitor-community-native-audio:processDebugJavaRes NO-SOURCE
+> Task :capacitor-cordova-android-plugins:processDebugJavaRes NO-SOURCE
+> Task :capacitor-filesystem:processDebugJavaRes UP-TO-DATE
+> Task :capacitor-geolocation:processDebugJavaRes UP-TO-DATE
+> Task :capacitor-haptics:processDebugJavaRes NO-SOURCE
+> Task :capacitor-local-notifications:processDebugJavaRes NO-SOURCE
+> Task :capacitor-network:processDebugJavaRes NO-SOURCE
+> Task :capgo-capacitor-native-biometric:processDebugJavaRes NO-SOURCE
+> Task :revenuecat-purchases-capacitor:processDebugJavaRes UP-TO-DATE
+> Task :app:mergeDebugJavaResource UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-app:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-filesystem:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-geolocation:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-haptics:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-local-notifications:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-network:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-android:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:bundleLibRuntimeToDirDebug UP-TO-DATE
+> Task :app:dexBuilderDebug UP-TO-DATE
+> Task :app:mergeProjectDexDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-android:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-android:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-android:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-app:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-app:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-community-background-geolocation:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-community-native-audio:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-cordova-android-plugins:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-filesystem:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-geolocation:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-haptics:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-local-notifications:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:mergeLibDexDebug UP-TO-DATE
+> Task :capacitor-network:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capacitor-network:mergeDebugNativeLibs NO-SOURCE
+> Task :capacitor-network:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugJniLibFolders UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugNativeLibs NO-SOURCE
+> Task :capgo-capacitor-native-biometric:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugJniLibFolders UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugNativeLibs NO-SOURCE
+> Task :revenuecat-purchases-capacitor:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :app:packageDebug UP-TO-DATE
+> Task :app:createDebugApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleDebug UP-TO-DATE
+> Task :capacitor-android:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-android:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-android:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-android:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-android:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-android:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-android:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-android:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-android:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-android:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-android:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-android:bundleDebugAar UP-TO-DATE
+> Task :capacitor-android:assembleDebug UP-TO-DATE
+> Task :capacitor-app:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-app:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-app:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-app:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-app:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-app:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-app:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-app:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-app:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-app:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-app:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-app:bundleDebugAar UP-TO-DATE
+> Task :capacitor-app:assembleDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-community-background-geolocation:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-community-background-geolocation:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-community-background-geolocation:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-community-background-geolocation:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-community-background-geolocation:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-community-background-geolocation:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-community-background-geolocation:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-community-background-geolocation:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-community-background-geolocation:bundleDebugAar UP-TO-DATE
+> Task :capacitor-community-background-geolocation:assembleDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-community-native-audio:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-community-native-audio:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-community-native-audio:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-community-native-audio:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-community-native-audio:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-community-native-audio:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-community-native-audio:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-community-native-audio:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-community-native-audio:bundleDebugAar UP-TO-DATE
+> Task :capacitor-community-native-audio:assembleDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-cordova-android-plugins:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:bundleDebugAar UP-TO-DATE
+> Task :capacitor-cordova-android-plugins:assembleDebug UP-TO-DATE
+> Task :capacitor-filesystem:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-filesystem:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-filesystem:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-filesystem:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-filesystem:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-filesystem:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-filesystem:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-filesystem:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-filesystem:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-filesystem:bundleDebugAar UP-TO-DATE
+> Task :capacitor-filesystem:assembleDebug UP-TO-DATE
+> Task :capacitor-geolocation:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-geolocation:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-geolocation:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-geolocation:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-geolocation:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-geolocation:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-geolocation:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-geolocation:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-geolocation:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-geolocation:bundleDebugAar UP-TO-DATE
+> Task :capacitor-geolocation:assembleDebug UP-TO-DATE
+> Task :capacitor-haptics:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-haptics:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-haptics:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-haptics:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-haptics:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-haptics:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-haptics:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-haptics:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-haptics:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-haptics:bundleDebugAar UP-TO-DATE
+> Task :capacitor-haptics:assembleDebug UP-TO-DATE
+> Task :capacitor-local-notifications:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-local-notifications:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-local-notifications:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-local-notifications:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-local-notifications:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-local-notifications:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-local-notifications:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-local-notifications:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-local-notifications:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-local-notifications:bundleDebugAar UP-TO-DATE
+> Task :capacitor-local-notifications:assembleDebug UP-TO-DATE
+> Task :capacitor-network:checkDebugAarMetadata UP-TO-DATE
+> Task :capacitor-network:stripDebugDebugSymbols NO-SOURCE
+> Task :capacitor-network:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capacitor-network:extractDebugAnnotations UP-TO-DATE
+> Task :capacitor-network:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capacitor-network:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capacitor-network:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capacitor-network:prepareDebugArtProfile UP-TO-DATE
+> Task :capacitor-network:prepareLintJarForPublish UP-TO-DATE
+> Task :capacitor-network:mergeDebugJavaResource UP-TO-DATE
+> Task :capacitor-network:syncDebugLibJars UP-TO-DATE
+> Task :capacitor-network:bundleDebugAar UP-TO-DATE
+> Task :capacitor-network:assembleDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:checkDebugAarMetadata UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:stripDebugDebugSymbols NO-SOURCE
+> Task :capgo-capacitor-native-biometric:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:extractDebugAnnotations UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:prepareDebugArtProfile UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:prepareLintJarForPublish UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:mergeDebugJavaResource UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:syncDebugLibJars UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:bundleDebugAar UP-TO-DATE
+> Task :capgo-capacitor-native-biometric:assembleDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:checkDebugAarMetadata UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:stripDebugDebugSymbols NO-SOURCE
+> Task :revenuecat-purchases-capacitor:copyDebugJniLibsProjectAndLocalJars UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:extractDebugAnnotations UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:extractDeepLinksForAarDebug UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugGeneratedProguardFiles UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugConsumerProguardFiles UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:prepareDebugArtProfile UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:prepareLintJarForPublish UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:mergeDebugJavaResource UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:syncDebugLibJars UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:bundleDebugAar UP-TO-DATE
+> Task :revenuecat-purchases-capacitor:assembleDebug UP-TO-DATE
+
+[Incubating] Problems report is available at: file:///C:/progetti/itainta/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 10.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 7m 50s
+388 actionable tasks: 388 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.1/userguide/configuration_cache_enabling.html
+APK_EXIT=0

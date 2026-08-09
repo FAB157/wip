@@ -1,0 +1,18 @@
+√ Copying web assets from dist to android\app\src\main\assets\public in 121.80ms
+√ Creating capacitor.config.json in android\app\src\main\assets in 3.82ms
+√ copy android in 225.02ms
+√ Updating Android plugins in 23.66ms
+[info] Found 10 Capacitor plugins for android:
+       @capacitor-community/background-geolocation@1.2.26
+       @capacitor-community/native-audio@8.0.0
+       @capacitor/app@8.1.1
+       @capacitor/filesystem@8.1.2
+       @capacitor/geolocation@7.1.8
+       @capacitor/haptics@8.0.2
+       @capacitor/local-notifications@7.0.6
+       @capacitor/network@7.0.4
+       @capgo/capacitor-native-biometric@6.0.4
+       @revenuecat/purchases-capacitor@13.2.2
+√ update android in 422.05ms
+[info] Sync finished in 0.844s
+SYNC_EXIT=0

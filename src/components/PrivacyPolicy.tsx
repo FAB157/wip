@@ -34,7 +34,7 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
               1. Raccolta dei Dati
             </h3>
             <p>
-              Italia in Tasca raccoglie dati personali (nome, email, avatar) necessari per il funzionamento dell'account,
+              WIP raccoglie dati personali (nome, email, avatar) necessari per il funzionamento dell'account,
               il tracking dell'esperienza utente (XP, itinerari salvati) e il sistema di pagamenti. Raccogliamo dati sulla
               posizione (GPS) in tempo reale per fornire le funzionalità core: audioguide basate sulla prossimità e navigazione.
             </p>

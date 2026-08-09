@@ -19,9 +19,12 @@ interface LoadingQuizProps {
   quizLength?: number;
   userId: string;
   language?: string;
+  /** Chiude il quiz lasciando proseguire la generazione: l'overlay è opaco
+   *  a tutto schermo e nascondeva l'itinerario che si costruisce in streaming. */
+  onDismiss?: () => void;
 }
 
-export default function LoadingQuiz({ destination, quizLength = 5, userId, language = 'it' }: LoadingQuizProps) {
+export default function LoadingQuiz({ destination, quizLength = 5, userId, language = 'it', onDismiss }: LoadingQuizProps) {
   const [questions, setQuestions] = useState<TriviaQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -33,6 +36,51 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
   // anche se il componente viene smontato improvvisamente.
   const correctCount = useRef(0);
   const hasRewarded = useRef(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Focus trap: l'overlay copre tutta la schermata, ma senza trap il Tab
+   * continuava a spostarsi sui controlli sottostanti (invisibili e non
+   * utilizzabili). Esc chiude, se la chiusura è consentita.
+   */
+  useEffect(() => {
+    const root = overlayRef.current;
+    if (!root) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[])
+        .filter(el => el.offsetParent !== null);
+    focusables()[0]?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onDismiss) {
+        e.preventDefault();
+        onDismiss();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) { e.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [onDismiss, loading, isFinished, currentIdx]);
 
   useEffect(() => {
     let isMounted = true;
@@ -40,7 +88,11 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
     function loadTrivia() {
       try {
         // Seleziona 'quizLength' domande casuali dal database locale
-        const dbToUse = language === 'en' ? triviaDbEn : triviaDbIt;
+        // `language` arriva maiuscolo da i18n ('IT' | 'EN' | ...): il vecchio
+        // confronto con 'en' minuscolo era sempre falso e il DB inglese non
+        // veniva mai usato. Le lingue senza DB dedicato ricadono sull'inglese.
+        const lang = (language || 'it').toLowerCase();
+        const dbToUse = lang === 'it' ? triviaDbIt : triviaDbEn;
         const shuffled = [...dbToUse].sort(() => 0.5 - Math.random());
         const selected = shuffled.slice(0, quizLength);
         
@@ -96,10 +148,31 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
   };
 
   return (
-    <div className="absolute inset-0 z-[90] bg-black/85 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-white overflow-hidden">
-      
+    <div
+      ref={overlayRef}
+      className="absolute inset-0 z-[90] bg-black/85 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-white overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-busy="true"
+      aria-label={getTranslation("wip_working", language as any) || "Elaborazione in corso..."}
+    >
+
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-primary/30 to-transparent blur-3xl pointer-events-none"></div>
+
+      {/* Il quiz è un passatempo, non un muro: si può chiudere e guardare
+          l'itinerario mentre viene generato. I punti già maturati vengono
+          comunque inviati dalla cleanup dell'effect. */}
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          aria-label={getTranslation("close", language as any) || "Chiudi"}
+          className="absolute top-4 right-4 z-20 min-w-[44px] min-h-[44px] px-4 flex items-center justify-center gap-2 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-black uppercase tracking-widest transition-colors backdrop-blur-md"
+        >
+          <X className="w-4 h-4" />
+          {getTranslation("skip", language as any) || "Salta"}
+        </button>
+      )}
 
       {loading ? (
         <motion.div 

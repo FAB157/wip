@@ -472,7 +472,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
         <div className="relative h-36 w-full flex-shrink-0 overflow-hidden bg-gray-100">
           {data?.imageUrl && !imgError ? (
-            <img src={data.imageUrl} alt={poi.name} className="w-full h-full object-cover" onError={() => setImgError(true)} />
+            <img src={data.imageUrl} alt={poi.name} loading="lazy" decoding="async" className="w-full h-full object-cover" onError={() => setImgError(true)} />
           ) : (
             <div className={`w-full h-full bg-gradient-to-br ${catGrad} flex items-center justify-center`}>
               <span className="text-4xl opacity-80">{catEmoji}</span>

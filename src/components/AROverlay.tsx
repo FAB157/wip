@@ -21,9 +21,19 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
   const [needsIosPermission, setNeedsIosPermission] = useState(false);
   const [gps, setGps] = useState<{lat: number, lon: number} | null>(null);
   const [poisLoaded, setPoisLoaded] = useState(false);
-  
+  // La bussola è "disponibile" SOLO quando arrivano eventi di orientamento
+  // reali. Se manca (sensore assente, permesso negato, tap su "Salta") l'AR
+  // deve passare a 360° e mostrare TUTTI i POI attorno, non solo ±45° da Nord.
+  const [compassAvailable, setCompassAvailable] = useState(false);
+
   const headingRef = useRef(0);
   const lastRenderedHeadingRef = useRef(0);
+  // Timestamp dell'ultimo evento di orientamento valido: alimenta il watchdog
+  // che riporta a 360° se la bussola smette di aggiornare (heading fermo >3s).
+  const lastOrientationTsRef = useRef(0);
+  // Ultima posizione per cui abbiamo caricato i POI: serve a ricaricare
+  // camminando (>200m) senza rifare la query a ogni micro-spostamento GPS.
+  const lastPoiLoadRef = useRef<{ lat: number; lon: number } | null>(null);
   // Cleanup del listener bussola avviato dal percorso iOS (dopo il tap di
   // consenso): senza questo ref la funzione di rimozione veniva scartata e
   // ogni apertura dell'AR accumulava listener deviceorientation a ~60Hz.
@@ -48,6 +58,9 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       }
       
       if (alpha !== null) {
+        // Evento di orientamento reale ricevuto: la bussola è disponibile.
+        lastOrientationTsRef.current = Date.now();
+        setCompassAvailable(true);
         const smoothed = lowPassFilter(alpha, headingRef.current, 0.12);
         headingRef.current = smoothed;
         // Re-render solo per variazioni percettibili: gli eventi arrivano a
@@ -93,6 +106,63 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
     }
     setNeedsIosPermission(false);
   };
+
+  // ─── Caricamento POI vicini (raggio 5 km) ────────────────────────────────
+  // Estratto in useCallback così può essere richiamato camminando (>200m) e
+  // non solo una volta al mount: prima l'AR restava "congelata" sui POI del
+  // punto di partenza anche dopo chilometri.
+  const loadPois = useCallback(async (lat: number, lon: number) => {
+    // Categorie importanti da mostrare in AR (evitiamo ristoranti, utilità, ecc)
+    const importantCategories = ['castle', 'museum', 'musei', 'monument', 'monumenti', 'church', 'chiese', 'viewpoint', 'panorami', 'attraction', 'gemme'];
+    try {
+      const { data, error } = await supabase.rpc('nearby_pois', {
+        p_lat: lat,
+        p_lon: lon,
+        radius_m: 5000,
+        limit_num: 50
+      });
+
+      if (error) {
+        console.warn('[AROverlay] RPC nearby_pois error:', error.message);
+        // Fallback: query diretta su shared_pois
+        const delta = 5000 / 111000;
+        const { data: fallback } = await supabase
+          .from('shared_pois')
+          .select('id, name, nome, lat, lon, category, status, photo_url, image_url')
+          .gte('lat', lat - delta)
+          .lte('lat', lat + delta)
+          .gte('lon', lon - delta)
+          .lte('lon', lon + delta)
+          .in('status', ['verified', 'auto', 'approved'])
+          .in('category', importantCategories)
+          .not('name', 'is', null)
+          .limit(50);
+
+        if (fallback && fallback.length > 0) {
+          console.log(`[AROverlay] Fallback: ${fallback.length} POI caricati`);
+          setPois(fallback);
+        } else {
+          console.warn('[AROverlay] Nessun POI trovato nel raggio di 5000m');
+        }
+      } else if (data && data.length > 0) {
+        // La RPC nearby_pois restituisce solo id/nome/lat/lon/distanza: NON
+        // espone `category`. Si filtra solo dove la categoria è presente.
+        const mapped = data.map((p: any) => ({ ...p, name: p.name ?? p.nome }));
+        const filtered = mapped.filter((p: any) =>
+          !p.category || importantCategories.includes(String(p.category).toLowerCase())
+        );
+        console.log(`[AROverlay] RPC: ${filtered.length} POI caricati`);
+        setPois(filtered);
+      } else {
+        console.warn('[AROverlay] RPC OK ma 0 POI nel raggio di 5000m');
+      }
+    } catch (e) {
+      console.warn('[AROverlay] Errore caricamento POI:', e);
+    } finally {
+      lastPoiLoadRef.current = { lat, lon };
+      setPoisLoaded(true);
+    }
+  }, []);
 
   useEffect(() => {
     let activeStream: MediaStream | null = null;
@@ -156,55 +226,8 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
         setGps({ lat, lon });
         console.log('[AROverlay] GPS ottenuto:', lat, lon);
 
-        // Categorie importanti da mostrare in AR (evitiamo ristoranti, utilità, ecc)
-        const importantCategories = ['castle', 'museum', 'musei', 'monument', 'monumenti', 'church', 'chiese', 'viewpoint', 'panorami', 'attraction', 'gemme'];
-
-        // Carica POI vicini (raggio 5000 m invece di 1500m)
-        const { data, error } = await supabase.rpc('nearby_pois', {
-          p_lat: lat,
-          p_lon: lon,
-          radius_m: 5000,
-          limit_num: 50
-        });
-
-        if (error) {
-          console.warn('[AROverlay] RPC nearby_pois error:', error.message);
-          // Fallback: query diretta su shared_pois
-          const delta = 5000 / 111000;
-          const { data: fallback } = await supabase
-            .from('shared_pois')
-            .select('id, name, nome, lat, lon, category, status, photo_url, image_url')
-            .gte('lat', lat - delta)
-            .lte('lat', lat + delta)
-            .gte('lon', lon - delta)
-            .lte('lon', lon + delta)
-            .in('status', ['verified', 'auto', 'approved'])
-            .in('category', importantCategories)
-            .not('name', 'is', null)
-            .limit(50);
-          
-          if (fallback && fallback.length > 0) {
-            console.log(`[AROverlay] Fallback: ${fallback.length} POI caricati`);
-            setPois(fallback);
-          } else {
-            console.warn('[AROverlay] Nessun POI trovato nel raggio di 5000m');
-          }
-        } else if (data && data.length > 0) {
-          // La RPC nearby_pois restituisce solo id/nome/lat/lon/distanza: NON
-          // espone `category`. Il vecchio filtro su quel campo scartava quindi
-          // sempre tutto e l'AR mostrava "Nessun punto di interesse" ovunque.
-          // Si filtra solo dove la categoria è davvero presente.
-          const mapped = data.map((p: any) => ({ ...p, name: p.name ?? p.nome }));
-          const filtered = mapped.filter((p: any) =>
-            !p.category || importantCategories.includes(String(p.category).toLowerCase())
-          );
-          console.log(`[AROverlay] RPC: ${filtered.length} POI caricati`);
-          setPois(filtered);
-        } else {
-          console.warn('[AROverlay] RPC OK ma 0 POI nel raggio di 5000m');
-        }
-
-        setPoisLoaded(true);
+        // Carica POI vicini (raggio 5000 m)
+        await loadPois(lat, lon);
       } catch (e) {
         console.warn("[AROverlay] GPS non disponibile:", e);
         setPoisLoaded(true);
@@ -234,7 +257,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       orientationCleanupRef.current?.();
       orientationCleanupRef.current = null;
     };
-  }, [startOrientationListener]);
+  }, [startOrientationListener, loadPois]);
 
   // ─── GPS live: distanze e posizioni etichette aggiornate camminando ──────
   // L'evento wip-location-update c'è solo con la guida attiva, quindi teniamo
@@ -246,6 +269,13 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
         if (prev && calculateDistance(prev.lat, prev.lon, lat, lon) < 3) return prev;
         return { lat, lon };
       });
+      // Ricarica i POI se ci siamo spostati di oltre 200m dall'ultimo caricamento:
+      // camminando si entra in aree nuove e i POI del punto di partenza non
+      // bastano più.
+      const last = lastPoiLoadRef.current;
+      if (last && calculateDistance(last.lat, last.lon, lat, lon) > 200) {
+        loadPois(lat, lon);
+      }
     };
     const onLoc = (e: any) => {
       const { lat, lon } = e.detail || {};
@@ -264,11 +294,24 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       window.removeEventListener('wip-location-update', onLoc);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
     };
+  }, [loadPois]);
+
+  // ─── Watchdog bussola ────────────────────────────────────────────────────
+  // Se non arriva alcun evento di orientamento valido da oltre 3s (sensore
+  // che si blocca, heading fermo) la bussola torna "non disponibile" → 360°.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (lastOrientationTsRef.current && Date.now() - lastOrientationTsRef.current > 3000) {
+        setCompassAvailable(false);
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
   }, []);
 
   // ─── Determina se usare FOV ristretto o 360° ─────────────────────────────
-  // Se la bussola non funziona (heading rimane sempre 0 per > 3s) usiamo FOV 360°
-  const effectiveFOV = permissionsGranted ? FOV : 360;
+  // Bussola disponibile → FOV ristretto (punta il telefono). Bussola assente,
+  // permesso negato o "Salta" → 360° (tutti i POI attorno).
+  const effectiveFOV = compassAvailable ? FOV : 360;
 
   return (
     <div className="absolute inset-0 bg-[#0a0a0a] z-50 overflow-hidden flex flex-col">
@@ -311,7 +354,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-10 flex justify-between items-start">
         <div className="text-white">
           <h2 className="font-black text-lg flex items-center gap-2">
-            <Compass className={`w-5 h-5 ${permissionsGranted ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <Compass className={`w-5 h-5 ${compassAvailable ? 'text-emerald-400' : 'text-amber-400'}`} />
             Radar AR
           </h2>
           <p className="text-xs text-white/80 font-medium">
@@ -392,7 +435,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       {/* ─── Rendering dei POI (Pin fluttuanti) ─────────────────────────────── */}
       {/* Mostriamo i POI appena GPS disponibile, indipendentemente dalla bussola */}
       {gps && pois.length > 0 && (() => {
-        const currentFOV = permissionsGranted ? effectiveFOV : 360;
+        const currentFOV = effectiveFOV;
 
         // 1. Proietta i POI nel campo visivo corrente
         const projected: { poi: any; dist: number; leftPercent: number }[] = [];

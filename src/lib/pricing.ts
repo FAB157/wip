@@ -6,6 +6,10 @@ export const PRICING_LIST = {
   photo_search: 5,       // Vision
   audio_guide: 15,       // Audioguida (TTS)
   itinerary_daily: 10,     // Pianificazione itinerario (per giorno)
+  // Sostituzione di una singola tappa. Voce dedicata e INTERA: prima si usava
+  // `audio_guide * 0.5` = 7,5 crediti, un valore frazionario che il wallet
+  // (e la RPC consume_credits) non è pensato per gestire.
+  replace_stop: 8,
   premium_guide_daily: 20, // Guida in PDF (per giorno)
   podcast_daily: 15,       // Podcast (per giorno)
   chat_session: 3,         // Chat sessione (10 messaggi)

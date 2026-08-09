@@ -137,10 +137,129 @@ class SupabaseClient {
         }
     }
 
+    // ------------------------------------------------------------------
+    // STORICO ASCOLTI (user_listening_history) — un POI già ascoltato è già
+    // acquistato: il nativo lo riproduce gratis, allineato al web
+    // (dayPassService.authorizeGuidePlayback / lib/listeningHistory.ts).
+    // ------------------------------------------------------------------
+
+    /** Con token utente le RLS passano; senza, fallback anon (best-effort). */
+    private fun bearerFor(accessToken: String?): String =
+        "Bearer ${if (accessToken.isNullOrBlank()) BuildConfig.SUPABASE_ANON_KEY else accessToken}"
+
+    /** Tutti i poi_id già ascoltati dall'utente. null = richiesta fallita. */
+    suspend fun fetchListeningHistoryPoiIds(
+        userId: String,
+        accessToken: String?
+    ): List<String>? = withContext(Dispatchers.IO) {
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/user_listening_history" +
+                "?user_id=eq.$userId&select=poi_id"
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", bearerFor(accessToken))
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext null
+                val arr = JSONArray(response.body?.string() ?: "[]")
+                val ids = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val id = arr.optJSONObject(i)?.optString("poi_id")
+                    if (!id.isNullOrBlank()) ids.add(id)
+                }
+                ids
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchListeningHistoryPoiIds failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Insert/update best-effort della riga di storico, stessa logica del web
+     * (lib/listeningHistory.ts): se esiste aggiorna listened_at, altrimenti
+     * insert. Ritorna true solo se il server ha accettato.
+     */
+    suspend fun recordListeningHistory(
+        userId: String,
+        accessToken: String?,
+        poiId: String,
+        poiName: String,
+        category: String,
+        imageUrl: String?
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (userId.isBlank() || poiId.isBlank()) return@withContext false
+        try {
+            val base = "${BuildConfig.SUPABASE_URL}/rest/v1/user_listening_history"
+            // Niente java.time: minSdk 24 senza desugaring
+            val nowIso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                .format(java.util.Date())
+
+            // 1) Esiste già una riga per (user, poi)?
+            val checkReq = Request.Builder()
+                .url("$base?user_id=eq.$userId&poi_id=eq.$poiId&select=id")
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", bearerFor(accessToken))
+                .build()
+            val existingId: String? = client.newCall(checkReq).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                val arr = JSONArray(resp.body?.string() ?: "[]")
+                if (arr.length() > 0) arr.getJSONObject(0).opt("id")?.toString() else null
+            }
+
+            val builder: Request.Builder
+            if (existingId != null) {
+                val patch = JSONObject().apply {
+                    put("listened_at", nowIso)
+                    put("poi_name", poiName)
+                }.toString().toRequestBody("application/json".toMediaType())
+                builder = Request.Builder()
+                    .url("$base?id=eq.$existingId")
+                    .patch(patch)
+            } else {
+                val insert = JSONObject().apply {
+                    put("user_id", userId)
+                    put("poi_id", poiId)
+                    put("poi_name", poiName)
+                    put("category", category)
+                    if (!imageUrl.isNullOrBlank()) put("image_url", imageUrl)
+                    put("listened_at", nowIso)
+                }.toString().toRequestBody("application/json".toMediaType())
+                builder = Request.Builder()
+                    .url(base)
+                    .post(insert)
+            }
+            val req = builder
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", bearerFor(accessToken))
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Prefer", "return=minimal")
+                .build()
+
+            client.newCall(req).execute().use { resp -> resp.isSuccessful }
+        } catch (e: Exception) {
+            Log.w(TAG, "recordListeningHistory failed: ${e.message}")
+            false
+        }
+    }
+
     private fun parsePoiList(body: String, uiCategories: List<String>, lang: String = "it"): List<PoiEntity> {
         val type = object : TypeToken<List<Map<String, Any>>>() {}.type
-        val rawList: List<Map<String, Any>> = gson.fromJson(body, type)
-        
+        val fullList: List<Map<String, Any>> = gson.fromJson(body, type)
+
+        // La RPC nearby_pois non filtra per status: i POI 'draft'/nascosti
+        // (bozze Vision, allucinazioni AI in bonifica) non devono arrivare al
+        // radar. Allineato a WipSupabaseClient.swift e poiRepository.ts.
+        val hiddenStatuses = setOf("draft", "needs_revision", "rejected", "hidden")
+        val rawList = fullList.filter { map ->
+            val status = (map["status"] ?: "").toString().lowercase()
+            status !in hiddenStatuses && map["is_hidden"] != true
+        }
+
         val targetDbCategories = mutableSetOf<String>()
         uiCategories.forEach { uiCat ->
             categoryMap[uiCat]?.let { targetDbCategories.addAll(it) }

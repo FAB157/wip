@@ -3,6 +3,7 @@ import { Language, getTranslation } from '../lib/i18n';
 import { Zap, Headphones, Map, Camera, Check, Coins, MessageSquare, Info, Volume2, BookOpen, ShoppingCart } from 'lucide-react';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { getWalletBalance } from '../lib/pricing';
+import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import { useEffect } from 'react';
 
@@ -69,12 +70,12 @@ export default function Pricing({ userSession, language }: PricingProps) {
 
   const executeCheckout = async (productId: string, priceCents: number, credits: number) => {
     if (!userSession || !userSession.user) {
-      alert(getTranslation("premium_alert_login", language));
+      notify(getTranslation("premium_alert_login", language));
       return;
     }
     
     if ((window as any).Capacitor && (window as any).Capacitor.isNativePlatform()) {
-      alert(getTranslation("premium_error", language) + ": Gli acquisti in-app tramite Google Play saranno disponibili a breve. Per ora, visita il nostro sito web per gestire l'abbonamento.");
+      notify(getTranslation("premium_error", language) + ": Gli acquisti in-app tramite Google Play saranno disponibili a breve. Per ora, visita il nostro sito web per gestire l'abbonamento.");
       return;
     }
 
@@ -102,7 +103,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
       }
     } catch (err: any) {
       console.error(err);
-      alert('Errore durante l\'apertura del checkout: ' + err.message);
+      notify('Errore durante l\'apertura del checkout: ' + err.message);
     } finally {
       setLoading(null);
     }
@@ -158,7 +159,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
             <button
               onClick={() => {
                 if (!userSession) {
-                  alert(getTranslation("premium_alert_login", language));
+                  notify(getTranslation("premium_alert_login", language));
                   return;
                 }
                 setShowConfirm(pack);

@@ -3,6 +3,7 @@ import { Camera, X, ImageIcon, Loader2, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Language, getTranslation } from '../lib/i18n';
+import { notify } from '../lib/toast';
 import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
@@ -76,7 +77,8 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
 };
 
   const handleFileUpload = async (event: import('react').ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const input = event.target;
+    const file = input.files?.[0];
     if (!file) return;
 
     try {
@@ -87,6 +89,10 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       console.error("Resize error:", e);
       setIsScanning(false);
       setError("Errore durante l'elaborazione dell'immagine. Riprova.");
+    } finally {
+      // Reset del valore: senza, riselezionare la STESSA foto non fa scattare
+      // onChange (il valore dell'input non cambia) e la scansione non parte.
+      input.value = '';
     }
   };
 
@@ -176,7 +182,7 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
     
     const payRes = await consumeCredits(currentUserId, PRICING_LIST.photo_search);
     if (!payRes) {
-      alert("Crediti insufficienti. Visita lo store per ricaricare.");
+      notify("Crediti insufficienti. Visita lo store per ricaricare.");
       setIsScanning(false);
       return;
     }
@@ -187,10 +193,16 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
     try {
       // getApiUrl: su app nativa il path relativo puntava agli asset locali
       // e la scansione falliva SEMPRE su telefono.
+      // Bearer della sessione: fa risolvere lo userId reale lato server (quota
+      // e vision_cards corrette) invece del fallback anonimo per IP.
+      const visionHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+      const accessToken = sessionData?.session?.access_token;
+      if (accessToken) visionHeaders['Authorization'] = `Bearer ${accessToken}`;
+
       const res = await fetch(getApiUrl('/api/vision'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        headers: visionHeaders,
+        body: JSON.stringify({
           imageBase64: base64Image,
           lat: gpsLat,
           lon: gpsLon
@@ -234,7 +246,9 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       console.error(err);
       await refundCredits(currentUserId, PRICING_LIST.photo_search)
         .catch(e => console.error('[Vision] Rimborso fallito:', e));
-      if (err.message.includes('429') || err.message.includes('quota') || err.message.includes('rate limit')) {
+      // Match case-insensitive: il server risponde "Quota Exceeded" (maiuscolo).
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('rate limit')) {
         setError(getTranslation("camera_error_quota", language));
       } else {
         setError(err.message || getTranslation("camera_error_failed", language));

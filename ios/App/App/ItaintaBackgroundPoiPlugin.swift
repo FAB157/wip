@@ -36,6 +36,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "deleteOfflinePackage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkOfflineTtsVoice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openTtsVoiceInstall", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setUserContext", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setWalletBalance", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setDayPass", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getDayPassState", returnType: CAPPluginReturnPromise),
@@ -307,6 +308,19 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
 
     // MARK: - Billing offline (stesse chiavi prefs di Android)
 
+    /**
+     * Identità utente per lo storico ascolti nativo: il JS la spinge a ogni
+     * sessione online (dayPassService.reconcileOfflineBilling). Il token serve
+     * per le RLS su user_listening_history; se scade, insert e sync restano
+     * best-effort. Alla ricezione sincronizza subito il mirror.
+     */
+    @objc func setUserContext(_ call: CAPPluginCall) {
+        prefs.set(call.getString("userId") ?? "", forKey: ListeningHistoryStore.prefUserId)
+        prefs.set(call.getString("accessToken") ?? "", forKey: ListeningHistoryStore.prefAccessToken)
+        ListeningHistoryStore.shared.syncFromCloud()
+        call.resolve()
+    }
+
     @objc func setWalletBalance(_ call: CAPPluginCall) {
         prefs.set(call.getInt("credits") ?? 0, forKey: "wallet_snapshot_credits")
         call.resolve()
@@ -367,8 +381,13 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         }
         let cost = call.getInt("cost") ?? BillingLogic.defaultGuideCost
 
-        guard let offlinePoi = store.getOfflinePoi(poiId),
-              let text = offlinePoi.audioText, !text.isEmpty else {
+        let offlinePoi = store.getOfflinePoi(poiId)
+        let text = offlinePoi?.audioText
+        let lang = prefs.string(forKey: "language") ?? "it"
+        // MP3 prefetchato: parte istantaneo e copre anche il caso audio_text
+        // assente nel pacchetto (catena fallback offline, come Android).
+        let mp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang)
+        guard (text?.isEmpty == false) || mp3 != nil else {
             call.resolve(["ok": false, "reason": "no_text"])
             return
         }
@@ -381,7 +400,12 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             guidesUsed: passUsed,
             cap: prefs.integer(forKey: "daypass_cap")
         )
-        if passActive {
+        // Già nello storico ascolti = già acquistato: gratis, non consuma
+        // né pass né crediti (come authorizeGuidePlayback web)
+        let alreadyPurchased = ListeningHistoryStore.shared.isAlreadyPurchased(poiId)
+        if alreadyPurchased {
+            ret["mode"] = "purchased"
+        } else if passActive {
             prefs.set(passUsed + 1, forKey: "daypass_used")
             ret["mode"] = "day_pass"
         } else {
@@ -401,9 +425,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         }
 
         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
-            text: text, isGem: offlinePoi.isGem, isItinerary: false,
-            poiId: poiId, priority: 1, kind: "arrival"
+            text: text ?? "", isGem: offlinePoi?.isGem ?? false, isItinerary: false,
+            poiId: poiId, priority: 1, kind: "arrival",
+            audioFile: mp3?.path
         ))
+        // Storico ascolti: mirror subito + cloud best-effort
+        ListeningHistoryStore.shared.recordListening(
+            poiId: poiId, poiName: offlinePoi?.nome ?? "", category: offlinePoi?.poiType
+        )
         ret["ok"] = true
         call.resolve(ret)
     }

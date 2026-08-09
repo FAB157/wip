@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Ticket } from 'lucide-react';
+import { notify } from '../lib/toast';
 import {
   getDayPassState,
   activateDayPass,
@@ -38,9 +39,9 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
     try {
       const state = await activateDayPass();
       setDayPass(state);
-      alert('Day Pass attivo! Per 24 ore non devi fare più nulla: solo attivare le cuffie.');
+      notify('Day Pass attivo! Per 24 ore non devi fare più nulla: solo attivare le cuffie.', 'success');
     } catch (e: any) {
-      alert(e?.message || 'Attivazione non riuscita.');
+      notify(e?.message || 'Attivazione non riuscita.');
     } finally {
       setActivating(false);
     }

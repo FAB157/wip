@@ -11,7 +11,7 @@ import UIKit
  * (equivalente del TextToSpeech di sistema) e con la background mode "audio"
  * parla anche a schermo spento.
  */
-final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
+final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     static let shared = SpeechQueue()
 
     // Stesse chiavi prefs di Android (GeofenceBroadcastReceiver.Companion)
@@ -27,9 +27,16 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
         var poiId: String? = nil
         let priority: Int // 0 = itinerario, 1 = gemma, 2 = normale
         var kind: String = "arrival" // arrival | approach
+        // MP3 prefetchato in cache locale (AudioPrefetchManager): se presente
+        // e valido si riproduce quello (partenza istantanea, voce neurale)
+        // invece del TTS; se fallisce si torna al TTS del campo text.
+        var audioFile: String? = nil
     }
 
     private let synthesizer = AVSpeechSynthesizer()
+    /// Player per gli MP3 prefetchati: vive nella stessa coda sequenziale del
+    /// TTS, mai due voci insieme.
+    private var audioPlayer: AVAudioPlayer?
     private var queue: [SpeechItem] = []
     private var isSpeaking = false
     private var activeItem: SpeechItem?
@@ -58,12 +65,51 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
     func stopSpeaking() {
         DispatchQueue.main.async {
             self.queue.removeAll()
+            if let player = self.audioPlayer {
+                // AVAudioPlayer.stop() non chiama il delegate: chiudiamo noi.
+                player.stop()
+                self.audioPlayer = nil
+                self.finishActiveSpeech(notifyJs: true)
+                self.deactivateAudioSessionIfIdle()
+                return
+            }
             if self.synthesizer.isSpeaking {
                 self.synthesizer.stopSpeaking(at: .immediate)
                 // Il delegate didCancel chiude lo stato; in sua assenza:
                 self.finishActiveSpeech(notifyJs: true)
             } else {
                 self.finishActiveSpeech(notifyJs: true)
+            }
+        }
+    }
+
+    /// Ferma SOLO la voce del POI indicato (superamento): via i suoi item
+    /// dalla coda; se sta parlando proprio lui si interrompe e si prosegue
+    /// con la coda. Le voci degli altri POI non si toccano — superare A
+    /// mentre suona la guida di B non deve uccidere B. Lo stop globale resta
+    /// per il plugin (audioguida completa in partenza dal JS).
+    func stopSpeaking(poiId: String) {
+        guard !poiId.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.queue.removeAll { $0.poiId == poiId }
+            guard self.activeItem?.poiId == poiId else { return }
+            if let player = self.audioPlayer {
+                // AVAudioPlayer.stop() non chiama il delegate: chiudiamo noi
+                // e facciamo ripartire la coda per gli altri POI.
+                player.stop()
+                self.audioPlayer = nil
+                self.finishActiveSpeech(notifyJs: true)
+                self.processNext()
+                self.deactivateAudioSessionIfIdle()
+                return
+            }
+            if self.synthesizer.isSpeaking {
+                // didCancel → onUtteranceFinished → processNext
+                self.synthesizer.stopSpeaking(at: .immediate)
+            } else {
+                self.finishActiveSpeech(notifyJs: true)
+                self.processNext()
+                self.deactivateAudioSessionIfIdle()
             }
         }
     }
@@ -93,10 +139,46 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
         prefs.set(next.poiId ?? "", forKey: Self.prefTeaserSpeakingPoi)
         onEvent?("teaserStarted", ["poiId": next.poiId ?? "", "kind": next.kind])
 
+        // MP3 prefetchato disponibile? Partenza istantanea senza TTS; su
+        // qualunque errore si prosegue col TTS del testo qui sotto.
+        if let path = next.audioFile,
+           FileManager.default.fileExists(atPath: path),
+           playMp3(path: path) {
+            return
+        }
+
+        guard !next.text.isEmpty else {
+            // Item solo-MP3 il cui file è fallito: chiudi e passa oltre,
+            // mai coda bloccata.
+            finishActiveSpeech(notifyJs: true)
+            processNext()
+            deactivateAudioSessionIfIdle()
+            return
+        }
+
         let utterance = AVSpeechUtterance(string: next.text)
         utterance.voice = Self.voiceForLanguage(prefs.string(forKey: "language") ?? "it")
         utterance.volume = 1.0
         synthesizer.speak(utterance)
+    }
+
+    /// Avvia la riproduzione dell'MP3 locale; true solo se è davvero partita.
+    /// Un file che non parte viene eliminato (probabile download corrotto).
+    private func playMp3(path: String) -> Bool {
+        do {
+            let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+            player.delegate = self
+            player.volume = 1.0
+            if player.play() {
+                audioPlayer = player
+                return true
+            }
+            try? FileManager.default.removeItem(atPath: path)
+            return false
+        } catch {
+            try? FileManager.default.removeItem(atPath: path)
+            return false
+        }
     }
 
     /// Il TTS deve duck-are la musica come un'istruzione di navigazione.
@@ -117,6 +199,10 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
         let item = activeItem
         activeItem = nil
         isSpeaking = false
+        if let player = audioPlayer {
+            player.stop()
+            audioPlayer = nil
+        }
 
         prefs.set(false, forKey: Self.prefTeaserSpeaking)
         prefs.set("", forKey: Self.prefTeaserSpeakingPoi)
@@ -148,6 +234,33 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async { self.onUtteranceFinished() }
+    }
+
+    // MARK: - AVAudioPlayerDelegate (MP3 prefetchati)
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        DispatchQueue.main.async {
+            // Riproduzione interrotta a metà (decode error, focus perso):
+            // rimetti in coda la versione solo-testo così il TTS fa da rete
+            // di sicurezza — mai silenzio senza fallback.
+            if !flag, let item = self.activeItem, !item.text.isEmpty {
+                var fallback = item
+                fallback.audioFile = nil
+                self.queue.append(fallback)
+            }
+            self.onUtteranceFinished()
+        }
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        DispatchQueue.main.async {
+            if let item = self.activeItem, !item.text.isEmpty {
+                var fallback = item
+                fallback.audioFile = nil
+                self.queue.append(fallback)
+            }
+            self.onUtteranceFinished()
+        }
     }
 
     // MARK: - Voci

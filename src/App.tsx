@@ -39,6 +39,7 @@ import RoutePoisModal from "./components/RoutePoisModal";
 import ZeroCreditsBanner from "./components/ZeroCreditsBanner";
 import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
+import ToastHost from "./components/ToastHost";
 
 // Centro iniziale finché l'utente non muove la mappa. Reference stabile: un
 // array inline come prop faceva ripartire i fetch di EventsScreen a ogni
@@ -233,13 +234,12 @@ export default function App() {
   };
 
   const handleRemoveRadarPoi = async (poiId: string) => {
-    const updated = radarPois.filter(p => p.id !== poiId);
-    setRadarPois(updated);
-    const { registerPlugin, Capacitor } = await import('@capacitor/core');
-    if (Capacitor.isNativePlatform()) {
-      const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
-      await plugin.syncManualSelection({ poisJson: JSON.stringify(updated) });
-    }
+    // Rimozione COSMETICA dal radar UI. Prima chiamava syncManualSelection coi
+    // POI del radar: ma quel metodo marca le voci come isFromItinerary=true nel
+    // nativo, trasformando ogni POI di prossimità in "tappa" e generando
+    // notifiche di check-in false ("Tappa completata!"). syncManualSelection è
+    // ora riservato alle vere tappe (locationService.syncItineraryToNative).
+    setRadarPois(radarPois.filter(p => p.id !== poiId));
   };
 
   /**
@@ -735,6 +735,10 @@ export default function App() {
         </div>
 
         <ApproachBanner language={language} />
+
+        {/* Canale unico delle notifiche in-app (lib/toast.ts): sostituisce
+            gli alert() bloccanti sparsi nelle schermate. */}
+        <ToastHost language={language} />
 
         {/* BOTTOM NAV */}
         {activeTab !== "camera" && (

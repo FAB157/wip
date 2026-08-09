@@ -16,8 +16,12 @@ import com.itaintasca.app.R
 import com.itaintasca.app.db.PoiDatabase
 import com.itaintasca.app.db.PoiEntity
 import com.itaintasca.app.db.TriggerState
+import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
+import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
+import com.itaintasca.app.geofence.PredictiveTrigger
+import com.itaintasca.app.geofence.TriggerTelemetry
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -46,6 +50,17 @@ class ItaintaBackgroundPoiService : Service() {
         // Dopo un fetch fallito (galleria, zona senza segnale) non riproviamo a
         // ogni update GPS (2-5s) ma al massimo ogni 20s.
         private const val FETCH_RETRY_BACKOFF_MS = 20_000L
+
+        // ── Valutatore predittivo ──
+        /** Tetto ai POI valutati per fix: in un centro storico denso
+         *  valutarli tutti a 1 Hz costerebbe CPU e batteria senza aggiungere
+         *  nulla — i più lontani non possono essere i prossimi. */
+        private const val MAX_PREDICTIVE_CANDIDATES = 5
+
+        /** Finestra di attenzione: sotto questo t_cpa si passa ad alta
+         *  frequenza (ARMED). Più larga di T_LEAD per avere qualche fix di
+         *  margine prima del momento dell'annuncio. */
+        private const val ARM_WINDOW_S = 90.0
     }
 
     private lateinit var fusedClient: FusedLocationProviderClient
@@ -80,6 +95,17 @@ class ItaintaBackgroundPoiService : Service() {
     private var alertRadiusCar = 300f
     private var arrivalRadiusCar = 50f
     private var selectedCategories = emptyList<String>()
+
+    // ── Valutatore predittivo in-process (Blocchi 2 e 3) ──────────────────
+    // Distanza al fix precedente, per POI: serve a rilevare il superamento
+    // (distanza crescente + CPA alle spalle).
+    private val lastDistances = HashMap<String, Float>()
+    // Livello corrente del duty cycle: `true` = alta frequenza perché c'è
+    // almeno un POI in rotta entro la finestra di attenzione.
+    @Volatile private var isArmed = false
+    // Guard: un solo giro di valutazione alla volta (i fix possono
+    // sovrapporsi alle query su Room).
+    private val predictiveBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -181,6 +207,17 @@ class ItaintaBackgroundPoiService : Service() {
             checkRefreshGeofences(initialLoc)
         }
 
+        // Mirror storico ascolti: scarica gli id già ascoltati dal cloud
+        // (best-effort). Serve al check "già acquistato = gratis" del
+        // receiver, che così funziona anche offline.
+        serviceScope.launch {
+            try {
+                ListeningHistoryStore.syncFromCloud(this@ItaintaBackgroundPoiService)
+            } catch (_: Exception) { /* best-effort */ }
+            // Igiene cache prefetch MP3: via i file più vecchi di 24h
+            AudioPrefetchManager.cleanup(this@ItaintaBackgroundPoiService)
+        }
+
         startActiveMonitoring()
         return START_STICKY
     }
@@ -249,10 +286,6 @@ class ItaintaBackgroundPoiService : Service() {
     }
 
     private fun startActiveMonitoring() {
-        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
-            .setMinUpdateIntervalMillis(2000L)
-            .build()
-
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
@@ -261,10 +294,13 @@ class ItaintaBackgroundPoiService : Service() {
                     updateNotificationAndStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
                 }
 
-                // I trigger veri sono i Geofence nativi (GeofenceBroadcastReceiver):
-                // qui solo refresh del radar e aggiornamento distanze.
                 RadarState.updateLocation(location)
                 maybeSwitchTravelMode(location)
+                // I geofence dell'OS restano come rete di sicurezza, ma il
+                // trigger tempestivo nasce QUI: il servizio è già sveglio e
+                // valuta il CPA a ogni fix, senza attendere che l'OS
+                // consegni la transizione ENTER.
+                runPredictiveEvaluation(location)
                 checkRefreshGeofences(location)
                 updateDistanceNotification(location)
             }
@@ -279,11 +315,202 @@ class ItaintaBackgroundPoiService : Service() {
                     checkRefreshGeofences(location)
                 }
             }
-            fusedClient.requestLocationUpdates(locationRequest, locationCallback!!, Looper.getMainLooper())
+            applyLocationRate(armed = false)
         } catch (e: SecurityException) {
             Log.e(TAG, "Permissions missing")
         }
     }
+
+    /**
+     * Duty cycle a due livelli (Blocco 3).
+     *
+     * Prima il servizio campionava sempre a PRIORITY_HIGH_ACCURACY ogni 5 s,
+     * anche in mezzo alla campagna senza un POI nel raggio di chilometri.
+     * Ora:
+     *   - ARMED (almeno un POI in rotta entro la finestra di attenzione):
+     *     1 s, alta precisione — è la fase in cui la latenza costa;
+     *   - IDLE: 20 s a potenza bilanciata, con batching fino a 60 s, così
+     *     il modem GPS resta spento per lunghi tratti.
+     *
+     * Il cambio è idempotente: si ri-registra solo se il livello cambia
+     * davvero, altrimenti a ogni fix si rifarebbe una requestLocationUpdates.
+     */
+    private fun applyLocationRate(armed: Boolean) {
+        val cb = locationCallback ?: return
+        val request = if (armed) {
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+                .setMinUpdateIntervalMillis(1000L)
+                .setWaitForAccurateLocation(true)
+                .build()
+        } else {
+            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 20_000L)
+                .setMinUpdateIntervalMillis(10_000L)
+                .setMaxUpdateDelayMillis(60_000L)
+                .build()
+        }
+        try {
+            fusedClient.removeLocationUpdates(cb)
+            fusedClient.requestLocationUpdates(request, cb, Looper.getMainLooper())
+            Log.d(TAG, "Location rate → ${if (armed) "ARMED (1s, high accuracy)" else "IDLE (20s, balanced)"}")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Permissions missing on rate change")
+        }
+    }
+
+    /**
+     * Valutatore predittivo in-process (Blocchi 2 e 3).
+     *
+     * Fa tre cose che i geofence circolari dell'OS non possono fare:
+     *   1. ANNUNCIA IN ANTICIPO — decide sul tempo al punto di massimo
+     *      avvicinamento (t_cpa), non sull'attraversamento di un raggio,
+     *      quindi non dipende dalla latenza di consegna della transizione;
+     *   2. RILEVA IL SUPERAMENTO (PASSED) e ferma l'audio: prima la voce
+     *      continuava a raccontare un monumento già alle spalle;
+     *   3. REGOLA IL DUTY CYCLE in base a quanto è vicino il prossimo POI.
+     */
+    private fun runPredictiveEvaluation(location: Location) {
+        if (currentPois.isEmpty()) return
+        if (!predictiveBusy.compareAndSet(false, true)) return
+
+        val isDriving = guideMode == "driving"
+        val alertRad = if (isDriving) alertRadiusCar else alertRadiusWalk
+        val arrivalRad = if (isDriving) arrivalRadiusCar else arrivalRadiusWalk
+
+        serviceScope.launch {
+            try {
+                val stateMap = db.poiDao().getAllTriggerStates().associate { it.poiId to it.state }
+                var shouldArm = false
+                // Anti-spam: in una piazza densa parla solo il primo.
+                var spokenInBatch = false
+
+                // Si valutano solo i candidati plausibili: oltre 3× il raggio
+                // di alert il CPA non può cadere nella finestra di anticipo.
+                val candidates = currentPois
+                    .map { poi ->
+                        val poiLoc = Location("").apply {
+                            latitude = poi.entranceLat ?: poi.lat
+                            longitude = poi.entranceLon ?: poi.lon
+                        }
+                        poi to location.distanceTo(poiLoc)
+                    }
+                    .filter { (_, d) -> d <= alertRad * 3f }
+                    .sortedWith(
+                        compareByDescending<Pair<PoiEntity, Float>> { it.first.isFromItinerary }
+                            .thenByDescending { it.first.isGem }
+                            .thenBy { it.second }
+                    )
+                    .take(MAX_PREDICTIVE_CANDIDATES)
+
+                for ((poi, _) in candidates) {
+                    if (!isPoiCategorySelected(poi)) continue
+
+                    val pred = PredictiveTrigger.evaluate(
+                        location = location,
+                        poiLat = poi.entranceLat ?: poi.lat,
+                        poiLon = poi.entranceLon ?: poi.lon,
+                        radiusM = alertRad.toDouble(),
+                        isDriving = isDriving
+                    )
+                    val state = stateMap[poi.id] ?: TriggerState.PENDING
+                    val prevDist = lastDistances[poi.id]
+                    val distNow = pred.distanceNowMeters.toFloat()
+
+                    // Finestra di attenzione: se un POI è a meno di 90 s, si alza il rate.
+                    if (!pred.tCpaSeconds.isNaN() && pred.tCpaSeconds > 0 && pred.tCpaSeconds <= ARM_WINDOW_S) {
+                        shouldArm = true
+                    } else if (distNow <= alertRad * 1.5f) {
+                        shouldArm = true
+                    }
+
+                    when (state) {
+                        // ── Superamento: si ferma la voce e si libera il POI ──
+                        TriggerState.APPROACH_FIRED, TriggerState.ARRIVED_FIRED -> {
+                            // Pavimento radiale per modalità: in auto basta
+                            // uscire dal cerchio di arrivo (sorpasso netto);
+                            // a piedi la voce vive finché resti nel raggio di
+                            // alert — a 35 m dal centroide di un duomo sei
+                            // ancora davanti al duomo.
+                            val passFloor = if (isDriving) arrivalRad else alertRad
+                            if (prevDist != null && distNow > arrivalRad &&
+                                PredictiveTrigger.hasPassed(
+                                    pred.tCpaSeconds, distNow.toDouble(), prevDist.toDouble(),
+                                    passFloor.toDouble(),
+                                    if (location.hasSpeed()) location.speed.toDouble() else 0.0
+                                )
+                            ) {
+                                handlePassed(poi, pred, location, isDriving, alertRad)
+                            }
+                        }
+                        // ── Approach proattivo: qui si recupera la latenza ──
+                        TriggerState.PENDING -> {
+                            if (pred.decision == PredictiveTrigger.Decision.FIRE) {
+                                TriggerTelemetry.log(
+                                    this@ItaintaBackgroundPoiService, poi.id, poi.nome,
+                                    "approach-predictive", pred, location, isDriving, alertRad
+                                )
+                                GeofenceBroadcastReceiver.firePredictedApproach(
+                                    this@ItaintaBackgroundPoiService, poi.id, poi.nome,
+                                    poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
+                                    speak = !spokenInBatch
+                                )
+                                spokenInBatch = true
+                            }
+                        }
+                        // Già superato: si attende che l'isteresi lo resetti.
+                        TriggerState.PASSED -> { /* no-op */ }
+                    }
+
+                    lastDistances[poi.id] = distNow
+                }
+
+                if (shouldArm != isArmed) {
+                    isArmed = shouldArm
+                    withContext(Dispatchers.Main) { applyLocationRate(shouldArm) }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Predictive evaluation failed: ${e.message}")
+            } finally {
+                predictiveBusy.set(false)
+            }
+        }
+    }
+
+    /**
+     * Il POI è stato superato: la voce che lo racconta non ha più senso.
+     * Prima questo caso non esisteva — il geofence di uscita a 1.5×
+     * resettava lo stato in silenzio, ma l'audio continuava.
+     */
+    private suspend fun handlePassed(
+        poi: PoiEntity,
+        pred: PredictiveTrigger.Result,
+        location: Location,
+        isDriving: Boolean,
+        alertRad: Float
+    ) {
+        TriggerTelemetry.log(
+            this, poi.id, poi.nome, "passed", pred, location, isDriving, alertRad
+        )
+        db.poiDao().updateTriggerState(TriggerStateEntity(poi.id, TriggerState.PASSED))
+        // Silenzio chirurgico: si spegne solo la voce di QUESTO POI —
+        // superare A mentre suona la guida di B non deve uccidere B.
+        GeofenceBroadcastReceiver.stopSpeakingForPoi(this, poi.id)
+
+        val intent = Intent("com.itaintasca.POI_EVENT")
+        intent.putExtra("event", "poiPassed")
+        intent.putExtra("poiId", poi.id)
+        intent.putExtra("name", poi.nome)
+        sendBroadcast(intent)
+        Log.d(TAG, "PASSED ${poi.nome}: audio fermato, tappa liberata")
+    }
+
+    /**
+     * Le categorie attive filtrano anche il percorso predittivo.
+     * Delega a GeofenceBroadcastReceiver, dove vive CATEGORY_MAP: una
+     * seconda copia della mappa qui si sarebbe disallineata al primo
+     * cambio di categorie nella UI.
+     */
+    private fun isPoiCategorySelected(poi: PoiEntity): Boolean =
+        GeofenceBroadcastReceiver.isCategoryActive(poi, selectedCategories)
 
     private fun showDiscoveryNotification(poi: PoiEntity) {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -607,6 +834,9 @@ class ItaintaBackgroundPoiService : Service() {
                 val prefs = getSharedPreferences("ItaintaPrefs", MODE_PRIVATE)
                 val notified = prefs.getStringSet("radarTeaserNotified", emptySet())?.toMutableSet() ?: mutableSetOf()
                 val alertRad = if (guideMode == "driving") alertRadiusCar else alertRadiusWalk
+                // Orizzonte utile: il fetch arriva a 5-10 km, ma a piedi un
+                // teaser per un POI a 4 km è rumore. 1,2 km ≈ 15 min a piedi.
+                val teaserHorizonM = if (guideMode == "driving") 5000f else 1200f
                 val candidates = pois
                     .filter { !it.teaserText.isNullOrBlank() && it.id !in notified }
                     .filter { db.poiDao().getTriggerState(it.id) == null }
@@ -617,7 +847,7 @@ class ItaintaBackgroundPoiService : Service() {
                         }
                         poi to location.distanceTo(poiLoc)
                     }
-                    .filter { (_, dist) -> dist > alertRad }
+                    .filter { (_, dist) -> dist > alertRad && dist <= teaserHorizonM }
                     .sortedBy { (_, dist) -> dist }
                     .take(2)
 

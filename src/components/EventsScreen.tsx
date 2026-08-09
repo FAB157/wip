@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { getDistanceFromLatLonInM } from "./MapArea";
+import { notify } from "../lib/toast";
 import {
   MapPin,
   Phone,
@@ -135,7 +136,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       let resolvedCityName = "Italia";
       try {
         const geocodeRes = await fetch(
-          `/api/nominatim/reverse?lat=${currentLat}&lon=${currentLon}`
+          getApiUrl(`/api/nominatim/reverse?lat=${currentLat}&lon=${currentLon}`)
         );
         if (geocodeRes.ok) {
           const geocodeData = await geocodeRes.json();
@@ -199,7 +200,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         return;
       }
       
-      const vRes = await fetch(`/api/virgilio?city=${encodeURIComponent(targetCity)}`);
+      const vRes = await fetch(getApiUrl(`/api/virgilio?city=${encodeURIComponent(targetCity)}`));
       
       if (!vRes.ok) {
         setSourceResults(prev => ({ ...prev, virgilio: [] }));
@@ -247,7 +248,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         const checkLower = (title + " " + description).toLowerCase();
 
         newEvents.push({
-          id: `virgilio-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+          // ID deterministico (titolo+data+luogo): un id casuale generava
+          // doppioni nei preferiti a ogni ricaricamento della stessa lista.
+          id: `virgilio-${title}-${eventDate}-${locationName}`,
           name: title,
           description: description,
           date: eventDate,
@@ -278,7 +281,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         if (ev.venueAddress) {
           const timerId = window.setTimeout(async () => {
             try {
-              const geoRes = await fetch(`/api/nominatim/search?q=${encodeURIComponent(ev.venueAddress)}&format=json&limit=1`);
+              const geoRes = await fetch(getApiUrl(`/api/nominatim/search?q=${encodeURIComponent(ev.venueAddress)}&format=json&limit=1`));
               if (geoRes.ok) {
                 const geoData = await geoRes.json();
                 if (geoData && geoData.length > 0) {
@@ -311,15 +314,13 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     logApiCall('ticketmaster', 'ricerca_eventi_api');
     setLoadingSources(prev => ({ ...prev, ticketmaster: true }));
     setSourceErrors(prev => ({ ...prev, ticketmaster: null }));
-    const activeCity = cityName || city;
-    const tmKey = (import.meta as any).env.VITE_TICKETMASTER_API_KEY;
     const startObj = new Date(startDate);
     const endObj = new Date(endDate);
     const startDateTime = startObj.toISOString().split(".")[0] + "Z";
     const endDateTime = new Date(endObj.getTime() + 86400000).toISOString().split(".")[0] + "Z";
 
     try {
-        const res = await fetch(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=${searchRadius}&startDateTime=${startDateTime}&endDateTime=${endDateTime}`);
+        const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=${searchRadius}&startDateTime=${startDateTime}&endDateTime=${endDateTime}`));
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           throw new Error(errData.message || "Errore Ticketmaster Proxy");
@@ -352,24 +353,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           return { ...prev, ticketmaster: unique };
         });
     } catch (e) {
+      // Nessun evento finto di ripiego: mostriamo solo l'errore reale della
+      // source, così l'utente non scambia un placeholder per un evento vero.
       setSourceErrors(prev => ({ ...prev, ticketmaster: "Nessun evento o API key mancante." }));
-      if (sourceResults.ticketmaster.length === 0) {
-        setSourceResults(prev => ({ ...prev, ticketmaster: [{
-          id: `mock-fail-${lat}-${lon}`,
-          name: `Concerto in piazza a ${activeCity === "Italia" ? "questa zona" : activeCity}`,
-          description: `Un concerto dal vivo per festeggiare insieme.`,
-          date: new Date().toISOString().split("T")[0],
-          venueName: "Piazza Centrale",
-          url: "#",
-          imageUrl: "https://images.unsplash.com/photo-1540039155732-6761b5f1e847?auto=format&fit=crop&q=80&w=400",
-          source: "ticketmaster" as EventSource,
-          lat: lat,
-          lon: lon,
-          isFree: true,
-          isFamily: true,
-          isMusic: true,
-        }]}));
-      }
     } finally {
       setLoadingSources(prev => ({ ...prev, ticketmaster: false }));
     }
@@ -436,7 +422,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const saveEventAsPoi = async (event: EventData) => {
-    if (!currentUserId) return alert("Devi essere loggato per salvare un evento.");
+    if (!currentUserId) return notify("Devi essere loggato per salvare un evento.");
 
     try {
       // Percorso unico dei preferiti (lib/favorites): prima l'insert diretto
@@ -444,7 +430,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       // FAVORITES_EVENT, quindi Scoperte/Preferiti non vedevano l'evento
       // salvato finché non si ricaricava tutto.
       if (getLocalFavorites().some((f: any) => String(f.poi_id || f.id) === String(event.id))) {
-        alert("Evento già salvato nei preferiti!");
+        notify("Evento già salvato nei preferiti!");
         return;
       }
       const poiData = {
@@ -460,10 +446,10 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         imageUrl: event.imageUrl
       };
       await toggleFavoritePoi(poiData);
-      alert("Evento salvato nei Preferiti! Potrai usarlo per generare itinerari personalizzati.");
+      notify("Evento salvato nei Preferiti! Potrai usarlo per generare itinerari personalizzati.");
     } catch (e: any) {
       console.error(e);
-      alert("Errore durante il salvataggio.");
+      notify("Errore durante il salvataggio.");
     }
   };
 
@@ -523,86 +509,14 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
   };
 
-  // Generate high-quality local mock events to ensure the screen is ALWAYS beautiful and filled
-  const getPremiumMockEvents = (lat: number, lon: number, cityName: string): EventData[] => {
-    const activeCity = cityName === "Italia" ? "Firenze" : cityName;
-    
-    // We offset the dates from today so they are always in the selected range
-    const today = new Date();
-    const formatDate = (offset: number) => {
-      const d = new Date(today.getTime() + offset * 24 * 60 * 60 * 1000);
-      return d.toISOString().split('T')[0];
-    };
-
-    return [
-      {
-        id: `mock-music-${activeCity}`,
-        name: `Concerto Sotto le Stelle a ${activeCity}`,
-        description: `Un'incredibile serata di musica dal vivo con artisti nazionali e internazionali nella splendida cornice del centro storico.`,
-        date: formatDate(1),
-        venueName: `Piazza Grande, ${activeCity}`,
-        url: "#",
-        imageUrl: "https://images.unsplash.com/photo-1501281668745-f7f57925c3b4?auto=format&fit=crop&q=80&w=600",
-        source: "ticketmaster",
-        lat: lat + 0.005,
-        lon: lon + 0.005,
-        isMusic: true,
-        isFree: false
-      },
-      {
-        id: `mock-food-${activeCity}`,
-        name: `Festival della Gastronomia e dei Sapori Tipici a ${activeCity}`,
-        description: `Sagre, degustazioni ed eccellenze culinarie locali. Vieni a scoprire e assaggiare i piatti più iconici della nostra tradizione.`,
-        date: formatDate(3),
-        venueName: `Parco delle Terme, ${activeCity}`,
-        url: "#",
-        imageUrl: "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?auto=format&fit=crop&q=80&w=600",
-        source: "virgilio",
-        lat: lat - 0.004,
-        lon: lon - 0.004,
-        isFamily: true,
-        isFree: true
-      },
-      {
-        id: `mock-art-${activeCity}`,
-        name: `Mostra Internazionale d'Arte Contemporanea`,
-        description: `Un viaggio affascinante tra sculture, dipinti e installazioni interattive di artisti emergenti da tutta Europa.`,
-        date: formatDate(5),
-        venueName: `Palazzo delle Esposizioni, ${activeCity}`,
-        url: "#",
-        imageUrl: "https://images.unsplash.com/photo-1543857778-c4a1a3e0b2eb?auto=format&fit=crop&q=80&w=600",
-        source: "ticketmaster",
-        lat: lat + 0.003,
-        lon: lon - 0.003,
-        isFree: false
-      },
-      {
-        id: `mock-market-${activeCity}`,
-        name: `Mercatino dell'Antiquariato e del Collezionismo`,
-        description: `Decine di espositori con oggetti vintage, libri antichi, dischi in vinile e pezzi unici di artigianato artistico.`,
-        date: formatDate(2),
-        venueName: `Via Roma, Dintorni`,
-        url: "#",
-        imageUrl: "https://images.unsplash.com/photo-1480796927426-f609979314bd?auto=format&fit=crop&q=80&w=600",
-        source: "virgilio",
-        lat: lat - 0.002,
-        lon: lon + 0.002,
-        isFamily: true,
-        isFree: true
-      }
-    ];
-  };
-
-  const allEvents = [
+  // Solo eventi REALI dalle quattro sorgenti: niente più mock di riempimento.
+  // Se non c'è nulla si mostra lo stato "nessun evento trovato".
+  const displayEvents = [
     ...sourceResults.virgilio,
     ...sourceResults.ticketmaster,
     ...sourceResults.getyourguide,
     ...sourceResults.viator
   ];
-
-  const displayEvents = allEvents.length === 0 || (allEvents.length === 1 && allEvents[0].id.includes("mock-fail"))
-    ? getPremiumMockEvents(mapCenter?.[0] || 44.0792, mapCenter?.[1] || 10.1, city)
-    : allEvents;
 
   const filteredEvents = displayEvents.filter((e) => {
     if (!e.date || e.date === "Data non specificata") return false;
@@ -675,7 +589,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         "_blank",
       );
     } else {
-      alert(getTranslation("events_error_nav", language));
+      notify(getTranslation("events_error_nav", language));
     }
   };
 

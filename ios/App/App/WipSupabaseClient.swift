@@ -19,12 +19,14 @@ final class WipSupabaseClient {
         session = URLSession(configuration: config)
     }
 
-    private func request(path: String, method: String, body: [String: Any]? = nil) -> URLRequest? {
+    private func request(path: String, method: String, body: [String: Any]? = nil, accessToken: String? = nil) -> URLRequest? {
         guard let url = URL(string: "\(Self.supabaseUrl)\(path)") else { return nil }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.addValue(Self.anonKey, forHTTPHeaderField: "apikey")
-        req.addValue("Bearer \(Self.anonKey)", forHTTPHeaderField: "Authorization")
+        // Con token utente le RLS passano; senza, fallback anon (best-effort)
+        let bearer = (accessToken?.isEmpty == false) ? accessToken! : Self.anonKey
+        req.addValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
         req.addValue("Itainta-iOS-Native", forHTTPHeaderField: "User-Agent")
         if let body = body {
@@ -101,9 +103,106 @@ final class WipSupabaseClient {
         }.resume()
     }
 
+    // MARK: - Storico ascolti (user_listening_history)
+    // Un POI già ascoltato è già acquistato: il nativo lo riproduce gratis,
+    // allineato al web (dayPassService.authorizeGuidePlayback).
+
+    /// Tutti i poi_id già ascoltati dall'utente. nil = richiesta fallita.
+    func fetchListeningHistoryPoiIds(userId: String, accessToken: String?, completion: @escaping ([String]?) -> Void) {
+        guard !userId.isEmpty,
+              let req = request(
+                path: "/rest/v1/user_listening_history?user_id=eq.\(userId)&select=poi_id",
+                method: "GET", accessToken: accessToken
+              ) else {
+            completion(nil)
+            return
+        }
+        session.dataTask(with: req) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data = data,
+                  let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+                completion(nil)
+                return
+            }
+            completion(arr.compactMap { row in
+                if let s = row["poi_id"] as? String { return s }
+                if let n = row["poi_id"] { return String(describing: n) }
+                return nil
+            })
+        }.resume()
+    }
+
+    /// Insert/update best-effort della riga di storico, stessa logica del web
+    /// (lib/listeningHistory.ts): se esiste aggiorna listened_at, altrimenti insert.
+    func recordListeningHistory(
+        userId: String, accessToken: String?,
+        poiId: String, poiName: String, category: String, imageUrl: String?,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard !userId.isEmpty, !poiId.isEmpty,
+              let checkReq = request(
+                path: "/rest/v1/user_listening_history?user_id=eq.\(userId)&poi_id=eq.\(poiId)&select=id",
+                method: "GET", accessToken: accessToken
+              ) else {
+            completion(false)
+            return
+        }
+        session.dataTask(with: checkReq) { [weak self] data, response, _ in
+            guard let self = self,
+                  let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data = data,
+                  let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+                completion(false)
+                return
+            }
+            let nowIso = ISO8601DateFormatter().string(from: Date())
+            var maybeReq: URLRequest?
+            if let rawId = arr.first?["id"] {
+                let existingId = (rawId as? String) ?? String(describing: rawId)
+                maybeReq = self.request(
+                    path: "/rest/v1/user_listening_history?id=eq.\(existingId)",
+                    method: "PATCH",
+                    body: ["listened_at": nowIso, "poi_name": poiName],
+                    accessToken: accessToken
+                )
+            } else {
+                var body: [String: Any] = [
+                    "user_id": userId, "poi_id": poiId, "poi_name": poiName,
+                    "category": category, "listened_at": nowIso
+                ]
+                if let imageUrl = imageUrl, !imageUrl.isEmpty { body["image_url"] = imageUrl }
+                maybeReq = self.request(
+                    path: "/rest/v1/user_listening_history",
+                    method: "POST", body: body, accessToken: accessToken
+                )
+            }
+            guard var req = maybeReq else {
+                completion(false)
+                return
+            }
+            req.addValue("return=minimal", forHTTPHeaderField: "Prefer")
+            self.session.dataTask(with: req) { _, resp, _ in
+                let ok = (resp as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+                completion(ok)
+            }.resume()
+        }.resume()
+    }
+
+    /// Status esclusi dal radar: la RPC nearby_pois non filtra per status, e
+    /// nei test in auto un POI 'draft' allucinato dalla Vision ("Pietà
+    /// Vaticana… Museo Omero" ad Avenza) è arrivato fino alla notifica di
+    /// arrivo. Tenere allineato ad Android e a poiRepository.ts.
+    static let hiddenStatuses: Set<String> = ["draft", "needs_revision", "rejected", "hidden"]
+
     static func parsePoiList(data: Data, uiCategories: [String], lang: String) -> [Poi] {
-        guard let rawList = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+        guard let anyList = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
             return []
+        }
+        let rawList = anyList.filter { map in
+            let status = ((map["status"] as? String) ?? "").lowercased()
+            if hiddenStatuses.contains(status) { return false }
+            if (map["is_hidden"] as? Bool) == true { return false }
+            return true
         }
 
         var targetDbCategories = Set<String>()
@@ -147,6 +246,111 @@ final class WipSupabaseClient {
         return pois.filter { poi in
             let cat = (poi.poiType ?? "").lowercased()
             return poi.isGem || targetDbCategories.contains(cat) || uiCategories.contains(cat)
+        }
+    }
+}
+
+/**
+ * Storico ascolti lato nativo: mirror locale (UserDefaults) dei poi_id già
+ * ascoltati + registrazione best-effort su user_listening_history.
+ *
+ * Un POI già nello storico è già "acquistato": il trigger in background lo
+ * riproduce GRATIS senza consumare il Day Pass né chiedere pagamento, come il
+ * web (dayPassService.authorizeGuidePlayback). Il mirror viene sincronizzato
+ * all'avvio del monitoraggio scaricando gli id dal cloud, così il check vale
+ * anche offline; gli ascolti registrati offline restano in una coda pending
+ * ritentata alla sync successiva. Fail-closed: in dubbio NON è acquistato.
+ *
+ * Stesse chiavi prefs del port Android (ListeningHistoryStore.kt): allineare.
+ */
+final class ListeningHistoryStore {
+    static let shared = ListeningHistoryStore()
+    static let prefListenedIds = "listened_poi_ids"
+    static let prefPending = "listened_pending_sync"
+    static let prefUserId = "wip_user_id"
+    static let prefAccessToken = "wip_supabase_token"
+
+    private let prefs = UserDefaults.standard
+    private let client = WipSupabaseClient()
+    // Serializza le letture/scritture del mirror (receiver + plugin + sync)
+    private let queue = DispatchQueue(label: "com.itaintasca.listeninghistory")
+
+    /// Mirror locale, vale anche offline. In dubbio: NON acquistato.
+    func isAlreadyPurchased(_ poiId: String) -> Bool {
+        guard !poiId.isEmpty else { return false }
+        return queue.sync {
+            (prefs.stringArray(forKey: Self.prefListenedIds) ?? []).contains(poiId)
+        }
+    }
+
+    /// Registra un ascolto completato: mirror subito (vale anche offline),
+    /// poi insert cloud best-effort. Se il cloud fallisce la voce resta
+    /// pending e viene ritentata alla prossima sync.
+    func recordListening(poiId: String, poiName: String?, category: String?, imageUrl: String? = nil) {
+        guard !poiId.isEmpty else { return }
+        queue.async {
+            var ids = Set(self.prefs.stringArray(forKey: Self.prefListenedIds) ?? [])
+            ids.insert(poiId)
+            self.prefs.set(Array(ids), forKey: Self.prefListenedIds)
+
+            var entry: [String: Any] = [
+                "poi_id": poiId,
+                "poi_name": (poiName?.isEmpty == false) ? poiName! : "Luogo d'interesse",
+                "category": (category?.isEmpty == false) ? category! : "Altro"
+            ]
+            if let imageUrl = imageUrl, !imageUrl.isEmpty { entry["image_url"] = imageUrl }
+            if let data = try? JSONSerialization.data(withJSONObject: entry),
+               let raw = String(data: data, encoding: .utf8) {
+                var pending = Set(self.prefs.stringArray(forKey: Self.prefPending) ?? [])
+                pending.insert(raw)
+                self.prefs.set(Array(pending), forKey: Self.prefPending)
+            }
+            self.flushPending()
+        }
+    }
+
+    /// All'avvio del servizio (e quando il JS aggiorna l'identità utente):
+    /// scarica gli id dal cloud e li UNISCE al mirror (mai sostituire: gli
+    /// ascolti offline non sincronizzati non vanno persi), poi ritenta i pending.
+    func syncFromCloud() {
+        let userId = prefs.string(forKey: Self.prefUserId) ?? ""
+        guard !userId.isEmpty else { return }
+        let token = prefs.string(forKey: Self.prefAccessToken)
+        client.fetchListeningHistoryPoiIds(userId: userId, accessToken: token) { [weak self] cloudIds in
+            guard let self = self, let cloudIds = cloudIds else { return }
+            self.queue.async {
+                var ids = Set(self.prefs.stringArray(forKey: Self.prefListenedIds) ?? [])
+                ids.formUnion(cloudIds)
+                self.prefs.set(Array(ids), forKey: Self.prefListenedIds)
+                self.flushPending()
+            }
+        }
+    }
+
+    /// Da chiamare su `queue`. Ritenta l'insert cloud delle voci pending.
+    private func flushPending() {
+        let userId = prefs.string(forKey: Self.prefUserId) ?? ""
+        guard !userId.isEmpty else { return }
+        let token = prefs.string(forKey: Self.prefAccessToken)
+        let pending = prefs.stringArray(forKey: Self.prefPending) ?? []
+        for raw in pending {
+            guard let data = raw.data(using: .utf8),
+                  let entry = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let poiId = entry["poi_id"] as? String else { continue }
+            client.recordListeningHistory(
+                userId: userId, accessToken: token,
+                poiId: poiId,
+                poiName: entry["poi_name"] as? String ?? "Luogo d'interesse",
+                category: entry["category"] as? String ?? "Altro",
+                imageUrl: entry["image_url"] as? String
+            ) { [weak self] ok in
+                guard ok, let self = self else { return }
+                self.queue.async {
+                    var rest = Set(self.prefs.stringArray(forKey: Self.prefPending) ?? [])
+                    rest.remove(raw)
+                    self.prefs.set(Array(rest), forKey: Self.prefPending)
+                }
+            }
         }
     }
 }

@@ -330,7 +330,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>Include un livello di <strong>informazioni aggiuntive</strong> dopo ogni guida.</Li>
             <Li>Le guide rimaste le vedi nel badge 🎫 accanto alle cuffie e nella notifica dell'audioguida.</Li>
           </ul>
-          <P>Si attiva da: Profilo → Mappe Offline, dall'itinerario appena creato, o dal popup che compare quando attivi le cuffie in una zona ricca di luoghi. <em>Conviene dal decimo ascolto in poi — se in un giorno visiti più di 13 luoghi, risparmi.</em></P>
+          <P>Si attiva da: Profilo → Mappe Offline, dall'itinerario appena creato, o dal popup che compare quando attivi le cuffie in una zona ricca di luoghi. <em>Conviene dal {Math.floor(PRICING_LIST.day_pass / PRICING_LIST.audio_guide) + 1}° ascolto in poi — se in un giorno visiti più di {Math.floor(PRICING_LIST.day_pass / PRICING_LIST.audio_guide)} luoghi, risparmi.</em></P>
         </>
       ),
     },

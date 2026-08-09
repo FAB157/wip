@@ -1,0 +1,104 @@
+
+> react-example@0.0.0 deploy
+> vercel --prod --yes
+
+<claude-code-hint v="1" type="plugin" value="vercel@claude-plugins-official" />
+Vercel CLI 54.17.1 (Node.js 24.14.1)
+Retrieving project…
+Deploying fabri75715-4892s-projects/itainta
+Uploading [--------------------] (0.0B/2.3MB)
+Uploading [=====---------------] (609.6KB/2.3MB)
+Uploading [==========----------] (1.2MB/2.3MB)
+Uploading [===============-----] (1.8MB/2.3MB)
+Uploading [====================] (2.3MB/2.3MB)
+  Inspect         https://vercel.com/fabri75715-4892s-projects/itainta/GZppMn4f4nAepZpY2uaXPdgNDEXZ
+  Production      https://itainta-qqb2j6vht-fabri75715-4892s-projects.vercel.app
+Building…
+Building…
+Running build in Washington, D.C., USA (East) – iad1
+Build machine configuration: 2 cores, 8 GB
+Retrieving list of deployment files...
+Downloading 659 deployment files...
+Restored build cache from previous deployment (86ryJQX3ACUHX2u3auJkPDTPreNm)
+Running "vercel build"
+Vercel CLI 58.1.0
+Installing dependencies...
+up to date in 2s
+263 packages are looking for funding
+run `npm fund` for details
+vite v6.4.3 building for production...
+transforming...
+✓ 2368 modules transformed.
+rendering chunks...
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/supabase.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/AROverlay.tsx, /vercel/path0/src/components/AdminApiStats.tsx, /vercel/path0/src/components/AdminCounters.tsx, /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/AdminEditor.tsx, /vercel/path0/src/components/AdminEnrichedPois.tsx, /vercel/path0/src/components/AdminPanel.tsx, /vercel/path0/src/components/AdminReports.tsx, /vercel/path0/src/components/AdminSystemErrors.tsx, /vercel/path0/src/components/AgentControls.tsx, /vercel/path0/src/components/B2BPartner.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/LiveTourPanel.tsx, /vercel/path0/src/components/LoginScreen.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/ShopScreen.tsx, /vercel/path0/src/components/UserProfileSummary.tsx, /vercel/path0/src/components/ZeroCreditsBanner.tsx, /vercel/path0/src/components/admin/ChallengeForm.tsx, /vercel/path0/src/components/admin/CouponForm.tsx, /vercel/path0/src/components/admin/CouponList.tsx, /vercel/path0/src/components/admin/LevelForm.tsx, /vercel/path0/src/components/admin/UserEditModal.tsx, /vercel/path0/src/hooks/useItinerary.ts, /vercel/path0/src/hooks/useLiveTour.ts, /vercel/path0/src/hooks/usePredictiveDownload.ts, /vercel/path0/src/lib/apiLogger.ts, /vercel/path0/src/lib/favorites.ts, /vercel/path0/src/lib/gamification.ts, /vercel/path0/src/lib/listeningHistory.ts, /vercel/path0/src/lib/offlineStorage.ts, /vercel/path0/src/lib/pricing.ts, /vercel/path0/src/lib/quotaManager.ts, /vercel/path0/src/services/dayPassService.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/poiRepository.ts, /vercel/path0/src/services/premiumGuideService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/dayPassService.ts is dynamically imported by /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/lib/AudioQueueManager.ts but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/DayPassBadge.tsx, /vercel/path0/src/components/DayPassCard.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/hooks/usePredictiveDownload.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/i18n.ts is dynamically imported by /vercel/path0/src/components/AdminDiagnostics.tsx but also statically imported by /vercel/path0/src/components/ApproachBanner.tsx, /vercel/path0/src/components/B2BPartner.tsx, /vercel/path0/src/components/BottomNav.tsx, /vercel/path0/src/components/CameraScreen.tsx, /vercel/path0/src/components/CategoryChips.tsx, /vercel/path0/src/components/EventsScreen.tsx, /vercel/path0/src/components/LoadingQuiz.tsx, /vercel/path0/src/components/MapArea.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/PremiumGuideModal.tsx, /vercel/path0/src/components/PremiumGuideRenderer.tsx, /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/components/RoutePoisModal.tsx, /vercel/path0/src/components/UserProfileSummary.tsx, /vercel/path0/src/components/itinerary/BudgetTable.tsx, /vercel/path0/src/components/itinerary/ItineraryStop.tsx, /vercel/path0/src/components/itinerary/TravelInfo.tsx, /vercel/path0/src/components/poi/PoiAudioPlayer.tsx, /vercel/path0/src/components/poi/PoiExtraDetails.tsx, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/offlineStorage.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx but also statically imported by /vercel/path0/src/App.tsx, /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/ProfileScreen.tsx, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/listeningHistory.ts is dynamically imported by /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/GeofenceAudioGuide.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/services/dayPassService.ts but also statically imported by /vercel/path0/src/components/ProfileScreen.tsx, /vercel/path0/src/services/locationService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/poiRepository.ts is dynamically imported by /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts, /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/components/OfflineMapsTab.tsx, /vercel/path0/src/components/PlanScreen.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/services/audioguideService.ts, /vercel/path0/src/services/enrichmentService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/capacitor/nativeAudioHelper.ts is dynamically imported by /vercel/path0/src/services/locationService.ts but also statically imported by /vercel/path0/src/services/ttsService.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/services/ttsService.ts is dynamically imported by /vercel/path0/src/components/ProfileScreen.tsx but also statically imported by /vercel/path0/src/components/AudioPlayerBanner.tsx, /vercel/path0/src/components/PoiPopupContent.tsx, /vercel/path0/src/components/VisionCardSheet.tsx, /vercel/path0/src/hooks/useWalkingNavigation.ts, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/printScoped.ts is dynamically imported by /vercel/path0/src/components/AppGuide.tsx, /vercel/path0/src/services/premiumGuideService.ts but also statically imported by /vercel/path0/src/components/PlanScreen.tsx, dynamic import will not move module into another chunk.
+[plugin vite:reporter]
+(!) /vercel/path0/src/lib/gamification.ts is dynamically imported by /vercel/path0/src/components/AdminDiagnostics.tsx, /vercel/path0/src/components/PoiDetailSheet.tsx, /vercel/path0/src/lib/listeningHistory.ts but also statically imported by /vercel/path0/src/components/LoadingQuiz.tsx, dynamic import will not move module into another chunk.
+computing gzip size...
+dist/registerSW.js                   0.13 kB
+dist/manifest.webmanifest            0.64 kB
+dist/index.html                      1.10 kB │ gzip:   0.50 kB
+dist/assets/vendor-CIGW-MKW.css     15.61 kB │ gzip:   6.46 kB
+dist/assets/main-CN0K79Fa.css      210.15 kB │ gzip:  30.84 kB
+dist/assets/index-gy_vcTVA.js        0.81 kB │ gzip:   0.48 kB │ map:     0.10 kB
+dist/assets/vendor-6aAXYWVr.js     926.78 kB │ gzip: 273.22 kB │ map: 4,173.39 kB
+dist/assets/main-DKEZQ0lJ.js     1,187.45 kB │ gzip: 320.05 kB │ map: 2,752.00 kB
+✓ built in 9.61s
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+PWA v1.3.0
+mode      generateSW
+precache  15 entries (3994.17 KiB)
+files generated
+dist/sw.js.map
+dist/sw.js
+dist/workbox-7334f08a.js.map
+dist/workbox-7334f08a.js
+Using TypeScript 5.8.3 (local user-provided)
+Using TypeScript 5.8.3 (local user-provided)
+Build Completed in /vercel/output [38s]
+Deploying outputs...
+[2K[1A[2K[G  Production      https://itainta-qqb2j6vht-fabri75715-4892s-projects.vercel.app
+Completing…
+▲ Aliased         https://itainta.vercel.app
+{
+  "status": "ok",
+  "deployment": {
+    "id": "dpl_GZppMn4f4nAepZpY2uaXPdgNDEXZ",
+    "url": "https://itainta-qqb2j6vht-fabri75715-4892s-projects.vercel.app",
+    "inspectorUrl": "https://vercel.com/fabri75715-4892s-projects/itainta/GZppMn4f4nAepZpY2uaXPdgNDEXZ",
+    "readyState": "READY",
+    "target": "production",
+    "deploymentApiUrl": "https://api.vercel.com/v13/deployments/dpl_GZppMn4f4nAepZpY2uaXPdgNDEXZ"
+  },
+  "message": "Deployment itainta-qqb2j6vht-fabri75715-4892s-projects.vercel.app ready.",
+  "next": [
+    {
+      "command": "vercel inspect itainta-qqb2j6vht-fabri75715-4892s-projects.vercel.app",
+      "when": "Inspect deployment"
+    },
+    {
+      "command": "vercel deploy --prod",
+      "when": "Promote to production"
+    }
+  ]
+}
+DEPLOY_EXIT=0

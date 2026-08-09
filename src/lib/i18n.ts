@@ -10,6 +10,22 @@ export const LANGUAGES: Record<Language, { label: string; flag: string }> = {
 };
 
 export const TRANSLATIONS: Record<string, Record<Language, string>> = {
+  // Navigazione a piedi (NavigationOverlay) — prima erano hardcoded in IT
+  nav_calculating: { IT: "Calcolo del percorso…", EN: "Calculating route…", FR: "Calcul de l'itinéraire…", ES: "Calculando la ruta…", RU: "Расчёт маршрута…", ZH: "正在计算路线…" },
+  nav_proceed: { IT: "Prosegui", EN: "Continue", FR: "Continuez", ES: "Continúa", RU: "Продолжайте", ZH: "继续前行" },
+  nav_in: { IT: "tra", EN: "in", FR: "dans", ES: "en", RU: "через", ZH: "还有" },
+  nav_arrived: { IT: "Sei arrivato!", EN: "You've arrived!", FR: "Vous êtes arrivé !", ES: "¡Has llegado!", RU: "Вы прибыли!", ZH: "您已到达！" },
+  nav_arrived_at: { IT: "Sei arrivato a", EN: "You arrived at", FR: "Vous êtes arrivé à", ES: "Has llegado a", RU: "Вы прибыли в", ZH: "您已到达" },
+  nav_next_stop: { IT: "Vai alla prossima tappa", EN: "Go to next stop", FR: "Aller à l'étape suivante", ES: "Ir a la siguiente parada", RU: "К следующей точке", ZH: "前往下一站" },
+  nav_repeat: { IT: "Ripeti istruzione", EN: "Repeat instruction", FR: "Répéter l'instruction", ES: "Repetir instrucción", RU: "Повторить указание", ZH: "重复指令" },
+  nav_stop: { IT: "Ferma navigazione", EN: "Stop navigation", FR: "Arrêter la navigation", ES: "Detener navegación", RU: "Остановить навигацию", ZH: "停止导航" },
+  // Itinerari offline (lista) — prima hardcoded in IT
+  offline_itineraries_title: { IT: "Itinerari Offline", EN: "Offline Itineraries", FR: "Itinéraires hors ligne", ES: "Itinerarios sin conexión", RU: "Офлайн-маршруты", ZH: "离线行程" },
+  offline_saved_count: { IT: "salvati", EN: "saved", FR: "enregistrés", ES: "guardados", RU: "сохранено", ZH: "已保存" },
+  offline_none: { IT: "Nessun itinerario scaricato", EN: "No downloaded itineraries", FR: "Aucun itinéraire téléchargé", ES: "Ningún itinerario descargado", RU: "Нет загруженных маршрутов", ZH: "没有已下载的行程" },
+  offline_none_hint: { IT: "Usa il bottone 'Offline' dentro un itinerario generato", EN: "Use the 'Offline' button inside a generated itinerary", FR: "Utilisez le bouton « Hors ligne » dans un itinéraire généré", ES: "Usa el botón 'Sin conexión' dentro de un itinerario generado", RU: "Нажмите «Офлайн» внутри созданного маршрута", ZH: "在已生成的行程中使用“离线”按钮" },
+  offline_saved_on: { IT: "Salvato il:", EN: "Saved on:", FR: "Enregistré le :", ES: "Guardado el:", RU: "Сохранено:", ZH: "保存于：" },
+  offline_open: { IT: "Apri Offline", EN: "Open Offline", FR: "Ouvrir hors ligne", ES: "Abrir sin conexión", RU: "Открыть офлайн", ZH: "离线打开" },
   // Navigation & Core Tabs
   explore: {
     IT: "Esplora",
@@ -940,14 +956,6 @@ export const TRANSLATIONS: Record<string, Record<Language, string>> = {
     ES: "Buscar",
     RU: "Поиск",
     ZH: "定位"
-  },
-  searching: {
-    IT: "Sto cercando...",
-    EN: "Searching...",
-    FR: "Recherche...",
-    ES: "Buscando...",
-    RU: "Поиск...",
-    ZH: "定位中..."
   },
   use_current_location: {
     IT: "Usa la mia posizione attuale",
@@ -3242,6 +3250,591 @@ export const TRANSLATIONS: Record<string, Record<Language, string>> = {
     ES: "Adelante 10s",
     RU: "Вперед 10с",
     ZH: "快进10秒"
+  },
+
+  // ── Modalità 3 (Raggio) e 4 (Swip) ───────────────────────────────────
+  // Prima erano stringhe hardcoded `language === 'IT' ? ... : ...`: chi usava
+  // FR/ES/RU/ZH si trovava mezza schermata in inglese e mezza in italiano.
+  radius_mode: {
+    IT: "Raggio", EN: "Radius", FR: "Rayon", ES: "Radio", RU: "Радиус", ZH: "半径探索"
+  },
+  radius_mode_desc: {
+    IT: "Scegli base e raggio per 3 alternative",
+    EN: "Choose base, radius for 3 options",
+    FR: "Choisissez une base et un rayon pour 3 options",
+    ES: "Elige base y radio para 3 opciones",
+    RU: "Выберите базу и радиус для 3 вариантов",
+    ZH: "选择出发地和半径，获取 3 个方案"
+  },
+  swip_mode: {
+    IT: "Swip", EN: "Swip", FR: "Swip", ES: "Swip", RU: "Swip", ZH: "滑动选择"
+  },
+  swip_mode_desc: {
+    IT: "Scorri e scegli le attrazioni",
+    EN: "Swipe to choose attractions",
+    FR: "Balayez pour choisir les attractions",
+    ES: "Desliza y elige las atracciones",
+    RU: "Свайпайте и выбирайте достопримечательности",
+    ZH: "滑动卡片挑选景点"
+  },
+  swip_subtitle: {
+    IT: "Scegli le attrazioni che ti piacciono",
+    EN: "Choose attractions you like",
+    FR: "Choisissez les attractions qui vous plaisent",
+    ES: "Elige las atracciones que te gustan",
+    RU: "Выберите понравившиеся достопримечательности",
+    ZH: "挑选您喜欢的景点"
+  },
+  attraction_types: {
+    IT: "Tipo di Attrazioni", EN: "Attraction Types", FR: "Types d'attractions",
+    ES: "Tipos de atracciones", RU: "Типы достопримечательностей", ZH: "景点类型"
+  },
+  start_swip: {
+    IT: "Inizia lo Swip!", EN: "Start Swip!", FR: "Commencer le Swip !",
+    ES: "¡Empieza el Swip!", RU: "Начать Swip!", ZH: "开始滑动！"
+  },
+  loading_attractions: {
+    IT: "Carico le attrazioni...", EN: "Loading attractions...",
+    FR: "Chargement des attractions...", ES: "Cargando atracciones...",
+    RU: "Загрузка достопримечательностей...", ZH: "正在加载景点..."
+  },
+  no_attractions_found: {
+    IT: "Nessuna attrazione trovata", EN: "No attractions found",
+    FR: "Aucune attraction trouvée", ES: "No se encontraron atracciones",
+    RU: "Достопримечательности не найдены", ZH: "未找到景点"
+  },
+  try_again: {
+    IT: "Riprova", EN: "Try Again", FR: "Réessayer", ES: "Reintentar",
+    RU: "Повторить", ZH: "重试"
+  },
+  seen_all_attractions: {
+    IT: "Hai visto tutte le attrazioni!", EN: "You've seen all attractions!",
+    FR: "Vous avez vu toutes les attractions !", ES: "¡Has visto todas las atracciones!",
+    RU: "Вы просмотрели все достопримечательности!", ZH: "您已浏览完所有景点！"
+  },
+  stops_selected: {
+    IT: "tappe selezionate", EN: "stops selected", FR: "étapes sélectionnées",
+    ES: "paradas seleccionadas", RU: "остановок выбрано", ZH: "个已选行程点"
+  },
+  review_stops: {
+    IT: "Rivedi le Tappe", EN: "Review Stops", FR: "Revoir les étapes",
+    ES: "Revisar paradas", RU: "Проверить остановки", ZH: "查看行程点"
+  },
+  review_stops_subtitle: {
+    IT: "Rimuovi o sostituisci prima di generare",
+    EN: "Remove or replace before generating",
+    FR: "Supprimez ou remplacez avant de générer",
+    ES: "Elimina o sustituye antes de generar",
+    RU: "Удалите или замените перед генерацией",
+    ZH: "生成前可删除或替换"
+  },
+  start_over: {
+    IT: "Ricomincia", EN: "Start Over", FR: "Recommencer", ES: "Empezar de nuevo",
+    RU: "Начать заново", ZH: "重新开始"
+  },
+  undo_last: {
+    IT: "Annulla", EN: "Undo", FR: "Annuler", ES: "Deshacer", RU: "Отменить", ZH: "撤销"
+  },
+  no_stops_selected: {
+    IT: "Nessuna tappa selezionata", EN: "No stops selected",
+    FR: "Aucune étape sélectionnée", ES: "Ninguna parada seleccionada",
+    RU: "Остановки не выбраны", ZH: "未选择行程点"
+  },
+  back_to_swip: {
+    IT: "Torna allo Swip", EN: "Back to Swip", FR: "Retour au Swip",
+    ES: "Volver al Swip", RU: "Назад к Swip", ZH: "返回滑动"
+  },
+  selected_label: {
+    IT: "Selezionati", EN: "Selected", FR: "Sélectionnés", ES: "Seleccionados",
+    RU: "Выбрано", ZH: "已选择"
+  },
+  choose_alternative: {
+    IT: "Scegli un'alternativa", EN: "Choose an alternative",
+    FR: "Choisissez une alternative", ES: "Elige una alternativa",
+    RU: "Выберите альтернативу", ZH: "选择替代项"
+  },
+  no_alternatives: {
+    IT: "Nessuna alternativa disponibile", EN: "No alternatives available",
+    FR: "Aucune alternative disponible", ES: "No hay alternativas disponibles",
+    RU: "Альтернатив нет", ZH: "无可用替代项"
+  },
+  use_alternative: {
+    IT: "Usa", EN: "Use", FR: "Utiliser", ES: "Usar", RU: "Выбрать", ZH: "使用"
+  },
+  replace_action: {
+    IT: "Sostituisci", EN: "Replace", FR: "Remplacer", ES: "Sustituir",
+    RU: "Заменить", ZH: "替换"
+  },
+  remove_action: {
+    IT: "Rimuovi", EN: "Remove", FR: "Supprimer", ES: "Eliminar",
+    RU: "Удалить", ZH: "移除"
+  },
+  generate_itinerary_with: {
+    IT: "Genera Itinerario con", EN: "Generate Itinerary with",
+    FR: "Générer l'itinéraire avec", ES: "Generar itinerario con",
+    RU: "Создать маршрут из", ZH: "生成行程，包含"
+  },
+  stops_word: {
+    IT: "tappe", EN: "stops", FR: "étapes", ES: "paradas", RU: "остановок", ZH: "个行程点"
+  },
+  generate_3_more: {
+    IT: "Genera altre 3 idee", EN: "Generate 3 more ideas",
+    FR: "Générer 3 autres idées", ES: "Generar 3 ideas más",
+    RU: "Ещё 3 идеи", ZH: "再生成 3 个方案"
+  },
+  saved_trips: {
+    IT: "Viaggi salvati", EN: "Saved trips", FR: "Voyages enregistrés",
+    ES: "Viajes guardados", RU: "Сохранённые поездки", ZH: "已保存的行程"
+  },
+  no_internet: {
+    IT: "Senza internet", EN: "No internet", FR: "Sans internet",
+    ES: "Sin internet", RU: "Без интернета", ZH: "无需联网"
+  },
+
+  // ── Impostazioni avanzate (condivise dalle 4 modalità) ────────────────
+  include_events: {
+    IT: "Includi Eventi Locali", EN: "Include Local Events",
+    FR: "Inclure les événements locaux", ES: "Incluir eventos locales",
+    RU: "Включить местные события", ZH: "包含本地活动"
+  },
+  include_events_desc: {
+    IT: "Concerti, sport, fiere nelle vicinanze",
+    EN: "Concerts, sports and fairs nearby",
+    FR: "Concerts, sports et foires à proximité",
+    ES: "Conciertos, deportes y ferias cercanas",
+    RU: "Концерты, спорт и ярмарки поблизости",
+    ZH: "附近的音乐会、体育赛事与展会"
+  },
+  include_tours: {
+    IT: "Includi Tour e Attività", EN: "Include Tours & Activities",
+    FR: "Inclure visites et activités", ES: "Incluir tours y actividades",
+    RU: "Включить туры и активности", ZH: "包含旅游团与活动"
+  },
+  include_tours_desc: {
+    IT: "Esperienze e biglietti dai partner",
+    EN: "Experiences and tickets from partners",
+    FR: "Expériences et billets des partenaires",
+    ES: "Experiencias y entradas de socios",
+    RU: "Впечатления и билеты от партнёров",
+    ZH: "来自合作伙伴的体验与门票"
+  },
+  budget_label: {
+    IT: "Budget", EN: "Budget", FR: "Budget", ES: "Presupuesto", RU: "Бюджет", ZH: "预算"
+  },
+  budget_economico: {
+    IT: "Economico", EN: "Budget", FR: "Économique", ES: "Económico", RU: "Экономный", ZH: "经济型"
+  },
+  budget_standard: {
+    IT: "Standard", EN: "Standard", FR: "Standard", ES: "Estándar", RU: "Стандартный", ZH: "标准型"
+  },
+  budget_lusso: {
+    IT: "Lusso", EN: "Luxury", FR: "Luxe", ES: "Lujo", RU: "Люкс", ZH: "豪华型"
+  },
+  travelers_label: {
+    IT: "Viaggiatori", EN: "Travellers", FR: "Voyageurs", ES: "Viajeros",
+    RU: "Путешественники", ZH: "出行人数"
+  },
+  travelers_solo: {
+    IT: "Solo", EN: "Solo", FR: "Solo", ES: "Solo", RU: "Один", ZH: "单人"
+  },
+  travelers_coppia: {
+    IT: "Coppia", EN: "Couple", FR: "Couple", ES: "Pareja", RU: "Пара", ZH: "情侣"
+  },
+  travelers_famiglia: {
+    IT: "Famiglia", EN: "Family", FR: "Famille", ES: "Familia", RU: "Семья", ZH: "家庭"
+  },
+  travelers_gruppo: {
+    IT: "Gruppo", EN: "Group", FR: "Groupe", ES: "Grupo", RU: "Группа", ZH: "团体"
+  },
+  pace_label: {
+    IT: "Ritmo", EN: "Pace", FR: "Rythme", ES: "Ritmo", RU: "Темп", ZH: "节奏"
+  },
+  pace_rilassato: {
+    IT: "Rilassato", EN: "Relaxed", FR: "Détendu", ES: "Relajado", RU: "Расслабленный", ZH: "轻松"
+  },
+  pace_standard: {
+    IT: "Standard", EN: "Standard", FR: "Standard", ES: "Estándar", RU: "Стандартный", ZH: "标准"
+  },
+  pace_intenso: {
+    IT: "Intenso", EN: "Intense", FR: "Intense", ES: "Intenso", RU: "Насыщенный", ZH: "紧凑"
+  },
+  guide_label: {
+    IT: "Guida", EN: "Guide", FR: "Guide", ES: "Guía", RU: "Гид", ZH: "导览员"
+  },
+  guide_nicky: {
+    IT: "Nicky (Locale)", EN: "Nicky (Local)", FR: "Nicky (Local)",
+    ES: "Nicky (Local)", RU: "Ники (местный)", ZH: "Nicky（本地向导）"
+  },
+  guide_dante: {
+    IT: "Dante (Storico)", EN: "Dante (Historian)", FR: "Dante (Historien)",
+    ES: "Dante (Historiador)", RU: "Данте (историк)", ZH: "Dante（历史学家）"
+  },
+  guide_entrambi: {
+    IT: "Entrambi", EN: "Both", FR: "Les deux", ES: "Ambos", RU: "Оба", ZH: "两者"
+  },
+
+  // ── Mesi (le select erano hardcoded in italiano in tutte le lingue) ────
+  month_any: {
+    IT: "Indifferente", EN: "Any", FR: "Peu importe", ES: "Cualquiera",
+    RU: "Любой", ZH: "不限"
+  },
+  month_1:  { IT: "Gennaio",   EN: "January",   FR: "Janvier",   ES: "Enero",      RU: "Январь",   ZH: "一月" },
+  month_2:  { IT: "Febbraio",  EN: "February",  FR: "Février",   ES: "Febrero",    RU: "Февраль",  ZH: "二月" },
+  month_3:  { IT: "Marzo",     EN: "March",     FR: "Mars",      ES: "Marzo",      RU: "Март",     ZH: "三月" },
+  month_4:  { IT: "Aprile",    EN: "April",     FR: "Avril",     ES: "Abril",      RU: "Апрель",   ZH: "四月" },
+  month_5:  { IT: "Maggio",    EN: "May",       FR: "Mai",       ES: "Mayo",       RU: "Май",      ZH: "五月" },
+  month_6:  { IT: "Giugno",    EN: "June",      FR: "Juin",      ES: "Junio",      RU: "Июнь",     ZH: "六月" },
+  month_7:  { IT: "Luglio",    EN: "July",      FR: "Juillet",   ES: "Julio",      RU: "Июль",     ZH: "七月" },
+  month_8:  { IT: "Agosto",    EN: "August",    FR: "Août",      ES: "Agosto",     RU: "Август",   ZH: "八月" },
+  month_9:  { IT: "Settembre", EN: "September", FR: "Septembre", ES: "Septiembre", RU: "Сентябрь", ZH: "九月" },
+  month_10: { IT: "Ottobre",   EN: "October",   FR: "Octobre",   ES: "Octubre",    RU: "Октябрь",  ZH: "十月" },
+  month_11: { IT: "Novembre",  EN: "November",  FR: "Novembre",  ES: "Noviembre",  RU: "Ноябрь",   ZH: "十一月" },
+  month_12: { IT: "Dicembre",  EN: "December",  FR: "Décembre",  ES: "Diciembre",  RU: "Декабрь",  ZH: "十二月" },
+
+  // ── Interessi (form_c) ────────────────────────────────────────────────
+  interest_arte: {
+    IT: "Arte & Cultura", EN: "Art & Culture", FR: "Art et culture",
+    ES: "Arte y cultura", RU: "Искусство и культура", ZH: "艺术与文化"
+  },
+  interest_famiglia: {
+    IT: "Famiglie", EN: "Families", FR: "Familles", ES: "Familias", RU: "Для семьи", ZH: "亲子"
+  },
+  interest_enogastronomia: {
+    IT: "Enogastronomia", EN: "Food & Wine", FR: "Gastronomie", ES: "Enogastronomía",
+    RU: "Гастрономия", ZH: "美食与美酒"
+  },
+  interest_mare: {
+    IT: "Mare", EN: "Sea", FR: "Mer", ES: "Mar", RU: "Море", ZH: "海滨"
+  },
+  interest_montagna: {
+    IT: "Montagna", EN: "Mountains", FR: "Montagne", ES: "Montaña", RU: "Горы", ZH: "山地"
+  },
+  interest_natura: {
+    IT: "Natura", EN: "Nature", FR: "Nature", ES: "Naturaleza", RU: "Природа", ZH: "自然"
+  },
+  interest_relax: {
+    IT: "Relax", EN: "Relax", FR: "Détente", ES: "Relax", RU: "Отдых", ZH: "休闲"
+  },
+  interest_avventura: {
+    IT: "Avventura", EN: "Adventure", FR: "Aventure", ES: "Aventura", RU: "Приключения", ZH: "探险"
+  },
+
+  // ── Categorie attrazioni (tinder_form) ────────────────────────────────
+  cat_musei: {
+    IT: "Musei", EN: "Museums", FR: "Musées", ES: "Museos", RU: "Музеи", ZH: "博物馆"
+  },
+  cat_monumenti: {
+    IT: "Monumenti", EN: "Monuments", FR: "Monuments", ES: "Monumentos",
+    RU: "Памятники", ZH: "古迹"
+  },
+  cat_chiese: {
+    IT: "Chiese", EN: "Churches", FR: "Églises", ES: "Iglesias", RU: "Церкви", ZH: "教堂"
+  },
+  cat_attrazioni: {
+    IT: "Attrazioni", EN: "Attractions", FR: "Attractions", ES: "Atracciones",
+    RU: "Достопримечательности", ZH: "景点"
+  },
+  cat_gastronomia: {
+    IT: "Gastronomia", EN: "Food", FR: "Gastronomie", ES: "Gastronomía",
+    RU: "Гастрономия", ZH: "美食"
+  },
+  cat_natura: {
+    IT: "Natura", EN: "Nature", FR: "Nature", ES: "Naturaleza", RU: "Природа", ZH: "自然"
+  },
+  cat_shopping: {
+    IT: "Shopping", EN: "Shopping", FR: "Shopping", ES: "Compras", RU: "Шопинг", ZH: "购物"
+  },
+
+  // ── Badge e azioni sulle tappe ────────────────────────────────────────
+  badge_visited: {
+    IT: "Visitato", EN: "Visited", FR: "Visité", ES: "Visitado", RU: "Посещено", ZH: "已到访"
+  },
+  badge_verified: {
+    IT: "Verificata", EN: "Verified", FR: "Vérifiée", ES: "Verificada",
+    RU: "Проверено", ZH: "已核实"
+  },
+  badge_to_verify: {
+    IT: "Da verificare", EN: "To verify", FR: "À vérifier", ES: "Por verificar",
+    RU: "Требует проверки", ZH: "待核实"
+  },
+  badge_verified_tooltip: {
+    IT: "Tappa confermata dalla verifica AI incrociata",
+    EN: "Stop confirmed by cross-checked AI verification",
+    FR: "Étape confirmée par vérification croisée de l'IA",
+    ES: "Parada confirmada por verificación cruzada de IA",
+    RU: "Остановка подтверждена перекрёстной AI-проверкой",
+    ZH: "该行程点已通过 AI 交叉核实"
+  },
+  source_label: {
+    IT: "Fonte", EN: "Source", FR: "Source", ES: "Fuente", RU: "Источник", ZH: "来源"
+  },
+  buy_see_tour: {
+    IT: "Acquista / Vedi Tour", EN: "Book / View Tour", FR: "Réserver / Voir le tour",
+    ES: "Reservar / Ver tour", RU: "Купить / Посмотреть тур", ZH: "购买 / 查看行程"
+  },
+  move_up: {
+    IT: "Sposta su", EN: "Move up", FR: "Monter", ES: "Subir", RU: "Вверх", ZH: "上移"
+  },
+  move_down: {
+    IT: "Sposta giù", EN: "Move down", FR: "Descendre", ES: "Bajar", RU: "Вниз", ZH: "下移"
+  },
+  lock_stop: {
+    IT: "Blocca tappa (non verrà cambiata rigenerando)",
+    EN: "Lock stop (kept when regenerating)",
+    FR: "Verrouiller l'étape (conservée à la régénération)",
+    ES: "Bloquear parada (se mantiene al regenerar)",
+    RU: "Закрепить остановку (сохранится при повторной генерации)",
+    ZH: "锁定行程点（重新生成时保留）"
+  },
+  confirm_delete_stop: {
+    IT: "Vuoi eliminare questa tappa dall'itinerario?",
+    EN: "Delete this stop from the itinerary?",
+    FR: "Supprimer cette étape de l'itinéraire ?",
+    ES: "¿Eliminar esta parada del itinerario?",
+    RU: "Удалить эту остановку из маршрута?",
+    ZH: "确定从行程中删除该点吗？"
+  },
+  suggest_with_ai: {
+    IT: "Suggerisci con AI", EN: "Suggest with AI", FR: "Suggérer avec l'IA",
+    ES: "Sugerir con IA", RU: "Предложить с ИИ", ZH: "用 AI 推荐"
+  },
+  save_btn: {
+    IT: "Salva", EN: "Save", FR: "Enregistrer", ES: "Guardar", RU: "Сохранить", ZH: "保存"
+  },
+  stop_type_visita: {
+    IT: "Azione/Visita", EN: "Activity/Visit", FR: "Activité/Visite",
+    ES: "Actividad/Visita", RU: "Активность/Посещение", ZH: "活动/参观"
+  },
+  stop_type_ristorante: {
+    IT: "Ristorante", EN: "Restaurant", FR: "Restaurant", ES: "Restaurante",
+    RU: "Ресторан", ZH: "餐厅"
+  },
+  stop_type_spostamento: {
+    IT: "Spostamento", EN: "Transfer", FR: "Déplacement", ES: "Traslado",
+    RU: "Переезд", ZH: "交通"
+  },
+  premium_experiences: {
+    IT: "Esperienze Premium consigliate", EN: "Recommended Premium Experiences",
+    FR: "Expériences premium recommandées", ES: "Experiencias premium recomendadas",
+    RU: "Рекомендуемые премиум-впечатления", ZH: "推荐的精选体验"
+  },
+
+  // ── Feedback / errori (sostituiscono gli alert() nativi) ──────────────
+  err_no_destination: {
+    IT: "Inserisci almeno una destinazione.", EN: "Enter at least one destination.",
+    FR: "Saisissez au moins une destination.", ES: "Introduce al menos un destino.",
+    RU: "Укажите хотя бы один пункт назначения.", ZH: "请至少输入一个目的地。"
+  },
+  err_no_base: {
+    IT: "Inserisci una città di partenza.", EN: "Enter a starting city.",
+    FR: "Saisissez une ville de départ.", ES: "Introduce una ciudad de partida.",
+    RU: "Укажите город отправления.", ZH: "请输入出发城市。"
+  },
+  err_valid_destination: {
+    IT: "Inserisci una destinazione valida (almeno 3 caratteri).",
+    EN: "Enter a valid destination (at least 3 characters).",
+    FR: "Saisissez une destination valide (au moins 3 caractères).",
+    ES: "Introduce un destino válido (mínimo 3 caracteres).",
+    RU: "Введите корректный пункт назначения (не менее 3 символов).",
+    ZH: "请输入有效目的地（至少 3 个字符）。"
+  },
+  err_no_favorites: {
+    IT: "Seleziona almeno un luogo dai preferiti.",
+    EN: "Select at least one saved place.",
+    FR: "Sélectionnez au moins un lieu enregistré.",
+    ES: "Selecciona al menos un lugar guardado.",
+    RU: "Выберите хотя бы одно сохранённое место.",
+    ZH: "请至少选择一个收藏地点。"
+  },
+  err_no_liked: {
+    IT: "Seleziona almeno un'attrazione col cuore.",
+    EN: "Select at least one attraction with the heart.",
+    FR: "Sélectionnez au moins une attraction avec le cœur.",
+    ES: "Selecciona al menos una atracción con el corazón.",
+    RU: "Отметьте сердечком хотя бы одну достопримечательность.",
+    ZH: "请用爱心至少选择一个景点。"
+  },
+  err_insufficient_credits: {
+    IT: "Crediti insufficienti. Visita lo store per ricaricare.",
+    EN: "Not enough credits. Visit the store to top up.",
+    FR: "Crédits insuffisants. Visitez la boutique pour recharger.",
+    ES: "Créditos insuficientes. Visita la tienda para recargar.",
+    RU: "Недостаточно кредитов. Пополните в магазине.",
+    ZH: "点数不足，请前往商店充值。"
+  },
+  err_generation_refunded: {
+    IT: "Generazione non riuscita. I crediti ti sono stati restituiti.",
+    EN: "Generation failed. Your credits have been refunded.",
+    FR: "Échec de la génération. Vos crédits ont été remboursés.",
+    ES: "Error en la generación. Se te han devuelto los créditos.",
+    RU: "Ошибка генерации. Кредиты возвращены.",
+    ZH: "生成失败，点数已退还。"
+  },
+  err_no_alternatives: {
+    IT: "Nessuna alternativa trovata. Riprova con un raggio più ampio.",
+    EN: "No alternatives found. Try a wider radius.",
+    FR: "Aucune alternative trouvée. Essayez un rayon plus large.",
+    ES: "No se encontraron alternativas. Prueba un radio mayor.",
+    RU: "Альтернатив не найдено. Попробуйте больший радиус.",
+    ZH: "未找到方案，请尝试更大的半径。"
+  },
+  err_candidates: {
+    IT: "Errore nel recupero delle attrazioni. Riprova.",
+    EN: "Error retrieving attractions. Please try again.",
+    FR: "Erreur lors de la récupération des attractions. Réessayez.",
+    ES: "Error al recuperar las atracciones. Inténtalo de nuevo.",
+    RU: "Ошибка загрузки достопримечательностей. Повторите попытку.",
+    ZH: "获取景点失败，请重试。"
+  },
+  err_location_not_found: {
+    IT: "Località non trovata. Controlla il nome e riprova.",
+    EN: "Location not found. Check the name and try again.",
+    FR: "Lieu introuvable. Vérifiez le nom et réessayez.",
+    ES: "Ubicación no encontrada. Comprueba el nombre e inténtalo de nuevo.",
+    RU: "Место не найдено. Проверьте название и повторите.",
+    ZH: "未找到该地点，请检查名称后重试。"
+  },
+  err_gps_failed: {
+    IT: "Impossibile ottenere la posizione.", EN: "Could not get your location.",
+    FR: "Impossible d'obtenir la position.", ES: "No se pudo obtener la ubicación.",
+    RU: "Не удалось определить местоположение.", ZH: "无法获取您的位置。"
+  },
+  err_end_before_start: {
+    IT: "L'orario di fine deve essere successivo a quello di inizio.",
+    EN: "End time must be later than start time.",
+    FR: "L'heure de fin doit être postérieure à l'heure de début.",
+    ES: "La hora de fin debe ser posterior a la de inicio.",
+    RU: "Время окончания должно быть позже времени начала.",
+    ZH: "结束时间必须晚于开始时间。"
+  },
+  getting_location: {
+    IT: "Rilevamento posizione...", EN: "Getting location...",
+    FR: "Localisation en cours...", ES: "Obteniendo ubicación...",
+    RU: "Определение местоположения...", ZH: "正在定位..."
+  },
+  cache_hit_discount: {
+    IT: "Itinerario pronto dalla nostra libreria: consegna immediata e metà prezzo",
+    EN: "Itinerary ready from our library: instant delivery, half price",
+    FR: "Itinéraire prêt dans notre bibliothèque : livraison immédiate, moitié prix",
+    ES: "Itinerario listo en nuestra biblioteca: entrega inmediata y mitad de precio",
+    RU: "Маршрут уже в нашей библиотеке: мгновенно и за полцены",
+    ZH: "行程已在我们的库中：即时交付，半价"
+  },
+  credits_refunded: {
+    IT: "crediti restituiti", EN: "credits refunded", FR: "crédits remboursés",
+    ES: "créditos devueltos", RU: "кредитов возвращено", ZH: "点数已退还"
+  },
+  library_note: {
+    IT: "Se è già nella nostra libreria, lo ricevi subito a metà prezzo",
+    EN: "If it's already in our library, you get it instantly at half price",
+    FR: "S'il est déjà dans notre bibliothèque, vous l'obtenez aussitôt à moitié prix",
+    ES: "Si ya está en nuestra biblioteca, lo recibes al instante a mitad de precio",
+    RU: "Если он уже в нашей библиотеке, вы получите его сразу за полцены",
+    ZH: "若已在我们的库中，将立即以半价交付"
+  },
+  warn_favorites_spread: {
+    IT: "I luoghi che hai scelto sono molto distanti tra loro",
+    EN: "The places you picked are very far apart",
+    FR: "Les lieux choisis sont très éloignés les uns des autres",
+    ES: "Los lugares que has elegido están muy alejados entre sí",
+    RU: "Выбранные места находятся очень далеко друг от друга",
+    ZH: "您选择的地点彼此相距很远"
+  },
+  warn_continue_anyway: {
+    IT: "Vuoi continuare comunque?", EN: "Continue anyway?",
+    FR: "Continuer quand même ?", ES: "¿Continuar de todos modos?",
+    RU: "Всё равно продолжить?", ZH: "仍要继续吗？"
+  },
+  free_label: {
+    IT: "gratis", EN: "free", FR: "gratuit", ES: "gratis", RU: "бесплатно", ZH: "免费"
+  },
+  credits_label: {
+    IT: "crediti", EN: "credits", FR: "crédits", ES: "créditos", RU: "кредитов", ZH: "点数"
+  },
+  free_replacement_done: {
+    IT: "Sostituzione gratuita effettuata", EN: "Free replacement done",
+    FR: "Remplacement gratuit effectué", ES: "Sustitución gratuita realizada",
+    RU: "Бесплатная замена выполнена", ZH: "已完成免费替换"
+  },
+  remaining_today: {
+    IT: "ancora gratis su questo giorno", EN: "free left on this day",
+    FR: "gratuits restants sur ce jour", ES: "gratis restantes en este día",
+    RU: "бесплатных осталось на этот день", ZH: "该日剩余免费次数"
+  },
+  free_replacements_left: {
+    IT: "sostituzioni gratis", EN: "free replacements",
+    FR: "remplacements gratuits", ES: "sustituciones gratis",
+    RU: "бесплатных замен", ZH: "次免费替换"
+  },
+  read_more: {
+    IT: "Leggi tutto", EN: "Read more", FR: "Lire la suite", ES: "Leer más",
+    RU: "Читать далее", ZH: "展开"
+  },
+  read_less: {
+    IT: "Riduci", EN: "Read less", FR: "Réduire", ES: "Leer menos",
+    RU: "Свернуть", ZH: "收起"
+  },
+  explore_map: {
+    IT: "Esplora la mappa", EN: "Explore the map", FR: "Explorer la carte",
+    ES: "Explorar el mapa", RU: "Открыть карту", ZH: "浏览地图"
+  },
+  add_destination: {
+    IT: "Aggiungi destinazione", EN: "Add destination", FR: "Ajouter une destination",
+    ES: "Añadir destino", RU: "Добавить пункт назначения", ZH: "添加目的地"
+  },
+  searching: {
+    IT: "Ricerca...", EN: "Searching...", FR: "Recherche...", ES: "Buscando...",
+    RU: "Поиск...", ZH: "搜索中..."
+  },
+  no_results: {
+    IT: "Nessun risultato trovato.", EN: "No results found.",
+    FR: "Aucun résultat trouvé.", ES: "No se encontraron resultados.",
+    RU: "Ничего не найдено.", ZH: "未找到结果。"
+  },
+  experience_added: {
+    IT: "Esperienza aggiunta all'itinerario", EN: "Experience added to the itinerary",
+    FR: "Expérience ajoutée à l'itinéraire", ES: "Experiencia añadida al itinerario",
+    RU: "Впечатление добавлено в маршрут", ZH: "体验已加入行程"
+  },
+  event_added: {
+    IT: "Evento aggiunto all'itinerario", EN: "Event added to the itinerary",
+    FR: "Événement ajouté à l'itinéraire", ES: "Evento añadido al itinerario",
+    RU: "Событие добавлено в маршрут", ZH: "活动已加入行程"
+  },
+  err_stop_required_fields: {
+    IT: "Compila almeno il nome della tappa e l'ora.",
+    EN: "Fill in at least the stop name and the time.",
+    FR: "Renseignez au moins le nom de l'étape et l'heure.",
+    ES: "Rellena al menos el nombre de la parada y la hora.",
+    RU: "Укажите хотя бы название остановки и время.",
+    ZH: "请至少填写行程点名称和时间。"
+  },
+  err_delete_itinerary: {
+    IT: "Eliminazione non riuscita. Riprova.", EN: "Deletion failed. Please try again.",
+    FR: "Échec de la suppression. Réessayez.", ES: "Error al eliminar. Inténtalo de nuevo.",
+    RU: "Не удалось удалить. Повторите попытку.", ZH: "删除失败，请重试。"
+  },
+  err_tts_unsupported: {
+    IT: "Sintesi vocale non supportata su questo browser.",
+    EN: "Speech synthesis is not supported in this browser.",
+    FR: "La synthèse vocale n'est pas prise en charge par ce navigateur.",
+    ES: "Este navegador no admite la síntesis de voz.",
+    RU: "Синтез речи не поддерживается этим браузером.",
+    ZH: "此浏览器不支持语音合成。"
+  },
+  close: {
+    IT: "Chiudi", EN: "Close", FR: "Fermer", ES: "Cerrar", RU: "Закрыть", ZH: "关闭"
+  },
+  skip: {
+    IT: "Salta", EN: "Skip", FR: "Passer", ES: "Saltar", RU: "Пропустить", ZH: "跳过"
+  },
+  free_no_credits: {
+    IT: "Gratis — paghi solo l'itinerario che scegli",
+    EN: "Free — you only pay for the itinerary you pick",
+    FR: "Gratuit — vous ne payez que l'itinéraire choisi",
+    ES: "Gratis: solo pagas el itinerario que elijas",
+    RU: "Бесплатно — вы платите только за выбранный маршрут",
+    ZH: "免费——仅为您选择的行程付费"
   }
 };
 

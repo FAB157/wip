@@ -27,6 +27,8 @@ export function buildOverpassQuery(lat: number, lon: number, radius: number): st
   nwr["amenity"="place_of_worship"]${around};
   nwr["amenity"~"^(restaurant|cafe|bar|pub|pharmacy|drinking_water|hospital|toilets|marketplace)$"]${around};
   nwr["leisure"~"^(park|playground)$"]${around};
+  nwr["place"="square"]${around};
+  nwr["highway"="pedestrian"]["area"="yes"]${around};
   nwr["railway"="station"]${around};
   nwr["highway"="motorway_junction"]${around};
   nwr["craft"]${around};

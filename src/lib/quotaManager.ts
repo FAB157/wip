@@ -342,9 +342,15 @@ export const checkUserQuota = async (
  * Increments the user's specific quota for today (upsert +1)
  */
 export const incrementQuota = async (
-  userId: string = "mock-user-id", 
+  userId: string = "mock-user-id",
   featureType: FeatureType
 ): Promise<void> => {
+  // DEPRECATO — NO-OP. I contatori d'uso (*_used) sono ora scritti solo dal
+  // server (checkAndIncrementQuota, autorità unica). Incrementarli anche dal
+  // client causava DOPPIO CONTEGGIO (il tetto reale di 500 audioguide/giorno
+  // si dimezzava) e, con la protezione DB su *_used (2026-08-09), lancerebbe
+  // un'eccezione RLS. La logica storica resta sotto solo per riferimento.
+  return;
   try {
     const { data: quotas, error } = await supabase
       .from('user_quotas')

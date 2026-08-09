@@ -68,26 +68,25 @@ export default function RoutePoisModal({
       setSuggestions([]);
       return;
     }
-    const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!token) return;
     const abortCtrl = new AbortController();
     abortRef.current?.abort();
     abortRef.current = abortCtrl;
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(customQuery)}.json` +
-          `?access_token=${token}&language=${language.toLowerCase()}&limit=5`,
-          { signal: abortCtrl.signal }
-        );
+        // Proxy server-side (/api/geocode): il token Mapbox non sta più nel
+        // bundle client. `types` allargati per accettare indirizzi civici.
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(customQuery)}`
+          + `&lang=${language.toLowerCase()}&limit=5&types=address,poi,place,locality,neighborhood`
+        ), { signal: abortCtrl.signal });
         if (!res.ok) return;
         const data = await res.json();
         if (abortCtrl.signal.aborted) return;
         setSuggestions((data.features || []).map((f: any) => ({
           id: f.id,
-          description: f.place_name,
-          lat: f.center[1],
-          lon: f.center[0],
+          description: f.description,
+          lat: f.lat,
+          lon: f.lon,
         })));
       } catch { /* abort o rete: ignora */ }
     }, 600);

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import CreditConfirmationModal from './CreditConfirmationModal';
+import { notify } from '../lib/toast';
 import ShopScreen from './ShopScreen';
 import { PRICING_LIST, getWalletBalance, consumeCredits, refundCredits } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
@@ -355,10 +356,10 @@ export default function PoiDetailSheet({
       setShowReportModal(false);
       setReportType('Informazioni errate');
       setReportDetails('');
-      alert('Segnalazione inviata con successo. Grazie per il tuo aiuto!');
+      notify('Segnalazione inviata con successo. Grazie per il tuo aiuto!', 'success');
     } catch (e) {
       console.error('Errore invio segnalazione:', e);
-      alert('Si è verificato un errore durante l\'invio della segnalazione.');
+      notify('Si è verificato un errore durante l\'invio della segnalazione.');
     } finally {
       setIsReporting(false);
     }
@@ -828,7 +829,7 @@ export default function PoiDetailSheet({
 
                 const payRes = await consumeCredits(currentUserId, PRICING_LIST.poi_detail);
                 if (!payRes) {
-                  alert("Crediti insufficienti. Visita lo store per ricaricare.");
+                  notify("Crediti insufficienti. Visita lo store per ricaricare.");
                   setIsLoading(false);
                   processedRef.current = "";
                   return;
@@ -1186,13 +1187,13 @@ export default function PoiDetailSheet({
       const res = await playOfflineGuide(String(poi?.id));
       if (!res?.ok) {
         if (res?.reason === 'insufficient_credits') {
-          alert(
+          notify(
             `Crediti insufficienti per l'ascolto offline` +
             (typeof res.remaining === 'number' ? ` (disponibili: ${res.remaining})` : '') +
             `. Ricarica quando torni online, o attiva il Day Pass prima di partire.`
           );
         } else {
-          alert('Audioguida non disponibile offline per questo luogo. Scarica il pacchetto della zona dalla tab Mappe Offline.');
+          notify('Audioguida non disponibile offline per questo luogo. Scarica il pacchetto della zona dalla tab Mappe Offline.');
         }
       }
       return;
@@ -1259,12 +1260,12 @@ export default function PoiDetailSheet({
           } else {
             // Errore tecnico di riproduzione: MAI il modale crediti a chi ha
             // il pass (il contatore non è stato consumato).
-            alert(language === 'IT' ? 'Riproduzione non riuscita. Riprova.' : 'Playback failed. Please try again.');
+            notify(language === 'IT' ? 'Riproduzione non riuscita. Riprova.' : 'Playback failed. Please try again.');
           }
           return;
         } else {
           // Contenuti non ancora pronti: niente paywall a chi ha il pass.
-          alert(language === 'IT'
+          notify(language === 'IT'
             ? 'Contenuti in caricamento, riprova tra un attimo.'
             : 'Content still loading, try again in a moment.');
           return;
@@ -1364,7 +1365,7 @@ export default function PoiDetailSheet({
       console.error("Regeneration error:", error);
       if (autoPlay) {
         // Azione esplicita dell'utente: avvisiamo
-        alert("Si è verificato un errore durante la rigenerazione. Riprova tra qualche istante.");
+        notify("Si è verificato un errore durante la rigenerazione. Riprova tra qualche istante.");
       } else {
         // Auto-rigenerazione in background: fallback elegante sul testo della
         // scheda, così il blocco audioguida non resta mai in caricamento.
@@ -1408,7 +1409,7 @@ export default function PoiDetailSheet({
 
   const handleSaveOfflineAudio = async () => {
     // Offline audio save handled globally if needed
-    alert("Funzione offline aggiornata per gestione globale.");
+    notify("Funzione offline aggiornata per gestione globale.");
   };
 
   const skipTime = (amount: number) => {
@@ -2864,14 +2865,14 @@ export default function PoiDetailSheet({
           const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
           const paid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
           if (!paid) {
-            alert(language === 'IT'
+            notify(language === 'IT'
               ? "Crediti insufficienti. Ricarica dallo shop per continuare."
               : "Not enough credits. Please top up to continue.");
             return;
           }
         } catch (e) {
           console.warn("[PoiDetailSheet] Addebito crediti fallito:", e);
-          alert(language === 'IT'
+          notify(language === 'IT'
             ? "Errore durante l'addebito dei crediti. Riprova."
             : "Error while charging credits. Please try again.");
           return;
@@ -2888,7 +2889,7 @@ export default function PoiDetailSheet({
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
-            alert("Could not generate the audioguide. Your credits have been refunded.");
+            notify("Could not generate the audioguide. Your credits have been refunded.");
           }
           return;
         }
@@ -2902,7 +2903,7 @@ export default function PoiDetailSheet({
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(e => console.error('[Audioguida] Rimborso fallito:', e));
-            alert(language === 'IT'
+            notify(language === 'IT'
               ? "Non è stato possibile riprodurre l'audioguida. I crediti ti sono stati restituiti."
               : "Could not play the audioguide. Your credits have been refunded.");
           }

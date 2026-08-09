@@ -19,6 +19,9 @@
 		A11A2B3C4D5E6F708091000D /* BackgroundPoiManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F708091000E /* BackgroundPoiManager.swift */; };
 		A11A2B3C4D5E6F708091000F /* WipPackageDownloadManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910010 /* WipPackageDownloadManager.swift */; };
 		A11A2B3C4D5E6F7080910011 /* ItaintaBackgroundPoiPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910012 /* ItaintaBackgroundPoiPlugin.swift */; };
+		A11A2B3C4D5E6F7080910013 /* AudioPrefetchManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910014 /* AudioPrefetchManager.swift */; };
+		A11A2B3C4D5E6F7080910015 /* PredictiveTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910016 /* PredictiveTrigger.swift */; };
+		A11A2B3C4D5E6F7080910017 /* TriggerTelemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910018 /* TriggerTelemetry.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -40,6 +43,9 @@
 		A11A2B3C4D5E6F708091000E /* BackgroundPoiManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundPoiManager.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910010 /* WipPackageDownloadManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipPackageDownloadManager.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910012 /* ItaintaBackgroundPoiPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItaintaBackgroundPoiPlugin.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910014 /* AudioPrefetchManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPrefetchManager.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910016 /* PredictiveTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictiveTrigger.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910018 /* TriggerTelemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerTelemetry.swift; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -102,6 +108,9 @@
 				A11A2B3C4D5E6F708091000E /* BackgroundPoiManager.swift */,
 				A11A2B3C4D5E6F7080910010 /* WipPackageDownloadManager.swift */,
 				A11A2B3C4D5E6F7080910012 /* ItaintaBackgroundPoiPlugin.swift */,
+				A11A2B3C4D5E6F7080910014 /* AudioPrefetchManager.swift */,
+				A11A2B3C4D5E6F7080910016 /* PredictiveTrigger.swift */,
+				A11A2B3C4D5E6F7080910018 /* TriggerTelemetry.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -246,6 +255,9 @@
 				A11A2B3C4D5E6F708091000D /* BackgroundPoiManager.swift in Sources */,
 				A11A2B3C4D5E6F708091000F /* WipPackageDownloadManager.swift in Sources */,
 				A11A2B3C4D5E6F7080910011 /* ItaintaBackgroundPoiPlugin.swift in Sources */,
+				A11A2B3C4D5E6F7080910013 /* AudioPrefetchManager.swift in Sources */,
+				A11A2B3C4D5E6F7080910015 /* PredictiveTrigger.swift in Sources */,
+				A11A2B3C4D5E6F7080910017 /* TriggerTelemetry.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

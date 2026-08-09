@@ -41,6 +41,11 @@ enum TriggerState: String, Codable {
     case pending = "PENDING"
     case approachFired = "APPROACH_FIRED"
     case arrivedFired = "ARRIVED_FIRED"
+    /// Superato: il CPA è alle spalle e la distanza cresce. Aggiunto col
+    /// geofencing predittivo — prima l'uscita a 1.5× resettava lo stato ma
+    /// non fermava l'audio, e la voce continuava a raccontare un monumento
+    /// già alle spalle. Stringa allineata a TriggerState.PASSED su Android.
+    case passed = "PASSED"
 }
 
 struct TriggerStateRecord: Codable {

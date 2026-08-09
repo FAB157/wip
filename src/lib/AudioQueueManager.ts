@@ -32,8 +32,21 @@ class AudioQueueManager {
   public currentLanguage: string = 'IT';
   public currentCharacter: GuideCharacter = 'nicky';
 
-  public get activationMode(): 'automatic' | 'manual' {
-    return (localStorage.getItem('wip_activation_mode') as 'automatic' | 'manual') || 'automatic';
+  constructor() {
+    if (typeof window !== 'undefined') {
+      // X del banner di avvicinamento: prima l'evento non aveva alcun
+      // listener e in modalità automatica l'audio partiva comunque.
+      window.addEventListener('wip-poi-exit-manual', (e: Event) => {
+        const poiId = (e as CustomEvent).detail?.poiId;
+        if (poiId) this.dismiss(String(poiId));
+      });
+    }
+  }
+
+  // I valori realmente persistiti dal setup sono 'automatic' | 'semi-automatic'
+  // (guideSettings.ActivationMode): il vecchio tipo 'manual' non esisteva.
+  public get activationMode(): 'automatic' | 'semi-automatic' {
+    return (localStorage.getItem('wip_activation_mode') as 'automatic' | 'semi-automatic') || 'automatic';
   }
 
   public update(poi: GeofencePoi, dist: number, isCar: boolean, alertRadius: number, triggerRadius: number): void {
@@ -128,31 +141,44 @@ class AudioQueueManager {
   }
 
   private async executePlay(item: QueuedPoi) {
-    // CANCELLO PAGAMENTI: prima l'autoplay (e il tasto Ascolta) riproduceva
-    // la guida completa GRATIS, bypassando crediti e Day Pass. Ora: acquisto
-    // pregresso → gratis; Day Pass attivo → scala il contatore; altrimenti
-    // niente audio e si apre la scheda POI col tasto "Ascolta" e il modale
-    // di acquisto da 15 crediti (stessa logica del percorso nativo).
-    try {
-      const { authorizeGuidePlayback } = await import('../services/dayPassService');
-      const auth = await authorizeGuidePlayback(String(item.poi.id));
-      if (!auth.allowed) {
-        item.state = 'trigger_fired';
-        window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
-          detail: { poiId: item.poi.id, poi: item.poi, alreadyPaid: false, autoPlay: false, needsPayment: true }
-        }));
-        return;
+    // CANCELLO PAGAMENTI: acquisto pregresso → gratis; Day Pass attivo →
+    // scala il contatore; altrimenti niente audio e si apre la scheda POI col
+    // modale di acquisto (needsPayment). L'autorizzazione/addebito NON avviene
+    // più qui all'accodamento ma dentro locationService, nel momento esatto in
+    // cui la traccia parte davvero (anche se ha atteso in coda dietro un'altra
+    // guida): prima si pagava una traccia che poteva non partire mai.
+    const authorize = async (): Promise<boolean> => {
+      try {
+        const { authorizeGuidePlayback } = await import('../services/dayPassService');
+        const auth = await authorizeGuidePlayback(String(item.poi.id));
+        if (!auth.allowed) {
+          window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+            detail: { poiId: item.poi.id, poi: item.poi, alreadyPaid: false, autoPlay: false, needsPayment: true }
+          }));
+          return false;
+        }
+        return true;
+      } catch {
+        // Fail-closed: in dubbio niente riproduzione gratuita
+        return false;
       }
-    } catch {
-      // Fail-closed: in dubbio niente riproduzione gratuita
-      item.state = 'trigger_fired';
-      return;
-    }
+    };
 
     const text = await getOrCreateAudioguideText(item.poi, this.currentLanguage, this.currentCharacter);
     if (!text) { this.markPassed(item.poi.id); return; }
 
-    const success = await locationService.playAudio(text, item.poi.name);
+    // poiId e personaggio DEVONO arrivare a playAudio: senza poiId
+    // recordPlaybackStart non scattava → niente markPlayed (il POI
+    // ritriggerava in loop scalando ogni volta il Day Pass) e niente
+    // riga in user_listening_history (l'acquisto non risultava mai).
+    const success = await locationService.playAudio(
+      text,
+      item.poi.name,
+      item.poi.category as any,
+      String(item.poi.id),
+      this.currentCharacter,
+      authorize
+    );
     this.cancelLocalNotification(item.poi.id);
     item.state = success ? 'completed' : 'dismissed';
     this.queue = this.queue.filter(q => q.poi.id !== item.poi.id);
@@ -174,6 +200,16 @@ class AudioQueueManager {
     }
     this.triggerLocalNotification(item.poi, item.distance);
     window.dispatchEvent(new CustomEvent('wip-poi-approach', { detail: item }));
+    // Voce di avviso + init navigazione turn-by-turn (useGeofencing ascolta
+    // 'wip-speak-approach'): l'evento non veniva MAI emesso, quindi su web
+    // l'avviso era muto e le istruzioni di navigazione non partivano.
+    // Solo su web/PWA: su nativo l'avviso lo pronuncia già il servizio
+    // Kotlin/Swift (mai due voci sovrapposte).
+    if (!Capacitor.isNativePlatform()) {
+      window.dispatchEvent(new CustomEvent('wip-speak-approach', {
+        detail: { poi: item.poi, distance: item.distance, isCar: item.isCar }
+      }));
+    }
   }
 
   private fireTrigger(item: QueuedPoi) {
@@ -229,6 +265,20 @@ class AudioQueueManager {
   }
 
   public dequeue(id: string) { this.markPassed(id); }
+
+  /**
+   * Chiusura manuale dal banner (X): il POI resta in coda come 'dismissed'
+   * così update() non lo ri-arma finché non esce dal raggio (con markPassed
+   * lo avrebbe ricreato da zero al tick successivo, alert incluso).
+   */
+  public dismiss(id: string) {
+    const item = this.queue.find(q => q.poi.id === id);
+    if (item && item.state !== 'playing') {
+      item.state = 'dismissed';
+      this.cancelLocalNotification(id);
+      this.processQueue();
+    }
+  }
 
   public getQueue(): QueuedPoi[] { return this.queue; }
 
