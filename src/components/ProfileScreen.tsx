@@ -14,6 +14,7 @@ import AdminPanel from './AdminPanel';
 import ShopScreen from './ShopScreen';
 import UserProfileSummary from './UserProfileSummary';
 import MyVisionTab from './MyVisionTab';
+import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
 import { getUserProfile, UserProfile } from '../lib/quotaManager';
 import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineStorage';
 import { Language, getTranslation, LANGUAGES } from '../lib/i18n';
@@ -113,6 +114,8 @@ const getCardIcon = (poi: any) => {
 
 export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRemovePoi, onClearItinerary, onSelectPoi, defaultLocation, setDefaultLocation, userSession, onSignOut, language, setLanguage }: ProfileScreenProps) {
   const [activeTab, setActiveTab] = useState<'diario' | 'myvision' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'b2b' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
+  // Vista griglia/lista condivisa con tutte le gallerie (My Vision, Diario…)
+  const [galleryView, setGalleryView] = useGalleryView();
   const [savedPois, setSavedPois] = useState<any[]>([]);
   const [savedItineraries, setSavedItineraries] = useState<any[]>([]);
   const [savedPremiumGuides, setSavedPremiumGuides] = useState<any[]>([]);
@@ -151,20 +154,25 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     setTtsTestResults(prev => ({ ...prev, [key]: { status: 'pending' } }));
     try {
       const { azureVoiceName, unlockSpeech } = await import('../services/ttsService');
+      const { postForAudioBlob } = await import('../lib/audioFetch');
       unlockSpeech();
       const voice = azureVoiceName(lang, character);
-      const res = await fetch(getApiUrl('/api/tts/azure'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: TTS_TEST_PHRASES[lang] || TTS_TEST_PHRASES.IT, voice })
-      });
-      if (!res.ok) {
-        let msg = `HTTP ${res.status}`;
-        try { msg += ': ' + ((await res.json())?.error || ''); } catch { /* body non JSON */ }
+      // postForAudioBlob: la fetch patchata da CapacitorHttp restituiva il
+      // corpo binario corrotto su nativo → "audio non valido (0 byte)" su
+      // TUTTE le voci anche con Azure perfettamente funzionante.
+      const { ok, status, blob, errorText } = await postForAudioBlob(
+        getApiUrl('/api/tts/azure'),
+        { text: TTS_TEST_PHRASES[lang] || TTS_TEST_PHRASES.IT, voice }
+      );
+      if (!ok || !blob) {
+        let msg = `HTTP ${status}`;
+        if (errorText) {
+          try { msg += ': ' + (JSON.parse(errorText)?.error || errorText.slice(0, 120)); }
+          catch { msg += ': ' + errorText.slice(0, 120); }
+        }
         setTtsTestResults(prev => ({ ...prev, [key]: { status: 'error', message: `${voice} — ${msg}` } }));
         return false;
       }
-      const blob = await res.blob();
       if (blob.size < 500 || blob.type.includes('json')) {
         setTtsTestResults(prev => ({ ...prev, [key]: { status: 'error', message: `${voice} — audio non valido (${blob.size} byte)` } }));
         return false;
@@ -1167,14 +1175,17 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <div className="flex justify-between items-center px-1">
+              <div className="flex justify-between items-center gap-2 px-1">
                 <h2 className="text-xl font-black text-primary tracking-tight">{getTranslation("my_discoveries", language)}</h2>
-                <div className="text-[11px] font-black text-on-surface-variant/40 uppercase tracking-widest">
-                  {/* Stesso dedup della griglia: la somma secca contava i
-                      doppioni presenti in entrambe le liste */}
-                  {isLoading
-                    ? (getTranslation('updating', language))
-                    : `${itinerary.length + savedPois.filter(s => !itinerary.some(p => String(p.id) === String(s.poi_id ?? s.id))).length} ${getTranslation("places", language)}`}
+                <div className="flex items-center gap-2">
+                  <div className="text-[11px] font-black text-on-surface-variant/40 uppercase tracking-widest">
+                    {/* Stesso dedup della griglia: la somma secca contava i
+                        doppioni presenti in entrambe le liste */}
+                    {isLoading
+                      ? (getTranslation('updating', language))
+                      : `${itinerary.length + savedPois.filter(s => !itinerary.some(p => String(p.id) === String(s.poi_id ?? s.id))).length} ${getTranslation("places", language)}`}
+                  </div>
+                  <GalleryViewToggle view={galleryView} onChange={setGalleryView} />
                 </div>
               </div>
 
@@ -1195,18 +1206,18 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   description={getTranslation("no_gems_desc", language)}
                 />
               ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className={galleryView === 'grid' ? 'grid grid-cols-2 gap-3 md:gap-4' : 'grid grid-cols-1 md:grid-cols-2 gap-4'}>
                     {/* Combinazione di POI da Supabase e POI locali (Sessione) */}
                     {[
-                      ...itinerary.map(p => ({ id: p.id, poi: p })), 
+                      ...itinerary.map(p => ({ id: p.id, poi: p })),
                       ...savedPois
                         .filter(s => !itinerary.some(p => String(p.id) === String(s.poi_id ?? s.id)))
                         .map(s => ({ id: s.poi_id || s.id, poi: s.data || s }))
                     ].map((item, idx) => (
-                      <PoiCard 
-                        key={item.id + idx} 
-                        poi={item.poi} 
-                        onRemove={() => onRemovePoi(item.id)} 
+                      <PoiCard
+                        key={item.id + idx}
+                        poi={item.poi}
+                        onRemove={() => onRemovePoi(item.id)}
                         onClick={() => onSelectPoi?.(item.poi)}
                       />
                     ))}

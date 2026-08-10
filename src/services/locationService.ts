@@ -12,6 +12,7 @@ import type { GeofencePoi } from '../types/poi';
 import { fetchWalkingRoute } from './osrmService';
 import { getMapboxRoute, getRoadDistance, getNextNavInstruction } from '../lib/mapboxRouter';
 import { getApiUrl } from '../lib/api';
+import { postForAudioBlob } from '../lib/audioFetch';
 import { audioQueueManager } from '../lib/AudioQueueManager';
 import { radiiForTransport, resolveTransportMode, getTransportPreference, markPlayed } from '../lib/guideSettings';
 
@@ -75,6 +76,8 @@ class LocationService {
   private currentCharacter: 'nicky' | 'dante' = 'nicky';
   /** Utterance Web Speech del fallback degradato (TTS server irraggiungibile). */
   private fallbackUtterance: SpeechSynthesisUtterance | null = null;
+  /** Timer del progresso stimato per il fallback Web Speech (nessun evento nativo). */
+  private fallbackProgressTimer: ReturnType<typeof setInterval> | null = null;
   /** Guardia anti-rientranza per stopGuideAudio (l'evento wip-audio-stopped
    *  può a sua volta richiamare stopGuideAudio via AudioQueueManager). */
   private isStoppingGuide = false;
@@ -840,13 +843,10 @@ class LocationService {
       // voce restava quella di guideMode (default Nicky) anche selezionando
       // Dante, in tutte le lingue.
       const voice = this.getNeuralVoiceName(this.language, character || this.guideMode);
-      const res = await fetch(getApiUrl('/api/tts/smart'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice })
-      });
-      if (!res.ok) throw new Error(`TTS ${res.status}`);
-      const blob = await res.blob();
+      // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
+      // corrompeva il corpo binario (MP3 → 0 byte, "click a vuoto" su iPhone).
+      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice });
+      if (!ok || !blob) throw new Error(`TTS ${status}`);
       // Un blob vuoto o una risposta JSON scambiata per audio produceva un
       // player "fantasma" con durata 0:00: meglio fallire esplicitamente.
       if (blob.size < 500 || blob.type.includes('json')) {
@@ -899,6 +899,7 @@ class LocationService {
       const finish = () => {
         // Se nel frattempo è partita un'altra traccia, non toccare lo stato.
         if (this.fallbackUtterance !== u) return;
+        if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
         this.fallbackUtterance = null;
         this.handlePlaybackFinished();
       };
@@ -909,6 +910,26 @@ class LocationService {
       window.speechSynthesis.speak(u);
       this.audioState.isPlaying = true;
       this.audioState.isActive = true;
+      // La Web Speech API non espone né durata né posizione: il player
+      // mostrava 00:00/00:00 con la barra ferma per tutta la lettura. Durata
+      // STIMATA (~15 caratteri/secondo alla velocità corrente) e posizione da
+      // timer: approssimate ma oneste, e la barra si muove.
+      const estimatedDuration = Math.max(3, text.length / (15 * (u.rate || 1)));
+      this.audioState.duration = estimatedDuration;
+      this.audioState.currentTime = 0;
+      this.audioState.progress = 0;
+      const startedAt = Date.now();
+      if (this.fallbackProgressTimer) clearInterval(this.fallbackProgressTimer);
+      this.fallbackProgressTimer = setInterval(() => {
+        if (this.fallbackUtterance !== u) {
+          if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
+          return;
+        }
+        const elapsed = (Date.now() - startedAt) / 1000;
+        this.audioState.currentTime = Math.min(elapsed, estimatedDuration);
+        this.audioState.progress = Math.min(100, (elapsed / estimatedDuration) * 100);
+        this.notifyAudioState();
+      }, 500);
       this.notifyAudioState();
       this.recordPlaybackStart().catch(() => {});
       return true;

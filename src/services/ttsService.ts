@@ -11,6 +11,7 @@ import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { getNativeAudioUri } from '../lib/capacitor/nativeAudioHelper';
 import { getApiUrl } from '../lib/api';
+import { postForAudioBlob } from '../lib/audioFetch';
 
 let speechUnlocked = false;
 let activeAudio: HTMLAudioElement | null = null;
@@ -214,17 +215,15 @@ export async function speakAudioguide(
     try {
       // getApiUrl: su app nativa il path relativo punterebbe a localhost e il TTS
       // neurale fallirebbe sempre, degradando a Web Speech.
-      const res = await fetch(getApiUrl('/api/tts/smart'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, voice: azureVoiceName(lang, character) }),
-      });
-      if (res.ok) {
-        const blob = await res.blob();
-
-        // Un MP3 vero non è mai sotto i 500 byte: un 200 con corpo vuoto
-        // (visto in produzione col test voci) non deve arrivare al player
-        // come file muto — si passa alla voce di sistema.
+      // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
+      // corrompeva il corpo binario (MP3 → 0 byte); qui passa dal canale giusto.
+      const { ok, status, blob } = await postForAudioBlob(
+        getApiUrl('/api/tts/smart'),
+        { text, voice: azureVoiceName(lang, character) }
+      );
+      if (ok && blob) {
+        // Un MP3 vero non è mai sotto i 500 byte: un 200 con corpo vuoto non
+        // deve arrivare al player come file muto — si passa alla voce di sistema.
         if (blob.size < 500 || (blob.type || '').includes('json')) {
           throw new Error(`TTS neurale: audio non valido (${blob.size} byte)`);
         }
@@ -265,7 +264,7 @@ export async function speakAudioguide(
         emitAudioState(true, true);
         return;
       }
-      console.warn('[ttsService] TTS neurale non disponibile (HTTP', res.status, ')');
+      console.warn('[ttsService] TTS neurale non disponibile (HTTP', status, ')');
     } catch (e) {
       console.warn('[ttsService] Error in speakAudioguide online neural TTS:', e);
       /* fallthrough al fallback */

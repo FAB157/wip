@@ -37,6 +37,13 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- Documenti dell'app visibili nell'app File (Sull'iPhone → WIP):
+	     senza queste chiavi le foto Vision salvate in Documenti/WIP Vision
+	     esistevano ma l'utente non poteva trovarle da nessuna parte. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>ITAINTA richiede l'accesso alla tua posizione sempre per rilevare monumenti e Gemme vicine mentre cammini o guidi, avvisandoti con l'audioguida anche se il telefono è in tasca.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

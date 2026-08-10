@@ -88,18 +88,14 @@ export default function PredictiveBundleModal({
         if (!audioUrl && details?.summary) {
           setProgress({ current: i, total: pois.length, status: `Generazione voce Premium per ${poi.name}...` });
           try {
-            const res = await fetch(getApiUrl('/api/tts/smart'), {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                text: details.summary,
-                voice: azureVoiceName('IT', guideMode as any)
-              })
+            // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
+            // corrompeva il corpo binario (MP3 → 0 byte nel bundle offline).
+            const { postForAudioBlob } = await import('../lib/audioFetch');
+            const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), {
+              text: details.summary,
+              voice: azureVoiceName('IT', guideMode as any)
             });
-            if (res.ok) {
-              const blob = await res.blob();
-              if (blob.size > 500) audioBlobUrl = URL.createObjectURL(blob);
-            }
+            if (ok && blob && blob.size > 500) audioBlobUrl = URL.createObjectURL(blob);
           } catch (e) {
             console.warn(`Fallita generazione audio per ${poi.name}`);
           }

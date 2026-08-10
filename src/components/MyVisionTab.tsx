@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Camera, Loader2, MapPin, Sparkles, Users } from 'lucide-react';
+import { Camera, Loader2, MapPin, Sparkles, Trash2, Users } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Language } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
 import { resolveVisionPhotoUrl } from '../lib/visionPhotos';
+import { notify } from '../lib/toast';
+import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
 import VisionCardSheet from './VisionCardSheet';
 
 interface MyVisionTabProps {
@@ -27,6 +29,32 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
   const [communityCards, setCommunityCards] = useState<any[] | null>(null);
   const [communityLoading, setCommunityLoading] = useState(false);
   const [openCard, setOpenCard] = useState<any | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [galleryView, setGalleryView] = useGalleryView();
+
+  /** Cancella un PROPRIO scatto dall'album (il POI community eventuale resta). */
+  const deleteCard = async (c: any) => {
+    if (deletingId) return;
+    if (!window.confirm(`Cancellare "${c.name}" dal tuo album? L'operazione non si può annullare.`)) return;
+    setDeletingId(c.id);
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess?.session?.access_token;
+      const res = await fetch(getApiUrl('/api/vision/delete-card'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ cardId: c.id }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'errore');
+      setCards(prev => prev.filter(x => x.id !== c.id));
+      notify('Scatto cancellato dal tuo album.');
+    } catch (e: any) {
+      notify(`Cancellazione non riuscita: ${e?.message || 'riprova'}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const fetchCards = async () => {
     try {
@@ -109,11 +137,59 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
     return acc;
   }, {});
 
+  /** Cestino sovrapposto alla card (solo album personale). */
+  const renderTrash = (c: any) => (
+    <button
+      onClick={(e) => { e.stopPropagation(); deleteCard(c); }}
+      disabled={deletingId === c.id}
+      title="Cancella dal tuo album"
+      className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/45 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-50 z-10"
+    >
+      {deletingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+    </button>
+  );
+
   const renderGrid = (list: any[], isMine: boolean) => (
     <div className="space-y-6">
       {Object.entries(groupByDate(list)).map(([date, items]) => (
         <div key={date}>
           <h4 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
+          {galleryView === 'list' ? (
+            <div className="flex flex-col gap-2">
+              {(items as any[]).map((c: any) => {
+                const photo = isMine ? c._photo : c.published_photo_url;
+                const badge = isMine ? statusBadge(c) : null;
+                return (
+                  <div
+                    key={c.id}
+                    className="relative bg-white rounded-2xl shadow-sm hover:shadow-md transition-all cursor-pointer flex items-center gap-3 p-2 pr-10"
+                    onClick={() => setOpenCard(toSheet(c, photo))}
+                  >
+                    <div className="w-16 h-16 rounded-xl bg-gray-100 overflow-hidden shrink-0">
+                      {photo ? (
+                        <img src={photo} alt={c.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center"><Camera className="w-6 h-6 text-gray-300" /></div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 title={c.name} className="font-black text-gray-900 line-clamp-1 text-sm leading-tight">{c.name}</h4>
+                      <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 mt-0.5">
+                        {c.city && (<><MapPin className="w-2.5 h-2.5" />{c.city} · </>)}
+                        {c.created_at ? new Date(c.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : ''}
+                      </p>
+                      {badge && (
+                        <span className={`inline-block mt-1 px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-wider ${badge.cls}`}>
+                          {badge.label}
+                        </span>
+                      )}
+                    </div>
+                    {isMine && renderTrash(c)}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
           <div className="grid grid-cols-2 gap-3">
             {(items as any[]).map((c: any) => {
               const photo = isMine ? c._photo : c.published_photo_url;
@@ -124,6 +200,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
                   className="group relative bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col"
                   onClick={() => setOpenCard(toSheet(c, photo))}
                 >
+                  {isMine && renderTrash(c)}
                   <div className="relative h-28 shrink-0 bg-gray-100 overflow-hidden">
                     {photo ? (
                       <img
@@ -172,6 +249,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
               );
             })}
           </div>
+          )}
         </div>
       ))}
     </div>
@@ -189,7 +267,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
         <div className="w-11 h-11 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
           <Camera className="w-5 h-5 text-primary" />
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h3 className="font-black text-gray-900 text-sm leading-tight">
             My Vision · {cards.length} {cards.length === 1 ? 'scatto' : 'scatti'}
           </h3>
@@ -197,6 +275,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
             Ogni foto approvata diventa un luogo WIP Community e ti premia in crediti.
           </p>
         </div>
+        <GalleryViewToggle view={galleryView} onChange={setGalleryView} />
       </div>
 
       {/* Sottopagine: il mio album / le Vision (anonime) di tutti */}

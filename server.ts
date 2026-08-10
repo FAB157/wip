@@ -3690,6 +3690,39 @@ function isNameMatching(name1: string, name2: string): boolean {
     }
   });
 
+  // Cancellazione di una PROPRIA vision dall'album (My Vision): via la riga e
+  // le foto private. Se era stata pubblicata, POI community e foto pubblica
+  // restano (sono contenuti della community: li gestisce l'admin).
+  app.post("/api/vision/delete-card", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const { cardId } = req.body || {};
+      if (!cardId) return res.status(400).json({ error: 'cardId mancante' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=id,user_id,photo_url,clean_photo_url`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+      if (String(card.user_id) !== String(userId)) return res.status(403).json({ error: 'not_owner' });
+
+      // Foto private nel bucket (path <uid>/<file>, mai URL): best-effort.
+      for (const p of [card.photo_url, card.clean_photo_url]) {
+        if (p && !String(p).startsWith('http')) {
+          await axios.delete(`${supabaseUrl}/storage/v1/object/vision-photos/${p}`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }).catch(() => {});
+        }
+      }
+      await axios.delete(`${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}`, { headers: svcHeaders });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('[Vision Delete Card] Errore:', e?.message);
+      res.status(500).json({ error: 'delete_failed' });
+    }
+  });
+
   // Modifica di una scheda GIÀ pubblicata: aggiorna vision_cards e, se il POI
   // è community (id 'vision-<card>'), propaga anche alla riga shared_pois.
   // Serve una route dedicata: /review sulle approvate esce con alreadyReviewed.
