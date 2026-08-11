@@ -32,6 +32,7 @@ if ('serviceWorker' in navigator && !window.location.protocol.includes('file')) 
 }
 
 import { ErrorBoundary } from './components/ErrorBoundary';
+import AppLockGate from './components/AppLockGate';
 import { Capacitor } from '@capacitor/core';
 import { Purchases, LOG_LEVEL } from '@revenuecat/purchases-capacitor';
 
@@ -58,7 +59,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <App />
+        {/* Blocco app biometrico opzionale (FaceID/impronta all'avvio) */}
+        <AppLockGate>
+          <App />
+        </AppLockGate>
       </QueryClientProvider>
     </ErrorBoundary>
   </StrictMode>,

@@ -27,6 +27,7 @@ import { downloadGuideAsPdf } from '../services/premiumGuideService';
 import { Download, X, Fingerprint, Lock } from 'lucide-react';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
 import { BIOMETRIC_PREF_KEY, isBiometricPrefEnabled } from './LoginScreen';
+import { APPLOCK_PREF_KEY } from './AppLockGate';
 import { Skeleton } from './SkeletonLoader';
 import { EmptyState } from './EmptyState';
 interface ProfileScreenProps {
@@ -622,6 +623,19 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const [secLoading, setSecLoading] = useState(false);
   // Gli account Google non hanno una password da cambiare
   const isEmailProvider = (userSession?.user?.app_metadata?.provider || 'email') === 'email';
+
+  // Blocco app biometrico all'avvio (FaceID/impronta anche con sessione attiva)
+  const [appLockEnabled, setAppLockEnabled] = useState(() => {
+    try { return localStorage.getItem(APPLOCK_PREF_KEY) === 'true'; } catch { return false; }
+  });
+  const handleToggleAppLock = () => {
+    const next = !appLockEnabled;
+    setAppLockEnabled(next);
+    try { localStorage.setItem(APPLOCK_PREF_KEY, String(next)); } catch { /* storage */ }
+    notify(next
+      ? 'Blocco app attivo: al prossimo avvio servirà impronta o FaceID.'
+      : 'Blocco app disattivato.');
+  };
 
   const handleToggleBiometric = async () => {
     const next = !biometricEnabled;
@@ -2081,6 +2095,25 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       aria-label="Attiva o disattiva lo sblocco biometrico"
                     >
                       <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${biometricEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                )}
+
+                {biometricAvailable && (
+                  <div className="flex items-center justify-between bg-[#f8f5f0] rounded-xl p-3 mb-4">
+                    <div className="flex items-center gap-2">
+                      <Lock className="w-5 h-5 text-primary" />
+                      <div>
+                        <p className="text-sm font-bold text-on-surface">Blocco app all'avvio</p>
+                        <p className="text-[10px] font-bold text-on-surface-variant/60">Richiedi FaceID/impronta a ogni apertura, anche se resti collegato</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleToggleAppLock}
+                      className={`w-12 h-7 rounded-full transition-colors relative ${appLockEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                      aria-label="Attiva o disattiva il blocco app biometrico"
+                    >
+                      <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${appLockEnabled ? 'left-[22px]' : 'left-0.5'}`} />
                     </button>
                   </div>
                 )}

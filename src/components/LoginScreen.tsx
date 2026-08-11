@@ -4,7 +4,7 @@ import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User } from 'lucide-reac
 import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
-import { useBiometricAuth } from '../hooks/useBiometricAuth';
+import { useBiometricAuth, hasSavedBiometricCredentials } from '../hooks/useBiometricAuth';
 
 interface LoginScreenProps {
   onLoginSuccess: (session: any) => void;
@@ -145,6 +145,19 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       setLoading(false);
     }
   };
+
+  // FaceID/impronta parte DA SOLA all'apertura del login quando ci sono
+  // credenziali salvate (esperienza da app bancaria): il bottone resta come
+  // ripiego se l'utente annulla il prompt. Un solo tentativo automatico.
+  const autoBioTriedRef = useRef(false);
+  useEffect(() => {
+    if (autoBioTriedRef.current) return;
+    if (!isBiometricAvailable || isRegistering || !isBiometricPrefEnabled()) return;
+    if (!hasSavedBiometricCredentials()) return;
+    autoBioTriedRef.current = true;
+    handleBiometricLogin();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBiometricAvailable]);
 
   const handleBiometricLogin = async () => {
     setLoading(true);

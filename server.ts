@@ -7279,6 +7279,96 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
   });
 
   // --- SMART POI DISCOVERY (Overpass + Geoapify + Foursquare Fallback) ---
+  // ── SNAP-TO-PATH: geometria strade/marciapiedi per area ──────────────────
+  // Serve la rete percorribile (highway) di una zona, divisa in "auto" e
+  // "piedi", semplificata, così il client la scarica insieme ai POI e snappa il
+  // GPS sul marciapiede/strada in locale (on-device, offline). NIENTE righe DB:
+  // è geometria statica, va nei pacchetti/cache client, non in Postgres.
+  const roadTileCache = new Map<string, { ts: number; data: any }>();
+  const ROAD_TILE_TTL = 7 * 24 * 60 * 60 * 1000; // le strade cambiano piano
+
+  // Douglas-Peucker: per lo snapping non serve la curva millimetrica.
+  const perpDistDeg = (p: number[], a: number[], b: number[]): number => {
+    const cosLat = Math.cos((a[0] * Math.PI) / 180) || 1;
+    const ax = a[1] * cosLat, ay = a[0], bx = b[1] * cosLat, by = b[0], px = p[1] * cosLat, py = p[0];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.hypot(px - ax, py - ay);
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  };
+  const simplify = (pts: number[][], tol: number): number[][] => {
+    if (pts.length < 3) return pts;
+    const keep = new Array(pts.length).fill(false);
+    keep[0] = keep[pts.length - 1] = true;
+    const stack: [number, number][] = [[0, pts.length - 1]];
+    while (stack.length) {
+      const [s, e] = stack.pop()!;
+      let maxD = 0, idx = -1;
+      for (let i = s + 1; i < e; i++) {
+        const d = perpDistDeg(pts[i], pts[s], pts[e]);
+        if (d > maxD) { maxD = d; idx = i; }
+      }
+      if (maxD > tol && idx !== -1) { keep[idx] = true; stack.push([s, idx], [idx, e]); }
+    }
+    return pts.filter((_, i) => keep[i]);
+  };
+
+  const CAR_HW = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street', 'service', 'road', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
+  const NO_FOOT = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link']); // pedoni ovunque tranne autostrade
+
+  app.get("/api/roads/tile", rateLimiter, async (req, res) => {
+    try {
+      const nLat = parseFloat(String(req.query.lat));
+      const nLon = parseFloat(String(req.query.lon));
+      const radius = Math.min(1500, Math.max(200, parseInt(String(req.query.radius || '700'), 10) || 700));
+      if (isNaN(nLat) || isNaN(nLon)) return res.status(400).json({ error: 'invalid_coords' });
+
+      // Chiave tile: arrotonda a ~0,01° (~1km) così zone vicine riusano la cache.
+      const key = `${nLat.toFixed(2)},${nLon.toFixed(2)},${radius}`;
+      const cached = roadTileCache.get(key);
+      if (cached && Date.now() - cached.ts < ROAD_TILE_TTL) {
+        return res.json({ ...cached.data, cached: true });
+      }
+
+      const q = `[out:json][timeout:25];way["highway"](around:${radius},${nLat},${nLon});out geom;`;
+      const endpoints = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+      let elements: any[] | null = null;
+      for (const ep of endpoints) {
+        try {
+          const oRes = await axios.post(ep, `data=${encodeURIComponent(q)}`, {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'WorldInPocketRoads/1.0' },
+            timeout: 15000,
+          });
+          if (oRes.data?.elements) { elements = oRes.data.elements; break; }
+        } catch { /* prova il prossimo endpoint */ }
+      }
+      if (!elements) return res.status(502).json({ error: 'overpass_unavailable' });
+
+      const TOL = 0.00003; // ~3m
+      const car: number[][][] = [];
+      const foot: number[][][] = [];
+      for (const el of elements) {
+        if (el.type !== 'way' || !Array.isArray(el.geometry)) continue;
+        const hw = String(el.tags?.highway || '');
+        if (!hw) continue;
+        const pts: number[][] = el.geometry.filter((g: any) => g && typeof g.lat === 'number').map((g: any) => [g.lat, g.lon]);
+        if (pts.length < 2) continue;
+        const simp = simplify(pts, TOL);
+        if (CAR_HW.has(hw)) car.push(simp);
+        if (!NO_FOOT.has(hw)) foot.push(simp);
+      }
+
+      const data = { car, foot, count: car.length + foot.length, center: [nLat, nLon], radius };
+      roadTileCache.set(key, { ts: Date.now(), data });
+      res.json(data);
+    } catch (e: any) {
+      console.error('[roads/tile] Errore:', e?.message);
+      res.status(500).json({ error: 'roads_failed' });
+    }
+  });
+
   app.post("/api/poi/discover", rateLimiter, async (req, res) => {
     try {
       const { lat, lon, radius = 800 } = req.body;

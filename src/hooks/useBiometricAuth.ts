@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
 import { Capacitor } from '@capacitor/core';
 
+/** Marker locale: esistono credenziali biometriche salvate per questa app. */
+export const BIOMETRIC_CREDS_SAVED_KEY = 'wip_biometric_creds_saved';
+export const hasSavedBiometricCredentials = () => {
+  try { return localStorage.getItem(BIOMETRIC_CREDS_SAVED_KEY) === '1'; } catch { return false; }
+};
+
 export function useBiometricAuth() {
   const [isAvailable, setIsAvailable] = useState(false);
 
@@ -31,6 +37,9 @@ export function useBiometricAuth() {
         password: password,
         server: 'itainta' // Identifier for the app's credentials in keychain
       });
+      // Marker per l'auto-prompt del login: dice "ci sono credenziali salvate"
+      // SENZA dover interrogare il keystore (che richiederebbe la verifica).
+      try { localStorage.setItem(BIOMETRIC_CREDS_SAVED_KEY, '1'); } catch { /* storage pieno */ }
       return true;
     } catch (error) {
       console.error('Failed to save biometric credentials:', error);
@@ -64,6 +73,7 @@ export function useBiometricAuth() {
       await NativeBiometric.deleteCredentials({
         server: 'itainta'
       });
+      try { localStorage.removeItem(BIOMETRIC_CREDS_SAVED_KEY); } catch { /* no-op */ }
       return true;
     } catch (error) {
       console.error('Failed to delete biometric credentials:', error);
