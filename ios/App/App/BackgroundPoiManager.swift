@@ -57,6 +57,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private var appLanguage = "it"
     private var selectedCategories: [String] = []
     private var modeSwitchStreak = 0
+    // Tiering posizione: chiave "armed-driving" già applicata, per non
+    // ri-settare desiredAccuracy a ogni fix. Parte "armed" = alta precisione = sicuro.
+    private var appliedTierKey = ""
     private var alertRadiusWalk: Double = 150
     private var arrivalRadiusWalk: Double = 30
     private var alertRadiusCar: Double = 300
@@ -232,6 +235,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         maybeSwitchTravelMode(location)
         checkRefreshPois(at: location)
         evaluateTriggers(at: location)
+        applyLocationTierForProximity(location)
         updateDistanceNotification(location)
     }
 
@@ -239,6 +243,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     private func maybeSwitchTravelMode(_ location: CLLocation) {
         guard transportPref == "auto", location.speed >= 0 else { return }
+        // FLAG "FERMO": non fidarsi della velocità se il fix è di bassa qualità
+        // (canyon urbano) — evita il falso passaggio ad "auto" da picchi di
+        // velocità fantasma quando in realtà sei fermo o a piedi.
+        if location.speedAccuracy >= 0 && location.speedAccuracy > 5 { modeSwitchStreak = 0; return }
         let kmh = location.speed * 3.6
         let target: String
         if kmh >= 12 { target = "driving" }
@@ -252,11 +260,50 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         guideMode = target
         prefs.set(guideMode, forKey: "guideMode")
         lastQueryLocation = nil // il prossimo fix rifà fetch coi raggi giusti
-        let accuracy = target == "driving" ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
-        let filter: CLLocationDistance = target == "driving" ? 10 : 5
+        // La precisione la applica applyLocationTier (in handleLocation), che
+        // tiene conto sia della modalità sia della prossimità a un POI.
+        appliedTierKey = ""
+    }
+
+    // TIERED LOCATION (parità con Android applyLocationRate): GPS ad alta
+    // precisione SOLO quando c'è un POI nella finestra di attenzione; altrimenti
+    // posizione economica (WiFi/cella) — in città spesso più precisa del GPS
+    // (niente multipath) e con batteria/calore molto più bassi. Nel dubbio
+    // (POI non ancora caricati) resta ad alta precisione: il caso peggiore è
+    // "risparmia meno", mai "manca un trigger".
+    private func applyLocationTierForProximity(_ location: CLLocation) {
+        let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
+        let armWindow = alertRad * 3.0 + 150.0 // margine per ri-armare in tempo
+        let armed: Bool
+        if lastQueryLocation == nil {
+            armed = true                 // POI non ancora noti → sicuro
+        } else if currentPois.isEmpty {
+            armed = false                // zona senza POI → risparmia
+        } else {
+            var nearest = Double.greatestFiniteMagnitude
+            for p in currentPois {
+                let d = location.distance(from: p.coordinate)
+                if d < nearest { nearest = d; if nearest <= armWindow { break } }
+            }
+            armed = nearest <= armWindow
+        }
+        applyLocationTier(armed: armed)
+    }
+
+    private func applyLocationTier(armed: Bool) {
+        let isDriving = guideMode == "driving"
+        let key = "\(armed)-\(isDriving)"
+        guard key != appliedTierKey else { return }
+        appliedTierKey = key
         DispatchQueue.main.async {
-            self.locationManager.desiredAccuracy = accuracy
-            self.locationManager.distanceFilter = filter
+            if armed {
+                self.locationManager.desiredAccuracy = isDriving
+                    ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
+                self.locationManager.distanceFilter = isDriving ? 10 : 5
+            } else {
+                self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+                self.locationManager.distanceFilter = 80
+            }
         }
     }
 

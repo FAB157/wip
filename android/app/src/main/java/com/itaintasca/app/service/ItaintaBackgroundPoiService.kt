@@ -234,6 +234,11 @@ class ItaintaBackgroundPoiService : Service() {
     private fun maybeSwitchTravelMode(location: Location) {
         if (transportPref != "auto") return
         if (!location.hasSpeed()) return
+        // FLAG "FERMO": non fidarsi della velocità se il fix è di bassa qualità
+        // (canyon urbano) — evita il falso passaggio ad "auto" da picchi di
+        // velocità fantasma quando in realtà sei fermo o a piedi.
+        if (Build.VERSION.SDK_INT >= 26 && location.hasSpeedAccuracy() &&
+            location.speedAccuracyMetersPerSecond > 5f) { modeSwitchStreak = 0; return }
         val kmh = location.speed * 3.6f
         val target = when {
             kmh >= 12f -> "driving"

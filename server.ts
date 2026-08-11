@@ -3551,7 +3551,10 @@ function isNameMatching(name1: string, name2: string): boolean {
   // storico alla creazione del profilo. Richiede la migration
   // 20260812000000_welcome_credits_email_verificata.sql (default → 0).
   const WELCOME_CREDITS = 100;
-  const WELCOME_GATE_SINCE = Date.parse('2026-08-12T00:00:00Z');
+  // Cutover = momento di applicazione della migration default→0 (11/08 ~22:35
+  // italiane): gli account nati prima hanno già avuto i 100 dal default
+  // storico, quelli nati dopo li ricevono da questa rotta.
+  const WELCOME_GATE_SINCE = Date.parse('2026-08-11T20:35:00Z');
 
   app.post("/api/welcome-bonus/claim", rateLimiter, async (req, res) => {
     try {
