@@ -59,7 +59,7 @@ if (PROVIDER === 'openrouter') {
     baseURL: 'https://openrouter.ai/api/v1',
     apiKey: orKey,
     // OpenRouter usa questi header per le statistiche di utilizzo.
-    defaultHeaders: { 'HTTP-Referer': 'https://itainta.vercel.app', 'X-Title': 'WIP World in Pocket' },
+    defaultHeaders: { 'HTTP-Referer': 'https://wip.guide', 'X-Title': 'WIP World in Pocket' },
   }));
   console.log(`🌐 Motore OpenRouter attivo (modello: ${MODEL_NAME}).`);
 } else {

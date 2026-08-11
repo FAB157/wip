@@ -33,7 +33,7 @@ export default function LiveTourPanel() {
     if (!activeSession) return;
     // Su app nativa window.location.origin è capacitor://localhost: il link
     // condiviso non aprirebbe nulla per gli amici. Sempre l'URL pubblico.
-    const base = Capacitor.isNativePlatform() ? 'https://itainta.vercel.app' : window.location.origin;
+    const base = Capacitor.isNativePlatform() ? 'https://wip.guide' : window.location.origin;
     const url = `${base}/?pin=${activeSession.pin}`;
     navigator.clipboard.writeText(url);
     setCopied(true);

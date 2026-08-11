@@ -126,7 +126,7 @@ class SupabaseClient {
                 put("character", character)
             }.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
-                .url("https://itainta.vercel.app/api/poi/audioguide")
+                .url("https://wip.guide/api/poi/audioguide")
                 .post(body)
                 .addHeader("Content-Type", "application/json")
                 .build()

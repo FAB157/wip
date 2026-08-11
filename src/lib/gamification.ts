@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { getTranslation } from './i18n';
 import { notifyCreditsChanged } from './pricing';
+import { getApiUrl } from './api';
 
 export interface GamificationReward {
   poiId: string | number;
@@ -88,30 +89,22 @@ export async function addTriviaRewards(currentUserId: string | null | undefined,
   if (!currentUserId || currentUserId === "mock-user-id" || correctAnswers <= 0) return;
 
   try {
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('xp_points, earned_credits')
-      .eq('id', currentUserId)
-      .single();
+    // Accredito SERVER-SIDE: scrivere earned_credits/xp_points dal browser è
+    // bloccato dal trigger anti-escalation su user_profiles (prima chiunque
+    // poteva farsi crediti da console). Il server valida e accredita con la
+    // service key. 1 credito + 20 XP per risposta corretta.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) return;
 
-    if (!profile) return;
-
-    const newXp = (profile.xp_points || 0) + (correctAnswers * 20); // 20 XP per risposta
-
-    // Ricompensa immediata del quiz: 1 credito per risposta corretta. Il bonus
-    // di livello NON viene sommato qui: evita il doppio accredito con il
-    // riscatto esplicito dei livelli (popup Missioni → user_rewards_claimed).
-    // I livelli usano solo il modello dinamico (gamification_levels.xp_required).
-    const earnedCreditsBonus = correctAnswers;
-    const currentEarned = profile.earned_credits || 0;
-
-    await supabase
-      .from('user_profiles')
-      .update({
-        xp_points: newXp,
-        earned_credits: currentEarned + earnedCreditsBonus
-      })
-      .eq('id', currentUserId);
+    const res = await fetch(getApiUrl('/api/gamification/trivia-reward'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ correctAnswers }),
+    });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => null);
+    const earnedCreditsBonus = data?.credits || 0;
 
     if (earnedCreditsBonus > 0) notifyCreditsChanged({ userId: currentUserId, delta: earnedCreditsBonus });
 

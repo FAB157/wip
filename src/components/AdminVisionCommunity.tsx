@@ -66,9 +66,10 @@ export default function AdminVisionCommunity() {
         body: JSON.stringify({ cardId: card.id, action, edits: edits[card.id] || {}, attachPoiId }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'errore');
+      if (!res.ok) throw new Error(data?.detail || data?.error || 'errore');
       if (action === 'reject') notify('Scheda rifiutata: resta un ricordo privato dell\'utente.');
       else if (action === 'attach') notify(`Foto allegata al POI ufficiale${data?.rewarded ? ` · +${data.rewarded} crediti all'autore` : ''}.`);
+      else if (data?.merged) notify(`Stesso posto già pubblicato: foto accorpata nella galleria di ${data?.published_poi_id || 'quel POI'}${data?.rewarded ? ` · +${data.rewarded} crediti all'autore` : ''}.`);
       else notify(`POI Community pubblicato${data?.rewarded ? ` · +${data.rewarded} crediti all'autore` : ''}.`);
       setAttachMode(null);
       setExpandedId(null);
@@ -141,11 +142,54 @@ export default function AdminVisionCommunity() {
         body: JSON.stringify({ cardId: card.id }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'errore');
+      if (!res.ok) throw new Error(data?.detail || data?.error || 'errore');
       if (data?.preview) setCleanPreview(prev => ({ ...prev, [card.id]: data.preview }));
       notify('Foto ripulita dall\'AI: verrà pubblicata questa versione.');
     } catch (e: any) {
       notify(`Pulizia AI non riuscita: ${e?.message || 'riprova'}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  /**
+   * Compila i campi della scheda con Agnes (Groq, solo testo): il server usa
+   * posizione GPS + reverse geocoding + POI vicini + racconto del viaggiatore
+   * + eventuali note già digitate dall'admin nei campi. I risultati riempiono
+   * il form di modifica: l'admin controlla e poi approva.
+   */
+  const doAiFill = async (card: any) => {
+    setBusyId(card.id);
+    try {
+      const token = await getToken();
+      const pending = edits[card.id] || {};
+      const adminHint = [pending.name, pending.description_short, pending.description_long]
+        .filter(Boolean).join(' — ');
+      const res = await fetch(getApiUrl('/api/admin/vision/ai-fill'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ cardId: card.id, adminHint }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.detail || data?.error || 'errore');
+      const f = data?.fields || {};
+      setEdits(prev => ({
+        ...prev,
+        [card.id]: {
+          ...(prev[card.id] || {}),
+          ...(f.name ? { name: f.name } : {}),
+          ...(f.city ? { city: f.city } : {}),
+          ...(f.poi_type ? { poi_type: f.poi_type } : {}),
+          ...(f.description_short ? { description_short: f.description_short } : {}),
+          ...(f.description_long ? { description_long: f.description_long } : {}),
+          ...(f.history ? { history: f.history } : {}),
+          ...(f.audio_script ? { audio_script: f.audio_script } : {}),
+        },
+      }));
+      setExpandedId(card.id);
+      notify('Campi compilati dall\'AI: controlla, correggi e approva.');
+    } catch (e: any) {
+      notify(`Compilazione AI non riuscita: ${e?.message || 'riprova'}`);
     } finally {
       setBusyId(null);
     }
@@ -296,6 +340,11 @@ export default function AdminVisionCommunity() {
                       className="flex items-center gap-1.5 px-3 py-2 bg-violet-50 text-violet-700 border border-violet-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
                       {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
                       Pulisci foto AI
+                    </button>
+                    <button disabled={busy} onClick={() => doAiFill(card)}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
+                      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      Compila con AI
                     </button>
                     <button disabled={busy} onClick={() => doReview(card, 'approve')}
                       className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm active:scale-95 transition-all disabled:opacity-50">

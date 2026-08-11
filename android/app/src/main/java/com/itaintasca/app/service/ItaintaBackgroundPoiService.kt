@@ -896,7 +896,7 @@ class ItaintaBackgroundPoiService : Service() {
                 }.toString().toRequestBody("application/json".toMediaType())
 
                 val request = Request.Builder()
-                    .url("https://itainta.vercel.app/api/poi/batch-teaser") // Corrected URL
+                    .url("https://wip.guide/api/poi/batch-teaser")
                     .post(body)
                     .build()
 

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Termini di servizio - WIP (World in Pocket)</title>
+    <meta name="description" content="Termini di servizio dell'app WIP - World in Pocket: account, crediti, contenuti AI, contenuti degli utenti e limitazioni di responsabilità.">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.7;
+            color: #374151;
+            background-color: #f3f4f6;
+            padding: 1.5rem;
+        }
+        .container {
+            background: white;
+            max-width: 820px;
+            margin: 0 auto;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .logo { font-size: 2rem; margin-bottom: 0.5rem; }
+        h1 { color: #1e3a8a; font-size: 1.8rem; }
+        .subtitle { color: #6b7280; font-size: 0.95rem; margin-top: 0.25rem; }
+        h2 { color: #1e40af; font-size: 1.1rem; margin-top: 2rem; margin-bottom: 0.6rem; }
+        p { color: #4b5563; margin-bottom: 0.75rem; }
+        ul { list-style: disc; padding-left: 1.5rem; color: #4b5563; margin-bottom: 0.75rem; }
+        li { margin-bottom: 0.35rem; }
+        .highlight {
+            background: linear-gradient(135deg, #fffbeb, #fef3c7);
+            border-left: 4px solid #f59e0b;
+            padding: 1rem 1.25rem;
+            border-radius: 0 8px 8px 0;
+            margin: 1rem 0;
+            font-weight: 500;
+            color: #92400e;
+        }
+        .contact-box {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 1.25rem;
+            margin-top: 2rem;
+        }
+        .contact-box a { color: #1e40af; text-decoration: none; font-weight: bold; }
+        .lang-switch { text-align: right; margin-bottom: 0.5rem; }
+        .lang-btn {
+            background: #f3f4f6; border: 1px solid #d1d5db; color: #374151;
+            padding: 4px 12px; border-radius: 99px; font-size: 0.8rem; font-weight: bold;
+            cursor: pointer; margin-left: 0.35rem;
+        }
+        .lang-btn.active { background: #1e3a8a; border-color: #1e3a8a; color: white; }
+        footer {
+            text-align: center; margin-top: 2rem; color: #9ca3af; font-size: 0.85rem;
+            border-top: 1px solid #e5e7eb; padding-top: 1.5rem;
+        }
+        footer a { color: #1e40af; text-decoration: none; margin: 0 0.4rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="lang-switch">
+            <button class="lang-btn" data-l="it" onclick="setLang('it')">IT</button>
+            <button class="lang-btn" data-l="en" onclick="setLang('en')">EN</button>
+        </div>
+        <div class="header">
+            <div class="logo">🌍</div>
+            <h1 data-lang="it">Termini di servizio</h1>
+            <h1 data-lang="en">Terms of Service</h1>
+            <p class="subtitle">WIP &mdash; World in Pocket</p>
+            <p class="subtitle" data-lang="it">Ultimo aggiornamento: 11 agosto 2026</p>
+            <p class="subtitle" data-lang="en">Last updated: August 11, 2026</p>
+        </div>
+
+        <!-- ==================== ITALIANO ==================== -->
+        <div data-lang="it">
+        <h2>1. Il servizio</h2>
+        <p><strong>WIP &mdash; World in Pocket</strong> (di seguito "l'app") è un'audioguida turistica basata sulla posizione, sviluppata da <strong>Davide Musetti</strong>, Via Vignaletto 50, 54033 Carrara (MS), Italia. Creando un account o usando l'app accetti questi termini e la <a href="/privacy" style="color:#1e40af; font-weight:bold;">Privacy Policy</a>.</p>
+
+        <h2>2. Account</h2>
+        <ul>
+            <li>Devi avere almeno 14 anni per creare un account.</li>
+            <li>Sei responsabile della riservatezza delle tue credenziali e delle attività svolte con il tuo account.</li>
+            <li>Puoi eliminare il tuo account in qualsiasi momento dall'app (<em>Profilo → Impostazioni → Elimina Account</em>) o da <a href="/delete-account" style="color:#1e40af; font-weight:bold;">wip.guide/delete-account</a>.</li>
+        </ul>
+
+        <h2>3. Crediti e acquisti</h2>
+        <ul>
+            <li>Alcune funzioni (audioguide premium, itinerari, guide PDF) si pagano in <strong>crediti</strong>, acquistabili via Stripe (web) o Google Play / App Store (in-app).</li>
+            <li>I crediti non hanno scadenza, <strong>non sono trasferibili</strong> ad altri account, non hanno valore monetario e non sono convertibili in denaro.</li>
+            <li>I crediti bonus/omaggio possono essere revocati in caso di abuso.</li>
+            <li>Per i rimborsi degli acquisti in-app valgono le politiche di Google Play / App Store; per gli acquisti via Stripe contatta <a href="mailto:support@wip.guide" style="color:#1e40af;">support@wip.guide</a>. Alla cancellazione dell'account i crediti residui non sono rimborsabili.</li>
+        </ul>
+
+        <h2>4. Contenuti generati con AI</h2>
+        <div class="highlight">
+            ⚠️ I contenuti delle audioguide sono generati con l'ausilio dell'intelligenza artificiale a scopo informativo e turistico. Possono contenere imprecisioni: verifica sempre orari, prezzi, accessibilità e condizioni dei luoghi prima di visitarli.
+        </div>
+        <ul>
+            <li>L'app non fornisce indicazioni di sicurezza né sostituisce la segnaletica o le norme locali.</li>
+            <li><strong>Alla guida</strong>: usa l'app solo in modalità audio e rispetta sempre il Codice della Strada; non interagire con lo schermo mentre guidi.</li>
+        </ul>
+
+        <h2>5. Contenuti degli utenti (WIP Vision / Community)</h2>
+        <ul>
+            <li>Caricando una foto e proponendola alla community, dichiari di averne i diritti e concedi a WIP una licenza gratuita, non esclusiva e mondiale di pubblicarla nell'app insieme alla scheda del luogo.</li>
+            <li>I contenuti proposti passano da una revisione; possiamo rifiutare o rimuovere contenuti inappropriati, illeciti o fuori tema.</li>
+            <li>Non caricare contenuti che ritraggono persone riconoscibili senza il loro consenso, dati personali di terzi o materiale protetto da copyright altrui.</li>
+            <li>Puoi rimuovere i tuoi contenuti in ogni momento dall'app; con la cancellazione dell'account vengono rimossi anche i contenuti pubblicati.</li>
+        </ul>
+
+        <h2>6. Uso accettabile</h2>
+        <ul>
+            <li>È vietato l'uso automatizzato o massivo del servizio (scraping, bot, resale delle audioguide o dei contenuti).</li>
+            <li>È vietato tentare di aggirare i sistemi di pagamento, i limiti d'uso o le misure di sicurezza.</li>
+            <li>Possiamo sospendere o chiudere account che violano questi termini.</li>
+        </ul>
+
+        <h2>7. Servizi di terze parti</h2>
+        <p>L'app mostra contenuti e offerte di terze parti (mappe, eventi, tour ed esperienze di partner come Ticketmaster, Viator e GetYourGuide). Le prenotazioni avvengono sui siti dei partner, con i loro termini; alcuni link sono affiliati e possono riconoscerci una commissione, senza costi aggiuntivi per te.</p>
+
+        <h2>8. Proprietà intellettuale</h2>
+        <p>L'app, il marchio WIP, la grafica e i contenuti generati (esclusi i contenuti degli utenti e i dati di fonti aperte come OpenStreetMap e Wikipedia, soggetti alle rispettive licenze) sono di proprietà del titolare. È concessa una licenza personale e non trasferibile per l'uso dell'app a fini privati.</p>
+
+        <h2>9. Limitazione di responsabilità</h2>
+        <p>L'app è fornita "così com'è". Nei limiti consentiti dalla legge, il titolare non risponde di danni indiretti derivanti dall'uso dell'app, da imprecisioni dei contenuti, da indisponibilità del servizio o da servizi di terze parti. Nulla in questi termini limita i diritti inderogabili riconosciuti ai consumatori dalla legge italiana ed europea.</p>
+
+        <h2>10. Modifiche e legge applicabile</h2>
+        <p>Possiamo aggiornare questi termini pubblicando la nuova versione su questa pagina; le modifiche sostanziali saranno segnalate nell'app. I presenti termini sono regolati dalla legge italiana; per i consumatori è competente il foro del luogo di residenza.</p>
+
+        <div class="contact-box">
+            <p>Domande su questi termini? 📧 <a href="mailto:support@wip.guide">support@wip.guide</a></p>
+        </div>
+        </div>
+
+        <!-- ==================== ENGLISH ==================== -->
+        <div data-lang="en">
+        <h2>1. The service</h2>
+        <p><strong>WIP &mdash; World in Pocket</strong> ("the app") is a location-based tourist audio guide developed by <strong>Davide Musetti</strong>, Via Vignaletto 50, 54033 Carrara (MS), Italy. By creating an account or using the app you accept these terms and the <a href="/privacy" style="color:#1e40af; font-weight:bold;">Privacy Policy</a>.</p>
+
+        <h2>2. Account</h2>
+        <ul>
+            <li>You must be at least 14 years old to create an account.</li>
+            <li>You are responsible for keeping your credentials confidential and for the activity on your account.</li>
+            <li>You can delete your account at any time in the app (<em>Profile → Settings → Delete Account</em>) or at <a href="/delete-account" style="color:#1e40af; font-weight:bold;">wip.guide/delete-account</a>.</li>
+        </ul>
+
+        <h2>3. Credits and purchases</h2>
+        <ul>
+            <li>Some features (premium audio guides, itineraries, PDF guides) are paid with <strong>credits</strong>, purchasable via Stripe (web) or Google Play / App Store (in-app).</li>
+            <li>Credits do not expire, are <strong>not transferable</strong> to other accounts, have no monetary value and cannot be converted to cash.</li>
+            <li>Bonus/free credits may be revoked in case of abuse.</li>
+            <li>Refunds for in-app purchases follow Google Play / App Store policies; for Stripe purchases contact <a href="mailto:support@wip.guide" style="color:#1e40af;">support@wip.guide</a>. Remaining credits are non-refundable upon account deletion.</li>
+        </ul>
+
+        <h2>4. AI-generated content</h2>
+        <div class="highlight">
+            ⚠️ Audio-guide content is generated with the help of artificial intelligence for informational and tourist purposes. It may contain inaccuracies: always verify opening hours, prices, accessibility and conditions before visiting.
+        </div>
+        <ul>
+            <li>The app does not provide safety guidance and does not replace local signage or regulations.</li>
+            <li><strong>While driving</strong>: use the app in audio-only mode and always comply with traffic laws; never interact with the screen while driving.</li>
+        </ul>
+
+        <h2>5. User content (WIP Vision / Community)</h2>
+        <ul>
+            <li>By uploading a photo and submitting it to the community, you declare you own the rights to it and grant WIP a free, non-exclusive, worldwide license to publish it in the app together with the place card.</li>
+            <li>Submitted content goes through review; we may reject or remove inappropriate, unlawful or off-topic content.</li>
+            <li>Do not upload content showing recognizable people without their consent, third parties' personal data, or material covered by someone else's copyright.</li>
+            <li>You can remove your content at any time in the app; deleting your account also removes your published content.</li>
+        </ul>
+
+        <h2>6. Acceptable use</h2>
+        <ul>
+            <li>Automated or bulk use of the service is forbidden (scraping, bots, resale of audio guides or content).</li>
+            <li>Attempting to bypass payment systems, usage limits or security measures is forbidden.</li>
+            <li>We may suspend or terminate accounts that violate these terms.</li>
+        </ul>
+
+        <h2>7. Third-party services</h2>
+        <p>The app shows third-party content and offers (maps, events, tours and experiences from partners such as Ticketmaster, Viator and GetYourGuide). Bookings happen on the partners' sites under their terms; some links are affiliate links and may earn us a commission at no extra cost to you.</p>
+
+        <h2>8. Intellectual property</h2>
+        <p>The app, the WIP brand, the graphics and the generated content (excluding user content and open-data sources such as OpenStreetMap and Wikipedia, subject to their own licenses) are property of the owner. You are granted a personal, non-transferable license to use the app for private purposes.</p>
+
+        <h2>9. Limitation of liability</h2>
+        <p>The app is provided "as is". To the extent permitted by law, the owner is not liable for indirect damages arising from use of the app, content inaccuracies, service unavailability or third-party services. Nothing in these terms limits the mandatory rights granted to consumers by Italian and EU law.</p>
+
+        <h2>10. Changes and governing law</h2>
+        <p>We may update these terms by publishing the new version on this page; material changes will be announced in the app. These terms are governed by Italian law; for consumers, the competent court is that of their place of residence.</p>
+
+        <div class="contact-box">
+            <p>Questions about these terms? 📧 <a href="mailto:support@wip.guide">support@wip.guide</a></p>
+        </div>
+        </div>
+
+        <footer>
+            &copy; 2026 WIP &mdash; World in Pocket<br>
+            <a href="/privacy">Privacy Policy</a> &middot;
+            <a href="/delete-account" data-lang="it">Elimina account</a><a href="/delete-account" data-lang="en">Delete account</a> &middot;
+            <a href="/support" data-lang="it">Supporto</a><a href="/support" data-lang="en">Support</a>
+        </footer>
+    </div>
+    <script>
+        function setLang(l) {
+            document.documentElement.lang = l;
+            document.querySelectorAll('[data-lang]').forEach(function (e) {
+                e.style.display = e.getAttribute('data-lang') === l ? '' : 'none';
+            });
+            document.querySelectorAll('.lang-btn').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-l') === l);
+            });
+            try { localStorage.setItem('wip_legal_lang', l); } catch (e) {}
+        }
+        setLang((function () {
+            try { var s = localStorage.getItem('wip_legal_lang'); if (s === 'it' || s === 'en') return s; } catch (e) {}
+            return (navigator.language || 'it').toLowerCase().indexOf('it') === 0 ? 'it' : 'en';
+        })());
+    </script>
+</body>
+</html>

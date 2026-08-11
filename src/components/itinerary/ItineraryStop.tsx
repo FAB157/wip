@@ -81,6 +81,12 @@ export default function ItineraryStop({
                 ⚠ {getTranslation("badge_to_verify", language)}
               </span>
             )}
+            {/* "Chicca": luogo reale ma poco famoso — consiglio, non allarme */}
+            {tappa.verifica === 'poco_noto' && (
+              <span className="flex items-center gap-1 text-[10px] font-black text-sky-700 bg-sky-50 px-2.5 py-1 rounded-full border border-sky-100 uppercase" title={tappa.nota_verifica || ''}>
+                💎 {getTranslation("badge_hidden_gem", language)}
+              </span>
+            )}
           </div>
           {/* Target tattili 44×44 (min-w/min-h): l'icona resta piccola ma
               l'area cliccabile rispetta le linee guida touch. */}
@@ -183,7 +189,11 @@ export default function ItineraryStop({
                 <p className="text-sm text-on-surface-variant font-bold leading-relaxed mb-4">{tappa.attivita}</p>
 
                 {tappa.nota_verifica && (
-                  <div className="mb-3 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-xl">
+                  <div className={`mb-3 text-[11px] font-bold px-3 py-2 rounded-xl border ${
+                    tappa.verifica === 'poco_noto'
+                      ? 'text-sky-700 bg-sky-50 border-sky-100'
+                      : 'text-amber-700 bg-amber-50 border-amber-100'
+                  }`}>
                     {tappa.nota_verifica}
                   </div>
                 )}

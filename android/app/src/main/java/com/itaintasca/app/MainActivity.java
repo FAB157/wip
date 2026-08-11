@@ -22,17 +22,11 @@ public class MainActivity extends BridgeActivity {
         
         // Attiva il Watchdog per il servizio di background
         ServiceWatchdog.Companion.schedule(this);
-        
-        // Permette all'attività di apparire sopra la lockscreen e accendere il display
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true);
-            setTurnScreenOn(true);
-        } else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-                    | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
-                    | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        }
-        
+
+        // I flag showWhenLocked/turnScreenOn sono stati rimossi (policy Play,
+        // ago 2026): l'arrivo al POI è una notifica heads-up sonora, come su
+        // iOS — l'audio parte comunque dal servizio, non serve accendere lo schermo.
+
         handleIntent(getIntent());
     }
 

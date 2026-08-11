@@ -86,70 +86,88 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             color: #1e1b14 !important;
           }
 
-          /* Elegant Branding Header */
+          /* ── Header compatto ─────────────────────────────────────────
+             Prima: logo 120px + titolo 24pt + margini larghi = un terzo di
+             pagina bruciato prima della prima tappa. Ora: fascia snella,
+             logo 58px, gerarchia tipografica netta. */
           .print-header {
             display: flex !important;
             flex-direction: row;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
-            border-bottom: 3px solid #1e3a8a;
-            padding-bottom: 16px;
-            margin-bottom: 24px;
-            gap: 24px;
+            border-bottom: 2px solid #1e3a8a;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+            gap: 16px;
           }
 
           .print-title {
-            font-size: 17pt;
+            font-size: 18pt;
             font-weight: 800;
             color: #1e3a8a;
-            margin: 0 0 2px 0;
-            line-height: 1.15;
+            margin: 0 0 3px 0;
+            line-height: 1.12;
+            letter-spacing: -0.01em;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
 
           .print-subtitle {
-            font-size: 8.5pt;
-            color: #0a6c44;
-            font-weight: 700;
+            font-size: 7.5pt;
+            color: #b45309;
+            font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
-            margin: 0 0 6px 0;
+            letter-spacing: 0.14em;
+            margin: 0;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
 
           .print-intro-desc {
-            font-size: 9pt;
-            color: #4a5554;
-            line-height: 1.35;
-            margin: 6px 0 0 0;
+            font-size: 8pt;
+            color: #57534e;
+            line-height: 1.4;
+            margin: 5px 0 0 0;
             font-style: italic;
-            text-align: justify;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            text-align: left;
+            max-width: 92%;
+            font-family: Georgia, "Times New Roman", serif;
+          }
+
+          .print-logo {
+            width: 58px;
+            height: 58px;
+            object-fit: contain;
+            border-radius: 10px;
           }
 
           /* Daily Schedule Flow (Avoiding forced page breaks, consecutive only) */
           .print-day-container {
             page-break-before: auto !important;
             break-before: auto !important;
-            margin-top: 18px;
-            margin-bottom: 12px;
+            margin-top: 14px;
+            margin-bottom: 10px;
           }
 
+          /* Fascia giorno: banda leggera navy con filetto oro, si distingue
+             a colpo d'occhio sfogliando la guida */
           .print-day-title {
             page-break-after: avoid !important;
             break-after: avoid !important;
-            border-bottom: 1.5px solid #bdc9c6;
-            padding-bottom: 3px;
+            background: #eff6ff !important;
+            border-left: 4px solid #d4af37;
+            border-radius: 0 6px 6px 0;
+            padding: 5px 10px;
             margin-bottom: 10px;
             display: block !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
 
           .print-day-text {
-            font-size: 11pt;
-            font-weight: 700;
+            font-size: 10.5pt;
+            font-weight: 800;
             color: #1e3a8a;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.05em;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
 
@@ -157,56 +175,145 @@ export default function PrintView({ plan, language }: PrintViewProps) {
           .print-activity-block {
             page-break-inside: avoid !important;
             break-inside: avoid !important;
-            border-left: 2px solid #1e3a8a;
+            border-left: 2px solid #dbe3f5;
             margin-left: 4px;
             padding-left: 10px;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             position: relative;
+          }
+
+          /* Pallino sulla timeline: raccorda visivamente le tappe del giorno */
+          .print-activity-block::before {
+            content: "";
+            position: absolute;
+            left: -5px;
+            top: 3px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #1e3a8a;
+            border: 1.5px solid #ffffff;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
           }
 
           .print-activity-title {
             font-size: 10.5pt;
             font-weight: 700;
-            color: #1e3a8a;
+            color: #111827;
             margin: 0 0 2px 0;
             line-height: 1.2;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
 
+          .print-activity-time {
+            display: inline-block;
+            font-size: 8pt;
+            font-weight: 800;
+            color: #1e3a8a;
+            margin-right: 6px;
+            font-variant-numeric: tabular-nums;
+          }
+
           /* Duration / Transfer Info - Minimal and clean */
           .print-activity-duration {
-            font-size: 8pt;
-            color: #0a6c44;
-            margin-bottom: 4px;
+            font-size: 7.5pt;
+            color: #6b7280;
+            margin-bottom: 3px;
             font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           }
 
           /* Description (Strict max 10pt for high density) */
           .print-activity-description {
-            font-size: 9.5pt;
-            color: #2e3534;
-            line-height: 1.35;
+            font-size: 9pt;
+            color: #374151;
+            line-height: 1.42;
             margin: 0 0 4px 0;
-            text-align: justify;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            text-align: left;
+            font-family: Georgia, "Times New Roman", serif;
           }
 
           /* Guide Advice (Gold accent block, distinct and attention-grabbing) */
           .print-curiosity-box {
-            background: #fbfaf7 !important;
-            border-left: 3px solid #0a6c44 !important;
-            padding: 6px 10px;
+            background: #fdfaf3 !important;
+            border-left: 3px solid #d4af37 !important;
+            padding: 5px 9px;
             border-radius: 0 6px 6px 0;
-            font-size: 8.5pt;
-            font-weight: 600;
+            font-size: 8pt;
+            font-weight: 500;
             font-style: italic;
-            color: #1e3a8a;
-            line-height: 1.35;
-            margin-top: 4px;
+            color: #44403c;
+            line-height: 1.4;
+            margin-top: 3px;
             -webkit-print-color-adjust: exact;
             print-color-adjust: exact;
+            font-family: Georgia, "Times New Roman", serif;
+          }
+
+          .print-curiosity-box strong {
+            color: #1e3a8a;
+            font-style: normal;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 7.5pt;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+          }
+
+          /* Sezioni finali (consigli, precauzioni…): titoli coerenti */
+          .print-section-title {
+            font-size: 12pt;
+            font-weight: 800;
+            color: #1e3a8a;
+            margin: 0 0 4px 0;
+            padding-bottom: 2px;
+            border-bottom: 1.5px solid #d4af37;
+            display: inline-block;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          }
+
+          .print-section-list {
+            padding-left: 16px;
+            margin: 6px 0;
+            font-size: 8.5pt;
+            color: #374151;
+            line-height: 1.45;
+            font-family: Georgia, "Times New Roman", serif;
+          }
+
+          /* Tabella budget: righe leggibili e cifre allineate a destra */
+          .print-budget {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 8.5pt;
+            color: #374151;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          }
+          .print-budget td {
+            padding: 3px 6px;
+            border-bottom: 1px solid #f1f5f9;
+            vertical-align: top;
+          }
+          .print-budget td:first-child {
+            font-weight: 700;
+            color: #1e3a8a;
+            width: 22%;
+            white-space: nowrap;
+          }
+          .print-budget td:last-child {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            width: 18%;
+            white-space: nowrap;
+          }
+          .print-budget tr.total td {
+            border-top: 1.5px solid #1e3a8a;
+            border-bottom: none;
+            font-weight: 800;
+            color: #1e3a8a;
+            padding-top: 5px;
           }
 
           /* Professional Fixed Footer */
@@ -253,7 +360,8 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             bottom: 5mm;
             left: 5mm;
             right: 5mm;
-            border: 2px solid #1e3a8a;
+            border: 1px solid #1e3a8a;
+            border-radius: 2mm;
             pointer-events: none;
             z-index: 9000;
           }
@@ -263,19 +371,19 @@ export default function PrintView({ plan, language }: PrintViewProps) {
       {/* PRINT-ONLY RESILIENT TRAVEL GUIDE */}
       <div className="absolute top-0 left-[-9999px] w-[800px] print:relative print:left-0 print:w-full text-black p-0 print-optimized-view">
         <div className="print-page-frame"></div>
-        {/* Elegant Header */}
+        {/* Header compatto: titolo + eyebrow + intro breve, logo discreto */}
         <div className="print-header">
           <div style={{ flex: 1 }}>
-            <h1 className="print-title" style={{ fontSize: '24pt', marginBottom: '8px' }}>{plan.titolo}</h1>
-            <p className="print-subtitle" style={{ fontSize: '10pt', color: '#1e3a8a' }}>
+            <p className="print-subtitle">
               {plan.giorni.length} {plan.giorni.length === 1 ? getPrintTranslation('single_day', langStr) : getPrintTranslation('days', langStr)} {getPrintTranslation('itinerary_by', langStr)}
             </p>
-            <p className="print-intro-desc" style={{ fontSize: '10pt', marginTop: '12px', borderLeft: '3px solid #eab308', paddingLeft: '12px' }}>
+            <h1 className="print-title">{plan.titolo}</h1>
+            <p className="print-intro-desc">
               {getPrintTranslation('intro', langStr)}
             </p>
           </div>
           <div style={{ flexShrink: 0 }}>
-            <img src="/logo.jpg" alt="World in Pocket" style={{ width: '120px', height: '120px', objectFit: 'contain', borderRadius: '16px' }} />
+            <img src="/logo.jpg" alt="World in Pocket" className="print-logo" />
           </div>
         </div>
 
@@ -294,9 +402,13 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             <div className="space-y-3">
               {giorno.tappe.map((tappa, tIdx) => (
                 <div key={`print-tappa-${tappa.id_tappa}-${tIdx}`} className="print-activity-block">
-                  <h4 className="print-activity-title">{tappa.titolo_tappa}</h4>
-                  
-                  {/* Duration and Spostamento (Technical Hours and Activity type tags are completely omitted!) */}
+                  <h4 className="print-activity-title">
+                    {/* L'orario c'era a schermo ma non in stampa: su carta è
+                        l'informazione più consultata */}
+                    {tappa.ora && <span className="print-activity-time">{tappa.ora}</span>}
+                    {tappa.titolo_tappa}
+                  </h4>
+
                   {(tappa.tempo_necessario || (tappa.spostamento_precedente && tappa.spostamento_precedente !== "null")) && (
                     <div className="print-activity-duration">
                       {tappa.tempo_necessario && (
@@ -331,48 +443,24 @@ export default function PrintView({ plan, language }: PrintViewProps) {
 
             {/* Tabella Budget Print */}
             {(giorno as any).tabella_budget && (
-              <div style={{ marginTop: '12px', marginBottom: '16px', borderTop: '1px solid #eee', paddingTop: '8px', fontSize: '9pt', fontFamily: 'sans-serif', breakInside: 'avoid' }}>
-                <strong style={{ display: 'block', color: '#1e3a8a', marginBottom: '4px' }}>Budget della Giornata</strong>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', color: '#2e3534' }}>
+              <div style={{ marginTop: '10px', marginBottom: '14px', breakInside: 'avoid' }}>
+                <strong style={{ display: 'block', color: '#1e3a8a', marginBottom: '3px', fontSize: '8pt', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'sans-serif' }}>Budget della Giornata</strong>
+                <table className="print-budget">
                   <tbody>
-                    {(giorno as any).tabella_budget.attrazioni && (
-                      <tr style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '2px 0', fontWeight: 'bold', width: '25%' }}>Attrazioni</td>
-                        <td style={{ padding: '2px 0', width: '50%' }}>{(giorno as any).tabella_budget.attrazioni.dettaglio || (giorno as any).tabella_budget.attrazioni}</td>
-                        <td style={{ padding: '2px 0', width: '25%' }}>{(giorno as any).tabella_budget.attrazioni.stima_pp || ''}</td>
-                      </tr>
-                    )}
-                    {(giorno as any).tabella_budget.trasporti && (
-                      <tr style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '2px 0', fontWeight: 'bold' }}>Trasporti</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.trasporti.dettaglio || (giorno as any).tabella_budget.trasporti}</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.trasporti.stima_pp || ''}</td>
-                      </tr>
-                    )}
-                    {(giorno as any).tabella_budget.colazione && (
-                      <tr style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '2px 0', fontWeight: 'bold' }}>Colazione</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.colazione.dettaglio || (giorno as any).tabella_budget.colazione}</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.colazione.stima_pp || ''}</td>
-                      </tr>
-                    )}
-                    {(giorno as any).tabella_budget.pranzo && (
-                      <tr style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '2px 0', fontWeight: 'bold' }}>Pranzo</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.pranzo.dettaglio || (giorno as any).tabella_budget.pranzo}</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.pranzo.stima_pp || ''}</td>
-                      </tr>
-                    )}
-                    {(giorno as any).tabella_budget.cena && (
-                      <tr style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '2px 0', fontWeight: 'bold' }}>Cena</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.cena.dettaglio || (giorno as any).tabella_budget.cena}</td>
-                        <td style={{ padding: '2px 0' }}>{(giorno as any).tabella_budget.cena.stima_pp || ''}</td>
-                      </tr>
-                    )}
-                    <tr>
-                      <td colSpan={2} style={{ padding: '4px 0', fontWeight: 'bold', color: '#1e3a8a' }}>TOTALE GIORNO</td>
-                      <td style={{ padding: '4px 0', fontWeight: 'bold', color: '#1e3a8a' }}>{(giorno as any).tabella_budget.totale_giorno}</td>
+                    {(['attrazioni', 'trasporti', 'colazione', 'pranzo', 'cena'] as const).map((voce) => {
+                      const riga = (giorno as any).tabella_budget[voce];
+                      if (!riga) return null;
+                      return (
+                        <tr key={voce}>
+                          <td style={{ textTransform: 'capitalize' }}>{voce}</td>
+                          <td>{riga.dettaglio || riga}</td>
+                          <td>{riga.stima_pp || ''}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="total">
+                      <td colSpan={2}>TOTALE GIORNO</td>
+                      <td>{(giorno as any).tabella_budget.totale_giorno}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -387,33 +475,33 @@ export default function PrintView({ plan, language }: PrintViewProps) {
         {plan.info_viaggio && (
           <div className="print-day-container" style={{ marginTop: '20px' }}>
             {plan.info_viaggio.raccomandazioni && plan.info_viaggio.raccomandazioni.length > 0 && (
-              <div style={{ marginBottom: '16px' }}>
-                <h3 className="print-title" style={{ fontSize: '14pt' }}>Consigli</h3>
-                <ul style={{ paddingLeft: '20px', margin: '8px 0', fontSize: '9.5pt', color: '#2e3534' }}>
+              <div style={{ marginBottom: '12px', breakInside: 'avoid' }}>
+                <h3 className="print-section-title">Consigli</h3>
+                <ul className="print-section-list">
                   {plan.info_viaggio.raccomandazioni.map((r, i) => (
-                    <li key={`racc-${i}`} style={{ marginBottom: '4px' }}>{r}</li>
+                    <li key={`racc-${i}`} style={{ marginBottom: '3px' }}>{r}</li>
                   ))}
                 </ul>
               </div>
             )}
-            
+
             {plan.info_viaggio.suggerimenti && plan.info_viaggio.suggerimenti.length > 0 && (
-              <div style={{ marginBottom: '16px' }}>
-                <h3 className="print-title" style={{ fontSize: '14pt' }}>Suggerimenti Extra</h3>
-                <ul style={{ paddingLeft: '20px', margin: '8px 0', fontSize: '9.5pt', color: '#2e3534' }}>
+              <div style={{ marginBottom: '12px', breakInside: 'avoid' }}>
+                <h3 className="print-section-title">Suggerimenti Extra</h3>
+                <ul className="print-section-list">
                   {plan.info_viaggio.suggerimenti.map((s, i) => (
-                    <li key={`sugg-${i}`} style={{ marginBottom: '4px' }}>{s}</li>
+                    <li key={`sugg-${i}`} style={{ marginBottom: '3px' }}>{s}</li>
                   ))}
                 </ul>
               </div>
             )}
 
             {plan.info_viaggio.precauzioni && plan.info_viaggio.precauzioni.length > 0 && (
-              <div style={{ marginBottom: '16px', breakInside: 'avoid' }}>
-                <h3 className="print-title" style={{ fontSize: '14pt', color: '#e11d48' }}>Precauzioni</h3>
-                <ul style={{ paddingLeft: '20px', margin: '8px 0', fontSize: '9.5pt', color: '#2e3534' }}>
+              <div style={{ marginBottom: '12px', breakInside: 'avoid' }}>
+                <h3 className="print-section-title" style={{ color: '#be123c', borderBottomColor: '#be123c' }}>Precauzioni</h3>
+                <ul className="print-section-list">
                   {plan.info_viaggio.precauzioni.map((p, i) => (
-                    <li key={`prec-${i}`} style={{ marginBottom: '4px' }}>{p}</li>
+                    <li key={`prec-${i}`} style={{ marginBottom: '3px' }}>{p}</li>
                   ))}
                 </ul>
               </div>
@@ -422,11 +510,11 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             {/* Zone da evitare: generate dall'AI e mostrate a schermo, ma
                 prima non venivano mai stampate */}
             {(plan.info_viaggio as any).zone_da_evitare && (plan.info_viaggio as any).zone_da_evitare.length > 0 && (
-              <div style={{ marginBottom: '16px', breakInside: 'avoid' }}>
-                <h3 className="print-title" style={{ fontSize: '14pt', color: '#b45309' }}>Zone da evitare</h3>
-                <ul style={{ paddingLeft: '20px', margin: '8px 0', fontSize: '9.5pt', color: '#2e3534' }}>
+              <div style={{ marginBottom: '12px', breakInside: 'avoid' }}>
+                <h3 className="print-section-title" style={{ color: '#b45309', borderBottomColor: '#b45309' }}>Zone da evitare</h3>
+                <ul className="print-section-list">
                   {(plan.info_viaggio as any).zone_da_evitare.map((z: string, i: number) => (
-                    <li key={`zona-${i}`} style={{ marginBottom: '4px' }}>{z}</li>
+                    <li key={`zona-${i}`} style={{ marginBottom: '3px' }}>{z}</li>
                   ))}
                 </ul>
               </div>
@@ -436,19 +524,19 @@ export default function PrintView({ plan, language }: PrintViewProps) {
 
         {/* Totale Viaggio */}
         {(plan as any).totale_viaggio && (
-          <div className="print-day-container" style={{ marginTop: '20px', padding: '16px', border: '2px solid #1e3a8a', borderRadius: '8px', backgroundColor: '#f8f5f0' }}>
-            <h3 style={{ margin: 0, fontSize: '14pt', color: '#1e3a8a', fontWeight: 'bold', textAlign: 'center' }}>
-              TOTALE STIMATO VIAGGIO
+          <div className="print-day-container" style={{ marginTop: '14px', padding: '10px 16px', border: '1.5px solid #1e3a8a', borderLeft: '5px solid #d4af37', borderRadius: '8px', backgroundColor: '#f8fafc', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', breakInside: 'avoid', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' } as any}>
+            <h3 style={{ margin: 0, fontSize: '10pt', color: '#1e3a8a', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'sans-serif' }}>
+              Totale stimato viaggio
             </h3>
-            <p style={{ margin: '8px 0 0 0', fontSize: '16pt', color: '#1e3a8a', fontWeight: 'black', textAlign: 'center', fontFamily: 'monospace' }}>
+            <p style={{ margin: 0, fontSize: '14pt', color: '#1e3a8a', fontWeight: 800, fontVariantNumeric: 'tabular-nums', fontFamily: 'sans-serif' }}>
               {(plan as any).totale_viaggio}
             </p>
           </div>
         )}
 
         {/* Mappa del percorso (Pagina a sé stante) */}
-        <div className="print-day-container" style={{ marginTop: '40px', marginBottom: '30px', height: '850px', pageBreakBefore: 'always', breakBefore: 'page', border: '2px solid #1e3a8a', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
-            <h3 style={{ position: 'absolute', top: 10, left: 20, zIndex: 1000, margin: 0, fontSize: '18pt', color: '#1e3a8a', fontWeight: 'bold', background: 'white', padding: '4px 12px', borderRadius: '8px', border: '1px solid #1e3a8a' }}>Mappa del Percorso</h3>
+        <div className="print-day-container" style={{ marginTop: '24px', marginBottom: '24px', height: '850px', pageBreakBefore: 'always', breakBefore: 'page', border: '1.5px solid #1e3a8a', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
+            <h3 style={{ position: 'absolute', top: 44, left: 12, zIndex: 1000, margin: 0, fontSize: '11pt', color: '#1e3a8a', fontWeight: 800, background: 'white', padding: '4px 12px', borderRadius: '999px', border: '1px solid #1e3a8a', fontFamily: 'sans-serif', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mappa del Percorso</h3>
             <PlanMap giorni={plan.giorni} isPrint={true} />
         </div>
 

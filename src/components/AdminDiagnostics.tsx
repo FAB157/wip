@@ -313,28 +313,6 @@ export default function AdminDiagnostics() {
       }
     },
     {
-      id: 'api_predicthq',
-      name: 'PredictHQ API',
-      description: 'Test connessione PredictHQ per eventi locali.',
-      icon: <CheckCircle2 className="w-5 h-5 text-orange-500" />,
-      status: 'idle',
-      run: async () => {
-        try {
-          // Coordinate di test (Roma) e finestra date DINAMICA (oggi → domani):
-          // le vecchie date hardcoded erano finite nel passato. getApiUrl per
-          // funzionare anche dall'app nativa.
-          const d0 = new Date().toISOString().slice(0, 10);
-          const d1 = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-          const res = await fetch(getApiUrl(`/api/predicthq?lat=41.8902&lon=12.4922&radius=10&startStr=${d0}&endStr=${d1}`));
-          if (res.ok) {
-            const data = await res.json();
-            if (data.results) return { status: 'passed', message: 'PredictHQ proxy attivo e funzionante.' };
-          }
-          return { status: 'failed', message: 'Errore API PredictHQ', solution: 'Verifica PREDICTHQ_API_KEY su Vercel.' };
-        } catch { return { status: 'failed', message: 'Backend irraggiungibile' }; }
-      }
-    },
-    {
       id: 'api_ai_gemini',
       name: 'API Gemini (Fallback/Vision)',
       description: 'Verifica la configurazione di Google Gemini AI.',

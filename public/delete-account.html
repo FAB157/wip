@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Elimina account - WIP (World in Pocket)</title>
+    <meta name="description" content="Elimina il tuo account WIP - World in Pocket e tutti i dati associati, anche senza reinstallare l'app.">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.7;
+            color: #374151;
+            background-color: #f3f4f6;
+            padding: 1.5rem;
+        }
+        .container {
+            background: white;
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 2.5rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        .logo { font-size: 2rem; margin-bottom: 0.5rem; }
+        h1 { color: #b91c1c; font-size: 1.7rem; }
+        .subtitle { color: #6b7280; font-size: 0.95rem; margin-top: 0.25rem; }
+        h2 { color: #1e40af; font-size: 1.1rem; margin-top: 2rem; margin-bottom: 0.6rem; }
+        p { color: #4b5563; margin-bottom: 0.75rem; }
+        ul { list-style: disc; padding-left: 1.5rem; color: #4b5563; margin-bottom: 0.75rem; }
+        li { margin-bottom: 0.3rem; }
+        .warn {
+            background: linear-gradient(135deg, #fef2f2, #fee2e2);
+            border-left: 4px solid #ef4444;
+            padding: 1rem 1.25rem;
+            border-radius: 0 8px 8px 0;
+            margin: 1rem 0;
+            color: #991b1b;
+            font-weight: 500;
+        }
+        .method {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin: 1rem 0;
+        }
+        .method h3 { color: #111827; font-size: 1rem; margin-bottom: 0.5rem; }
+        .method a { color: #1e40af; font-weight: bold; }
+        form { margin-top: 1rem; }
+        label { display: block; font-size: 0.85rem; font-weight: bold; color: #374151; margin-bottom: 0.25rem; }
+        input[type=email], input[type=password] {
+            width: 100%; padding: 0.7rem 0.9rem; border: 1px solid #d1d5db;
+            border-radius: 10px; font-size: 1rem; margin-bottom: 0.9rem; background: white; color: #111827;
+        }
+        .check { display: flex; align-items: flex-start; gap: 0.5rem; margin-bottom: 1rem; }
+        .check input { margin-top: 0.3rem; }
+        .check span { font-size: 0.9rem; color: #4b5563; }
+        button.delete-btn {
+            width: 100%; background: #dc2626; color: white; font-weight: bold;
+            padding: 0.85rem; border: none; border-radius: 10px; font-size: 1rem; cursor: pointer;
+        }
+        button.delete-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.delete-btn:hover:not(:disabled) { background: #b91c1c; }
+        .msg { margin-top: 1rem; padding: 0.9rem 1.1rem; border-radius: 10px; font-weight: 500; display: none; }
+        .msg.error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+        .msg.success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+        .lang-switch { text-align: right; margin-bottom: 0.5rem; }
+        .lang-btn {
+            background: #f3f4f6; border: 1px solid #d1d5db; color: #374151;
+            padding: 4px 12px; border-radius: 99px; font-size: 0.8rem; font-weight: bold;
+            cursor: pointer; margin-left: 0.35rem;
+        }
+        .lang-btn.active { background: #1e3a8a; border-color: #1e3a8a; color: white; }
+        footer {
+            text-align: center; margin-top: 2rem; color: #9ca3af; font-size: 0.85rem;
+            border-top: 1px solid #e5e7eb; padding-top: 1.5rem;
+        }
+        footer a { color: #1e40af; text-decoration: none; margin: 0 0.4rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="lang-switch">
+            <button class="lang-btn" data-l="it" onclick="setLang('it')">IT</button>
+            <button class="lang-btn" data-l="en" onclick="setLang('en')">EN</button>
+        </div>
+        <div class="header">
+            <div class="logo">🌍</div>
+            <h1 data-lang="it">Eliminazione account</h1>
+            <h1 data-lang="en">Account deletion</h1>
+            <p class="subtitle">WIP &mdash; World in Pocket &middot; Davide Musetti</p>
+        </div>
+
+        <!-- ==================== ITALIANO ==================== -->
+        <div data-lang="it">
+        <p>Da questa pagina puoi eliminare il tuo account <strong>WIP &mdash; World in Pocket</strong> e tutti i dati personali associati, anche se hai già disinstallato l'app.</p>
+
+        <div class="warn">
+            ⚠️ La cancellazione è <strong>immediata e definitiva</strong>. Vengono eliminati: account, profilo, <strong>crediti residui (non rimborsabili)</strong>, preferiti, itinerari, cronologia ascolti, foto e schede WIP Vision e i contenuti pubblicati nella community. Restano solo le registrazioni delle transazioni presso i fornitori di pagamento (obblighi fiscali) e log tecnici anonimi.
+        </div>
+
+        <div class="method">
+            <h3>📱 Metodo 1 &mdash; Dall'app</h3>
+            <p style="margin-bottom:0">Apri WIP e vai su <em>Profilo → Impostazioni → Elimina Account</em>.</p>
+        </div>
+
+        <div class="method">
+            <h3>💻 Metodo 2 &mdash; Da questa pagina</h3>
+            <p>Accedi con l'email e la password del tuo account WIP: la cancellazione avviene subito.</p>
+            <form id="form-it" onsubmit="return submitDelete(event, 'it')">
+                <label for="email-it">Email</label>
+                <input type="email" id="email-it" autocomplete="email" required>
+                <label for="pass-it">Password</label>
+                <input type="password" id="pass-it" autocomplete="current-password" required>
+                <div class="check">
+                    <input type="checkbox" id="confirm-it" required>
+                    <span>Capisco che la cancellazione è definitiva e che i crediti residui non sono rimborsabili.</span>
+                </div>
+                <button type="submit" class="delete-btn" id="btn-it">Elimina definitivamente il mio account</button>
+            </form>
+            <div class="msg" id="msg-it"></div>
+            <p style="margin-top:0.75rem; font-size:0.85rem;">Password dimenticata? Reimpostala dall'app (schermata di accesso → "Password dimenticata?") oppure usa il Metodo 3.</p>
+        </div>
+
+        <div class="method">
+            <h3>📧 Metodo 3 &mdash; Via email</h3>
+            <p style="margin-bottom:0">Scrivi a <a href="mailto:support@wip.guide?subject=Richiesta%20eliminazione%20account">support@wip.guide</a> dall'email con cui ti sei registrato, con oggetto <em>"Richiesta eliminazione account"</em>. La richiesta viene evasa entro <strong>30 giorni</strong>.</p>
+        </div>
+
+        <p style="font-size:0.9rem;">Per maggiori dettagli su quali dati trattiamo e conserviamo, consulta la <a href="/privacy" style="color:#1e40af; font-weight:bold;">Privacy Policy</a>.</p>
+        </div>
+
+        <!-- ==================== ENGLISH ==================== -->
+        <div data-lang="en">
+        <p>From this page you can delete your <strong>WIP &mdash; World in Pocket</strong> account and all associated personal data, even if you have already uninstalled the app.</p>
+
+        <div class="warn">
+            ⚠️ Deletion is <strong>immediate and permanent</strong>. The following are erased: account, profile, <strong>remaining credits (non-refundable)</strong>, favorites, itineraries, listening history, WIP Vision photos and cards, and your community content. Only transaction records held by payment providers (tax obligations) and anonymous technical logs are retained.
+        </div>
+
+        <div class="method">
+            <h3>📱 Method 1 &mdash; In the app</h3>
+            <p style="margin-bottom:0">Open WIP and go to <em>Profile → Settings → Delete Account</em>.</p>
+        </div>
+
+        <div class="method">
+            <h3>💻 Method 2 &mdash; From this page</h3>
+            <p>Sign in with your WIP account email and password: deletion happens right away.</p>
+            <form id="form-en" onsubmit="return submitDelete(event, 'en')">
+                <label for="email-en">Email</label>
+                <input type="email" id="email-en" autocomplete="email" required>
+                <label for="pass-en">Password</label>
+                <input type="password" id="pass-en" autocomplete="current-password" required>
+                <div class="check">
+                    <input type="checkbox" id="confirm-en" required>
+                    <span>I understand that deletion is permanent and remaining credits are non-refundable.</span>
+                </div>
+                <button type="submit" class="delete-btn" id="btn-en">Permanently delete my account</button>
+            </form>
+            <div class="msg" id="msg-en"></div>
+            <p style="margin-top:0.75rem; font-size:0.85rem;">Forgot your password? Reset it from the app (login screen → "Forgot password?") or use Method 3.</p>
+        </div>
+
+        <div class="method">
+            <h3>📧 Method 3 &mdash; By email</h3>
+            <p style="margin-bottom:0">Write to <a href="mailto:support@wip.guide?subject=Account%20deletion%20request">support@wip.guide</a> from your registration email with subject <em>"Account deletion request"</em>. Requests are processed within <strong>30 days</strong>.</p>
+        </div>
+
+        <p style="font-size:0.9rem;">For details on what data we process and retain, see the <a href="/privacy" style="color:#1e40af; font-weight:bold;">Privacy Policy</a>.</p>
+        </div>
+
+        <footer>
+            &copy; 2026 WIP &mdash; World in Pocket<br>
+            <a href="/privacy">Privacy Policy</a> &middot;
+            <a href="/terms" data-lang="it">Termini di servizio</a><a href="/terms" data-lang="en">Terms of Service</a> &middot;
+            <a href="/support" data-lang="it">Supporto</a><a href="/support" data-lang="en">Support</a>
+        </footer>
+    </div>
+    <script>
+        function setLang(l) {
+            document.documentElement.lang = l;
+            document.querySelectorAll('[data-lang]').forEach(function (e) {
+                e.style.display = e.getAttribute('data-lang') === l ? '' : 'none';
+            });
+            document.querySelectorAll('.lang-btn').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-l') === l);
+            });
+            try { localStorage.setItem('wip_legal_lang', l); } catch (e) {}
+        }
+        setLang((function () {
+            try { var s = localStorage.getItem('wip_legal_lang'); if (s === 'it' || s === 'en') return s; } catch (e) {}
+            return (navigator.language || 'it').toLowerCase().indexOf('it') === 0 ? 'it' : 'en';
+        })());
+
+        var TEXTS = {
+            it: {
+                confirm: 'Confermi di voler eliminare DEFINITIVAMENTE il tuo account WIP? L\'operazione non può essere annullata.',
+                deleting: 'Eliminazione in corso…',
+                success: '✅ Il tuo account e i dati associati sono stati eliminati. Ci dispiace vederti andare via.',
+                badCredentials: 'Email o password non corretti. Se hai dimenticato la password, usa il Metodo 3.',
+                tooMany: 'Troppi tentativi: riprova tra qualche minuto.',
+                generic: 'Si è verificato un errore. Riprova più tardi oppure scrivi a support@wip.guide.'
+            },
+            en: {
+                confirm: 'Do you confirm you want to PERMANENTLY delete your WIP account? This cannot be undone.',
+                deleting: 'Deleting…',
+                success: '✅ Your account and associated data have been deleted. We are sorry to see you go.',
+                badCredentials: 'Incorrect email or password. If you forgot your password, use Method 3.',
+                tooMany: 'Too many attempts: try again in a few minutes.',
+                generic: 'Something went wrong. Try again later or write to support@wip.guide.'
+            }
+        };
+
+        function submitDelete(ev, l) {
+            ev.preventDefault();
+            var t = TEXTS[l];
+            if (!window.confirm(t.confirm)) return false;
+            var btn = document.getElementById('btn-' + l);
+            var msg = document.getElementById('msg-' + l);
+            var email = document.getElementById('email-' + l).value.trim();
+            var password = document.getElementById('pass-' + l).value;
+            btn.disabled = true;
+            btn.textContent = t.deleting;
+            msg.style.display = 'none';
+            msg.className = 'msg';
+            // Stesso progetto Vercel dell'API: il path relativo funziona sia su
+            // wip.guide sia su itainta.vercel.app senza CORS.
+            fetch('/api/account/delete-web', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email, password: password, confirm: true })
+            }).then(function (res) {
+                return res.json().catch(function () { return {}; }).then(function (body) {
+                    if (res.ok && body && body.success) {
+                        document.getElementById('form-' + l).style.display = 'none';
+                        msg.className = 'msg success';
+                        msg.textContent = t.success;
+                    } else if (res.status === 401) {
+                        msg.className = 'msg error';
+                        msg.textContent = t.badCredentials;
+                    } else if (res.status === 429) {
+                        msg.className = 'msg error';
+                        msg.textContent = t.tooMany;
+                    } else {
+                        msg.className = 'msg error';
+                        msg.textContent = t.generic;
+                    }
+                    msg.style.display = 'block';
+                });
+            }).catch(function () {
+                msg.className = 'msg error';
+                msg.textContent = t.generic;
+                msg.style.display = 'block';
+            }).then(function () {
+                var form = document.getElementById('form-' + l);
+                if (form.style.display !== 'none') {
+                    btn.disabled = false;
+                    btn.textContent = l === 'it' ? 'Elimina definitivamente il mio account' : 'Permanently delete my account';
+                }
+            });
+            return false;
+        }
+    </script>
+</body>
+</html>

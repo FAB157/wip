@@ -7,7 +7,7 @@ import Foundation
  * perdita di rete nel frattempo).
  *
  * L'MP3 arriva dallo STESSO endpoint del player web/JS
- * (POST https://itainta.vercel.app/api/tts/smart {text, voice}): il server è
+ * (POST https://wip.guide/api/tts/smart {text, voice}): il server è
  * cache-first (bucket audio_cache, chiave voce+md5 del testo), quindi per i
  * testi già sintetizzati risponde con un redirect immediato.
  *
@@ -17,7 +17,7 @@ import Foundation
  */
 enum AudioPrefetchManager {
 
-    private static let ttsEndpoint = "https://itainta.vercel.app/api/tts/smart"
+    private static let ttsEndpoint = "https://wip.guide/api/tts/smart"
     private static let maxAgeSec: TimeInterval = 24 * 60 * 60
     // Un MP3 sotto ~1KB è un errore mascherato (il server stesso scarta <500B)
     private static let minValidBytes = 1000

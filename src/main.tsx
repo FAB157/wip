@@ -40,11 +40,12 @@ if (Capacitor.isNativePlatform()) {
   Purchases.setLogLevel({ level: LOG_LEVEL.DEBUG });
   
   if (Capacitor.getPlatform() === 'ios') {
-    // Sostituisci con la vera Public API Key di iOS fornita da RevenueCat.
-    // Finché resta il placeholder NON configuriamo: gli acquisti falliscono
-    // con un messaggio pulito invece di inondare il log di errori.
-    const iosRevenueCatKey = "appl_YOUR_IOS_API_KEY_HERE";
-    if (!iosRevenueCatKey.includes("YOUR_IOS")) {
+    // Chiave pubblica RevenueCat iOS da env (VITE_REVENUECAT_IOS_KEY): quando
+    // arriverà basta impostarla e rifare la build, senza toccare il codice.
+    // Senza chiave NON configuriamo: gli acquisti falliscono con un messaggio
+    // pulito invece di inondare il log di errori.
+    const iosRevenueCatKey = import.meta.env.VITE_REVENUECAT_IOS_KEY || "";
+    if (iosRevenueCatKey.startsWith("appl_")) {
       Purchases.configure({ apiKey: iosRevenueCatKey });
     }
   } else if (Capacitor.getPlatform() === 'android') {

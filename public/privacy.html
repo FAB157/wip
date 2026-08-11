@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Policy - World in Pocket (WIP)</title>
+    <title>Privacy Policy - WIP (World in Pocket)</title>
+    <meta name="description" content="Informativa privacy dell'app WIP - World in Pocket: dati raccolti, posizione in background, terze parti, diritti GDPR e cancellazione account.">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -35,11 +36,10 @@
             font-size: 1.1rem;
             margin-top: 2rem;
             margin-bottom: 0.6rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
         }
         p { color: #4b5563; margin-bottom: 0.75rem; }
+        ul { list-style: disc; padding-left: 1.5rem; color: #4b5563; margin-bottom: 0.75rem; }
+        li { margin-bottom: 0.35rem; }
         .highlight {
             background: linear-gradient(135deg, #eff6ff, #dbeafe);
             border-left: 4px solid #3b82f6;
@@ -56,20 +56,10 @@
             padding: 1.5rem;
             margin: 1.5rem 0;
         }
-        .deletion-box h3 {
-            color: #15803d;
-            font-size: 1.05rem;
-            margin-bottom: 0.75rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .deletion-box p { color: #166534; margin-bottom: 0.5rem; }
-        .deletion-box a {
-            color: #15803d;
-            font-weight: bold;
-            text-decoration: underline;
-        }
+        .deletion-box h3 { color: #15803d; font-size: 1.05rem; margin-bottom: 0.75rem; }
+        .deletion-box p, .deletion-box li { color: #166534; }
+        .deletion-box ul { color: #166534; }
+        .deletion-box a { color: #15803d; font-weight: bold; text-decoration: underline; }
         .contact-box {
             background: #f9fafb;
             border: 1px solid #e5e7eb;
@@ -90,6 +80,13 @@
             vertical-align: middle;
             margin-left: 0.5rem;
         }
+        .lang-switch { text-align: right; margin-bottom: 0.5rem; }
+        .lang-btn {
+            background: #f3f4f6; border: 1px solid #d1d5db; color: #374151;
+            padding: 4px 12px; border-radius: 99px; font-size: 0.8rem; font-weight: bold;
+            cursor: pointer; margin-left: 0.35rem;
+        }
+        .lang-btn.active { background: #1e3a8a; border-color: #1e3a8a; color: white; }
         footer {
             text-align: center;
             margin-top: 2rem;
@@ -98,63 +95,198 @@
             border-top: 1px solid #e5e7eb;
             padding-top: 1.5rem;
         }
+        footer a { color: #1e40af; text-decoration: none; margin: 0 0.4rem; }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="lang-switch">
+            <button class="lang-btn" data-l="it" onclick="setLang('it')">IT</button>
+            <button class="lang-btn" data-l="en" onclick="setLang('en')">EN</button>
+        </div>
         <div class="header">
             <div class="logo">🌍</div>
             <h1>Privacy Policy</h1>
-            <p class="subtitle">World in Pocket (WIP) &mdash; Ultimo aggiornamento: Luglio 2026</p>
+            <p class="subtitle">WIP &mdash; World in Pocket</p>
+            <p class="subtitle" data-lang="it">Ultimo aggiornamento: 11 agosto 2026</p>
+            <p class="subtitle" data-lang="en">Last updated: August 11, 2026</p>
         </div>
 
-        <h2>📋 1. Raccolta dei Dati</h2>
-        <p>World in Pocket (WIP) raccoglie i seguenti dati personali strettamente necessari per il funzionamento dell'app:</p>
-        <ul style="list-style:disc; padding-left:1.5rem; color:#4b5563; margin-bottom:0.75rem;">
-            <li>Nome e indirizzo email (per la creazione dell'account)</li>
-            <li>Avatar e foto profilo (opzionale)</li>
-            <li>Posizione GPS (per le audioguide e il geofencing)</li>
-            <li>Itinerari salvati e preferenze di viaggio</li>
-            <li>Dati di acquisto (gestiti da Stripe, cifrati e sicuri)</li>
+        <!-- ==================== ITALIANO ==================== -->
+        <div data-lang="it">
+        <h2>1. Titolare del trattamento</h2>
+        <p>Il titolare del trattamento dei dati è <strong>Davide Musetti</strong>, Via Vignaletto 50, 54033 Carrara (MS), Italia &mdash; sviluppatore dell'app <strong>WIP &mdash; World in Pocket</strong> (pacchetto <code>com.itaintasca.app</code>).</p>
+        <p>Per ogni richiesta relativa alla privacy: <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+
+        <h2>2. Dati che raccogliamo</h2>
+        <ul>
+            <li><strong>Dati account</strong>: indirizzo email, nome visualizzato e avatar (facoltativo), forniti alla registrazione.</li>
+            <li><strong>Posizione GPS</strong> (in primo piano e in background): necessaria per le funzioni principali dell'app &mdash; audioguide di prossimità, geofencing e navigazione. Vedi la sezione 3.</li>
+            <li><strong>Foto e contenuti</strong>: le foto che scatti con la funzione WIP Vision / Community vengono caricate sui nostri server per generare la scheda del luogo; se scegli di proporle alla community, vengono riviste da un moderatore e possono essere pubblicate nell'app.</li>
+            <li><strong>Dati di acquisto</strong>: gli acquisti sono gestiti da Stripe (web) e Google Play / App Store con RevenueCat (in-app). Non vediamo né conserviamo i dati della tua carta; riceviamo solo la conferma della transazione per accreditare i crediti.</li>
+            <li><strong>Dati d'uso</strong>: crediti, punti esperienza, itinerari e luoghi salvati, cronologia degli ascolti, contatori giornalieri anti-abuso.</li>
+            <li><strong>Log tecnici</strong>: registri delle chiamate ai nostri server (per sicurezza, diagnostica e prevenzione frodi).</li>
         </ul>
 
-        <h2>📍 2. Uso della Posizione (Foreground e Background)</h2>
+        <h2>3. Posizione in background</h2>
         <div class="highlight">
-            ⚠️ Specifiche Posizione: L'app accede alla posizione in background anche quando chiusa o non in uso per attivare automaticamente le audioguide dei monumenti tramite Geofencing.
+            ⚠️ WIP accede alla posizione anche in background, quando l'app è chiusa o non in uso, per attivare automaticamente le audioguide dei luoghi che incontri (geofencing). La posizione viene inviata ai nostri server per trovare i punti di interesse vicini e generare i contenuti.
         </div>
-        <p>Questi dati di posizione <strong>non vengono mai venduti a terzi</strong> e sono usati esclusivamente per attivare i trigger audio e segnalarti attrazioni vicine. Puoi disattivare la posizione in background in qualsiasi momento dalle impostazioni del tuo dispositivo.</p>
+        <p>I dati di posizione <strong>non vengono mai venduti</strong> né usati per pubblicità. Puoi revocare il permesso di posizione in background in qualsiasi momento dalle impostazioni del dispositivo: l'app continuerà a funzionare con la sola posizione in primo piano.</p>
 
-        <h2>🔒 3. Sicurezza e Conservazione</h2>
-        <p>Utilizziamo standard di crittografia per proteggere i tuoi dati durante il transito (HTTPS/TLS 1.3) e a riposo (database Supabase crittografati). I dati vengono conservati finché il tuo account rimane attivo.</p>
+        <h2>4. Perché trattiamo i dati (basi giuridiche GDPR)</h2>
+        <ul>
+            <li><strong>Esecuzione del contratto</strong>: account, audioguide, itinerari, acquisti e crediti.</li>
+            <li><strong>Legittimo interesse</strong>: sicurezza, prevenzione di frodi e abusi, statistiche aggregate.</li>
+            <li><strong>Consenso</strong>: pubblicazione delle tue foto nella community; puoi revocarlo eliminando lo scatto o l'account.</li>
+            <li><strong>Obblighi di legge</strong>: conservazione dei dati fiscali sulle transazioni.</li>
+        </ul>
 
-        <h2>🤝 4. Condivisione con Terze Parti</h2>
-        <p>WIP si avvale di servizi di terze parti affidabili per il suo funzionamento: <strong>Supabase</strong> (database), <strong>Stripe</strong> (pagamenti), <strong>Google/Gemini AI</strong> (generazione contenuti), <strong>Foursquare</strong> (dati locali), <strong>ElevenLabs</strong> (sintesi vocale). Nessun dato personale viene condiviso con terze parti per scopi pubblicitari.</p>
+        <h2>5. Terze parti che trattano dati per nostro conto</h2>
+        <p>Tutte le chiamate a questi servizi passano dai nostri server: nessuna chiave di terze parti è presente sul tuo dispositivo.</p>
+        <ul>
+            <li><strong>Supabase</strong> &mdash; database, autenticazione e archiviazione file (account, preferiti, cronologia, foto).</li>
+            <li><strong>Vercel</strong> &mdash; hosting dei nostri server.</li>
+            <li><strong>Stripe</strong> e <strong>Google Play / App Store con RevenueCat</strong> &mdash; pagamenti e acquisti in-app.</li>
+            <li><strong>Fornitori di intelligenza artificiale</strong> (Groq, DeepSeek, Together AI, Google Gemini, OpenAI) &mdash; generano i testi delle audioguide e analizzano le foto WIP Vision; ricevono il nome del luogo, le coordinate dell'area e la lingua, mai la tua identità.</li>
+            <li><strong>Sintesi vocale</strong> (Microsoft Azure, Google, ElevenLabs) &mdash; trasformano i testi in audio; non ricevono dati personali.</li>
+            <li><strong>Mappe e luoghi</strong> (OpenStreetMap, Mapbox, Geoapify, Foursquare, TripAdvisor, Wikipedia/Wikimedia, Unsplash) &mdash; ricevono le coordinate dell'area visualizzata per mostrarti mappa, luoghi e immagini.</li>
+            <li><strong>Eventi e tour</strong> (Ticketmaster, Viator, GetYourGuide) &mdash; se apri le loro offerte, la prenotazione avviene sui loro siti (link affiliati: potremmo ricevere una commissione, senza costi aggiuntivi per te).</li>
+        </ul>
+        <p>Nessun dato personale viene condiviso con terze parti per scopi pubblicitari.</p>
 
-        <h2>👶 5. Minori</h2>
-        <p>WIP non è destinata a bambini di età inferiore ai 13 anni. Non raccogliamo consapevolmente dati da minori di 13 anni.</p>
+        <h2>6. Conservazione dei dati</h2>
+        <p>I dati vengono conservati finché il tuo account è attivo. Dopo la cancellazione dell'account eliminiamo profilo, preferiti, itinerari, cronologia, crediti, foto e contenuti pubblicati. Possono essere conservati solo: le registrazioni delle transazioni presso i fornitori di pagamento (obblighi fiscali e antifrode) e log tecnici in forma anonima e aggregata.</p>
+
+        <h2>7. I tuoi diritti (GDPR)</h2>
+        <p>In conformità al Regolamento UE 2016/679 hai diritto di: accedere ai tuoi dati, chiederne la rettifica o la cancellazione, limitarne od opporti al trattamento e riceverne copia in formato portabile. Scrivi a <a href="mailto:support@wip.guide">support@wip.guide</a>: rispondiamo entro 30 giorni. Hai inoltre il diritto di proporre reclamo al Garante per la Protezione dei Dati Personali (<a href="https://www.garanteprivacy.it">garanteprivacy.it</a>).</p>
 
         <!-- SEZIONE OBBLIGATORIA GOOGLE PLAY -->
         <div class="deletion-box">
-            <h3>🗑️ 6. Eliminazione Account e Dati <span class="badge">GOOGLE PLAY</span></h3>
-            <p>Hai il diritto di richiedere la cancellazione del tuo account e di tutti i dati personali associati in qualsiasi momento, anche dopo aver disinstallato l'app.</p>
-            <p><strong>Metodo 1 (dall'app):</strong> Vai su <em>Profilo → Impostazioni → Elimina Account</em>. La cancellazione è immediata e permanente.</p>
-            <p><strong>Metodo 2 (via email):</strong> Se hai già disinstallato l'app o non riesci ad accedere al tuo account, invia una richiesta di cancellazione a:<br>
-            📧 <a href="mailto:privacy@worldinpocket.app">privacy@worldinpocket.app</a><br>
-            indicando nell'oggetto: <em>"Richiesta eliminazione account - [tua email di registrazione]"</em></p>
-            <p>La richiesta verrà evasa entro <strong>30 giorni</strong>. Verranno eliminati: dati del profilo, itinerari, storico ascolti, crediti e tutte le informazioni personali dai nostri server.</p>
+            <h3>🗑️ 8. Eliminazione account e dati <span class="badge">GOOGLE PLAY</span></h3>
+            <p>Puoi cancellare il tuo account e tutti i dati personali associati in qualsiasi momento, anche dopo aver disinstallato l'app.</p>
+            <p><strong>Metodo 1 (dall'app):</strong> <em>Profilo → Impostazioni → Elimina Account</em>. La cancellazione è immediata e permanente.</p>
+            <p><strong>Metodo 2 (dal web):</strong> vai su <a href="https://wip.guide/delete-account">wip.guide/delete-account</a> e accedi con email e password: la cancellazione è immediata, senza reinstallare l'app.</p>
+            <p><strong>Metodo 3 (via email):</strong> scrivi a <a href="mailto:support@wip.guide">support@wip.guide</a> con oggetto <em>"Richiesta eliminazione account"</em> dall'email di registrazione. La richiesta viene evasa entro <strong>30 giorni</strong>.</p>
+            <p>Vengono eliminati: account, profilo, crediti (non rimborsabili), preferiti, itinerari, cronologia ascolti, foto e schede WIP Vision, contenuti pubblicati nella community.</p>
         </div>
 
-        <h2>📬 7. Contatti e DPO</h2>
+        <h2>9. Minori</h2>
+        <p>WIP non è destinata a minori di 14 anni e non raccogliamo consapevolmente dati di minori di 14 anni. Se ritieni che un minore ci abbia fornito dati personali, contattaci per la rimozione.</p>
+
+        <h2>10. Sicurezza</h2>
+        <p>Proteggiamo i tuoi dati con crittografia in transito (HTTPS/TLS) e a riposo (database Supabase crittografati). Le foto private di WIP Vision sono conservate in un archivio non pubblico, accessibile solo a te e ai moderatori.</p>
+
+        <h2>11. Modifiche a questa informativa</h2>
+        <p>Eventuali modifiche sostanziali saranno pubblicate su questa pagina con aggiornamento della data in alto. L'uso continuato dell'app dopo le modifiche ne costituisce accettazione.</p>
+
+        <h2>12. Contatti</h2>
         <div class="contact-box">
-            <p>Per qualsiasi domanda sulla privacy, richiesta di accesso, rettifica o portabilità dei dati, contattaci a:</p>
-            <p style="margin-top:0.5rem">📧 <a href="mailto:privacy@worldinpocket.app">privacy@worldinpocket.app</a></p>
-            <p style="margin-top:0.5rem; font-size:0.9rem; color:#6b7280;">World in Pocket &mdash; Sviluppato in Italia 🇮🇹</p>
+            <p>Per qualsiasi domanda su questa informativa o sui tuoi dati:</p>
+            <p style="margin-top:0.5rem">📧 <a href="mailto:support@wip.guide">support@wip.guide</a></p>
+            <p style="margin-top:0.5rem; font-size:0.9rem; color:#6b7280;">WIP &mdash; World in Pocket &middot; Davide Musetti &middot; Sviluppato in Italia 🇮🇹</p>
+        </div>
+        </div>
+
+        <!-- ==================== ENGLISH ==================== -->
+        <div data-lang="en">
+        <h2>1. Data controller</h2>
+        <p>The data controller is <strong>Davide Musetti</strong>, Via Vignaletto 50, 54033 Carrara (MS), Italy &mdash; developer of the app <strong>WIP &mdash; World in Pocket</strong> (package <code>com.itaintasca.app</code>).</p>
+        <p>For any privacy request: <a href="mailto:support@wip.guide">support@wip.guide</a>.</p>
+
+        <h2>2. Data we collect</h2>
+        <ul>
+            <li><strong>Account data</strong>: email address, display name and optional avatar, provided at sign-up.</li>
+            <li><strong>GPS location</strong> (foreground and background): required for the app's core features &mdash; proximity audio guides, geofencing and navigation. See section 3.</li>
+            <li><strong>Photos and content</strong>: photos you take with WIP Vision / Community are uploaded to our servers to generate the place card; if you submit them to the community, they are reviewed by a moderator and may be published in the app.</li>
+            <li><strong>Purchase data</strong>: purchases are handled by Stripe (web) and Google Play / App Store with RevenueCat (in-app). We never see or store your card details; we only receive the transaction confirmation to credit your wallet.</li>
+            <li><strong>Usage data</strong>: credits, experience points, saved places and itineraries, listening history, daily anti-abuse counters.</li>
+            <li><strong>Technical logs</strong>: server request logs (security, diagnostics and fraud prevention).</li>
+        </ul>
+
+        <h2>3. Background location</h2>
+        <div class="highlight">
+            ⚠️ WIP accesses your location in the background, even when the app is closed or not in use, to automatically trigger audio guides for the places you pass by (geofencing). Your location is sent to our servers to find nearby points of interest and generate content.
+        </div>
+        <p>Location data is <strong>never sold</strong> or used for advertising. You can revoke background location permission at any time in your device settings: the app will keep working with foreground location only.</p>
+
+        <h2>4. Why we process data (GDPR legal bases)</h2>
+        <ul>
+            <li><strong>Contract performance</strong>: account, audio guides, itineraries, purchases and credits.</li>
+            <li><strong>Legitimate interest</strong>: security, fraud and abuse prevention, aggregate statistics.</li>
+            <li><strong>Consent</strong>: publication of your photos in the community; you can withdraw it by deleting the photo or your account.</li>
+            <li><strong>Legal obligations</strong>: retention of tax records for transactions.</li>
+        </ul>
+
+        <h2>5. Third parties processing data on our behalf</h2>
+        <p>All calls to these services go through our servers: no third-party keys are present on your device.</p>
+        <ul>
+            <li><strong>Supabase</strong> &mdash; database, authentication and file storage (account, favorites, history, photos).</li>
+            <li><strong>Vercel</strong> &mdash; hosting of our servers.</li>
+            <li><strong>Stripe</strong> and <strong>Google Play / App Store with RevenueCat</strong> &mdash; payments and in-app purchases.</li>
+            <li><strong>AI providers</strong> (Groq, DeepSeek, Together AI, Google Gemini, OpenAI) &mdash; generate audio-guide texts and analyze WIP Vision photos; they receive the place name, area coordinates and language, never your identity.</li>
+            <li><strong>Text-to-speech</strong> (Microsoft Azure, Google, ElevenLabs) &mdash; turn texts into audio; they receive no personal data.</li>
+            <li><strong>Maps and places</strong> (OpenStreetMap, Mapbox, Geoapify, Foursquare, TripAdvisor, Wikipedia/Wikimedia, Unsplash) &mdash; receive the coordinates of the viewed area to show you the map, places and images.</li>
+            <li><strong>Events and tours</strong> (Ticketmaster, Viator, GetYourGuide) &mdash; if you open their offers, booking happens on their sites (affiliate links: we may earn a commission at no extra cost to you).</li>
+        </ul>
+        <p>No personal data is shared with third parties for advertising purposes.</p>
+
+        <h2>6. Data retention</h2>
+        <p>Data is kept as long as your account is active. After account deletion we erase your profile, favorites, itineraries, history, credits, photos and published content. Only the following may be retained: transaction records held by payment providers (tax and anti-fraud obligations) and technical logs in anonymous, aggregate form.</p>
+
+        <h2>7. Your rights (GDPR)</h2>
+        <p>Under EU Regulation 2016/679 you have the right to access your data, request rectification or erasure, restrict or object to processing, and receive a portable copy. Write to <a href="mailto:support@wip.guide">support@wip.guide</a>: we reply within 30 days. You may also lodge a complaint with the Italian Data Protection Authority (<a href="https://www.garanteprivacy.it">garanteprivacy.it</a>).</p>
+
+        <!-- GOOGLE PLAY REQUIRED SECTION -->
+        <div class="deletion-box">
+            <h3>🗑️ 8. Account and data deletion <span class="badge">GOOGLE PLAY</span></h3>
+            <p>You can delete your account and all associated personal data at any time, even after uninstalling the app.</p>
+            <p><strong>Method 1 (in-app):</strong> <em>Profile → Settings → Delete Account</em>. Deletion is immediate and permanent.</p>
+            <p><strong>Method 2 (web):</strong> go to <a href="https://wip.guide/delete-account">wip.guide/delete-account</a> and sign in with your email and password: deletion is immediate, without reinstalling the app.</p>
+            <p><strong>Method 3 (email):</strong> write to <a href="mailto:support@wip.guide">support@wip.guide</a> with subject <em>"Account deletion request"</em> from your registration email. Requests are processed within <strong>30 days</strong>.</p>
+            <p>The following are deleted: account, profile, credits (non-refundable), favorites, itineraries, listening history, WIP Vision photos and cards, community content.</p>
+        </div>
+
+        <h2>9. Children</h2>
+        <p>WIP is not intended for children under 14 and we do not knowingly collect data from children under 14. If you believe a child has provided us personal data, contact us for removal.</p>
+
+        <h2>10. Security</h2>
+        <p>We protect your data with encryption in transit (HTTPS/TLS) and at rest (encrypted Supabase databases). Private WIP Vision photos are stored in a non-public bucket, accessible only to you and the moderators.</p>
+
+        <h2>11. Changes to this policy</h2>
+        <p>Any material changes will be published on this page with an updated date at the top. Continued use of the app after changes constitutes acceptance.</p>
+
+        <h2>12. Contact</h2>
+        <div class="contact-box">
+            <p>For any question about this policy or your data:</p>
+            <p style="margin-top:0.5rem">📧 <a href="mailto:support@wip.guide">support@wip.guide</a></p>
+            <p style="margin-top:0.5rem; font-size:0.9rem; color:#6b7280;">WIP &mdash; World in Pocket &middot; Davide Musetti &middot; Made in Italy 🇮🇹</p>
+        </div>
         </div>
 
         <footer>
-            &copy; 2026 World in Pocket (WIP). Tutti i diritti riservati.<br>
-            <a href="https://itainta.vercel.app" style="color:#1e40af;">itainta.vercel.app</a>
+            &copy; 2026 WIP &mdash; World in Pocket. <span data-lang="it">Tutti i diritti riservati.</span><span data-lang="en">All rights reserved.</span><br>
+            <a href="https://wip.guide">wip.guide</a> &middot;
+            <a href="/terms" data-lang="it">Termini di servizio</a><a href="/terms" data-lang="en">Terms of Service</a> &middot;
+            <a href="/delete-account" data-lang="it">Elimina account</a><a href="/delete-account" data-lang="en">Delete account</a> &middot;
+            <a href="/support" data-lang="it">Supporto</a><a href="/support" data-lang="en">Support</a>
         </footer>
     </div>
+    <script>
+        function setLang(l) {
+            document.documentElement.lang = l;
+            document.querySelectorAll('[data-lang]').forEach(function (e) {
+                e.style.display = e.getAttribute('data-lang') === l ? '' : 'none';
+            });
+            document.querySelectorAll('.lang-btn').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-l') === l);
+            });
+            try { localStorage.setItem('wip_legal_lang', l); } catch (e) {}
+        }
+        setLang((function () {
+            try { var s = localStorage.getItem('wip_legal_lang'); if (s === 'it' || s === 'en') return s; } catch (e) {}
+            return (navigator.language || 'it').toLowerCase().indexOf('it') === 0 ? 'it' : 'en';
+        })());
+    </script>
 </body>
 </html>

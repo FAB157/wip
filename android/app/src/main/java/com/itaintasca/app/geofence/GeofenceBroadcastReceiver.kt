@@ -976,7 +976,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 }.toString().toRequestBody("application/json".toMediaType())
 
                 val request = Request.Builder()
-                    .url("https://itainta.vercel.app/api/poi/batch-teaser")
+                    .url("https://wip.guide/api/poi/batch-teaser")
                     .post(body)
                     .build()
 
@@ -1067,14 +1067,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // copre lo schermo per un semplice "ci stai arrivando".
             .setPriority(if (isArrival) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
             .setSilent(!isArrival)
-            .setCategory(if (isArrival) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
+            // CATEGORY_ALARM + full-screen intent rimossi (policy Play ago 2026):
+            // dal targetSdk 34 il full-screen è riservato a sveglie/chiamate.
+            // L'heads-up sonoro arriva comunque dal canale IMPORTANCE_HIGH.
+            .setCategory(if (isArrival) NotificationCompat.CATEGORY_EVENT else NotificationCompat.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setContentIntent(pIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
         if (isArrival) {
-            // ✅ SVEGLIA DISPLAY: Forza il popup a comparsa (Heads-up) e permette di accendere lo schermo
-            builder.setFullScreenIntent(pIntent, true)
             builder.setVibrate(longArrayOf(0, 500, 200, 500))
         }
 

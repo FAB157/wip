@@ -9,7 +9,7 @@ import Foundation
  */
 final class WipPackageDownloadManager {
 
-    static let bundleUrl = "https://itainta.vercel.app/api/area/bundle"
+    static let bundleUrl = "https://wip.guide/api/area/bundle"
     static let pageSize = 500
     static let eventProgress = "offlinePackageProgress"
 

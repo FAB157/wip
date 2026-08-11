@@ -9,6 +9,8 @@ import ShopScreen from './ShopScreen';
 import { PRICING_LIST, getWalletBalance, consumeCredits, refundCredits } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import PoiContactButtons from './PoiContactButtons';
+import PoiTicketsButtons from './PoiTicketsButtons';
+import PoiGallery from './PoiGallery';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
@@ -1814,9 +1816,9 @@ export default function PoiDetailSheet({
         tags = extractSpecialTags(combinedText, tags);
 
         if (p.photos && p.photos.length > 0) {
-          thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://itainta.vercel.app' : ''}/api/photo?ref=${p.photos[0].photo_reference}`;
+          thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://wip.guide' : ''}/api/photo?ref=${p.photos[0].photo_reference}`;
         } else if (poi.photo_reference) {
-          thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://itainta.vercel.app' : ''}/api/photo?ref=${poi.photo_reference}`;
+          thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://wip.guide' : ''}/api/photo?ref=${poi.photo_reference}`;
         }
 
         setTripData({
@@ -1880,7 +1882,7 @@ export default function PoiDetailSheet({
                 if (details.photos?.length > 0) {
                   thumbnail = `${details.photos[0].prefix}original${details.photos[0].suffix}`;
                 } else if (poi.photo_reference) {
-                  thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://itainta.vercel.app' : ''}/api/photo?ref=${poi.photo_reference}`;
+                  thumbnail = `${(window as any).Capacitor || window.location.protocol === 'file:' ? 'https://wip.guide' : ''}/api/photo?ref=${poi.photo_reference}`;
                 }
 
                 setTripData({
@@ -2476,6 +2478,23 @@ export default function PoiDetailSheet({
               }}
               language={language}
             />
+            {/* Biglietti d'ingresso reali (Tiqets, URL già affiliate dal
+                server): stesso filtro turistico dei contatti, best-effort. */}
+            <PoiTicketsButtons
+              poi={{
+                id: String(poi.id),
+                lat: poi.lat,
+                lon: poi.lon,
+                name: poi.name,
+                category: poi.category,
+                poiType: (poi as any).poi_type || (poi as any).poiType,
+                isGem: (poi as any).is_gem ?? (poi as any).isGem,
+              }}
+              language={language}
+            />
+            {/* Galleria community: foto Vision approvate/accorpate sul POI
+                (images_json). Un solo fetch per apertura, nulla se vuota. */}
+            <PoiGallery poiId={String(poi.id)} />
             {/* New Speciality Tags Section - Expanded for Romantico, Vista, Pet, Family */}
             {tripData?.tags && tripData.tags.length > 0 && (
               <div className="flex flex-wrap gap-2.5 mb-6">

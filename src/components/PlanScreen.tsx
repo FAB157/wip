@@ -295,6 +295,8 @@ async function verifyItineraryAntiAllucinazioni(data: any, genBody: any): Promis
         radius: genBody.radius,
         specialRequests: genBody.specialRequests,
         interests: genBody.interests,
+        // Le note di verifica (es. "chicca poco conosciuta") escono nella lingua dell'utente
+        language: genBody.language,
       }),
       signal: ctrl.signal,
     });
@@ -721,6 +723,11 @@ export default function PlanScreen({
   const [ticketmasterLoadingDay, setTicketmasterLoadingDay] = useState<number | null>(null);
   const [ticketmasterExpandedDay, setTicketmasterExpandedDay] = useState<number | null>(null);
 
+  // ── Tiqets (biglietti musei/attrazioni) per day ──
+  const [tiqetsByDay, setTiqetsByDay] = useState<Record<number, any[]>>({});
+  const [tiqetsLoadingDay, setTiqetsLoadingDay] = useState<number | null>(null);
+  const [tiqetsExpandedDay, setTiqetsExpandedDay] = useState<number | null>(null);
+
   // ── Podcast state ──
   const [playingDay, setPlayingDay] = useState<number | string | null>(null);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState<number | string | null>(null);
@@ -891,6 +898,50 @@ export default function PlanScreen({
       setGygByDay(prev => ({ ...prev, [dayIdx]: [] }));
     } finally {
       setGygLoadingDay(null);
+    }
+  };
+
+  const loadTiqetsForDay = async (dayIdx: number) => {
+    if (tiqetsByDay[dayIdx]) {
+      setTiqetsExpandedDay(prev => prev === dayIdx ? null : dayIdx);
+      return;
+    }
+    setTiqetsLoadingDay(dayIdx);
+    setTiqetsExpandedDay(dayIdx);
+
+    try {
+      let lat = 0, lon = 0;
+      let cityName = destinations[0] || '';
+
+      if (generatedPlan) {
+        const g = generatedPlan.giorni[dayIdx === 999 ? 0 : dayIdx];
+        const firstStop = g?.tappe?.[0];
+        lat = firstStop?.coordinate?.lat || 0;
+        lon = firstStop?.coordinate?.lng || (firstStop?.coordinate as any)?.lon || 0;
+        if (!cityName) cityName = resolvePartnerCity();
+      } else if (likedCandidates.length > 0) {
+        const first = likedCandidates[0];
+        lat = first.coordinate?.lat || 0;
+        lon = first.coordinate?.lng || 0;
+      }
+
+      const res = await fetch("/api/tiqets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon, radius: 30, cityName, lang: (language || 'IT').toLowerCase() })
+      });
+      if (!res.ok) throw new Error("Errore api Tiqets");
+      const experiences = await res.json();
+
+      // NIENTE ensureAffiliateUrl: le URL Tiqets arrivano dal server GIÀ con
+      // ?partner=<brand> (attribuzione legata al token) — riscriverle o
+      // "normalizzarle" farebbe perdere la commissione.
+      setTiqetsByDay(prev => ({ ...prev, [dayIdx]: Array.isArray(experiences) ? experiences : [] }));
+    } catch (err) {
+      console.error("[Tiqets] Error loading tickets for day", dayIdx, err);
+      setTiqetsByDay(prev => ({ ...prev, [dayIdx]: [] }));
+    } finally {
+      setTiqetsLoadingDay(null);
     }
   };
 
@@ -1248,6 +1299,34 @@ export default function PlanScreen({
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
     notify(`${getTranslation('event_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
+  };
+
+  const handleAddTiqetsToDay = (dayIdx: number, exp: any) => {
+    if (!generatedPlan) return;
+
+    const newTappa = {
+      id_tappa: `tq_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      ora: "Da definire",
+      titolo_tappa: exp.name || "Biglietto Tiqets",
+      attivita: exp.description || "Biglietto d'ingresso prenotabile online.",
+      consiglio_guida: `✨ Nicky: Biglietto prenotabile su Tiqets${exp.price ? `: ${exp.price}` : ''}${exp.rating ? ` (${exp.rating})` : ''}.`,
+      tipo: "esperienza",
+      coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 },
+      // URL Tiqets INTATTA: il ?partner= è già dentro (attribuzione dal token
+      // server); niente ensureAffiliateUrl, che è per Viator/GYG.
+      link_info: exp.url
+    };
+
+    const updatedPlan = {
+      ...generatedPlan,
+      giorni: generatedPlan.giorni.map((g, idx) =>
+        idx === dayIdx ? { ...g, tappe: [...g.tappe, newTappa] } : g
+      )
+    };
+
+    setGeneratedPlan(updatedPlan);
+    savePlanToSupabase(updatedPlan);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
   };
 
   // Quota limit toast
@@ -2897,6 +2976,14 @@ export default function PlanScreen({
         guida,
         mese,
         pois: selectedPoisFull,
+        // Coordinate strutturate per l'ottimizzazione del percorso server-side
+        // (nearest-neighbour + giorni compatti): la stringa di selectedPoisFull
+        // non è parsabile in modo affidabile.
+        poisDetailed: selectedPoiObjs.map(s => ({
+          nome: s.poi.name || s.poi.title,
+          lat: Number(s.poi.lat ?? s.poi.location?.lat),
+          lon: Number(s.poi.lon ?? s.poi.location?.lng)
+        })),
         radius: safeRadius(),
         language,
         // Quota per-utente (non più per-IP): vedi handleRegenerateWithLocks.
@@ -3506,6 +3593,13 @@ export default function PlanScreen({
           >
             {ticketmasterLoadingDay === PREMIUM_DAY_SLOT ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Music className="w-3.5 h-3.5" />} Ticketmaster
           </button>
+          <button
+            type="button"
+            onClick={() => loadTiqetsForDay(PREMIUM_DAY_SLOT)}
+            className="flex-1 p-3 min-h-[44px] bg-violet-50 border border-violet-100 rounded-xl text-[10px] font-black text-violet-700 uppercase tracking-wider flex items-center justify-center gap-2"
+          >
+            {tiqetsLoadingDay === PREMIUM_DAY_SLOT ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ticket className="w-3.5 h-3.5" />} Tiqets
+          </button>
         </div>
 
         <AnimatePresence>
@@ -3527,6 +3621,13 @@ export default function PlanScreen({
             <div className="space-y-3">
               {ticketmasterByDay[PREMIUM_DAY_SLOT]?.map((exp: any, eIdx: number) => (
                 <ExperienceCard key={eIdx} exp={exp} color="#1e3a8a" onAdd={() => addLiked(exp, 'evento')} />
+              ))}
+            </div>
+          )}
+          {tiqetsExpandedDay === PREMIUM_DAY_SLOT && (
+            <div className="space-y-3">
+              {tiqetsByDay[PREMIUM_DAY_SLOT]?.map((exp: any, eIdx: number) => (
+                <ExperienceCard key={eIdx} exp={exp} color="#7c3aed" onAdd={() => addLiked(exp, 'esperienza')} />
               ))}
             </div>
           )}
@@ -5505,6 +5606,28 @@ export default function PlanScreen({
                               : <ChevronDown className="w-5 h-5 text-blue-900/50" />
                             }
                           </button>
+
+                          <button
+                            onClick={() => loadTiqetsForDay(gIdx)}
+                            disabled={tiqetsLoadingDay === gIdx}
+                            className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-violet-50 to-purple-50 rounded-2xl border border-violet-200 hover:border-violet-400 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-violet-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                {tiqetsLoadingDay === gIdx
+                                  ? <Loader2 className="w-5 h-5 text-violet-600 animate-spin" />
+                                  : <Ticket className="w-5 h-5 text-violet-600" />
+                                }
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-black text-violet-600">🎫 Tiqets</p>
+                              </div>
+                            </div>
+                            {tiqetsExpandedDay === gIdx
+                              ? <ChevronUp className="w-5 h-5 text-violet-400" />
+                              : <ChevronDown className="w-5 h-5 text-violet-400" />
+                            }
+                          </button>
                         </div>
                       )}
 
@@ -5542,6 +5665,18 @@ export default function PlanScreen({
                                 ))}
                                 </div>
                             ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun evento Ticketmaster trovato.</div>}
+                          </motion.div>
+                        )}
+
+                        {tiqetsExpandedDay === gIdx && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            {tiqetsByDay[gIdx] && tiqetsByDay[gIdx].length > 0 ? (
+                              <div className="space-y-3 mt-4">
+                                {tiqetsByDay[gIdx].map((exp: any, eIdx: number) => (
+                                  <ExperienceCard key={`tq-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddTiqetsToDay(gIdx, exp)} color="#7c3aed" />
+                                ))}
+                              </div>
+                            ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun biglietto Tiqets trovato.</div>}
                           </motion.div>
                         )}
                       </AnimatePresence>

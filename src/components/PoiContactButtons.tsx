@@ -40,7 +40,7 @@ const NON_TOURISTIC_TYPES = new Set([
   'police', 'taxi', 'station', 'subway_entrance', 'toll_booth', 'drinking_water',
   'marketplace', 'mercato', 'playground', 'information', 'tourism_information', 'office',
 ]);
-function isTouristicPoi(category?: string | null, poiType?: string | null, isGem?: boolean): boolean {
+export function isTouristicPoi(category?: string | null, poiType?: string | null, isGem?: boolean): boolean {
   if (isGem) return true;
   if (NON_TOURISTIC_CATEGORIES.has(String(category || '').toLowerCase())) return false;
   if (NON_TOURISTIC_TYPES.has(String(poiType || '').toLowerCase())) return false;

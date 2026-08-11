@@ -1219,7 +1219,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // MARK: - Teaser batch (stesso endpoint del server Vercel)
 
     private func generateTeasersInBackground(poiIds: [String]) {
-        guard let url = URL(string: "https://itainta.vercel.app/api/poi/batch-teaser") else { return }
+        guard let url = URL(string: "https://wip.guide/api/poi/batch-teaser") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")

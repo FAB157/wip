@@ -17,6 +17,9 @@ import { FAVORITES_EVENT, getLocalFavorites, setLocalFavorites, toggleFavoritePo
 import { initOfflineBilling } from "./services/dayPassService";
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
+import { getApiUrl } from "./lib/api";
+import { notify } from "./lib/toast";
+import { notifyCreditsChanged } from "./lib/pricing";
 import { Headphones, MapPin } from "lucide-react";
 import { Language, getTranslation } from "./lib/i18n";
 import { Capacitor } from '@capacitor/core';
@@ -290,6 +293,27 @@ export default function App() {
     window.addEventListener('wip-map-center-change', onMapCenter);
     return () => window.removeEventListener('wip-map-center-change', onMapCenter);
   }, []);
+
+  // Bonus di benvenuto a EMAIL CONFERMATA: i 100 crediti non sono più il
+  // default del profilo (farmabili con email inventate) — li eroga il server
+  // con /api/welcome-bonus/claim, idempotente, solo ad account con email
+  // verificata. Fire-and-forget a ogni avvio con sessione.
+  useEffect(() => {
+    if (!session?.access_token) return;
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/welcome-bonus/claim'), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        const data = await res.json().catch(() => null);
+        if (data?.granted > 0) {
+          notify(`🎁 Benvenuto in WIP! Hai ricevuto ${data.granted} crediti.`);
+          notifyCreditsChanged({ userId: session.user?.id });
+        }
+      } catch { /* best-effort: riprova al prossimo avvio */ }
+    })();
+  }, [session?.access_token]);
 
   // --- Initialization Effects ---
   useEffect(() => {

@@ -53,8 +53,10 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
               anche quando tieni lo schermo spento, l'app richiede l'accesso alla <strong>Posizione in Background</strong> ("Consenti Sempre").
             </p>
             <p>
-              Questi dati di posizione <strong>non vengono venduti a terzi</strong> e sono usati esclusivamente sul tuo dispositivo 
-              per far scattare i trigger audio e segnalarti attrazioni vicine.
+              Questi dati di posizione <strong>non vengono mai venduti</strong> né usati per pubblicità. La posizione viene
+              inviata ai nostri server per trovare i punti di interesse vicini e generare i contenuti; puoi revocare il
+              permesso in background in qualsiasi momento dalle impostazioni del dispositivo e l'app continuerà a
+              funzionare con la sola posizione in primo piano.
             </p>
           </section>
 
@@ -68,8 +70,7 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
             </p>
             <ul className="list-disc pl-5 space-y-1">
               <li><strong>Supabase</strong> (database e autenticazione): conserva account, preferiti, cronologia ascolti e crediti.</li>
-              <li><strong>Google Sign-In</strong> (accesso facoltativo con account Google): riceviamo solo nome, email e foto del profilo Google; nessun altro dato del tuo account Google è accessibile all'app.</li>
-              <li><strong>Stripe</strong> (pagamenti web) e <strong>Google Play / RevenueCat</strong> (acquisti in-app su Android): gestiscono i pagamenti; noi <strong>non</strong> vediamo né conserviamo i dati della tua carta.</li>
+              <li><strong>Stripe</strong> (pagamenti web) e <strong>Google Play / App Store con RevenueCat</strong> (acquisti in-app): gestiscono i pagamenti; noi <strong>non</strong> vediamo né conserviamo i dati della tua carta.</li>
               <li><strong>Fornitori AI</strong> (generazione testi e voci delle audioguide): ricevono il nome del luogo e la lingua, mai la tua identità.</li>
               <li><strong>Servizi mappe e luoghi</strong> (OpenStreetMap, Mapbox, Wikipedia e simili): ricevono le coordinate dell'area visualizzata per mostrarti mappa e punti di interesse.</li>
             </ul>
@@ -102,9 +103,14 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
             <p>
               In conformità al Regolamento UE 2016/679 (GDPR) hai diritto di: accedere ai tuoi dati, chiederne la rettifica o la
               cancellazione, limitarne od opporti al trattamento, e riceverne una copia in formato portabile.
-              Il titolare del trattamento è <strong>WIP</strong>.
-              Per esercitare questi diritti scrivi a <a href="mailto:wip15775@gmail.com" className="text-blue-600 font-bold">wip15775@gmail.com</a>:
+              Il titolare del trattamento è <strong>Davide Musetti</strong> (WIP &mdash; World in Pocket), Via Vignaletto 50, 54033 Carrara (MS).
+              Per esercitare questi diritti scrivi a <a href="mailto:support@wip.guide" className="text-blue-600 font-bold">support@wip.guide</a>:
               rispondiamo entro 30 giorni. Hai inoltre il diritto di proporre reclamo al Garante per la Protezione dei Dati Personali.
+            </p>
+            <p>
+              La versione completa e sempre aggiornata di questa informativa è pubblicata su{' '}
+              <a href="https://wip.guide/privacy" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-bold">wip.guide/privacy</a>;
+              i termini completi su <a href="https://wip.guide/terms" target="_blank" rel="noopener noreferrer" className="text-blue-600 font-bold">wip.guide/terms</a>.
             </p>
           </section>
 

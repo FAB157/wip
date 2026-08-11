@@ -293,15 +293,15 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               </div>
               <ul className="space-y-3 text-sm text-gray-600">
                 <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold">•</span>
+                  <span className="text-primary font-bold">•</span>
                   <span><strong>Modificare l'itinerario:</strong> "Aggiungi un museo alle 15:00", "Ho un'ora di ritardo", "Piove, cambia i piani."</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold">•</span>
+                  <span className="text-primary font-bold">•</span>
                   <span><strong>Informazioni Locali:</strong> "Dove si trova lo stadio?", "A che ora apre la galleria d'arte?"</span>
                 </li>
                 <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold">•</span>
+                  <span className="text-primary font-bold">•</span>
                   <span><strong>Consigli Pratici:</strong> "Che tempo fa oggi?", "Quali documenti mi servono?"</span>
                 </li>
               </ul>
@@ -328,7 +328,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               </div>
               <div className="flex flex-col">
                 <span className="font-bold text-gray-800 leading-none">WIP</span>
-                <span className="text-[9px] font-black text-brand-600 uppercase tracking-widest mt-1">
+                <span className="text-[9px] font-black text-primary uppercase tracking-widest mt-1">
                   {messagesLeft > 0
                     ? `${messagesLeft} messaggi rimasti`
                     : itineraryId !== 'general'
@@ -338,7 +338,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <button onClick={() => setShowInfo(true)} className="text-brand-500 hover:text-brand-700">
+              <button onClick={() => setShowInfo(true)} className="text-primary hover:text-primary/80">
                 <Info className="w-5 h-5" />
               </button>
               <button onClick={() => { setIsExpanded(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
@@ -361,7 +361,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
                   msg.role === 'user' 
-                    ? 'bg-brand-600 text-white rounded-tr-sm' 
+                    ? 'bg-primary text-white rounded-tr-sm' 
                     : 'bg-white border border-gray-100 text-gray-800 shadow-sm rounded-tl-sm'
                 }`}>
                   {msg.content}
@@ -371,7 +371,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
 
             {isOptimizing && (
               <div className="flex justify-start">
-                <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2 text-brand-600 text-sm">
+                <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-2 text-primary text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span className="animate-pulse">Sto pensando...</span>
                 </div>
@@ -402,14 +402,14 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               onKeyDown={(e) => { if (e.key === 'Enter') handleSendEvent(customEvent); }}
               onFocus={() => !isExpanded && setIsExpanded(true)}
               placeholder={isListening ? "Ascolto in corso..." : isExpanded ? "Scrivi un messaggio..." : "Chiedi a WIP o ottimizza l'itinerario..."} 
-              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 ${isExpanded ? 'pr-20' : 'pr-10'} text-sm focus:ring-2 focus:ring-brand-500 transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
+              className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 ${isExpanded ? 'pr-20' : 'pr-10'} text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
             />
             
             <div className="absolute right-1 flex items-center gap-1">
               {!customEvent && !isListening && (
                 <button 
                   onClick={handleMicrophoneClick}
-                  className="w-8 h-8 rounded-full text-gray-400 hover:text-brand-500 hover:bg-gray-100 flex items-center justify-center transition-colors"
+                  className="w-8 h-8 rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 flex items-center justify-center transition-colors"
                   title="Parla"
                 >
                   <Mic className="w-5 h-5" />
@@ -429,7 +429,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               {!customEvent && !isExpanded && !isListening && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); setShowInfo(true); }}
-                  className="w-8 h-8 rounded-full text-gray-400 hover:text-brand-500 hover:bg-gray-100 flex items-center justify-center transition-colors"
+                  className="w-8 h-8 rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 flex items-center justify-center transition-colors"
                 >
                   <Info className="w-5 h-5" />
                 </button>
@@ -439,7 +439,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
                 <button 
                   onClick={() => handleSendEvent(customEvent)}
                   disabled={isOptimizing}
-                  className="w-8 h-8 rounded-full bg-brand-600 text-white flex items-center justify-center hover:bg-brand-700 transition disabled:opacity-50"
+                  className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center hover:bg-primary/90 transition disabled:opacity-50"
                 >
                   <Send className="w-4 h-4 ml-0.5" />
                 </button>

@@ -29,7 +29,7 @@ class PackageDownloadManager(private val context: Context) {
 
     companion object {
         private const val TAG = "PackageDownloadMgr"
-        private const val BUNDLE_URL = "https://itainta.vercel.app/api/area/bundle"
+        private const val BUNDLE_URL = "https://wip.guide/api/area/bundle"
         private const val PAGE_SIZE = 500
         const val EVENT_PROGRESS = "offlinePackageProgress"
     }

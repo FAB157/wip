@@ -21,6 +21,7 @@ import { Language, getTranslation, LANGUAGES } from '../lib/i18n';
 import B2BPartner from './B2BPartner';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { getListeningHistory, ListeningHistoryEntry, LISTENING_HISTORY_EVENT, deleteListeningHistory } from '../lib/listeningHistory';
+import { wipeLocalUserData } from '../lib/userSession';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
 import { Download, X, Fingerprint, Lock } from 'lucide-react';
@@ -377,8 +378,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
       });
       
-      if (!res.ok) throw new Error("Errore durante l'eliminazione");
-      
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "Errore durante l'eliminazione");
+      }
+
+      // Stessa pulizia del cambio account: senza, cronologia/preferiti/keychain
+      // dell'account appena cancellato restavano sul dispositivo.
+      wipeLocalUserData();
       await supabase.auth.signOut();
       if (onSignOut) onSignOut();
     } catch (e) {
@@ -1258,7 +1265,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               ) : itinerariSubTab === 'ai' ? (
                 savedItineraries.length === 0 ? (
                 <EmptyState 
-                  icon={Map}
+                  icon={MapIcon}
                   title={getTranslation("suggested_itineraries", language)}
                   description="Qui appariranno i percorsi personalizzati creati per te dalla nostra Guida AI."
                 />
@@ -1768,7 +1775,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
 
                 <div className="grid grid-cols-1 gap-4">
-                  <a href="mailto:wip15775@gmail.com" className="flex items-center gap-4 p-6 bg-gray-50 rounded-3xl border border-transparent hover:border-blue-200 transition-all group">
+                  <a href="mailto:support@wip.guide" className="flex items-center gap-4 p-6 bg-gray-50 rounded-3xl border border-transparent hover:border-blue-200 transition-all group">
                     <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-gray-400 group-hover:text-blue-600 transition-colors shadow-sm">
                       <Mail className="w-6 h-6" />
                     </div>
@@ -1795,7 +1802,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       const body = encodeURIComponent(
                         `Descrivi qui il problema (cosa stavi facendo, cosa è successo):\n\n\n--- Dati diagnostici (non cancellare) ---\n${diag}`
                       );
-                      window.location.href = `mailto:wip15775@gmail.com?subject=${encodeURIComponent('Segnalazione problema tecnico WIP')}&body=${body}`;
+                      window.location.href = `mailto:support@wip.guide?subject=${encodeURIComponent('Segnalazione problema tecnico WIP')}&body=${body}`;
                     }}
                     className="flex items-center gap-4 p-6 bg-gray-50 rounded-3xl border border-transparent hover:border-blue-200 transition-all group cursor-pointer text-left w-full"
                   >

@@ -9,6 +9,7 @@ import android.provider.Settings
 import android.app.AlertDialog
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.getcapacitor.*
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
@@ -99,9 +100,12 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             if (context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 Handler(Looper.getMainLooper()).post {
+                    // Prominent disclosure richiesta dalla policy Play sulla
+                    // posizione in background: deve dire COSA si raccoglie,
+                    // PERCHÉ, e che avviene anche ad app chiusa.
                     AlertDialog.Builder(context)
                         .setTitle("Posizione in background")
-                        .setMessage("Per riprodurre le audioguide automaticamente quando ti avvicini a un punto di interesse (anche con lo schermo spento o in tasca), ItaInta raccoglie dati sulla tua posizione in background. Vai su Impostazioni -> Permessi -> Posizione e seleziona 'Consenti sempre'.")
+                        .setMessage("WIP raccoglie i dati della tua posizione in background per riprodurre automaticamente le audioguide quando ti avvicini a un punto di interesse, anche quando l'app è chiusa o non in uso (schermo spento o telefono in tasca). La posizione non viene usata per pubblicità. Per attivare la funzione vai su Impostazioni → Permessi → Posizione e scegli 'Consenti sempre'.")
                         .setPositiveButton("Vai alle Impostazioni") { _, _ ->
                             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                 data = Uri.fromParts("package", context.packageName, null)
@@ -146,15 +150,22 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:${context.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS (dialog diretto)
+                // richiede un permesso NON dichiarato nel manifest → poteva
+                // lanciare SecurityException, ed è sotto scrutinio Play.
+                // Si apre invece la LISTA di sistema (nessun permesso richiesto).
+                try {
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(intent)
+                    val ret = JSObject()
+                    ret.put("status", "requesting_battery_optimization")
+                    call.resolve(ret)
+                    return
+                } catch (e: Exception) {
+                    Log.w("ItaintaPoiPlugin", "Battery optimization settings unavailable: ${e.message}")
                 }
-                context.startActivity(intent)
-                val ret = JSObject()
-                ret.put("status", "requesting_battery_optimization")
-                call.resolve(ret)
-                return
             }
         }
         val ret = JSObject()

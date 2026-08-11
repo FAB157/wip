@@ -473,7 +473,7 @@ export default function AppGuide({ language }: AppGuideProps) {
         <>
           <H>Contatti</H>
           <ul className="mb-2">
-            <Li><Mail className="w-3.5 h-3.5 inline" /> <strong>Email assistenza</strong>: <a href="mailto:wip15775@gmail.com" className="text-primary font-bold underline">wip15775@gmail.com</a> — rispondiamo entro 48 ore lavorative.</Li>
+            <Li><Mail className="w-3.5 h-3.5 inline" /> <strong>Email assistenza</strong>: <a href="mailto:support@wip.guide" className="text-primary font-bold underline">support@wip.guide</a> — rispondiamo entro 48 ore lavorative.</Li>
             <Li><strong>Segnala un problema tecnico</strong>: da Profilo → Supporto, il tasto dedicato prepara un'email con i dati del dispositivo già compilati.</Li>
             <Li><strong>Segnala un errore su un luogo</strong>: dalla scheda del POI (informazioni errate, luogo chiuso, foto sbagliata).</Li>
             <Li><strong>Strutture e partner (B2B)</strong>: sezione Partner nel Profilo per hotel, guide e attività che vogliono offrire WIP ai propri ospiti.</Li>
@@ -584,7 +584,7 @@ export default function AppGuide({ language }: AppGuideProps) {
         {/* Piè di pagina del documento */}
         <div style={{ borderTop: '2px solid #1e3a8a', marginTop: 8, paddingTop: 8, display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#1e3a8a', fontWeight: 700 }}>
           <span>WIP — World in Pocket · Carrara (MS), Italia</span>
-          <span>wip15775@gmail.com</span>
+          <span>support@wip.guide</span>
         </div>
       </div>
     </div>

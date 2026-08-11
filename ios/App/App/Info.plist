@@ -45,7 +45,7 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>ITAINTA richiede l'accesso alla tua posizione sempre per rilevare monumenti e Gemme vicine mentre cammini o guidi, avvisandoti con l'audioguida anche se il telefono è in tasca.</string>
+	<string>WIP richiede l'accesso alla tua posizione sempre per rilevare monumenti e Gemme vicine mentre cammini o guidi, avvisandoti con l'audioguida anche se il telefono è in tasca o l'app è chiusa. La posizione non viene usata per pubblicità.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>La tua posizione serve per mostrarti i punti di interesse sulla mappa e calcolare il percorso verso i monumenti.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
@@ -56,12 +56,13 @@
 	<string>La fotocamera serve per la funzione Vision che riconosce i monumenti inquadrati.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Il microfono potrebbe essere usato per i comandi vocali della guida.</string>
+	<!-- Solo i background mode realmente implementati: 'fetch' e
+	     'remote-notification' erano dichiarati senza handler né entitlement
+	     push — in App Review sono solo domande in più. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>location</string>
-		<string>fetch</string>
-		<string>remote-notification</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
@@ -69,7 +70,7 @@
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
-		<string>armv7</string>
+		<string>arm64</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>

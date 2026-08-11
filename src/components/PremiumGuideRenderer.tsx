@@ -173,7 +173,7 @@ const CoverPage = ({
       alignItems: 'center',
     }}>
       <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', letterSpacing: '1px' }}>
-        worldinpocket.app
+        wip.guide
       </div>
       <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>
         {new Date().toLocaleDateString('it-IT', { year: 'numeric', month: 'long' })}
@@ -644,7 +644,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
         fontSize: '10px',
         color: C.light,
       }}>
-        <span>WIP Premium Smart Guide • worldinpocket.app</span>
+        <span>WIP Premium Smart Guide • wip.guide</span>
         <span>{poi.titolo}</span>
       </div>
     </div>
@@ -725,7 +725,7 @@ export default function PremiumGuideRenderer({
           Generata con Wikipedia, Wikivoyage, Foursquare e TripAdvisor.
         </div>
         <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px', marginTop: '20px' }}>
-          worldinpocket.app • {new Date().getFullYear()}
+          wip.guide • {new Date().getFullYear()}
         </div>
       </div>
     </div>

@@ -68,38 +68,8 @@ export async function searchTicketmasterEvents(lat: number, lng: number, keyword
   }
 }
 
-// ==========================================
-// PREDICTHQ API
-// ==========================================
-export async function searchPredictHQEvents(lat: number, lng: number, radiusKm: number = 50, startStr?: string, endStr?: string): Promise<string> {
-  const phqKey = "XpVfpLieYlYH63VwP25TgDqWcbzah_NM2GzUcBUS";
-  if (!startStr) {
-    startStr = new Date().toISOString().split("T")[0];
-  }
-  if (!endStr) {
-    endStr = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-  }
-  try {
-    // PredictHQ consiglia 'within=50km@lat,lng' invece di location_around per maggiore precisione
-    const url = `https://api.predicthq.com/v1/events?within=${radiusKm}km@${lat},${lng}&active.gte=${startStr}&active.lte=${endStr}&sort=-rank&limit=10`;
-    const res = await axios.get(url, {
-      headers: { "Authorization": `Bearer ${phqKey}`, "Accept": "application/json" }
-    });
-    const events = res.data?.results;
-    if (!events || events.length === 0) return "Nessun evento PredictHQ trovato nei paraggi.";
-    
-    const results = events.map((e: any) => ({
-      name: e.title,
-      description: e.description || "Evento locale da PredictHQ.",
-      date: e.start.split('T')[0],
-      venue: e.entities?.[0]?.name || "Varie location"
-    }));
-    return JSON.stringify(results);
-  } catch (err: any) {
-    console.error("PredictHQ Error:", err.message);
-    return JSON.stringify({ error: "PredictHQ irraggiungibile" });
-  }
-}
+// (PredictHQ rimosso ago 2026: chiave revocata — conteneva anche una chiave
+// hardcoded nel sorgente, eliminata con la funzione)
 
 // ==========================================
 // EUROPEANA API (Free Tier with API Key)

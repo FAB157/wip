@@ -10,9 +10,9 @@ export function getApiUrl(path: string): string {
 
   const isNative = Capacitor.isNativePlatform();
 
-  // URL di produzione (Vercel)
-  // TODO: Sostituisci con il tuo vero URL Vercel se diverso
-  const PROD_URL = 'https://itainta.vercel.app';
+  // URL di produzione: dominio custom wip.guide (stesso progetto Vercel di
+  // itainta.vercel.app, che resta attivo per le build vecchie).
+  const PROD_URL = 'https://wip.guide';
 
   if (isNative) {
     // Se siamo su Android/iOS, dobbiamo usare l'URL assoluto

@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { getUserProfile } from './quotaManager';
+import { getApiUrl } from './api';
 
 export const PRICING_LIST = {
   poi_detail: 5,         // Arricchimento POI
@@ -14,7 +15,11 @@ export const PRICING_LIST = {
   podcast_daily: 15,       // Podcast (per giorno)
   chat_session: 3,         // Chat sessione (10 messaggi)
   day_pass: 200,           // WIP Day Pass: 24h hands-free, max 40 audioguide (mappe offline gratuite)
+  museum_pass: 100,        // Pass Museo: riconoscimenti Vision illimitati per 4 ore (indoor)
 };
+
+/** Durata del Pass Museo in ore. Allineare a MUSEUM_PASS_HOURS in server.ts. */
+export const MUSEUM_PASS_HOURS = 4;
 
 /** Cap audioguide del Day Pass nelle 24 ore. */
 export const DAY_PASS_GUIDE_CAP = 40;
@@ -70,18 +75,30 @@ export async function hasEnoughCredits(userId: string, cost: number): Promise<bo
  */
 export async function consumeCredits(userId: string, cost: number): Promise<boolean> {
   if (cost <= 0) return true;
-  
+
+  // Consumo SERVER-SIDE: scrivere i crediti dal browser è bloccato dal trigger
+  // anti-escalation su user_profiles (prima il fallback client-side falliva in
+  // silenzio, lasciando il servizio gratis o l'utente senza addebito). Il
+  // server addebita con la RPC atomica (o service key) e ritorna 402 se il
+  // saldo non basta.
   try {
-    const { data, error } = await supabase.rpc('consume_credits', { p_user_id: userId, p_amount: cost });
-    if (error) {
-      console.warn('[pricing] RPC consume_credits failed, using fallback:', error.message);
-      return await consumeCreditsFallback(userId, cost);
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) return false;
+
+    const res = await fetch(getApiUrl('/api/credits/consume'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ amount: cost }),
+    });
+    if (res.ok) {
+      notifyCreditsChanged({ userId, delta: -cost });
+      return true;
     }
-    if (data === true) notifyCreditsChanged({ userId, delta: -cost });
-    return data === true;
+    return false; // 402 crediti insufficienti o errore
   } catch (err) {
     console.error('[pricing] Exception consuming credits:', err);
-    return await consumeCreditsFallback(userId, cost);
+    return false;
   }
 }
 
@@ -94,26 +111,23 @@ export async function consumeCredits(userId: string, cost: number): Promise<bool
  */
 export async function refundCredits(userId: string, cost: number): Promise<boolean> {
   if (cost <= 0) return true;
+  // Rimborso SERVER-MEDIATO. La RPC self-service `refund_credits` è stata
+  // revocata dal client (chiunque poteva rimborsarsi senza fallimento reale →
+  // tutto gratis). Il vecchio fallback read-modify-write su purchased_credits è
+  // ora bloccato dal trigger anti-escalation. Unico percorso: la rotta server
+  // /api/credits/refund (service key, cap sull'importo).
   try {
-    const { data, error } = await supabase.rpc('refund_credits', { p_amount: cost });
-    if (!error) {
-      if (data === true) notifyCreditsChanged({ userId, delta: cost });
-      return data === true;
-    }
-    console.warn('[pricing] RPC refund_credits non disponibile, uso il fallback:', error.message);
-  } catch (e) {
-    console.warn('[pricing] RPC refund_credits exception:', e);
-  }
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) return false;
 
-  try {
-    const profile = await getUserProfile(userId);
-    const purchased = Number(profile.purchased_credits) || 0;
-    const { error } = await supabase.from('user_profiles').update({
-      purchased_credits: purchased + cost
-    }).eq('id', userId);
-
-    if (error) {
-      console.error('[pricing] Refund failed:', error);
+    const res = await fetch(getApiUrl('/api/credits/refund'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ amount: cost }),
+    });
+    if (!res.ok) {
+      console.warn('[pricing] Rimborso server fallito:', res.status);
       return false;
     }
     notifyCreditsChanged({ userId, delta: cost });

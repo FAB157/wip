@@ -1437,6 +1437,96 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Запрос к ИИ-путеводителю...",
     ZH: "正在检索 WIP 云端数据库与AI导游..."
   },
+  museum_pass_title: {
+    IT: "Pass Museo",
+    EN: "Museum Pass",
+    FR: "Pass Musée",
+    ES: "Pase Museo",
+    DE: "Museumspass",
+    RU: "Музейный пасс",
+    ZH: "博物馆通票"
+  },
+  museum_pass_desc: {
+    IT: "Riconoscimenti illimitati per 4 ore: inquadra le opere, WIP te le racconta.",
+    EN: "Unlimited recognitions for 4 hours: frame the artworks, WIP tells their story.",
+    FR: "Reconnaissances illimitées pendant 4 heures : cadrez les œuvres, WIP les raconte.",
+    ES: "Reconocimientos ilimitados durante 4 horas: encuadra las obras y WIP te las cuenta.",
+    DE: "Unbegrenzte Erkennungen für 4 Stunden: Kunstwerke anvisieren, WIP erzählt.",
+    RU: "Безлимитное распознавание на 4 часа: наведите камеру на экспонат — WIP расскажет.",
+    ZH: "4小时内无限识别：对准展品，WIP 为你讲解。"
+  },
+  museum_pass_active: {
+    IT: "Pass Museo attivo",
+    EN: "Museum Pass active",
+    FR: "Pass Musée actif",
+    ES: "Pase Museo activo",
+    DE: "Museumspass aktiv",
+    RU: "Музейный пасс активен",
+    ZH: "博物馆通票已激活"
+  },
+  museum_pass_unlimited: {
+    IT: "Scansioni illimitate incluse",
+    EN: "Unlimited scans included",
+    FR: "Scans illimités inclus",
+    ES: "Escaneos ilimitados incluidos",
+    DE: "Unbegrenzte Scans inklusive",
+    RU: "Безлимитные сканирования включены",
+    ZH: "已含无限次扫描"
+  },
+  museum_pass_remaining: {
+    IT: "Scade tra",
+    EN: "Expires in",
+    FR: "Expire dans",
+    ES: "Caduca en",
+    DE: "Läuft ab in",
+    RU: "Истекает через",
+    ZH: "剩余时间"
+  },
+  museum_pass_cta: {
+    IT: "Attiva per 4 ore",
+    EN: "Activate for 4 hours",
+    FR: "Activer pour 4 heures",
+    ES: "Activar por 4 horas",
+    DE: "Für 4 Stunden aktivieren",
+    RU: "Активировать на 4 часа",
+    ZH: "激活4小时"
+  },
+  museum_pass_bought: {
+    IT: "Pass Museo attivato! Inquadra le opere e lasciati raccontare.",
+    EN: "Museum Pass activated! Frame the artworks and enjoy the stories.",
+    FR: "Pass Musée activé ! Cadrez les œuvres et laissez-vous raconter.",
+    ES: "¡Pase Museo activado! Encuadra las obras y déjate contar.",
+    DE: "Museumspass aktiviert! Kunstwerke anvisieren und zuhören.",
+    RU: "Музейный пасс активирован! Наводите камеру на экспонаты.",
+    ZH: "博物馆通票已激活！对准展品，聆听讲解。"
+  },
+  museum_pass_error: {
+    IT: "Attivazione non riuscita, riprova.",
+    EN: "Activation failed, please try again.",
+    FR: "Activation échouée, réessayez.",
+    ES: "Activación fallida, inténtalo de nuevo.",
+    DE: "Aktivierung fehlgeschlagen, bitte erneut versuchen.",
+    RU: "Не удалось активировать, попробуйте ещё раз.",
+    ZH: "激活失败，请重试。"
+  },
+  credits_word: {
+    IT: "crediti",
+    EN: "credits",
+    FR: "crédits",
+    ES: "créditos",
+    DE: "Credits",
+    RU: "кредитов",
+    ZH: "积分"
+  },
+  poi_tickets_book: {
+    IT: "Prenota",
+    EN: "Book",
+    FR: "Réserver",
+    ES: "Reservar",
+    DE: "Buchen",
+    RU: "Купить",
+    ZH: "预订"
+  },
   camera_error_title: {
     IT: "Ops!",
     EN: "Oops!",
@@ -3566,6 +3656,10 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   badge_to_verify: {
     IT: "Da verificare", EN: "To verify", FR: "À vérifier", ES: "Por verificar",
     RU: "Требует проверки", ZH: "待核实"
+  },
+  badge_hidden_gem: {
+    IT: "Gemma poco nota", EN: "Hidden gem", FR: "Pépite cachée", ES: "Joya escondida",
+    RU: "Скрытая жемчужина", ZH: "小众宝藏"
   },
   badge_verified_tooltip: {
     IT: "Tappa confermata dalla verifica AI incrociata",

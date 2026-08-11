@@ -42,12 +42,18 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
 
   useEffect(() => () => { if (cooldownRef.current) clearInterval(cooldownRef.current); }, []);
 
+  // Email non confermata al login: mostra il tasto "Reinvia email di conferma".
+  const [needsConfirm, setNeedsConfirm] = useState(false);
+
   const friendlyError = (e: any): string => {
     const msg = e?.message || '';
     // Timeout/abort di rete (wrapper supabase o browser): il messaggio grezzo
     // "signal is aborted without reason" non deve arrivare all'utente.
     if (e?.name === 'AbortError' || e?.name === 'TimeoutError' || msg.includes('aborted') || msg.includes('interrotta dopo')) {
       return 'Connessione lenta o assente: la richiesta è scaduta. Controlla la rete e riprova.';
+    }
+    if (msg.includes('Email not confirmed')) {
+      return 'Email non ancora confermata: apri il link che ti abbiamo inviato (controlla anche lo Spam) oppure reinvia la conferma qui sotto.';
     }
     if (msg.includes('Invalid login credentials')) {
       return 'Credenziali non valide. Verifica email e password o conferma l\'account se ti sei appena registrato.';
@@ -71,6 +77,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     e.preventDefault();
     setLoading(true);
     setError('');
+    setNeedsConfirm(false);
     try {
       if (isRegistering) {
         const trimmedName = name.trim();
@@ -81,10 +88,14 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
         }
         // Il nome viaggia nei metadata auth (display_name) e viene salvato
         // subito anche in locale: la home del profilo lo mostra dal primo avvio.
+        // Il link di conferma email deve atterrare sulla PWA di produzione:
+        // su nativo window.location.origin è capacitor://localhost e il link
+        // non potrebbe mai tornare nell'app.
+        const confirmRedirect = Capacitor.isNativePlatform() ? 'https://wip.guide' : window.location.origin;
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
-          options: { data: { display_name: trimmedName } },
+          options: { data: { display_name: trimmedName }, emailRedirectTo: confirmRedirect },
         });
         if (error) throw error;
         localStorage.setItem('userProfileName', trimmedName);
@@ -110,6 +121,24 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
           onLoginSuccess(data.session);
         }
       }
+    } catch (e: any) {
+      if (String(e?.message || '').includes('Email not confirmed')) setNeedsConfirm(true);
+      setError(friendlyError(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    if (!email) { setError('Inserisci la tua email per reinviare la conferma.'); return; }
+    setLoading(true);
+    try {
+      const redirectTo = Capacitor.isNativePlatform() ? 'https://wip.guide' : window.location.origin;
+      const { error } = await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: redirectTo } });
+      if (error) throw error;
+      notify('Email di conferma reinviata: controlla la casella (anche lo Spam).');
+      setNeedsConfirm(false);
+      setError('');
     } catch (e: any) {
       setError(friendlyError(e));
     } finally {
@@ -156,7 +185,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       // il flusso PASSWORD_RECOVERY → "Nuova Password" funziona già; poi
       // l'utente rientra nell'app con la nuova password.
       const redirectTo = Capacitor.isNativePlatform()
-        ? 'https://itainta.vercel.app'
+        ? 'https://wip.guide'
         : window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) throw error;
@@ -335,6 +364,16 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
               )}
 
               {error && <p className="text-error text-sm mt-2">{error}</p>}
+              {needsConfirm && (
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={loading}
+                  className="w-full mt-2 py-2.5 rounded-xl border border-secondary/30 text-secondary text-sm font-bold hover:bg-secondary/10 transition-colors disabled:opacity-50"
+                >
+                  Reinvia email di conferma
+                </button>
+              )}
 
               <button
                 type="submit"
@@ -488,7 +527,10 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
 
 
         <p className="text-center text-xs text-on-surface-variant/60 mt-8 mb-4">
-          Continuando accetti i nostri Termini di Servizio e le Condizioni di Privacy.
+          Continuando accetti i nostri{' '}
+          <a href="https://wip.guide/terms" target="_blank" rel="noopener noreferrer" className="underline font-bold">Termini di Servizio</a>
+          {' '}e la{' '}
+          <a href="https://wip.guide/privacy" target="_blank" rel="noopener noreferrer" className="underline font-bold">Privacy Policy</a>.
         </p>
 
       </motion.div>

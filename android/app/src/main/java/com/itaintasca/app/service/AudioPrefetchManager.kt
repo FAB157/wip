@@ -21,7 +21,7 @@ import java.util.concurrent.TimeUnit
  * (e funziona anche se nel frattempo la rete è sparita).
  *
  * L'MP3 arriva dallo STESSO endpoint usato dal player web/JS
- * (POST https://itainta.vercel.app/api/tts/smart {text, voice}): il server è
+ * (POST https://wip.guide/api/tts/smart {text, voice}): il server è
  * cache-first (bucket audio_cache di Supabase, chiave md5(testo)+voce), quindi
  * per i POI già ascoltati da altri utenti risponde con un redirect immediato
  * all'MP3 già sintetizzato.
@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit
 object AudioPrefetchManager {
 
     private const val TAG = "AudioPrefetch"
-    private const val TTS_ENDPOINT = "https://itainta.vercel.app/api/tts/smart"
+    private const val TTS_ENDPOINT = "https://wip.guide/api/tts/smart"
     private const val MAX_AGE_MS = 24 * 60 * 60 * 1000L
     // Un MP3 sotto ~1KB è un errore mascherato (il server stesso scarta <500B)
     private const val MIN_VALID_BYTES = 1000L

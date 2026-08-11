@@ -84,7 +84,7 @@ final class WipSupabaseClient {
     /// un utente straniero, in auto col Day Pass, sentiva testo italiano letto
     /// con voce nella sua lingua. Ora il testo è già nella lingua giusta.
     func fetchAudioguideText(poiId: String, lang: String, character: String, completion: @escaping (String?) -> Void) {
-        guard let url = URL(string: "https://itainta.vercel.app/api/poi/audioguide") else {
+        guard let url = URL(string: "https://wip.guide/api/poi/audioguide") else {
             completion(nil); return
         }
         var req = URLRequest(url: url)

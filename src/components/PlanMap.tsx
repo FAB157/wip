@@ -97,10 +97,39 @@ const LEGEND = [
   { color: '#16a34a', label: 'Natura' },
 ];
 
+/** Distanza approssimata in km (equirettangolare: più che sufficiente per il filtro) */
+function distKm(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const dLat = (aLat - bLat) * 111.32;
+  const dLng = (aLng - bLng) * 111.32 * Math.cos(((aLat + bLat) / 2) * Math.PI / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+function median(nums: number[]): number {
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
 function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAudioGuideActive = false }: PlanMapProps) {
-  const allStops = useMemo(() => giorni.flatMap(g => g.tappe).filter(
-    (t: any) => t.coordinate && t.coordinate.lat !== 0 && t.coordinate.lng !== 0
-  ), [giorni]);
+  // Coordinate allucinate dall'AI (luogo omonimo in un'altra città) finivano
+  // sulla mappa: un pin a 400 km sfasciava zoom e percorso. Filtro robusto:
+  // centro MEDIANO delle tappe (insensibile agli outlier) + soglia adattiva.
+  const { allStops, inRange } = useMemo(() => {
+    const raw = giorni.flatMap(g => g.tappe).filter(
+      (t: any) => t.coordinate && Number.isFinite(Number(t.coordinate.lat)) && Number.isFinite(Number(t.coordinate.lng)) && t.coordinate.lat !== 0 && t.coordinate.lng !== 0
+    );
+    if (raw.length < 3) {
+      return { allStops: raw, inRange: (_t: any) => true };
+    }
+    const cLat = median(raw.map((t: any) => Number(t.coordinate.lat)));
+    const cLng = median(raw.map((t: any) => Number(t.coordinate.lng)));
+    const dists = raw.map((t: any) => distKm(Number(t.coordinate.lat), Number(t.coordinate.lng), cLat, cLng));
+    // 80 km coprono le gite fuori porta (es. "Ravenna e la Riviera"); il 4×
+    // della distanza mediana lascia respirare gli itinerari itineranti veri.
+    const cutoff = Math.max(80, median(dists) * 4);
+    const check = (t: any) => distKm(Number(t.coordinate.lat), Number(t.coordinate.lng), cLat, cLng) <= cutoff;
+    return { allStops: raw.filter(check), inRange: check };
+  }, [giorni]);
 
   // Bounds derivati dalle tappe: useMemo su [giorni] al posto di useState+useEffect
   const bounds = useMemo(() => {
@@ -170,7 +199,7 @@ function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAud
 
         {giorni.map((giorno, dayIdx) => {
           const tappeConMap = giorno.tappe.filter(
-            (t: any) => t.coordinate && t.coordinate.lat !== 0 && t.coordinate.lng !== 0
+            (t: any) => t.coordinate && t.coordinate.lat !== 0 && t.coordinate.lng !== 0 && inRange(t)
           );
           const dayColor = DAY_COLORS[dayIdx % DAY_COLORS.length];
           const positions = tappeConMap.map((t: any) => [t.coordinate.lat, t.coordinate.lng] as [number, number]);

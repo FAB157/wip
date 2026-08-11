@@ -5,6 +5,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { getWalletBalance } from '../lib/pricing';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
+import { getApiUrl } from '../lib/api';
 import { useEffect } from 'react';
 
 interface PricingProps {
@@ -80,25 +81,28 @@ export default function Pricing({ userSession, language }: PricingProps) {
     }
 
     setLoading(productId);
-    
-    try {
-      const { data: edgeData, error } = await supabase.functions.invoke('stripe-checkout', {
-        body: {
-          productId: productId,
-          priceCents: priceCents,
-          credits: credits,
-          userId: userSession.user.id
-        }
-      });
 
-      if (error) throw error;
-      
-      if (edgeData?.sessionId) {
+    try {
+      // PREZZO E CREDITI DERIVATI SERVER-SIDE: si invia solo l'importo di
+      // crediti (l'edge function stripe-checkout, che accettava priceCents e
+      // credits dal client, è stata dismessa — permetteva 1M crediti per
+      // €0,50). Il server riconosce il pacchetto da `amount` via CREDIT_PACKS.
+      const res = await fetch(getApiUrl('/api/stripe/create-checkout'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: userSession.user.id, amount: credits })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Creazione sessione fallita');
+
+      if (data?.url) {
+        window.location.href = data.url;
+      } else if (data?.sessionId) {
         const stripeModule = await import('@stripe/stripe-js');
         const loadStripe = stripeModule.loadStripe;
         const stripe = await loadStripe('pk_test_51TZDL16ssNLgb6zHYHEMKH3dDjFfnPg8VNKpEvhBo8xy0IqBIR6sCqtDims4ArBQK2FkI9pZGvhvFGZmMhkF7ly900Z0IJZuZV');
         if (stripe) {
-          await (stripe as any).redirectToCheckout({ sessionId: edgeData.sessionId });
+          await (stripe as any).redirectToCheckout({ sessionId: data.sessionId });
         }
       }
     } catch (err: any) {

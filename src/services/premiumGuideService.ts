@@ -168,7 +168,7 @@ export async function generatePremiumGuide(
   }
 
   const data = await response.json();
-  const verifiedContent = await verifyGuideAntiAllucinazioni(data.content, itinerary);
+  const verifiedContent = await verifyGuideAntiAllucinazioni(data.content, itinerary, language);
   const result: GenerateGuideResult = {
     content: verifiedContent as PremiumGuideContent,
     media_manifest: data.media_manifest || {},
@@ -242,7 +242,7 @@ export async function generatePremiumGuideStream(
   const lb = cleanJson.lastIndexOf('}');
   if (fb !== -1 && lb > fb) cleanJson = cleanJson.slice(fb, lb + 1);
   const data = JSON.parse(cleanJson);
-  const verifiedContent = await verifyGuideAntiAllucinazioni(data, itinerary);
+  const verifiedContent = await verifyGuideAntiAllucinazioni(data, itinerary, language);
   const result: GenerateGuideResult = {
     content: verifiedContent as PremiumGuideContent,
     media_manifest: {}, // Le immagini possono mancare nello stream veloce
@@ -260,7 +260,7 @@ export async function generatePremiumGuideStream(
  * (campi verifica/nota_verifica per POI). Fail-open: su errore o timeout
  * la guida passa com'è.
  */
-async function verifyGuideAntiAllucinazioni(content: any, itinerary: any): Promise<any> {
+async function verifyGuideAntiAllucinazioni(content: any, itinerary: any, language: string = 'IT'): Promise<any> {
   try {
     if (!content?.giorni?.length) return content;
     const destination = itinerary?.titolo || itinerary?.destinazione || content?.guida_titolo || '';
@@ -270,7 +270,7 @@ async function verifyGuideAntiAllucinazioni(content: any, itinerary: any): Promi
     const res = await fetch('/api/itinerary/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ itinerary: content, destination }),
+      body: JSON.stringify({ itinerary: content, destination, language }),
       signal: ctrl.signal,
     });
     clearTimeout(t);

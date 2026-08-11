@@ -41,7 +41,7 @@ object ConnectivityMonitor {
                 .callTimeout(timeoutMs * 2, TimeUnit.MILLISECONDS)
                 .build()
             val req = Request.Builder()
-                .url("https://itainta.vercel.app/api/area/bundle")
+                .url("https://wip.guide/api/area/bundle")
                 .head()
                 .build()
             client.newCall(req).execute().use { it.code in 200..499 }

@@ -17,7 +17,7 @@
  */
 
 /** Le API Wikimedia chiedono uno User-Agent identificabile con un contatto. */
-export const WIKI_UA = 'WIP-WorldInPocket/1.0 (https://itainta.vercel.app; marmidicarrara@gmail.com)';
+export const WIKI_UA = 'WIP-WorldInPocket/1.0 (https://wip.guide; support@wip.guide)';
 
 /** Raggio di ricerca attorno al POI: oltre, non è più "quel" luogo. */
 export const GEO_RADIUS_M = 300;

@@ -337,9 +337,23 @@ function extractItineraryStops(obj: any): any[] {
 // ('verificata' | 'da_verificare' | 'non_conforme') e "nota_verifica".
 // Fail-open: qualsiasi errore lascia l'itinerario com'è.
 async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
-  const { destination, lat, lon, radiusKm, specialRequests, interests } = opts || {};
+  const { destination, lat, lon, radiusKm, specialRequests, interests, language } = opts || {};
   const stops = extractItineraryStops(itineraryObj).slice(0, 60);
   if (stops.length === 0) return { checked: 0, flagged: 0 };
+
+  // Nota "chicca" nella lingua dell'utente: tono da consiglio, NON da allarme.
+  // Il verdetto "dubbio" = luogo vero ma poco famoso; il vecchio "⚠ Luogo poco
+  // documentato: verifica prima di andare" faceva sembrare la tappa inventata.
+  const HIDDEN_GEM_NOTES: Record<string, string> = {
+    IT: "💎 Gemma fuori dai circuiti più battuti: ti consigliamo di controllare orari e giorni di apertura prima della visita.",
+    EN: "💎 A gem off the beaten path: we recommend checking opening days and hours before your visit.",
+    FR: "💎 Une pépite hors des sentiers battus : nous vous conseillons de vérifier les horaires d'ouverture avant votre visite.",
+    ES: "💎 Una joya fuera de las rutas más frecuentadas: te recomendamos comprobar los horarios de apertura antes de tu visita.",
+    DE: "💎 Ein Geheimtipp abseits der üblichen Routen: Wir empfehlen, die Öffnungszeiten vor dem Besuch zu prüfen.",
+    RU: "💎 Скрытая жемчужина вдали от туристических маршрутов: советуем уточнить часы работы перед посещением.",
+    ZH: "💎 小众宝藏景点：建议出发前确认开放时间。"
+  };
+  const hiddenGemNote = HIDDEN_GEM_NOTES[String(language || 'IT').toUpperCase()] || HIDDEN_GEM_NOTES.IT;
 
   // 1) Controllo geografico deterministico: tappe lontane dalla destinazione
   //    = probabile luogo omonimo in un'altra città o coordinate inventate.
@@ -441,8 +455,10 @@ ${JSON.stringify(compact)}`;
       flagged++;
     } else if (v.esiste === 'dubbio') {
       if (!s.ref.verifica) {
-        s.ref.verifica = 'da_verificare';
-        s.ref.nota_verifica = `⚠ Luogo poco documentato: verifica prima di andare${v.motivo ? ` (${v.motivo})` : ''}`;
+        // 'poco_noto' e non 'da_verificare': il client lo mostra come
+        // consiglio (stile info), non come allarme ambra.
+        s.ref.verifica = 'poco_noto';
+        s.ref.nota_verifica = hiddenGemNote;
         flagged++;
       }
     } else if (!s.ref.verifica) {
@@ -1027,54 +1043,8 @@ async function incrementQuotaCount(userId: string, feature: 'itinerari' | 'audio
   }
 }
 
-async function fetchPredictHQEvents(destination: string, mese?: string, radiusKm: number = 100): Promise<string | null> {
-  try {
-    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(destination)}&countrycodes=it,sm,va&format=json&limit=1`;
-    const nomRes = await axios.get(nomUrl, { headers: { "User-Agent": "WorldInPocket/1.0" } });
-    
-    if (!nomRes.data || nomRes.data.length === 0) return null;
-    
-    const { lat, lon } = nomRes.data[0];
-    const nLat = parseFloat(lat);
-    const nLon = parseFloat(lon);
-
-    // Niente chiave hardcoded: se manca la env si salta PredictHQ (gli eventi
-    // sono un extra dell'itinerario, non un blocco).
-    const phqKey = process.env.PREDICTHQ_API_KEY;
-    if (!phqKey) return null;
-    
-    let startStr = new Date().toISOString().split('T')[0];
-    let endObj = new Date();
-    endObj.setDate(endObj.getDate() + 45); // Next 45 days
-    let endStr = endObj.toISOString().split('T')[0];
-
-    const phqUrl = `https://api.predicthq.com/v1/events?location_around.origin=${nLat},${nLon}&location_around.scale=${radiusKm}km&active.gte=${startStr}&active.lte=${endStr}&sort=-rank&limit=10`;
-    
-    const res = await axios.get(phqUrl, {
-      headers: {
-        "Authorization": `Bearer ${phqKey}`,
-        "Accept": "application/json"
-      }
-    });
-
-    if (res.data && res.data.results && res.data.results.length > 0) {
-      const events = res.data.results.map((e: any) => {
-        let macroCat = "🌟 Altro";
-        if (e.category === "concerts") macroCat = "🎵 Musica";
-        else if (e.category === "performing-arts") macroCat = "🎭 Arte & Teatro";
-        else if (e.category === "sports") macroCat = "⚽ Sport";
-        else if (["festivals", "expos"].includes(e.category)) macroCat = "🎪 Fiere & Sagre";
-        
-        return `- [${macroCat}] ${e.title} (dal ${e.start.split('T')[0]} al ${e.end ? e.end.split('T')[0] : e.start.split('T')[0]}) presso ${e.entities && e.entities.length > 0 ? e.entities[0].name : e.location[0]+','+e.location[1]}`;
-      });
-      return `\nATTENZIONE: L'utente ha richiesto di INCLUDERE EVENTI LOCALI. Ecco alcuni EVENTI REALI (entro ${radiusKm}km) previsti in zona in questo periodo. INCLUDI ASSOLUTAMENTE almeno 1 o 2 di questi eventi come 'tappa' nell'itinerario, mantenendo il nome dell'evento e il luogo:\n` + events.join("\n");
-    }
-  } catch (err: any) {
-    console.error("[PredictHQ] Fetch error:", err.message);
-  }
-  return null;
-}
-
+// PredictHQ rimosso (ago 2026): chiave revocata (401) e nessun rinnovo
+// previsto. Gli eventi reali arrivano da Ticketmaster/Viator/GYG.
 
 async function fetchGeographicContext(destination: string): Promise<{context: string, hasDbPois: boolean} | null> {
   try {
@@ -1251,6 +1221,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   // sono soggette a CORS e passano comunque. L'header statico è stato tolto da
   // vercel.json (questo middleware è l'unica autorità).
   const CORS_ALLOWLIST = new Set([
+    'https://wip.guide',
+    'https://www.wip.guide',
     'https://itainta.vercel.app',
     'capacitor://localhost',
     'ionic://localhost',
@@ -1634,13 +1606,68 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const SERVER_PRICING: Record<string, number> = {
     premium_guide_daily: 20, audio_guide: 15, itinerary_daily: 10,
     photo_search: 5, poi_detail: 5, podcast_daily: 15,
+    // Pass Museo: Vision illimitata per MUSEUM_PASS_HOURS ore (visita indoor).
+    // 100 crediti (~1€): break-even col costo AI (~0,4 cent/scansione
+    // gpt-4o-mini) anche nel caso peggiore del tetto scansioni.
+    museum_pass: 100,
   };
 
+  // Header service-role riusati dagli helper crediti.
+  const CREDIT_SVC_HEADERS = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
   /**
-   * Verifica il TOKEN (mai il body) e addebita `feature × units` crediti in
-   * modo atomico via consume_credits. Ritorna {userId, cost} o null avendo
-   * già inviato la risposta d'errore (401 login, 402 crediti, 500). Il
-   * chiamante genera e, in caso di fallimento, rimborsa con refundServer.
+   * Addebito robusto. RPC atomica `consume_credits` (earned-first) preferita;
+   * se la RPC non è applicata sul DB si ripiega su una scrittura service-key
+   * (che bypassa il trigger anti-escalation su user_profiles). Il trigger
+   * blocca ogni scrittura crediti dal client, quindi TUTTI i consumi devono
+   * passare da qui. Ritorna 'ok' | 'insufficient' | 'error'.
+   */
+  async function consumeCreditsServer(userId: string, amount: number): Promise<'ok' | 'insufficient' | 'error'> {
+    if (amount <= 0) return 'ok';
+    try {
+      const rpc = await axios.post(`${supabaseUrl}/rest/v1/rpc/consume_credits`,
+        { p_user_id: userId, p_amount: amount }, { headers: CREDIT_SVC_HEADERS });
+      if (rpc.data === true) return 'ok';
+      if (rpc.data === false) return 'insufficient';
+    } catch { /* RPC assente/errore → fallback */ }
+    try {
+      const { data: prof } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=earned_credits,purchased_credits`, { headers: CREDIT_SVC_HEADERS });
+      let earned = Number(prof?.[0]?.earned_credits) || 0;
+      let purchased = Number(prof?.[0]?.purchased_credits) || 0;
+      if (earned + purchased < amount) return 'insufficient';
+      let rem = amount;
+      if (earned >= rem) { earned -= rem; rem = 0; } else { rem -= earned; earned = 0; }
+      if (rem > 0) purchased -= rem;
+      await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`,
+        { earned_credits: earned, purchased_credits: purchased }, { headers: CREDIT_SVC_HEADERS });
+      return 'ok';
+    } catch { return 'error'; }
+  }
+
+  /** Rimborso robusto (RPC atomica o fallback service-key su purchased). */
+  async function refundCreditsServer(userId: string, amount: number): Promise<boolean> {
+    if (amount <= 0) return true;
+    try {
+      await axios.post(`${supabaseUrl}/rest/v1/rpc/refund_credits_service`,
+        { p_user_id: userId, p_amount: amount }, { headers: CREDIT_SVC_HEADERS });
+      return true;
+    } catch { /* RPC assente/errore → fallback */ }
+    try {
+      const { data: prof } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=purchased_credits`, { headers: CREDIT_SVC_HEADERS });
+      const purchased = Number(prof?.[0]?.purchased_credits) || 0;
+      await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`,
+        { purchased_credits: purchased + amount }, { headers: CREDIT_SVC_HEADERS });
+      return true;
+    } catch { return false; }
+  }
+
+  /**
+   * Verifica il TOKEN (mai il body) e addebita `feature × units` crediti.
+   * Ritorna {userId, cost} o null avendo già inviato la risposta d'errore
+   * (401 login, 402 crediti, 500). Il chiamante genera e, in caso di
+   * fallimento, rimborsa con refundServer.
    */
   async function chargeOrReject(req: any, res: any, feature: string, units: number = 1): Promise<{ userId: string; cost: number } | null> {
     const userId = await verifyUserToken(req);
@@ -1648,30 +1675,16 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     const unit = SERVER_PRICING[feature];
     if (!unit) { res.status(500).json({ error: 'unknown_feature' }); return null; }
     const cost = unit * Math.max(1, Math.floor(units));
-    try {
-      const rpc = await axios.post(
-        `${supabaseUrl}/rest/v1/rpc/consume_credits`,
-        { p_user_id: userId, p_amount: cost },
-        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
-      );
-      if (rpc.data !== true) { res.status(402).json({ error: 'insufficient_credits', cost }); return null; }
-    } catch (e: any) {
-      res.status(500).json({ error: 'charge_failed' }); return null;
-    }
+    const outcome = await consumeCreditsServer(userId, cost);
+    if (outcome === 'insufficient') { res.status(402).json({ error: 'insufficient_credits', cost }); return null; }
+    if (outcome === 'error') { res.status(500).json({ error: 'charge_failed' }); return null; }
     return { userId, cost };
   }
 
   /** Rimborso server-side (generazione fallita dopo l'addebito). Best-effort. */
   async function refundServer(userId: string, amount: number): Promise<void> {
-    try {
-      await axios.post(
-        `${supabaseUrl}/rest/v1/rpc/refund_credits_service`,
-        { p_user_id: userId, p_amount: amount },
-        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
-      );
-    } catch (e: any) {
-      await logSystemError('critical', `Rimborso server-side fallito: ${e.message}`, { source: 'chargeOrReject', userId, amount });
-    }
+    const ok = await refundCreditsServer(userId, amount);
+    if (!ok) await logSystemError('critical', `Rimborso server-side fallito`, { source: 'chargeOrReject', userId, amount });
   }
 
   // Come verifyUserToken ma richiede is_admin = true sul profilo.
@@ -1956,10 +1969,17 @@ app.post("/api/groq/candidates", rateLimiter, async (req, res) => {
     if (includeEvents) extraInstructions += " IMPORTANTE: L'utente ha richiesto eventi. Includi tra i candidati almeno 2 o 3 eventi, concerti o spettacoli reali e famosi per questa destinazione.";
     if (includeTours) extraInstructions += " IMPORTANTE: L'utente ha richiesto tour. Includi tra i candidati almeno 2 o 3 tour, degustazioni o esperienze guidate di alto livello.";
 
+    // Candidati proporzionali alla durata: il "15 fisso" dava le stesse carte
+    // per 1 o 7 giorni. 1g→10, 2g→15, 3g→20, 4g→25… con tetto a 45 (oltre il
+    // JSON rischia il taglio a 8192 token di output e il mazzo diventa illeggibile).
+    const safeDays = Math.min(30, Math.max(1, Math.floor(Number(days)) || 1));
+    const numCandidates = Math.min(45, 10 + (safeDays - 1) * 5);
+
     const systemPrompt = `Sei un curatore di viaggi d'elite e lifestyle editor per World in Pocket (WIP).
 Il tuo compito è selezionare ESCLUSIVAMENTE i luoghi più iconici, alla moda, prestigiosi e culturalmente rilevanti per la destinazione richiesta. Scegli attrazioni tratte da circuiti ufficiali (UNESCO, Michelin) o recensite da magazine prestigiosi (Condé Nast, Vogue, Lonely Planet). Evita trappole per turisti. DEVONO ESSERE I "MUST TO SEE" ASSOLUTI, I PIÙ FAMOSI E BELLI PER OGNI CATEGORIA.
 ${extraInstructions}
-Proponi esattamente 15 attrazioni o punti di interesse eccellenti e verificati, corrispondenti alle categorie: ${categoriesStr}.
+Proponi esattamente ${numCandidates} attrazioni o punti di interesse eccellenti e verificati, corrispondenti alle categorie: ${categoriesStr}.
+ORDINE OBBLIGATORIO: l'array "candidates" deve essere ordinato per IMPORTANZA DECRESCENTE — la prima attrazione è la più iconica e imperdibile in assoluto, l'ultima la meno essenziale.
 Ogni candidato deve contenere:
 - id: un identificatore univoco (es. "cand_1", "cand_2", etc.)
 - giorno: assegna casualmente un giorno ideale per la visita (numero da 1 a ${days})
@@ -1977,7 +1997,7 @@ RISPONDI RIGOROSAMENTE NELLA LINGUA: ${language}.
 
     const userPrompt = `Genera l'elenco dei candidati per la città di ${destination} per un viaggio di ${days} giorni, concentrandoti su attrazioni di tipo: ${categoriesStr}.${geoAnchor}`;
 
-    console.log(`[DeepSeek Candidates] Generating 15 candidates for ${destination} using DeepSeek...`);
+    console.log(`[DeepSeek Candidates] Generating ${numCandidates} candidates (${safeDays} days) for ${destination} using DeepSeek...`);
     const response = await callUniversalAi(
       "deepseek",
       [
@@ -2072,13 +2092,7 @@ ${ANTI_HALLUCINATION_RULES}`;
         prompt += `\nL'utente ha anche queste RICHIESTE PARTICOLARI a cui devi assolutamente attenerti: "${specialRequests}". Modifica l'itinerario e i luoghi in base a queste richieste (es. ristoranti particolari, solo certe attrazioni, etc).`;
       }
 
-      if (includeEvents) {
-        console.log(`[PredictHQ] Fetching events for ${destination}...`);
-        const eventsContext = await fetchPredictHQEvents(destination, mese, radius);
-        if (eventsContext) {
-          prompt += eventsContext;
-        }
-      }
+      // (PredictHQ rimosso: gli eventi entrano via Ticketmaster/Viator nel prompt)
 
       if (includeTours) {
         console.log(`[Viator] Fetching real tours for itinerary in ${destination}...`);
@@ -2088,16 +2102,30 @@ ${ANTI_HALLUCINATION_RULES}`;
           if (Array.isArray(toursArray) && toursArray.length > 0 && !toursArray[0].error && toursArray[0].name !== "Tour Esclusivo e Degustazione") {
             const viatorData = toursArray.slice(0, 3).map((t: any) => `- ${t.name} (${t.price}, durata: ${t.duration}). Link: ${t.url}`).join("\n");
             if (viatorData) {
-              prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. DEVI integrare ESATTAMENTE 3 di questi tour Viator nell'itinerario (se sufficienti, circa 1 al giorno):\n${viatorData}\nAssicurati di usare i dettagli forniti (prezzi, orari, titoli). DEVI INSERIRE il link specifico esatto dell'esperienza Viator nel campo "link_info" della tappa (non usare MAI un link generico ad aviator/viator). I TOUR VIATOR HANNO ASSOLUTA PRIORITÀ SUGLI EVENTI. Se ci sono eventi (PredictHQ), inseriscili solo se c'è ancora spazio DOPO aver inserito i tour Viator. Tutte le informazioni devono essere accuratissime e di massima qualità. Imposta la categoria di queste tappe a "Esperienze".`;
+              prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. DEVI integrare ESATTAMENTE 3 di questi tour Viator nell'itinerario (se sufficienti, circa 1 al giorno):\n${viatorData}\nAssicurati di usare i dettagli forniti (prezzi, orari, titoli). DEVI INSERIRE il link specifico esatto dell'esperienza Viator nel campo "link_info" della tappa (non usare MAI un link generico ad aviator/viator). I TOUR VIATOR HANNO ASSOLUTA PRIORITÀ SUGLI EVENTI. Se ci sono eventi, inseriscili solo se c'è ancora spazio DOPO aver inserito i tour Viator. Tutte le informazioni devono essere accuratissime e di massima qualità. Imposta la categoria di queste tappe a "Esperienze".`;
             } else {
-             prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
+             prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide/Tiqets a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
             }
           } else {
-             prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
+             prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide/Tiqets a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
           }
         } catch(e) {
-          prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
+          prompt += `\nATTENZIONE: L'utente ha richiesto di INCLUDERE TOUR O ESPERIENZE. Genera 1 o 2 tappe per tour estremamente rinomati e REALI per la destinazione, di cui sei CERTO che esistano. VIETATO costruire URL Viator/GetYourGuide/Tiqets a memoria (risultano quasi sempre inventati): lascia "link_info" VUOTO per queste tappe. NON usare MAI link di ricerca generici. Imposta la categoria di queste tappe a "Esperienze".`;
         }
+      }
+
+      // ── BIGLIETTI D'INGRESSO REALI (Tiqets) ──────────────────────────
+      // NON gated su includeTours: prezzi e link biglietto valgono per le
+      // tappe normali (musei, attrazioni). Le URL arrivano dall'API già
+      // affiliate (partner nel token): il modello deve copiarle INTATTE.
+      try {
+        const tiqetsList = await fetchTiqetsProducts({ cityName: destination, lang: String(userLanguage || 'IT').toLowerCase(), pageSize: 8 });
+        if (tiqetsList.length > 0) {
+          const tqData = tiqetsList.slice(0, 6).map((t: any) => `- ${t.name}${t.venue ? ` [${t.venue}]` : ''} (${t.price}${t.rating ? `, ${t.rating}` : ''}). Link: ${t.url}`).join("\n");
+          prompt += `\nBIGLIETTI D'INGRESSO REALI (Tiqets) per la destinazione. Se una tappa dell'itinerario corrisponde a una di queste attrazioni: usa ESATTAMENTE l'URL indicato nel campo "link_info" della tappa (copialo INTATTO, contiene il codice partner) e riporta il prezzo reale del biglietto nella tabella budget del giorno. VIETATO costruire URL tiqets.com a memoria o modificare quelli forniti:\n${tqData}`;
+        }
+      } catch (tqErr: any) {
+        console.warn('[Tiqets] Iniezione itinerario (non-stream) fallita:', tqErr?.message);
       }
 
       let lockedStopsInstruction = "";
@@ -2326,11 +2354,11 @@ Non aggiungere testo prima o dopo il JSON.`;
   // dell'itinerario non viene MAI bloccata da questa verifica.
   app.post("/api/itinerary/verify", rateLimiter, async (req, res) => {
     try {
-      const { itinerary, destination, lat, lon, radius, specialRequests, interests } = req.body || {};
+      const { itinerary, destination, lat, lon, radius, specialRequests, interests, language } = req.body || {};
       if (!itinerary || !destination) return res.status(400).json({ error: "Missing itinerary/destination" });
       const timeout = new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 25000));
       const report = await Promise.race([
-        verifyItineraryAntiHallucination(itinerary, { destination, lat, lon, radiusKm: radius, specialRequests, interests }),
+        verifyItineraryAntiHallucination(itinerary, { destination, lat, lon, radiusKm: radius, specialRequests, interests, language }),
         timeout,
       ]);
       // verifyItineraryAntiHallucination muta itinerary in place (campi
@@ -2344,7 +2372,7 @@ Non aggiungere testo prima o dopo il JSON.`;
 
   app.post("/api/groq/itinerary-stream", rateLimiter, async (req, res) => {
     try {
-      const { destination, days, interests, pois, specialRequests, startTime, endTime, budget = "standard", viaggiatori = "solo", ritmo = "standard", guida = "NICKY", mese, includeEvents, includeTours, radius = 100, lockedStops, lat, lon, language } = req.body;
+      const { destination, days, interests, pois, poisDetailed, specialRequests, startTime, endTime, budget = "standard", viaggiatori = "solo", ritmo = "standard", guida = "NICKY", mese, includeEvents, includeTours, radius = 100, lockedStops, lat, lon, language } = req.body;
       const tInizio = startTime || "09:00";
       const tFine = endTime || "19:00";
       // interests può arrivare come stringa singola: prima esplodeva con
@@ -2423,11 +2451,69 @@ Non aggiungere testo prima o dopo il JSON.`;
         ]).catch(() => "");
       }
 
+      // Biglietti d'ingresso reali Tiqets (URL già affiliate dal token): NON
+      // gated su includeTours — prezzi e link biglietto servono anche alle
+      // tappe normali (musei, attrazioni). Fail-open con tetto 8s.
+      let ticketsContext = "";
+      try {
+        const tqList: any[] = await Promise.race([
+          fetchTiqetsProducts({ cityName: destination, lang: String(language || 'IT').toLowerCase(), pageSize: 8 }),
+          new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 8000)),
+        ]);
+        if (Array.isArray(tqList) && tqList.length > 0) {
+          const tqLines = tqList.slice(0, 6).map((t: any) => `- [Tiqets] ${t.name}${t.venue ? ` [${t.venue}]` : ''} (${t.price}${t.rating ? `, ${t.rating}` : ''}) → link_info ESATTO: ${t.url}`);
+          ticketsContext = `\nBIGLIETTI D'INGRESSO REALI (Tiqets): se una tappa corrisponde a una di queste attrazioni usa ESATTAMENTE questo URL in "link_info" (copiato INTATTO: contiene il codice partner) e riporta il prezzo del biglietto nel budget del giorno. VIETATO costruire URL tiqets.com a memoria:\n${tqLines.join("\n")}`;
+        }
+      } catch { /* fail-open: l'itinerario vive anche senza biglietti */ }
+
+      // ── PERCORSO PIÙ BREVE CALCOLATO QUI (non dall'AI) ──────────────────
+      // Il client (swipe/preferiti) invia `poisDetailed` con le coordinate,
+      // che prima venivano IGNORATE: l'assegnazione ai giorni era casuale e
+      // gli spostamenti a zig-zag. Ora: giro nearest-neighbour su tutti i POI
+      // partendo dal più periferico, poi spezzato in segmenti contigui per
+      // giorno → giornate geograficamente compatte e ordine di visita ottimo.
+      let routePlanInstruction = "";
+      const pdArr: any[] = (Array.isArray(poisDetailed) ? poisDetailed : [])
+        .map((p: any) => ({ ...p, lat: Number(p?.lat), lon: Number(p?.lon) }))
+        .filter((p: any) => p.nome && Number.isFinite(p.lat) && Number.isFinite(p.lon) && p.lat !== 0);
+      const nDaysRoute = Math.min(30, Math.max(1, Math.floor(Number(days)) || 1));
+      if (pdArr.length >= 2) {
+        const distKm = (a: any, b: any) => {
+          const dLat = (a.lat - b.lat) * 111.32;
+          const dLon = (a.lon - b.lon) * 111.32 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+          return Math.sqrt(dLat * dLat + dLon * dLon);
+        };
+        const cLat = pdArr.reduce((s, p) => s + p.lat, 0) / pdArr.length;
+        const cLon = pdArr.reduce((s, p) => s + p.lon, 0) / pdArr.length;
+        let startIdx = 0, maxD = -1;
+        pdArr.forEach((p, i) => { const d = distKm(p, { lat: cLat, lon: cLon }); if (d > maxD) { maxD = d; startIdx = i; } });
+        const remaining = [...pdArr];
+        const ordered = [remaining.splice(startIdx, 1)[0]];
+        while (remaining.length) {
+          let bi = 0, bd = Infinity;
+          remaining.forEach((p, i) => { const d = distKm(ordered[ordered.length - 1], p); if (d < bd) { bd = d; bi = i; } });
+          ordered.push(remaining.splice(bi, 1)[0]);
+        }
+        // Ripartizione bilanciata (non ceil: 15 POI su 7 giorni lasciava gli
+        // ultimi giorni vuoti): i primi (n % giorni) giorni prendono una tappa in più.
+        const base = Math.floor(ordered.length / nDaysRoute);
+        const extra = ordered.length % nDaysRoute;
+        const dayLines: string[] = [];
+        let cursor = 0;
+        for (let d = 0; d < nDaysRoute; d++) {
+          const size = base + (d < extra ? 1 : 0);
+          const seg = ordered.slice(cursor, cursor + size);
+          cursor += size;
+          if (seg.length) dayLines.push(`Giorno ${d + 1}: ${seg.map(p => p.nome).join(" → ")}`);
+        }
+        routePlanInstruction = `\n\nPIANO GEOGRAFICO GIÀ OTTIMIZZATO (percorso più breve calcolato sulle coordinate reali dei luoghi scelti): assegna le tappe ai giorni ESATTAMENTE come indicato e visitale in QUEST'ORDINE, inserendo colazione/pranzo/cena e le eventuali tappe aggiuntive LUNGO il percorso, senza mai stravolgerlo né spostare una tappa in un altro giorno:\n${dayLines.join("\n")}`;
+      }
+
       let prompt = "";
       if (pois && pois.length > 0) {
-        prompt = `Crea un itinerario ottimizzato per ${days} giorni a ${destination} (con orario riga giornaliero da ${tInizio} a ${tFine}) includendo questi luoghi: ${pois.join(", ")}.\n\nREGOLA SUPREMA INVALICABILE: DEVI ASSOLUTAMENTE INCLUDERE TUTTE LE TAPPE ELENCATE (${pois.join(", ")}). È severamente vietato omettere anche solo una di queste tappe. Se il tempo a disposizione è limitato, riduci la durata di ciascuna visita pur di farle entrare tutte nell'itinerario. ${specialRequests ? `Richieste particolari dell'utente (rispettale): ${specialRequests}` : ""} ${ragInstruction}${geoAnchor}${userPrefs}${diningContext}${toursContext}`;
+        prompt = `Crea un itinerario ottimizzato per ${days} giorni a ${destination} (con orario riga giornaliero da ${tInizio} a ${tFine}) includendo questi luoghi: ${pois.join(", ")}.\n\nREGOLA SUPREMA INVALICABILE: DEVI ASSOLUTAMENTE INCLUDERE TUTTE LE TAPPE ELENCATE (${pois.join(", ")}). È severamente vietato omettere anche solo una di queste tappe. Se il tempo a disposizione è limitato, riduci la durata di ciascuna visita pur di farle entrare tutte nell'itinerario.${routePlanInstruction} ${specialRequests ? `Richieste particolari dell'utente (rispettale): ${specialRequests}` : ""} ${ragInstruction}${geoAnchor}${userPrefs}${diningContext}${toursContext}${ticketsContext}`;
       } else {
-        prompt = `Crea un itinerario ottimizzato per ${days} giorni a ${destination} (dalle ${tInizio} alle ${tFine}). Basati sui seguenti interessi/richieste: ${interestsArr.join(", ")}. ${specialRequests ? `Richieste particolari dell'utente (rispettale): ${specialRequests}` : ""} ${ragInstruction}${geoAnchor}${userPrefs}${diningContext}${toursContext}`;
+        prompt = `Crea un itinerario ottimizzato per ${days} giorni a ${destination} (dalle ${tInizio} alle ${tFine}). Basati sui seguenti interessi/richieste: ${interestsArr.join(", ")}. ${specialRequests ? `Richieste particolari dell'utente (rispettale): ${specialRequests}` : ""} ${ragInstruction}${geoAnchor}${userPrefs}${diningContext}${toursContext}${ticketsContext}`;
       }
 
       if (lockedStops && Array.isArray(lockedStops) && lockedStops.length > 0) {
@@ -2444,6 +2530,7 @@ REGOLE STRUTTURA GIORNATA (OBBLIGATORIE PER OGNI GIORNO):
 3. Poi ALMENO 3-4 tappe al POMERIGGIO.
 4. Infine la tappa CENA (campo "tipo": "cena") con nome del locale REALE specifico e piatto tipico consigliato.
 5. Totale minimo: 8 tappe per giorno (incluse pranzo e cena). Adatta le durate delle visite per rientrare nella fascia oraria richiesta, ma NON scendere sotto questi minimi.
+6. PERCORSO PIÙ BREVE OBBLIGATORIO: ogni giorno copre UNA sola zona/quartiere compatto e le tappe si susseguono in ordine di prossimità geografica (dalla più vicina alla successiva, mai a zig-zag attraverso la città). Anche pranzo e cena vanno scelti LUNGO il percorso del giorno, non dall'altra parte della città.
 
 REGOLE LUNGHEZZA TESTI:
 1. "attivita": Ogni descrizione deve essere approfondita e ricca di dettagli, lunga circa 5-6 righe (circa 60-80 parole).
@@ -2599,15 +2686,37 @@ RICORDA: È ASSOLUTAMENTE TASSATIVO RISPETTARE QUESTE REGOLE. PENA: FALLIMENTO T
   app.post("/api/groq/replace", async (req, res) => {
     try {
       const { currentItinerary, tappaId } = req.body;
-      
-      const systemPrompt = `Sei un esperto di routing turistico. 
+
+      // Biglietti reali Tiqets attorno alla tappa da sostituire: così
+      // l'alternativa può uscire già con link biglietto affiliato, e il
+      // modello ha il divieto esplicito di inventare URL di prenotazione.
+      let replaceTicketsBlock = "";
+      try {
+        let stopLat = 0, stopLon = 0;
+        for (const g of currentItinerary?.giorni || []) {
+          for (const t of g?.tappe || []) {
+            if (String(t?.id_tappa) === String(tappaId)) {
+              stopLat = t?.coordinate?.lat || 0;
+              stopLon = t?.coordinate?.lng || t?.coordinate?.lon || 0;
+            }
+          }
+        }
+        if (stopLat && stopLon) {
+          const tq = await fetchTiqetsProducts({ lat: stopLat, lon: stopLon, radiusKm: 5, lang: 'it', pageSize: 6 });
+          if (tq.length > 0) {
+            replaceTicketsBlock = `\nBIGLIETTI REALI TIQETS nella zona della tappa da sostituire — se l'alternativa scelta corrisponde a una di queste attrazioni usa ESATTAMENTE questo URL in "link_info", copiato INTATTO (contiene il codice partner):\n${tq.map((t: any) => `- ${t.name}${t.venue ? ` [${t.venue}]` : ''} (${t.price}). Link: ${t.url}`).join("\n")}\nVIETATO costruire URL viator.com, getyourguide o tiqets.com a memoria.`;
+          }
+        }
+      } catch { /* fail-open: la sostituzione vive anche senza biglietti */ }
+
+      const systemPrompt = `Sei un esperto di routing turistico.
 L'utente vuole sostituire una tappa specifica del suo itinerario.
 REGOLE:
 1. Sostituisci la tappa con id_tappa "${tappaId}" con un'alternativa coerente per tipologia e ottimizzazione geografica rispetto alle tappe precedenti e successive.
 2. L'alternativa deve avere lo STESSO TEMPO DI VISITA (durata) della tappa originale per non scombussolare il resto dell'itinerario.
 3. Mantieni lo stesso formato JSON dell'itinerario originale.
 4. Rispondi SOLO con il JSON completo aggiornato.
-${ANTI_HALLUCINATION_RULES}
+${ANTI_HALLUCINATION_RULES}${replaceTicketsBlock}
 
 JSON Originale:
 ${JSON.stringify(currentItinerary)}
@@ -2995,9 +3104,19 @@ function isNameMatching(name1: string, name2: string): boolean {
       // Quota Circuit Breaker Check
       // checkAndIncrementQuota risolve lo userId dal Bearer opzionale (se il
       // client lo invia); altrimenti degrada a un id anonimo per IP.
+      // Il limite giornaliero unificato (anti-bot) non deve strozzare un Pass
+      // Museo legittimo: col pass attivo fa fede il tetto del pass
+      // (MUSEUM_PASS_MAX_SCANS nella finestra), verificato qui sotto.
       const quota = await checkAndIncrementQuota(req, 'vision');
       if (!quota.allowed) {
-        return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
+        const quotaUid = quota.userId && !String(quota.userId).startsWith('anonymous-') ? String(quota.userId) : null;
+        const passExp = quotaUid ? await getActiveMuseumPassExpiry(quotaUid) : null;
+        const passHasRoom = passExp && quotaUid
+          ? (await countMuseumPassScans(quotaUid, passExp)) < MUSEUM_PASS_MAX_SCANS
+          : false;
+        if (!passHasRoom) {
+          return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
+        }
       }
 
       // quota.userId può essere il fallback anonimo per IP: per schede, XP e
@@ -3077,6 +3196,25 @@ function isNameMatching(name1: string, name2: string): boolean {
         }
       };
 
+      // ── PASS MUSEO ─────────────────────────────────────────────────────
+      // Con un pass attivo i riconoscimenti sono inclusi (niente addebito)
+      // e la cache GPS è bypassata in lettura E scrittura: in un museo due
+      // opere distano pochi metri, la cache per coordinate (30 m)
+      // risponderebbe con la scheda dell'opera sbagliata.
+      const museumPassExpiresAt = realUserId ? await getActiveMuseumPassExpiry(realUserId) : null;
+      let museumPassActive = !!museumPassExpiresAt;
+
+      // Tetto anti-spam del pass: oltre MUSEUM_PASS_MAX_SCANS scansioni nella
+      // finestra il pass smette di coprire e si torna all'addebito per foto
+      // (lo spam diventa costoso; un visitatore vero non ci arriva mai).
+      if (museumPassActive && realUserId && museumPassExpiresAt) {
+        const used = await countMuseumPassScans(realUserId, museumPassExpiresAt);
+        if (used >= MUSEUM_PASS_MAX_SCANS) {
+          console.warn(`[Vision] Pass Museo: tetto ${MUSEUM_PASS_MAX_SCANS} scansioni raggiunto (${used}): si torna all'addebito standard`);
+          museumPassActive = false;
+        }
+      }
+
       // ── GATE CREDITI SERVER-SIDE ───────────────────────────────────────
       // Prima l'addebito photo_search viveva solo nel client (bypassabile
       // via cURL, AUDIT A6). chargeOrReject risponde da solo 401/402/500.
@@ -3084,15 +3222,19 @@ function isNameMatching(name1: string, name2: string): boolean {
       // Vision) costa 5 crediti anche quando la risposta arriva dalla cache —
       // col vecchio ordine chi riscattava vicino a una scansione precedente
       // (entro 30 m) non pagava MAI e "Vision non scala i crediti".
-      charge = await chargeOrReject(req, res, 'photo_search');
-      if (!charge) return;
+      if (museumPassActive) {
+        console.log(`[Vision] Pass Museo attivo (scade ${new Date(museumPassExpiresAt).toISOString()}): riconoscimento incluso, cache GPS bypassata`);
+      } else {
+        charge = await chargeOrReject(req, res, 'photo_search');
+        if (!charge) return;
+      }
 
       // ── CACHE GPS CONDIVISA (ora SOLO server-side) ─────────────────────
       // Hit entro 30 m = si risparmia la chiamata AI, non l'addebito. Prima il
       // controllo (e la scrittura!) vivevano nel client con la anon key: la
       // cache era avvelenabile da chiunque. La tabella è ora sotto RLS senza
       // policy: legge e scrive solo la service role.
-      if (lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
+      if (!museumPassActive && lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
         try {
           const m = 0.0003;
           const cacheRes = await axios.get(
@@ -3162,7 +3304,7 @@ function isNameMatching(name1: string, name2: string): boolean {
       }
 
       let promptText = `Sei un esperto di storia dell'arte e guida turistica internazionale.
-        Analizza l'immagine fornita per identificare con precisione il monumento, l'opera d'arte, la chiesa o il sito storico inquadrato.
+        Analizza l'immagine fornita per identificare con precisione il soggetto inquadrato: monumento, opera d'arte, chiesa, castello, borgo, panorama, paesaggio naturale o sito storico/archeologico.
 
         INFORMAZIONI GEOGRAFICHE DA GPS:
         L'utente si trova alle coordinate GPS [${lat || 0}, ${lon || 0}] vicino a: "${address}".
@@ -3171,7 +3313,7 @@ function isNameMatching(name1: string, name2: string): boolean {
         
         ISTRUZIONI TASSATIVE:
         1. Identifica l'oggetto/monumento principale nella foto.
-        2. Se l'immagine NON mostra un monumento, chiesa, statua, edificio storico o punto d'interesse (es. è un selfie, un pavimento, un'auto), imposta "riconosciuto": false.
+        2. Anche panorami, paesaggi naturali, castelli, borghi e scorci urbani caratteristici SONO punti d'interesse validi. Imposta "riconosciuto": false SOLO se l'immagine non mostra alcun luogo, monumento od opera (es. è un selfie, un pavimento, un'auto).
         3. Se invece è un luogo di interesse, imposta "riconosciuto": true e fornisci informazioni ESTREMAMENTE DETTAGLIATE su di esso. Vogliamo creare una pagina enciclopedica e turistica completa per l'utente.
 
         RISPOSTA IN FORMATO JSON:
@@ -3192,6 +3334,14 @@ function isNameMatching(name1: string, name2: string): boolean {
           "spiegazione_audio": "Una narrazione avvincente ed emozionante di circa 200 parole in italiano perfetta per un'audioguida. Inizia con un'accoglienza calorosa ed esplora i dettagli visibili.",
           "coordinate": { "lat": ${lat || 0.0}, "lng": ${lon || 0.0} }
         }`;
+
+      // Modalità museo: col pass attivo l'utente è quasi certamente al chiuso
+      // davanti a un'opera esposta. Senza questo indizio il modello tende a
+      // rispondere con l'edificio (il museo suggerito dal GPS) invece che con
+      // l'opera inquadrata.
+      if (museumPassActive) {
+        promptText += `\n\nCONTESTO MUSEO (Pass Museo attivo): l'utente è probabilmente all'INTERNO di un museo o luogo espositivo. Se l'immagine mostra un quadro, una statua, un affresco o un reperto, identifica l'OPERA specifica (titolo, autore, datazione), non l'edificio che la ospita. Le coordinate GPS indicano il museo, non l'opera.`;
+      }
 
       // Parse difensivo: alcuni modelli avvolgono il JSON in ```json o
       // aggiungono testo attorno. Estraiamo SEMPRE il primo oggetto JSON valido.
@@ -3340,7 +3490,7 @@ function isNameMatching(name1: string, name2: string): boolean {
       // Cache condivisa: SOLO riconoscimenti riusciti, e SENZA i campi
       // personali (card_id/photo_url del primo utente non devono finire
       // nelle risposte servite ai successivi).
-      if (result?.riconosciuto && lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
+      if (!museumPassActive && result?.riconosciuto && lat !== undefined && lon !== undefined && lat !== null && lon !== null) {
         try {
           const { card_id: _cid, photo_url: _pu, ...shareable } = result;
           await axios.post(`${supabaseUrl}/rest/v1/shared_vision_cache`, {
@@ -3379,7 +3529,9 @@ function isNameMatching(name1: string, name2: string): boolean {
         console.debug("Failed to log vision api_usage_logs");
       }
 
-      res.json({ ...result, refunded, charged: refunded || !charge ? 0 : charge.cost });
+      // passExpiresAt null quando il pass non copre (assente, scaduto o oltre
+      // il tetto scansioni): così il client spegne il banner.
+      res.json({ ...result, refunded, charged: refunded || !charge ? 0 : charge.cost, passActive: museumPassActive, passExpiresAt: museumPassActive ? museumPassExpiresAt : null });
     } catch (e: any) {
       console.error("Vision error:", e);
       // Errore dopo l'addebito → crediti indietro (best-effort, come le
@@ -3387,6 +3539,151 @@ function isNameMatching(name1: string, name2: string): boolean {
       if (charge && !refunded) {
         await refundServer(charge.userId, charge.cost).catch(() => {});
       }
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── BONUS DI BENVENUTO A EMAIL CONFERMATA ────────────────────────────────
+  // I 100 crediti di prova NON sono più il default del profilo (erano
+  // farmabili all'infinito con email inventate, mai confermate): li eroga
+  // questa rotta, UNA sola volta, quando auth conferma l'email. Vale solo per
+  // account creati dopo il cutover — i precedenti hanno già avuto il default
+  // storico alla creazione del profilo. Richiede la migration
+  // 20260812000000_welcome_credits_email_verificata.sql (default → 0).
+  const WELCOME_CREDITS = 100;
+  const WELCOME_GATE_SINCE = Date.parse('2026-08-12T00:00:00Z');
+
+  app.post("/api/welcome-bonus/claim", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
+      // La verità sull'email viene dall'admin API di auth, non dal client.
+      const { data: authUser } = await axios.get(`${supabaseUrl}/auth/v1/admin/users/${userId}`, { headers: svcHeaders });
+      if (!authUser?.email_confirmed_at) return res.json({ granted: 0, reason: 'email_not_confirmed' });
+      if (Date.parse(authUser.created_at || '0') < WELCOME_GATE_SINCE) return res.json({ granted: 0, reason: 'legacy_account' });
+
+      // Idempotenza: stesso registro dei premi vision/gamification.
+      const { data: claimed } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.welcome&reward_source_id=eq.email-confirmed&select=id`,
+        { headers: svcHeaders }
+      );
+      if (claimed?.length > 0) return res.json({ granted: 0, reason: 'already_claimed' });
+      await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`,
+        { user_id: userId, reward_source_type: 'welcome', reward_source_id: 'email-confirmed' },
+        { headers: svcHeaders });
+
+      const { data: prof } = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=earned_credits`, { headers: svcHeaders });
+      if (prof?.length > 0) {
+        await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`,
+          { earned_credits: (prof[0].earned_credits || 0) + WELCOME_CREDITS }, { headers: svcHeaders });
+      } else {
+        await axios.post(`${supabaseUrl}/rest/v1/user_profiles`,
+          { id: userId, earned_credits: WELCOME_CREDITS }, { headers: svcHeaders });
+      }
+      console.log(`[Welcome] +${WELCOME_CREDITS} crediti di benvenuto a ${userId} (email confermata)`);
+      res.json({ granted: WELCOME_CREDITS });
+    } catch (e: any) {
+      console.error('[Welcome] Errore claim:', e?.response?.data || e?.message);
+      res.status(500).json({ error: 'welcome_claim_failed' });
+    }
+  });
+
+  // ── PASS MUSEO ─────────────────────────────────────────────────────────
+  // Riconoscimenti Vision illimitati per una finestra di tempo (la visita a
+  // un museo): niente addebito per-foto e cache GPS bypassata. NESSUNA
+  // migration: il pass è una riga in user_rewards_claimed (tabella esistente,
+  // scrivibile solo dalla service role) con la scadenza codificata nel
+  // reward_source_id ("mpass-<expiresMs>-<rnd>").
+  const MUSEUM_PASS_HOURS = 4;
+  // Tetto anti-spam nella finestra del pass: un visitatore vero fa 60-150
+  // scansioni in 4 ore (una ogni 20-30 s a ciclo continuo ne darebbe ~480):
+  // 300 copre anche il completista con margine 2-3×, oltre è uno script.
+  // Superato il tetto il pass smette di coprire e ogni scansione torna a
+  // costare i crediti standard.
+  const MUSEUM_PASS_MAX_SCANS = 300;
+
+  /**
+   * Scansioni fatte nella finestra del pass corrente: ogni /api/vision salva
+   * una riga in vision_cards, quindi il conteggio è COUNT(vision_cards) del
+   * proprietario da inizio finestra (expiry - durata). Nessuna tabella nuova.
+   */
+  async function countMuseumPassScans(userId: string, passExpiresAt: number): Promise<number> {
+    try {
+      const sinceIso = new Date(passExpiresAt - MUSEUM_PASS_HOURS * 3_600_000).toISOString();
+      const r = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?user_id=eq.${userId}&created_at=gte.${encodeURIComponent(sinceIso)}&select=id`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'count=exact', 'Range-Unit': 'items', Range: '0-0' } }
+      );
+      return parseInt(String(r.headers['content-range'] || '0/0').split('/')[1] || '0', 10) || 0;
+    } catch {
+      // In dubbio non si blocca: il tetto è anti-spam, non fatturazione.
+      return 0;
+    }
+  }
+
+  async function getActiveMuseumPassExpiry(userId: string): Promise<number | null> {
+    try {
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_pass&select=reward_source_id`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+      );
+      let best = 0;
+      for (const row of data || []) {
+        const ms = parseInt(String(row.reward_source_id || '').split('-')[1] || '0', 10);
+        if (Number.isFinite(ms) && ms > best) best = ms;
+      }
+      return best > Date.now() ? best : null;
+    } catch {
+      // In dubbio niente pass: al peggio l'utente paga i 5 crediti standard.
+      return null;
+    }
+  }
+
+  // Stato del pass (banner in CameraScreen).
+  app.get("/api/vision/museum-pass", rateLimiter, async (req, res) => {
+    const userId = await verifyUserToken(req);
+    if (!userId) return res.status(401).json({ error: 'login_required' });
+    const expiresAt = await getActiveMuseumPassExpiry(userId);
+    const scansUsed = expiresAt ? await countMuseumPassScans(userId, expiresAt) : 0;
+    res.json({
+      active: !!expiresAt && scansUsed < MUSEUM_PASS_MAX_SCANS,
+      expiresAt,
+      scansUsed,
+      scansLimit: MUSEUM_PASS_MAX_SCANS,
+      hours: MUSEUM_PASS_HOURS,
+      priceCredits: SERVER_PRICING.museum_pass
+    });
+  });
+
+  // Acquisto: idempotente — con un pass già attivo NON riaddebita.
+  app.post("/api/vision/museum-pass", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+
+      const existing = await getActiveMuseumPassExpiry(userId);
+      if (existing) return res.json({ active: true, expiresAt: existing, charged: 0, alreadyActive: true, hours: MUSEUM_PASS_HOURS });
+
+      const charge = await chargeOrReject(req, res, 'museum_pass');
+      if (!charge) return;
+
+      const expiresAt = Date.now() + MUSEUM_PASS_HOURS * 3_600_000;
+      try {
+        await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, {
+          user_id: userId,
+          reward_source_type: 'museum_pass',
+          reward_source_id: `mpass-${expiresAt}-${Math.random().toString(36).slice(2, 7)}`
+        }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } });
+      } catch (insErr: any) {
+        // Pass non registrato = servizio non erogato: crediti indietro.
+        await refundServer(userId, charge.cost);
+        return res.status(500).json({ error: 'pass_activation_failed' });
+      }
+      res.json({ active: true, expiresAt, charged: charge.cost, hours: MUSEUM_PASS_HOURS });
+    } catch (e: any) {
+      console.error('[MuseumPass] Errore acquisto:', e.message);
       res.status(500).json({ error: e.message });
     }
   });
@@ -3586,6 +3883,11 @@ function isNameMatching(name1: string, name2: string): boolean {
 
       let publishedPoiId: string | null = null;
       let publicPhotoUrl: string | null = null;
+      // Vision dello stesso posto = UN solo POI community con galleria: se
+      // all'approvazione esiste già un POI community entro questo raggio, la
+      // foto si accorpa nella sua images_json invece di creare un pin doppio.
+      const COMMUNITY_MERGE_RADIUS_M = 150;
+      let merged = false;
       try {
         // Campi eventualmente corretti dall'admin in revisione
         const e = edits || {};
@@ -3619,20 +3921,61 @@ function isNameMatching(name1: string, name2: string): boolean {
         }
 
         if (action === 'approve') {
-          publishedPoiId = `vision-${card.id}`;
-          // POI community: category='community', tipo reale in poi_type,
-          // MAI is_gem (bypasserebbe i filtri nativi).
-          const poiRow: any = {
-            id: publishedPoiId, name, lat: card.lat, lon: card.lon,
-            category: 'community', poi_type: e.poi_type || card.category || 'attraction',
-            status: 'verified', verified: true, is_hidden: false, is_gem: false,
-            image_url: publicPhotoUrl, photo_url: publicPhotoUrl,
-            description_short: descShort, description_ai: descShort, description_long: descLong,
-            full_description: history, audio_script: audioScript, city,
-            source: 'wip_community', alert_radius: 150, geofence_radius: 50
-          };
-          await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, poiRow,
-            { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
+          // ── ACCORPAMENTO PER DISTANZA ────────────────────────────────
+          // Cerca un POI community esistente entro COMMUNITY_MERGE_RADIUS_M:
+          // bbox largo poi distanza reale, vince il più vicino.
+          let mergeTarget: any = null;
+          try {
+            const dM = 0.004;
+            const { data: nearCommunity } = await axios.get(
+              `${supabaseUrl}/rest/v1/shared_pois?category=eq.community&lat=gte.${(card.lat - dM).toFixed(5)}&lat=lte.${(card.lat + dM).toFixed(5)}&lon=gte.${(card.lon - dM).toFixed(5)}&lon=lte.${(card.lon + dM).toFixed(5)}&select=id,name,lat,lon,images_json,image_url`,
+              { headers: svcHeaders }
+            );
+            let bestD = COMMUNITY_MERGE_RADIUS_M;
+            for (const p of nearCommunity || []) {
+              const dist = getHaversineDistance(card.lat, card.lon, p.lat, p.lon);
+              if (dist <= bestD) { bestD = dist; mergeTarget = p; }
+            }
+          } catch (nearErr: any) {
+            console.warn('[Vision Review] Ricerca POI community vicini fallita (si crea un POI nuovo):', nearErr?.message);
+          }
+
+          if (mergeTarget) {
+            // Stesso posto: la foto entra nella GALLERIA del POI esistente;
+            // i testi restano quelli già pubblicati (rifinibili dall'admin).
+            let images: any[] = [];
+            try {
+              images = Array.isArray(mergeTarget.images_json) ? mergeTarget.images_json : JSON.parse(mergeTarget.images_json || '[]');
+            } catch { images = []; }
+            if (publicPhotoUrl) images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso, card_id: card.id });
+            await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(mergeTarget.id)}`,
+              {
+                images_json: images,
+                // Se il POI esistente era senza copertina, la eredita.
+                ...(mergeTarget.image_url || !publicPhotoUrl ? {} : { image_url: publicPhotoUrl, photo_url: publicPhotoUrl })
+              },
+              { headers: svcHeaders });
+            publishedPoiId = mergeTarget.id;
+            merged = true;
+            console.log(`[Vision Review] Vision ${card.id} accorpata al POI community ${mergeTarget.id} (galleria: ${images.length} foto)`);
+          } else {
+            publishedPoiId = `vision-${card.id}`;
+            // POI community: category='community', tipo reale in poi_type,
+            // MAI is_gem (bypasserebbe i filtri nativi). La galleria nasce
+            // già col primo scatto: le vision successive si accodano qui.
+            const poiRow: any = {
+              id: publishedPoiId, name, lat: card.lat, lon: card.lon,
+              category: 'community', poi_type: e.poi_type || card.category || 'attraction',
+              status: 'verified', verified: true, is_hidden: false, is_gem: false,
+              image_url: publicPhotoUrl, photo_url: publicPhotoUrl,
+              images_json: publicPhotoUrl ? [{ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso, card_id: card.id }] : [],
+              description_short: descShort, description_ai: descShort, description_long: descLong,
+              full_description: history, audio_script: audioScript, city,
+              source: 'wip_community', alert_radius: 150, geofence_radius: 50
+            };
+            await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, poiRow,
+              { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
+          }
         } else {
           // ATTACH: la foto entra nella galleria del POI ufficiale.
           let images: any[] = [];
@@ -3683,10 +4026,16 @@ function isNameMatching(name1: string, name2: string): boolean {
         }
       }
 
-      res.json({ success: true, published_poi_id: publishedPoiId, rewarded, public_photo_url: publicPhotoUrl });
+      res.json({ success: true, published_poi_id: publishedPoiId, rewarded, public_photo_url: publicPhotoUrl, merged });
     } catch (e: any) {
-      console.error('[Vision Review] Errore:', e?.message);
-      res.status(500).json({ error: 'review_failed' });
+      // Il messaggio Postgres vero (es. il trigger che blocca l'insert) deve
+      // arrivare all'admin, non un "review_failed" muto.
+      const detail = e?.response?.data?.message || e?.message || '';
+      console.error('[Vision Review] Errore:', detail, e?.response?.data);
+      const friendly = /Only admin users can modify/i.test(String(detail))
+        ? "Trigger DB da aggiornare: esegui scratch/fix-trigger-vision-review-20260811.sql nell'SQL editor Supabase"
+        : detail;
+      res.status(500).json({ error: 'review_failed', detail: friendly });
     }
   });
 
@@ -3819,11 +4168,13 @@ function isNameMatching(name1: string, name2: string): boolean {
     try {
       const adminId = await verifyAdminBearer(req);
       if (!adminId) return res.status(403).json({ error: 'admin_required' });
-      // Editing immagini: OpenRouter primario (DeepSeek NON edita immagini),
-      // Gemini diretto come riserva se configurato.
+      // Editing immagini: OpenAI gpt-image-1 PRIMARIO (stessa chiave e stessi
+      // fondi della Vision — accesso verificato dal vivo il 2026-08-11), poi
+      // OpenRouter, poi Gemini diretto. Groq/DeepSeek NON editano immagini.
+      const openAiEditKey = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
       const openRouterKey = process.env.OPENROUTER_API_KEY;
-      if (!openRouterKey && !ai) {
-        return res.status(500).json({ error: 'Nessun provider di editing immagini configurato (OPENROUTER_API_KEY o GEMINI_API_KEY)' });
+      if (!openAiEditKey && !openRouterKey && !ai) {
+        return res.status(500).json({ error: 'Nessun provider di editing immagini configurato (OPENAI_API_KEY, OPENROUTER_API_KEY o GEMINI_API_KEY)' });
       }
       const { cardId, instruction } = req.body || {};
       if (!cardId) return res.status(400).json({ error: 'cardId mancante' });
@@ -3842,9 +4193,47 @@ function isNameMatching(name1: string, name2: string): boolean {
         "Rimuovi o sfoca in modo naturale volti riconoscibili, targhe di veicoli e altri dati personali visibili in questa foto. Non alterare il monumento, l'opera o il paesaggio. Restituisci SOLO l'immagine modificata.";
 
       let outB64: string | null = null;
+      // Stato degli errori per una diagnosi onesta all'admin: "clean_failed"
+      // generico nascondeva che i motori erano semplicemente senza fondi.
+      let openAiStatus: number | null = null;
+      let orStatus: number | null = null;
+      let geminiQuota = false;
 
-      // Motore primario: OpenRouter (modello immagini Gemini via API unificata)
-      if (openRouterKey) {
+      // Motore 0: OpenAI gpt-image-1 (images/edits). FormData/Blob globali
+      // (Node 18+); output_format jpeg perché il file viene salvato come .jpg.
+      if (openAiEditKey) {
+        try {
+          const form = new FormData();
+          form.append('model', 'gpt-image-1');
+          form.append('image', new Blob([buf], { type: 'image/jpeg' }), 'photo.jpg');
+          form.append('prompt', prompt);
+          form.append('size', 'auto');
+          form.append('quality', 'medium');
+          form.append('output_format', 'jpeg');
+          const r = await fetch('https://api.openai.com/v1/images/edits', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${openAiEditKey}` },
+            body: form,
+            signal: AbortSignal.timeout(120000)
+          });
+          const j: any = await r.json().catch(() => ({}));
+          if (r.ok) {
+            outB64 = j?.data?.[0]?.b64_json || null;
+            if (!outB64) console.warn('[Vision Clean] OpenAI ha risposto senza immagine');
+          } else {
+            openAiStatus = r.status;
+            console.warn('[Vision Clean] OpenAI fallito:', r.status, String(j?.error?.message || '').slice(0, 200));
+            if (r.status === 402 || r.status === 429) {
+              await reportVisionFundsIssue('OpenAI (editing foto)', { response: { status: r.status, data: j } });
+            }
+          }
+        } catch (oaErr: any) {
+          console.warn('[Vision Clean] OpenAI eccezione:', oaErr?.message);
+        }
+      }
+
+      // Riserva 1: OpenRouter (modello immagini Gemini via API unificata)
+      if (openRouterKey && !outB64) {
         try {
           const r = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
             model: 'google/gemini-2.5-flash-image',
@@ -3866,7 +4255,8 @@ function isNameMatching(name1: string, name2: string): boolean {
           }
           if (!outB64) console.warn('[Vision Clean] OpenRouter ha risposto senza immagine');
         } catch (orErr: any) {
-          console.warn('[Vision Clean] OpenRouter fallito:', orErr?.response?.data?.error?.message || orErr?.message);
+          orStatus = orErr?.response?.status || null;
+          console.warn('[Vision Clean] OpenRouter fallito:', orStatus, orErr?.response?.data?.error?.message || orErr?.message);
           await reportVisionFundsIssue('OpenRouter (editing foto)', orErr);
         }
       }
@@ -3887,10 +4277,23 @@ function isNameMatching(name1: string, name2: string): boolean {
           const img = parts.find((p: any) => p.inlineData?.data);
           if (img) { outB64 = img.inlineData.data; break; }
         } catch (mErr: any) {
+          if (/quota|429|RESOURCE_EXHAUSTED/i.test(String(mErr?.message))) geminiQuota = true;
           console.warn(`[Vision Clean] ${model} fallito:`, mErr?.message);
         }
       }
-      if (!outB64) return res.status(502).json({ error: 'Editing AI non riuscito, riprova' });
+      if (!outB64) {
+        // Diagnosi verificata 2026-08-11: OpenRouter 402 (crediti finiti) e
+        // Gemini 429 (quota immagini esaurita su TUTTE le chiavi); OpenAI
+        // gpt-image-1 è il primario funzionante. Groq NON può sostituirli:
+        // genera solo testo, non modifica immagini.
+        const funds = openAiStatus === 402 || openAiStatus === 429 || orStatus === 402 || geminiQuota;
+        return res.status(502).json({
+          error: 'clean_failed',
+          detail: funds
+            ? 'Crediti/quota AI esauriti per l\'editing foto su tutti i motori (OpenAI, OpenRouter, Gemini): ricarica uno dei provider. Groq non può modificare immagini.'
+            : 'Editing AI non riuscito, riprova'
+        });
+      }
 
       const basePath = /^https?:/i.test(card.photo_url || '')
         ? `${card.user_id || 'legacy'}/${card.id}`
@@ -3906,7 +4309,146 @@ function isNameMatching(name1: string, name2: string): boolean {
       res.json({ success: true, clean_photo_url: cleanPath, preview: await signVisionPhoto(cleanPath) });
     } catch (e: any) {
       console.error('[Vision Clean] Errore:', e?.message);
-      res.status(500).json({ error: 'clean_failed' });
+      res.status(500).json({ error: 'clean_failed', detail: e?.message });
+    }
+  });
+
+  // ── Compila da AI (Agnes su Groq): riempie i campi della scheda in coda ──
+  // partendo da posizione GPS (reverse geocoding + POI reali vicini come
+  // indizi) e dai racconti di viaggiatore e admin. SOLO TESTO: per questo
+  // Groq va benissimo — per l'editing FOTO invece no (non genera immagini).
+  app.post("/api/admin/vision/ai-fill", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminBearer(req);
+      if (!adminId) return res.status(403).json({ error: 'admin_required' });
+      const { cardId, adminHint } = req.body || {};
+      if (!cardId) return res.status(400).json({ error: 'cardId mancante' });
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?id=eq.${encodeURIComponent(cardId)}&select=*`,
+        { headers: svcHeaders }
+      );
+      const card = cards?.[0];
+      if (!card) return res.status(404).json({ error: 'Scheda non trovata' });
+
+      // Contesto REALE della zona: indirizzo, POI del DB con distanze, luoghi
+      // Wikipedia georeferenziati + estratti delle 2 voci più vicine. L'AI
+      // deve ancorarsi a riferimenti verificabili, non alla fantasia.
+      let address = '';
+      let nearbyNames: string[] = [];
+      let wikiRefs: string[] = [];
+      let wikiExtracts: string[] = [];
+      if (card.lat != null && card.lon != null) {
+        try {
+          const nom = await axios.get(
+            `https://nominatim.openstreetmap.org/reverse?lat=${card.lat}&lon=${card.lon}&format=json&accept-language=it`,
+            { headers: { 'User-Agent': 'WorldInPocket/1.0' }, timeout: 6000 }
+          );
+          address = nom.data?.display_name || '';
+        } catch { /* best-effort */ }
+        try {
+          const d = 0.006;
+          const { data: pois } = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(card.lat - d).toFixed(5)}&lat=lte.${(card.lat + d).toFixed(5)}&lon=gte.${(card.lon - d).toFixed(5)}&lon=lte.${(card.lon + d).toFixed(5)}&category=neq.community&select=name,poi_type,lat,lon&limit=15`,
+            { headers: svcHeaders }
+          );
+          nearbyNames = (pois || []).map((p: any) => {
+            const distM = Math.round(getHaversineDistance(card.lat, card.lon, p.lat, p.lon));
+            return `${p.name}${p.poi_type ? ` (${p.poi_type})` : ''} a ${distM}m`;
+          });
+        } catch { /* best-effort */ }
+        // Wikipedia geosearch: luoghi REALI e citabili attorno al punto.
+        try {
+          const geo = await axios.get(
+            `https://it.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${card.lat}%7C${card.lon}&gsradius=1500&gslimit=8&format=json`,
+            { headers: { 'User-Agent': 'WorldInPocket/1.0' }, timeout: 6000 }
+          );
+          const hits = geo.data?.query?.geosearch || [];
+          wikiRefs = hits.map((h: any) => `${h.title} (${Math.round(h.dist)}m)`);
+          const topTitles = hits.slice(0, 2).map((h: any) => h.title);
+          if (topTitles.length > 0) {
+            const ext = await axios.get(
+              `https://it.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&exchars=700&titles=${encodeURIComponent(topTitles.join('|'))}&format=json`,
+              { headers: { 'User-Agent': 'WorldInPocket/1.0' }, timeout: 6000 }
+            );
+            const pages: any = ext.data?.query?.pages || {};
+            wikiExtracts = Object.values(pages)
+              .map((p: any) => (p?.extract ? `${p.title}: ${String(p.extract).replace(/\s+/g, ' ')}` : ''))
+              .filter(Boolean);
+          }
+        } catch { /* best-effort */ }
+      }
+
+      const sysPrompt = `Sei Agnes, redattrice turistica di World in Pocket. Componi la scheda di un luogo fotografato da un viaggiatore, destinata alla pubblicazione come POI community. Scrivi in ITALIANO con tono da guida turistica calda e precisa.
+AGGANCIATI AI FATTI: usa SOLO dettagli riscontrabili — ciò che si VEDE nella foto (se fornita: descrivi elementi concreti dello scatto) e i riferimenti REALI del contesto (estratti Wikipedia, POI del database con distanze, indirizzo). Nomi propri, epoche e attribuzioni SOLO se presenti nel contesto fornito. VIETATO inventare date, aneddoti o citazioni. Nel dubbio resta descrittiva.
+Se il "Nome attuale scheda" è un segnaposto generico (es. "Vision 11/08/2026"), IGNORALO: ricava il nome vero del luogo da foto, indirizzo e riferimenti (es. "Spiaggia di Fiascherino").
+Rispondi SOLO con un oggetto JSON valido, nessun testo fuori dal JSON:
+{
+  "name": "nome proprio e breve del luogo (usa il nome reale dal contesto se identificabile)",
+  "city": "città o località",
+  "poi_type": "UNO tra: monument | church | museum | viewpoint | artwork | attraction | park | beach | castle",
+  "description_short": "2 frasi, max 50 parole, con almeno un dettaglio concreto della zona o della foto",
+  "description_long": "150-200 parole: cosa si vede (dalla foto), dove ci si trova (dai riferimenti reali), perché vale la sosta",
+  "history": "80-120 parole di contesto storico/culturale PRESO DAI RIFERIMENTI forniti (Wikipedia in primis); se i riferimenti non bastano, contesto geografico prudente senza date",
+  "audio_script": "narrazione di circa 150 parole in seconda persona, da leggere ad alta voce, che accoglie il visitatore sul posto citando dettagli reali visibili"
+}`;
+
+      const contextBlock = `DATI DISPONIBILI
+Nome attuale scheda: ${card.name || 'n/d'}
+Posizione GPS: ${card.lat}, ${card.lon}
+Indirizzo (reverse geocoding): ${address || 'n/d'}
+Città rilevata: ${card.city || 'n/d'}
+Racconto del viaggiatore: ${card.user_comment || 'nessuno'}
+Tag del viaggiatore: ${Array.isArray(card.comment_tags) ? card.comment_tags.join(', ') : (card.comment_tags || 'nessuno')}
+Note dell'admin: ${String(adminHint || '').trim() || 'nessuna'}
+POI reali nelle vicinanze (dal database WIP): ${nearbyNames.join('; ') || 'nessuno'}
+Luoghi Wikipedia vicini (riferimenti REALI): ${wikiRefs.join('; ') || 'nessuno'}
+Estratti Wikipedia (fatti verificati sulla zona):
+${wikiExtracts.join('\n') || 'nessuno'}`;
+
+      // Motore 1: OpenAI gpt-4o-mini VEDE la foto — i dettagli dello scatto
+      // entrano nella scheda. Agnes/Groq resta la riserva solo-testo.
+      let fields: any = null;
+      const openAiFillKey = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+      if (openAiFillKey) {
+        try {
+          const photoBuf = await downloadVisionPhoto(card.clean_photo_url || card.photo_url);
+          const userContent: any[] = [{ type: 'text', text: contextBlock }];
+          if (photoBuf) {
+            userContent.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${photoBuf.toString('base64')}` } });
+          }
+          const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: sysPrompt },
+              { role: 'user', content: userContent }
+            ],
+            temperature: 0.5,
+            max_tokens: 1600,
+            response_format: { type: 'json_object' }
+          }, { timeout: 45000, headers: { Authorization: `Bearer ${openAiFillKey}`, 'Content-Type': 'application/json' } });
+          fields = parseSafeJSON(r.data?.choices?.[0]?.message?.content || '{}');
+        } catch (oaErr: any) {
+          console.warn('[Vision AI-Fill] OpenAI fallito, fallback Agnes/Groq:', oaErr?.response?.data?.error?.message || oaErr?.message);
+        }
+      }
+
+      if (!fields || typeof fields !== 'object' || !fields.name) {
+        const response = await callUniversalAi('groq', [
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: contextBlock }
+        ], { response_format: { type: 'json_object' }, temperature: 0.6 }, 'vision_admin_fill', supabaseUrl, supabaseServiceKey, groq);
+        fields = parseSafeJSON(String(response?.data || '{}'));
+      }
+
+      if (!fields || typeof fields !== 'object' || !fields.name) {
+        return res.status(502).json({ error: 'ai_fill_failed', detail: 'Risposta AI vuota o non valida, riprova' });
+      }
+      res.json({ success: true, fields });
+    } catch (e: any) {
+      console.error('[Vision AI-Fill] Errore:', e?.response?.data || e?.message);
+      res.status(500).json({ error: 'ai_fill_failed', detail: e?.message });
     }
   });
 
@@ -5447,6 +5989,76 @@ Regole di aderenza e anti-allucinazione:
   // Il client NON può scrivere earned_credits (bloccato dalle policy di
   // security hardening): la validazione e l'accredito avvengono qui con la
   // service key. Idempotente su user_rewards_claimed.
+  // Premio quiz trivia: prima gamification.ts scriveva earned_credits/xp_points
+  // DIRETTAMENTE dal browser con la anon key. Con il trigger anti-escalation su
+  // user_profiles quella scrittura viene bloccata (o, senza trigger, chiunque
+  // può farsi crediti da console). L'accredito passa ora dal server (service
+  // key). Cap difensivo sul numero di risposte per chiamata.
+  app.post("/api/gamification/trivia-reward", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const correct = Math.max(0, Math.min(20, Math.floor(Number(req.body?.correctAnswers) || 0)));
+      if (correct <= 0) return res.json({ success: true, credits: 0, xp: 0 });
+
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const { data: prof } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=xp_points,earned_credits`,
+        { headers: svcHeaders }
+      );
+      const p = prof?.[0] || {};
+      const newXp = (p.xp_points || 0) + correct * 20;
+      const newEarned = (p.earned_credits || 0) + correct; // 1 credito per risposta
+      await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`,
+        { xp_points: newXp, earned_credits: newEarned }, { headers: svcHeaders });
+      res.json({ success: true, credits: correct, xp: correct * 20 });
+    } catch (e: any) {
+      console.error('[trivia-reward] Errore:', e?.message);
+      res.status(500).json({ error: 'reward_failed' });
+    }
+  });
+
+  // Rimborso crediti server-mediato. La RPC self-service `refund_credits` va
+  // revocata dal client (chiunque poteva chiamarla e farsi rimborsare senza
+  // fallimento reale): i rimborsi legittimi dei flussi che pagano lato client
+  // (PlanScreen, PoiDetail, bundle) passano ora da qui, con service key e cap
+  // sul singolo importo. NB: la verifica del fallimento reale resta un TODO
+  // (pending_refund) — questa rotta chiude solo l'accesso diretto alla RPC.
+  app.post("/api/credits/refund", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const amount = Math.floor(Number(req.body?.amount) || 0);
+      if (amount <= 0 || amount > 2000) return res.status(400).json({ error: 'invalid_amount' });
+      const ok = await refundCreditsServer(userId, amount);
+      if (!ok) return res.status(500).json({ error: 'refund_failed' });
+      res.json({ success: true, amount });
+    } catch (e: any) {
+      console.error('[credits/refund] Errore:', e?.message);
+      res.status(500).json({ error: 'refund_failed' });
+    }
+  });
+
+  // Consumo crediti server-side. Il trigger anti-escalation blocca la scrittura
+  // client dei crediti, quindi il vecchio fallback client-side di consumeCredits
+  // non funziona più: senza questa rotta nessuno potrebbe spendere crediti.
+  // RPC consume_credits (atomica, earned-first) preferita; fallback diretto con
+  // service key se la RPC non è applicata sul DB.
+  app.post("/api/credits/consume", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const amount = Math.floor(Number(req.body?.amount) || 0);
+      const outcome = await consumeCreditsServer(userId, amount);
+      if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits' });
+      if (outcome === 'error') return res.status(500).json({ error: 'consume_failed' });
+      res.json({ success: true });
+    } catch (e: any) {
+      console.error('[credits/consume] Errore:', e?.message);
+      res.status(500).json({ error: 'consume_failed' });
+    }
+  });
+
   app.post("/api/gamification/claim", rateLimiter, async (req, res) => {
     try {
       const authHeader = String(req.headers.authorization || '');
@@ -5554,6 +6166,7 @@ Regole di aderenza e anti-allucinazione:
       ticketmaster: st(has('TICKETMASTER_API_KEY', 'VITE_TICKETMASTER_API_KEY')),
       viator: st(has('VIATOR_API_KEY', 'VITE_VIATOR_API_KEY')),
       getyourguide: st(has('GYG_API_KEY', 'VITE_GYG_API_KEY')),
+      tiqets: st(has('TIQETS_API_KEY', 'VITE_TIQETS_API_KEY')),
       google_places: st(has('VITE_GOOGLE_MAPS_API_KEY', 'GOOGLE_MAPS_API_KEY', 'GOOGLE_PLACES_API_KEY', 'GOOGLE_API_KEY')),
       azure_tts: st(has('AZURE_SPEECH_KEY')),
       stripe: st(has('STRIPE_SECRET_KEY')),
@@ -6099,40 +6712,52 @@ Wikipedia: "${extract || "Nessuna fonte trovata"}"`;
       if (!thumbnail) thumbnail = "";
 
       try {
-        const updatePayload: any = {
-          id: precisionId,
-          lat: targetLat,
-          lon: targetLon,
-          name,
-          category,
-          image_url: thumbnail,
-          photo_url: thumbnail,
-          status: 'verified',
-          is_gem: !!jsonResponse.is_gem,
-          updated_at: new Date().toISOString()
-        };
-        
+        const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+
+        // SCRITTURA SICURA. La rotta è pubblica (il client non manda token) e
+        // scrive con la service key: prima accettava id/name/status dal body e
+        // sovrascriveva QUALSIASI POI con status:'verified' → defacement di
+        // massa del catalogo (e delle audioguide lette agli utenti). Ora un POI
+        // esistente non viene mai sovrascritto nell'identità né promosso: al più
+        // si riempiono i campi di contenuto ancora vuoti; i POI nuovi nascono
+        // 'auto' (soggetti a moderazione), mai 'verified', mai is_gem.
+        const existRes = await axios.get(
+          `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(precisionId)}&select=id,description_short,image_url`,
+          { headers: svcHeaders }
+        ).catch(() => null);
+        const existing = existRes?.data?.[0];
+
+        const content: any = { updated_at: new Date().toISOString() };
         if (jsonResponse.description_short) {
-          updatePayload.description_short = jsonResponse.description_short;
-          updatePayload.description_ai = jsonResponse.description_short;
+          content.description_short = jsonResponse.description_short;
+          content.description_ai = jsonResponse.description_short;
         }
         if (jsonResponse.description_long) {
-          updatePayload.description_long = jsonResponse.description_long;
-          updatePayload.description_ai = jsonResponse.description_long;
+          content.description_long = jsonResponse.description_long;
+          content.description_ai = jsonResponse.description_long;
+        }
+        if (thumbnail && !existing?.image_url) { content.image_url = thumbnail; content.photo_url = thumbnail; }
+
+        let didWrite = false;
+        if (existing) {
+          if (!existing.description_short && (content.description_short || content.description_long)) {
+            await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(precisionId)}`, content, { headers: svcHeaders });
+            didWrite = true;
+          } else if (content.image_url) {
+            await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(precisionId)}`, { image_url: content.image_url, photo_url: content.photo_url }, { headers: svcHeaders });
+          }
+        } else {
+          await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, {
+            id: precisionId, lat: targetLat, lon: targetLon, name, category,
+            status: 'auto', is_gem: false, ...content
+          }, { headers: { ...svcHeaders, Prefer: 'resolution=merge-duplicates' } });
+          didWrite = true;
         }
 
-        await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, updatePayload, {
-          headers: {
-            apikey: supabaseServiceKey,
-            Authorization: `Bearer ${supabaseServiceKey}`,
-            Prefer: 'resolution=merge-duplicates'
-          }
-        });
-        
-        // Se abbiamo generato gli script audio, li salviamo nella tabella poi_audioguides (per Nicky e Dante, in italiano)
-        if ((jsonResponse as any).audio_script) {
+        // Audio solo su contenuto nuovo: mai sovrascrivere l'audioguida di un
+        // POI già arricchito.
+        if (didWrite && (jsonResponse as any).audio_script) {
            const { upsertAudioguide } = await import('./src/services/poiRepository');
-           // Salviamo audio_script come guida standard
            await upsertAudioguide(precisionId, "it", "nicky", (jsonResponse as any).audio_script);
            await upsertAudioguide(precisionId, "it", "dante", (jsonResponse as any).audio_script);
         }
@@ -7473,7 +8098,7 @@ out center tags;`;
       const groqClient = groqKey ? new GroqConstructor({ apiKey: groqKey }) : null;
 
       let systemPrompt = `Sei WIP, l'Assistente di Viaggio AI tuttofare per 'World in Pocket'. Il tuo compito è interagire con l'utente in modo VELOCISSIMO, ACCURATO e MULTILINGUA (rispondi sempre nella lingua usata dall'utente).
-Puoi usare i tools a disposizione per trovare eventi, meteo o calcolare percorsi.
+Puoi usare i tools a disposizione per trovare eventi, meteo, percorsi, tour (Viator) e biglietti d'ingresso reali (Tiqets). Quando inserisci un link di prenotazione in una tappa usa SOLO gli URL restituiti dai tools, copiati INTATTI: contengono i codici partner, ed è VIETATO costruire URL viator.com/getyourguide/tiqets.com a memoria.
 Se l'utente ti fa una domanda, rispondi in modo conciso e utile nel campo "message" e imposta il "type" su "chat_only".
 Se l'utente ti chiede esplicitamente di MODIFICARE o AGGIORNARE l'itinerario (es. "Ho un ritardo", "Meteo cambiato", "Voglio visitare un museo"), modifica l'itinerario JSON esistente mantenendo inalterata la struttura, imposta "type" su "itinerary_update" e inserisci l'itinerario modificato nel campo "updatedPlan".
 
@@ -7485,18 +8110,7 @@ Usa SEMPRE E SOLO questo schema JSON:
   "updatedPlan": { ... } // (Se type è "itinerary_update", DEVI OBBLIGATORIAMENTE includere TUTTO l'itinerario, specialmente l'array "giorni" con tutte le sue tappe. Non omettere mai "giorni", altrimenti distruggerai l'itinerario!)
 }`;
 
-      // Inject PredictHQ events into context (solo con un itinerario reale:
-      // per la chat generica non conosciamo la destinazione)
-      try {
-        if (isGeneralChat) throw new Error("skip");
-        const dest = dbItinerary.citta || dbItinerary.titolo || "Roma";
-        console.log(`[Chatbot] Pre-fetching PredictHQ events for context: ${dest}`);
-        const eventsContext = await fetchPredictHQEvents(dest);
-        if (eventsContext) {
-          systemPrompt += `\n\nCONTESTO AGGIUNTIVO - EVENTI IN ZONA:\n${eventsContext}\nSe l'utente ti chiede di scambiare un'attività o trovare un concerto, usa questi eventi reali e inseriscili in updatedPlan. Genera anche esperienze/tour se richiesto usando l'URL GetYourGuide: https://www.getyourguide.it/s?q=${encodeURIComponent(dest)}+Tour+Nome&partner_id=KYSFZYF`;
-        }
-      } catch(e) {}
-
+      // (PredictHQ rimosso: per gli eventi il chatbot usa il tool Ticketmaster)
 
       const tools: any = [
         {
@@ -7534,8 +8148,8 @@ Usa SEMPRE E SOLO questo schema JSON:
         {
           type: "function",
           function: {
-            name: "searchPredictHQEvents",
-            description: "Cerca eventi e concerti locali PredictHQ.",
+            name: "searchTiqetsTickets",
+            description: "Cerca biglietti d'ingresso reali (musei, attrazioni, salta-fila) su Tiqets vicino a una posizione. Gli URL restituiti contengono già il codice partner: inseriscili INTATTI in link_info, mai modificarli o inventarne altri.",
             parameters: { type: "object", properties: { lat: { type: "number" }, lng: { type: "number" }, radiusKm: { type: "number" } }, required: ["lat", "lng"] }
           }
         },
@@ -7626,7 +8240,7 @@ Usa SEMPRE E SOLO questo schema JSON:
               else if (toolCall.function.name === "getRouteOsrm") toolResult = await agentTools.getRouteOsrm(args.fromLat, args.fromLng, args.toLat, args.toLng);
               else if (toolCall.function.name === "searchTicketmasterEvents") toolResult = await agentTools.searchTicketmasterEvents(args.lat, args.lng, args.keyword);
               else if (toolCall.function.name === "searchViatorExperiences") toolResult = await agentTools.searchViatorExperiences(args.lat, args.lng, args.radiusKm || 100);
-              else if (toolCall.function.name === "searchPredictHQEvents") toolResult = await agentTools.searchPredictHQEvents(args.lat, args.lng, args.radiusKm);
+              else if (toolCall.function.name === "searchTiqetsTickets") toolResult = JSON.stringify(await fetchTiqetsProducts({ lat: args.lat, lon: args.lng, radiusKm: args.radiusKm || 20, lang: 'it', pageSize: 8 }));
               else if (toolCall.function.name === "searchEuropeana") toolResult = await agentTools.searchEuropeana(args.keyword);
               else toolResult = JSON.stringify({ error: "Tool not found" });
             } catch (e: any) {
@@ -7779,9 +8393,15 @@ Usa SEMPRE E SOLO questo schema JSON:
         essential: "Sei un logista esperto che ottimizza itinerari. Preciso, pragmatico, forni tutti i dati pratici con accuratezza assoluta."
       };
 
+      // Stessa regola lingua della rotta non-stream: prima `language` era ignorato.
+      const PGS_LANGS: Record<string, string> = { IT: "italiano", EN: "inglese (English)", FR: "francese (français)", ES: "spagnolo (español)", DE: "tedesco (Deutsch)", RU: "russo (русский)", ZH: "cinese semplificato (简体中文)" };
+      const pgsLangName = PGS_LANGS[String(language || "IT").toUpperCase()] || "italiano";
+      const pgsLangRule = pgsLangName === "italiano" ? "" : `
+LINGUA OBBLIGATORIA: scrivi TUTTI i testi della guida in ${pgsLangName}. Le CHIAVI del JSON restano ESATTAMENTE in italiano come da schema.`;
+
       const baseSystemPrompt = `Sei l'autore principale della prestigiosa collana "WIP Premium Smart Guide" di World in Pocket. ${PERSONA[style] || PERSONA.essential}
 
-Devi creare una GUIDA TURISTICA PROFESSIONALE COMPLETA in formato JSON.
+Devi creare una GUIDA TURISTICA PROFESSIONALE COMPLETA in formato JSON.${pgsLangRule}
 REGOLE ASSOLUTE:
 1. "descrizione_lunga": MINIMO 4 paragrafi corposi.
 2. "curiosita": Array OBBLIGATORIO di 3-4 curiosità sorprendenti.
@@ -7942,9 +8562,16 @@ Non aggiungere testo prima o dopo il JSON.`;
         essential:"Sei un logista esperto che ottimizza itinerari. Preciso, pragmatico, forni tutti i dati pratici con accuratezza assoluta."
       };
 
+      // Lingua dell'utente: prima il parametro `language` arrivava dal client
+      // ma non entrava MAI nel prompt → guide sempre in italiano per tutti.
+      const GUIDE_LANG_NAMES: Record<string, string> = { IT: "italiano", EN: "inglese (English)", FR: "francese (français)", ES: "spagnolo (español)", DE: "tedesco (Deutsch)", RU: "russo (русский)", ZH: "cinese semplificato (简体中文)" };
+      const guideLangName = GUIDE_LANG_NAMES[String(language || "IT").toUpperCase()] || "italiano";
+      const guideLangRule = guideLangName === "italiano" ? "" : `
+LINGUA OBBLIGATORIA: scrivi TUTTI i testi della guida (titoli, descrizioni, curiosità, consigli, info utili) in ${guideLangName}. Le CHIAVI del JSON restano ESATTAMENTE in italiano come da schema.`;
+
       const baseSystemPrompt = `Sei l'autore principale della prestigiosa collana "WIP Premium Smart Guide" di World in Pocket. ${PERSONA[style] || PERSONA.essential}
 
-Devi creare una GUIDA TURISTICA PROFESSIONALE di altissima qualità sulla destinazione "${destination}", identica nelle caratteristiche editoriali alle migliori guide cartacee (Lonely Planet, National Geographic Traveler).
+Devi creare una GUIDA TURISTICA PROFESSIONALE di altissima qualità sulla destinazione "${destination}", identica nelle caratteristiche editoriali alle migliori guide cartacee (Lonely Planet, National Geographic Traveler).${guideLangRule}
 
 REGOLE ASSOLUTE – VIOLAZIONE = FALLIMENTO TOTALE:
 1. "descrizione_lunga": MINIMO 5 paragrafi corposi (450-600 parole totali). Usa narrazione immersiva, cinematografica, sensoriale. Includi storia del luogo, architettura, contesto culturale, atmosfera, aneddoti verificati.
@@ -8009,21 +8636,14 @@ Restituisci ESATTAMENTE questo schema JSON:
            return {};
         });
 
-        // --- PROMISES: Giorni (Parallel) ---
-        const dayPromises = (enrichedItinerary.giorni || []).map((giorno: any) => {
-          const dayPrompt = `Genera ESATTAMENTE i dati per il Giorno ${giorno.giorno}: "${giorno.titolo_giorno || ''}".
-Tappe previste con contesto reale (Wikipedia/Foursquare):
-${JSON.stringify(giorno.tappe || [], null, 2)}
-
-RICORDA LE REGOLE: OGNI POI deve avere "descrizione_lunga" di ALMENO 450 parole, 4 curiosità, e "consiglio_insider" specifico.
-
-Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
-{
-  "giorno": ${giorno.giorno},
-  "titolo_giorno": "string - titolo evocativo",
-  "tema_giorno": "string - frase poetica",
-  "pois": [
-    {
+        // --- PROMISES: Giorni in sotto-blocchi da 2 POI ---
+        // deepseek-chat ha un tetto FISICO di 8192 token di output: un giorno
+        // intero con 4-5 POI "premium" (450-600 parole l'uno) lo sforava
+        // sempre → JSON troncato → parse fallito → "guida incompleta" e
+        // rimborso. Ogni chiamata ora genera al massimo 2 POI (~4k token) e i
+        // blocchi vengono ricuciti qui, mantenendo il tutto-o-niente per giorno.
+        const POI_CHUNK = 2;
+        const poiSchema = `{
       "poi_id": "string",
       "titolo": "string - nome ufficiale",
       "categoria_pdf": "string - CATEGORIA MAIUSCOLO",
@@ -8037,30 +8657,67 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
       "consiglio_insider": "string - MINIMO 120 parole",
       "migliori_piatti": [],
       "info_utili": { "orari": "string", "best_time": "string", "prezzo": "string", "telefono": "string", "sito_web": "string" }
-    }
+    }`;
+
+        const dayPromises = (enrichedItinerary.giorni || []).map(async (giorno: any) => {
+          const tappe: any[] = giorno.tappe || [];
+          const chunks: any[][] = [];
+          for (let i = 0; i < tappe.length; i += POI_CHUNK) chunks.push(tappe.slice(i, i + POI_CHUNK));
+          if (chunks.length === 0) chunks.push([]);
+
+          const chunkResults = await Promise.all(chunks.map((chunkTappe, ci) => {
+            const dayPrompt = `Stai scrivendo il Giorno ${giorno.giorno} ("${giorno.titolo_giorno || ''}") della guida. Questo blocco copre SOLO le tappe ${ci * POI_CHUNK + 1}-${ci * POI_CHUNK + chunkTappe.length} di ${tappe.length} del giorno (le altre sono generate a parte, NON aggiungerle).
+Tappe di QUESTO blocco con contesto reale (Wikipedia/Foursquare):
+${JSON.stringify(chunkTappe, null, 2)}
+
+RICORDA LE REGOLE: OGNI POI deve avere "descrizione_lunga" di ALMENO 450 parole, 4 curiosità, e "consiglio_insider" specifico.
+
+Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI tappa del blocco:
+{
+  "giorno": ${giorno.giorno},
+  "titolo_giorno": "string - titolo evocativo dell'INTERA giornata",
+  "tema_giorno": "string - frase poetica",
+  "pois": [
+    ${poiSchema}
   ]
 }`;
-          return callUniversalAi(
-            "deepseek",
-            [
-              { role: "system", content: baseSystemPrompt },
-              { role: "user", content: dayPrompt }
-            ],
-            {
-              response_format: { type: "json_object" },
-              temperature: 0.72
-            },
-            "guida_premium_giorno",
-            supabaseUrl,
-            supabaseServiceKey,
-            groq
-          ).then(r => {
-             try { return JSON.parse(r.data || "{}"); }
-             catch { return null; }
-          }).catch(err => {
-             console.error(`[Premium Guide] Generation failed for Day ${giorno.giorno}:`, err.message);
-             return null;
-          });
+            return callUniversalAi(
+              "deepseek",
+              [
+                { role: "system", content: baseSystemPrompt },
+                { role: "user", content: dayPrompt }
+              ],
+              {
+                response_format: { type: "json_object" },
+                temperature: 0.72
+              },
+              "guida_premium_giorno",
+              supabaseUrl,
+              supabaseServiceKey,
+              groq
+            ).then(r => {
+               try { return JSON.parse(r.data || "{}"); }
+               catch { return null; }
+            }).catch(err => {
+               console.error(`[Premium Guide] Generation failed for Day ${giorno.giorno} block ${ci + 1}:`, err.message);
+               return null;
+            });
+          }));
+
+          // Ricucitura: se anche un solo blocco è nullo o vuoto, il giorno è
+          // fallito (il controllo tutto-o-niente a valle rimborsa).
+          const mergedPois: any[] = [];
+          for (const cr of chunkResults) {
+            if (!cr || !Array.isArray(cr.pois) || cr.pois.length === 0) return null;
+            mergedPois.push(...cr.pois);
+          }
+          const firstMeta = chunkResults[0] || {};
+          return {
+            giorno: giorno.giorno,
+            titolo_giorno: firstMeta.titolo_giorno || giorno.titolo_giorno || `Giorno ${giorno.giorno}`,
+            tema_giorno: firstMeta.tema_giorno || "",
+            pois: mergedPois
+          };
         });
 
         // ESEGUI TUTTO IN PARALLELO
@@ -8224,42 +8881,152 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
     }
   });
 
+  // (rotta /api/predicthq rimossa ago 2026: servizio dismesso, chiave revocata)
+
+  // ── TIQETS (biglietti musei e attrazioni) ──────────────────────────────
+  // Complementare a Viator/GYG che coprono tour e attività. AFFILIAZIONE: a
+  // differenza di GYG (partner_id appeso da noi) il token Tiqets identifica
+  // il partner e le product_url restituite dall'API arrivano GIÀ con
+  // ?partner=<brand> (verificato: wip-189103) — quelle URL vanno propagate
+  // INTATTE ovunque (Eventi, itinerari, schede POI), mai riscritte.
+  //
+  // Helper unico per tutte le superfici: tab Eventi (/api/tiqets), iniezione
+  // negli itinerari e biglietti della scheda POI (/api/poi/tickets).
+  async function fetchTiqetsProducts(opts: { lat?: number; lon?: number; cityName?: string; radiusKm?: number; lang?: string; pageSize?: number }): Promise<any[]> {
+    const tiqetsKey = process.env.TIQETS_API_KEY || process.env.VITE_TIQETS_API_KEY;
+    if (!tiqetsKey) return [];
+
+    // lang=it/en/fr/...: titoli e tagline nella lingua dell'utente
+    // (verificato: senza lang l'API risponde in inglese).
+    const params: any = {
+      page_size: opts.pageSize || 20,
+      currency: "EUR",
+      lang: String(opts.lang || 'it').slice(0, 2).toLowerCase()
+    };
+    if (opts.lat !== undefined && opts.lon !== undefined && opts.lat !== null && opts.lon !== null) {
+      params.lat = opts.lat;
+      params.lng = opts.lon;
+      // Tiqets è forte su musei/attrazioni cittadine: raggio contenuto.
+      params.max_distance = Math.min(opts.radiusKm || 30, 50);
+    } else if (opts.cityName) {
+      params.city_name = opts.cityName;
+    } else {
+      return [];
+    }
+
+    const r = await axios.get("https://api.tiqets.com/v2/products", {
+      params,
+      headers: { Authorization: `Token ${tiqetsKey}`, Accept: "application/json" },
+      timeout: 8000
+    });
+
+    // Parsing difensivo: la shape esatta dipende dalla versione API.
+    const products = r.data?.products || r.data?.data?.products || (Array.isArray(r.data) ? r.data : []);
+    return (products || []).map((p: any) => {
+      const priceRaw = p.price;
+      const price = typeof priceRaw === "number" ? `da €${priceRaw}`
+        : priceRaw?.formatted || (priceRaw?.value ? `da €${priceRaw.value}` : "Vedi prezzo");
+      const ratingAvg = p.ratings?.average ?? p.rating?.average ?? (typeof p.rating === "number" ? p.rating : null);
+      return {
+        id: String(p.id || p.product_id || `tiqets-${Math.random().toString(36).slice(2, 8)}`),
+        name: p.title || p.name || "Biglietto Tiqets",
+        description: p.tagline || p.summary || p.description || "Biglietto d'ingresso per questa attrazione.",
+        price,
+        duration: p.duration || "",
+        rating: ratingAvg ? `${parseFloat(ratingAvg).toFixed(1)} ⭐` : "",
+        imageUrl: p.images?.[0]?.large || p.images?.[0]?.medium || p.images?.[0]?.url || p.image_url || "",
+        // product_url arriva già col partner: è il link commissionabile.
+        url: p.product_url || p.product_checkout_url || "",
+        source: "tiqets",
+        lat: p.geolocation?.lat || p.venue?.lat || opts.lat || 0,
+        lon: p.geolocation?.lng || p.venue?.lon || opts.lon || 0,
+        city: p.city_name || p.city || "",
+        venue: p.venue?.name || "",
+        distanceKm: typeof p.distance === "number" ? p.distance : null
+      };
+    }).filter((x: any) => x.url);
+  }
+
   /**
-   * Eventi PredictHQ attorno a un punto. Finora la route non esisteva: il
-   * pannello Admin la interrogava comunque, quindi quel test risultava sempre
-   * fallito anche a chiave valida. Accetta le coordinate (non un nome di
-   * città), così può seguire il centro della mappa come gli altri provider.
+   * Ranking dei prodotti Tiqets per un singolo POI: somiglianza del nome
+   * (token in comune) + distanza reale. Un biglietto è pertinente se il nome
+   * combacia OPPURE se il prodotto è ancorato al POI stesso (≤250 m: la
+   * biglietteria non coincide mai col centroide del monumento).
    */
-  app.get("/api/predicthq", async (req, res) => {
+  function rankTiqetsForPoi(products: any[], poiName: string, lat: number, lon: number): any[] {
+    const norm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ');
+    const STOP = new Set(['di', 'del', 'della', 'dei', 'delle', 'the', 'of', 'la', 'il', 'le', 'lo', 'los', 'las', 'el', 'e', 'and', 'de', 'des', 'der', 'die', 'das']);
+    const tokens = norm(poiName).split(/\s+/).filter((t: string) => t.length > 2 && !STOP.has(t));
+    return (products || [])
+      .map((p: any) => {
+        const hay = norm(`${p.name} ${p.venue} ${p.description}`);
+        const score = tokens.filter((t: string) => hay.includes(t)).length;
+        const distM = Math.round(getHaversineDistance(lat, lon, p.lat, p.lon));
+        return { ...p, _score: score, _distM: distM };
+      })
+      .filter((p: any) => p._score > 0 || p._distM <= 250)
+      .sort((a: any, b: any) => (b._score - a._score) || (a._distM - b._distM))
+      .slice(0, 3)
+      .map(({ _score, _distM, ...rest }: any) => ({ ...rest, distanceM: _distM }));
+  }
+
+  // Proxy per la tab Eventi (quinta sorgente).
+  app.post("/api/tiqets", async (req, res) => {
     try {
-      const { lat, lon, radius, startStr, endStr } = req.query as Record<string, string>;
-      const phqKey = process.env.PREDICTHQ_API_KEY;
-      if (!phqKey) return res.status(500).json({ error: "PREDICTHQ_API_KEY not configured" });
-
-      const parsedLat = parseFloat(lat);
-      const parsedLon = parseFloat(lon);
-      if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLon)) {
-        return res.status(400).json({ error: "lat e lon sono obbligatori" });
+      const { lat, lon, radius, lang, cityName } = req.body;
+      const parsedLat = parseFloat(lat) || 0;
+      const parsedLon = parseFloat(lon) || 0;
+      // Coordinate se valide, altrimenti fallback per città (PlanScreen può
+      // avere giorni con tappe senza coordinate risolte).
+      if ((!parsedLat || !parsedLon) && !cityName) return res.status(400).json({ error: "lat/lon o cityName obbligatori" });
+      if (!process.env.TIQETS_API_KEY && !process.env.VITE_TIQETS_API_KEY) {
+        return res.status(500).json({ error: "TIQETS_API_KEY non configurata" });
       }
-      const parsedRadius = Math.min(parseFloat(radius) || 50, 500);
 
-      const start = startStr || new Date().toISOString().split("T")[0];
-      const end = endStr || new Date(Date.now() + 45 * 86400000).toISOString().split("T")[0];
+      const results = (await fetchTiqetsProducts(
+        parsedLat && parsedLon
+          ? { lat: parsedLat, lon: parsedLon, radiusKm: parseFloat(radius) || 30, lang, pageSize: 20 }
+          : { cityName: String(cityName), lang, pageSize: 20 }
+      )).slice(0, 12);
 
-      const url = `https://api.predicthq.com/v1/events` +
-        `?location_around.origin=${parsedLat},${parsedLon}` +
-        `&location_around.scale=${parsedRadius}km` +
-        `&active.gte=${start}&active.lte=${end}` +
-        `&sort=-rank&limit=20`;
-
-      const phqRes = await axios.get(url, {
-        headers: { Authorization: `Bearer ${phqKey}`, Accept: "application/json" },
-        timeout: 8000
-      });
-      res.json(phqRes.data);
+      console.log(`[Tiqets Proxy] ${results.length} prodotti per (${parsedLat}, ${parsedLon})`);
+      res.json(results);
     } catch (err: any) {
-      console.error("[PredictHQ Proxy] Error:", err.message);
-      res.status(500).json({ error: "Failed to fetch from PredictHQ", message: err.message });
+      console.error("[Tiqets Proxy] Error:", err.response?.status, err.response?.data?.message || err.message);
+      res.status(500).json({ error: "Failed to fetch from Tiqets", message: err.message });
+    }
+  });
+
+  // ── Biglietti per singolo POI (scheda) ─────────────────────────────────
+  // Cache-first su api_cache con chiave per CELLA (~110 m) + lingua + giorno:
+  // la chiave giornaliera evita sia i prezzi stantii sia il problema del
+  // refresh (saveToCache non fa upsert). Il paniere in cache è GREZZO e
+  // riusabile dai POI vicini; il ranking per nome si fa a ogni richiesta.
+  app.post("/api/poi/tickets", rateLimiter, async (req, res) => {
+    try {
+      const { lat, lon, name, lang } = req.body || {};
+      const pLat = parseFloat(lat);
+      const pLon = parseFloat(lon);
+      if (!Number.isFinite(pLat) || !Number.isFinite(pLon)) return res.status(400).json({ error: 'lat/lon obbligatori' });
+      const langCode = String(lang || 'it').slice(0, 2).toLowerCase();
+
+      const dayBucket = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const cacheKey = `tiqets_poi_${pLat.toFixed(3)}_${pLon.toFixed(3)}_${langCode}_${dayBucket}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const all = JSON.parse(cached.text_content);
+          return res.json({ tickets: rankTiqetsForPoi(all, name, pLat, pLon), cached: true });
+        } catch { /* cache corrotta: rigenera sotto */ }
+      }
+
+      const products = await fetchTiqetsProducts({ lat: pLat, lon: pLon, radiusKm: 2, lang: langCode, pageSize: 20 });
+      saveToCache(cacheKey, 'tiqets_poi', JSON.stringify(products));
+      res.json({ tickets: rankTiqetsForPoi(products, name, pLat, pLon) });
+    } catch (e: any) {
+      console.error('[PoiTickets] Errore:', e.message);
+      // Best-effort: la scheda POI vive anche senza biglietti.
+      res.json({ tickets: [] });
     }
   });
 
@@ -8417,32 +9184,148 @@ Restituisci ESATTAMENTE questo schema JSON per il giorno in questione:
       res.status(500).json({ error: "Failed to fetch from GetYourGuide" });
     }
   });
+  // --- CANCELLAZIONE ACCOUNT (Apple 5.1.1(v) + Google Play Data Safety) ---
+  // La sola auth.admin.deleteUser lasciava orfani: vision_cards e
+  // api_usage_logs non hanno FK su auth.users, gli oggetti nei bucket storage
+  // non si cancellano mai da soli e il cliente Stripe (con eventuale
+  // abbonamento attivo) restava vivo. Qui si pulisce tutto PRIMA di eliminare
+  // l'utente auth; ogni passo non critico è best-effort.
+  async function deleteUserAccountCascade(userId: string): Promise<void> {
+    const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+
+    // 1) Stripe: il customer va letto PRIMA che user_profiles sparisca col
+    //    CASCADE; cancellarlo chiude anche gli abbonamenti attivi.
+    try {
+      const { data: prof } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=stripe_customer_id`,
+        { headers: svcHeaders }
+      );
+      const customerId = prof?.[0]?.stripe_customer_id;
+      if (customerId && stripeClient) {
+        await stripeClient.customers.del(String(customerId));
+      }
+    } catch (e: any) {
+      console.warn('[Delete Account] Pulizia Stripe fallita:', e?.message);
+    }
+
+    // 2) RevenueCat: l'app_user_id è lo stesso UUID Supabase (ShopScreen fa
+    //    Purchases.logIn(userId)). Best-effort, solo se la chiave è configurata.
+    if (process.env.REVENUECAT_API_KEY) {
+      try {
+        await axios.delete(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(userId)}`,
+          { headers: { Authorization: `Bearer ${process.env.REVENUECAT_API_KEY}` } });
+      } catch (e: any) {
+        console.warn('[Delete Account] Pulizia RevenueCat fallita:', e?.message);
+      }
+    }
+
+    // 3) Vision pubblicate: foto pubblica via e POI community nascosto.
+    //    Il DELETE su shared_pois è bloccato dal trigger di protezione delle
+    //    colonne di revisione: si usa is_hidden come per la moderazione.
+    try {
+      const { data: cards } = await axios.get(
+        `${supabaseUrl}/rest/v1/vision_cards?user_id=eq.${userId}&select=id,published_poi_id`,
+        { headers: svcHeaders }
+      );
+      for (const card of cards || []) {
+        if (card.published_poi_id && card.published_poi_id === `vision-${card.id}`) {
+          await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(card.published_poi_id)}`,
+            { is_hidden: true }, { headers: svcHeaders }).catch(() => {});
+          await axios.delete(`${supabaseUrl}/storage/v1/object/vision-public/vision-${card.id}.jpg`,
+            { headers: svcHeaders }).catch(() => {});
+        }
+      }
+    } catch (e: any) {
+      console.warn('[Delete Account] Pulizia vision pubbliche fallita:', e?.message);
+    }
+
+    // 4) Storage privato: tutto il prefisso vision-photos/<uid>/ (copre anche
+    //    upload rimasti senza scheda).
+    try {
+      const { data: objects } = await axios.post(
+        `${supabaseUrl}/storage/v1/object/list/vision-photos`,
+        { prefix: `${userId}/`, limit: 1000 },
+        { headers: svcHeaders }
+      );
+      const names = (objects || []).map((o: any) => `${userId}/${o.name}`);
+      if (names.length) {
+        await axios.delete(`${supabaseUrl}/storage/v1/object/vision-photos`,
+          { headers: svcHeaders, data: { prefixes: names } });
+      }
+    } catch (e: any) {
+      console.warn('[Delete Account] Pulizia storage vision-photos fallita:', e?.message);
+    }
+
+    // 5) Tabelle senza FK su auth.users (o con cascade non verificata):
+    //    delete esplicito, innocuo dove il CASCADE esiste già.
+    for (const t of ['vision_cards', 'api_usage_logs', 'saved_pois', 'user_itineraries', 'itinerary_guides', 'user_listening_history']) {
+      await axios.delete(`${supabaseUrl}/rest/v1/${t}?user_id=eq.${userId}`, { headers: svcHeaders }).catch(() => {});
+    }
+
+    // 6) Utente auth: da qui partono i CASCADE (user_profiles, quote,
+    //    crediti…). Unico passo che DEVE riuscire.
+    await axios.delete(`${supabaseUrl}/auth/v1/admin/users/${userId}`, { headers: svcHeaders });
+  }
+
   app.post("/api/delete-account", rateLimiter, async (req, res) => {
     try {
       // L'identità viene ricavata SOLO dal token della sessione, mai dal body:
       // prima chiunque poteva cancellare l'account di qualunque utente passando
       // uno userId arbitrario.
-      const authHeader = String(req.headers.authorization || '');
-      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-      if (!token) return res.status(401).json({ error: "Missing token" });
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: "Invalid token" });
 
-      const { createClient } = await import('@supabase/supabase-js');
-      const adminClient = createClient(supabaseUrl, supabaseServiceKey, {
-        auth: {
-          autoRefreshToken: false,
-          persistSession: false
-        }
-      });
-
-      const { data: userData, error: userErr } = await adminClient.auth.getUser(token);
-      if (userErr || !userData?.user) return res.status(401).json({ error: "Invalid token" });
-
-      const { error } = await adminClient.auth.admin.deleteUser(userData.user.id);
-      if (error) throw error;
-
+      await deleteUserAccountCascade(userId);
       res.json({ success: true });
     } catch (err: any) {
       console.error("Delete Account error:", err.message);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
+  });
+
+  // Cancellazione dal web (wip.guide/delete-account): Google Play impone un
+  // percorso utilizzabile senza reinstallare l'app. Verifica email+password
+  // (unico metodo di login dell'app) lato server: nessuna chiave Supabase
+  // esposta nella pagina statica.
+  const webDeleteAttempts = new Map<string, { count: number; resetTime: number }>();
+  app.post("/api/account/delete-web", rateLimiter, async (req, res) => {
+    try {
+      const { email, password, confirm } = req.body || {};
+      if (!email || !password || confirm !== true) {
+        return res.status(400).json({ error: "missing_fields" });
+      }
+      // Anti credential-stuffing: 5 tentativi per IP ogni 15 minuti. Come
+      // rateLimiter è in-memory (si azzera ai cold start): limite di cortesia.
+      const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown");
+      const now = Date.now();
+      const att = webDeleteAttempts.get(ip);
+      if (!att || now > att.resetTime) {
+        webDeleteAttempts.set(ip, { count: 1, resetTime: now + 15 * 60 * 1000 });
+      } else if (att.count >= 5) {
+        return res.status(429).json({ error: "too_many_attempts" });
+      } else {
+        att.count++;
+      }
+
+      let userId: string | null = null;
+      try {
+        const tokenRes = await axios.post(
+          `${supabaseUrl}/auth/v1/token?grant_type=password`,
+          { email: String(email).trim(), password: String(password) },
+          { headers: { apikey: supabaseServiceKey, 'Content-Type': 'application/json' } }
+        );
+        userId = tokenRes.data?.user?.id || null;
+      } catch {
+        userId = null;
+      }
+      // Risposta identica per "utente inesistente" e "password sbagliata":
+      // la pagina non deve fare da oracolo sulle email registrate.
+      if (!userId) return res.status(401).json({ error: "invalid_credentials" });
+
+      await deleteUserAccountCascade(userId);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Delete Account (web) error:", err.message);
       res.status(500).json({ error: "Failed to delete account" });
     }
   });

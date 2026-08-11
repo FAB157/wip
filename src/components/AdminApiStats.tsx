@@ -33,7 +33,6 @@ const COST_MAP: Record<string, number> = {
   'wikipedia': 0.00,
   'foursquare': 0.005,
   'ticketmaster': 0.00,
-  'predicthq': 0.00,
   'virgilio': 0.00,
   'viator': 0.00,
   'getyourguide': 0.00,

@@ -19,7 +19,7 @@ import { getApiUrl } from "../lib/api";
 import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
 
-type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator";
+type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator" | "tiqets";
 
 interface EventData {
   id: string;
@@ -60,18 +60,21 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     ticketmaster: [],
     getyourguide: [],
     viator: [],
+    tiqets: [],
   });
   const [loadingSources, setLoadingSources] = useState<Record<EventSource, boolean>>({
     virgilio: false,
     ticketmaster: false,
     getyourguide: false,
     viator: false,
+    tiqets: false,
   });
   const [sourceErrors, setSourceErrors] = useState<Record<EventSource, string | null>>({
     virgilio: null,
     ticketmaster: null,
     getyourguide: null,
     viator: null,
+    tiqets: null,
   });
 
   const [loading, setLoading] = useState(true);
@@ -119,6 +122,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         ticketmaster: [],
         getyourguide: [],
         viator: [],
+        tiqets: [],
       });
     }
     
@@ -158,6 +162,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         loadTicketmaster(currentLat, currentLon, radius, resolvedCityName),
         loadGetYourGuide(currentLat, currentLon, radius, resolvedCityName),
         loadViator(currentLat, currentLon, radius, startDate, endDate, resolvedCityName),
+        loadTiqets(currentLat, currentLon, radius),
       ]);
 
     } catch (err) {
@@ -368,6 +373,57 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     if (source === "ticketmaster") loadTicketmaster(lat, lon, radius, city);
     if (source === "getyourguide") loadGetYourGuide(lat, lon, radius, city);
     if (source === "viator") loadViator(lat, lon, radius, startDate, endDate, city);
+    if (source === "tiqets") loadTiqets(lat, lon, radius);
+  };
+
+  const loadTiqets = async (lat: number, lon: number, searchRadius: number) => {
+    logApiCall('tiqets', 'fetch_tickets');
+    setLoadingSources(prev => ({ ...prev, tiqets: true }));
+    setSourceErrors(prev => ({ ...prev, tiqets: null }));
+
+    try {
+      const res = await fetch(getApiUrl("/api/tiqets"), {
+        method: "POST",
+        signal: AbortSignal.timeout(12000),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat, lon, radius: searchRadius, lang: (language || 'IT').toLowerCase() })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Errore API Tiqets (${res.status})`);
+      }
+
+      const data = await res.json();
+      const parsedData = Array.isArray(data) ? data : [];
+
+      const mappedEvents: EventData[] = parsedData.map((t: any) => ({
+        id: `tiqets-${t.id}`,
+        name: t.name,
+        description: t.description || "Biglietto d'ingresso per questa attrazione.",
+        date: startDate,
+        venueName: t.venue ? (t.price ? `${t.venue} · ${t.price}` : t.venue) : (t.price ? `Biglietto · ${t.price}` : "Tiqets"),
+        // L'URL arriva dal server GIÀ con ?partner=<brand> (attribuzione
+        // Tiqets legata al token): passarla intatta, MAI riscriverla.
+        url: t.url,
+        imageUrl: t.imageUrl || "https://images.unsplash.com/photo-1554907984-15263bfd63bd?auto=format&fit=crop&q=80&w=400",
+        source: "tiqets" as EventSource,
+        lat: t.lat || lat,
+        lon: t.lon || lon,
+        macroCategory: "🎫 Musei & Attrazioni"
+      }));
+
+      setSourceResults(prev => {
+        const combined = [...prev.tiqets, ...mappedEvents];
+        const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
+        return { ...prev, tiqets: unique };
+      });
+    } catch (err: any) {
+      console.error("loadTiqets error:", err);
+      setSourceErrors(prev => ({ ...prev, tiqets: "Impossibile recuperare biglietti Tiqets" }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, tiqets: false }));
+    }
   };
 
   const loadViator = async (lat: number, lon: number, r: number, start: string, end: string, cityName: string) => {
@@ -514,13 +570,14 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
   };
 
-  // Solo eventi REALI dalle quattro sorgenti: niente più mock di riempimento.
+  // Solo eventi REALI dalle cinque sorgenti: niente più mock di riempimento.
   // Se non c'è nulla si mostra lo stato "nessun evento trovato".
   const displayEvents = [
     ...sourceResults.virgilio,
     ...sourceResults.ticketmaster,
     ...sourceResults.getyourguide,
-    ...sourceResults.viator
+    ...sourceResults.viator,
+    ...sourceResults.tiqets
   ];
 
   const filteredEvents = displayEvents.filter((e) => {
@@ -635,7 +692,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
               // Mostra errore solo se non ci sono risultati (nemmeno fallback) per quella source
               const hasResults = (sourceResults as any)[source]?.length > 0;
               if (!err || hasResults) return null;
-              const sourceLabel = source === 'ticketmaster' ? 'Ticketmaster' : source === 'getyourguide' ? 'GetYourGuide' : source === 'viator' ? 'Viator' : source;
+              const sourceLabel = source === 'ticketmaster' ? 'Ticketmaster' : source === 'getyourguide' ? 'GetYourGuide' : source === 'viator' ? 'Viator' : source === 'tiqets' ? 'Tiqets' : source;
               return (
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.9 }}

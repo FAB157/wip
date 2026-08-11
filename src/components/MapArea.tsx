@@ -788,6 +788,44 @@ function MapArea({
     });
   }, [pois, center, mapZoom]);
 
+  /**
+   * POI community (Vision approvate) per bbox, SENZA clamp di raggio: sono
+   * pochi e curati (uno per luogo, accorpati all'approvazione) e devono
+   * restare visibili anche a zoom lontani, dove la RPC nearby (25km/1000)
+   * li perderebbe. SELECT pubblica diretta su shared_pois.
+   */
+  const fetchCommunityPoisInBounds = async (
+    south: number, west: number, north: number, east: number
+  ): Promise<Poi[]> => {
+    try {
+      const { data } = await supabase
+        .from('shared_pois')
+        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden')
+        .eq('category', 'community')
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(300);
+      return (data || [])
+        .filter((i: any) => i.is_hidden !== true && i.status !== 'draft' && i.name)
+        .map((i: any) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          category: 'community',
+          baseCategory: 'community',
+          subCategory: i.poi_type || 'community',
+          description: i.description_ai || i.description_short,
+          image_url: i.image_url,
+          is_gem: false,
+          isFromDb: true,
+          status: i.status || 'verified'
+        } as Poi));
+    } catch {
+      return [];
+    }
+  };
+
   const performFetchPois = async (bounds: L.LatLngBounds) => {
     // Nuova generazione di fetch: quelle precedenti diventano stale
     const fetchSeq = ++fetchSeqRef.current;
@@ -802,6 +840,19 @@ function MapArea({
 
     const zoom = mapRef.current?.getZoom() || 13;
     if (zoom < 8) {
+      // A zoom lontani si evita il carico pesante, MA i pin community
+      // restano visibili (richiesta esplicita: si vedono anche da lontano).
+      if (activeCategories.includes('community') && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        const farCommunity = await fetchCommunityPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+        if (farCommunity.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            farCommunity.forEach(p => m.set(String(p.id), p));
+            return Array.from(m.values());
+          });
+        }
+      }
       setIsLoadingPois(false);
       return;
     }
@@ -972,6 +1023,18 @@ function MapArea({
           }
         } catch (utilEx) {
           console.warn('get_utility_pois non disponibile:', utilEx);
+        }
+      }
+
+      // I POI community non devono dipendere dal clamp 25km / limit 1000
+      // della RPC: fetch dedicato per bbox e merge (la versione bbox vince
+      // sugli eventuali doppioni della RPC).
+      if (activeCategories.includes('community')) {
+        const communityExtra = await fetchCommunityPoisInBounds(south, west, north, east);
+        if (communityExtra.length > 0) {
+          const seen = new Set(communityExtra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !seen.has(String(p.id))).concat(communityExtra);
+          console.log(`[MapArea] +${communityExtra.length} POI community (fetch bbox dedicato)`);
         }
       }
     } catch (err: any) {

@@ -50,6 +50,10 @@ export default defineConfig(({mode}) => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,json}'],
           maximumFileSizeToCacheInBytes: 5000000,
+          // Le pagine legali statiche (compliance store) vivono FUORI dalla SPA:
+          // senza denylist il service worker rispondeva a /privacy &co. con
+          // index.html (navigation fallback) per chi aveva già il SW attivo.
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
