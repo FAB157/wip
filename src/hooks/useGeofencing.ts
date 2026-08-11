@@ -388,11 +388,25 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
         // ritriggera finché l'utente non usa "Azzera Storico" nel setup.
         if (isPlayed(poi.id)) { audioQueueManager.dequeue(poi.id); continue; }
 
-        const radii = radiiForTransport(isCar ? 'car' : 'walk', poi.category);
+        // PERIMETRO + INGRESSO REALE: se il POI è stato processato col footprint
+        // OSM (entrance valorizzato), centra il trigger sull'INGRESSO (non sul
+        // centro dell'edificio) e usa i raggi calibrati sul perimetro. Altrimenti
+        // comportamento identico a oggi (centroide + raggi di modalità).
+        const eLat = (poi as any).entrance_lat;
+        const eLon = (poi as any).entrance_lon;
+        const hasEntrance = typeof eLat === 'number' && typeof eLon === 'number';
+        const targetLat = hasEntrance ? eLat : poi.lat;
+        const targetLon = hasEntrance ? eLon : poi.lon;
+
+        const radii = radiiForTransport(isCar ? 'car' : 'walk', poi.category, {
+          geofenceRadius: (poi as any).geofence_radius,
+          alertRadius: (poi as any).alert_radius,
+          hasEntrance,
+        });
         const { alert: alertRadius, trigger: triggerRadius } = radii;
 
         // Pre-filtro rapido con Haversine (evita chiamate Mapbox inutili)
-        const haversineDist = haversineMeters(here.lat, here.lon, poi.lat, poi.lon);
+        const haversineDist = haversineMeters(here.lat, here.lon, targetLat, targetLon);
         if (haversineDist > alertRadius * 2) {
           // Troppo lontano → dequeue se era in coda
           audioQueueManager.dequeue(poi.id);
@@ -415,7 +429,7 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
             // se la linea d'aria è > 3×alertRadius non chiama Mapbox affatto.
             const { roadDist, fromMapbox } = await getRoadDistance(
               { lat: here.lat, lon: here.lon },
-              { lat: poi.lat,  lon: poi.lon  },
+              { lat: targetLat, lon: targetLon },
               isCar ? 'driving' : 'walking',
               lang,
               haversineDist,

@@ -471,8 +471,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // l'audio continuava fino a fine teaser.
             if state == .approachFired || state == .arrivedFired,
                let prev = lastDistances[c.poi.id], c.dist > prev, c.dist > arrivalRad {
+                // Allineato ad Android: il predittore usa l'INGRESSO (coordinate
+                // = entranceLat/Lon ?? lat/lon), non il centroide grezzo. Se non
+                // c'è ingresso, coordinate == lat/lon → comportamento identico.
                 let passPred = PredictiveTrigger.evaluate(
-                    location: location, poiLat: c.poi.lat, poiLon: c.poi.lon,
+                    location: location,
+                    poiLat: c.poi.coordinate.coordinate.latitude,
+                    poiLon: c.poi.coordinate.coordinate.longitude,
                     radiusM: alertRad, isDriving: isDriving
                 )
                 if PredictiveTrigger.hasPassed(
@@ -556,10 +561,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // Predittore CPA al posto del vecchio filtro ±60°: valuta se
                 // l'utente è realmente IN ROTTA e se il momento è quello
                 // giusto, invece di limitarsi a vetare le direzioni sbagliate.
+                // Ingresso invece del centroide (allineato ad Android).
                 let pred = PredictiveTrigger.evaluate(
                     location: location,
-                    poiLat: c.poi.lat,
-                    poiLon: c.poi.lon,
+                    poiLat: c.poi.coordinate.coordinate.latitude,
+                    poiLon: c.poi.coordinate.coordinate.longitude,
                     radiusM: alertRad,
                     isDriving: isDriving
                 )

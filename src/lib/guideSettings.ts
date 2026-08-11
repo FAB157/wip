@@ -82,7 +82,21 @@ export function setDistance(key: DistanceKey, value: number): void {
  * Raggi operativi (alert/trigger) per la modalita' di trasporto corrente.
  * Include una logica di espansione del raggio per edifici grandi (Musei, Castelli, ecc.)
  */
-export function radiiForTransport(mode: TransportMode, category?: string | null): {
+/** Raggi calibrati sul perimetro reale del POI (footprint OSM), quando presenti. */
+export interface PoiFootprint {
+  /** Raggio di trigger/arrivo derivato dal perimetro (colonna geofence_radius). */
+  geofenceRadius?: number | null;
+  /** Raggio di alert derivato dal perimetro (colonna alert_radius). */
+  alertRadius?: number | null;
+  /** True se il POI è stato processato col footprint (entrance valorizzato). */
+  hasEntrance?: boolean;
+}
+
+export function radiiForTransport(
+  mode: TransportMode,
+  category?: string | null,
+  footprint?: PoiFootprint | null,
+): {
   alert: number;
   trigger: number;
 } {
@@ -91,9 +105,22 @@ export function radiiForTransport(mode: TransportMode, category?: string | null)
     ? { alert: d.carAlert, trigger: d.carTrigger }
     : { alert: d.walkAlert, trigger: d.walkTrigger };
 
-  // Logica di espansione per edifici grandi (Buffer Zone)
-  // Se l'edificio è un castello, museo o chiesa grande, aumentiamo il trigger di 30-50m
-  // per compensare il fatto che il centro (centroid) è lontano dalla strada.
+  // RAGGI CALIBRATI SUL PERIMETRO REALE. Se il POI è stato processato col
+  // footprint OSM (entrance valorizzato → hasEntrance), usa i suoi raggi reali,
+  // EspAndendo (mai riducendo) i default di modalità: una piazza ottiene un
+  // raggio grande, una statua resta stretta. Sostituisce il bump forfettario.
+  // Gated su hasEntrance: i POI non processati sono IDENTICI a oggi (i valori
+  // 50/150 di default sono indistinguibili da raggi reali e non vanno usati).
+  const fpTrigger = Number(footprint?.geofenceRadius) || 0;
+  const fpAlert = Number(footprint?.alertRadius) || 0;
+  if (footprint?.hasEntrance && (fpTrigger > 0 || fpAlert > 0)) {
+    if (fpTrigger > 0) trigger = Math.max(trigger, fpTrigger);
+    if (fpAlert > 0) alert = Math.max(alert, fpAlert);
+    return { alert, trigger };
+  }
+
+  // Fallback (comportamento attuale): bump forfettario per edifici grandi,
+  // perché il centroide di un edificio massiccio è lontano dalla strada.
   const cat = (category || '').toLowerCase();
   const largeScaleCategories = [
     'castle', 'castelli', 'museum', 'musei', 'church', 'chiese',
