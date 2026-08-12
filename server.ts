@@ -3,6 +3,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import zlib from "node:zlib";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import dns from "node:dns";
@@ -7318,6 +7319,30 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
   const CAR_HW = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street', 'service', 'road', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
   const NO_FOOT = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link']); // pedoni ovunque tranne autostrade
 
+  // GeoJSON (tile pre-estratte dallo script footprint) → polilinee [lat,lon].
+  // NB: le coordinate GeoJSON sono [lon,lat]: qui si invertono in [lat,lon].
+  const geojsonToPolylines = (fc: any): number[][][] => {
+    const out: number[][][] = [];
+    for (const f of fc?.features || []) {
+      const g = f?.geometry;
+      if (g?.type === 'LineString') out.push(g.coordinates.map((c: number[]) => [c[1], c[0]]));
+      else if (g?.type === 'MultiLineString') for (const ls of g.coordinates) out.push(ls.map((c: number[]) => [c[1], c[0]]));
+    }
+    return out;
+  };
+  const loadStorageRoadTile = async (name: string): Promise<number[][][] | null> => {
+    try {
+      const url = `${supabaseUrl}/storage/v1/object/road_tiles/${name}`;
+      const r = await axios.get(url, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
+        responseType: 'arraybuffer', timeout: 8000,
+      });
+      const jsonStr = zlib.gunzipSync(Buffer.from(r.data)).toString('utf-8');
+      const polys = geojsonToPolylines(JSON.parse(jsonStr));
+      return polys.length ? polys : null;
+    } catch { return null; }
+  };
+
   app.get("/api/roads/tile", rateLimiter, async (req, res) => {
     try {
       const nLat = parseFloat(String(req.query.lat));
@@ -7330,6 +7355,21 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       const cached = roadTileCache.get(key);
       if (cached && Date.now() - cached.ts < ROAD_TILE_TTL) {
         return res.json({ ...cached.data, cached: true });
+      }
+
+      // STORAGE-FIRST: se esiste la tile pre-estratta (script generate_road_tiles),
+      // la servo convertita senza toccare Overpass. Griglia 0,05° come lo script;
+      // nomi file "x{gx}_y{gy}_{mode}.json.gz" (senza prefisso regione).
+      const gx = (Math.floor(nLon / 0.05) * 0.05).toFixed(2);
+      const gy = (Math.floor(nLat / 0.05) * 0.05).toFixed(2);
+      const [preCar, preFoot] = await Promise.all([
+        loadStorageRoadTile(`x${gx}_y${gy}_car.json.gz`),
+        loadStorageRoadTile(`x${gx}_y${gy}_foot.json.gz`),
+      ]);
+      if (preCar || preFoot) {
+        const data = { car: preCar || [], foot: preFoot || [], count: (preCar?.length || 0) + (preFoot?.length || 0), center: [nLat, nLon], radius, source: 'storage' };
+        roadTileCache.set(key, { ts: Date.now(), data });
+        return res.json(data);
       }
 
       const q = `[out:json][timeout:25];way["highway"](around:${radius},${nLat},${nLon});out geom;`;
