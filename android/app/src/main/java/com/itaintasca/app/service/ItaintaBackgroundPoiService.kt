@@ -124,10 +124,23 @@ class ItaintaBackgroundPoiService : Service() {
         // con startForegroundService da plugin/watchdog/boot/sync e ha pochi secondi
         // per promuoversi, pena ForegroundServiceDidNotStartInTimeException.
         val notification = buildNotification("Audioguida attiva", "Acquisizione posizione...")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(NOTIF_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            } else {
+                startForeground(NOTIF_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Android 12+: avviare un FGS 'location' DA BACKGROUND (boot, watchdog
+            // 15 min, sentinella geofence quando l'app non è "while-in-use") è
+            // vietato e lancia ForegroundServiceStartNotAllowedException/
+            // SecurityException QUI DENTRO il servizio — il try/catch del chiamante
+            // non la prende, e prima era un CRASH (rischio rifiuto Play + riavvio
+            // al boot). Ora si degrada: niente promozione → stopSelf pulito, i
+            // geofence dell'OS restano la rete di sicurezza.
+            Log.w(TAG, "startForeground non consentito (background start): ${e.message}")
+            stopSelf()
+            return START_NOT_STICKY
         }
 
         if (intent == null && !isReallyActive) {
@@ -361,8 +374,12 @@ class ItaintaBackgroundPoiService : Service() {
     private fun applyLocationRate(armed: Boolean) {
         val cb = locationCallback ?: return
         val request = if (armed) {
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-                .setMinUpdateIntervalMillis(1000L)
+            // Intervallo armato MODE-AWARE: in auto serve reattività (1 s); a piedi
+            // 2 s dimezza il carico GNSS/CPU senza perdere trigger (a passo d'uomo
+            // 2 s ≈ 3 m). Prima era 1 Hz pieno anche a piedi = il driver di calore #1.
+            val armedIntervalMs = if (guideMode == "driving") 1000L else 2000L
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, armedIntervalMs)
+                .setMinUpdateIntervalMillis(armedIntervalMs)
                 .setWaitForAccurateLocation(true)
                 .build()
         } else {
@@ -587,8 +604,16 @@ class ItaintaBackgroundPoiService : Service() {
         sendBroadcast(intent)
     }
 
+    @Volatile private var lastDistanceNotifAt = 0L
     private fun updateDistanceNotification(location: Location) {
         if (currentPois.isEmpty()) return
+        // La notifica di distanza è SOLO UI: non serve aggiornarla a 1-2 Hz.
+        // Throttle a 5 s → taglia ~80% delle letture DB (getAllTriggerStates) e
+        // delle ricostruzioni notifica per fix (driver batteria #2). Il predittore
+        // (runPredictiveEvaluation) resta invece a piena frequenza per i trigger.
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastDistanceNotifAt < 5000L) return
+        lastDistanceNotifAt = nowMs
         var closestPoi: PoiEntity? = null
         var closestDist = Float.MAX_VALUE
         

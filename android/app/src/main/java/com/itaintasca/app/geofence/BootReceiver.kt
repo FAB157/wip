@@ -18,10 +18,18 @@ class BootReceiver : BroadcastReceiver() {
             if (shouldRestart) {
                 Log.d("BootReceiver", "Restarting ItaintaBackgroundPoiService")
                 val serviceIntent = Intent(context, ItaintaBackgroundPoiService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(serviceIntent)
+                    } else {
+                        context.startService(serviceIntent)
+                    }
+                } catch (e: Exception) {
+                    // Android 12+: avviare un FGS 'location' DA BACKGROUND al boot è
+                    // vietato → non forzarlo (niente crash, niente ottica-policy
+                    // negativa del Play). Il servizio riparte alla riapertura
+                    // dell'app; i geofence dell'OS restano la rete di sicurezza.
+                    Log.w("BootReceiver", "Avvio al boot non consentito: ${e.message}")
                 }
             }
         }

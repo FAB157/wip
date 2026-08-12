@@ -189,6 +189,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // la latenza; il GPS è comunque acceso di continuo, il filtro
             // regola solo la frequenza dei callback.
             self.locationManager.distanceFilter = self.guideMode == "driving" ? 10 : 5
+            // activityType: iOS ottimizza il duty-cycle del GPS in base all'attività
+            // (in auto tollera pause in coda, a piedi calibra diversamente).
+            self.locationManager.activityType = self.guideMode == "driving" ? .automotiveNavigation : .fitness
             self.locationManager.allowsBackgroundLocationUpdates = true
             self.locationManager.pausesLocationUpdatesAutomatically = false
             if #available(iOS 11.0, *) {
@@ -302,6 +305,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         guard key != appliedTierKey else { return }
         appliedTierKey = key
         DispatchQueue.main.async {
+            self.locationManager.activityType = isDriving ? .automotiveNavigation : .fitness
             if armed {
                 self.locationManager.desiredAccuracy = isDriving
                     ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
