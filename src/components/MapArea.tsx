@@ -1793,6 +1793,15 @@ function MapArea({
         p.baseCategory = 'utilita';
       }
 
+      // Nascondi i POI utilità/famiglie VUOTI o con nome generico ("luogo
+      // d'interesse", parcheggio, punto, area sosta…). I servizi con nome reale
+      // (Farmacia Rossi, Stazione Centrale) restano. Queste categorie erano
+      // esentate dal filtro anti-vuoti a monte; qui lo applichiamo — cattura
+      // anche i POI utilità da Overpass live che saltano le RPC filtrate.
+      if ((p.category === 'utilita' || p.category === 'famiglie') && isGenericUtilityName(p.name)) {
+        return false;
+      }
+
       // Cross-category disabili (wheelchair accessible) filter override!
       if (subFilter && subFilter.includes("disabili")) {
         return isAccessible(p);

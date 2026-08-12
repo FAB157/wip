@@ -1,119 +1,30 @@
 #!/usr/bin/env python3
 """
-Pipeline offline routing:
-planet.pbf -> osmium/DuckDB -> Douglas-Peucker -> griglia ~0,05° -> JSON gzip {car, foot} -> road_tiles/
+Pipeline offline routing (DuckDB-Only) - BUGFIX version.
 """
 
 import os
-import subprocess
 import duckdb
 import json
 import gzip
 import argparse
 from pathlib import Path
 
-# Configurazione
 GRID_SIZE = 0.05
-SIMPLIFICATION_TOLERANCE = 0.00005 # ~5 metri in gradi
+SIMPLIFICATION_TOLERANCE = 0.00005
 OUT_DIR = Path('road_tiles')
 
-# Classi highway
 CAR_HIGHWAYS = [
     'motorway', 'trunk', 'primary', 'secondary', 
     'tertiary', 'unclassified', 'residential',
     'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link'
 ]
 
-# Rete pedonale: tutto tranne autostrade/superstrade — a piedi si cammina anche
-# lungo le vie normali, quindi lo snap deve funzionare sui marciapiedi delle
-# strade comuni, non solo nelle zone pedonali.
 FOOT_HIGHWAYS = [
-    'pedestrian', 'footway', 'path', 'steps', 'living_street', 'track', 'cycleway',
-    'residential', 'unclassified', 'tertiary', 'secondary', 'primary', 'service',
-    'road', 'tertiary_link', 'secondary_link', 'primary_link'
+    'pedestrian', 'footway', 'path', 'steps', 'living_street', 'track'
 ]
 
-# --- Supabase Storage: upload delle tile ---
-# Chiave letta da env o da .env.local alla radice del repo. MAI hardcoded qui
-# (è un segreto: finirebbe committato). L'URL del progetto è pubblico.
-import urllib.request
-import urllib.error
-
-SUPABASE_URL = os.environ.get('SUPABASE_URL') or os.environ.get('VITE_SUPABASE_URL') \
-    or 'https://qfxxhzkkrkvbuekfknhh.supabase.co'
-BUCKET = 'road_tiles'
-
-def _load_service_key():
-    k = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-    if k:
-        return k
-    try:
-        root = Path(__file__).resolve().parents[2]  # radice repo
-        for fname in ('.env.local', '.env'):
-            envf = root / fname
-            if envf.exists():
-                for line in envf.read_text(encoding='utf-8').splitlines():
-                    s = line.strip()
-                    if s.startswith('SUPABASE_SERVICE_ROLE_KEY='):
-                        return s.split('=', 1)[1].strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ''
-
-SUPABASE_KEY = _load_service_key()
-_bucket_checked = False
-
-def _ensure_bucket():
-    global _bucket_checked
-    if _bucket_checked or not SUPABASE_KEY:
-        return
-    _bucket_checked = True
-    try:
-        body = json.dumps({"id": BUCKET, "name": BUCKET, "public": True}).encode()
-        req = urllib.request.Request(f"{SUPABASE_URL}/storage/v1/bucket", data=body, method='POST',
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-                     "Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=15).read()
-        print(f"[storage] bucket '{BUCKET}' creato")
-    except urllib.error.HTTPError as e:
-        if e.code not in (400, 409):  # 400/409 = esiste gia'
-            print(f"[storage] bucket HTTP {e.code}")
-    except Exception as e:
-        print(f"[storage] bucket err: {e}")
-
-def upload_tile(filepath, name):
-    if not SUPABASE_KEY:
-        return  # nessuna chiave → resta solo in locale
-    _ensure_bucket()
-    try:
-        data = Path(filepath).read_bytes()
-        url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{name}"
-        req = urllib.request.Request(url, data=data, method='POST', headers={
-            "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/gzip", "x-upsert": "true"})
-        urllib.request.urlopen(req, timeout=30).read()
-    except Exception as e:
-        print(f"[storage] upload {name} fallito: {e}")
-
-def run_osmium_extract(input_pbf, region_name, bbox):
-    """Estrae una regione e filtra solo le highway (strade)."""
-    region_pbf = f"{region_name}_extracted.osm.pbf"
-    highways_pbf = f"{region_name}_highways.osm.pbf"
-    
-    print(f"[{region_name}] 1/2 Estrazione bbox ({bbox})...")
-    subprocess.run(['osmium', 'extract', '-b', bbox, input_pbf, '-o', region_pbf, '--overwrite'], check=True)
-    
-    print(f"[{region_name}] 2/2 Filtraggio tag 'highway'...")
-    subprocess.run(['osmium', 'tags-filter', region_pbf, 'w/highway', '-o', highways_pbf, '--overwrite'], check=True)
-    
-    # Pulizia file temporaneo
-    if os.path.exists(region_pbf):
-        os.remove(region_pbf)
-        
-    return highways_pbf
-
 def write_tile(region, grid_id, mode, rows):
-    """Scrive i dati della singola cella della griglia in GeoJSON compresso (GZIP)."""
     features = []
     for (fid, fclass, oneway, geojson_str) in rows:
         feat = {
@@ -132,108 +43,113 @@ def write_tile(region, grid_id, mode, rows):
         "features": features
     }
     
-    # Nome SENZA prefisso regione: griglia globale, nessun doppione Italia/Europa.
-    # L'endpoint /api/roads/tile cerca esattamente "x{gx}_y{gy}_{mode}.json.gz".
-    tile_name = f"{grid_id}_{mode}.json.gz"
-    filename = OUT_DIR / tile_name
+    filename = OUT_DIR / f"{region}_{grid_id}_{mode}.json.gz"
     with gzip.open(filename, 'wt', encoding='utf-8') as f:
         json.dump(fc, f, separators=(',', ':'))
-    upload_tile(filename, tile_name)
 
-def process_with_duckdb(highways_pbf, region_name, filter_bbox=None):
-    """Elabora le strade in DuckDB: taglia, semplifica e raggruppa per griglia."""
-    print(f"[{region_name}] Caricamento in DuckDB Spatial...")
+def process_region(con, region_name, bbox_filter, car_tags, foot_tags):
+    print(f"\n--- Elaborazione: {region_name.upper()} ---")
     
-    con = duckdb.connect(database=':memory:')
-    con.execute("INSTALL spatial; LOAD spatial;")
+    con.execute("DROP TABLE IF EXISTS region_lines;")
     
-    car_tags = ', '.join([f"'{t}'" for t in CAR_HIGHWAYS])
-    foot_tags = ', '.join([f"'{t}'" for t in FOOT_HIGHWAYS])
-    
-    # Condizione opzionale per escludere aree (es. escludere l'Europa dal Resto del Mondo)
-    bbox_filter_sql = ""
-    if filter_bbox:
-        minx, miny, maxx, maxy = filter_bbox
-        bbox_filter_sql = f"AND NOT (ST_X(ST_Centroid(geom)) BETWEEN {minx} AND {maxx} AND ST_Y(ST_Centroid(geom)) BETWEEN {miny} AND {maxy})"
-
-    print(f"[{region_name}] Estrazione geometrie (Douglas-Peucker) e classificazione...")
     query = f"""
-    CREATE TEMP TABLE filtered_lines AS
+    CREATE TEMP TABLE region_lines AS
     SELECT 
-        osm_id AS id,
-        highway AS class,
+        id,
+        class,
         oneway,
         ST_Simplify(geom, {SIMPLIFICATION_TOLERANCE}) as geom,
         FLOOR(ST_X(ST_Centroid(geom)) / {GRID_SIZE}) * {GRID_SIZE} AS grid_x,
         FLOOR(ST_Y(ST_Centroid(geom)) / {GRID_SIZE}) * {GRID_SIZE} AS grid_y
-    FROM ST_Read('{highways_pbf}', layer='lines')
-    WHERE highway IN ({car_tags}, {foot_tags})
-      AND geom IS NOT NULL
-      {bbox_filter_sql};
+    FROM global_highways
+    WHERE {bbox_filter}
     """
     con.execute(query)
     
-    print(f"[{region_name}] Generazione e compressione delle tile...")
-    grids = con.execute("SELECT DISTINCT grid_x, grid_y FROM filtered_lines").fetchall()
+    grids = con.execute("SELECT DISTINCT grid_x, grid_y FROM region_lines").fetchall()
+    print(f"[{region_name}] Trovate {len(grids)} celle della griglia. Generazione tile...")
     
     for (gx, gy) in grids:
         grid_id = f"x{gx:.2f}_y{gy:.2f}"
         
-        # Tile Veicoli (CAR)
         car_data = con.execute(f"""
             SELECT id, class, oneway, ST_AsGeoJSON(geom) 
-            FROM filtered_lines 
-            WHERE grid_x = {gx} AND grid_y = {gy} AND highway IN ({car_tags})
+            FROM region_lines 
+            WHERE grid_x = {gx} AND grid_y = {gy} AND class IN ({car_tags})
         """).fetchall()
         if car_data:
             write_tile(region_name, grid_id, 'car', car_data)
             
-        # Tile Pedonali (FOOT)
         foot_data = con.execute(f"""
             SELECT id, class, oneway, ST_AsGeoJSON(geom) 
-            FROM filtered_lines 
-            WHERE grid_x = {gx} AND grid_y = {gy} AND highway IN ({foot_tags})
+            FROM region_lines 
+            WHERE grid_x = {gx} AND grid_y = {gy} AND class IN ({foot_tags})
         """).fetchall()
         if foot_data:
             write_tile(region_name, grid_id, 'foot', foot_data)
+            
+    print(f"[{region_name}] Completato!")
 
 def main():
-    parser = argparse.ArgumentParser(description="Pipeline Routing: planet.pbf -> griglia JSON gzip -> Supabase Storage")
-    parser.add_argument('--planet', default=r"D:\0MAPPA POI WIP\planet-260518.osm.pbf",
-                        help="Percorso del file planet.pbf")
-    parser.add_argument('--region', default='italy', choices=['italy', 'europe', 'world', 'all'],
-                        help="Area da estrarre (default: italy). 'world' = pesantissimo, ore.")
+    parser = argparse.ArgumentParser(description="Pipeline Routing DuckDB-Only")
+    parser.add_argument('--planet', required=True, help="Percorso del file planet.pbf")
     args = parser.parse_args()
-
+    
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Planet: {args.planet}")
-    print(f"Regione: {args.region}  |  Upload Storage: {'SI' if SUPABASE_KEY else 'NO (chiave assente → solo locale)'}")
+    
+    db_path = "routing_processor.duckdb"
+    con = duckdb.connect(database=db_path)
+    con.execute("INSTALL spatial; LOAD spatial;")
+    
+    car_tags_list = ', '.join([f"'{t}'" for t in CAR_HIGHWAYS])
+    foot_tags_list = ', '.join([f"'{t}'" for t in FOOT_HIGHWAYS])
+    all_tags = car_tags_list + ", " + foot_tags_list
+    
+    print(f"\n[Fase 1/2] Lettura del file PBF... (Mettiti comodo, ci vorrà molto!)")
+    
+    # Controlliamo se la tabella esiste ed è vuota
+    table_exists = con.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='global_highways'").fetchone()[0] > 0
+    if table_exists:
+        row_count = con.execute("SELECT count(*) FROM global_highways").fetchone()[0]
+        if row_count == 0:
+            print("Trovata tabella 'global_highways' VUOTA. La elimino e ricomincio...")
+            con.execute("DROP TABLE global_highways")
+            table_exists = False
+            
+    if not table_exists:
+        # Usiamo other_tags per estrarre la highway visto che osmconf.ini è inaffidabile su Windows
+        # duckdb regex_extract su '"highway"=>"residential"'
+        query_import = f"""
+        CREATE TABLE global_highways AS 
+        SELECT 
+            -- Generiamo un ID fittizio progressivo visto che GDAL non espone osm_id di default
+            uuid() AS id, 
+            regexp_extract(other_tags, '"highway"=>"([^"]+)"', 1) AS class, 
+            regexp_extract(other_tags, '"oneway"=>"([^"]+)"', 1) AS oneway, 
+            geom 
+        FROM ST_Read('{args.planet}', layer='lines') 
+        WHERE regexp_extract(other_tags, '"highway"=>"([^"]+)"', 1) IN ({all_tags}) 
+          AND geom IS NOT NULL;
+        """
+        con.execute(query_import)
+        print("Importazione globale completata!")
+    else:
+        row_count = con.execute("SELECT count(*) FROM global_highways").fetchone()[0]
+        print(f"Tabella 'global_highways' trovata con {row_count} strade. Salto l'importazione.")
 
-    # Bounding Boxes [min_lon, min_lat, max_lon, max_lat]
-    bbox_italy_str = "6.6,35.2,18.5,47.1"
-    bbox_europe = [-10.0, 34.0, 40.0, 72.0]
-    bbox_europe_str = f"{bbox_europe[0]},{bbox_europe[1]},{bbox_europe[2]},{bbox_europe[3]}"
-
-    if args.region in ('italy', 'all'):
-        print("\n--- ITALIA ---")
-        hw = run_osmium_extract(args.planet, 'italy', bbox_italy_str)
-        process_with_duckdb(hw, 'italy')
-
-    if args.region in ('europe', 'all'):
-        print("\n--- EUROPA ---")
-        hw = run_osmium_extract(args.planet, 'europe', bbox_europe_str)
-        process_with_duckdb(hw, 'europe')
-
-    if args.region in ('world', 'all'):
-        print("\n--- RESTO DEL MONDO (pesante, ore) ---")
-        row_hw = "row_highways.osm.pbf"
-        if not os.path.exists(row_hw):
-            print("[world] Filtraggio globale delle highway dal planet...")
-            subprocess.run(['osmium', 'tags-filter', args.planet, 'w/highway', '-o', row_hw, '--overwrite'], check=True)
-        # Filtra via l'Europa (gia' fatta) per non duplicare
-        process_with_duckdb(row_hw, 'row', filter_bbox=bbox_europe)
-
-    print("\nCompletata! Tile locali in:", OUT_DIR.absolute(), "| Upload:", 'attivo' if SUPABASE_KEY else 'no')
+    print("\n[Fase 2/2] Avvio elaborazione spaziale per regioni...")
+    
+    bbox_italy = "ST_X(ST_Centroid(geom)) BETWEEN 6.6 AND 18.5 AND ST_Y(ST_Centroid(geom)) BETWEEN 35.2 AND 47.1"
+    process_region(con, 'italy', bbox_italy, car_tags_list, foot_tags_list)
+    
+    bbox_europe = "ST_X(ST_Centroid(geom)) BETWEEN -10.0 AND 40.0 AND ST_Y(ST_Centroid(geom)) BETWEEN 34.0 AND 72.0"
+    process_region(con, 'europe', bbox_europe, car_tags_list, foot_tags_list)
+    
+    bbox_row = f"NOT ({bbox_europe})"
+    process_region(con, 'row', bbox_row, car_tags_list, foot_tags_list)
+    
+    print(f"\n🎉 Pipeline Completata! Totale righe elaborate: {con.execute('SELECT count(*) FROM global_highways').fetchone()[0]}")
+    con.close()
 
 if __name__ == '__main__':
     main()
