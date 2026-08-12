@@ -234,7 +234,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
         maybeSwitchTravelMode(location)
         checkRefreshPois(at: location)
-        evaluateTriggers(at: location)
+        // SNAP-TO-PATH (conservativo): scarica il tile strade sul cambio area e
+        // valuta i trigger sulla posizione snappata sul percorso; senza tile o
+        // strada vicina resta il GPS grezzo. Refresh area, tiering e notifica
+        // usano la posizione reale.
+        if RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
+        let evalLoc = RoadSnap.shared.snap(location, isDriving: guideMode == "driving") ?? location
+        evaluateTriggers(at: evalLoc)
         applyLocationTierForProximity(location)
         updateDistanceNotification(location)
     }

@@ -21,6 +21,7 @@ import com.itaintasca.app.db.toPoiEntity
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
 import com.itaintasca.app.geofence.PredictiveTrigger
+import com.itaintasca.app.geofence.RoadSnap
 import com.itaintasca.app.geofence.TriggerTelemetry
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -291,6 +292,10 @@ class ItaintaBackgroundPoiService : Service() {
     }
 
     private fun startActiveMonitoring() {
+        // Snap-to-path: ripristina il tile strade persistito (offline) e imposta
+        // la cartella cache. Best-effort, mai bloccante per l'avvio.
+        RoadSnap.cacheDir = filesDir
+        RoadSnap.loadCached()
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
@@ -301,11 +306,24 @@ class ItaintaBackgroundPoiService : Service() {
 
                 RadarState.updateLocation(location)
                 maybeSwitchTravelMode(location)
+                // SNAP-TO-PATH (conservativo): raddrizza la posizione sul
+                // marciapiede/strada più vicina; senza tile o strada vicina
+                // resta il GPS grezzo. Il tile si scarica sullo stesso "cambio
+                // area" dei POI, fuori dal main thread.
+                if (RoadSnap.shouldRefresh(location.latitude, location.longitude)) {
+                    serviceScope.launch(Dispatchers.IO) {
+                        RoadSnap.refresh(location.latitude, location.longitude)
+                    }
+                }
+                val evalLoc = RoadSnap.snap(location.latitude, location.longitude, location.accuracy, guideMode == "driving")
+                    ?.let { Location(location).apply { latitude = it.first; longitude = it.second } }
+                    ?: location
                 // I geofence dell'OS restano come rete di sicurezza, ma il
                 // trigger tempestivo nasce QUI: il servizio è già sveglio e
                 // valuta il CPA a ogni fix, senza attendere che l'OS
-                // consegni la transizione ENTER.
-                runPredictiveEvaluation(location)
+                // consegni la transizione ENTER. La valutazione usa la posizione
+                // snappata; il refresh area e la notifica usano il GPS grezzo.
+                runPredictiveEvaluation(evalLoc)
                 checkRefreshGeofences(location)
                 updateDistanceNotification(location)
             }

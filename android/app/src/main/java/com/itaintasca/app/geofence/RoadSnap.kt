@@ -1,0 +1,163 @@
+package com.itaintasca.app.geofence
+
+import android.util.Log
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.TimeUnit
+import kotlin.math.asin
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+/**
+ * SNAP-TO-PATH nativo — port fedele di src/lib/roadSnap.ts.
+ *
+ * Scarica la geometria strade/marciapiedi di un'area da /api/roads/tile, la
+ * indicizza a griglia in RAM e "snappa" la posizione GPS sul segmento
+ * percorribile piu' vicino in modo CONSERVATIVO: solo se una strada e' entro
+ * la soglia, altrimenti ritorna null e il chiamante usa il GPS grezzo. Al
+ * momento dello snap non serve rete (l'indice e' gia' in memoria).
+ *
+ * NB: NON testato sul campo. Conservativo per costruzione (worst case =
+ * comportamento attuale). Il fetch va fatto fuori dal main thread.
+ */
+object RoadSnap {
+    private const val TAG = "RoadSnap"
+    private const val CELL = 0.003 // ~300 m
+    private const val ROADS_URL = "https://wip.guide/api/roads/tile"
+
+    private data class Seg(val aLat: Double, val aLon: Double, val bLat: Double, val bLon: Double)
+
+    @Volatile private var carGrid: Map<String, List<Seg>> = emptyMap()
+    @Volatile private var footGrid: Map<String, List<Seg>> = emptyMap()
+    @Volatile private var haveTile = false
+    @Volatile private var lastLat = 0.0
+    @Volatile private var lastLon = 0.0
+    @Volatile private var fetching = false
+
+    // Persistenza: il tile dell'area visitata online resta disponibile offline
+    // dopo un riavvio. Un tile di un'altra area è innocuo (celle non combaciano
+    // → nessuno snap, GPS grezzo). Impostare cacheDir a filesDir all'avvio.
+    @Volatile var cacheDir: java.io.File? = null
+    private const val CACHE_FILE = "road_tile.json"
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    private fun cellKey(lat: Double, lon: Double) = "${Math.round(lat / CELL)},${Math.round(lon / CELL)}"
+
+    private fun metersBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371000.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = sin(dLat / 2).pow(2) +
+            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
+        return 2 * r * asin(min(1.0, sqrt(a)))
+    }
+
+    private class Proj(val lat: Double, val lon: Double, val distM: Double)
+
+    private fun projectToSeg(lat: Double, lon: Double, s: Seg): Proj {
+        val cosLat = cos(Math.toRadians(lat)).let { if (it == 0.0) 1.0 else it }
+        val px = lon * cosLat; val py = lat
+        val ax = s.aLon * cosLat; val ay = s.aLat
+        val bx = s.bLon * cosLat; val by = s.bLat
+        val dx = bx - ax; val dy = by - ay
+        val len2 = dx * dx + dy * dy
+        var t = if (len2 == 0.0) 0.0 else ((px - ax) * dx + (py - ay) * dy) / len2
+        t = max(0.0, min(1.0, t))
+        val snapLat = ay + t * dy
+        val snapLon = (ax + t * dx) / cosLat
+        return Proj(snapLat, snapLon, metersBetween(lat, lon, snapLat, snapLon))
+    }
+
+    /** Snap conservativo. Ritorna (lat,lon) snappati oppure null (usa GPS grezzo). */
+    fun snap(lat: Double, lon: Double, accM: Float, isCar: Boolean): Pair<Double, Double>? {
+        val grid = if (isCar) carGrid else footGrid
+        if (grid.isEmpty()) return null
+        val maxSnap = min(40.0, max(20.0, if (accM <= 0f) 20.0 else accM.toDouble()))
+        val cLat = Math.round(lat / CELL)
+        val cLon = Math.round(lon / CELL)
+        var best: Proj? = null
+        for (dLa in -1..1) for (dLo in -1..1) {
+            val arr = grid["${cLat + dLa},${cLon + dLo}"] ?: continue
+            for (s in arr) {
+                val p = projectToSeg(lat, lon, s)
+                if (best == null || p.distM < best!!.distM) best = p
+            }
+        }
+        val b = best ?: return null
+        if (b.distM > maxSnap) return null
+        if (metersBetween(lat, lon, b.lat, b.lon) < 3.0) return null
+        return Pair(b.lat, b.lon)
+    }
+
+    fun shouldRefresh(lat: Double, lon: Double, thresholdM: Double = 400.0): Boolean {
+        if (!haveTile) return true
+        return metersBetween(lat, lon, lastLat, lastLon) > thresholdM
+    }
+
+    /** Scarica e reindicizza il tile. Best-effort, BLOCCANTE (chiamare su IO). */
+    fun refresh(lat: Double, lon: Double, radius: Int = 700) {
+        if (fetching) return
+        fetching = true
+        try {
+            val url = "$ROADS_URL?lat=$lat&lon=$lon&radius=$radius"
+            client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                if (!resp.isSuccessful) return
+                val body = resp.body?.string() ?: return
+                val json = JSONObject(body)
+                carGrid = buildGrid(json.optJSONArray("car"))
+                footGrid = buildGrid(json.optJSONArray("foot"))
+                lastLat = lat; lastLon = lon; haveTile = true
+                cacheDir?.let { try { java.io.File(it, CACHE_FILE).writeText(body) } catch (_: Exception) {} }
+                Log.d(TAG, "Tile strade caricato: car=${carGrid.size} celle, foot=${footGrid.size} celle")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "refresh fallito: ${e.message}")
+        } finally {
+            fetching = false
+        }
+    }
+
+    /** Carica il tile persistito (offline). Da chiamare all'avvio dopo cacheDir. */
+    fun loadCached() {
+        val dir = cacheDir ?: return
+        try {
+            val f = java.io.File(dir, CACHE_FILE)
+            if (!f.exists()) return
+            val json = JSONObject(f.readText())
+            carGrid = buildGrid(json.optJSONArray("car"))
+            footGrid = buildGrid(json.optJSONArray("foot"))
+            haveTile = true // shouldRefresh riscarica appena online ci si sposta
+            Log.d(TAG, "Tile strade ripristinato da disco")
+        } catch (_: Exception) { /* nessun tile persistito */ }
+    }
+
+    private fun buildGrid(polys: JSONArray?): Map<String, List<Seg>> {
+        val g = HashMap<String, MutableList<Seg>>()
+        if (polys == null) return g
+        for (i in 0 until polys.length()) {
+            val poly = polys.optJSONArray(i) ?: continue
+            var j = 0
+            while (j + 1 < poly.length()) {
+                val p0 = poly.optJSONArray(j)
+                val p1 = poly.optJSONArray(j + 1)
+                if (p0 != null && p1 != null) {
+                    val seg = Seg(p0.optDouble(0), p0.optDouble(1), p1.optDouble(0), p1.optDouble(1))
+                    g.getOrPut(cellKey(seg.aLat, seg.aLon)) { mutableListOf() }.add(seg)
+                    g.getOrPut(cellKey(seg.bLat, seg.bLon)) { mutableListOf() }.add(seg)
+                }
+                j++
+            }
+        }
+        return g
+    }
+}

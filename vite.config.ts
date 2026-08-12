@@ -117,6 +117,21 @@ export default defineConfig(({mode}) => {
                   maxAgeSeconds: 60 * 60 * 24 * 7
                 }
               }
+            },
+            {
+              // Snap-to-path: le tile strade dell'area. NetworkFirst così sono
+              // fresche online ma restano disponibili offline nelle aree già
+              // visitate (le strade cambiano piano).
+              urlPattern: /\/api\/roads\/tile/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'roads-tiles-cache',
+                expiration: {
+                  maxEntries: 80,
+                  maxAgeSeconds: 60 * 60 * 24 * 30
+                },
+                cacheableResponse: { statuses: [0, 200] }
+              }
             }
           ]
         }
