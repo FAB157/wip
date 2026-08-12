@@ -32,6 +32,7 @@ import {
   isPlayed,
 } from '../lib/guideSettings';
 import { haversineMeters } from '../lib/geo';
+import { getRoadIndex, refreshRoadTile, shouldRefreshRoads } from '../lib/roadSnap';
 import { getMapboxRoute, getRoadDistance, buildNavSpeechText } from '../lib/mapboxRouter';
 import { audioQueueManager } from '../lib/AudioQueueManager';
 import { useWakeLock } from './useWakeLock';
@@ -326,6 +327,10 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
       // ── Refresh periodico POI dal DB ──
       if (now - lastQueryRef.current > DB_QUERY_INTERVAL_MS) {
         lastQueryRef.current = now;
+        // Strade per lo snap-to-path: stessa cadenza dei POI, con guardia di
+        // distanza (il tile copre ~700 m, si rifà quando ti allontani).
+        // Best-effort: senza tile lo snap non fa nulla e resta il GPS grezzo.
+        if (shouldRefreshRoads(here.lat, here.lon)) { void refreshRoadTile(here.lat, here.lon); }
         (async () => {
           try {
             const indexed = await isAreaIndexed(here.lat, here.lon);
@@ -371,6 +376,13 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
 
       const isCar    = resolveTransportMode(loc.speed) === 'car';
 
+      // SNAP-TO-PATH (conservativo): rimette la posizione sul marciapiede/strada
+      // più vicina quando ce n'è una entro la soglia; altrimenti tiene il GPS
+      // grezzo. Toglie il tremolio da canyon e i falsi trigger da fermo.
+      const snapped = getRoadIndex()?.snap(here.lat, here.lon, (loc as any).accuracy ?? 999, isCar ? 'car' : 'walk');
+      const userLat = snapped?.lat ?? here.lat;
+      const userLon = snapped?.lon ?? here.lon;
+
       // Leggi filtri categorie attivi
       const storedTree   = localStorage.getItem('wip_active_subcategories');
       // Fallback = default del setup GeoControl. Il vecchio `{ gemme: true }`,
@@ -405,8 +417,9 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
         });
         const { alert: alertRadius, trigger: triggerRadius } = radii;
 
-        // Pre-filtro rapido con Haversine (evita chiamate Mapbox inutili)
-        const haversineDist = haversineMeters(here.lat, here.lon, targetLat, targetLon);
+        // Pre-filtro rapido con Haversine (evita chiamate Mapbox inutili).
+        // userLat/userLon = posizione snappata sul percorso (o GPS grezzo).
+        const haversineDist = haversineMeters(userLat, userLon, targetLat, targetLon);
         if (haversineDist > alertRadius * 2) {
           // Troppo lontano → dequeue se era in coda
           audioQueueManager.dequeue(poi.id);
@@ -428,7 +441,7 @@ export function useGeofencing(opts: UseGeofencingOptions): void {
             // L'Haversine è passato come guard (3× alertRadius):
             // se la linea d'aria è > 3×alertRadius non chiama Mapbox affatto.
             const { roadDist, fromMapbox } = await getRoadDistance(
-              { lat: here.lat, lon: here.lon },
+              { lat: userLat, lon: userLon },
               { lat: targetLat, lon: targetLon },
               isCar ? 'driving' : 'walking',
               lang,
