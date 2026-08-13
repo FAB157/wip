@@ -32,6 +32,7 @@ export default function AdminVisionCommunity() {
   // a raffica dall'alto e ispeziona solo la coda bassa.
   const [aiScores, setAiScores] = useState<Record<string, any> | null>(null);
   const [premoderating, setPremoderating] = useState(false);
+  const [lightbox, setLightbox] = useState<string | null>(null);
 
   const doPreModerate = async () => {
     setPremoderating(true);
@@ -54,7 +55,18 @@ export default function AdminVisionCommunity() {
 
   const getToken = async () => {
     const { data } = await supabase.auth.getSession();
-    return data?.session?.access_token || null;
+    let session = data?.session;
+    // Su nativo (Android/iOS) il timer di auto-refresh di supabase-js si
+    // ferma quando l'app va in background: al rientro la sessione è ancora
+    // in storage ma l'access_token può essere scaduto. getSession() non lo
+    // rinnova da sola, quindi lo forziamo qui se manca meno di 60s alla
+    // scadenza — altrimenti ogni fetch admin fallisce con 403 in silenzio.
+    const expiresAt = session?.expires_at;
+    if (session && expiresAt && expiresAt * 1000 < Date.now() + 60000) {
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      session = refreshed?.session || session;
+    }
+    return session?.access_token || null;
   };
 
   const fetchQueue = async (forStatus: QueueStatus = status) => {
@@ -65,10 +77,11 @@ export default function AdminVisionCommunity() {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error === 'admin_required' ? 'sessione admin scaduta, rientra e riprova' : (data?.error || 'errore'));
       setCards(Array.isArray(data?.cards) ? data.cards : []);
       if (data?.counts) setCounts(data.counts);
-    } catch {
-      notify('Caricamento coda Vision non riuscito.');
+    } catch (e: any) {
+      notify(`Caricamento coda Vision non riuscito: ${e?.message || 'riprova'}.`);
     } finally {
       setLoading(false);
     }
@@ -219,8 +232,9 @@ export default function AdminVisionCommunity() {
     }
   };
 
-  // Candidati "Allega a POI ufficiale": POI veri (non community) entro ~500m,
-  // letti direttamente da shared_pois (SELECT pubblica).
+  // Candidati "Allega a POI": sia POI ufficiali che POI Community (altre
+  // schede Vision già pubblicate) entro ~500m, letti da shared_pois (SELECT
+  // pubblica). Il badge nella riga mostra quale dei due tipi è.
   const loadAttachCandidates = async (card: any) => {
     setAttachMode(card.id);
     setAttachCandidates([]);
@@ -232,7 +246,7 @@ export default function AdminVisionCommunity() {
         .select('id, name, category, lat, lon, image_url')
         .gte('lat', card.lat - d).lte('lat', card.lat + d)
         .gte('lon', card.lon - d).lte('lon', card.lon + d)
-        .neq('category', 'community')
+        .neq('id', card.published_poi_id || '')
         .limit(30);
       const withDist = (data || []).map((p: any) => ({
         ...p,
@@ -315,7 +329,10 @@ export default function AdminVisionCommunity() {
             return (
               <div key={card.id} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="flex gap-3 p-3">
-                  <div className="w-24 h-24 rounded-2xl bg-gray-100 overflow-hidden shrink-0">
+                  <div
+                    className={`w-24 h-24 rounded-2xl bg-gray-100 overflow-hidden shrink-0 ${photo ? 'cursor-pointer' : ''}`}
+                    onClick={() => photo && setLightbox(photo)}
+                  >
                     {photo ? (
                       <img src={photo} alt={card.name} className="w-full h-full object-cover" />
                     ) : (
@@ -408,7 +425,7 @@ export default function AdminVisionCommunity() {
                     <button disabled={busy} onClick={() => attachMode === card.id ? setAttachMode(null) : loadAttachCandidates(card)}
                       className="flex items-center gap-1.5 px-3 py-2 bg-sky-50 text-sky-700 border border-sky-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
                       <Paperclip className="w-3.5 h-3.5" />
-                      Allega a POI ufficiale
+                      Allega a POI esistente
                     </button>
                     <button disabled={busy} onClick={() => doReview(card, 'reject')}
                       className="flex items-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-500 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
@@ -451,16 +468,21 @@ export default function AdminVisionCommunity() {
 
                 {attachMode === card.id && (
                   <div className="px-3 pb-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-2">POI ufficiali entro ~500 m (la foto entra nella loro galleria)</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-2">POI entro ~500 m, ufficiali o Community (la foto entra nella loro galleria)</p>
                     {attachCandidates.length === 0 ? (
-                      <p className="text-[11px] text-gray-400 font-bold">Nessun POI ufficiale nelle vicinanze.</p>
+                      <p className="text-[11px] text-gray-400 font-bold">Nessun POI nelle vicinanze.</p>
                     ) : (
                       <div className="space-y-1.5 max-h-48 overflow-y-auto">
                         {attachCandidates.map((p: any) => (
                           <button key={p.id} disabled={busy} onClick={() => doReview(card, 'attach', p.id)}
                             className="w-full flex items-center justify-between gap-2 bg-[#f8f5f0] hover:bg-sky-50 border border-gray-200 rounded-xl px-3 py-2 text-left active:scale-[0.99] transition-all disabled:opacity-50">
                             <span className="text-xs font-bold text-gray-800 truncate">{p.name}</span>
-                            <span className="text-[9px] font-black text-gray-400 shrink-0">{p._dist} m · {p.category}</span>
+                            <span className="flex items-center gap-1 shrink-0">
+                              {p.category === 'community' && (
+                                <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-violet-100 text-violet-700">Community</span>
+                              )}
+                              <span className="text-[9px] font-black text-gray-400">{p._dist} m · {p.category === 'community' ? 'community' : p.category}</span>
+                            </span>
                           </button>
                         ))}
                       </div>
@@ -470,6 +492,26 @@ export default function AdminVisionCommunity() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <button
+            onClick={() => setLightbox(null)}
+            className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white"
+          >
+            <XCircle className="w-7 h-7" />
+          </button>
+          <img
+            src={lightbox}
+            alt=""
+            className="max-w-full max-h-full rounded-2xl object-contain"
+            onClick={e => e.stopPropagation()}
+          />
         </div>
       )}
     </div>

@@ -2484,13 +2484,9 @@ Non aggiungere testo prima o dopo il JSON.`;
       let roadtripInstruction = "";
       if (isRoadtrip) {
         const nDaysRt = Math.min(30, Math.max(1, Math.floor(Number(days)) || 1));
-        // Distanza stradale stimata: haversine × 1,3 (fattore strada tipico)
-        const roadKm = (a: any, b: any) => {
-          const R = 6371, toRad = (x: number) => x * Math.PI / 180;
-          const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
-          const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-          return 2 * R * Math.asin(Math.sqrt(h)) * 1.3;
-        };
+        // Distanza stradale stimata: haversine condiviso (getHaversineDistance,
+        // in metri) × 1,3 (fattore strada tipico), convertita in km.
+        const roadKm = (a: any, b: any) => getHaversineDistance(a.lat, a.lon, b.lat, b.lon) / 1000 * 1.3;
         const fmtLeg = (a: any, b: any) => {
           const km = roadKm(a, b);
           const min = Math.round(km / 80 * 60); // ~80 km/h medi porta a porta
@@ -2566,7 +2562,22 @@ ${dayLines.join("\n")}
       // restava senza itinerario. In parallelo il tetto è quello del più lento (~12s).
       const [diningContext, toursContext, eventsContext, ticketsContext] = await Promise.all([
         // Pasti ancorati a locali reali (TripAdvisor + Foursquare), tetto 6s.
+        // Roadtrip (ondata 7): una città sola qui lasciava le tappe pasto di
+        // TUTTE le altre città del giro libere di inventare ristoranti — si
+        // recupera il contesto per OGNI città in parallelo (stesso tetto 6s,
+        // il roadtrip è comunque limitato a 6 città) e si etichetta ciascun
+        // blocco con la città di appartenenza.
         (async (): Promise<string> => {
+          if (isRoadtrip) {
+            const perCity = await Promise.all(legsArr.map(async (leg) => {
+              const ctx = await Promise.race([
+                fetchRealDiningContext(leg.lat, leg.lon),
+                new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
+              ]).catch(() => "");
+              return ctx ? `\n### Ristoranti a ${leg.city}:${ctx}` : "";
+            }));
+            return perCity.filter(Boolean).join("\n");
+          }
           if (typeof lat === "number" && typeof lon === "number") {
             return await Promise.race([
               fetchRealDiningContext(lat, lon),
@@ -6901,7 +6912,7 @@ Regole di aderenza e anti-allucinazione:
     try {
       const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
       const { data } = await axios.get(
-        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.pending&select=id,name,description,lat,lon,category,created_at&order=created_at.desc&limit=60`,
+        `${supabaseUrl}/rest/v1/vision_cards?review_status=eq.pending&select=id,name,description_short,lat,lon,category,created_at&order=created_at.desc&limit=60`,
         { headers }
       );
       const cards: any[] = Array.isArray(data) ? data : [];
@@ -6932,7 +6943,7 @@ Regole di aderenza e anti-allucinazione:
       let realScores: Record<string, number> = {};
       if (toScore.length > 0) {
         try {
-          const listino = toScore.map(c => ({ id: c.id, nome: c.name, descrizione: String(c.description || '').slice(0, 200), categoria: c.category || null, poi_vicini: (nearbyOf[c.id] || []).map((n: any) => n.name).slice(0, 5) }));
+          const listino = toScore.map(c => ({ id: c.id, nome: c.name, descrizione: String(c.description_short || '').slice(0, 200), categoria: c.category || null, poi_vicini: (nearbyOf[c.id] || []).map((n: any) => n.name).slice(0, 5) }));
           const resp = await callUniversalAi('groq', [
             { role: 'system', content: 'Sei il pre-moderatore della community fotografica di un\'app di viaggi. Per ogni scheda inviata dagli utenti valuta SOLO la plausibilità che sia un luogo reale e di interesse (nome sensato, non spam/test/offese, coerente con l\'eventuale descrizione e i POI vicini). Rispondi ESCLUSIVAMENTE con un oggetto JSON: chiave = id della scheda, valore = numero intero 0-100 (0 = spazzatura certa, 100 = luogo reale certo).' },
             { role: 'user', content: JSON.stringify(listino) }
@@ -6949,7 +6960,7 @@ Regole di aderenza e anti-allucinazione:
         // Completezza scheda: nome, descrizione, coordinate, categoria
         let completeness = 0;
         if (String(c.name || '').trim().length >= 3) completeness += 40;
-        if (String(c.description || '').trim().length >= 20) completeness += 25;
+        if (String(c.description_short || '').trim().length >= 20) completeness += 25;
         if (Number.isFinite(Number(c.lat)) && Number(c.lat) !== 0) completeness += 25;
         if (c.category) completeness += 10;
         // Duplicato: nome quasi identico a un POI ufficiale vicino
@@ -7048,7 +7059,11 @@ Regole di aderenza e anti-allucinazione:
       };
       await saveToCache(groupPlanKey(pin), 'group_plan', JSON.stringify(session));
       res.json({ pin, expiresAt: session.expiresAt });
-    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+    } catch (e: any) {
+      // Dettaglio solo nei log server; al client un messaggio generico.
+      console.error('[group-plan/create] error:', e?.message);
+      res.status(500).json({ error: 'group_plan_create_failed' });
+    }
   });
 
   // Vista della stanza per chi ha il PIN: i memberId NON escono mai (sono il
@@ -7063,7 +7078,10 @@ Regole di aderenza e anti-allucinazione:
       const members = (Array.isArray(session.members) ? session.members : [])
         .map((m: any) => { const { memberId: _mid, ...pub } = m; return pub; });
       res.json({ ...session, members });
-    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+    } catch (e: any) {
+      console.error('[group-plan/:pin] error:', e?.message);
+      res.status(500).json({ error: 'group_plan_fetch_failed' });
+    }
   });
 
   app.post('/api/group-plan/vote', rateLimiter, async (req, res) => {
@@ -7072,9 +7090,6 @@ Regole di aderenza e anti-allucinazione:
       const memberId = gpClean(req.body?.memberId, 40);
       if (!/^\d{6}$/.test(pin) || !memberId) return res.status(400).json({ error: 'pin e memberId richiesti' });
       const key = groupPlanKey(pin);
-      const session = parseGroupPlan(await getFromCache(key));
-      if (!session) return res.status(404).json({ error: 'Stanza non trovata' });
-      if (Number(session.expiresAt) < Date.now()) return res.status(410).json({ error: 'Stanza scaduta' });
       // Stessi id del form itinerari (PlanScreen): tutto il resto si scarta.
       const ALLOWED_INTERESTS = ['arte', 'gastronomia', 'natura', 'avventura', 'shopping', 'fotografia'];
       const vote = {
@@ -7088,15 +7103,45 @@ Regole di aderenza e anti-allucinazione:
         noGo: gpClean(req.body?.noGo, 200),
         votedAt: Date.now(),
       };
-      const members = Array.isArray(session.members) ? session.members : [];
-      const idx = members.findIndex((m: any) => m.memberId === memberId);
-      if (idx >= 0) members[idx] = vote;
-      else if (members.length >= GROUP_PLAN_MAX_MEMBERS) return res.status(409).json({ error: `La stanza è piena (max ${GROUP_PLAN_MAX_MEMBERS} partecipanti)` });
-      else members.push(vote);
-      session.members = members;
-      await saveToCache(key, 'group_plan', JSON.stringify(session));
-      res.json({ ok: true, members: members.length });
-    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+      // getFromCache/saveToCache non offrono un compare-and-swap reale
+      // (api_cache è un upsert senza condizione): due amici che votano nello
+      // stesso istante possono leggere lo stesso stato e l'ultimo scrivente
+      // sovrascriverebbe silenziosamente l'altro. Mitigazione senza migration:
+      // dopo ogni scrittura si rilegge e si verifica che IL NOSTRO voto sia
+      // ancora presente e intatto; se è stato scavalcato si riapplica sulla
+      // versione fresca, fino a 4 tentativi.
+      let memberCount = 0;
+      let confirmed = false;
+      let lastErr: string | null = null;
+      for (let attempt = 0; attempt < 4 && !confirmed; attempt++) {
+        const session = parseGroupPlan(await getFromCache(key));
+        if (!session) return res.status(404).json({ error: 'Stanza non trovata' });
+        if (Number(session.expiresAt) < Date.now()) return res.status(410).json({ error: 'Stanza scaduta' });
+        const members = Array.isArray(session.members) ? session.members : [];
+        const idx = members.findIndex((m: any) => m.memberId === memberId);
+        if (idx >= 0) members[idx] = vote;
+        else if (members.length >= GROUP_PLAN_MAX_MEMBERS) return res.status(409).json({ error: `La stanza è piena (max ${GROUP_PLAN_MAX_MEMBERS} partecipanti)` });
+        else members.push(vote);
+        session.members = members;
+        await saveToCache(key, 'group_plan', JSON.stringify(session));
+        const verify = parseGroupPlan(await getFromCache(key));
+        const mine = (verify?.members || []).find((m: any) => m.memberId === memberId);
+        if (mine && mine.votedAt === vote.votedAt) {
+          confirmed = true;
+          memberCount = verify.members.length;
+        } else {
+          lastErr = 'conflict';
+        }
+      }
+      if (!confirmed) {
+        console.warn(`[group-plan/vote] voto non confermato dopo i tentativi (pin=${pin}): ${lastErr}`);
+        return res.status(409).json({ error: 'Un altro voto è arrivato nello stesso istante: riprova.' });
+      }
+      res.json({ ok: true, members: memberCount });
+    } catch (e: any) {
+      console.error('[group-plan/vote] error:', e?.message);
+      res.status(500).json({ error: 'group_plan_vote_failed' });
+    }
   });
 
   app.post("/api/itinerary/rainplan", rateLimiter, async (req, res) => {
