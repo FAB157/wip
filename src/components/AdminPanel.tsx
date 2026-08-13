@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
-  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera
+  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
@@ -14,6 +14,8 @@ import AdminEnrichedPois from './AdminEnrichedPois';
 import AdminSystemErrors from './AdminSystemErrors';
 import AdminReports from './AdminReports';
 import AdminVisionCommunity from './AdminVisionCommunity';
+import AdminPoiMapEditor from './AdminPoiMapEditor';
+import UserManageModal from './admin/UserManageModal';
 import CouponForm from './admin/CouponForm';
 import CouponList from './admin/CouponList';
 import ChallengeForm from './admin/ChallengeForm';
@@ -21,7 +23,9 @@ import LevelForm from './admin/LevelForm';
 import UserEditModal from './admin/UserEditModal';
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'gamification' | 'health' | 'api_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'gamification' | 'health' | 'api_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
+  // Utente aperto nella gestione completa (movimenti, rettifiche, sospensione)
+  const [managedUser, setManagedUser] = useState<any | null>(null);
   const [pendingReports, setPendingReports] = useState<number>(0);
   const [pendingVisions, setPendingVisions] = useState<number>(0);
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -443,6 +447,21 @@ export default function AdminPanel() {
       {/* Tabs Menu */}
       <div className="overflow-x-auto no-scrollbar" data-swipe-ignore="true">
         <div className="flex flex-nowrap md:flex-wrap bg-[#f8f5f0] p-1 rounded-2xl gap-1 min-w-max md:min-w-full">
+          {/* WIP COMMUNITY (Vision) CON BADGE */}
+          <button
+            onClick={() => { setActiveTab('vision'); fetchPendingVisions(); }}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all relative ${
+              activeTab === 'vision' ? 'bg-white text-pink-600 shadow-sm' : 'text-primary/60 hover:text-pink-600'
+            }`}
+          >
+            <Camera className="w-4 h-4" />
+            WIP Community
+            {pendingVisions > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-pink-500 text-white text-[9px] font-black rounded-full flex items-center justify-center px-1 shadow-md animate-pulse">
+                {pendingVisions > 99 ? '99+' : pendingVisions}
+              </span>
+            )}
+          </button>
           <button
             onClick={() => setActiveTab('users')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -451,6 +470,15 @@ export default function AdminPanel() {
           >
             <Users className="w-4 h-4" />
             Utenti ({users.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('health')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'health' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            Diagnostica
           </button>
           <button
             onClick={() => setActiveTab('coupons')}
@@ -480,6 +508,15 @@ export default function AdminPanel() {
             Editor POI
           </button>
           <button
+            onClick={() => setActiveTab('poi_map')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'poi_map' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
+            }`}
+          >
+            <MapPin className="w-4 h-4" />
+            Mappa POI
+          </button>
+          <button
             onClick={() => setActiveTab('gamification')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
               activeTab === 'gamification' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
@@ -496,15 +533,6 @@ export default function AdminPanel() {
           >
             <BarChart3 className="w-4 h-4" />
             API & Costi
-          </button>
-          <button
-            onClick={() => setActiveTab('health')}
-            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
-              activeTab === 'health' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            Diagnostica
           </button>
           <button
             onClick={() => setActiveTab('enriched_pois')}
@@ -539,21 +567,6 @@ export default function AdminPanel() {
               </span>
             )}
           </button>
-          {/* WIP COMMUNITY (Vision) CON BADGE */}
-          <button
-            onClick={() => { setActiveTab('vision'); fetchPendingVisions(); }}
-            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all relative ${
-              activeTab === 'vision' ? 'bg-white text-pink-600 shadow-sm' : 'text-primary/60 hover:text-pink-600'
-            }`}
-          >
-            <Camera className="w-4 h-4" />
-            WIP Community
-            {pendingVisions > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-pink-500 text-white text-[9px] font-black rounded-full flex items-center justify-center px-1 shadow-md animate-pulse">
-                {pendingVisions > 99 ? '99+' : pendingVisions}
-              </span>
-            )}
-          </button>
         </div>
       </div>
 
@@ -561,6 +574,8 @@ export default function AdminPanel() {
       {activeTab === 'enriched_pois' && <AdminEnrichedPois />}
       {activeTab === 'system_errors' && <AdminSystemErrors />}
       {activeTab === 'vision' && <AdminVisionCommunity />}
+      {activeTab === 'poi_map' && <AdminPoiMapEditor />}
+      {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 
       {activeTab === 'users' && (
         <div className="space-y-4">
@@ -667,6 +682,13 @@ export default function AdminPanel() {
                           className="px-3 py-1.5 bg-primary/5 hover:bg-primary/10 text-primary rounded-lg text-xs font-black transition-colors"
                         >
                           Modifica
+                        </button>
+                        <button
+                          onClick={() => setManagedUser(user)}
+                          className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-black transition-colors flex items-center gap-1"
+                          title="Movimenti crediti, rettifiche con causale, sospensione account"
+                        >
+                          <Wallet className="w-3.5 h-3.5" /> Gestione
                         </button>
                       </td>
                     </tr>

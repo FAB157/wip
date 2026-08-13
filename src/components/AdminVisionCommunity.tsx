@@ -27,6 +27,30 @@ export default function AdminVisionCommunity() {
   const [cleanPreview, setCleanPreview] = useState<Record<string, string>>({});
   const [attachMode, setAttachMode] = useState<string | null>(null);
   const [attachCandidates, setAttachCandidates] = useState<any[]>([]);
+  // Pre-moderazione AI: punteggio 0-100 per card (plausibilità + completezza
+  // + duplicati). La coda si riordina dal punteggio più alto: l'admin approva
+  // a raffica dall'alto e ispeziona solo la coda bassa.
+  const [aiScores, setAiScores] = useState<Record<string, any> | null>(null);
+  const [premoderating, setPremoderating] = useState(false);
+
+  const doPreModerate = async () => {
+    setPremoderating(true);
+    try {
+      const token = await getToken();
+      const res = await fetch(getApiUrl('/api/admin/vision/pre-moderate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'errore');
+      setAiScores(data?.scores || {});
+      notify(`Coda ordinata: ${data?.scored || 0} card valutate ora, ${data?.fromCache || 0} dalla cache.`);
+    } catch (e: any) {
+      notify(`Pre-moderazione non riuscita: ${e?.message || 'riprova'}`);
+    } finally {
+      setPremoderating(false);
+    }
+  };
 
   const getToken = async () => {
     const { data } = await supabase.auth.getSession();
@@ -237,9 +261,22 @@ export default function AdminVisionCommunity() {
         <h3 className="font-black text-primary text-sm uppercase tracking-widest flex items-center gap-2">
           <Camera className="w-4 h-4" /> WIP Community · Revisione Vision
         </h3>
-        <button onClick={() => fetchQueue(status)} className="p-2 bg-white rounded-xl border border-gray-100 shadow-sm active:scale-95 transition-transform">
-          <RefreshCw className="w-4 h-4 text-primary" />
-        </button>
+        <div className="flex items-center gap-2">
+          {status === 'pending' && (
+            <button
+              onClick={doPreModerate}
+              disabled={premoderating || loading}
+              className="flex items-center gap-1.5 px-3 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm active:scale-95 transition-all disabled:opacity-50"
+              title="Punteggio AI per ogni card (plausibilità, completezza, duplicati) e coda riordinata dal migliore"
+            >
+              {premoderating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              Pre-modera AI
+            </button>
+          )}
+          <button onClick={() => fetchQueue(status)} className="p-2 bg-white rounded-xl border border-gray-100 shadow-sm active:scale-95 transition-transform">
+            <RefreshCw className="w-4 h-4 text-primary" />
+          </button>
+        </div>
       </div>
 
       {/* Tile filtri con conteggi (pattern AdminReports) */}
@@ -267,10 +304,14 @@ export default function AdminVisionCommunity() {
         </div>
       ) : (
         <div className="space-y-3">
-          {cards.map(card => {
+          {(status === 'pending' && aiScores
+            ? [...cards].sort((a, b) => ((aiScores[b.id]?.score ?? -1) - (aiScores[a.id]?.score ?? -1)))
+            : cards
+          ).map(card => {
             const photo = cleanPreview[card.id] || card.clean_signed || card.photo_signed;
             const isOpen = expandedId === card.id;
             const busy = busyId === card.id;
+            const ai = status === 'pending' ? aiScores?.[card.id] : null;
             return (
               <div key={card.id} className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="flex gap-3 p-3">
@@ -284,9 +325,22 @@ export default function AdminVisionCommunity() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-2">
                       <h4 className="font-black text-gray-900 text-sm leading-tight line-clamp-2">{card.name}</h4>
-                      {card.recognized === false && (
-                        <span className="shrink-0 bg-orange-100 text-orange-600 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md">Non riconosciuta</span>
-                      )}
+                      <div className="shrink-0 flex items-center gap-1">
+                        {ai && (
+                          <span
+                            className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${ai.score >= 70 ? 'bg-emerald-100 text-emerald-700' : ai.score >= 40 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-600'}`}
+                            title={(ai.reasons || []).join(' · ')}
+                          >
+                            AI {ai.score}
+                          </span>
+                        )}
+                        {ai?.duplicateOf && (
+                          <span className="bg-red-100 text-red-600 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md" title={`Possibile duplicato di "${ai.duplicateOf.name}"`}>Duplicato?</span>
+                        )}
+                        {card.recognized === false && (
+                          <span className="bg-orange-100 text-orange-600 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md">Non riconosciuta</span>
+                        )}
+                      </div>
                     </div>
                     <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 mt-0.5">
                       <MapPin className="w-3 h-3" />

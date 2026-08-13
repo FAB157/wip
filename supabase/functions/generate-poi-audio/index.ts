@@ -22,6 +22,33 @@ serve(async (req) => {
   }
 
   try {
+    // SICUREZZA: prima QUALSIASI chiamante con la anon key pubblica poteva far
+    // scrivere audio/URL arbitrari in shared_pois e caricare file nello storage
+    // (backdoor service-role). Ora serve la service role key (server/cron) o un
+    // JWT di un utente ADMIN; la sola anon key pubblica viene rifiutata.
+    {
+      const authHeader = req.headers.get("Authorization") || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY") || "";
+      const authClient = createClient(supabaseUrl, supabaseServiceKey);
+      let authorized = !!token && !!supabaseServiceKey && token === supabaseServiceKey;
+      if (!authorized && token && token !== anonKey) {
+        try {
+          const { data: { user } } = await authClient.auth.getUser(token);
+          if (user) {
+            const { data: prof } = await authClient.from("user_profiles").select("is_admin").eq("id", user.id).single();
+            authorized = prof?.is_admin === true;
+          }
+        } catch (_e) { /* non autorizzato */ }
+      }
+      if (!authorized) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+        });
+      }
+    }
+
     const { poi_id, text, voice_mode = "nicky", lang = "it", audio_type = "short" } = await req.json();
 
     if (!poi_id || !text) {
@@ -145,8 +172,9 @@ serve(async (req) => {
       }
     );
   } catch (err: any) {
+    // Dettaglio solo nei log; al client un messaggio generico.
     console.error("[generate-poi-audio] Edge Function Error:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: "audio_generation_failed" }), {
       status: 500,
       headers: {
         "Content-Type": "application/json",

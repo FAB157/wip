@@ -19,7 +19,7 @@ import { getApiUrl } from "../lib/api";
 import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
 
-type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator" | "tiqets";
+type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator" | "tiqets" | "local";
 
 interface EventData {
   id: string;
@@ -34,6 +34,8 @@ interface EventData {
   source: EventSource;
   lat?: number;
   lon?: number;
+  /** Sagre: coordinate del capoluogo di provincia, non del paese esatto. */
+  approxCoords?: boolean;
   isFree?: boolean;
   isFamily?: boolean;
   isMusic?: boolean;
@@ -61,6 +63,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     getyourguide: [],
     viator: [],
     tiqets: [],
+    local: [],
   });
   const [loadingSources, setLoadingSources] = useState<Record<EventSource, boolean>>({
     virgilio: false,
@@ -68,6 +71,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     getyourguide: false,
     viator: false,
     tiqets: false,
+    local: false,
   });
   const [sourceErrors, setSourceErrors] = useState<Record<EventSource, string | null>>({
     virgilio: null,
@@ -75,6 +79,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     getyourguide: null,
     viator: null,
     tiqets: null,
+    local: null,
   });
 
   const [loading, setLoading] = useState(true);
@@ -123,6 +128,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         getyourguide: [],
         viator: [],
         tiqets: [],
+        local: [],
       });
     }
     
@@ -163,6 +169,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         loadGetYourGuide(currentLat, currentLon, radius, resolvedCityName),
         loadViator(currentLat, currentLon, radius, startDate, endDate, resolvedCityName),
         loadTiqets(currentLat, currentLon, radius),
+        loadLocal(currentLat, currentLon, radius),
       ]);
 
     } catch (err) {
@@ -374,6 +381,48 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     if (source === "getyourguide") loadGetYourGuide(lat, lon, radius, city);
     if (source === "viator") loadViator(lat, lon, radius, startDate, endDate, city);
     if (source === "tiqets") loadTiqets(lat, lon, radius);
+    if (source === "local") loadLocal(lat, lon, radius);
+  };
+
+  // ── Sagre e mercati locali (ondata 6) ──────────────────────────────────
+  // /api/events/local: mercati settimanali da OpenStreetMap (mondiali) e
+  // sagre/feste di paese da eventiesagre.it (Italia). Le sagre hanno le
+  // coordinate del capoluogo di provincia: approxCoords allarga il filtro.
+  const loadLocal = async (lat: number, lon: number, searchRadius: number) => {
+    logApiCall('local_events', 'sagre_mercati');
+    setLoadingSources(prev => ({ ...prev, local: true }));
+    setSourceErrors(prev => ({ ...prev, local: null }));
+    try {
+      const r = await fetch(
+        getApiUrl(`/api/events/local?lat=${lat}&lon=${lon}&radius=${searchRadius}`),
+        { signal: AbortSignal.timeout(20000) }
+      );
+      if (!r.ok) throw new Error(`Errore sagre/mercati (${r.status})`);
+      const data = await r.json();
+      const mapped: EventData[] = (data?.events || []).map((e: any) => ({
+        id: `local-${e.id}`,
+        name: e.name,
+        description: e.description || '',
+        date: e.date,
+        venueName: e.venueName || '',
+        url: e.url || '',
+        imageUrl: e.imageUrl || (e.kind === 'mercato'
+          ? 'https://images.unsplash.com/photo-1488459716781-31db52582fe9?auto=format&fit=crop&q=80&w=400'
+          : 'https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?auto=format&fit=crop&q=80&w=400'),
+        source: 'local' as EventSource,
+        macroCategory: e.kind === 'mercato' ? '🧺 Mercato' : '🍷 Sagra & Festa',
+        lat: e.lat,
+        lon: e.lon,
+        approxCoords: !!e.approx,
+        isFree: e.kind === 'mercato' ? true : undefined,
+      }));
+      setSourceResults(prev => ({ ...prev, local: mapped }));
+    } catch (err) {
+      console.error('loadLocal Error:', err);
+      setSourceErrors(prev => ({ ...prev, local: 'Sagre e mercati non disponibili.' }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, local: false }));
+    }
   };
 
   const loadTiqets = async (lat: number, lon: number, searchRadius: number) => {
@@ -480,6 +529,50 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
   };
 
+  // ── Alert su eventi salvati (ondata 6) ─────────────────────────────────
+  // Gli eventi Ticketmaster salvati nei preferiti finiscono anche in una
+  // watchlist locale: al ritorno nella tab (max ogni 6 ore) si ricontrollano
+  // prezzo minimo e stato vendita, e le variazioni compaiono in un banner.
+  const [eventAlerts, setEventAlerts] = useState<string[]>([]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = JSON.parse(localStorage.getItem('wip_watched_events') || '[]');
+        if (!Array.isArray(raw) || raw.length === 0) return;
+        const lastCheck = Number(localStorage.getItem('wip_watched_events_checked_at') || 0);
+        if (Date.now() - lastCheck < 6 * 3600_000) return;
+        localStorage.setItem('wip_watched_events_checked_at', String(Date.now()));
+
+        // Pulizia: eventi osservati da più di 6 mesi escono da soli
+        const watched = raw.filter((w: any) => Date.now() - (w.savedAt || 0) < 180 * 86400_000).slice(0, 10);
+        const alerts: string[] = [];
+        for (const w of watched) {
+          try {
+            const r = await fetch(getApiUrl(`/api/ticketmaster?id=${encodeURIComponent(w.id)}`));
+            if (!r.ok) continue;
+            const ev = await r.json();
+            const status = ev?.dates?.status?.code || null;
+            const price = ev?.priceRanges?.[0]?.min ?? null;
+            if (w.status && status && status !== w.status) {
+              alerts.push(status === 'offsale' || status === 'cancelled'
+                ? `⚠️ "${w.name}": vendite ${status === 'cancelled' ? 'ANNULLATE' : 'chiuse'} — se ti interessa muoviti sul mercato secondario.`
+                : `ℹ️ "${w.name}": stato biglietti cambiato (${w.status} → ${status}).`);
+            }
+            if (w.price != null && price != null && price !== w.price) {
+              alerts.push(price > w.price
+                ? `📈 "${w.name}": il prezzo minimo è salito da ${w.price}€ a ${price}€.`
+                : `📉 "${w.name}": il prezzo minimo è sceso da ${w.price}€ a ${price}€!`);
+            }
+            w.status = status ?? w.status;
+            w.price = price ?? w.price;
+          } catch { /* un evento irraggiungibile non blocca gli altri */ }
+        }
+        localStorage.setItem('wip_watched_events', JSON.stringify(watched));
+        if (alerts.length) setEventAlerts(alerts);
+      } catch { /* watchlist corrotta: silenzio */ }
+    })();
+  }, []);
+
   const saveEventAsPoi = async (event: EventData) => {
     if (!currentUserId) return notify("Devi essere loggato per salvare un evento.");
 
@@ -505,6 +598,18 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         imageUrl: event.imageUrl
       };
       await toggleFavoritePoi(poiData);
+      // Watchlist per gli alert (solo Ticketmaster: ha id ricontrollabili)
+      if (event.source === 'ticketmaster') {
+        try {
+          const watched = JSON.parse(localStorage.getItem('wip_watched_events') || '[]');
+          if (!watched.some((w: any) => w.id === event.id)) {
+            watched.unshift({ id: event.id, name: event.name, price: null, status: null, savedAt: Date.now() });
+            localStorage.setItem('wip_watched_events', JSON.stringify(watched.slice(0, 10)));
+          }
+        } catch { /* watchlist best-effort */ }
+        notify("Evento salvato! Ti avviso qui se il prezzo o lo stato dei biglietti cambia.");
+        return;
+      }
       notify("Evento salvato nei Preferiti! Potrai usarlo per generare itinerari personalizzati.");
     } catch (e: any) {
       console.error(e);
@@ -577,7 +682,8 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     ...sourceResults.ticketmaster,
     ...sourceResults.getyourguide,
     ...sourceResults.viator,
-    ...sourceResults.tiqets
+    ...sourceResults.tiqets,
+    ...sourceResults.local
   ];
 
   const filteredEvents = displayEvents.filter((e) => {
@@ -600,7 +706,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       const distInKm = getDistanceFromLatLonInM(mapCenter[0], mapCenter[1], e.lat, e.lon) / 1000;
       // Viator ha il suo tetto: le esperienze oltre i 50 km non riguardano
       // il luogo che l'utente sta guardando.
-      const maxKm = e.source === "viator" ? Math.min(radius, VIATOR_MAX_RADIUS_KM) : radius;
+      // Le sagre hanno coordinate approssimate (capoluogo di provincia):
+      // il raggio si allarga per non perdere la sagra del paese accanto.
+      const maxKm = e.source === "viator" ? Math.min(radius, VIATOR_MAX_RADIUS_KM)
+        : e.approxCoords ? radius + 70
+        : radius;
       if (distInKm > maxKm) {
         return false;
       }
@@ -657,6 +767,17 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   return (
     <div className="flex-1 flex flex-col bg-surface h-full overflow-hidden relative">
+      {/* Alert eventi salvati (ondata 6): variazioni di prezzo o vendite */}
+      {eventAlerts.length > 0 && (
+        <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 space-y-1">
+          {eventAlerts.map((a, i) => (
+            <p key={i} className="text-[11px] font-bold text-amber-800 leading-snug">{a}</p>
+          ))}
+          <button onClick={() => setEventAlerts([])} className="text-[10px] font-black uppercase tracking-widest text-amber-600 hover:text-amber-800">
+            Ho capito, nascondi
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="bg-surface/80 backdrop-blur-xl border-b border-outline-variant/20 px-6 py-4 flex flex-col relative flex-shrink-0">
         {onClose && (
@@ -692,7 +813,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
               // Mostra errore solo se non ci sono risultati (nemmeno fallback) per quella source
               const hasResults = (sourceResults as any)[source]?.length > 0;
               if (!err || hasResults) return null;
-              const sourceLabel = source === 'ticketmaster' ? 'Ticketmaster' : source === 'getyourguide' ? 'GetYourGuide' : source === 'viator' ? 'Viator' : source === 'tiqets' ? 'Tiqets' : source;
+              const sourceLabel = source === 'ticketmaster' ? 'Ticketmaster' : source === 'getyourguide' ? 'GetYourGuide' : source === 'viator' ? 'Viator' : source === 'tiqets' ? 'Tiqets' : source === 'local' ? 'Sagre & Mercati' : source;
               return (
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.9 }}

@@ -1,6 +1,14 @@
 // =====================================================================
 // ITAINTA · useGeofencing — motore geofencing con coda audioguide
 //
+// ⚠️ WEB = RADAR-ONLY. In produzione i TRIGGER geofence sono gestiti dal
+//   servizio NATIVO (Android ItaintaBackgroundPoiService / iOS
+//   BackgroundPoiManager), che funziona anche a WebView spenta. Questo hook
+//   NON è montato (nessun componente lo chiama): resta come implementazione
+//   web di riferimento/foreground, ma non gira in background e non va
+//   considerato un "port allineato" del nativo. Montarlo cambierebbe consumo
+//   batteria e comportamento del PWA: NON farlo senza una decisione esplicita.
+//
 // PIPELINE:
 //   GPS tick → distanza STRADALE Mapbox (driving/walking)
 //            → audioQueueManager.update()

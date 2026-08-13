@@ -166,17 +166,22 @@ export default defineConfig(({mode}) => {
       rollupOptions: {
         external: ['html2pdf.js'],
         output: {
-          // Split vendor/main: senza React.lazy sui pannelli pesanti (il vero
-          // guadagno di first-paint, follow-up da testare a runtime) togliere
-          // del tutto manualChunks collassava in UN file da 2,16 MB
-          // ri-scaricato a ogni deploy. Con lo split, vendor (~0,9 MB, cambia
-          // di rado) resta in cache tra i deploy.
+          // Split vendor: le dipendenze (~0,9 MB, cambiano di rado) restano in
+          // cache tra i deploy. I moduli di /src/ NON sono più forzati in un
+          // unico chunk 'main': così i pannelli caricati con React.lazy
+          // (PlanScreen/EventsScreen/CameraScreen/ProfileScreen/AdminPanel)
+          // finiscono in chunk separati, alleggerendo il first-paint.
           manualChunks(id) {
             if (id.includes('node_modules')) return 'vendor';
-            if (id.includes('/src/')) return 'main';
           }
         }
       }
+    },
+    // In produzione elimina console.* e debugger dal bundle (54 chiamate
+    // console sparse nel codice): niente rumore/log in chiaro agli utenti.
+    // In sviluppo restano per il debug.
+    esbuild: {
+      drop: mode === 'production' ? ['console', 'debugger'] : [],
     }
   };
 });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Headphones, Check, Shield } from 'lucide-react';
 import { PRICING_LIST } from '../lib/pricing';
@@ -62,6 +62,38 @@ export default function OfflineAudioBundleModal({
 
   const totalCost = selectedPois.length * BUNDLE_PRICE_PER_POI;
 
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement)) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -74,6 +106,10 @@ export default function OfflineAudioBundleModal({
         onClick={onClose}
       />
       <motion.div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={language === 'IT' ? 'Scarica per offline' : 'Download for offline'}
         initial={{ scale: 0.95, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 20 }}
@@ -203,7 +239,7 @@ export default function OfflineAudioBundleModal({
           </button>
         </div>
 
-        <button onClick={onClose} className="absolute top-4 right-4 w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white backdrop-blur-md transition-colors">
+        <button onClick={onClose} aria-label={language === 'IT' ? 'Chiudi' : 'Close'} className="absolute top-4 right-4 w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white backdrop-blur-md transition-colors">
           <X className="w-4 h-4" />
         </button>
       </motion.div>

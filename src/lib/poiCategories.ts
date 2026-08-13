@@ -130,14 +130,36 @@ export function isAcceptablePoi(
 }
 
 /**
- * Normalizza un osm id all'id numerico puro per il dedup.
- * Il CSV ha "@id" numerico senza tipo; Overpass live ha "node/123".
- * Estraendo solo le cifre finali, le due fonti diventano confrontabili.
+ * Normalizza l'id di un POI di fonte terza per il dedup.
+ *
+ * SOLO gli id genuinamente OSM diventano id numerico puro:
+ *   - "node/123" | "way/123" | "relation/123"  (Overpass live)
+ *   - "123" | "@123"                            (CSV, colonna @id numerica)
+ * confrontabili fra loro → poi diventeranno "osm-123" in shared_pois.
+ *
+ * Gli id con PREFISSO di altre sorgenti (Foursquare "fsq_…", Geoapify "geo_…")
+ * NON sono OSM: estrarne le cifre finali creava collisioni "osm-<n>" con POI
+ * OSM reali diversi. Si conserva un namespace distinto ("fsq-…", "geo-…"),
+ * normalizzando il separatore a '-' (insertAutoPois lo tratta come id già
+ * namespacizzato perché contiene '-').
  */
 export function normalizeOsmId(raw: string | number): string {
   const s = String(raw).trim();
-  const m = s.match(/(\d+)\s*$/);
-  return m ? m[1] : s;
+  // OSM esplicito: tipo/idnumerico.
+  const typed = s.match(/^(?:node|way|relation)\/(\d+)$/i);
+  if (typed) return typed[1];
+  // OSM da CSV: id puramente numerico (con eventuale '@' del campo @id).
+  const numeric = s.match(/^@?(\d+)$/);
+  if (numeric) return numeric[1];
+  // Fonte terza con prefisso alfabetico (fsq_/geo_/…): namespace preservato.
+  const prefixed = s.match(/^([a-z]+)[_:\-](.+)$/i);
+  if (prefixed) {
+    const ns = prefixed[1].toLowerCase();
+    const rest = prefixed[2].replace(/[^a-z0-9]+/gi, '');
+    if (rest) return `${ns}-${rest}`;
+  }
+  // Fallback: id sconosciuto lasciato intatto, MAI ridotto alle cifre finali.
+  return s;
 }
 
 /** Etichette IT per la UI. */

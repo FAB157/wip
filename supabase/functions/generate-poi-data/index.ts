@@ -36,28 +36,39 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Try to get user_id from payload, otherwise extract it from JWT auth token
-    let userId = body.userId || body.user_id;
-    if (!userId) {
-      const authHeader = req.headers.get("Authorization");
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        const token = authHeader.substring(7);
-        try {
-          const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-          if (user && !authErr) {
-            userId = user.id;
-          }
-        } catch (e) {
-          console.warn("[Edge Function] Auth user verification failed:", e.message);
+    // SICUREZZA: identità derivata SOLO dal JWT (mai da body.userId: prima
+    // bastava passare un userId nel payload per curare/consumare a nome altrui)
+    // e NESSUN fallback ad un admin hardcoded. Serve la service role key
+    // (server/cron) o un JWT di un utente ADMIN; la sola anon key è rifiutata.
+    const authHeader = req.headers.get("Authorization") || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY") || "";
+    let userId: string | null = null;
+    let authorized = false;
+    if (token && supabaseKey && token === supabaseKey) {
+      authorized = true; // chiamata server-to-server / cron (nessun utente)
+    } else if (token && token !== anonKey) {
+      try {
+        const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+        if (user && !authErr) {
+          const { data: prof } = await supabase
+            .from("user_profiles").select("is_admin").eq("id", user.id).single();
+          if (prof?.is_admin === true) { authorized = true; userId = user.id; }
         }
+      } catch (e) {
+        console.warn("[Edge Function] Auth verification failed:", e.message);
       }
     }
-
-    // Default fallback to a mock admin profile for testing
-    if (!userId) {
-      userId = "6d6abced-8478-4665-91d1-066470c516b9"; // seeded admin user
+    if (!authorized) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
+    // La verifica quota vale solo per un UTENTE reale (admin). Per le chiamate
+    // service-role/cron (userId null) si salta: non sono legate a un wallet.
+    if (userId) {
     console.log(`[Edge Function] Verifying credits for user_id: ${userId}`);
 
     // Query quotas record
@@ -121,6 +132,8 @@ serve(async (req) => {
         status: 429,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
     }
 
     let description = "";
@@ -212,7 +225,9 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
       description_ai: description,
       image_url: defaultImage,
       is_gem: isGem,
-      status: "verified",
+      // MAI 'verified' da una funzione automatica (non è una revisione umana):
+      // 'verified' promuoveva contenuti generati/allucinati. Sempre 'auto'.
+      status: "auto",
       last_reviewed_at: new Date().toISOString(),
       reviewed_by: null
     };
@@ -226,22 +241,22 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
       console.error("[Edge Function] Database upsert failed:", dbErr.message);
     }
 
-    // --- PHASE D: AUTO INCREMENT SAAS QUOTA COUNTER ---
-    try {
+    // --- PHASE D: AUTO INCREMENT SAAS QUOTA COUNTER (solo utente reale) ---
+    if (userId) try {
       console.log(`[Edge Function] Operation successful. Incrementing vision_used for ${userId}`);
       const { data: freshRecord } = await supabase
         .from("user_quotas")
         .select("vision_used")
         .eq("user_id", userId)
         .single();
-      
+
       if (freshRecord) {
         const nextUsed = (freshRecord.vision_used || 0) + 1;
         await supabase
           .from("user_quotas")
           .update({ vision_used: nextUsed })
           .eq("user_id", userId);
-        console.log(`[Edge Function] Increment completed successfully. New usage: ${nextUsed}/${limit}`);
+        console.log(`[Edge Function] Increment completed successfully. New usage: ${nextUsed}`);
       }
     } catch (quotaIncErr) {
       console.error("[Edge Function] Failed to auto-increment quota counter:", quotaIncErr.message);
@@ -258,8 +273,9 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
     });
 
   } catch (err) {
+    // Dettaglio solo nei log; al client un messaggio generico.
     console.error("[Edge Function] Server execution error:", err.message);
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: "curation_failed" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

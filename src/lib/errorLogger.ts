@@ -45,6 +45,9 @@ export const logSystemError = (
           userId,
           url: typeof location !== 'undefined' ? location.href : '',
           userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+          // Piattaforma per il raggruppamento nel pannello (web/android/ios):
+          // letta via window per non importare Capacitor in un error handler.
+          platform: (typeof window !== 'undefined' && (window as any).Capacitor?.getPlatform?.()) || 'web',
           ...opts?.context,
         },
       }).then(() => { /* ok o tabella assente: irrilevante */ });

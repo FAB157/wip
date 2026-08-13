@@ -15,5 +15,12 @@ data class PoiEntity(
     val guideDefault: String, // nicky | dante
     val isGem: Boolean = false,
     val isFromItinerary: Boolean = false,
-    val teaserText: String? = null // Breve teaser per voce nativa (30m)
+    val teaserText: String? = null, // Breve teaser per voce nativa (30m)
+    // Raggi calibrati sul PERIMETRO reale del POI (footprint OSM), quando
+    // presenti. alertRadius = colonna alert_radius; geofenceRadius = colonna
+    // geofence_radius (raggio di trigger/arrivo). Nullable: i POI non
+    // processati col footprint restano identici (usano i raggi di modalità).
+    // Parità con src/lib/guideSettings.ts::radiiForTransport (gated su hasEntrance).
+    val alertRadius: Int? = null,
+    val geofenceRadius: Int? = null
 )

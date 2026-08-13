@@ -2,7 +2,7 @@
 // modulo → "new Map()" (historyPoiDetails) esplodeva con "is not a constructor".
 import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import React, { ReactNode, useState, useEffect } from 'react';
+import React, { ReactNode, useState, useEffect, lazy, Suspense } from 'react';
 import { useSwipeable } from 'react-swipeable';
 import { notify } from '../lib/toast';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -10,7 +10,9 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings';
-import AdminPanel from './AdminPanel';
+// Pannello admin caricato SOLO su richiesta (React.lazy): è pesante e serve
+// solo agli admin, quindi non deve finire nel bundle di ogni utente.
+const AdminPanel = lazy(() => import('./AdminPanel'));
 import ShopScreen from './ShopScreen';
 import UserProfileSummary from './UserProfileSummary';
 import MyVisionTab from './MyVisionTab';
@@ -23,6 +25,8 @@ import { FAVORITES_EVENT } from '../lib/favorites';
 import { getListeningHistory, ListeningHistoryEntry, LISTENING_HISTORY_EVENT, deleteListeningHistory } from '../lib/listeningHistory';
 import { wipeLocalUserData } from '../lib/userSession';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
+import PremiumGuideAudiobook from './PremiumGuideAudiobook';
+import TravelerDashboard from './TravelerDashboard';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
 import { Download, X, Fingerprint, Lock } from 'lucide-react';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
@@ -396,6 +400,90 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       setIsDeleting(false);
       setShowDeleteModal(false);
     }
+  };
+
+  // Esporta i tuoi dati (GDPR self-service, ondata 3): raccoglie ciò che
+  // appartiene all'utente leggendo con la SUA sessione (le RLS limitano già
+  // alle proprie righe) e scarica un archivio JSON. Le foto restano come URL.
+  const [isExporting, setIsExporting] = useState(false);
+  const handleExportData = async () => {
+    setIsExporting(true);
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const uid = s?.session?.user?.id;
+      if (!uid) throw new Error('Devi essere loggato per esportare i tuoi dati');
+      // Ogni tabella è best-effort: se una non esiste o non è leggibile,
+      // nell'archivio finisce l'errore al suo posto, mai un crash.
+      const grab = async (table: string, filter?: (q: any) => any) => {
+        try {
+          let q: any = supabase.from(table).select('*').limit(1000);
+          q = filter ? filter(q) : q.eq('user_id', uid);
+          const { data, error } = await q;
+          return error ? { _non_leggibile: error.message } : (data || []);
+        } catch (e: any) { return { _non_leggibile: String(e?.message || e) }; }
+      };
+      const exportObj = {
+        esportato_il: new Date().toISOString(),
+        account: { id: uid, email: s?.session?.user?.email || null },
+        profilo: await grab('user_profiles', q => q.eq('id', uid)),
+        itinerari: await grab('user_itineraries'),
+        preferiti: await grab('saved_pois'),
+        movimenti_crediti: await grab('credit_transactions'),
+        vision_cards: await grab('vision_cards'),
+        premi_riscattati: await grab('user_rewards_claimed'),
+        // Dati solo locali (preferenze, cronologie sul dispositivo)
+        dati_locali_dispositivo: Object.fromEntries(
+          Object.entries(localStorage).filter(([k]) => k.startsWith('wip_'))
+        ),
+      };
+      const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `wip-dati-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      notify('Archivio dei tuoi dati scaricato.');
+    } catch (e: any) {
+      notify(`Export non riuscito: ${e?.message || e}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // ── Diario post-viaggio (ondata 5): racconto AI dalle tappe reali ──────
+  const [tripStory, setTripStory] = useState<{ titolo: string; story: string } | null>(null);
+  const [storyLoadingId, setStoryLoadingId] = useState<string | null>(null);
+  const generateTripStory = async (itineraryDb: any) => {
+    const giorniRaw = itineraryDb?.dati_itinerario?.giorni || [];
+    const giorni = giorniRaw.map((g: any, i: number) => ({
+      giorno: g.giorno || i + 1,
+      tappe: (g.tappe || []).map((t: any) => t.titolo_tappa || t.nome).filter(Boolean),
+    })).filter((g: any) => g.tappe.length > 0);
+    if (giorni.length === 0) { notify('Questo itinerario non ha tappe da raccontare.'); return; }
+    setStoryLoadingId(itineraryDb.id);
+    try {
+      const res = await fetch(getApiUrl('/api/trip-story'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titolo: itineraryDb.titolo, giorni, lang: language }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.story) throw new Error(data?.error || 'generazione fallita');
+      setTripStory({ titolo: itineraryDb.titolo || 'Il nostro viaggio', story: data.story });
+    } catch (e: any) {
+      notify(`Racconto non riuscito: ${e?.message || 'riprova'}`);
+    } finally {
+      setStoryLoadingId(null);
+    }
+  };
+  const shareTripStory = async () => {
+    if (!tripStory) return;
+    const text = `${tripStory.titolo}\n\n${tripStory.story}\n\n— raccontato da WIP · wip.guide`;
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else { await navigator.clipboard.writeText(text); notify('Racconto copiato negli appunti.'); }
+    } catch { /* condivisione annullata */ }
   };
 
   // "start" = distanza di arrivo/inizio guida: un solo controllo che scrive
@@ -1196,6 +1284,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
+              {/* Dashboard del viaggiatore + Passaporto WIP (ondata 5):
+                  numeri e timbri dai dati già raccolti */}
+              <TravelerDashboard language={language} />
+
               <div className="flex justify-between items-center gap-2 px-1">
                 <h2 className="text-xl font-black text-primary tracking-tight">{getTranslation("my_discoveries", language)}</h2>
                 <div className="flex items-center gap-2">
@@ -1310,7 +1402,15 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                          Creato il {new Date(itineraryDb.created_at || Date.now()).toLocaleDateString('it-IT')}
                       </p>
-                      <div className="flex mt-auto pt-2">
+                      <div className="flex mt-auto pt-2 gap-2 flex-wrap">
+                        <button
+                          onClick={() => generateTripStory(itineraryDb)}
+                          disabled={storyLoadingId === itineraryDb.id}
+                          className="px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-colors disabled:opacity-50"
+                          title="Il viaggio raccontato dall'AI a partire dalle tue tappe"
+                        >
+                          {storyLoadingId === itineraryDb.id ? 'Scrivo…' : '📖 Racconto'}
+                        </button>
                         {(() => {
                           // Deeplink con COORDINATE quando disponibili (il nome
                           // tappa da solo porta Maps su destinazioni ambigue);
@@ -2640,6 +2740,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               {onSignOut && (
                 <div className="pt-4 flex flex-col gap-3 justify-center mb-8">
                   <button
+                    onClick={handleExportData}
+                    disabled={isExporting}
+                    className="px-6 py-3 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shrink-0 w-full shadow-sm disabled:opacity-50"
+                    title="Scarica un archivio JSON con profilo, itinerari, preferiti, movimenti crediti e vision card (GDPR)"
+                  >
+                    {isExporting ? 'Preparo l\'archivio…' : '📦 Esporta i tuoi dati'}
+                  </button>
+                  <button
                     onClick={async () => {
                       await supabase.auth.signOut();
                       // Su dispositivo condiviso i dati dell'utente precedente
@@ -2719,7 +2827,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <AdminPanel />
+              <Suspense fallback={
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                </div>
+              }>
+                <AdminPanel />
+              </Suspense>
             </motion.div>
           )}
         </AnimatePresence>
@@ -2836,6 +2950,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               </div>
             </div>
             <div className="flex-1 overflow-y-auto bg-gray-100 p-2 sm:p-8" id="premium-guide-viewer-container">
+              {/* Audio-libro: fuori dal contenitore PDF, così non finisce in stampa */}
+              <PremiumGuideAudiobook content={guideToRender.content} language={language} />
               <PremiumGuideRenderer
                 content={guideToRender.content}
                 mediaManifest={guideToRender.media}
@@ -2893,6 +3009,27 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               </button>
             </div>
           </motion.div>
+        </div>
+      )}
+
+      {/* Racconto post-viaggio (ondata 5) */}
+      {tripStory && (
+        <div className="fixed inset-0 z-[1350] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setTripStory(null)}>
+          <div className="w-full max-w-lg bg-white rounded-3xl p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="font-black text-primary text-lg leading-tight">📖 {tripStory.titolo}</h3>
+              <button onClick={() => setTripStory(null)} className="p-1 text-gray-400 hover:text-gray-600 shrink-0">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto text-[15px] leading-relaxed text-gray-700 whitespace-pre-line italic border-l-4 border-amber-200 pl-4">
+              {tripStory.story}
+            </div>
+            <button
+              onClick={shareTripStory}
+              className="w-full py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest"
+            >
+              Condividi il racconto
+            </button>
+          </div>
         </div>
       )}
 

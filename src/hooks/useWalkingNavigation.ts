@@ -16,6 +16,7 @@ import { locationService } from '../services/locationService';
 import { fetchWalkingRoute, type WalkingRoute } from '../services/osrmService';
 import { speakInstruction } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
+import { notify } from '../lib/toast';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
@@ -36,6 +37,45 @@ const REROUTE_PHRASES: Record<string, string> = {
   ru: 'Маршрут пересчитан',
   zh: '路线已重新计算',
 };
+
+const NO_GPS_PHRASES: Record<string, string> = {
+  it: 'Attiva il GPS o scegli un indirizzo di partenza',
+  en: 'Turn on GPS or choose a starting address',
+  fr: 'Activez le GPS ou choisissez une adresse de départ',
+  es: 'Activa el GPS o elige una dirección de salida',
+  de: 'Aktiviere GPS oder wähle eine Startadresse',
+  ru: 'Включите GPS или выберите адрес отправления',
+  zh: '请开启GPS或选择出发地址',
+};
+
+const ROUTE_FAIL_PHRASES: Record<string, string> = {
+  it: 'Impossibile calcolare il percorso. Riprova.',
+  en: 'Could not calculate the route. Try again.',
+  fr: "Impossible de calculer l'itinéraire. Réessayez.",
+  es: 'No se pudo calcular la ruta. Inténtalo de nuevo.',
+  de: 'Route konnte nicht berechnet werden. Erneut versuchen.',
+  ru: 'Не удалось построить маршрут. Попробуйте снова.',
+  zh: '无法计算路线，请重试。',
+};
+
+// Proiezione punto→segmento (frame equirettangolare locale), identica a
+// roadSnap.projectToSeg (non esportata da quel modulo). Distanza in metri DAL
+// SEGMENTO (non dal vertice) + punto proiettato. Geometria in [lat, lon].
+function projectToSeg(
+  lat: number, lon: number, a: [number, number], b: [number, number],
+): { lat: number; lon: number; distM: number } {
+  const cosLat = Math.cos((lat * Math.PI) / 180) || 1;
+  const px = lon * cosLat, py = lat;
+  const ax = a[1] * cosLat, ay = a[0];
+  const bx = b[1] * cosLat, by = b[0];
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const snapLat = ay + t * dy;
+  const snapLon = (ax + t * dx) / cosLat;
+  return { lat: snapLat, lon: snapLon, distM: haversineMeters(lat, lon, snapLat, snapLon) };
+}
 
 export interface NavTarget extends LatLon {
   poiId?: number | string;
@@ -116,13 +156,25 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     setRouteGeometry(g);
   };
 
-  // Vertice del tracciato più vicino alla posizione + distanza da esso.
-  const nearestVertex = (here: LatLon): { idx: number; dist: number } => {
+  // Punto più vicino sul TRACCIATO (proiezione sul segmento, non sul vertice):
+  //   dist      = distanza perpendicolare dal percorso → fuori-rotta corretto
+  //   remaining = metri residui dalla proiezione alla meta lungo il tracciato
+  // La distanza-al-vertice gonfiava il fuori-rotta e faceva scattare ricalcoli
+  // fantasma anche restando esattamente sul percorso.
+  const nearestOnRoute = (here: LatLon): { idx: number; dist: number; remaining: number } => {
     const g = routeRef.current?.geometry || [];
-    let best = { idx: 0, dist: Infinity };
-    for (let i = 0; i < g.length; i++) {
-      const d = haversineMeters(here.lat, here.lon, g[i][0], g[i][1]);
-      if (d < best.dist) best = { idx: i, dist: d };
+    const rem = remainingFromVertexRef.current;
+    if (g.length === 0) return { idx: 0, dist: Infinity, remaining: 0 };
+    if (g.length === 1) {
+      return { idx: 0, dist: haversineMeters(here.lat, here.lon, g[0][0], g[0][1]), remaining: rem[0] ?? 0 };
+    }
+    let best = { idx: 0, dist: Infinity, remaining: rem[0] ?? 0 };
+    for (let i = 0; i + 1 < g.length; i++) {
+      const p = projectToSeg(here.lat, here.lon, g[i], g[i + 1]);
+      if (p.distM < best.dist) {
+        const tail = haversineMeters(p.lat, p.lon, g[i + 1][0], g[i + 1][1]);
+        best = { idx: i, dist: p.distM, remaining: (rem[i + 1] ?? 0) + tail };
+      }
     }
     return best;
   };
@@ -232,18 +284,27 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // Origine esplicita (es. "Indirizzo personalizzato" dal modal WIP Nav):
       // prima veniva sempre ignorata e si partiva comunque dal GPS.
       const last = locationService.getLastLocation();
+      // Senza origine esplicita E senza fix GPS non si può partire: prima si
+      // ripiegava su target→target (percorso degenere di 0 m, "sei arrivato"
+      // immediato). Meglio rifiutare con un messaggio chiaro.
+      if (!originOverride && !last) {
+        setState('idle');
+        notify(NO_GPS_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || NO_GPS_PHRASES.en);
+        return;
+      }
       const from: LatLon = originOverride
         ? originOverride
-        : last
-          ? { lat: last.latitude, lon: last.longitude }
-          : { lat: target.lat, lon: target.lon };
+        : { lat: last!.latitude, lon: last!.longitude };
 
       const route = await fetchWalkingRoute(from, target, language, target.poiName);
       // L'utente può aver premuto STOP durante il calcolo: senza questo guard
       // si ripartiva comunque, con overlay congelato e wake lock leakato.
       if (targetRef.current !== target) return;
       if (!route || route.steps.length === 0) {
+        // Prima l'avvio falliva in SILENZIO (overlay che spariva senza alcun
+        // feedback): ora avvisiamo l'utente e torniamo a idle.
         setState('idle');
+        notify(ROUTE_FAIL_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ROUTE_FAIL_PHRASES.en);
         return;
       }
       setRoute(route);
@@ -267,10 +328,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // Distanza residua LUNGO IL TRACCIATO (non in linea d'aria) + ETA.
         // In linea d'aria un percorso a U dava ETA assurde ("200 m" con 15
         // minuti reali di cammino).
-        const nearest = nearestVertex(here);
-        const remaining = remainingFromVertexRef.current[nearest.idx] ?? 0;
+        const nearest = nearestOnRoute(here);
+        const remaining = Math.max(nearest.remaining, 0);
         const dDestAir = haversineMeters(here.lat, here.lon, t.lat, t.lon);
-        const dDest = Math.max(remaining, 0);
+        const dDest = remaining;
         setDistanceToDestination(Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist)));
         setEtaSeconds(Math.round((dDest + nearest.dist) / WALK_SPEED_MS));
 

@@ -11,10 +11,16 @@ import androidx.room.TypeConverters
  * uscita a 1.5× resettava lo stato ma NON fermava l'audio, quindi la voce
  * continuava a raccontare un monumento che l'utente aveva già superato.
  *
+ * EXITED sostituisce la cancellazione secca dello stato all'uscita: il suo
+ * timestamp fa da cooldown anti-rimbalzo (il GPS che rientra/esce dall'isteresi
+ * fra le chiome non deve rifare banner+annuncio ogni pochi metri). Port di
+ * BackgroundPoiManager.swift (stato .exited + approachRetriggerCooldown /
+ * arrivalAfterExitCooldown).
+ *
  * Il Converter di Room serializza per NOME (TriggerState.valueOf), quindi
  * aggiungere un valore in coda non invalida le righe già salvate.
  */
-enum class TriggerState { PENDING, APPROACH_FIRED, ARRIVED_FIRED, PASSED }
+enum class TriggerState { PENDING, APPROACH_FIRED, ARRIVED_FIRED, PASSED, EXITED }
 
 @Entity(tableName = "trigger_state")
 data class TriggerStateEntity(

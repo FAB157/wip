@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, MapPin, Zap, CheckCircle2 } from 'lucide-react';
 import { consumeCredits, refundCredits, PRICING_LIST } from '../lib/pricing';
@@ -29,6 +29,42 @@ export default function PredictiveBundleModal({
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: pois.length, status: '' });
   const [completed, setCompleted] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  // Specchio di `downloading`: durante il download il LoadingQuiz montato
+  // dentro gestisce già il proprio focus, quindi la trap qui si sospende.
+  const downloadingRef = useRef(false);
+  downloadingRef.current = downloading;
+
+  // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement) && !downloadingRef.current) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (downloadingRef.current) return; // il LoadingQuiz gestisce la tastiera
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [isOpen]);
   
   // Sconto 50% sul prezzo standard
   const bundlePricePerPoi = Math.floor((PRICING_LIST.audio_guide + PRICING_LIST.poi_detail) * 0.5);
@@ -151,6 +187,10 @@ export default function PredictiveBundleModal({
         className="absolute inset-0 bg-black/60 backdrop-blur-md"
       />
       <motion.div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Bundle offline · ${city}`}
         initial={{ scale: 0.95, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 20 }}

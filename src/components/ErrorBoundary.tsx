@@ -1,4 +1,5 @@
 import React, { ErrorInfo, ReactNode } from 'react';
+import { logSystemError } from '../lib/errorLogger';
 
 interface Props {
   children?: ReactNode;
@@ -6,34 +7,52 @@ interface Props {
 
 interface State {
   hasError: boolean;
-  error: Error | null;
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
   public state: State = {
     hasError: false,
-    error: null
   };
 
-  public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+  public static getDerivedStateFromError(_error: Error): State {
+    return { hasError: true };
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error:', error, errorInfo);
+    // Lo stack tecnico NON va mostrato all'utente: finisce solo nella tabella
+    // system_errors (tab admin "Errori di sistema") tramite errorLogger.
+    logSystemError(error?.message || 'React render crash', {
+      level: 'critical',
+      stack: `${error?.stack || ''}\n\nComponent stack:${errorInfo?.componentStack || ''}`,
+      context: { source: 'ErrorBoundary' },
+    });
   }
+
+  private handleReload = () => {
+    // Ricarica pulita: risolve la maggior parte dei crash di rendering
+    // (stato incoerente, chunk lazy non caricato) senza intervento tecnico.
+    try {
+      window.location.reload();
+    } catch {
+      (this as any).setState({ hasError: false });
+    }
+  };
 
   public render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '20px', backgroundColor: '#fee2e2', color: '#991b1b', height: '100vh', width: '100vw', zIndex: 99999, position: 'fixed', top: 0, left: 0 }}>
-          <h1 style={{ fontSize: '24px', fontWeight: 'bold' }}>Si è verificato un errore imprevisto.</h1>
-          <p style={{ marginTop: '10px' }}>Invia uno screenshot di questa schermata a Nicky.</p>
-          <pre style={{ marginTop: '20px', whiteSpace: 'pre-wrap', backgroundColor: '#fecaca', padding: '10px', borderRadius: '5px', fontSize: '12px' }}>
-            {this.state.error?.toString()}
-            {'\n'}
-            {this.state.error?.stack}
-          </pre>
+        <div style={{ padding: '24px', backgroundColor: '#f8f5f0', color: '#1e3a8a', height: '100vh', width: '100vw', zIndex: 99999, position: 'fixed', top: 0, left: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+          <div style={{ fontSize: '44px', marginBottom: '12px' }}>😕</div>
+          <h1 style={{ fontSize: '22px', fontWeight: 800, marginBottom: '10px' }}>Qualcosa è andato storto</h1>
+          <p style={{ fontSize: '15px', maxWidth: '320px', lineHeight: 1.5, opacity: 0.8, marginBottom: '24px' }}>
+            Si è verificato un errore imprevisto. Ricarica l'app per continuare: i tuoi dati sono al sicuro.
+          </p>
+          <button
+            onClick={this.handleReload}
+            style={{ backgroundColor: '#1e3a8a', color: '#ffffff', fontWeight: 800, fontSize: '15px', padding: '14px 32px', borderRadius: '16px', border: 'none', cursor: 'pointer' }}
+          >
+            Ricarica
+          </button>
         </div>
       );
     }

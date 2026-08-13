@@ -6,7 +6,7 @@ import { getApiUrl } from '../lib/api';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import { getTranslation, Language } from '../lib/i18n';
-import { insertAutoPois } from '../services/poiRepository';
+import { insertAutoPois, isDownloadablePoiStatus } from '../services/poiRepository';
 import {
   isNativeOfflineSupported,
   listOfflinePackages,
@@ -444,16 +444,22 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
         console.error("Overpass offline fetch error:", err);
       }
 
+      // DIFESA STATUS: la RPC offline storicamente non ritornava lo status →
+      // un draft/POI in bonifica poteva finire scaricato e, offline, triggerare.
+      // Teniamo solo i record con status noto e non nascosto (i record da
+      // shared_pois hanno lo status dal merge, quelli Overpass sono 'verified').
+      const downloadablePois = poiList.filter(isDownloadablePoiStatus);
+
       const newArea: OfflineMapArea = {
         id: `${cityName.toLowerCase().replace(/\s+/g, '_')}_${radiusKm}km`,
         name: `${cityName} (${radiusKm}km)`,
         center: { lat: centerLat, lon: centerLon },
         radiusKm,
         date: Date.now(),
-        poiCount: poiList.length
+        poiCount: downloadablePois.length
       };
 
-      await saveOfflineMapArea(newArea, poiList);
+      await saveOfflineMapArea(newArea, downloadablePois);
 
       // 4. Sfondo mappa: senza le tile in cache la mappa offline era vuota.
       const tiles = await prefetchTiles(centerLat, centerLon);
@@ -463,7 +469,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       setSelectedPlace(null);
       notify(
         `Mappa di ${cityName} scaricata con successo!\n` +
-        `${poiList.length} POI salvati offline` +
+        `${downloadablePois.length} POI salvati offline` +
         (tiles.total > 0 ? ` + ${tiles.done} tile di sfondo mappa.` : '.') +
         `\n\nPer verificare: attiva la modalità aereo e riapri la mappa sulla zona di ${cityName} — sfondo e pin restano visibili.`
       );

@@ -176,20 +176,36 @@ export async function getNearbyPois(
 
     if (allPois.length > 0) {
       const pois = allPois;
-      // Salva in Dexie per uso offline
+      // Salva in Dexie per uso offline. MERGE con i record esistenti: il radar
+      // porta solo i campi base (id/nome/coord/categoria/status/foto), ma
+      // mirrorPoisToDexie (aree scaricate) può aver già scritto
+      // description_ai/audio_script/teaser_text_it per l'ascolto offline. Un
+      // bulkPut "magro" li cancellava. Leggiamo prima e sovrascriviamo SOLO i
+      // campi del radar, preservando il resto.
       try {
-        await db.pois.bulkPut(pois.map(p => ({
-          id: p.id.toString(),
-          name: p.name,
-          lat: p.lat,
-          lon: p.lon,
-          category: p.category || 'monumenti',
-          is_gem: (p as any).premium ?? false,
-          lastUpdated: Date.now(),
-          status: p.status,
-          photo_url: (p as any).photo_url || (p as any).image_url,
-          image_url: (p as any).image_url || (p as any).photo_url,
-        })));
+        const ids = pois.map(p => p.id.toString());
+        const existingRows = await db.pois.bulkGet(ids);
+        const prevById = new Map<string, any>();
+        existingRows.forEach((r: any) => { if (r && r.id != null) prevById.set(String(r.id), r); });
+        await db.pois.bulkPut(pois.map(p => {
+          const prev = prevById.get(p.id.toString()) || {};
+          return {
+            ...prev,
+            id: p.id.toString(),
+            name: p.name,
+            lat: p.lat,
+            lon: p.lon,
+            category: p.category || 'monumenti',
+            // is_gem reale (non più `premium ?? false`): utility rows portano
+            // is_gem=false, i POI curati is_gem=true. Fallback al valore già in
+            // Dexie solo se il radar non lo fornisce.
+            is_gem: (p as any).is_gem ?? (p as any).premium ?? prev.is_gem ?? false,
+            lastUpdated: Date.now(),
+            status: p.status ?? prev.status,
+            photo_url: (p as any).photo_url || (p as any).image_url || prev.photo_url,
+            image_url: (p as any).image_url || (p as any).photo_url || prev.image_url,
+          };
+        }));
       } catch (dexieErr) {
         console.warn('[Dexie] Errore salvataggio POI:', dexieErr);
       }
@@ -280,6 +296,13 @@ export async function getNearbyPois(
     console.warn('[poiRepository] Dexie final fallback fail:', e);
   }
 
+  // Degradazione: RPC + fallback diretto + Dexie hanno TUTTI reso vuoto. Il
+  // radar resta bianco: segnaliamo (console + evento) così il chiamante può
+  // avvisare invece di far sembrare "zona senza POI" un guasto di rete/breaker.
+  console.warn('[poiRepository] Radar degradato: nessun POI da RPC/fallback/Dexie (rete o circuit breaker).');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('wip-radar-degraded', { detail: { source: 'getNearbyPois' } }));
+  }
   return [];
 }
 
@@ -292,9 +315,23 @@ export async function getNearbyPois(
 // allucinazioni Vision in bonifica, POI rifiutati/nascosti. Prima le letture
 // Dexie non filtravano nulla → offline (dove il geofencing parte da solo) un
 // draft poteva far scattare "Sei arrivato!". Stessa denylist di nearby_pois.
-const HIDDEN_POI_STATUSES = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
-function isVisiblePoiStatus(p: any): boolean {
+export const HIDDEN_POI_STATUSES = new Set(['draft', 'needs_revision', 'rejected', 'hidden']);
+export function isVisiblePoiStatus(p: any): boolean {
   return !HIDDEN_POI_STATUSES.has(String(p?.status || '').toLowerCase()) && p?.is_hidden !== true;
+}
+
+/**
+ * Filtro PIÙ STRETTO per il download offline: oltre a escludere gli status
+ * nascosti, scarta anche i record SENZA status (undefined). Motivo: la RPC
+ * offline storicamente non ritornava lo status, quindi un draft "senza status"
+ * finiva scaricato e, offline (dove il geofencing parte da solo), poteva far
+ * scattare un trigger. Un POI legittimo scaricabile ha SEMPRE uno status noto
+ * (verified/auto/approved dal merge shared_pois, oppure 'verified' da Overpass).
+ */
+export function isDownloadablePoiStatus(p: any): boolean {
+  const s = String(p?.status || '').toLowerCase();
+  if (!s) return false; // status assente → non scaricare (era il buco draft)
+  return !HIDDEN_POI_STATUSES.has(s) && p?.is_hidden !== true;
 }
 
 const AUDIOGUIDABLE_CATEGORIES = new Set([
@@ -440,20 +477,52 @@ export async function saveIndexedArea(
 }
 
 // --- Dedup osm_id (protegge i POI eliminati dall'admin) -----------------
-/** Ritorna il set degli osm_id gia' presenti in DB (QUALSIASI status). */
+/**
+ * Costruisce l'id shared_pois da un osm_id/id-di-fonte, coerente con
+ * insertAutoPois: gli id NAMESPACIZZATI (fsq-…, geo-…, iti-…) — che contengono
+ * '-' — restano intatti; gli id OSM numerici puri diventano "osm-<n>".
+ */
+function toSharedPoiId(rawId: string): string {
+  return rawId.includes('-') ? rawId : `osm-${rawId}`;
+}
+
+/**
+ * Ritorna il set degli osm_id (nella STESSA forma passata dal chiamante) già
+ * presenti in DB (QUALSIASI status) OPPURE tombstonati.
+ *
+ * Include i tombstone (shared_pois_tombstones) per NON resuscitare i POI
+ * hard-deleted dall'admin: reinserirli farebbe scattare il trigger di
+ * untombstone che annulla la cancellazione. Prima, controllando solo
+ * shared_pois, la discovery li reinseriva ad ogni giro.
+ *
+ * La mappatura preserva il namespace: "fsq_abc" → "fsq-abc" (NON "osm-fsq-abc"),
+ * evitando le collisioni "osm-<cifre>" che il vecchio prefisso forzato creava.
+ */
 export async function findExistingOsmIds(osmIds: string[]): Promise<Set<string>> {
   const result = new Set<string>();
   if (osmIds.length === 0) return result;
+
+  // id shared_pois reale → osm_id originale (per restituire la forma attesa).
+  const dbIdToOsm = new Map<string, string>();
+  for (const osm of osmIds) dbIdToOsm.set(toSharedPoiId(osm), osm);
+  const dbIds = [...dbIdToOsm.keys()];
+
   try {
     // chunk per evitare URL troppo lunghi nelle IN()
     const chunkSize = 200;
-    for (let i = 0; i < osmIds.length; i += chunkSize) {
-      const chunk = osmIds.slice(i, i + chunkSize).map(id => `osm-${id}`);
-      const { data } = await supabase.from('shared_pois').select('id').in('id', chunk);
-      (data as any[] | null)?.forEach((r) => {
-        if (r.id && r.id.startsWith('osm-')) {
-          result.add(r.id.replace('osm-', ''));
-        }
+    for (let i = 0; i < dbIds.length; i += chunkSize) {
+      const chunk = dbIds.slice(i, i + chunkSize);
+      const [liveRes, deadRes] = await Promise.all([
+        supabase.from('shared_pois').select('id').in('id', chunk),
+        supabase.from('shared_pois_tombstones').select('id').in('id', chunk),
+      ]);
+      (liveRes.data as any[] | null)?.forEach((r) => {
+        const osm = dbIdToOsm.get(r.id);
+        if (osm) result.add(osm);
+      });
+      (deadRes.data as any[] | null)?.forEach((r) => {
+        const osm = dbIdToOsm.get(r.id);
+        if (osm) result.add(osm); // tombstonato → NON reinserire
       });
     }
   } catch (e) {
@@ -488,8 +557,8 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */
 export async function insertAutoPois(rows: AutoPoiInput[]): Promise<number> {
   if (rows.length === 0) return 0;
-  const payload = rows.map((r) => ({ 
-    id: r.osm_id.includes('-') ? r.osm_id : `osm-${r.osm_id}`,
+  const payload = rows.map((r) => ({
+    id: toSharedPoiId(r.osm_id),
     name: r.name,
     lat: r.lat,
     lon: r.lon,
@@ -576,22 +645,16 @@ export async function getPoiDetails(
   }
 }
 
+/**
+ * NO-OP lato client: poi_details è scrivibile SOLO server-side (RLS chiusa).
+ * La persistenza avviene dentro /api/poi/enrich (service role). Manteniamo la
+ * firma (ritorna true) per non far scattare falsi fallimenti nei chiamanti.
+ */
 export async function upsertPoiDetails(
-  details: Partial<PoiDetails> & { poi_id: string; language: string },
+  _details: Partial<PoiDetails> & { poi_id: string; language: string },
 ): Promise<boolean> {
-  try {
-    const { error } = await supabase
-      .from('poi_details')
-      .upsert({ ...details, updated_at: new Date().toISOString() }, { onConflict: 'poi_id,language' });
-    if (error) {
-      console.warn('[poiRepository] upsertPoiDetails error:', error.message);
-      return false;
-    }
-    return true;
-  } catch (e) {
-    console.warn('[poiRepository] upsertPoiDetails exception', e);
-    return false;
-  }
+  // Scrittura rimossa: un upsert client su poi_details verrebbe negato dalla RLS.
+  return true;
 }
 
 // --- Audioguide (cache-first) ------------------------------------------
@@ -614,26 +677,22 @@ export async function getAudioguide(
   }
 }
 
+/**
+ * NO-OP lato client: poi_audioguides è scrivibile SOLO server-side (RLS chiusa).
+ * La persistenza per-lingua avviene nella route get-or-create /api/poi/audioguide
+ * (service role), popolata dal prefetch nativo e da getOrCreateAudioguideText.
+ * Manteniamo la firma perché è chiamata anche da server.ts (dove il write via
+ * client anon sarebbe comunque negato dalla RLS) e da PoiDetailSheet.
+ */
 export async function upsertAudioguide(
-  poiId: string,
-  language: string,
-  character: GuideCharacter,
-  audioText: string,
+  _poiId: string,
+  _language: string,
+  _character: GuideCharacter,
+  _audioText: string,
 ): Promise<void> {
-  try {
-    await supabase.from('poi_audioguides').upsert(
-      {
-        poi_id: poiId,
-        language,
-        guide_character: character,
-        audio_text: audioText,
-        generated_at: new Date().toISOString(),
-      },
-      { onConflict: 'poi_id,language,guide_character' },
-    );
-  } catch (e) {
-    console.warn('[poiRepository] upsertAudioguide', e);
-  }
+  // Scrittura rimossa: un upsert client su poi_audioguides verrebbe negato
+  // dalla RLS. Il testo mostrato resta valido per la sessione; la cache
+  // condivisa viene popolata server-side dalla route get-or-create.
 }
 
 export async function incrementAudioguidePlay(audioguideId: number): Promise<void> {

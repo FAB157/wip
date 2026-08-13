@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { Download, AlertTriangle, X } from 'lucide-react';
 import { Language } from '../lib/i18n';
+import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
 
 interface GeofenceAudioGuideProps {
@@ -83,28 +84,11 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       } catch {}
       
       if (count === 0) return;
-      
-      const banner = document.createElement('div');
-      banner.style.position = 'fixed';
-      banner.style.top = '100px';
-      banner.style.left = '50%';
-      banner.style.transform = 'translateX(-50%)';
-      banner.style.backgroundColor = '#4CAF50';
-      banner.style.color = 'white';
-      banner.style.padding = '12px 24px';
-      banner.style.borderRadius = '30px';
-      banner.style.fontWeight = 'bold';
-      banner.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-      banner.style.zIndex = '9999';
-      banner.style.transition = 'opacity 0.5s ease-in-out';
-      banner.innerText = `✅ ${count} POI caricati nel radar. Ora puoi spegnere il display!`;
-      
-      document.body.appendChild(banner);
-      
-      setTimeout(() => {
-        banner.style.opacity = '0';
-        setTimeout(() => document.body.removeChild(banner), 500);
-      }, 4000);
+
+      // Banner di stato via canale toast condiviso (ToastHost, role="status"/
+      // aria-live): prima era un <div> costruito a mano con document.createElement,
+      // fuori dal flusso React e invisibile agli screen reader.
+      notify(`✅ ${count} POI caricati nel radar. Ora puoi spegnere il display!`, 'success', 5000);
     };
     
     window.addEventListener("pois-loaded", handlePoisLoaded);
@@ -275,8 +259,14 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       // 300 m in auto, e il banner mostrava "150m" anche per POI molto più
       // lontani. Se il nativo la fornisce si usa quella; altrimenti si parte
       // dal raggio corretto per la modalità e il primo fix GPS la corregge.
-      const isCar = (localStorage.getItem('wip_transport_mode') || '') === 'car';
-      const nativeDist = Number((e.detail || {}).distance);
+      // Chiave allineata alle impostazioni (guideSettings.KEYS.transport =
+      // 'wip_transport_pref', valore 'auto' | 'walk' | 'car'): prima leggeva
+      // 'wip_transport_mode', chiave inesistente → sempre modalità a piedi.
+      const isCar = (localStorage.getItem('wip_transport_pref') || '') === 'car';
+      // Il nativo può fornire la distanza come `distanceM` (nuove build) o
+      // `distance`; se manca (NaN) si ricade sul raggio di alert corretto per
+      // la modalità invece di mostrare un "150m" fittizio.
+      const nativeDist = Number((e.detail || {}).distanceM ?? (e.detail || {}).distance);
       window.dispatchEvent(new CustomEvent('wip-poi-approach', {
         detail: {
           poi,

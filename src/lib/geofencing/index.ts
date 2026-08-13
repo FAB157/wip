@@ -1,6 +1,14 @@
 /**
  * index.ts
- * Barrel export del sistema geofencing itainta
+ * Barrel export del sistema geofencing itainta.
+ *
+ * ⚠️ WEB = RADAR-ONLY. I trigger geofence in produzione sono gestiti dal
+ * servizio NATIVO (Android/iOS). Questo stack (SmartGeofenceManager +
+ * useSmartGeofence + predictive/…) NON è montato in produzione: nessun
+ * componente fuori da questa cartella lo importa. Resta come base web di
+ * riferimento; NON è un "port allineato" del nativo e non va tenuto in sync a
+ * costante col Kotlin/Swift. `routeEngine` è invece usato altrove (owner: altro
+ * modulo mappa) e resta esportato qui.
  */
 
 export { SmartGeofenceManager } from './SmartGeofenceManager';
@@ -20,8 +28,9 @@ export type { TriggerEvent, TriggerType } from './triggerManager';
 
 export { handleTriggerAudio, speak, stopAudio } from './audioDirector';
 
-// Nucleo predittivo (CPA). Le costanti sono da tarare sul campo: tenerle
-// allineate a PredictiveTrigger.kt e PredictiveTrigger.swift.
+// Nucleo predittivo (CPA), usato dal solo stack web (non montato). Le costanti
+// vivono qui in modo indipendente: il nativo ha i propri PredictiveTrigger.kt /
+// .swift e non dipende da questi valori.
 export {
   evaluatePredictive,
   hasPassed,

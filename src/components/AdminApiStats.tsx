@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
+import { getApiUrl } from '../lib/api';
 import {
   BarChart3, RefreshCw, Activity, Database, Server, Calendar as CalendarIcon,
   DollarSign, AlertTriangle, Search, User, ChevronDown, ChevronUp, TrendingUp,
-  Zap, Globe, Download, Filter, X
+  Zap, Globe, Download, Filter, X, PiggyBank
 } from 'lucide-react';
 
 const COST_MAP: Record<string, number> = {
@@ -115,6 +116,49 @@ export default function AdminApiStats() {
   const [logPage, setLogPage] = useState(0);
   const LOG_PAGE_SIZE = 50;
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
+
+  // ── Budget mensile: letto/salvato via rotte admin; il canarino lo
+  // controlla ogni mattina e a sforamento scrive un errore critical.
+  const [monthCost, setMonthCost] = useState<number | null>(null);
+  const [monthlyBudget, setMonthlyBudget] = useState<number>(0);
+  const [budgetInput, setBudgetInput] = useState('');
+  const [budgetSaving, setBudgetSaving] = useState(false);
+
+  const adminHeaders = async (): Promise<Record<string, string>> => {
+    const { data: s } = await supabase.auth.getSession();
+    const token = s?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/admin/ai-costs?days=31'), { headers: await adminHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setMonthCost(Number(data.monthCost) || 0);
+          setMonthlyBudget(Number(data.monthlyBudgetUsd) || 0);
+          setBudgetInput(data.monthlyBudgetUsd ? String(data.monthlyBudgetUsd) : '');
+        }
+      } catch { /* la card resta in stato "n/d" */ }
+    })();
+  }, []);
+
+  const saveBudget = async () => {
+    setBudgetSaving(true);
+    try {
+      const res = await fetch(getApiUrl('/api/admin/ai-budget'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await adminHeaders()) },
+        body: JSON.stringify({ monthlyBudgetUsd: Number(budgetInput) || 0 })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMonthlyBudget(Number(data.monthlyBudgetUsd) || 0);
+      }
+    } catch { /* riprovabile */ }
+    setBudgetSaving(false);
+  };
 
   const fetchStats = async () => {
     setLoading(true);
@@ -323,6 +367,58 @@ export default function AdminApiStats() {
           ))}
         </div>
       )}
+
+      {/* Budget mensile: la promessa "alert di sforamento" è del canarino,
+          questa card la rende visibile e regolabile */}
+      <div className={`rounded-2xl p-5 border ${
+        monthlyBudget > 0 && monthCost != null && monthCost > monthlyBudget ? 'bg-red-50 border-red-200' :
+        monthlyBudget > 0 && monthCost != null && monthCost > monthlyBudget * 0.8 ? 'bg-amber-50 border-amber-200' :
+        'bg-white border-gray-100 shadow-sm'
+      }`}>
+        <div className="flex flex-col md:flex-row md:items-center gap-4">
+          <div className="flex items-center gap-2">
+            <PiggyBank className="w-5 h-5 text-primary" />
+            <div>
+              <div className="text-xs font-black uppercase tracking-widest text-primary/60">Budget AI mensile</div>
+              <div className="text-2xl font-black text-on-surface tabular-nums">
+                {monthCost == null ? '—' : `$${monthCost.toFixed(2)}`}
+                <span className="text-sm font-bold text-on-surface-variant"> {monthlyBudget > 0 ? `su $${monthlyBudget.toFixed(2)}` : '(nessun budget impostato)'}</span>
+              </div>
+            </div>
+          </div>
+          {monthlyBudget > 0 && monthCost != null && (
+            <div className="flex-1 max-w-sm">
+              <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${monthCost > monthlyBudget ? 'bg-red-500' : monthCost > monthlyBudget * 0.8 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                  style={{ width: `${Math.min(100, (monthCost / monthlyBudget) * 100)}%` }}
+                />
+              </div>
+              <div className="text-[10px] font-bold text-on-surface-variant mt-1">
+                {((monthCost / monthlyBudget) * 100).toFixed(0)}% del budget — a sforamento il canarino scrive un errore critico
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2 md:ml-auto">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Budget $/mese"
+              value={budgetInput}
+              onChange={e => setBudgetInput(e.target.value)}
+              className="w-32 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <button
+              onClick={saveBudget}
+              disabled={budgetSaving}
+              className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-black disabled:opacity-50"
+            >
+              {budgetSaving ? 'Salvo...' : 'Imposta'}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

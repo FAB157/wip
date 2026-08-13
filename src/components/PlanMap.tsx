@@ -52,7 +52,7 @@ function createTappaIcon(tipo: string, number: number, dayColor: string): L.DivI
         <circle cx="17" cy="16" r="10.5" fill="white" opacity="0.93"/>
         <text x="17" y="20.5" text-anchor="middle" font-size="11" font-family="system-ui,sans-serif" font-weight="900" fill="${bg}">${number}</text>
       </svg>
-      <div style="position:absolute;top:-7px;right:-7px;background:${dayColor};color:white;border-radius:50%;width:16px;height:16px;font-size:9px;display:flex;align-items:center;justify-content:center;font-weight:900;border:1.5px solid white;box-shadow:0 1px 3px rgba(0,0,0,.3)">${emoji.length <= 2 ? '' : ''}</div>
+      <div style="position:absolute;top:-7px;right:-7px;background:${dayColor};color:white;border-radius:50%;width:16px;height:16px;font-size:9px;display:flex;align-items:center;justify-content:center;font-weight:900;border:1.5px solid white;box-shadow:0 1px 3px rgba(0,0,0,.3)">${emoji}</div>
     </div>
   `;
   return L.divIcon({
@@ -184,9 +184,12 @@ function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAud
         center={allStops[0] ? [allStops[0].coordinate.lat, allStops[0].coordinate.lng] : [41.9, 12.5]}
         zoom={13}
       >
+        {/* Stesse tile CARTO di MapArea (default Leaflet subdomains 'abc' +
+            suffisso retina {r}): così il prefetch offline (offlineTiles.ts /
+            service worker) copre anche la mappa dell'itinerario. */}
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
         {bounds && <ChangeView bounds={bounds} />}
 

@@ -35,6 +35,10 @@
     {
       "path": "/api/poi/batch-enrich",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/canary/run",
+      "schedule": "0 5 * * *"
     }
   ]
 }

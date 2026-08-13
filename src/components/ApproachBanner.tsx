@@ -177,7 +177,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     const onDistUpdate = (e: Event) => {
       const d = (e as CustomEvent).detail;
       if (!d.entries) return;
-      const isCar = (localStorage.getItem('wip_transport_mode') || '') === 'car';
+      const isCar = (localStorage.getItem('wip_transport_pref') || '') === 'car';
       setEntries(prev => {
         const prevById = new Map<string, any>(prev.map(x => [String(x.poiId), x] as [string, any]));
         return (d.entries as any[])

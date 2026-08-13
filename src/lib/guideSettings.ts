@@ -193,7 +193,10 @@ export function resolveTransportMode(speedMetersPerSec: number | null): Transpor
   if (pref === 'walk') return 'walk';
   if (pref === 'car') return 'car';
   const kmh = (speedMetersPerSec || 0) * 3.6;
-  return kmh >= 10 ? 'car' : 'walk'; // soglia spec: <10 km/h a piedi
+  // Il nativo usa un'ISTERESI 12 km/h (sopra → auto) / 6 km/h (sotto → piedi)
+  // per evitare il flip ai semafori. Qui, senza stato tra i fix, una singola
+  // soglia intermedia (~10 km/h) approssima quel crossover: sopra → auto.
+  return kmh >= 10 ? 'car' : 'walk';
 }
 
 // --- Anti-ripetizione (POI gia' riprodotti) -----------------------------

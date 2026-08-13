@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { X, Camera, Loader2, Send, Sparkles } from 'lucide-react';
 import { supabase } from '../lib/supabase';
@@ -36,6 +36,36 @@ export default function VisionCommentModal({ cardId, image, refunded = true, onC
   const [tags, setTags] = useState<string[]>([]);
   const [comment, setComment] = useState('');
   const [sending, setSending] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+
+  // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
+  useEffect(() => {
+    const root = dialogRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement)) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, []);
 
   const toggleTag = (t: string) =>
     setTags(prev => (prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]));
@@ -71,6 +101,10 @@ export default function VisionCommentModal({ cardId, image, refunded = true, onC
   return (
     <div className="fixed inset-0 z-[2600] bg-black/70 backdrop-blur-sm flex items-end sm:items-center sm:justify-center">
       <motion.div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Racconta perché questo posto è speciale"
         initial={{ y: 80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', damping: 26, stiffness: 300 }}
@@ -82,6 +116,7 @@ export default function VisionCommentModal({ cardId, image, refunded = true, onC
           <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/70 to-transparent" />
           <button
             onClick={onClose}
+            aria-label="Chiudi"
             className="absolute top-3 right-3 w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform"
           >
             <X className="w-5 h-5" />

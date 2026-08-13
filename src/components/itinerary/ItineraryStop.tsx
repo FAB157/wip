@@ -28,6 +28,8 @@ interface ItineraryStopProps {
   freeReplacementsLeft?: number;
   /** Costo in crediti quando le gratuite sono esaurite. */
   replaceCost?: number;
+  /** Tratta reale verso la tappa successiva (OSRM): calcolata in PlanScreen. */
+  legToNext?: { walkMin: number; carMin: number; km: number; taxiEur: number } | null;
 }
 
 export default function ItineraryStop({
@@ -45,7 +47,8 @@ export default function ItineraryStop({
   onDelete,
   onSelectPoi,
   freeReplacementsLeft,
-  replaceCost
+  replaceCost,
+  legToNext
 }: ItineraryStopProps) {
   // Il pulsante deve dire in anticipo se la sostituzione è gratis o costa:
   // prima l'unico segnale era il modale crediti che compariva a sorpresa.
@@ -57,7 +60,7 @@ export default function ItineraryStop({
     <div className="relative">
       {/* Dot on line */}
       <div className={`absolute -left-[27px] top-4 w-3 h-3 rounded-full border-2 border-[#f8f5f0] shadow-sm ${
-        tappa.tipo === 'ristorante' ? 'bg-orange-400' : tappa.tipo === 'pausa' ? 'bg-blue-400' : 'bg-primary'
+        tappa.tipo === 'ristorante' ? 'bg-orange-400' : tappa.tipo === 'pausa' ? 'bg-blue-400' : tappa.tipo === 'trasferimento' ? 'bg-indigo-400' : 'bg-primary'
       }`}></div>
 
       <div className="bg-white p-6 rounded-[2rem] border border-outline-variant/10 shadow-sm relative group print:shadow-none print:border-gray-200 print:break-inside-avoid">
@@ -280,6 +283,26 @@ export default function ItineraryStop({
           )}
         </AnimatePresence>
       </div>
+
+      {/* Trasporti per tratta (ondata 6): durate REALI dalla rete stradale
+          (OSRM) verso la prossima tappa — il timing smette di essere una
+          promessa dell'AI e diventa un dato verificabile. */}
+      {!isLast && legToNext && (
+        <div className="mt-3 ml-1 flex items-center gap-2 text-[10px] font-black text-primary/50 uppercase tracking-wider print:hidden">
+          <span className="w-4 border-t border-dashed border-primary/25" />
+          🚶 {legToNext.walkMin} min
+          <span className="opacity-40">·</span>
+          🚗 {legToNext.carMin} min
+          <span className="opacity-40">·</span>
+          {legToNext.km.toFixed(1).replace('.', ',')} km
+          {legToNext.taxiEur > 0 && (
+            <>
+              <span className="opacity-40">·</span>
+              taxi ~{legToNext.taxiEur}€
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

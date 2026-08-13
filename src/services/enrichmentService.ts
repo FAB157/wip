@@ -1,22 +1,63 @@
 // =====================================================================
 // ITAINTA · Enrichment scheda POI (cache-first)
 // Per ogni POI genera UNA volta la scheda (Wikipedia/Wikidata/Commons via
-// /api/poi/enrich + Foursquare via /api/fsq/*) e la salva in poi_details.
-// Dalla seconda volta in poi si riusa la cache. Nessuna key lato client.
+// /api/poi/enrich + Foursquare via /api/fsq/*). La PERSISTENZA in poi_details è
+// server-owned (dentro /api/poi/enrich, service role): la RLS blocca ora la
+// scrittura client. Qui si legge/rilegge la cache dal DB; dalla seconda volta
+// in poi si riusa. Nessuna key lato client.
 // =====================================================================
 
-import { getPoiDetails, upsertPoiDetails } from './poiRepository';
+import { getPoiDetails } from './poiRepository';
 import { getApiUrl } from '../lib/api';
+import { isNetworkError } from '../lib/circuitBreaker';
 import type { PoiCategory, PoiDetails, PoiImage, FoursquareData } from '../types/poi';
 
-// --- CIRCUIT BREAKER ---
+// --- CIRCUIT BREAKER (half-open con cooldown) ---
+// Conta SOLO i fallimenti di RETE di /api/poi/enrich (fetch fallita): un 4xx/5xx
+// applicativo è deterministico e non deve aprire il breaker. All'apertura si
+// sospende l'enrichment per un cooldown, poi si riprova (half-open) invece di
+// restare disabilitato per sempre (prima resetCircuitBreaker non veniva mai
+// chiamato → enrichment morto fino al reload).
 export let consecutiveDbFailures = 0;
 export let enrichmentDisabled = false;
 const MAX_DB_FAILURES = 3;
+const ENRICH_COOLDOWN_MS = 2 * 60_000; // 2 min prima del tentativo half-open
+let enrichmentDisabledUntil = 0;
 
 export function resetCircuitBreaker() {
   consecutiveDbFailures = 0;
   enrichmentDisabled = false;
+  enrichmentDisabledUntil = 0;
+}
+
+/** True se il breaker è aperto E il cooldown non è ancora scaduto. */
+function isEnrichmentOpen(): boolean {
+  if (!enrichmentDisabled) return false;
+  if (Date.now() >= enrichmentDisabledUntil) {
+    // Half-open: cooldown scaduto → si concede un nuovo tentativo.
+    enrichmentDisabled = false;
+    consecutiveDbFailures = 0;
+    console.info('[Enrichment] Circuit breaker half-open: nuovo tentativo dopo cooldown.');
+    return false;
+  }
+  return true;
+}
+
+function noteEnrichSuccess(): void {
+  consecutiveDbFailures = 0;
+}
+
+function noteEnrichNetworkFailure(): void {
+  consecutiveDbFailures++;
+  console.warn(`[Enrichment] Fallimento di rete /api/poi/enrich. Consecutivi: ${consecutiveDbFailures}`);
+  if (consecutiveDbFailures >= MAX_DB_FAILURES && !enrichmentDisabled) {
+    enrichmentDisabled = true;
+    enrichmentDisabledUntil = Date.now() + ENRICH_COOLDOWN_MS;
+    console.error('[Enrichment] CIRCUIT BREAKER APERTO (cooldown 2 min) dopo 3 fallimenti di rete.');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('enrichment-circuit-breaker', { detail: { open: true } }));
+    }
+  }
 }
 // -----------------------
 
@@ -31,14 +72,14 @@ export interface EnrichInput {
 /** Chiama /api/poi/enrich (pipeline Oracle: wiki + edge + foto). */
 async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> {
   try {
-    // IMPORTANTE: Assicurati di non raddoppiare il prefisso osm-
-    const cleanId = poi.id.startsWith('osm-') ? poi.id : `osm-${poi.id}`;
-
+    // ID ORIGINALE, non modificato: forzare "osm-" su QUALSIASI id (uuid
+    // community, "iti-…", utility) faceva creare al server una riga nuova.
+    // Il dedup è responsabilità del server, che riceve l'id reale del POI.
     const res = await fetch(getApiUrl('/api/poi/enrich'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: cleanId,
+        id: poi.id,
         name: poi.name,
         lat: poi.lat,
         lon: poi.lon,
@@ -46,9 +87,12 @@ async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> 
         lang,
       }),
     });
-    if (!res.ok) return null;
+    if (!res.ok) return null; // errore applicativo/HTTP: NON conta per il breaker
+    noteEnrichSuccess();
     return await res.json();
-  } catch {
+  } catch (e) {
+    // Solo un vero errore di RETE apre il breaker.
+    if (isNetworkError(e)) noteEnrichNetworkFailure();
     return null;
   }
 }
@@ -91,8 +135,8 @@ export async function ensurePoiDetails(
   language = 'it',
   force = false,
 ): Promise<PoiDetails | null> {
-  if (enrichmentDisabled) {
-    console.warn('[Enrichment] Circuit breaker is open. Enrichment is disabled.');
+  if (isEnrichmentOpen()) {
+    console.warn('[Enrichment] Circuit breaker aperto (cooldown attivo): enrichment sospeso.');
     return null;
   }
 
@@ -136,24 +180,11 @@ export async function ensurePoiDetails(
     enriched,
   };
 
-  const success = await upsertPoiDetails(details);
-  
-  if (success) {
-    consecutiveDbFailures = 0;
-  } else {
-    consecutiveDbFailures++;
-    console.warn(`[Enrichment] DB save failed. Consecutive failures: ${consecutiveDbFailures}`);
-    if (consecutiveDbFailures >= MAX_DB_FAILURES) {
-      enrichmentDisabled = true;
-      console.error('[Enrichment] CIRCUIT BREAKER OPENED due to 3 consecutive DB failures.');
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('enrichment-circuit-breaker', { detail: { open: true } }));
-      }
-    }
-  }
-
-  // Se la rilettura dal DB fallisce (offline, RLS, circuit breaker aperto)
-  // si restituiscono comunque i dettagli appena generati: buttarli faceva
+  // NIENTE upsert lato client: poi_details è ora scrivibile SOLO server-side
+  // (RLS chiusa). La persistenza avviene dentro /api/poi/enrich (service role);
+  // qui rileggiamo dal DB ciò che il server ha salvato.
+  // Se la rilettura fallisce (offline, server non ancora aggiornato) si
+  // restituiscono comunque i dettagli appena generati: buttarli faceva
   // ripiegare l'audioguida sul solo nome del POI ("Duomo (chiesa)"),
   // cioè contenuto pagato e generato senza fonti.
   const stored = await getPoiDetails(poi.id, language);

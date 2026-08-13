@@ -188,8 +188,20 @@ class GeofenceManager(private val context: Context) {
         val lat = poi.entranceLat ?: poi.lat
         val lon = poi.entranceLon ?: poi.lon
 
-        val alertRadius = if (guideMode == "driving") alertRadiusCar else alertRadiusWalk
-        val arrivalRadius = if (guideMode == "driving") arrivalRadiusCar else arrivalRadiusWalk
+        var alertRadius = if (guideMode == "driving") alertRadiusCar else alertRadiusWalk
+        var arrivalRadius = if (guideMode == "driving") arrivalRadiusCar else arrivalRadiusWalk
+
+        // RAGGI DA FOOTPRINT (perimetro reale del POI). Parità con
+        // src/lib/guideSettings.ts::radiiForTransport: SOLO se il POI è stato
+        // processato col footprint (ingresso valorizzato = hasEntrance) si
+        // ESPANDE (mai riduce) il raggio di modalità coi valori reali —
+        // una piazza ottiene un cerchio grande, una statua resta stretta.
+        val hasEntrance = poi.entranceLat != null && poi.entranceLon != null
+        if (hasEntrance) {
+            poi.alertRadius?.let { if (it > 0) alertRadius = maxOf(alertRadius, it.toFloat()) }
+            poi.geofenceRadius?.let { if (it > 0) arrivalRadius = maxOf(arrivalRadius, it.toFloat()) }
+        }
+
         // Raggio isteresi (uscita silenziosa): 1.5× il raggio di alert
         val exitRadius = alertRadius * 1.5f
 

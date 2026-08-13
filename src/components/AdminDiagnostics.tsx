@@ -1,7 +1,188 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { Activity, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Database, Wifi, Smartphone, HardDrive, Map, Award, Trash2, Bell, ShieldCheck, Globe2, Volume2, Navigation } from 'lucide-react';
+import { KNOWN_FLAGS } from '../lib/featureFlags';
+import { Activity, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Database, Wifi, Smartphone, HardDrive, Map, Award, Trash2, Bell, ShieldCheck, Globe2, Volume2, Navigation, Bird, ToggleLeft } from 'lucide-react';
+
+// Header di autenticazione admin condiviso dalle sezioni canarino e flag.
+const adminAuthHeaders = async (): Promise<Record<string, string>> => {
+  const { data: s } = await supabase.auth.getSession();
+  const token = s?.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+// ── CANARINO API: semaforo dell'ultimo smoke test schedulato ────────────
+// Il cron Vercel chiama /api/canary/run ogni mattina alle 07:00 italiane;
+// qui si legge lo snapshot e si può rilanciare a mano.
+function CanarySection() {
+  const [status, setStatus] = useState<{ last: any; history: any[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(getApiUrl('/api/admin/canary/status'), { headers: await adminAuthHeaders() });
+      if (res.ok) setStatus(await res.json());
+    } catch { /* rete giù: resta l'ultimo stato */ }
+    setLoading(false);
+  };
+
+  const runNow = async () => {
+    setRunning(true);
+    try {
+      const res = await fetch(getApiUrl('/api/canary/run'), { headers: await adminAuthHeaders() });
+      if (res.ok) {
+        const snap = await res.json();
+        setStatus(prev => ({ last: snap, history: [{ ranAt: snap.ranAt, ok: snap.ok, failedCount: snap.failedCount, failedNames: (snap.checks || []).filter((c: any) => !c.ok).map((c: any) => c.name) }, ...(prev?.history || [])] }));
+      }
+    } catch { /* il prossimo load ripulisce */ }
+    setRunning(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const last = status?.last;
+  const failed = (last?.checks || []).filter((c: any) => !c.ok);
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Bird className={`w-5 h-5 ${!last ? 'text-gray-400' : last.ok ? 'text-emerald-500' : 'text-red-500'}`} />
+          <div>
+            <h3 className="font-black text-primary text-sm">Canarino API — smoke test giornaliero</h3>
+            <p className="text-[11px] text-on-surface-variant">
+              Cron Vercel ogni mattina (07:00 italiane). Un check che passa al rosso finisce negli Errori di Sistema come critico.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={runNow}
+          disabled={running}
+          className="self-start px-4 py-2 rounded-xl bg-primary text-white text-xs font-black flex items-center gap-1.5 disabled:opacity-50"
+        >
+          {running ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> In volo...</> : <><Play className="w-3.5 h-3.5" /> Esegui ora</>}
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento ultimo run...</div>
+      ) : !last ? (
+        <div className="text-xs text-on-surface-variant italic">Nessun run registrato: il primo arriva col cron di domattina, oppure lancialo ora.</div>
+      ) : (
+        <>
+          <div className={`rounded-xl px-3 py-2 text-xs font-bold flex flex-wrap items-center gap-2 ${last.ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+            {last.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+            {last.total - last.failedCount}/{last.total} servizi verdi
+            <span className="font-medium text-[11px] opacity-70">
+              — {new Date(last.ranAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </span>
+            {/* Storico compatto: un pallino per run, dal più recente */}
+            <span className="ml-auto flex items-center gap-1" title="Ultimi run (dal più recente)">
+              {(status?.history || []).slice(0, 14).map((h: any, i: number) => (
+                <span key={i} className={`w-2 h-2 rounded-full ${h.ok ? 'bg-emerald-400' : 'bg-red-400'}`} title={`${new Date(h.ranAt).toLocaleString('it-IT')}${h.failedCount ? ` — rossi: ${(h.failedNames || []).join(', ')}` : ''}`} />
+              ))}
+            </span>
+          </div>
+          {failed.length > 0 && (
+            <div className="space-y-1">
+              {failed.map((c: any) => (
+                <div key={c.name} className="text-[11px] font-bold text-red-700 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2">
+                  <span>{c.name}</span>
+                  <span className="font-mono font-medium text-red-500 truncate max-w-[50%]" title={c.note}>{c.note}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── FEATURE FLAG: kill switch senza deploy ──────────────────────────────
+// Ogni interruttore salva subito: spegnere una feature guasta deve costare
+// un tap, non un rilascio. Propagazione: client al riavvio, server ≤60s.
+function FlagsSection() {
+  const [flags, setFlags] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/flags'));
+        if (res.ok) {
+          const data = await res.json();
+          setFlags(data?.flags || {});
+        }
+      } catch { /* default: tutto acceso */ }
+      setLoading(false);
+    })();
+  }, []);
+
+  const toggle = async (key: string) => {
+    const next = { ...flags, [key]: flags[key] === false };
+    setSavingKey(key);
+    setError('');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/flags'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ flags: next })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setFlags(data.flags || next);
+    } catch (e: any) {
+      setError(`Salvataggio fallito: ${e?.message || e}`);
+    }
+    setSavingKey(null);
+  };
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex items-center gap-2">
+        <ToggleLeft className="w-5 h-5 text-primary" />
+        <div>
+          <h3 className="font-black text-primary text-sm">Feature flag — kill switch senza deploy</h3>
+          <p className="text-[11px] text-on-surface-variant">
+            Spegni una funzione guasta in pochi secondi: il server la blocca entro 1 minuto, i client la nascondono al riavvio dell'app.
+          </p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento flag...</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {KNOWN_FLAGS.map(f => {
+            const on = flags[f.key] !== false;
+            return (
+              <button
+                key={f.key}
+                onClick={() => toggle(f.key)}
+                disabled={savingKey === f.key}
+                className={`text-left rounded-xl border p-3 transition-colors ${on ? 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'bg-red-50 border-red-200 hover:bg-red-100'}`}
+                title={f.desc}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-black text-primary">{f.label}</span>
+                  {savingKey === f.key
+                    ? <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
+                    : <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${on ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>{on ? 'ATTIVA' : 'SPENTA'}</span>}
+                </div>
+                <div className="text-[10px] text-on-surface-variant mt-1 leading-tight">{f.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {error && <div className="text-[11px] font-bold text-red-600">{error}</div>}
+    </div>
+  );
+}
 
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed' | 'warning';
 
@@ -753,6 +934,11 @@ export default function AdminDiagnostics() {
           </button>
         </div>
       </div>
+
+      {/* Canarino schedulato + kill switch: la parte "sempre accesa" della
+          diagnostica, visibile prima ancora di lanciare i test manuali */}
+      <CanarySection />
+      <FlagsSection />
 
       {/* Riepilogo esito: appare dopo il primo giro di test */}
       {summary.ran > 0 && (

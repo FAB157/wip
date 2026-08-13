@@ -201,10 +201,68 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
           <Coins className="absolute -right-4 -bottom-4 w-32 h-32 text-white/20" />
         </div>
 
-        <h3 className="font-bold text-slate-500 uppercase text-xs mb-3 ml-1 tracking-wider">
+        <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 tracking-wider">
+          Pacchetti Crediti
+        </h3>
+
+        <div className="flex flex-col gap-3">
+          <motion.div whileTap={{ scale: 0.98 }} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h4 className="font-black text-lg text-slate-800 leading-tight">City-Break</h4>
+              <p className="text-xs text-slate-400 mb-1.5">Perfetto per un weekend in città</p>
+              <p className="text-slate-600 text-sm flex items-center gap-1.5">
+                <Coins className="w-4 h-4 text-amber-500" />
+                <span className="font-bold">500 Crediti</span>
+              </p>
+            </div>
+            <button onClick={() => buyPackage(500, 0, 'package_500')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
+              € 4,99
+            </button>
+          </motion.div>
+
+          <motion.div whileTap={{ scale: 0.98 }} className="bg-gradient-to-br from-[#1e3a8a] to-blue-700 p-4 rounded-xl shadow-lg shadow-blue-900/25 flex items-center justify-between gap-3 relative overflow-hidden">
+            <div className="absolute top-0 right-0 bg-amber-400 text-blue-950 text-[10px] font-black px-2.5 py-1 rounded-bl-xl tracking-wide">
+              +10% BONUS
+            </div>
+            <Coins className="absolute -right-5 -bottom-6 w-24 h-24 text-white/10 pointer-events-none" />
+            <div className="relative min-w-0">
+              <h4 className="font-black text-lg text-white leading-tight">Vacanza 1 Settimana</h4>
+              <p className="text-xs text-blue-200 mb-1.5">Il più scelto dai viaggiatori</p>
+              <div className="text-blue-100 text-sm flex items-center gap-1.5">
+                <Coins className="w-4 h-4 text-amber-400" />
+                <span className="line-through opacity-60 text-xs">1000</span>
+                <span className="font-black text-white">1100 Crediti</span>
+              </div>
+            </div>
+            <button onClick={() => buyPackage(1000, 100, 'package_1100')} disabled={loading} className="relative shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl shadow-md active:scale-95 transition disabled:opacity-50">
+              € 9,99
+            </button>
+          </motion.div>
+
+          <motion.div whileTap={{ scale: 0.98 }} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between gap-3 relative overflow-hidden">
+            <div className="absolute top-0 right-0 bg-amber-500 text-white text-[10px] font-black px-2.5 py-1 rounded-bl-xl tracking-wide">
+              +30% BONUS
+            </div>
+            <div className="min-w-0">
+              <h4 className="font-black text-lg text-slate-800 leading-tight">Tour Operator</h4>
+              <p className="text-xs text-slate-400 mb-1.5">Il massimo risparmio per lunghi viaggi</p>
+              <div className="text-slate-600 text-sm flex items-center gap-1.5">
+                <Coins className="w-4 h-4 text-amber-500" />
+                <span className="line-through opacity-50 text-xs">2000</span>
+                {/* Allineato al prodotto reale su Google Play/RevenueCat: package_2600 */}
+                <span className="font-black text-amber-600">2600 Crediti</span>
+              </div>
+            </div>
+            <button onClick={() => buyPackage(2000, 600, 'package_2600')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
+              € 19,99
+            </button>
+          </motion.div>
+        </div>
+
+        <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 mt-6 tracking-wider">
           Riscatta Voucher Hotel
         </h3>
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 mb-8 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="flex items-center gap-3 p-4 pb-3">
             <div className="w-11 h-11 rounded-xl bg-[#1e3a8a]/10 flex items-center justify-center shrink-0">
               <Ticket className="w-5 h-5 text-[#1e3a8a]" />
@@ -234,65 +292,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
           </div>
         </div>
 
-        <h3 className="font-bold text-slate-500 uppercase text-xs mb-3 ml-1 tracking-wider">
-          Pacchetti Crediti
-        </h3>
-        
-        <div className="flex flex-col gap-4">
-          <motion.div whileTap={{ scale: 0.98 }} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h4 className="font-black text-lg text-slate-800 leading-tight">City-Break</h4>
-              <p className="text-xs text-slate-400 mb-1.5">Perfetto per un weekend in città</p>
-              <p className="text-slate-600 text-sm flex items-center gap-1.5">
-                <Coins className="w-4 h-4 text-amber-500" />
-                <span className="font-bold">500 Crediti</span>
-              </p>
-            </div>
-            <button onClick={() => buyPackage(500, 0, 'package_500')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
-              € 4,99
-            </button>
-          </motion.div>
-
-          <motion.div whileTap={{ scale: 0.98 }} className="bg-gradient-to-br from-[#1e3a8a] to-blue-700 p-5 rounded-2xl shadow-lg shadow-blue-900/25 flex items-center justify-between gap-3 relative overflow-hidden">
-            <div className="absolute top-0 right-0 bg-amber-400 text-blue-950 text-[10px] font-black px-2.5 py-1 rounded-bl-xl tracking-wide">
-              +10% BONUS
-            </div>
-            <Coins className="absolute -right-5 -bottom-6 w-24 h-24 text-white/10 pointer-events-none" />
-            <div className="relative min-w-0">
-              <h4 className="font-black text-lg text-white leading-tight">Vacanza 1 Settimana</h4>
-              <p className="text-xs text-blue-200 mb-1.5">Il più scelto dai viaggiatori</p>
-              <div className="text-blue-100 text-sm flex items-center gap-1.5">
-                <Coins className="w-4 h-4 text-amber-400" />
-                <span className="line-through opacity-60 text-xs">1000</span>
-                <span className="font-black text-white">1100 Crediti</span>
-              </div>
-            </div>
-            <button onClick={() => buyPackage(1000, 100, 'package_1100')} disabled={loading} className="relative shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl shadow-md active:scale-95 transition disabled:opacity-50">
-              € 9,99
-            </button>
-          </motion.div>
-
-          <motion.div whileTap={{ scale: 0.98 }} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between gap-3 relative overflow-hidden">
-            <div className="absolute top-0 right-0 bg-amber-500 text-white text-[10px] font-black px-2.5 py-1 rounded-bl-xl tracking-wide">
-              +30% BONUS
-            </div>
-            <div className="min-w-0">
-              <h4 className="font-black text-lg text-slate-800 leading-tight">Tour Operator</h4>
-              <p className="text-xs text-slate-400 mb-1.5">Il massimo risparmio per lunghi viaggi</p>
-              <div className="text-slate-600 text-sm flex items-center gap-1.5">
-                <Coins className="w-4 h-4 text-amber-500" />
-                <span className="line-through opacity-50 text-xs">2000</span>
-                {/* Allineato al prodotto reale su Google Play/RevenueCat: package_2600 */}
-                <span className="font-black text-amber-600">2600 Crediti</span>
-              </div>
-            </div>
-            <button onClick={() => buyPackage(2000, 600, 'package_2600')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
-              € 19,99
-            </button>
-          </motion.div>
-        </div>
-
-        <div className="mt-8 flex items-center justify-center gap-2 text-xs text-slate-400">
+        <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">
           <ShieldCheck className="w-4 h-4" /> Pagamenti sicuri criptati
         </div>
       </div>

@@ -13,6 +13,30 @@ final class WipPackageDownloadManager {
     static let pageSize = 500
     static let eventProgress = "offlinePackageProgress"
 
+    /// Placeholder generici del vecchio import CSV/OSM (nessun contenuto reale):
+    /// mirror ESATTO dell'IN-list di public.is_generic_poi_name (migration
+    /// 20260812150000). Guardia difensiva client: il server già li scarta, ma un
+    /// bundle vecchio o un delta potrebbe ancora portarli. Tenere allineato ad
+    /// Android e a poiRepository.ts. Il regex "parcheggio pubblico…" del DB non
+    /// è replicato qui per non rischiare falsi positivi su POI reali: resta al
+    /// server, questa lista copre le frasi esatte (incluso "Punto di interesse",
+    /// il blocco più grosso di spazzatura).
+    static let genericPoiNames: Set<String> = [
+        "parcheggio", "parco", "giardino", "giardinetti", "giardinetto", "villa", "parking",
+        "park", "garden", "playground", "posteggio", "sosta", "stazionamento",
+        "luogo d'interesse", "luogo d interesse", "area camper", "area sosta",
+        "area di sosta", "sito", "punto",
+        "punto di interesse", "punto d'interesse", "punto d interesse",
+        "luogo di interesse", "point of interest", "points of interest"
+    ]
+
+    /// True se il nome è vuoto/troppo corto o è una frase-placeholder generica.
+    static func isGenericPoiName(_ name: String?) -> Bool {
+        let n = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if n.count < 2 { return true }
+        return genericPoiNames.contains(n)
+    }
+
     private let store = PoiStore.shared
     private let session: URLSession
 
@@ -131,6 +155,16 @@ final class WipPackageDownloadManager {
             var pois: [OfflinePoi] = []
             for p in (json["pois"] as? [[String: Any]] ?? []) {
                 guard let poiId = p["id"] as? String, !poiId.isEmpty else { continue }
+                // GUARDIA DIFENSIVA (allineata ad Android e a poiRepository.ts):
+                // mai ingerire nel pacchetto offline POI draft/da-revisionare/
+                // rifiutati/nascosti o con nome placeholder generico. Il server
+                // già li scarta, ma un bundle vecchio o un delta potrebbe ancora
+                // portarne uno (in auto un draft allucinato è arrivato fino alla
+                // notifica di arrivo). Il campo `status` lo aggiunge il bundle.
+                let status = ((p["status"] as? String) ?? "").lowercased()
+                if WipSupabaseClient.hiddenStatuses.contains(status) { continue }
+                if (p["is_hidden"] as? Bool) == true { continue }
+                if Self.isGenericPoiName(p["nome"] as? String) { continue }
                 pois.append(OfflinePoi(
                     id: poiId,
                     nome: p["nome"] as? String ?? "Punto di interesse",

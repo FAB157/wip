@@ -138,10 +138,25 @@ class PackageDownloadManager(private val context: Context) {
                     val p = poisArr.getJSONObject(i)
                     val poiId = p.optString("id", "")
                     if (poiId.isEmpty()) continue
+
+                    // DIFESA IN PROFONDITÀ (il DB agent li scarta già lato server):
+                    // niente bozze/allucinazioni/nascosti nei pacchetti offline.
+                    // Stessa lista status di SupabaseClient.parsePoiList.
+                    val status = p.optString("status", "").lowercase()
+                    if (status == "draft" || status == "needs_revision" ||
+                        status == "rejected" || status == "hidden" ||
+                        p.optBoolean("is_hidden", false)
+                    ) continue
+
+                    // Placeholder generici (nessun nome reale): non devono finire
+                    // nel radar offline né essere annunciati.
+                    val nome = p.optString("nome", "")
+                    if (nome.isBlank() || nome.equals("Punto di interesse", ignoreCase = true)) continue
+
                     pois.add(
                         OfflinePoiEntity(
                             id = poiId,
-                            nome = p.optString("nome", "Punto di interesse"),
+                            nome = nome,
                             lat = p.optDouble("lat", 0.0),
                             lon = p.optDouble("lon", 0.0),
                             category = p.strOrNull("category"),

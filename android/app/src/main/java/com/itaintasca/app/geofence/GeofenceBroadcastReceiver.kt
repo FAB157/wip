@@ -58,6 +58,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         private const val ARRIVAL_RETRIGGER_TTL_MS = 24 * 60 * 60 * 1000L
         private const val EXIT_ARRIVAL_GRACE_MS = 30 * 60 * 1000L
 
+        // Cooldown anti-rimbalzo dopo un'uscita (stato EXITED), port di
+        // BackgroundPoiManager.swift:36,39. Pubblici: anche il valutatore
+        // predittivo del servizio li usa per il re-approach post-EXITED.
+        // - avvicinamento: 30 min prima di RI-annunciare un POI già uscito
+        //   dall'isteresi (GPS che rimbalza fra le chiome ≠ nuova visita);
+        // - arrivo: 10 min prima di riaccettare un arrivo dopo un'uscita
+        //   (un rientro immediato nel cerchio è quasi sempre rumore GPS).
+        const val APPROACH_RETRIGGER_COOLDOWN_MS = 30 * 60 * 1000L
+        const val ARRIVAL_AFTER_EXIT_COOLDOWN_MS = 10 * 60 * 1000L
+
         // Stato teaser condiviso col JS (via prefs + eventi plugin)
         const val PREF_TEASER_SPEAKING = "teaser_speaking"
         const val PREF_TEASER_SPEAKING_POI = "teaser_speaking_poi"
@@ -107,6 +117,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // Pubblica: è la copia canonica, usata anche dal filtro offline del service.
         val CATEGORY_MAP = mapOf(
             "monumenti" to listOf("monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"),
+            // castelli/archeo: chiavi dedicate del web (useGeofencing.ts) che
+            // seguono `monumenti` di default. Restano dentro monumenti sopra,
+            // ma esposte a parte per rispettare un eventuale toggle separato.
+            "castelli" to listOf("castle", "castelli"),
+            "archeo" to listOf("ruins", "archaeological_site", "archeo"),
             "musei" to listOf("museum", "gallery", "musei"),
             "chiese" to listOf("church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"),
             "panorami" to listOf("viewpoint", "park", "panorami"),
@@ -115,6 +130,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // i mercati (marketplace) confluiscono in utilita
             "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
             "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
+            // Gemme: chiave del toggle web. Nel prodotto sono "sempre attive",
+            // ma esposta per parità di mappa (vedi isPoiCategoryActive).
+            "gemme" to listOf("gemme"),
             // Toggle "Consigli" del setup GeoControl: presente in SupabaseClient.kt
             // e PoiModels.swift (iOS) — senza questa riga i POI consigli venivano
             // scaricati ma il receiver li scartava al trigger.
@@ -252,8 +270,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
                     val params = Bundle()
                     params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+                    // Via emoji/pittogrammi: il TTS li legge per nome ("💎" →
+                    // "diamante", "📍" → "puntina"). Port di SpeechQueue.speakableText (iOS).
                     val result = ttsInstance?.speak(
-                        next.text,
+                        speakableText(next.text),
                         TextToSpeech.QUEUE_ADD,
                         params,
                         "GEOFENCE_${next.poiId ?: "x"}_${System.currentTimeMillis()}"
@@ -471,6 +491,22 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             })
         }
 
+        /**
+         * Toglie emoji e pittogrammi dal testo da leggere: il TTS di sistema li
+         * pronuncia per nome ("💎" → "diamante", "📍" → "puntina", "🎫" →
+         * "biglietto"). Port di SpeechQueue.speakableText (SpeechQueue.swift:166-178).
+         * Cifre e simboli ASCII (metri, ×) restano intatti.
+         */
+        private val EMOJI_REGEX = Regex(
+            "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{2190}-\\x{21FF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{20E3}\\x{2122}\\x{2139}\\x{00A9}\\x{00AE}]"
+        )
+
+        private fun speakableText(text: String): String {
+            val cleaned = EMOJI_REGEX.replace(text, "").replace(Regex("\\s+"), " ").trim()
+            // Mai utterance vuota (item tutto-emoji): la coda resterebbe bloccata.
+            return cleaned.ifBlank { text.trim() }
+        }
+
         private fun requestFocus(appContext: Context) {
             val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -485,8 +521,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     .setOnAudioFocusChangeListener { change ->
                         // Se qualcuno ci porta via il focus (es. chiamata in arrivo,
                         // prompt del navigatore), tacere subito è la scelta pulita.
+                        // Prima si fermava SOLO il TTS: l'MP3 prefetchato continuava
+                        // a suonare sopra la telefonata. Ora si chiude anche il
+                        // MediaPlayer e lo stato "sto parlando" (finishActiveSpeech
+                        // rilascia il player, abbandona il focus, avvisa il JS).
                         if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
                             try { ttsInstance?.stop() } catch (_: Exception) { }
+                            try { activeMediaPlayer?.pause() } catch (_: Exception) { }
+                            finishActiveSpeech(appContext, notifyJs = true)
                         }
                     }
                     .build()
@@ -667,7 +709,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 continue
             }
 
-            if (info.type == "approach" && triggerState == TriggerState.PENDING) {
+            // Ri-avvicinamento consentito da PENDING oppure da EXITED dopo il
+            // cooldown anti-rimbalzo (30 min): il rientro immediato nell'isteresi
+            // fra le chiome non deve rifare banner+annuncio. Port iOS (stato
+            // .exited + approachRetriggerCooldownMs).
+            val canApproach = triggerState == TriggerState.PENDING ||
+                (triggerState == TriggerState.EXITED && triggerEntity != null &&
+                    System.currentTimeMillis() - triggerEntity.updatedAt > APPROACH_RETRIGGER_COOLDOWN_MS)
+            if (info.type == "approach" && canApproach) {
                 // Predittore CPA al posto del vecchio filtro ±60°: valuta se
                 // l'utente è realmente IN ROTTA verso il POI e se il momento
                 // è quello giusto (t_cpa dentro la finestra di anticipo),
@@ -687,20 +736,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     isDriving = isDrivingMode, radiusM = alertRad
                 )
                 if (pred.decision == PredictiveTrigger.Decision.FIRE) {
-                    handleApproach(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, db, speak = !approachSpokenInBatch)
+                    handleApproach(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, db, speak = !approachSpokenInBatch, distanceM = info.realDist)
                     approachSpokenInBatch = true
                 } else {
                     Log.d(TAG, "Approach non emesso per ${poi.nome}: ${pred.decision} (${pred.reason})")
                 }
             } else if (info.type == "arrival") {
-                // ARRIVED_FIRED scade dopo 24h: un POI rivisitato il giorno dopo
-                // torna a triggerare (prima restava muto per sempre).
-                val arrivedRecently = triggerState == TriggerState.ARRIVED_FIRED &&
-                    triggerEntity != null &&
-                    (System.currentTimeMillis() - triggerEntity.updatedAt) < ARRIVAL_RETRIGGER_TTL_MS
-                if (!arrivedRecently) {
+                // Blocco arrivo (port iOS blockedArrival): il TTL 24h copre
+                // ARRIVED e ora anche PASSED — prima un POI superato ri-arrivava
+                // al primo rientro (il ramo else lo lasciava passare). EXITED
+                // recente blocca il rientro-da-rumore-GPS con un cooldown più
+                // corto (10 min).
+                val age = if (triggerEntity != null) System.currentTimeMillis() - triggerEntity.updatedAt else Long.MAX_VALUE
+                val blockedArrival =
+                    ((triggerState == TriggerState.ARRIVED_FIRED || triggerState == TriggerState.PASSED) && age < ARRIVAL_RETRIGGER_TTL_MS) ||
+                    (triggerState == TriggerState.EXITED && age < ARRIVAL_AFTER_EXIT_COOLDOWN_MS)
+                if (!blockedArrival) {
                     // ✅ [ROBUSTEZZA] - Permettiamo l'arrivo anche se l'approccio è stato saltato (es. marcia veloce)
-                    handleArrival(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, isAutomaticMode, db)
+                    handleArrival(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, isAutomaticMode, db, distanceM = info.realDist)
                 }
             }
         }
@@ -736,9 +789,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             val type = requestId.substringAfterLast("_")
             if (type != "exit") continue
             val entity = db.poiDao().getTriggerState(poiId) ?: continue
+            // Niente più cancellazione secca: si passa a EXITED e il suo
+            // timestamp fa da cooldown anti-rimbalzo (approach 30 min, arrivo
+            // 10 min in handleEnterTransitions). Cancellare permetteva un nuovo
+            // annuncio al primo rientro nel raggio (banner ogni pochi metri).
+            // Port di BackgroundPoiManager.swift (stato .exited).
             when (entity.state) {
                 TriggerState.APPROACH_FIRED -> {
-                    db.poiDao().deleteTriggerState(poiId)
+                    db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.EXITED))
                     sendEventToPlugin(context, "poiExited", poiId, "")
                 }
                 TriggerState.ARRIVED_FIRED -> {
@@ -746,7 +804,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     // disponibile per una futura visita, senza il rimbalzo del
                     // giro dell'isolato.
                     if (System.currentTimeMillis() - entity.updatedAt > EXIT_ARRIVAL_GRACE_MS) {
-                        db.poiDao().deleteTriggerState(poiId)
+                        db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.EXITED))
                         sendEventToPlugin(context, "poiExited", poiId, "")
                     }
                 }
@@ -754,10 +812,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     // Prima cadeva nel ramo else: chi superava il monumento e
                     // tornava indietro non lo risentiva finché non usciva da
                     // 3× il raggio + nuovo fetch. iOS resettava già all'uscita:
-                    // ora anche Android libera lo stato PASSED.
-                    db.poiDao().deleteTriggerState(poiId)
+                    // ora anche Android libera lo stato PASSED → EXITED (col
+                    // cooldown, non un reset immediato).
+                    db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.EXITED))
                     sendEventToPlugin(context, "poiExited", poiId, "")
                 }
+                // Già EXITED (o PENDING): niente da fare.
                 else -> { }
             }
         }
@@ -789,11 +849,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     // dove i dati non consentono una predizione. Vedi PredictiveTrigger.kt.
 
     private suspend fun handleApproach(
-        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, db: PoiDatabase, speak: Boolean = true
+        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, db: PoiDatabase, speak: Boolean = true, distanceM: Float? = null
     ) {
         val poi = db.poiDao().getPoiById(poiId) ?: return
         db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.APPROACH_FIRED))
-        sendEventToPlugin(context, "poiApproaching", poiId, name, poi.lat, poi.lon)
+        sendEventToPlugin(context, "poiApproaching", poiId, name, poi.lat, poi.lon, distanceM)
 
         // ✅ [PREDICTIVE TEASER] - Chiediamo a DeepSeek di preparare il teaser ORA (a 150m)
         // Solo con rete utilizzabile: offline sarebbe un timeout a vuoto.
@@ -835,11 +895,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     }
 
     private suspend fun handleArrival(
-        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, isAutomaticMode: Boolean, db: PoiDatabase
+        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, isAutomaticMode: Boolean, db: PoiDatabase, distanceM: Float? = null
     ) {
         var poi = db.poiDao().getPoiById(poiId)
         db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
-        sendEventToPlugin(context, "poiArrived", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0)
+        sendEventToPlugin(context, "poiArrived", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0, distanceM)
 
         val priority = if (poi?.isFromItinerary == true) 0 else 1
 
@@ -921,6 +981,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 // Il teaser (già in coda sopra) e la notifica (sotto) sono i
                 // gradini 4 e 5: mai silenzio totale.
                 var fullText = db.offlineDao().getPoiById(poiId)?.audioText
+                // Mono-lingua: il testo offline (audioText) è nella lingua del
+                // pacchetto scaricato; se non combacia con la lingua utente lo
+                // scartiamo, così i rami sotto lo rifetchano nella lingua giusta
+                // (stessa guardia di AudioPrefetchManager.resolveAudioText).
+                val pkgLang = db.offlineDao().getPoiPackageLanguage(poiId)
+                if (!fullText.isNullOrBlank() && pkgLang != null && !pkgLang.equals(lang, ignoreCase = true)) {
+                    fullText = null
+                }
                 var mp3File = com.itaintasca.app.service.AudioPrefetchManager
                     .cachedFile(context, poiId, lang)
                 if (fullText.isNullOrBlank() && mp3File == null &&
@@ -944,7 +1012,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     enqueue(context, SpeechItem(fullText ?: "", isGem, isItinerary, poiId, priority, kind = "arrival", audioFile = mp3File?.absolutePath))
                     // Info aggiuntive incluse nel pass (1 livello): la descrizione
                     // breve se distinta dal testo guida.
-                    val extra = db.offlineDao().getPoiById(poiId)?.descriptionShort
+                    // Stessa guardia lingua della guida: niente descrizione IT
+                    // sotto una guida EN (pacchetto in lingua diversa → salta).
+                    val extra = if (pkgLang != null && !pkgLang.equals(lang, ignoreCase = true)) null
+                                else db.offlineDao().getPoiById(poiId)?.descriptionShort
                     if (!extra.isNullOrBlank() && extra != fullText && fullText?.contains(extra) != true) {
                         enqueue(context, SpeechItem(extra, isGem, isItinerary, poiId, priority, kind = "arrival"))
                     }
@@ -1005,7 +1076,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
     private fun isPoiCategoryActive(poi: PoiEntity, selected: List<String>): Boolean {
         if (poi.isFromItinerary) return true
-        if (poi.isGem) return true
+        if (poi.isGem) return areGemsActive(selected)
         val cat = (poi.poiType ?: "").lowercase()
         if (selected.contains(cat)) return true
         for (uiCat in selected) {
@@ -1013,6 +1084,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
         return false
     }
+
+    /**
+     * Attivazione delle gemme (parità con useGeofencing.ts `activeSubcats.gemme
+     * ?? true`: attive di DEFAULT, spegnibili dall'utente).
+     *
+     * ⚠️ Nel prodotto attuale le gemme sono "sempre attive" (checkbox disabilitata
+     *    nel setup, App.tsx: "gemme sempre attive a parte") e locationService NON
+     *    inoltra mai "gemme" tra le categorie native: in produzione il set è
+     *    tipicamente ['monumenti','musei','chiese']. Gating su
+     *    `selected.contains("gemme")` spegnerebbe TUTTE le gemme (regressione).
+     *    Quindi il default resta ON; l'utente può spegnerle SOLO con un OFF
+     *    esplicito, rappresentato dalla sentinella "gemme:off" nella lista
+     *    (nessuno la invia oggi → comportamento invariato). Onorare un toggle
+     *    utente vero richiede che il JS inoltri lo stato gemme al nativo (fuori
+     *    dallo scope Android — vedi report).
+     */
+    private fun areGemsActive(selected: List<String>): Boolean =
+        !selected.contains("gemme:off")
 
     private fun vibrate(context: Context, pattern: LongArray) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -1099,12 +1188,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun sendEventToPlugin(context: Context, event: String, poiId: String, poiName: String, lat: Double = 0.0, lon: Double = 0.0) {
+    private fun sendEventToPlugin(context: Context, event: String, poiId: String, poiName: String, lat: Double = 0.0, lon: Double = 0.0, distanceM: Float? = null) {
         val jsonData = JSONObject().apply {
             put("poiId", poiId)
             put("poiName", poiName)
             put("lat", lat)
             put("lon", lon)
+            // distanceM: distanza REALE dal fix, così il banner JS mostra la
+            // distanza vera invece di stimarla (parità iOS sendPoiEvent).
+            if (distanceM != null) put("distanceM", distanceM.toInt())
             // ts: il WebView può ricevere l'evento in ritardo (risveglio dopo
             // sblocco) — il JS scarta i banner stantii. Allineato a iOS.
             put("ts", System.currentTimeMillis())

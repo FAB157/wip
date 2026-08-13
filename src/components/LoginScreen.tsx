@@ -44,6 +44,12 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
 
   // Email non confermata al login: mostra il tasto "Reinvia email di conferma".
   const [needsConfirm, setNeedsConfirm] = useState(false);
+  // Dopo una registrazione che richiede conferma email: guida PERSISTENTE in
+  // pagina + azione "Ho confermato, accedi", così l'utente non resta bloccato.
+  // Su nativo il link di conferma apre il browser su wip.guide (non esiste un
+  // handler deep-link auth nell'app), quindi dopo la conferma l'utente rientra
+  // qui e accede: questo pannello glielo rende esplicito.
+  const [signupConfirmPending, setSignupConfirmPending] = useState(false);
 
   const friendlyError = (e: any): string => {
     const msg = e?.message || '';
@@ -78,6 +84,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     setLoading(true);
     setError('');
     setNeedsConfirm(false);
+    setSignupConfirmPending(false);
     try {
       if (isRegistering) {
         const trimmedName = name.trim();
@@ -107,6 +114,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
         } else {
           notify('Registrazione avvenuta! Controlla la tua casella email (anche nello Spam) per confermare l\'account.');
           setIsRegistering(false);
+          setSignupConfirmPending(true);
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -141,6 +149,40 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       setError('');
     } catch (e: any) {
       setError(friendlyError(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // "Ho confermato, accedi": dopo aver aperto il link dall'email, l'utente
+  // rientra e tenta l'accesso con le stesse credenziali. Se l'account non è
+  // ancora confermato, messaggio dedicato invece di bloccarlo.
+  const handleAlreadyConfirmed = async () => {
+    if (!email || !password) {
+      // Password non più in memoria: torna al login classico con email pronta.
+      setIsRegistering(false);
+      setSignupConfirmPending(false);
+      setError('Inserisci di nuovo email e password per accedere.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      if (data.session) {
+        setSignupConfirmPending(false);
+        if (isBiometricAvailable && isBiometricPrefEnabled()) {
+          await saveCredentials(email, password).catch(() => {});
+        }
+        onLoginSuccess(data.session);
+      }
+    } catch (e: any) {
+      if (String(e?.message || '').includes('Email not confirmed')) {
+        setError('L\'account non risulta ancora confermato. Apri il link nell\'email (controlla anche lo Spam) e poi riprova.');
+      } else {
+        setError(friendlyError(e));
+      }
     } finally {
       setLoading(false);
     }
@@ -318,6 +360,37 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
                 <h2 className="text-lg font-semibold">{isRegistering ? 'Registrati' : 'Accedi'}</h2>
               </div>
 
+              {signupConfirmPending && (
+                <div className="flex items-start gap-2 bg-green-500/10 border border-green-500/30 rounded-xl p-3">
+                  <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                  <div className="text-sm text-on-surface space-y-3 w-full">
+                    <p>
+                      Ti abbiamo inviato un'email di conferma{email ? <> a <b className="break-all">{email}</b></> : ''}.
+                      Aprila (controlla anche lo <b>Spam</b>), conferma l'account, poi torna qui e accedi.
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAlreadyConfirmed}
+                        disabled={loading}
+                        className="w-full py-2.5 rounded-xl bg-primary text-secondary border-2 border-secondary border-opacity-30 text-sm font-bold hover:bg-primary/80 transition-colors disabled:opacity-50 flex items-center justify-center"
+                      >
+                        {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                        Ho confermato, accedi
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResendConfirmation}
+                        disabled={loading}
+                        className="w-full py-2.5 rounded-xl border border-secondary/30 text-secondary text-sm font-bold hover:bg-secondary/10 transition-colors disabled:opacity-50"
+                      >
+                        Reinvia email di conferma
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4">
                 {isRegistering && (
                   <div>
@@ -413,7 +486,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
                 {isRegistering ? 'Hai già un account? ' : 'Non hai un account? '}
                 <button
                   type="button"
-                  onClick={() => setIsRegistering(!isRegistering)}
+                  onClick={() => { setIsRegistering(!isRegistering); setSignupConfirmPending(false); setError(''); }}
                   className="text-secondary hover:text-secondary/80 font-medium hover:underline transition-colors"
                 >
                   {isRegistering ? 'Accedi' : 'Registrati'}

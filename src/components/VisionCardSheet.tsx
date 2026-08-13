@@ -24,9 +24,39 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
   const [audioLoading, setAudioLoading] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return () => { stopSpeech(); };
+  }, []);
+
+  // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
+  useEffect(() => {
+    const root = dialogRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement)) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
   }, []);
 
   const photo = card.image || card.photo_url || null;
@@ -155,6 +185,10 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
   return (
     <div className="fixed inset-0 z-[2500] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center">
       <motion.div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={card.nome || 'Scheda Vision'}
         initial={{ y: 80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', damping: 26, stiffness: 300 }}
@@ -172,6 +206,7 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
           <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent" />
           <button
             onClick={onClose}
+            aria-label="Chiudi"
             className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform"
           >
             <X className="w-5 h-5" />
@@ -182,6 +217,7 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
                 onClick={handleDownload}
                 disabled={photoBusy}
                 title="Salva la foto sul dispositivo"
+                aria-label="Salva la foto sul dispositivo"
                 className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-50"
               >
                 {photoBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
@@ -190,6 +226,7 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
                 onClick={handleShare}
                 disabled={photoBusy}
                 title="Condividi la foto"
+                aria-label="Condividi la foto"
                 className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform disabled:opacity-50"
               >
                 <Share2 className="w-4 h-4" />
@@ -201,6 +238,7 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
           </div>
           <button
             onClick={handleAudio}
+            aria-label={audioPlaying ? 'Metti in pausa' : 'Ascolta la scheda'}
             className="absolute -bottom-0 right-4 translate-y-0 w-11 h-11 rounded-full bg-primary text-white flex items-center justify-center shadow-lg active:scale-90 transition-transform"
             style={{ transform: 'translateY(50%)' }}
           >

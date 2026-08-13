@@ -18,6 +18,14 @@ struct Poi: Codable {
     var isGem: Bool
     var isFromItinerary: Bool
     var teaserText: String?
+    /// Raggi calibrati sul perimetro reale (footprint OSM) quando il POI è
+    /// stato processato: alert_radius / geofence_radius del DB e del pacchetto
+    /// offline. nil = non calibrato → si usano i raggi di modalità. Usati SOLO
+    /// se c'è un ingresso reale (entrance), come radiiForTransport lato web
+    /// (src/lib/guideSettings.ts) e la modifica gemella Android. Default nil
+    /// così l'init membrowise resta compatibile con i chiamanti esistenti.
+    var alertRadius: Int? = nil
+    var arrivalRadius: Int? = nil
 
     var coordinate: CLLocation {
         CLLocation(latitude: entranceLat ?? lat, longitude: entranceLon ?? lon)
@@ -33,6 +41,8 @@ struct Poi: Codable {
         if let v = entranceLon { d["entranceLon"] = v }
         if let v = poiType { d["poiType"] = v }
         if let v = teaserText { d["teaserText"] = v }
+        if let v = alertRadius { d["alertRadius"] = v }
+        if let v = arrivalRadius { d["arrivalRadius"] = v }
         return d
     }
 }
@@ -75,10 +85,16 @@ struct OfflinePoi: Codable {
     var updatedAt: String?
 
     func toPoi() -> Poi {
+        // Preserva i raggi calibrati sul perimetro (footprint) che il pacchetto
+        // offline già trasporta: prima venivano scartati e il trigger usava solo
+        // i raggi di modalità. L'ingresso reale non è nel bundle offline, quindi
+        // di fatto il footprint entra in gioco solo per i POI online (dove
+        // entranceLat/Lon sono valorizzati) — vedi effectiveRadii/BackgroundPoiManager.
         Poi(id: id, nome: nome, lat: lat, lon: lon,
             entranceLat: nil, entranceLon: nil,
             poiType: poiType ?? category, guideDefault: "nicky",
-            isGem: isGem, isFromItinerary: false, teaserText: teaserText)
+            isGem: isGem, isFromItinerary: false, teaserText: teaserText,
+            alertRadius: alertRadius, arrivalRadius: arrivalRadius)
     }
 }
 
@@ -137,6 +153,11 @@ enum BillingLogic {
 enum PoiCategories {
     static let map: [String: [String]] = [
         "monumenti": ["monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"],
+        // Chiavi dedicate del web (isCategoryAllowed): castelli/archeo seguono
+        // "monumenti" nella UI ma, se un giorno arrivano come chiave a sé nella
+        // lista `selected`, devono comunque attivare i rispettivi POI.
+        "castelli": ["castle", "castelli"],
+        "archeo": ["ruins", "archaeological_site", "archeo"],
         "musei": ["museum", "gallery", "musei"],
         "chiese": ["church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"],
         "panorami": ["viewpoint", "park", "panorami"],
@@ -144,20 +165,37 @@ enum PoiCategories {
         "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"],
         "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie"],
         "consigli": ["information", "tourism_information", "office", "consigli"],
+        // Gemme: chiave presente per completezza (passano comunque via isGem).
+        "gemme": ["gemme"],
         // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
         "community": ["community"]
     ]
 
+    /// Set "default assoluto" (nessuna categoria selezionata): allineato al
+    /// default del setup GeoControl web { monumenti, musei, chiese } — panorami
+    /// e consigli sono OFF di default (src/hooks/useGeofencing.ts:393). Prima
+    /// includeva viewpoint/park/panorami e i panorami risultavano attivi di
+    /// default, divergendo dal web. Tenere allineato ad Android (parsePois).
     static let culturalCats = [
-        "monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti",
+        "monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "monumenti",
         "museum", "gallery", "musei", "church", "place_of_worship", "cathedral",
-        "chiese", "viewpoint", "park", "panorami"
+        "chiese"
     ]
 
     /// Stessa semantica di isPoiCategoryActive del receiver Android.
     static func isActive(poi: Poi, selected: [String]) -> Bool {
-        if poi.isFromItinerary || poi.isGem { return true }
+        if poi.isFromItinerary { return true }
         let cat = (poi.poiType ?? "").lowercased()
+        // GEMME = "default assoluto, sempre attive a parte" (App.tsx:187 e il
+        // filtro radar App.tsx poisUpdated "Gemme Sempre Attive, come nel
+        // servizio nativo"), e isCategoryAllowed usa `?? true`. Il modello a
+        // lista `selected` non può rappresentare una disattivazione ESPLICITA
+        // delle gemme (la lista contiene solo chiavi ON, e il default nativo
+        // che parte dal JS — ['monumenti','musei','chiese'] — non include mai
+        // 'gemme'): richiederla in lista le spegnerebbe di default = regressione
+        // della feature di punta. Restano quindi sempre attive, in parità con
+        // Android (isPoiCategoryActive: `if (poi.isGem) return true`). Vedi REPORT.
+        if poi.isGem || cat == "gemme" { return true }
         if selected.isEmpty { return culturalCats.contains(cat) }
         if selected.contains(cat) { return true }
         return selected.contains { map[$0]?.contains(cat) == true }

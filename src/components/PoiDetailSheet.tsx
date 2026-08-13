@@ -6,7 +6,7 @@ import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { notify } from '../lib/toast';
 import ShopScreen from './ShopScreen';
-import { PRICING_LIST, getWalletBalance, consumeCredits, refundCredits } from '../lib/pricing';
+import { PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged, consumeCredits } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import PoiContactButtons from './PoiContactButtons';
 import PoiTicketsButtons from './PoiTicketsButtons';
@@ -177,6 +177,11 @@ export default function PoiDetailSheet({
   const [reportDetails, setReportDetails] = useState('');
   const [isReporting, setIsReporting] = useState(false);
   const [localGuideMode, setLocalGuideMode] = useState<"nicky" | "dante">(guideMode);
+  // Registro dell'audioguida (ondata 4): standard, breve (~40s) o bambini.
+  // Codificato nel guide_character (es. "nicky_breve"): stessa cache
+  // poi_audioguides per (poi, lingua, personaggio+registro), zero migration.
+  const [guideRegister, setGuideRegister] = useState<'standard' | 'breve' | 'bambini'>('standard');
+  const charKeyFor = (mode: "nicky" | "dante") => guideRegister === 'standard' ? mode : `${mode}_${guideRegister}`;
   const creditConfirm = useCreditConfirmation();
   const hasAutoPlayedRef = useRef<string | null>(null);
 
@@ -231,7 +236,45 @@ export default function PoiDetailSheet({
   // Prevention for infinite loops
   const processedRef = useRef<string>("");
 
-  
+  // A11y bottom sheet (dialog): root per il focus trap + specchio dello stato
+  // dei modali annidati (crediti/shop/segnalazione/nearby) che nel DOM sono
+  // fratelli e gestiscono da sé il proprio focus.
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const nestedOpenRef = useRef(false);
+  nestedOpenRef.current = showCreditModal || creditConfirm.isOpen || showReportModal || showNearbyList || !!shopUserId;
+
+  // Focus trap + ritorno del focus alla chiusura, sospeso quando un modale
+  // annidato è aperto (così il Tab non resta intrappolato nella sheet).
+  useEffect(() => {
+    if (!poi) return;
+    const root = sheetRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement) && !nestedOpenRef.current) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (nestedOpenRef.current) return; // lascia gestire al modale annidato
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [poi?.id]);
+
   const loadingPhrases = [
     "Sto consultando gli archivi storici...",
     "Sto cercando segreti e curiosità...",
@@ -307,9 +350,17 @@ export default function PoiDetailSheet({
         created_at: new Date().toISOString()
       };
       
+      // /api/cache/upsert ora richiede un token (anti-poisoning della cache
+      // condivisa): inoltriamo il bearer della sessione. Scrittura best-effort:
+      // se manca il token il server risponde 401 e il catch lo ignora.
+      const { data: cacheSess } = await supabase.auth.getSession();
+      const cacheToken = cacheSess?.session?.access_token;
       const res = await fetch("/api/cache/upsert", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(cacheToken ? { Authorization: `Bearer ${cacheToken}` } : {})
+        },
         body: JSON.stringify(payload)
       });
 
@@ -836,14 +887,11 @@ export default function PoiDetailSheet({
                   processedRef.current = ""; // Permetti di riprovare
                   return;
                 }
-
-                const payRes = await consumeCredits(currentUserId, PRICING_LIST.poi_detail);
-                if (!payRes) {
-                  notify("Crediti insufficienti. Visita lo store per ricaricare.");
-                  setIsLoading(false);
-                  processedRef.current = "";
-                  return;
-                }
+                // ADDEBITO LATO SERVER: la scheda dettagli è ora scalata dalla
+                // route di arricchimento (col token utente). Il vecchio
+                // consumeCredits qui provocava un DOPPIO addebito. Restano la
+                // conferma qui sopra e, dopo l'arricchimento, il refresh del
+                // saldo nei widget (notifyCreditsChanged più in basso).
             } else {
                 console.log("[DetailSheet] POI già acquistato, salto conferma crediti.");
             }
@@ -898,6 +946,22 @@ export default function PoiDetailSheet({
                 if (fastErr?.message?.includes("curatela")) throw fastErr;
                 console.warn("[PoiDetailSheet] Fast enrich skip:", fastErr?.message);
               }
+            }
+
+            // Saldo addebitato lato server durante l'arricchimento: allinea i
+            // widget crediti come dopo un acquisto (evento wip-credits-updated)
+            // e aggiorna il saldo mostrato nel modale.
+            if (!alreadyPaid) {
+              // ADDEBITO CLIENT-SIDE alla consegna dei dettagli: consumeCredits
+              // scala i crediti SERVER-SIDE via token utente (/api/credits/consume).
+              // Si paga solo dopo aver ottenuto la scheda; la rotta /api/poi/enrich
+              // NON scala crediti da sé → nessun doppio addebito.
+              try { await consumeCredits(currentUserId, PRICING_LIST.poi_detail); } catch { /* saldo già verificato dal gate; contenuto già consegnato */ }
+              notifyCreditsChanged({ userId: currentUserId });
+              try {
+                const bal = await getWalletBalance(currentUserId);
+                if (active) setCurrentBalance(bal.total);
+              } catch { /* saldo aggiornato al prossimo refresh */ }
             }
 
             if (active) {
@@ -1304,7 +1368,7 @@ export default function PoiDetailSheet({
       // narrazione: l'approfondimento è sempre nuovo.
       if (!isDeepDive) {
         try {
-          const cachedGuide = await getAudioguide(String(poi.id), String(language), modeToUse);
+          const cachedGuide = await getAudioguide(String(poi.id), String(language), charKeyFor(modeToUse) as any);
           if (cachedGuide?.audio_text) {
             console.log("[DetailSheet] Audioguida da cache poi_audioguides:", poi?.name);
             setGeneratedText(cachedGuide.audio_text);
@@ -1326,7 +1390,9 @@ export default function PoiDetailSheet({
           text: wikiData.extract,
           poiName: poi?.name,
           location: locationName || undefined,
-          mode: modeToUse,
+          // Personaggio + registro (es. "nicky_breve"): il server ne ricava
+          // persona e formato; la voce TTS usa sempre il personaggio base.
+          mode: charKeyFor(modeToUse),
           previousText: generatedText || undefined,
           lang: language,
           poi_id: poi.id
@@ -1351,14 +1417,20 @@ export default function PoiDetailSheet({
             description_short: poi.description_short || null,
             description_long: wikiData?.extract || null,
           }).then(() => {
-            upsertAudioguide(String(poi.id), String(language), modeToUse, data.result).catch(() => {});
+            upsertAudioguide(String(poi.id), String(language), charKeyFor(modeToUse) as any, data.result).catch(() => {});
           }).catch(() => {});
         }
         if (autoPlay) {
-          await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse);
+          const played = await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse);
+          // Ritorna l'esito reale: il chiamante a pagamento (onConfirm non-IT)
+          // rimborsa se la riproduzione fallisce. Prima la funzione inghiottiva
+          // ogni errore e non lanciava mai → il refund era codice morto.
+          if (!played) return false;
         }
+        return true;
       } else {
         setGeneratedText(wikiData?.extract || "Descrizione non disponibile.");
+        return false; // nessun testo generato
       }
     } catch (error: any) {
       console.error("Regeneration error:", error);
@@ -1370,6 +1442,7 @@ export default function PoiDetailSheet({
         // scheda, così il blocco audioguida non resta mai in caricamento.
         setGeneratedText(prev => prev || wikiData?.extract || "Descrizione non disponibile al momento.");
       }
+      return false;
     } finally {
       setIsRegenerating(false);
     }
@@ -1387,17 +1460,19 @@ export default function PoiDetailSheet({
     if (wikiData?.extract && !generatedText && !isRegenerating && !isLoading && !isStreaming && wikiData.extract.length > 50) {
        // Se il DB ha già il copione audio (audio_script) e siamo in italiano,
        // non serve rigenerare nulla: il blocco audioguida lo mostra subito.
-       if (language === 'IT' && (poi as any)?.audioScript) return;
-       // UNA sola auto-rigenerazione per combinazione POI/lingua/personaggio:
-       // prima, se /api/regenerate falliva, l'effect ripartiva all'infinito
-       // (spinner "Caricamento in corso..." perenne + alert a raffica).
-       const attemptKey = `${poi?.id}_${language}_${localGuideMode}`;
+       // Con un registro diverso da standard invece SI rigenera: il copione
+       // in DB è la versione standard.
+       if (language === 'IT' && (poi as any)?.audioScript && guideRegister === 'standard') return;
+       // UNA sola auto-rigenerazione per combinazione POI/lingua/personaggio/
+       // registro: prima, se /api/regenerate falliva, l'effect ripartiva
+       // all'infinito (spinner "Caricamento..." perenne + alert a raffica).
+       const attemptKey = `${poi?.id}_${language}_${localGuideMode}_${guideRegister}`;
        if (autoRegenAttemptedRef.current === attemptKey) return;
        autoRegenAttemptedRef.current = attemptKey;
        console.log("[DetailSheet] Triggering auto-regeneration for:", poi?.name);
        regenerateWithGemini(false, localGuideMode);
     }
-  }, [wikiData?.extract, generatedText, isRegenerating, isLoading, isStreaming, language, localGuideMode]);
+  }, [wikiData?.extract, generatedText, isRegenerating, isLoading, isStreaming, language, localGuideMode, guideRegister]);
 
   const formatTime = (seconds: number) => {
     if (!seconds || isNaN(seconds)) return "00:00";
@@ -2380,6 +2455,10 @@ export default function PoiDetailSheet({
       <AnimatePresence>
         {poi && (
       <motion.div
+        ref={sheetRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={poi?.name || 'Dettagli luogo'}
         key={`poi-${poi.id}`}
         initial={{ y: "100%" }}
         animate={{ y: 0 }}
@@ -2416,11 +2495,14 @@ export default function PoiDetailSheet({
                   onClick={openChatWithWip}
                   className="p-2.5 bg-blue-600/80 backdrop-blur-md rounded-full text-white hover:bg-blue-700 transition-all shadow-lg active:scale-90"
                   title="Chat con Wip"
+                  aria-label="Chat con Wip"
                 >
                   <MessageSquare className="w-5 h-5" />
                 </button>
                 <button
                   onClick={onToggleSave}
+                  aria-label={isSaved ? 'Rimuovi dai preferiti' : 'Salva nei preferiti'}
+                  aria-pressed={isSaved}
                   className={`p-2.5 backdrop-blur-md rounded-full transition-all shadow-lg active:scale-90 ${
                     isSaved
                       ? "bg-secondary text-white"
@@ -2433,6 +2515,7 @@ export default function PoiDetailSheet({
                 </button>
                 <button
                   onClick={onClose}
+                  aria-label="Chiudi"
                   className="p-2.5 bg-black/30 backdrop-blur-md rounded-full text-white hover:bg-black/50 transition-colors shadow-lg"
                 >
                   <X className="w-5 h-5" />
@@ -2842,6 +2925,18 @@ export default function PoiDetailSheet({
                   setGeneratedText(null);
                 }
               }}
+              guideRegister={guideRegister}
+              setGuideRegister={(r) => {
+                if (r !== guideRegister) {
+                  setGuideRegister(r);
+                  if (audioState.isPlaying && audioState.poiId === String(poi?.id)) {
+                    locationService.stopGuideAudio();
+                  }
+                  // Testo azzerato → l'auto-rigenerazione riparte col nuovo
+                  // registro (o pesca la versione già cachata per quel registro)
+                  setGeneratedText(null);
+                }
+              }}
               isLoading={isLoading}
               isRegenerating={isRegenerating}
               generatedText={generatedText}
@@ -2896,36 +2991,38 @@ export default function PoiDetailSheet({
         if (!pendingAudioTask) return;
         const task = pendingAudioTask;
         setPendingAudioTask(null);
-        try {
-          const { data: sessionData } = await supabase.auth.getSession();
-          const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-          const paid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
-          if (!paid) {
-            notify(language === 'IT'
-              ? "Crediti insufficienti. Ricarica dallo shop per continuare."
-              : "Not enough credits. Please top up to continue.");
-            return;
-          }
-        } catch (e) {
-          console.warn("[PoiDetailSheet] Addebito crediti fallito:", e);
+        // ADDEBITO CLIENT-SIDE alla conferma: consumeCredits scala i crediti
+        // SERVER-SIDE via token utente (POST /api/credits/consume, atomico). I
+        // rami sotto rimborsano con refundCredits se la generazione o la
+        // riproduzione falliscono. Le rotte di generazione/TTS NON scalano da
+        // sé → nessun doppio addebito.
+        const { data: sessionData } = await supabase.auth.getSession();
+        const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
+        const audioPaid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
+        if (!audioPaid) {
           notify(language === 'IT'
-            ? "Errore durante l'addebito dei crediti. Riprova."
-            : "Error while charging credits. Please try again.");
+            ? "Crediti insufficienti per l'audioguida."
+            : "Not enough credits for the audioguide.");
+          openCreditShop();
           return;
         }
         // Utente non-IT senza testo già generato: dopo il pagamento la guida
         // va narrata nella SUA lingua — rigenera e riproduce (prima partiva
         // il testo italiano di fallback). Rimborso se la generazione fallisce.
         if (language !== 'IT' && !generatedText) {
-          try {
-            await regenerateWithGemini(true, localGuideMode);
-          } catch (regenErr) {
-            console.error('[PoiDetailSheet] Regen post-pagamento fallita:', regenErr);
+          // regenerateWithGemini ora ritorna l'esito reale (true = generata e
+          // riprodotta). Su fallimento rimborsiamo l'addebito appena fatto.
+          const regenOk = await regenerateWithGemini(true, localGuideMode);
+          if (regenOk) {
+            notifyCreditsChanged({ userId: currentUserId });
+          } else {
             const { data: sd } = await supabase.auth.getSession();
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
-            notify("Could not generate the audioguide. Your credits have been refunded.");
+            notify(language === 'IT'
+              ? "Non è stato possibile generare l'audioguida. I crediti ti sono stati restituiti."
+              : "Could not generate the audioguide. Your credits have been refunded.");
           }
           return;
         }
@@ -2942,6 +3039,9 @@ export default function PoiDetailSheet({
             notify(language === 'IT'
               ? "Non è stato possibile riprodurre l'audioguida. I crediti ti sono stati restituiti."
               : "Could not play the audioguide. Your credits have been refunded.");
+          } else {
+            // Saldo scalato lato server: aggiorna i widget crediti.
+            notifyCreditsChanged({ userId: currentUserId });
           }
         }
       }}

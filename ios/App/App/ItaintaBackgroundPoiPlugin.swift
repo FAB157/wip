@@ -24,6 +24,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "checkAndRequestPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "syncManualSelection", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resetTriggerHistory", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopNativeTeaser", returnType: CAPPluginReturnPromise),
@@ -176,6 +177,17 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     @objc func syncManualSelection(_ call: CAPPluginCall) {
         let poisJson = call.getString("poisJson") ?? "[]"
         BackgroundPoiManager.shared.syncManualSelection(poisJson: poisJson)
+        call.resolve()
+    }
+
+    /// Azzera lo storico dei trigger di geofencing (trigger_state): dopo il
+    /// reset ogni POI verrà riannunciato come la prima volta. Chiamato dal JS
+    /// (ProfileScreen → "Azzera storico") in parallelo alla cancellazione web
+    /// di wip_played_pois. Senza, il servizio in background continuava a saltare
+    /// i POI già annunciati anche dopo il reset lato web. Port di
+    /// ItaintaBackgroundPoiPlugin.kt::resetTriggerHistory.
+    @objc func resetTriggerHistory(_ call: CAPPluginCall) {
+        store.clearTriggerStates()
         call.resolve()
     }
 
@@ -382,8 +394,11 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let cost = call.getInt("cost") ?? BillingLogic.defaultGuideCost
 
         let offlinePoi = store.getOfflinePoi(poiId)
-        let text = offlinePoi?.audioText
         let lang = prefs.string(forKey: "language") ?? "it"
+        // Testo offline SOLO se il pacchetto è nella lingua dell'utente; se il
+        // pacchetto è in un'altra lingua si scarta il testo (mono-lingua) e ci
+        // si affida all'MP3 prefetchato, già sintetizzato nella lingua giusta.
+        let text = store.getOfflineAudioText(poiId, lang: lang)
         // MP3 prefetchato: parte istantaneo e copre anche il caso audio_text
         // assente nel pacchetto (catena fallback offline, come Android).
         let mp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang)

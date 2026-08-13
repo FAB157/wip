@@ -1,7 +1,10 @@
 /**
  * useSmartGeofence.ts
- * Hook React per integrare SmartGeofenceManager in itainta
- * 
+ * Hook React per integrare SmartGeofenceManager in itainta.
+ *
+ * ⚠️ WEB = RADAR-ONLY: hook NON montato in produzione (nessun componente lo usa).
+ * I trigger geofence reali sono nativi (Android/iOS). Resta come riferimento.
+ *
  * Uso:
  * const { mode, activeBanner, activeCard, dismissBanner, setManualMode } = useSmartGeofence(pois);
  */

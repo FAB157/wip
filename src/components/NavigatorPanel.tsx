@@ -1,3 +1,7 @@
+// @deprecated STACK NON USATO. Questo pannello (con NavigatorEngine e
+// useNavigator) non è importato da nessuno: la UI di navigazione attiva è
+// NavigationOverlay (pilotata da useWalkingNavigation). Mantenuto per
+// riferimento; non ricollegare senza revisione.
 import React from 'react';
 import { NavigationState } from '../lib/navigator/NavigatorEngine';
 import { X, ArrowUp, CornerUpLeft, CornerUpRight, MoveDiagonal, RotateCw, MapPin } from 'lucide-react';

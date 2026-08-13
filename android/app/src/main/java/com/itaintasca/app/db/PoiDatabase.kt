@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 5
+    version = 6
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -97,6 +97,20 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 5→6: raggi da footprint (perimetro reale) sul radar cache. Migration
+        // REALE (mai distruttiva): un bump distruttivo cancellerebbe anche i
+        // pacchetti offline scaricati. Le colonne sono nullable → nessun
+        // default: i POI già in cache restano NULL (= raggi di modalità, come
+        // prima) finché il prossimo fetch non le popola.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO / ANDROID STUDIO: schema Room + upgrade
+        //    reale da un'installazione con DB v5 (pacchetti offline preservati).
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `alertRadius` INTEGER")
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `geofenceRadius` INTEGER")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         private val rtreeCallback = object : Callback() {
@@ -112,8 +126,12 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5)
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                    // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
+                    // domani una migration mancante (es. 6→7 dimenticata) o un
+                    // downgrade NON deve azzerare offline_packages/pois/ledger.
+                    .fallbackToDestructiveMigrationFrom(1, 2, 3)
+                    .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(rtreeCallback)
                     .build()
                     .also { instance = it }

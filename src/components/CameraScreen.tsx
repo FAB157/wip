@@ -31,6 +31,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string>('');
   const [mode, setMode] = useState<'vision' | 'ar'>('vision');
+  // Vision opere musei (ondata 7): in modalità "Opera" il server riceve
+  // mode:'artwork' → prompt da storico dell'arte, cache GPS bypassata (due
+  // opere distano pochi metri). Col Pass Museo attivo la scansione è inclusa.
+  const [visionTarget, setVisionTarget] = useState<'place' | 'artwork'>('place');
   const { quotaToast, showQuotaToast, closeQuotaToast } = useQuotaToast();
   
   const creditConfirm = useCreditConfirmation();
@@ -53,6 +57,42 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     const t = setInterval(() => setTick(x => x + 1), 30_000);
     return () => clearInterval(t);
   }, []);
+
+  // ── Prima card guidata (ondata 3) ──────────────────────────────────────
+  // Al primo ingresso in camera un overlay in 3 passi spiega il gesto e la
+  // ricompensa, e se il GPS risponde suggerisce un luogo vicino da provare.
+  // Il primo contributo è il funnel critico: chi pubblica una card torna.
+  const [showFirstGuide, setShowFirstGuide] = useState(() => {
+    try { return !localStorage.getItem('wip_first_card_guide_done'); } catch { return false; }
+  });
+  const [nearbySuggestion, setNearbySuggestion] = useState<{ name: string; dist: number } | null>(null);
+  useEffect(() => {
+    if (!showFirstGuide || !('geolocation' in navigator)) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        const { latitude: la, longitude: lo } = pos.coords;
+        const d = 0.004; // ~400m
+        const { data } = await supabase
+          .from('shared_pois')
+          .select('name, lat, lon')
+          .gte('lat', la - d).lte('lat', la + d)
+          .gte('lon', lo - d).lte('lon', lo + d)
+          .neq('category', 'community')
+          .limit(20);
+        if (cancelled || !data?.length) return;
+        const best = data
+          .map((p: any) => ({ name: p.name, dist: Math.round(Math.hypot((p.lat - la) * 111320, (p.lon - lo) * 111320 * Math.cos(la * Math.PI / 180))) }))
+          .sort((a: any, b: any) => a.dist - b.dist)[0];
+        if (best) setNearbySuggestion(best);
+      } catch { /* niente suggerimento, la guida resta valida */ }
+    }, () => { /* permesso negato: nessun suggerimento */ }, { timeout: 3000, maximumAge: 60000 });
+    return () => { cancelled = true; };
+  }, [showFirstGuide]);
+  const dismissFirstGuide = () => {
+    try { localStorage.setItem('wip_first_card_guide_done', '1'); } catch { /* ok */ }
+    setShowFirstGuide(false);
+  };
 
   const openCreditShop = async () => {
     const { data } = await supabase.auth.getSession();
@@ -244,7 +284,10 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       setIsScanning(false); // Pausa per mostrare il modale
       const bal = await getWalletBalance(currentUserId);
       setCurrentBalance(bal.total);
-      const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.photo_search, "Visione AI");
+      const confirmed = await creditConfirm.requestConfirmation(
+        PRICING_LIST.photo_search,
+        visionTarget === 'artwork' ? "Visione AI — Opera d'arte" : "Visione AI"
+      );
       if (!confirmed) return;
       setIsScanning(true);
     }
@@ -267,7 +310,10 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         body: JSON.stringify({
           imageBase64: base64Image,
           lat: gpsLat,
-          lon: gpsLon
+          lon: gpsLon,
+          // Modalità "Opera" (ondata 7): il server identifica l'opera
+          // inquadrata (quadro/statua/reperto), non l'edificio del GPS.
+          ...(visionTarget === 'artwork' ? { mode: 'artwork' } : {})
         })
       });
 
@@ -325,6 +371,48 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
   return (
     <div className="flex-1 w-full h-full relative bg-[#0a0a0a] overflow-hidden flex flex-col font-sans">
       {quotaToast && <QuotaLimitToast feature={quotaToast} onClose={closeQuotaToast} />}
+
+      {/* Prima card guidata: overlay una-tantum al primo ingresso in camera */}
+      <AnimatePresence>
+        {showFirstGuide && mode === 'vision' && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <div className="w-full max-w-sm bg-[#111827] border border-white/15 rounded-3xl p-6 space-y-4 text-white shadow-2xl">
+              <h3 className="text-lg font-black text-center">📸 La tua prima scoperta</h3>
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <span className="w-7 h-7 shrink-0 rounded-full bg-primary flex items-center justify-center text-xs font-black">1</span>
+                  <p className="text-sm text-white/85"><b>Inquadra un monumento</b>, una chiesa o uno scorcio che ti colpisce: il mirino AI lo riconosce da solo.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-7 h-7 shrink-0 rounded-full bg-primary flex items-center justify-center text-xs font-black">2</span>
+                  <p className="text-sm text-white/85"><b>Scatta</b>: ottieni subito la scheda del luogo con l'audioguida da ascoltare.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <span className="w-7 h-7 shrink-0 rounded-full bg-primary flex items-center justify-center text-xs font-black">3</span>
+                  <p className="text-sm text-white/85"><b>Guadagna crediti</b>: se la tua foto viene pubblicata nella WIP Community ricevi <b>+10 crediti</b> da spendere nell'app.</p>
+                </div>
+              </div>
+              {nearbySuggestion && (
+                <div className="bg-primary/20 border border-primary/40 rounded-2xl px-4 py-3 text-center">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-0.5">Vicino a te, da provare subito</p>
+                  <p className="text-sm font-black">{nearbySuggestion.name} <span className="font-bold text-white/60">a ~{nearbySuggestion.dist} m</span></p>
+                </div>
+              )}
+              <button
+                onClick={dismissFirstGuide}
+                className="w-full py-3 bg-primary rounded-2xl font-black text-sm uppercase tracking-widest active:scale-95 transition-transform"
+              >
+                Iniziamo!
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {onClose && mode !== 'ar' && (
         <button 
           onClick={onClose}
@@ -366,10 +454,31 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
           Analizza il Mondo
         </h2>
         <p className="text-xs text-secondary/40 font-medium max-w-[200px] text-center mx-auto">
-          Scansiona per riconoscere il punto di interesse: la scheda finisce in My Vision e sblocchi 10 XP.
+          {visionTarget === 'artwork'
+            ? "Inquadra un quadro, una statua o un reperto: WIP riconosce l'opera e te la racconta come un'audioguida."
+            : 'Scansiona per riconoscere il punto di interesse: la scheda finisce in My Vision e sblocchi 10 XP.'}
         </p>
 
         <div className="flex flex-col gap-4 w-full max-w-xs">
+          {/* Vision opere musei (ondata 7): selettore Luogo/Opera */}
+          <div className="w-full flex items-center gap-1 p-1 bg-surface/10 border border-white/10 rounded-2xl backdrop-blur-md">
+            {([
+              { key: 'place', label: '📍 Luogo' },
+              { key: 'artwork', label: '🖼️ Opera' },
+            ] as const).map(opt => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => setVisionTarget(opt.key)}
+                aria-pressed={visionTarget === opt.key}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all active:scale-95 ${
+                  visionTarget === opt.key ? 'bg-primary text-white shadow-lg' : 'text-secondary/50 hover:text-secondary'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <button
             onClick={openCamera}
             disabled={isScanning}

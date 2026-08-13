@@ -182,7 +182,40 @@ serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
 
-    // Payload dal Database Webhook (record = nuovo POI inserito)
+    // ── SICUREZZA ─────────────────────────────────────────────────────────
+    // Prima QUALSIASI chiamante con la anon key pubblica poteva invocare questa
+    // funzione con un body arbitrario e far scrivere in shared_pois (service
+    // key). Ora serve la service role key (il Database Webhook DEVE inviarla
+    // nell'header Authorization) oppure un JWT di un utente ADMIN.
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    {
+      const authHeader = req.headers.get("Authorization") || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY") || "";
+      let authorized = !!token && !!supabaseKey && token === supabaseKey;
+      if (!authorized && token && token !== anonKey) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser(token);
+          if (user) {
+            const { data: prof } = await supabase
+              .from("user_profiles").select("is_admin").eq("id", user.id).single();
+            authorized = prof?.is_admin === true;
+          }
+        } catch (_e) { /* non autorizzato */ }
+      }
+      if (!authorized) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Payload dal Database Webhook (record = nuovo POI inserito). Da qui usiamo
+    // solo gli IDENTIFICATORI (id/name/coordinate); technical_data e i campi da
+    // riempire vengono RILETTI DAL DB (vedi sotto), mai dal body.
     const record = body.record || body;
     const { id, name, category, lat, lon } = record;
 
@@ -193,8 +226,21 @@ serve(async (req) => {
       });
     }
 
-    // Leggi technical_data già presente (sync da punti_interesse via trigger SQL)
-    const techDataRaw = record.technical_data || {};
+    // technical_data + stato attuale dei campi RILETTI DAL DB: un chiamante
+    // diretto poteva iniettare tag wikipedia/wikidata arbitrari nel body per far
+    // scrivere contenuti da fonti controllate dall'attaccante. La verità è la riga.
+    const { data: dbRow } = await supabase
+      .from("shared_pois")
+      .select("technical_data, description_ai, description_long, full_description, image_url, photo_url, practical_info, audio_script")
+      .eq("id", id)
+      .single();
+    if (!dbRow) {
+      return new Response(JSON.stringify({ skipped: true, reason: "row not found" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const techDataRaw = dbRow.technical_data || {};
     const techData = typeof techDataRaw === "string" ? JSON.parse(techDataRaw) : techDataRaw;
 
     const wikipedia      = techData.wikipedia      || null;
@@ -241,22 +287,23 @@ serve(async (req) => {
     }
     const fullDescription = descParts.join("\n\n").trim() || null;
 
-    // ── Technical data ────────────────────────────────────────────────
+    // ── Technical data (FILL-IF-EMPTY: aggiunge SOLO chiavi mancanti, non
+    //    sovrascrive metadati già presenti nella riga) ─────────────────────
     const newTechData: Record<string, any> = { ...techData };
-    if (wdData?.inception)    newTechData.inception    = wdData.inception;
-    if (wdData?.architect)    newTechData.architect    = wdData.architect;
-    if (wdData?.style)        newTechData.style        = wdData.style;
-    if (wdData?.material)     newTechData.material     = wdData.material;
-    if (wdData?.height)       newTechData.height       = `${wdData.height} m`;
-    if (wdData?.adminLabel)   newTechData.city         = wdData.adminLabel;
-    if (wpData?.url)          newTechData.wikipedia_url   = wpData.url;
-    if (wvData?.url)          newTechData.wikivoyage_url  = wvData.url;
-    if (wvData?.title)        newTechData.wikivoyage_dest = wvData.title;
-    if (wvData?.dist)         newTechData.wikivoyage_dist = wvData.dist;
-    if (wikidata)             newTechData.wikidata_id     = wikidata;
+    if (wdData?.inception && !newTechData.inception)   newTechData.inception       = wdData.inception;
+    if (wdData?.architect && !newTechData.architect)   newTechData.architect       = wdData.architect;
+    if (wdData?.style && !newTechData.style)           newTechData.style           = wdData.style;
+    if (wdData?.material && !newTechData.material)      newTechData.material        = wdData.material;
+    if (wdData?.height && !newTechData.height)          newTechData.height          = `${wdData.height} m`;
+    if (wdData?.adminLabel && !newTechData.city)        newTechData.city            = wdData.adminLabel;
+    if (wpData?.url && !newTechData.wikipedia_url)      newTechData.wikipedia_url   = wpData.url;
+    if (wvData?.url && !newTechData.wikivoyage_url)     newTechData.wikivoyage_url  = wvData.url;
+    if (wvData?.title && !newTechData.wikivoyage_dest)  newTechData.wikivoyage_dest = wvData.title;
+    if (wvData?.dist && !newTechData.wikivoyage_dist)   newTechData.wikivoyage_dist = wvData.dist;
+    if (wikidata && !newTechData.wikidata_id)           newTechData.wikidata_id     = wikidata;
 
-    // ── Practical info ────────────────────────────────────────────────
-    let practicalInfo: string | null = record.practical_info || null;
+    // ── Practical info (dal DB, non dal body) ─────────────────────────────
+    let practicalInfo: string | null = dbRow.practical_info || null;
     if (!practicalInfo) {
       const pParts: string[] = [];
       if (wdData?.phone)   pParts.push(`Tel: ${wdData.phone}`);
@@ -267,31 +314,33 @@ serve(async (req) => {
     // ── Audio script (testo pre-generato per TTS) ─────────────────────
     const audioScript = buildAudioScript(name, category, wpData?.extract || null, wvData, newTechData);
 
-    // ── Salva nel DB via Supabase ─────────────────────────────────────
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // ── Salva nel DB (FILL-IF-EMPTY) ──────────────────────────────────────
+    // Non sovrascrive MAI campi già valorizzati: prima ogni ri-esecuzione del
+    // webhook riscriveva description/immagine, potendo CANCELLARE una scheda già
+    // curata (o degradarla). Ora aggiorna solo i campi ancora vuoti.
+    const isEmpty = (v: any) => v === null || v === undefined || String(v).trim() === "";
+    const updateFields: Record<string, any> = {
+      technical_data:    newTechData,
+      enriched_at:       new Date().toISOString(),
+      enrichment_source: "auto-edge-v4",
+    };
+    if (fullDescription && isEmpty(dbRow.description_ai))   updateFields.description_ai   = fullDescription;
+    if (fullDescription && isEmpty(dbRow.description_long)) updateFields.description_long = fullDescription;
+    if (fullDescription && isEmpty(dbRow.full_description)) updateFields.full_description = fullDescription;
+    if (wmImage && isEmpty(dbRow.image_url))               updateFields.image_url        = wmImage;
+    if (wmImage && isEmpty(dbRow.photo_url))               updateFields.photo_url        = wmImage;
+    if (practicalInfo && isEmpty(dbRow.practical_info))    updateFields.practical_info   = practicalInfo;
+    if (audioScript && isEmpty(dbRow.audio_script))        updateFields.audio_script     = audioScript;
 
-    if (fullDescription || wmImage) {
+    if (fullDescription || wmImage || audioScript) {
       const { error } = await supabase
         .from("shared_pois")
-        .update({
-          description_ai:    fullDescription,
-          description_long:  fullDescription,
-          full_description:  fullDescription,
-          image_url:         wmImage || undefined,
-          photo_url:         wmImage || undefined,
-          technical_data:    newTechData,
-          practical_info:    practicalInfo || undefined,
-          audio_script:      audioScript || undefined,
-          enriched_at:       new Date().toISOString(),
-          enrichment_source: "auto-edge-v4",
-        })
+        .update(updateFields)
         .eq("id", id);
 
       if (error) {
         console.error(`[auto-enrich] Failed to update POI ${id}:`, error.message);
-        return new Response(JSON.stringify({ error: error.message }), {
+        return new Response(JSON.stringify({ error: "update_failed" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -314,8 +363,9 @@ serve(async (req) => {
     });
 
   } catch (e: any) {
+    // Dettaglio solo nei log; al client un messaggio generico.
     console.error("[auto-enrich] Error:", e.message);
-    return new Response(JSON.stringify({ error: e.message }), {
+    return new Response(JSON.stringify({ error: "enrich_failed" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

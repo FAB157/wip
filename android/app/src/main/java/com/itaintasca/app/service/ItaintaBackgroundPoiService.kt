@@ -383,10 +383,15 @@ class ItaintaBackgroundPoiService : Service() {
                 .setWaitForAccurateLocation(true)
                 .build()
         } else {
-            LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 20_000L)
+            val idle = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 20_000L)
                 .setMinUpdateIntervalMillis(10_000L)
-                .setMaxUpdateDelayMillis(60_000L)
-                .build()
+            // BATCHING SOLO A PIEDI: un batch fino a 60 s in auto significa che a
+            // 100 km/h (~28 m/s) l'auto percorre ~1,7 km fra un fix e l'altro e
+            // può attraversare un'intera zona di alert alla cieca. In "driving"
+            // niente batching (i fix arrivano ~ogni 20 s); a piedi 60 s va bene
+            // e tiene il modem GPS spento più a lungo.
+            if (guideMode != "driving") idle.setMaxUpdateDelayMillis(60_000L)
+            idle.build()
         }
         try {
             fusedClient.removeLocationUpdates(cb)
@@ -410,6 +415,18 @@ class ItaintaBackgroundPoiService : Service() {
      */
     private fun runPredictiveEvaluation(location: Location) {
         if (currentPois.isEmpty()) return
+        // GATE ACCURATEZZA (fail-closed): senza un fix RECENTE e PRECISO ogni
+        // trigger è sospetto. Indoor/seminterrato la posizione di RETE ha
+        // incertezza chilometrica e il predittore, valutando comunque, poteva
+        // "annunciare" da fermo mezzo radar. Stesso guardiano del receiver
+        // (GeofenceBroadcastReceiver.handleEnterTransitions:~596-604) e di iOS
+        // (BackgroundPoiManager.swift:493-497).
+        val maxAccuracyM = 100f
+        val maxFixAgeMs = 2 * 60_000L
+        if (!location.hasAccuracy() || location.accuracy <= 0f || location.accuracy > maxAccuracyM ||
+            System.currentTimeMillis() - location.time > maxFixAgeMs) {
+            return
+        }
         if (!predictiveBusy.compareAndSet(false, true)) return
 
         val isDriving = guideMode == "driving"
@@ -418,7 +435,9 @@ class ItaintaBackgroundPoiService : Service() {
 
         serviceScope.launch {
             try {
-                val stateMap = db.poiDao().getAllTriggerStates().associate { it.poiId to it.state }
+                // associateBy (non solo lo stato): serve updatedAt per il
+                // cooldown di re-approach post-EXITED.
+                val stateMap = db.poiDao().getAllTriggerStates().associateBy { it.poiId }
                 var shouldArm = false
                 // Anti-spam: in una piazza densa parla solo il primo.
                 var spokenInBatch = false
@@ -451,7 +470,8 @@ class ItaintaBackgroundPoiService : Service() {
                         radiusM = alertRad.toDouble(),
                         isDriving = isDriving
                     )
-                    val state = stateMap[poi.id] ?: TriggerState.PENDING
+                    val stateEntity = stateMap[poi.id]
+                    val state = stateEntity?.state ?: TriggerState.PENDING
                     val prevDist = lastDistances[poi.id]
                     val distNow = pred.distanceNowMeters.toFloat()
 
@@ -484,6 +504,26 @@ class ItaintaBackgroundPoiService : Service() {
                         // ── Approach proattivo: qui si recupera la latenza ──
                         TriggerState.PENDING -> {
                             if (pred.decision == PredictiveTrigger.Decision.FIRE) {
+                                TriggerTelemetry.log(
+                                    this@ItaintaBackgroundPoiService, poi.id, poi.nome,
+                                    "approach-predictive", pred, location, isDriving, alertRad
+                                )
+                                GeofenceBroadcastReceiver.firePredictedApproach(
+                                    this@ItaintaBackgroundPoiService, poi.id, poi.nome,
+                                    poi.guideDefault, poi.isGem, poi.isFromItinerary, db,
+                                    speak = !spokenInBatch
+                                )
+                                spokenInBatch = true
+                            }
+                        }
+                        // ── Ri-approach dopo EXITED: solo passato il cooldown ──
+                        // anti-rimbalzo (30 min). Prima l'uscita cancellava lo
+                        // stato e il primo rientro ri-annunciava subito; ora
+                        // EXITED col suo timestamp fa da cooldown (mirror iOS).
+                        TriggerState.EXITED -> {
+                            val exitedAge = stateEntity?.let { System.currentTimeMillis() - it.updatedAt } ?: Long.MAX_VALUE
+                            if (exitedAge > GeofenceBroadcastReceiver.APPROACH_RETRIGGER_COOLDOWN_MS &&
+                                pred.decision == PredictiveTrigger.Decision.FIRE) {
                                 TriggerTelemetry.log(
                                     this@ItaintaBackgroundPoiService, poi.id, poi.nome,
                                     "approach-predictive", pred, location, isDriving, alertRad
@@ -857,10 +897,13 @@ class ItaintaBackgroundPoiService : Service() {
         if (p.isGem) return true
         val cat = (p.poiType ?: p.category ?: "").lowercase()
         if (selectedCategories.isEmpty()) {
+            // Default "insieme vuoto" allineato al web (useGeofencing.ts):
+            // { monumenti, musei, chiese } attivi, panorami OFF. Prima il nativo
+            // includeva viewpoint/park/panorami di default (divergenza dal web).
             val culturalCats = listOf(
                 "monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti",
                 "museum", "gallery", "musei", "church", "place_of_worship", "cathedral",
-                "chiese", "viewpoint", "park", "panorami"
+                "chiese"
             )
             return culturalCats.contains(cat)
         }

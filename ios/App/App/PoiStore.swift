@@ -108,6 +108,17 @@ final class PoiStore {
         queue.sync { loadIfNeeded(); return triggerStates }
     }
 
+    /// Azzera TUTTO lo storico trigger: dopo, ogni POI viene riannunciato come
+    /// la prima volta. Port di poiDao().clearTriggerStates() Android, chiamato
+    /// dal plugin resetTriggerHistory (ProfileScreen → "Azzera storico").
+    func clearTriggerStates() {
+        queue.sync {
+            loadIfNeeded()
+            triggerStates.removeAll()
+            writeFile(triggerStates, to: triggerFile)
+        }
+    }
+
     // MARK: - Pacchetti offline
 
     func upsertPackage(_ pkg: OfflinePackage) {
@@ -175,6 +186,52 @@ final class PoiStore {
 
     func getOfflinePoi(_ id: String) -> OfflinePoi? {
         queue.sync { loadIfNeeded(); return offlinePois[id] }
+    }
+
+    // MARK: - Testi offline con controllo lingua
+    //
+    // Gli OfflinePoi non portano un campo lingua PER RIGA: la lingua è quella
+    // del PACCHETTO che li contiene (offline_packages.language). Un utente EN
+    // che passa accanto a un POI di un pacchetto IT non deve sentire il testo
+    // italiano letto con voce inglese: se il pacchetto NON è nella lingua
+    // richiesta il chiamante prende il testo giusto dal cloud (get-or-create
+    // per-lingua). Mirror del comportamento web/Android.
+
+    /// True SOLO se si conosce con certezza che il POI proviene da pacchetti in
+    /// una lingua DIVERSA da `lang`. Se nessun pacchetto lo referenzia (lingua
+    /// ignota) → false: non blocca, meglio usare il testo locale che tacere.
+    /// Da chiamare mentre si tiene `queue`.
+    private func offlineLangConflictsLocked(_ poiId: String, lang: String) -> Bool {
+        let target = lang.lowercased()
+        var known = false
+        for (pkgId, refs) in packageRefs where refs.contains(poiId) {
+            if let l = packages[pkgId]?.language.lowercased() {
+                if l == target { return false } // almeno un pacchetto è nella lingua giusta
+                known = true
+            }
+        }
+        return known // pacchetti trovati ma nessuno nella lingua richiesta
+    }
+
+    /// audio_text del pacchetto offline, ma solo se la lingua NON è in conflitto
+    /// con `lang`; altrimenti nil → il chiamante recupera il testo nella lingua
+    /// giusta da WipSupabaseClient.fetchAudioguideText.
+    func getOfflineAudioText(_ poiId: String, lang: String) -> String? {
+        queue.sync {
+            loadIfNeeded()
+            guard let t = offlinePois[poiId]?.audioText, !t.isEmpty else { return nil }
+            return offlineLangConflictsLocked(poiId, lang: lang) ? nil : t
+        }
+    }
+
+    /// description_short del pacchetto offline con lo stesso controllo lingua:
+    /// evita di accodare testo di un'altra lingua alla coda dell'audioguida.
+    func getOfflineDescriptionShort(_ poiId: String, lang: String) -> String? {
+        queue.sync {
+            loadIfNeeded()
+            guard let t = offlinePois[poiId]?.descriptionShort, !t.isEmpty else { return nil }
+            return offlineLangConflictsLocked(poiId, lang: lang) ? nil : t
+        }
     }
 
     /// Finestra offline: POI dei pacchetti dentro il raggio dato (equivalente

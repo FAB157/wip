@@ -28,6 +28,10 @@ class AudioQueueManager {
   private queue: QueuedPoi[] = [];
   private isProcessing = false;
   private activeNotificationId: string | null = null;
+  // Timer di auto-play (2s dopo il trigger in modalità automatica) per POI:
+  // vanno cancellati se il POI viene chiuso/superato prima dello scadere,
+  // altrimenti riproducono (e addebitano il Day Pass) un luogo già dismesso.
+  private autoPlayTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   public currentLanguage: string = 'IT';
   public currentCharacter: GuideCharacter = 'nicky';
@@ -122,7 +126,12 @@ class AudioQueueManager {
           item.state = 'trigger_fired';
           this.fireTrigger(item);
           if (this.activationMode === 'automatic') {
-            setTimeout(() => this.userTriggeredPlay(item.poi.id), 2000);
+            this.clearAutoPlayTimer(item.poi.id);
+            const timer = setTimeout(() => {
+              this.autoPlayTimers.delete(item.poi.id);
+              this.userTriggeredPlay(item.poi.id);
+            }, 2000);
+            this.autoPlayTimers.set(item.poi.id, timer);
           }
           break;
         }
@@ -134,9 +143,22 @@ class AudioQueueManager {
 
   public userTriggeredPlay(poiId: string): void {
     const item = this.queue.find(q => q.poi.id === poiId);
-    if (item && item.state !== 'playing') {
+    if (!item) return;
+    // Il timer da 2s dell'automatico poteva far partire (e addebitare) un POI
+    // che nel frattempo l'utente aveva chiuso con la X ('dismissed') o che era
+    // uscito dal raggio ('passed'/'completed'): qui lo saltiamo.
+    if (item.state === 'dismissed' || item.state === 'passed' || item.state === 'completed') return;
+    if (item.state !== 'playing') {
       item.state = 'playing';
       this.executePlay(item);
+    }
+  }
+
+  private clearAutoPlayTimer(poiId: string): void {
+    const t = this.autoPlayTimers.get(poiId);
+    if (t) {
+      clearTimeout(t);
+      this.autoPlayTimers.delete(poiId);
     }
   }
 
@@ -186,6 +208,7 @@ class AudioQueueManager {
   }
 
   private markPassed(poiId: string) {
+    this.clearAutoPlayTimer(poiId);
     this.cancelLocalNotification(poiId);
     this.queue = this.queue.filter(q => q.poi.id !== poiId);
     window.dispatchEvent(new CustomEvent('wip-poi-exit', { detail: { poiId } }));
@@ -275,6 +298,9 @@ class AudioQueueManager {
     const item = this.queue.find(q => q.poi.id === id);
     if (item && item.state !== 'playing') {
       item.state = 'dismissed';
+      // Ferma l'eventuale auto-play in attesa: senza questo il timer da 2s
+      // riproduceva comunque il POI appena chiuso.
+      this.clearAutoPlayTimer(id);
       this.cancelLocalNotification(id);
       this.processQueue();
     }

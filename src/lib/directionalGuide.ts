@@ -18,6 +18,9 @@ function getNormalizedDifference(target: number, current: number): number {
 
 /**
  * Genera una frase da "guida turistica" basata sulle indicazioni di direzione e distanza.
+ *
+ * NOTA: attualmente NON collegata ad alcun componente (nessun import nel
+ * codebase). Mantenuta e corretta per un futuro uso (es. bussola AR).
  */
 export function getDirectionalPhrase({
   targetName,
@@ -27,24 +30,25 @@ export function getDirectionalPhrase({
 }: DirectionalInput): string {
   const diff = getNormalizedDifference(targetBearing, userBearing);
   const roundedDist = Math.round(distance);
-  let directionText = '';
+  // Default = banda frontale [-20, 20]. Le altre bande sono CONTINUE: prima
+  // `>=21`/`<=20` lasciavano buchi sugli angoli frazionari (20,5° / 70,4° non
+  // ricadevano in nessuna banda → frase senza direzione).
+  let directionText = 'Davanti a te';
 
   // 1. Logica di direzione
-  if (diff >= -20 && diff <= 20) {
-    directionText = 'Davanti a te';
-  } else if (diff >= 21 && diff <= 70) {
+  if (diff > 20 && diff <= 70) {
     directionText = 'Alla tua destra';
-  } else if (diff >= 71 && diff <= 110) {
+  } else if (diff > 70 && diff <= 110) {
     directionText = 'Proprio alla tua destra';
-  } else if (diff >= 111 && diff <= 160) {
+  } else if (diff > 110 && diff <= 160) {
     directionText = 'Dietro alla tua destra';
-  } else if (diff >= 161 || diff <= -161) {
+  } else if (diff > 160 || diff <= -160) {
     directionText = 'Alle tue spalle';
-  } else if (diff <= -111 && diff >= -160) {
+  } else if (diff > -160 && diff <= -110) {
     directionText = 'Dietro alla tua sinistra';
-  } else if (diff <= -71 && diff >= -110) {
+  } else if (diff > -110 && diff <= -70) {
     directionText = 'Proprio alla tua sinistra';
-  } else if (diff <= -21 && diff >= -70) {
+  } else if (diff > -70 && diff < -20) {
     directionText = 'Alla tua sinistra';
   }
 

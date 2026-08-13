@@ -1,4 +1,5 @@
 import { Poi } from '../../types/poi';
+import { OSRM_FOOT_BASE } from '../../services/osrmService';
 
 export type TransportMode = 'walking' | 'driving';
 
@@ -29,10 +30,20 @@ export interface NavigationState {
   isArrived: boolean;
 }
 
+/**
+ * @deprecated STACK NON USATO. Nessun import in tutto il codebase (verificato):
+ * il navigatore realmente attivo è `useWalkingNavigation` + `osrmService`. Non
+ * cancellato per sicurezza, ma non ricollegarlo senza revisione — `process.env`
+ * non esiste nel bundle Vite del browser e istanziarlo faceva "process is not
+ * defined".
+ */
 export class NavigatorEngine {
   private state: NavigationState = this.getInitialState();
   private onStateChangeCallback?: (state: NavigationState) => void;
-  private osrmBaseUrl = process.env.NEXT_PUBLIC_OSRM_BASE || 'https://router.project-osrm.org';
+  // Guard: in Vite `process` è undefined nel browser → ReferenceError se questo
+  // modulo venisse importato. Override solo se un bundler lo definisce; default
+  // = demo pubblico (attenzione: espone solo il grafo AUTO).
+  private osrmBaseUrl = (typeof process !== 'undefined' && (process as any)?.env?.NEXT_PUBLIC_OSRM_BASE) || 'https://router.project-osrm.org';
   private polylineDecoder = new PolylineDecoder();
   private isRecalculating = false;
 
@@ -147,8 +158,13 @@ export class NavigatorEngine {
     if (!this.state.destination) return;
     const dest = this.state.destination;
     const profile = this.state.mode === 'walking' ? 'foot' : 'driving';
-    
-    const url = `${this.osrmBaseUrl}/route/v1/${profile}/${userPos.lng},${userPos.lat};${dest.lon},${dest.lat}?overview=full&geometries=polyline&steps=true&language=it`;
+
+    // Il profilo FOOT usa la base pedonale condivisa (grafo reale FOSSGIS); il
+    // demo pubblico "foot" era in realtà il grafo AUTO. OSRM_FOOT_BASE termina
+    // già con "…/foot/".
+    const url = profile === 'foot'
+      ? `${OSRM_FOOT_BASE}${userPos.lng},${userPos.lat};${dest.lon},${dest.lat}?overview=full&geometries=polyline&steps=true&language=it`
+      : `${this.osrmBaseUrl}/route/v1/${profile}/${userPos.lng},${userPos.lat};${dest.lon},${dest.lat}?overview=full&geometries=polyline&steps=true&language=it`;
 
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
@@ -198,23 +214,42 @@ export class NavigatorEngine {
 
   // --- Utility Matematiche ---
   private calculateProgress(pos: LatLng, geometry: LatLng[]) {
-    let minDistance = Infinity;
-    let closestIndex = 0;
-
-    for (let i = 0; i < geometry.length; i++) {
-      const d = this.haversineDistance(pos, geometry[i]);
-      if (d < minDistance) {
-        minDistance = d;
-        closestIndex = i;
-      }
+    if (geometry.length < 2) {
+      const d = geometry.length ? this.haversineDistance(pos, geometry[0]) : 0;
+      return { closestIndex: 0, offRouteDistance: d, remainingDistance: 0 };
     }
 
-    let remainingDistance = 0;
-    for (let i = closestIndex; i < geometry.length - 1; i++) {
-      remainingDistance += this.haversineDistance(geometry[i], geometry[i+1]);
+    // Fuori-rotta = distanza dalla PROIEZIONE sul segmento più vicino, non dal
+    // vertice (la distanza-al-vertice gonfiava l'off-route → ricalcoli fantasma).
+    let minDistance = Infinity;
+    let closestIndex = 0;
+    let proj: LatLng = geometry[0];
+    for (let i = 0; i < geometry.length - 1; i++) {
+      const p = this.projectToSeg(pos, geometry[i], geometry[i + 1]);
+      if (p.distM < minDistance) { minDistance = p.distM; closestIndex = i; proj = { lat: p.lat, lng: p.lng }; }
+    }
+
+    let remainingDistance = this.haversineDistance(proj, geometry[closestIndex + 1]);
+    for (let i = closestIndex + 1; i < geometry.length - 1; i++) {
+      remainingDistance += this.haversineDistance(geometry[i], geometry[i + 1]);
     }
 
     return { closestIndex, offRouteDistance: minDistance, remainingDistance };
+  }
+
+  // Proiezione punto→segmento (equirettangolare locale), come roadSnap.projectToSeg.
+  private projectToSeg(p: LatLng, a: LatLng, b: LatLng): { lat: number; lng: number; distM: number } {
+    const cosLat = Math.cos((p.lat * Math.PI) / 180) || 1;
+    const px = p.lng * cosLat, py = p.lat;
+    const ax = a.lng * cosLat, ay = a.lat;
+    const bx = b.lng * cosLat, by = b.lat;
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const snapLat = ay + t * dy;
+    const snapLng = (ax + t * dx) / cosLat;
+    return { lat: snapLat, lng: snapLng, distM: this.haversineDistance(p, { lat: snapLat, lng: snapLng }) };
   }
 
   private haversineDistance(pos1: LatLng, pos2: LatLng): number {

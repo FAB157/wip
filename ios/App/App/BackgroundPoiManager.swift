@@ -449,12 +449,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             for region in self.locationManager.monitoredRegions {
                 self.locationManager.stopMonitoring(for: region)
             }
-            let alertRad = self.guideMode == "driving" ? self.alertRadiusCar : self.alertRadiusWalk
+            let isDriving = self.guideMode == "driving"
             for id in targetIds {
                 guard let poi = byId[id] else { continue }
+                // Raggio della regione = alert calibrato sul perimetro del POI
+                // (max con la modalità): il footprint di edifici grandi allarga
+                // anche l'assicurazione di rilancio. Cresce solo, mai riduce.
+                let (regionAlert, _) = self.effectiveRadii(for: poi, isDriving: isDriving)
                 let region = CLCircularRegion(
                     center: poi.coordinate.coordinate,
-                    radius: alertRad,
+                    radius: regionAlert,
                     identifier: poi.id
                 )
                 region.notifyOnEntry = true
@@ -487,6 +491,26 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// REALE invece della stringa fissa "circa 150m".
     private var lastFixLocation: CLLocation?
 
+    /// Raggi operativi per un POI: max(raggio di modalità, raggio da footprint
+    /// OSM) SOLO se il POI ha un ingresso reale (entrance). I default 50/150 di
+    /// un POI non processato sono indistinguibili da raggi calibrati, quindi il
+    /// footprint entra in gioco solo con entranceLat/Lon valorizzati (di norma i
+    /// POI online; il bundle offline non trasporta l'ingresso). Il max non
+    /// riduce MAI i default di modalità: una piazza ottiene un raggio grande,
+    /// una statua resta stretta. Mirror di radiiForTransport (guideSettings.ts).
+    private func effectiveRadii(for poi: Poi, isDriving: Bool) -> (alert: Double, arrival: Double) {
+        var alert = isDriving ? alertRadiusCar : alertRadiusWalk
+        var arrival = isDriving ? arrivalRadiusCar : arrivalRadiusWalk
+        let hasEntrance = poi.entranceLat != nil && poi.entranceLon != nil
+        let fpAlert = Double(poi.alertRadius ?? 0)
+        let fpArrival = Double(poi.arrivalRadius ?? 0)
+        if hasEntrance && (fpAlert > 0 || fpArrival > 0) {
+            if fpAlert > 0 { alert = max(alert, fpAlert) }
+            if fpArrival > 0 { arrival = max(arrival, fpArrival) }
+        }
+        return (alert, arrival)
+    }
+
     private func evaluateTriggers(at location: CLLocation) {
         lastFixLocation = location
         // Fail-closed: senza fix recente e preciso ogni trigger è sospetto
@@ -497,9 +521,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
               nowMs() - location.timestamp.timeIntervalSince1970 * 1000 <= maxFixAgeMs else { return }
 
         let isDriving = guideMode == "driving"
-        let alertRad = isDriving ? alertRadiusCar : alertRadiusWalk
-        let arrivalRad = isDriving ? arrivalRadiusCar : arrivalRadiusWalk
-        let exitRad = alertRad * 1.5
+        // I raggi NON sono più costanti di batch: dal footprint OSM ogni POI può
+        // avere raggi calibrati sul suo perimetro reale. Vengono calcolati per
+        // POI dentro il loop (effectiveRadii), mirror di radiiForTransport web.
 
         struct Candidate {
             let poi: Poi
@@ -518,6 +542,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         approachSpokenInBatch = false
 
         for c in candidates {
+            // Raggi calibrati sul perimetro (footprint OSM) del singolo POI,
+            // gated sull'ingresso reale — mirror di radiiForTransport
+            // (src/lib/guideSettings.ts) e della modifica gemella Android.
+            // Senza footprint/ingresso restano i raggi di modalità (identico a prima).
+            let (alertRad, arrivalRad) = effectiveRadii(for: c.poi, isDriving: isDriving)
+            let exitRad = alertRad * 1.5
             let record = store.getTriggerState(c.poi.id)
             let state = record?.state ?? .pending
 
@@ -738,7 +768,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         guard isOnline else { return }
         let lang = appLanguage
         guard AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang) == nil else { return }
-        if let localText = store.getOfflinePoi(poi.id)?.audioText, !localText.isEmpty {
+        // Testo offline SOLO se il pacchetto è nella lingua richiesta
+        // (mono-lingua): altrimenti si prende il testo tradotto dal cloud.
+        if let localText = store.getOfflineAudioText(poi.id, lang: lang) {
             AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: localText)
         } else {
             // Testo NELLA LINGUA dell'utente (get-or-create per-lingua), non i
@@ -840,8 +872,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         audioFile: mp3Path
                     ))
                     if let full = fullText,
-                       let extra = self.store.getOfflinePoi(poi.id)?.descriptionShort,
-                       !extra.isEmpty, extra != full, !full.contains(extra) {
+                       let extra = self.store.getOfflineDescriptionShort(poi.id, lang: self.appLanguage),
+                       extra != full, !full.contains(extra) {
                         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                             text: extra, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
                             poiId: poi.id, priority: priority, kind: "arrival"
@@ -855,7 +887,11 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     )
                 }
                 let lang = self.appLanguage
-                let localText = self.store.getOfflinePoi(poi.id)?.audioText
+                // Testo offline SOLO se il pacchetto è nella lingua dell'utente:
+                // altrimenti nil → più sotto si scarica il testo tradotto dal
+                // cloud (fetchAudioguideText). Evita la voce nella lingua giusta
+                // che legge testo di un'altra lingua (bug mono-lingua).
+                let localText = self.store.getOfflineAudioText(poi.id, lang: lang)
                 if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang) {
                     playFullText(localText, cachedMp3.path)
                 } else if let localText = localText, !localText.isEmpty {
@@ -1223,8 +1259,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
 
         // Stessa catena di fallback dell'auto-play: MP3 in cache → testo del
-        // pacchetto offline (+MP3 se la rete c'è) → testo da shared_pois.
-        let localText = store.getOfflinePoi(poiId)?.audioText
+        // pacchetto offline (+MP3 se la rete c'è) → testo da shared_pois. Il
+        // testo offline è usato SOLO se il pacchetto è nella lingua dell'utente
+        // (mono-lingua): altrimenti nil e si scende alla fetch cloud tradotta.
+        let localText = store.getOfflineAudioText(poiId, lang: lang)
         if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang) {
             play(localText, cachedMp3.path)
         } else if let localText = localText, !localText.isEmpty {

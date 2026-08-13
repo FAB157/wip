@@ -20,6 +20,24 @@ let nativePlaybackActive = false;
 /** Callback di fine traccia in attesa (percorso nativo). */
 let pendingOnEnd: (() => void) | null = null;
 let nativeListenersReady = false;
+/** Utterance Web Speech del fallback audioguida + watchdog di fine traccia. */
+let fallbackUtterance: SpeechSynthesisUtterance | null = null;
+let fallbackWatchdog: ReturnType<typeof setTimeout> | null = null;
+function clearFallback() {
+  if (fallbackWatchdog) { clearTimeout(fallbackWatchdog); fallbackWatchdog = null; }
+  fallbackUtterance = null;
+}
+
+// BCP-47 corretti: `${prefix}-${prefix.toUpperCase()}` generava en-EN/zh-ZH NON
+// validi (nessuna voce → muto su alcuni motori). Mappa allineata a
+// locationService.speakWithWebSpeech.
+const LOCALE_MAP: Record<string, string> = {
+  it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES', de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN',
+};
+function bcp47(lang: string): string {
+  const p = (lang || 'it').toLowerCase().slice(0, 2);
+  return LOCALE_MAP[p] || `${p}-${p.toUpperCase()}`;
+}
 
 function emitAudioState(isPlaying: boolean, isVisible: boolean) {
   if (typeof window === 'undefined') return;
@@ -63,6 +81,7 @@ if (typeof window !== 'undefined') {
     }
     nativePlaybackActive = false;
     pendingOnEnd = null;
+    clearFallback();
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     emitAudioState(false, false);
   });
@@ -120,23 +139,63 @@ import { locationService } from './locationService';
 /** Legge una frase breve con la voce nativa del browser (gratis). */
 export function speakInstruction(text: string, lang = 'it', character: GuideCharacter = 'nicky'): void {
   if (locationService.getIsGuideMuted()) return;
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
   // Notifica il banner ApproachBanner dell'istruzione corrente
   try {
     window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
   } catch { /* ignore */ }
 
+  const hasWebSpeech = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+  // Su WebView nativa (Android) speechSynthesis è spesso ASSENTE: il turn-by-turn
+  // restava MUTO. Instradiamo la frase al TTS nativo/Azure (stesso canale delle
+  // audioguide su nativo) così le indicazioni si sentono anche in-app.
+  if (Capacitor.isNativePlatform() || !hasWebSpeech) {
+    void speakInstructionNative(text, lang, character);
+    return;
+  }
+
   try {
     const u = new SpeechSynthesisUtterance(text);
-    const prefix = (lang || 'it').toLowerCase().slice(0, 2);
-    u.lang = `${prefix}-${prefix.toUpperCase()}`;
+    u.lang = bcp47(lang); // BCP-47 valido (niente più en-EN/zh-ZH)
     const v = pickVoice(lang, character);
     if (v) u.voice = v;
     window.speechSynthesis.cancel(); // interrompe l'istruzione precedente
     window.speechSynthesis.speak(u);
   } catch {
     /* ignore */
+  }
+}
+
+/**
+ * Fallback NATIVO per le frasi brevi (turn-by-turn): scarica l'MP3 Azure con lo
+ * stesso canale delle audioguide (postForAudioBlob evita la corruzione binaria
+ * di CapacitorHttp) e lo riproduce sul player nativo. Best-effort: offline o
+ * errore → niente voce, come prima.
+ */
+async function speakInstructionNative(text: string, lang: string, character: GuideCharacter): Promise<void> {
+  try {
+    // Se un'audioguida è già in riproduzione sul player nativo NON la
+    // interrompiamo (romperemmo il tracking di fine traccia → onEnd anticipato):
+    // in questo raro overlap l'istruzione resta silenziosa, come prima.
+    if (nativePlaybackActive) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    const { ok, blob } = await postForAudioBlob(
+      getApiUrl('/api/tts/smart'),
+      { text, voice: azureVoiceName(lang, character) }
+    );
+    if (!ok || !blob || blob.size < 500 || (blob.type || '').includes('json')) return;
+    ensureNativeListeners();
+    const nativeUri = await getNativeAudioUri(blob, `tts_instr_${Date.now()}.mp3`);
+    // Frase breve: non marchiamo nativePlaybackActive (nessun onEnd atteso), per
+    // non interferire con lo stato del banner dell'audioguida principale.
+    await WipBackgroundAudio.play({
+      url: nativeUri,
+      title: text.length > 40 ? text.slice(0, 40) + '…' : text,
+      subtitle: 'Navigazione',
+    });
+  } catch {
+    /* best-effort: senza rete niente voce, come prima */
   }
 }
 
@@ -148,6 +207,7 @@ export function stopSpeech(): void {
     }
     nativePlaybackActive = false;
     pendingOnEnd = null;
+    clearFallback();
     if (activeAudio) {
       activeAudio.pause();
       activeAudio = null;
@@ -271,11 +331,41 @@ export async function speakAudioguide(
     }
   }
 
-  // Fallback gratuito
+  // Fallback gratuito (Web Speech). Usiamo un'utterance PROPRIA con onend/onerror
+  // REALI: prima si delegava a speakInstruction e la fine era un timer stimato
+  // che (a) faceva partire onEnd anche se la voce continuava o era già stata
+  // fermata, e (b) non veniva mai cancellato. Ora il timer è solo un watchdog,
+  // azzerato alla fine vera o allo stop.
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
+    } catch { /* ignore */ }
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = bcp47(lang);
+    const v = pickVoice(lang, character);
+    if (v) u.voice = v;
+    const finish = () => {
+      // Se nel frattempo è partita un'altra traccia, non toccare lo stato.
+      if (fallbackUtterance !== u) return;
+      clearFallback();
+      emitAudioState(false, false);
+      if (onEnd) onEnd();
+    };
+    u.onend = finish;
+    u.onerror = finish;
+    window.speechSynthesis.cancel();
+    fallbackUtterance = u;
+    window.speechSynthesis.speak(u);
+    emitAudioState(true, true);
+    // Watchdog: alcuni motori non emettono 'end' se l'utente esce dall'app.
+    const estimatedMs = Math.max(3000, (text.length / 15) * 1000) + 2000;
+    fallbackWatchdog = setTimeout(finish, estimatedMs);
+    return;
+  }
+
+  // Nessun Web Speech (es. nativo offline): tentativo nativo + stima onEnd.
   speakInstruction(text, lang, character);
   emitAudioState(true, true);
-  // La fine viene stimata dalla lunghezza del testo: Web Speech non espone
-  // un evento affidabile quando l'utente esce dall'app.
   const estimatedMs = Math.max(3000, (text.length / 15) * 1000);
   setTimeout(() => {
     emitAudioState(false, false);

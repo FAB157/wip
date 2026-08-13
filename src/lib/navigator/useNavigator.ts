@@ -1,3 +1,7 @@
+// @deprecated STACK NON USATO. Questo hook (con NavigatorEngine e
+// NavigatorPanel) non è importato da nessun componente: il navigatore attivo è
+// `useWalkingNavigation` + `osrmService`. Mantenuto per riferimento; non
+// ricollegare senza revisione.
 import { useState, useEffect } from 'react';
 import { navigatorEngine, NavigationState, TransportMode, LatLng } from './NavigatorEngine';
 import type { Poi } from '../../types/poi';

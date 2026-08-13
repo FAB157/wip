@@ -153,12 +153,19 @@ object AudioPrefetchManager {
      */
     private suspend fun resolveAudioText(context: Context, poiId: String, lang: String, character: String): String? {
         return try {
-            val local = com.itaintasca.app.db.PoiDatabase.getInstance(context)
-                .offlineDao().getPoiById(poiId)?.audioText
-            if (!local.isNullOrBlank()) local
-            // Testo NELLA LINGUA dell'utente (get-or-create per-lingua): così
-            // l'MP3 prefetchato è già tradotto, non italiano.
-            else SupabaseClient().fetchAudioguideText(poiId, lang, character)?.takeIf { it.isNotBlank() }
+            val dao = com.itaintasca.app.db.PoiDatabase.getInstance(context).offlineDao()
+            val local = dao.getPoiById(poiId)?.audioText
+            // MONO-LINGUA: il testo offline è nella lingua DEL PACCHETTO che
+            // l'ha scritto. Usalo SOLO se quel pacchetto è nella lingua
+            // richiesta, altrimenti un utente EN col pacchetto IT sentirebbe
+            // (e prefetcherebbe) l'MP3 in italiano. Negli altri casi si passa
+            // al get-or-create per-lingua da shared_pois.
+            val pkgLang = dao.getPoiPackageLanguage(poiId)
+            if (!local.isNullOrBlank() && pkgLang != null && pkgLang.equals(lang, ignoreCase = true)) {
+                local
+            } else {
+                SupabaseClient().fetchAudioguideText(poiId, lang, character)?.takeIf { it.isNotBlank() }
+            }
         } catch (_: Exception) {
             null
         }

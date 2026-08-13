@@ -46,7 +46,8 @@ interface DiscoveryResult {
 
 /**
  * Interroga Overpass intorno al punto, filtra, esclude gli osm_id gia' noti
- * (qualsiasi status) e inserisce i nuovi come status='auto'.
+ * (presenti in shared_pois con QUALSIASI status, OPPURE tombstonati = eliminati
+ * dall'admin) e inserisce i nuovi come status='auto'.
  * Registra sempre l'area in indexed_areas (anche se 0 nuovi: e' una scelta).
  */
 export async function runOverpassDiscovery(
@@ -88,6 +89,11 @@ export async function runOverpassDiscovery(
     const coordLon = el.lon ?? el.center?.lon;
     if (coordLat == null || coordLon == null) continue;
 
+    // normalizeOsmId: id OSM (node/way/relation/N o numerico puro) → "<n>"
+    // (poi "osm-<n>" in DB); fonti terze prefissate (fsq_/geo_) → namespace
+    // distinto "fsq-…/geo-…", MAI ridotte alle cifre finali (niente più
+    // collisioni osm-<n>). findExistingOsmIds/insertAutoPois usano la stessa
+    // regola di id, quindi dedup e insert restano coerenti.
     const osm_id = normalizeOsmId(el.id);
     if (candidates.has(osm_id)) continue;
     candidates.set(osm_id, {
@@ -101,7 +107,9 @@ export async function runOverpassDiscovery(
   }
   result.accepted = candidates.size;
 
-  // Escludi gli osm_id gia' presenti in DB (anche status='deleted')
+  // Escludi gli osm_id gia' presenti in DB o TOMBSTONATI (hard-deleted): senza
+  // il controllo tombstone la discovery li reinseriva e il trigger di
+  // untombstone annullava la cancellazione dell'admin (POI "resuscitati").
   const existing = await findExistingOsmIds([...candidates.keys()]);
   const fresh: AutoPoiInput[] = [];
   for (const [osmId, poi] of candidates) {

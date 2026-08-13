@@ -55,6 +55,19 @@ interface OfflineDao {
     suspend fun getPoiById(id: String): OfflinePoiEntity?
 
     /**
+     * Lingua del pacchetto che contiene questo POI: il testo audioguida offline
+     * è nella lingua del pacchetto che l'ha scritto, quindi serve per non
+     * riprodurre testo IT a un utente EN (un POI può stare in più pacchetti:
+     * basta che ne esista uno nella lingua richiesta).
+     */
+    @Query(
+        "SELECT p.language FROM offline_packages p " +
+            "JOIN offline_package_pois r ON p.id = r.packageId " +
+            "WHERE r.poiId = :poiId LIMIT 1"
+    )
+    suspend fun getPoiPackageLanguage(poiId: String): String?
+
+    /**
      * Le query spaziali passano dall'R-tree (tabella virtuale offline_poi_rtree,
      * fuori dallo schema noto a Room): devono essere raw. Costruirle con
      * [OfflineRtree.bboxQuery], mai a mano.

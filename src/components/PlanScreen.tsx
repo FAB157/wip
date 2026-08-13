@@ -12,6 +12,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
 import { getApiUrl } from '../lib/api';
+import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
@@ -25,8 +26,11 @@ import PremiumGuideModal from './PremiumGuideModal';
 import AgentControls from './AgentControls';
 import { useItinerary } from '../hooks/useItinerary';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
+import PremiumGuideAudiobook from './PremiumGuideAudiobook';
 import { parsePartialJSON } from '../lib/partialJsonParser';
 import OfflineAudioBundleModal from './OfflineAudioBundleModal';
+import { templatesForNow, type SeasonalTemplate } from '../lib/seasonalTemplates';
+import GroupPlanPanel, { type MergedGroupPrefs } from './GroupPlanPanel';
 import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
@@ -197,7 +201,9 @@ async function processItineraryStream(
   if (hasError) {
     throw new Error(errorMessage === "QUOTA_EXCEEDED"
       ? "Hai raggiunto il limite di itinerari. Riprova domani."
-      : `Errore dal server AI: ${errorMessage}`);
+      : errorMessage === "FEATURE_DISABLED"
+        ? "La generazione itinerari è temporaneamente in manutenzione. Riprova più tardi."
+        : `Errore dal server AI: ${errorMessage}`);
   }
 
   if (!fullJson.trim()) {
@@ -499,7 +505,7 @@ export default function PlanScreen({
   setExternalPlan
 }: PlanScreenProps & { externalPlan?: any, setExternalPlan?: (p: any) => void }) {
   const isOnline = useNetworkStatus();
-  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries'>(isOnline ? 'selection' : 'offline_list');
+  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan'>(isOnline ? 'selection' : 'offline_list');
   const creditConfirm = useCreditConfirmation();
   const [currentBalance, setCurrentBalance] = useState(0);
   // Shop crediti raggiungibile anche dal tab Plan (prima "Ricarica" era un alert)
@@ -541,17 +547,27 @@ export default function PlanScreen({
   const [loading, setLoading] = useState(false);
   const [activeQuizLength, setActiveQuizLength] = useState<number>(7);
   const [days, setDays] = useState(2);
-  const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('20:00');
-  const [selectedInterests, setSelectedInterests] = useState<string[]>([]);
+  // Preferenze di viaggio persistenti (ondata 3): le stesse scelte non si
+  // rifanno a ogni itinerario — pre-compilate dall'ultima sessione e salvate
+  // a ogni modifica (vedi useEffect dopo le checkbox avanzate). Restano fuori
+  // le scelte legate al singolo viaggio: giorni, mese, richieste speciali.
+  const loadPlanPref = <T,>(key: string, fallback: T): T => {
+    try {
+      const all = JSON.parse(localStorage.getItem('wip_plan_prefs') || '{}');
+      return all && all[key] !== undefined ? all[key] : fallback;
+    } catch { return fallback; }
+  };
+  const [startTime, setStartTime] = useState(() => loadPlanPref('startTime', '09:00'));
+  const [endTime, setEndTime] = useState(() => loadPlanPref('endTime', '20:00'));
+  const [selectedInterests, setSelectedInterests] = useState<string[]>(() => loadPlanPref<string[]>('interests', []));
   const [specialRequests, setSpecialRequests] = useState('');
   // I default devono coincidere con le option delle select in renderAdvancedSettings
-  const [budget, setBudget] = useState<'economico' | 'standard' | 'lusso'>('standard');
-  const [viaggiatori, setViaggiatori] = useState<'solo' | 'coppia' | 'famiglia' | 'gruppo'>('coppia');
-  const [ritmo, setRitmo] = useState<'rilassato' | 'standard' | 'intenso'>('standard');
-  const [guida, setGuida] = useState<'NICKY' | 'DANTE' | 'ENTRAMBI'>('NICKY');
+  const [budget, setBudget] = useState<'economico' | 'standard' | 'lusso'>(() => loadPlanPref('budget', 'standard' as const));
+  const [viaggiatori, setViaggiatori] = useState<'solo' | 'coppia' | 'famiglia' | 'gruppo'>(() => loadPlanPref('viaggiatori', 'coppia' as const));
+  const [ritmo, setRitmo] = useState<'rilassato' | 'standard' | 'intenso'>(() => loadPlanPref('ritmo', 'standard' as const));
+  const [guida, setGuida] = useState<'NICKY' | 'DANTE' | 'ENTRAMBI'>(() => loadPlanPref('guida', 'NICKY' as const));
   const [mese, setMese] = useState('');
-  const [radius, setRadius] = useState('300');
+  const [radius, setRadius] = useState(() => loadPlanPref('radius', '300'));
   // ── Tinder mode ──
   const [likedCandidates, setLikedCandidates] = useState<any[]>([]);
   const [alternatives, setAlternatives] = useState<any[]>([]);
@@ -643,10 +659,178 @@ export default function PlanScreen({
     window.addEventListener('wip-itinerary-verified', handler);
     return () => window.removeEventListener('wip-itinerary-verified', handler);
   }, []);
+
+  // Deep link di gruppo (?groupplan=PIN, stashato da App.tsx in localStorage):
+  // si entra direttamente nella stanza per votare le preferenze.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('wip_group_plan_join')) setPlannerMode('group_plan');
+    } catch { /* ok */ }
+  }, []);
   const [lockedStops, setLockedStops] = useState<Record<string, any>>({});
   const [expandedStops, setExpandedStops] = useState<Record<string, boolean>>({});
-  const [includeEvents, setIncludeEvents] = useState(false);
-  const [includeTours, setIncludeTours] = useState(false);
+  const [includeEvents, setIncludeEvents] = useState<boolean>(() => loadPlanPref('includeEvents', false));
+  const [includeTours, setIncludeTours] = useState<boolean>(() => loadPlanPref('includeTours', false));
+  // Casella "Gratis": solo tappe a ingresso libero (pasti esclusi dal vincolo)
+  const [soloGratis, setSoloGratis] = useState<boolean>(() => loadPlanPref('soloGratis', false));
+
+  // Persistenza delle preferenze di viaggio: ogni modifica sovrascrive il
+  // blocco intero, così la prossima pianificazione parte già configurata.
+  useEffect(() => {
+    try {
+      localStorage.setItem('wip_plan_prefs', JSON.stringify({
+        startTime, endTime, interests: selectedInterests, budget, viaggiatori,
+        ritmo, guida, radius, includeEvents, includeTours, soloGratis,
+      }));
+    } catch { /* storage pieno o bloccato: pazienza, niente persistenza */ }
+  }, [startTime, endTime, selectedInterests, budget, viaggiatori, ritmo, guida, radius, includeEvents, includeTours, soloGratis]);
+
+  // ── Trasporti per tratta (ondata 6): durate REALI dalla rete stradale ──
+  // Una chiamata OSRM multi-waypoint per giorno; a piedi = distanza/4,5 km/h,
+  // taxi ≈ 3,50€ + 1,35€/km. Se OSRM non risponde l'itinerario resta intatto.
+  const [dayLegs, setDayLegs] = useState<Record<number, Record<number, { walkMin: number; carMin: number; km: number; taxiEur: number }>>>({});
+  const legsSigRef = useRef('');
+  useEffect(() => {
+    const plan = generatedPlan;
+    const coordOf = (t: any) => {
+      const lat = Number(t?.coordinate?.lat ?? t?.lat);
+      const lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon);
+      return Number.isFinite(lat) && Number.isFinite(lon) && lat !== 0 ? { lat, lon } : null;
+    };
+    if (!plan?.giorni?.length) { setDayLegs({}); legsSigRef.current = ''; return; }
+    const sig = plan.giorni.map((g: any) => (g.tappe || []).map((t: any) => { const c = coordOf(t); return c ? `${c.lat.toFixed(4)},${c.lon.toFixed(4)}` : 'x'; }).join(';')).join('|');
+    if (sig === legsSigRef.current) return;
+    legsSigRef.current = sig;
+    let cancelled = false;
+    (async () => {
+      const out: Record<number, Record<number, any>> = {};
+      for (let g = 0; g < plan.giorni.length; g++) {
+        const tappe = plan.giorni[g].tappe || [];
+        const pts = tappe.map(coordOf);
+        const validIdx = pts.map((p: any, i: number) => (p ? i : -1)).filter((i: number) => i >= 0);
+        if (validIdx.length < 2) continue;
+        try {
+          const coordStr = validIdx.map((i: number) => `${pts[i]!.lon},${pts[i]!.lat}`).join(';');
+          const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=false&steps=false`);
+          if (!r.ok) continue;
+          const data = await r.json();
+          const legs = data?.routes?.[0]?.legs || [];
+          // walkMin sul grafo PEDONALE reale: a piedi il percorso/tempo differisce
+          // da quello auto (marciapiedi, ZTL, scorciatoie). Richiesta foot separata
+          // sulla base condivisa (stesso fix del routing pedonale). Best-effort: se
+          // fallisce si ricade sulla stima dalla distanza auto.
+          let footLegs: any[] = [];
+          try {
+            const rf = await fetch(`${OSRM_FOOT_BASE}${coordStr}?overview=false&steps=false`, { signal: AbortSignal.timeout(6000) });
+            if (rf.ok) { const df = await rf.json(); footLegs = df?.routes?.[0]?.legs || []; }
+          } catch { /* foot giù: fallback alla stima dalla distanza auto */ }
+          out[g] = {};
+          for (let j = 0; j < validIdx.length - 1; j++) {
+            // La tratta vale solo tra tappe CONSECUTIVE nell'itinerario
+            if (validIdx[j + 1] !== validIdx[j] + 1) continue;
+            const leg = legs[j];
+            if (!leg) continue;
+            const km = (leg.distance || 0) / 1000;
+            if (km <= 0.02) continue; // stessa piazza: inutile
+            const footLeg = footLegs[j];
+            out[g][validIdx[j]] = {
+              carMin: Math.max(1, Math.round((leg.duration || 0) / 60)),
+              // Tempo a piedi dalla DURATA del percorso pedonale reale; solo se
+              // manca si stima dalla distanza auto (÷1,25 m/s).
+              walkMin: footLeg
+                ? Math.max(1, Math.round((footLeg.duration || 0) / 60))
+                : Math.max(1, Math.round((leg.distance || 0) / 1.25 / 60)),
+              km,
+              taxiEur: km >= 0.8 ? Math.round(3.5 + km * 1.35) : 0,
+            };
+          }
+        } catch { /* OSRM giù: niente tratte per questo giorno */ }
+        if (cancelled) return;
+      }
+      if (!cancelled) setDayLegs(out);
+    })();
+    return () => { cancelled = true; };
+  }, [generatedPlan]);
+
+  // ── Piano B pioggia (ondata 6) ─────────────────────────────────────────
+  // Previsioni Open-Meteo (gratuite): badge sul giorno con probabilità di
+  // pioggia ≥50%, assumendo Giorno 1 = oggi (la data è mostrata nel badge).
+  const [rainByDay, setRainByDay] = useState<Record<number, { prob: number; dateLabel: string }>>({});
+  const [rainLoadingDay, setRainLoadingDay] = useState<number | null>(null);
+  const [rainPreview, setRainPreview] = useState<{ gIdx: number; giornoNum: number; tappe: any[] } | null>(null);
+  useEffect(() => {
+    const lat = destCoords?.lat, lon = destCoords?.lon;
+    if (!generatedPlan?.giorni?.length || !Number.isFinite(lat) || !Number.isFinite(lon)) { setRainByDay({}); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=precipitation_probability_max&timezone=auto&forecast_days=14`);
+        if (!r.ok) return;
+        const data = await r.json();
+        const probs: number[] = data?.daily?.precipitation_probability_max || [];
+        const dates: string[] = data?.daily?.time || [];
+        if (cancelled) return;
+        const out: Record<number, { prob: number; dateLabel: string }> = {};
+        (generatedPlan.giorni || []).forEach((g: any, i: number) => {
+          const p = probs[i];
+          if (typeof p === 'number' && p >= 50) {
+            const d = dates[i] ? new Date(dates[i]) : null;
+            out[g.giorno] = { prob: p, dateLabel: d ? d.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' }) : '' };
+          }
+        });
+        setRainByDay(out);
+      } catch { /* meteo irraggiungibile: nessun badge */ }
+    })();
+    return () => { cancelled = true; };
+  }, [generatedPlan?.id, generatedPlan?.giorni?.length, destCoords?.lat, destCoords?.lon]);
+
+  const handleRainPlan = async (gIdx: number) => {
+    const giorno = generatedPlan?.giorni?.[gIdx];
+    if (!giorno) return;
+    setRainLoadingDay(giorno.giorno);
+    try {
+      const res = await fetch(getApiUrl('/api/itinerary/rainplan'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          destination: destinations.filter(d => d.trim()).join(' e ') || generatedPlan?.titolo || '',
+          lat: destCoords?.lat, lon: destCoords?.lon, lang: language,
+          giorno: giorno.giorno,
+          tappe: (giorno.tappe || []).map((t: any) => ({ orario: t.orario, titolo_tappa: t.titolo_tappa, tipo: t.tipo, attivita: t.attivita, tempo_necessario: t.tempo_necessario })),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !Array.isArray(data?.tappe) || data.tappe.length === 0) throw new Error(data?.error || 'variante vuota');
+      setRainPreview({ gIdx, giornoNum: giorno.giorno, tappe: data.tappe });
+    } catch (e: any) {
+      notify(`Piano B non riuscito: ${e?.message || 'riprova'}`);
+    } finally {
+      setRainLoadingDay(null);
+    }
+  };
+  // Template stagionali (ondata 6): un tap pre-compila il form; la
+  // generazione resta all'utente perché costa crediti.
+  const applyTemplate = (t: SeasonalTemplate) => {
+    setDestinations([t.destination]);
+    setDestCoords(null);
+    setDays(t.days);
+    setSelectedInterests(t.interests);
+    setSpecialRequests(t.specialRequests);
+    notify(`Template "${t.title}" applicato: controlla il form e premi Genera.`);
+  };
+
+  const applyRainPlan = () => {
+    if (!rainPreview || !generatedPlan) return;
+    const newPlan = structuredClone(generatedPlan);
+    newPlan.giorni[rainPreview.gIdx].tappe = rainPreview.tappe.map((t: any, i: number) => ({
+      ...t,
+      id_tappa: t.id_tappa || `rain_${rainPreview.giornoNum}_${i}_${Date.now()}`,
+    }));
+    setGeneratedPlan(newPlan);
+    savePlanToSupabase(newPlan);
+    setRainPreview(null);
+    notify('Giornata sostituita con la variante al coperto. Pranzo e cena sono rimasti al loro posto.');
+  };
   const [savedPois, setSavedPois] = useState<any[]>([]);
   // Storico itinerari personali
   const [myItineraries, setMyItineraries] = useState<any[]>([]);
@@ -1069,7 +1253,24 @@ export default function PlanScreen({
         if (!res.ok) continue;
         const details = await res.json();
         
-        const textToSpeak = details?.description_long || details?.description || details?.description_short || details?.summary || details?.wiki_extract || tappa.attivita || tappa.titolo_tappa;
+        let textToSpeak = details?.description_long || details?.description || details?.description_short || details?.summary || details?.wiki_extract || tappa.attivita || tappa.titolo_tappa;
+
+        // MULTI-LINGUA (ondata 4 — chiude il residuo noto "pacchetti offline
+        // mono-lingua"): il testo da leggere arriva dal get-or-create PER
+        // LINGUA (/api/poi/audioguide, cache poi_audioguides condivisa con il
+        // nativo), non più dai campi italiani di shared_pois. La traduzione
+        // la paga il primo utente di quella lingua, poi è cache per tutti.
+        try {
+          const agRes = await fetch(getApiUrl('/api/poi/audioguide'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ poiId: stableId, lang: language, character: guideMode }),
+          });
+          if (agRes.ok) {
+            const ag = await agRes.json();
+            if (ag?.text && String(ag.text).trim().length > 40) textToSpeak = ag.text;
+          }
+        } catch { /* rete instabile: il bundle prosegue col testo base */ }
 
         // Scheda testuale offline: PoiDetailSheet la legge quando manca la
         // rete (chiave offline_poi_<id>), così testo e guida restano fruibili.
@@ -1081,7 +1282,9 @@ export default function PlanScreen({
             pageUrl: '#'
           },
           tripData: { address: '', tags: [tappa.tipo || 'cultura'], rating: details?.rating || null, numReviews: 0, reviews: [] },
-          generatedText: details?.audio_script || textToSpeak
+          // In italiano il copione DB resta il migliore; nelle altre lingue
+          // vale il testo tradotto appena ottenuto.
+          generatedText: String(language).toUpperCase() === 'IT' ? (details?.audio_script || textToSpeak) : textToSpeak
         });
 
         // 2. Chiamiamo il TTS
@@ -1452,11 +1655,19 @@ export default function PlanScreen({
   // produce meno giorni di quelli addebitati in anticipo (prompt troncato,
   // JSON parziale), la differenza torna subito all'utente.
   const settleItineraryCost = async (userId: string, chargedDays: number, plan: any) => {
-    const effective = Array.isArray(plan?.giorni) ? plan.giorni.length : 0;
-    const delta = (chargedDays - effective) * PRICING_LIST.itinerary_daily;
-    if (effective > 0 && delta > 0) {
-      await refundCredits(userId, delta).catch(e => console.warn('[PlanScreen] Conguaglio fallito:', e));
-    }
+    // Addebito CLIENT-SIDE alla consegna (pattern storico dell'app): si paga
+    // SOLO in caso di generazione riuscita, sui giorni realmente consegnati (se
+    // il modello ne produce meno del richiesto per troncamento/JSON parziale).
+    // Charge-on-success evita sia il rimborso (niente da restituire su
+    // fallimento: non si è addebitato) sia il doppio addebito col server, che
+    // per queste rotte NON scala crediti (vedi nota di reconciliation).
+    const deliveredDays = Math.max(1, Math.min(
+      Math.max(1, Math.floor(chargedDays)),
+      Array.isArray(plan?.giorni) && plan.giorni.length > 0 ? plan.giorni.length : chargedDays
+    ));
+    const cost = PRICING_LIST.itinerary_daily * deliveredDays;
+    try { await consumeCredits(userId, cost); } catch { /* saldo già verificato dal gate; edge concorrente non blocca il contenuto già generato */ }
+    notifyCreditsChanged({ userId });
   };
 
   const handleRegenerateWithLocks = async () => {
@@ -1477,8 +1688,11 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
+    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
+    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
+    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
+    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
       return;
@@ -1489,10 +1703,15 @@ export default function PlanScreen({
       // Destinazione REALE dal form (il titolo dell'itinerario mandava il
       // modello fuori strada: "Weekend d'arte" non è una città) + coordinate
       const regenCoords = destCoords || await resolveDestCoords();
+      // Roadtrip (ondata 7): anche la rigenerazione conserva le città multiple;
+      // silent=true perché qui l'addebito è già avvenuto — se una città non si
+      // risolve si ricade sulla generazione mono-città senza doppio avviso.
+      const regenLegs = await buildRoadtripLegs(destinations.filter(d => d.trim()), regenCoords, true);
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination: destinations.filter(d => d.trim()).join(" e ") || generatedPlan.titolo,
         lat: regenCoords?.lat,
         lon: regenCoords?.lon,
+        ...(regenLegs ? { legs: regenLegs } : {}),
         days: generatedPlan.giorni.length,
         startTime,
         endTime,
@@ -1500,6 +1719,7 @@ export default function PlanScreen({
         specialRequests,
         includeEvents,
         includeTours,
+        soloGratis,
         budget,
         viaggiatori,
         ritmo,
@@ -1521,12 +1741,12 @@ export default function PlanScreen({
         await settleItineraryCost(currentUserId, numDaysForPricing, data);
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        await refundCredits(currentUserId, totalItineraryCost);
+        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Regeneration with locks error:", err);
-      await refundCredits(currentUserId, totalItineraryCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
     } finally {
       setLoading(false);
@@ -1555,11 +1775,11 @@ export default function PlanScreen({
 
        return;
     }
-    const payRes = await consumeCredits(currentUserId, suggestCost);
-    if (!payRes) {
+    // Addebito ora SERVER-SIDE (/api/groq/suggest scala i crediti via token):
+    // niente consumo client per non addebitare due volte. Gate di saldo per la
+    // stessa UX; il rimborso più sotto copre il fallimento server.
+    if (bal.total < suggestCost) {
       notify(getTranslation('err_insufficient_credits', language));
-
-
       return;
     }
 
@@ -1583,14 +1803,19 @@ export default function PlanScreen({
           lat: data.coordinate?.lat?.toString() || '',
           lng: data.coordinate?.lng?.toString() || ''
         });
+        // Addebito CLIENT-SIDE alla consegna del suggerimento (si paga solo se
+        // il server ha restituito una tappa valida); il server non scala crediti
+        // su questa rotta, quindi nessun doppio addebito.
+        try { await consumeCredits(currentUserId, suggestCost); } catch { /* saldo già verificato dal gate */ }
+        notifyCreditsChanged({ userId: currentUserId });
       } else {
         // Nessun suggerimento valido: rimborsiamo i crediti addebitati
-        await refundCredits(currentUserId, suggestCost);
+        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Suggest Stop Error:", err);
-      await refundCredits(currentUserId, suggestCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
     } finally {
       setSuggestLoading(false);
@@ -1928,9 +2153,17 @@ export default function PlanScreen({
       return;
     }
 
+    // Roadtrip multi-città (ondata 7): tutte le città risolte PRIMA di
+    // addebitare — una città non geocodificabile blocca qui, a costo zero.
+    let roadtripLegs: Array<{ city: string; lat: number; lon: number }> | null = null;
+    if (activeDestinations.length >= 2) {
+      roadtripLegs = await buildRoadtripLegs(activeDestinations, coords);
+      if (!roadtripLegs) return;
+    }
+
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-    
+
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
     const numDaysForPricing = clampDays(days);
@@ -1941,8 +2174,11 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
+    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
+    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
+    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
+    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
       return;
@@ -1963,8 +2199,11 @@ export default function PlanScreen({
       destination.toLowerCase().trim().replace(/[^a-z0-9]/g, '_'),
       // Coordinate nella chiave: distinguono città omonime e invalidano le
       // voci generate prima del fix geografico (es. "Tallinn" → Olbia), che
-      // altrimenti continuerebbero a essere servite dalla cache.
-      coords ? `${coords.lat.toFixed(1)}_${coords.lon.toFixed(1)}` : 'nogeo',
+      // altrimenti continuerebbero a essere servite dalla cache. Nel roadtrip
+      // entrano le coordinate di TUTTE le città.
+      roadtripLegs
+        ? roadtripLegs.map(l => `${l.lat.toFixed(1)}_${l.lon.toFixed(1)}`).join('-')
+        : (coords ? `${coords.lat.toFixed(1)}_${coords.lon.toFixed(1)}` : 'nogeo'),
       numDaysForPricing,
       language.toLowerCase(),
       budget,
@@ -1978,7 +2217,9 @@ export default function PlanScreen({
       mese || 'anymonth',
       `${startTime}-${endTime}`,
       includeEvents ? 'ev1' : 'ev0',
-      includeTours ? 'tr1' : 'tr0'
+      includeTours ? 'tr1' : 'tr0',
+      // La casella "Gratis" cambia radicalmente le tappe: slot cache separato
+      soloGratis ? 'fr1' : 'fr0'
     ].join('_');
     // Le richieste speciali sono libere e personali: niente cache (né lettura né scrittura)
     const cacheUsable = specialRequests.trim().length === 0;
@@ -1998,26 +2239,13 @@ export default function PlanScreen({
         const plan = structuredClone(cachedData.dati_itinerario);
         plan.id = crypto.randomUUID();
 
-        // Sconto libreria: l'itinerario esiste già nella cache condivisa,
-        // quindi qui non c'è NESSUNA chiamata AI e il costo per noi è zero.
-        // Prima si incassava il prezzo pieno in silenzio: l'utente pagava
-        // fino a 70 crediti per una risposta arrivata in mezzo secondo.
-        // Ora metà torna subito nel portafoglio e glielo diciamo.
-        const discount = Math.round(totalItineraryCost / 2);
-        if (discount > 0) {
-          try {
-            await refundCredits(currentUserId, discount);
-            setCacheDiscount(discount);
-            notify(
-              `${getTranslation('cache_hit_discount', language)} — ${discount} ${getTranslation('credits_refunded', language)}`,
-              'success'
-            );
-          } catch (e) {
-            // Rimborso fallito: l'itinerario si consegna comunque, ma non
-            // dichiariamo uno sconto che non è stato accreditato.
-            console.warn('[Library discount] rimborso non riuscito:', e);
-          }
-        }
+        // Sconto libreria: l'itinerario esiste già nella cache condivisa, qui
+        // non c'è NESSUNA chiamata AI. Con l'addebito ora interamente SERVER-SIDE
+        // questo ramo cache NON passa dal server (return anticipato): non esiste
+        // alcun addebito da scontare, quindi NON si rimborsa dal client — lo
+        // farebbe STAMPANDO crediti dal nulla. Il cache-hit resta gratuito.
+        // TODO(prodotto): se il cache-hit dovrà costare (mezzo prezzo), l'addebito
+        // va fatto su una rotta SERVER dedicata, mai col refund lato client.
 
         setGeneratedPlan(plan);
         savePlanToSupabase(plan); // Salva nei personali dell'utente
@@ -2037,6 +2265,7 @@ export default function PlanScreen({
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination,
         ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
+        ...(roadtripLegs ? { legs: roadtripLegs } : {}),
         days: numDaysForPricing,
         startTime,
         endTime,
@@ -2044,6 +2273,7 @@ export default function PlanScreen({
         specialRequests,
         includeEvents,
         includeTours,
+        soloGratis,
         budget,
         viaggiatori,
         ritmo,
@@ -2078,13 +2308,13 @@ export default function PlanScreen({
         setPlannerMode('view');
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        await refundCredits(currentUserId, totalItineraryCost);
+        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('form_a');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      await refundCredits(currentUserId, totalItineraryCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
       setPlannerMode('form_a');
     } finally {
@@ -2115,8 +2345,11 @@ export default function PlanScreen({
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
     const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
     if (!confirmed) return;
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
+    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
+    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
+    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
+    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
       return;
@@ -2139,6 +2372,7 @@ export default function PlanScreen({
         specialRequests: `ATTENZIONE: Questo è un itinerario a raggio con base di partenza ${baseLocation}. L'utente ha selezionato questa opzione specifica: ${alt.titolo} - ${alt.descrizione_breve}. Sviluppa le tappe seguendo questa idea. ${specialRequests}`,
         includeEvents,
         includeTours,
+        soloGratis,
         budget,
         viaggiatori,
         ritmo,
@@ -2156,7 +2390,7 @@ export default function PlanScreen({
         savePlanToSupabase(data);
         await settleItineraryCost(currentUserId, numDaysForPricing, data);
       } else {
-        await refundCredits(currentUserId, totalItineraryCost);
+        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('alternatives_view');
       }
@@ -2164,7 +2398,7 @@ export default function PlanScreen({
       console.error("Generation error:", err);
       // Prima questo ramo non rimborsava nulla: si tornava alle alternative
       // con un alert e i crediti persi.
-      await refundCredits(currentUserId, totalItineraryCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
       setPlannerMode('alternatives_view');
     } finally {
@@ -2222,6 +2456,7 @@ export default function PlanScreen({
           ritmo,
           guida,
           mese,
+          soloGratis,
           language
         })
       });
@@ -2561,6 +2796,45 @@ export default function PlanScreen({
     notify(`"${destinations[0]}" — ${getTranslation('err_location_not_found', language)}`);
   };
 
+  // Geocodifica una singola città (roadtrip, ondata 7): stessa rotta rigorosa
+  // di resolveDestCoords ma senza toccare destCoords, che resta sulla prima.
+  const geocodeCity = async (name: string): Promise<{ lat: number; lon: number } | null> => {
+    const q = name.trim();
+    if (!q) return null;
+    try {
+      const res = await fetch(getApiUrl(
+        `/api/geocode?q=${encodeURIComponent(q)}&limit=1`
+        + `&types=place,locality,region,country&lang=${language.toLowerCase()}`
+      ));
+      if (!res.ok) return null;
+      const f = (await res.json()).features?.[0];
+      return f && Number.isFinite(f.lat) && Number.isFinite(f.lon) ? { lat: f.lat, lon: f.lon } : null;
+    } catch { return null; }
+  };
+
+  // Roadtrip multi-città (ondata 7): con 2+ destinazioni ogni città viene
+  // geocodificata e inviata al server come tappa del viaggio [{city,lat,lon}];
+  // la ripartizione dei giorni e i trasferimenti li calcola il server sulle
+  // coordinate reali. null se una città non è risolvibile.
+  const buildRoadtripLegs = async (
+    activeDestinations: string[],
+    firstCoords: { lat: number; lon: number } | null,
+    silent = false
+  ): Promise<Array<{ city: string; lat: number; lon: number }> | null> => {
+    if (activeDestinations.length < 2) return null;
+    const legs: Array<{ city: string; lat: number; lon: number }> = [];
+    for (let i = 0; i < activeDestinations.length; i++) {
+      const cityName = activeDestinations[i];
+      const c = i === 0 && firstCoords ? firstCoords : await geocodeCity(cityName);
+      if (!c) {
+        if (!silent) notify(`"${cityName}" — ${getTranslation('err_location_not_found', language)}`);
+        return null;
+      }
+      legs.push({ city: cityName.trim(), lat: c.lat, lon: c.lon });
+    }
+    return legs;
+  };
+
   /** Giorni sempre entro [1, 30]: l'input numerico ignorava min/max e un "99"
    *  digitato a mano portava la conferma a 990 crediti. */
   const clampDays = (v: number) => Math.min(30, Math.max(1, Math.floor(v) || 1));
@@ -2671,6 +2945,7 @@ export default function PlanScreen({
           categories: tinderSelectedCategories,
           includeEvents,
           includeTours,
+          soloGratis,
           language
         })
       });
@@ -2803,8 +3078,11 @@ export default function PlanScreen({
     if (!confirmed) {
       return;
     }
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
+    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
+    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
+    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
+    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
       return;
@@ -2840,6 +3118,7 @@ export default function PlanScreen({
         specialRequests: specialRequests || 'Usa rigorosamente le attrazioni selezionate per strutturare le tappe principali.',
         includeEvents,
         includeTours,
+        soloGratis,
         budget,
         viaggiatori,
         ritmo,
@@ -2872,13 +3151,13 @@ export default function PlanScreen({
         await settleItineraryCost(currentUserId, numDaysForPricing, data);
       } else {
         // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        await refundCredits(currentUserId, totalItineraryCost);
+        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('tinder_review');
       }
     } catch (err) {
       console.error(err);
-      await refundCredits(currentUserId, totalItineraryCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
       setPlannerMode('tinder_review');
     } finally {
@@ -2948,8 +3227,11 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    const payRes = await consumeCredits(currentUserId, totalItineraryCost);
-    if (!payRes) {
+    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
+    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
+    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
+    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
       return;
@@ -2970,6 +3252,7 @@ export default function PlanScreen({
         specialRequests,
         includeEvents,
         includeTours,
+        soloGratis,
         budget,
         viaggiatori,
         ritmo,
@@ -3001,13 +3284,13 @@ export default function PlanScreen({
         await settleItineraryCost(currentUserId, numDaysForPricing, data);
       } else {
          // Nessun itinerario valido: rimborsiamo i crediti addebitati
-         await refundCredits(currentUserId, totalItineraryCost);
+         notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
          notify(getTranslation('err_generation_refunded', language));
          setPlannerMode('form_b');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      await refundCredits(currentUserId, totalItineraryCost);
+      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
       setPlannerMode('form_b');
     } finally {
@@ -3029,6 +3312,10 @@ export default function PlanScreen({
 
         const allStops = plan.giorni.flatMap(g => g.tappe);
         const poiPayloads = allStops
+          // Le tappe "trasferimento" (roadtrip, ondata 7) hanno le coordinate
+          // del centro della città di arrivo: non sono luoghi visitabili e non
+          // devono diventare POI in shared_pois.
+          .filter(t => String((t as any).tipo || '').toLowerCase() !== 'trasferimento')
           .filter(t => t.coordinate && t.coordinate.lat !== 0)
           .map(tappa => {
             const lat = parseFloat(String(tappa.coordinate.lat));
@@ -3313,8 +3600,10 @@ export default function PlanScreen({
       if (!confirmed) {
          return;
       }
-      const payRes = await consumeCredits(currentUserId, replaceCost);
-      if (!payRes) {
+      // Addebito ora SERVER-SIDE (/api/groq/replace scala i crediti via token):
+      // niente consumo client per non addebitare due volte. Gate di saldo per la
+      // stessa UX; il rimborso più sotto copre il fallimento server.
+      if (bal.total < replaceCost) {
         notify(getTranslation('err_insufficient_credits', language));
         setShowShop(true);
         return;
@@ -3350,6 +3639,14 @@ export default function PlanScreen({
         }
         setGeneratedPlan(data);
         savePlanToSupabase(data);
+        // Addebito CLIENT-SIDE alla consegna, SOLO se a pagamento (le
+        // sostituzioni entro la quota gratuita restano gratis): consumeCredits
+        // scala i crediti SERVER-SIDE via token (/api/credits/consume). La rotta
+        // /api/groq/replace non scala da sé → nessun doppio addebito.
+        if (replaceCost > 0) {
+          try { await consumeCredits(currentUserId, replaceCost); } catch { /* saldo già verificato dal gate */ }
+          notifyCreditsChanged({ userId: currentUserId });
+        }
         // Anche la tappa sostituita passa dalla verifica anti-allucinazione
         // in background: i badge ✓/⚠ arrivano via 'wip-itinerary-verified'
         verifyItineraryAntiAllucinazioni(data, {
@@ -3366,12 +3663,12 @@ export default function PlanScreen({
       } else {
         // Nessuna sostituzione valida: si rimborsa solo se si era pagato
         // (una gratuita fallita non consuma la quota, gestita sopra).
-        if (replaceCost > 0) await refundCredits(currentUserId, replaceCost);
+        if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Replace error:", err);
-      if (replaceCost > 0) await refundCredits(currentUserId, replaceCost);
+      if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
       notify(getTranslation('err_generation_refunded', language));
     } finally {
       setLoading(false);
@@ -3653,6 +3950,13 @@ export default function PlanScreen({
             <span className="text-xs text-gray-600">{getTranslation('include_tours_desc', language)}</span>
           </div>
         </label>
+        <label className="flex items-center gap-3 cursor-pointer bg-[#F8FAFC] p-4 rounded-2xl border border-outline-variant/10 hover:border-blue-200 transition-colors">
+          <input type="checkbox" checked={soloGratis} onChange={e => setSoloGratis(e.target.checked)} className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 border-gray-300" />
+          <div className="flex flex-col">
+            <span className="text-sm font-bold text-primary">🆓 {getTranslation('free_only', language)}</span>
+            <span className="text-xs text-gray-600">{getTranslation('free_only_desc', language)}</span>
+          </div>
+        </label>
       </div>
 
       <button
@@ -3823,6 +4127,21 @@ export default function PlanScreen({
                 </button>
               </div>
 
+              {/* Pianificazione di gruppo (ondata 7): ogni amico vota per
+                  conto suo (anche senza account), WIP fonde le preferenze */}
+              <button
+                onClick={() => setPlannerMode('group_plan')}
+                className="w-full p-4 bg-gradient-to-br from-violet-50 to-indigo-50 rounded-2xl border border-violet-200/60 shadow-sm flex items-center gap-3 group hover:shadow-md hover:border-violet-400/50 transition-all"
+              >
+                <div className="w-10 h-10 bg-violet-100 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                  <span className="text-lg">👥</span>
+                </div>
+                <div className="text-left flex-1">
+                  <h3 className="text-xs font-black text-gray-900">Viaggio di gruppo</h3>
+                  <p className="text-[10px] text-gray-600 font-bold">Ognuno vota le sue preferenze via PIN, WIP le fonde in un itinerario per tutti.</p>
+                </div>
+              </button>
+
               {/* I Miei Itinerari (tasto lungo) + Offline */}
               <div className="flex gap-3">
                 <button
@@ -3853,14 +4172,59 @@ export default function PlanScreen({
             </motion.div>
           )}
 
+          {plannerMode === 'group_plan' && (
+            <GroupPlanPanel
+              language={language}
+              defaultDestination={(destinations[0] || '').trim()}
+              defaultDays={days}
+              notify={notify}
+              onBack={() => setPlannerMode('selection')}
+              onApplyGroup={(g: MergedGroupPrefs) => {
+                // La fusione pre-compila il form: la generazione (e il costo)
+                // restano un gesto esplicito dell'organizzatore.
+                setDestinations([g.destination]);
+                setDestCoords(null);
+                setDays(clampDays(g.days));
+                if (g.interests.length) setSelectedInterests(g.interests);
+                setBudget(g.budget);
+                setRitmo(g.ritmo);
+                setViaggiatori('gruppo');
+                setMese(g.mese);
+                setSpecialRequests(g.specialRequests);
+                setPlannerMode('form_a');
+                notify('Preferenze del gruppo applicate: controlla il form e premi Genera.', 'success');
+              }}
+            />
+          )}
+
           {plannerMode === 'form_a' && (
-            <motion.div 
+            <motion.div
               key="form_a"
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
               className="space-y-8 pt-4"
             >
+              {/* Template stagionali curati (ondata 6): proposti in base al
+                  periodo, un tap pre-compila destinazione+giorni+interessi */}
+              <div className="space-y-2">
+                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">✨ Ispirazioni di stagione</label>
+                <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
+                  {templatesForNow().map(t => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => applyTemplate(t)}
+                      className="shrink-0 w-44 text-left bg-white border border-outline-variant/20 rounded-2xl p-3 shadow-sm hover:border-primary/30 hover:shadow-md transition-all active:scale-95"
+                    >
+                      <div className="text-2xl mb-1">{t.emoji}</div>
+                      <div className="text-xs font-black text-primary leading-tight">{t.title}</div>
+                      <div className="text-[10px] font-bold text-gray-400 mt-0.5">{t.destination} · {t.days} {t.days === 1 ? 'giorno' : 'giorni'}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="space-y-6">
                 <div className="space-y-3">
                   <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("destination", language)}</label>
@@ -3982,6 +4346,15 @@ export default function PlanScreen({
                   >
                     <span>➕</span> {getTranslation('add_destination', language)}
                   </button>
+
+                  {/* Roadtrip multi-città (ondata 7): con 2+ città il viaggio
+                      diventa un roadtrip con trasferimenti come tappe */}
+                  {destinations.filter(d => d.trim()).length >= 2 && (
+                    <div className="mt-2 flex items-start gap-2 text-[11px] font-bold text-primary/80 bg-primary/5 border border-primary/10 rounded-2xl px-3 py-2">
+                      <span className="text-base leading-none">🚗</span>
+                      <span>Roadtrip multi-città: i giorni verranno ripartiti tra le città e i trasferimenti diventano tappe con km e tempi reali. In auto tieni attiva l'audioguida GPS: i luoghi lungo il percorso si raccontano da soli.</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-3">
@@ -5392,6 +5765,20 @@ export default function PlanScreen({
                           {freeReplacementsLeft(giorno.giorno)} {getTranslation('free_replacements_left', language)}
                         </span>
                       )}
+                      {/* Piano B pioggia (ondata 6): previsioni reali sul giorno */}
+                      {rainByDay[giorno.giorno] && (
+                        <span className="shrink-0 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sky-50 border border-sky-200 text-sky-700 text-[9px] font-black uppercase tracking-widest print:hidden">
+                          🌧 {rainByDay[giorno.giorno].prob}%{rainByDay[giorno.giorno].dateLabel ? ` ${rainByDay[giorno.giorno].dateLabel}` : ''}
+                          <button
+                            onClick={() => handleRainPlan(gIdx)}
+                            disabled={rainLoadingDay === giorno.giorno}
+                            className="px-1.5 py-0.5 bg-sky-600 text-white rounded-full disabled:opacity-50 hover:bg-sky-700 transition-colors"
+                            title="Variante al coperto: musei, chiese e gallerie al posto delle tappe all'aperto, pranzo e cena invariati"
+                          >
+                            {rainLoadingDay === giorno.giorno ? '…' : 'Piano B'}
+                          </button>
+                        </span>
+                      )}
                       <div className="flex-1 h-px bg-primary/10 min-w-[12px]"></div>
                       <div className="flex flex-wrap gap-1.5 shrink-0">
                         {setIsAudioGuideActive && (
@@ -5471,6 +5858,7 @@ export default function PlanScreen({
                           replaceCost={PRICING_LIST.replace_stop}
                           onDelete={() => handleDeleteTappa(gIdx, tappa.id_tappa)}
                           onSelectPoi={onSelectPoi ? handleSelectItineraryPoi : undefined}
+                          legToNext={dayLegs[gIdx]?.[tIdx] || null}
                         />
                       ))}
 
@@ -5978,18 +6366,45 @@ export default function PlanScreen({
               </div>
             </div>
             <div className="flex-1 overflow-y-auto bg-gray-100 p-2 sm:p-8" id="premium-guide-viewer-container-plan">
-              <PremiumGuideRenderer 
-                content={guideToRender.content} 
-                mediaManifest={guideToRender.media} 
+              {/* Audio-libro: fuori dal contenitore PDF, così non finisce in stampa */}
+              <PremiumGuideAudiobook content={guideToRender.content} language={language} />
+              <PremiumGuideRenderer
+                content={guideToRender.content}
+                mediaManifest={guideToRender.media}
                 language={language}
                 containerId="premium-guide-pdf-inner-plan"
-                onClose={() => setGuideToRender(null)} 
+                onClose={() => setGuideToRender(null)}
               />
             </div>
           </div>
         </div>
       )}
       
+      {/* Anteprima Piano B pioggia (ondata 6): si applica solo su conferma */}
+      {rainPreview && (
+        <div className="fixed inset-0 z-[1360] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setRainPreview(null)}>
+          <div className="w-full max-w-md bg-white rounded-3xl p-5 space-y-3 shadow-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <h3 className="font-black text-primary text-base">🌧 Piano B — Giorno {rainPreview.giornoNum} al coperto</h3>
+            <p className="text-[11px] text-gray-500 font-medium">Pranzo e cena restano invariati; le visite all'aperto sono sostituite da alternative al coperto.</p>
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {rainPreview.tappe.map((t: any, i: number) => (
+                <div key={i} className="flex items-start gap-2.5 bg-[#f8f5f0] rounded-xl px-3 py-2">
+                  <span className="text-[10px] font-black text-primary/50 mt-0.5 shrink-0 tabular-nums">{t.orario || '—'}</span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-primary leading-tight">{t.titolo_tappa}</p>
+                    {t.attivita && <p className="text-[10px] text-gray-500 leading-snug line-clamp-2">{t.attivita}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setRainPreview(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest">Annulla</button>
+              <button onClick={applyRainPlan} className="flex-1 py-2.5 bg-sky-600 text-white rounded-xl font-black text-xs uppercase tracking-widest">Applica variante</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Offline Audio Bundle Modal */}
       {generatedPlan && showOfflineBundleModal && (
         <OfflineAudioBundleModal

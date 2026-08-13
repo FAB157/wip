@@ -44,6 +44,7 @@ export default function RoutePoisModal({
   const [suggestions, setSuggestions] = useState<Array<{ id: string; description: string; lat: number; lon: number }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   const isIt = language === 'IT';
   const origin = originMode === 'gps' ? gpsCoords : (customCoords ? { lat: customCoords.lat, lon: customCoords.lon } : null);
@@ -129,6 +130,36 @@ export default function RoutePoisModal({
   // chiuso) e all'avvio endCoords è null — senza `?.` l'app crashava al mount.
   }, [isOpen, origin?.lat, origin?.lon, endCoords?.lat, endCoords?.lon]);
 
+  // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
+  useEffect(() => {
+    if (!isOpen || !endCoords) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const selector = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = (): HTMLElement[] =>
+      (Array.from(root.querySelectorAll(selector)) as HTMLElement[]).filter(el => el.offsetParent !== null);
+    const focusTimer = setTimeout(() => {
+      if (!root.contains(document.activeElement)) focusables()[0]?.focus();
+    }, 60);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener('keydown', onKeyDown, true);
+      previouslyFocused?.focus?.();
+    };
+  }, [isOpen, endCoords?.lat, endCoords?.lon]);
+
   if (!isOpen || !endCoords) return null;
 
   const togglePoi = (id: string) => {
@@ -145,7 +176,13 @@ export default function RoutePoisModal({
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="WIP Nav"
+        className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+      >
         <div className="p-6 pb-4 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50 dark:bg-gray-800/50">
           <div>
             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
@@ -156,7 +193,7 @@ export default function RoutePoisModal({
             </h2>
             <p className="text-sm text-gray-500 mt-1">{isIt ? 'Verso' : 'To'}: {destinationName}</p>
           </div>
-          <button onClick={onClose} className="p-2 bg-white dark:bg-gray-800 rounded-full hover:bg-gray-100 shadow-sm">
+          <button onClick={onClose} aria-label="Chiudi" className="p-2 bg-white dark:bg-gray-800 rounded-full hover:bg-gray-100 shadow-sm">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>

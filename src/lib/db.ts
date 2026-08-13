@@ -28,8 +28,28 @@ const db = new Dexie('ItaliaInTascaDB') as Dexie & {
 };
 
 // Schema declaration:
+// `lastUpdated` è indicizzato: oltre a datare i record serve da chiave per
+// l'EVICTION (prunePoisOlderThan) — senza potatura il mirror POI crescerebbe
+// senza limite col passare delle aree visitate.
 db.version(1).stores({
-  pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated' 
+  pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated'
 });
+
+/**
+ * Eviction: rimuove dal mirror i POI non aggiornati da oltre `maxAgeMs`
+ * (usa l'indice lastUpdated). Le aree scaricate vengono ri-mirrorate dalla
+ * sync periodica, quindi restano fresche finché l'utente va online ogni tanto.
+ * Ritorna il numero di record rimossi. Best-effort: mai lancia.
+ */
+export async function prunePoisOlderThan(maxAgeMs: number): Promise<number> {
+  try {
+    const cutoff = Date.now() - maxAgeMs;
+    const stale = await db.pois.where('lastUpdated').below(cutoff).primaryKeys();
+    if (stale.length) await db.pois.bulkDelete(stale as string[]);
+    return stale.length;
+  } catch {
+    return 0;
+  }
+}
 
 export { db };

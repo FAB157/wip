@@ -266,7 +266,12 @@ final class WipSupabaseClient {
                 guideDefault: (map["guide_default"] as? String) ?? "nicky",
                 isGem: isGem,
                 isFromItinerary: false,
-                teaserText: teaser
+                teaserText: teaser,
+                // Raggi calibrati sul perimetro reale (footprint OSM): usati
+                // dal trigger solo se il POI ha un ingresso (entrance_lat/lon),
+                // come radiiForTransport lato web. Prima venivano ignorati.
+                alertRadius: (map["alert_radius"] as? NSNumber)?.intValue,
+                arrivalRadius: (map["geofence_radius"] as? NSNumber)?.intValue
             )
         }
 

@@ -1,6 +1,7 @@
 import { get, set, del, keys } from 'idb-keyval';
-import { db } from './db';
+import { db, prunePoisOlderThan } from './db';
 import { supabase } from './supabase';
+import { isDownloadablePoiStatus } from '../services/poiRepository';
 
 export interface OfflineItinerarySummary {
   id: string;
@@ -73,6 +74,9 @@ export const mirrorPoisToDexie = async (pois: any[]) => {
   try {
     await db.pois.bulkPut(pois
       .filter(p => p && p.id && typeof p.lat === 'number' && typeof p.lon === 'number')
+      // Difesa: mai mirrorare draft/nascosti o record senza status (offline il
+      // geofencing parte da solo → un draft "senza status" poteva triggerare).
+      .filter(isDownloadablePoiStatus)
       .map(p => ({
         id: String(p.id),
         name: p.name || p.nome || '',
@@ -166,8 +170,63 @@ export const saveOfflinePoiSheet = (
 const SYNC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const SYNC_FIELDS = 'id,name,lat,lon,category,status,is_gem,description,description_short,description_long,description_ai,audio_script,practical_info,image_url,photo_url,teaser_text_it';
 
+// Riconciliazione mirror: chiave dell'ultima lettura tombstone e TTL eviction.
+const TOMBSTONE_SYNC_KEY = 'wip_last_tombstone_sync';
+const DEXIE_PRUNE_TTL_MS = 45 * 24 * 60 * 60 * 1000; // 45 giorni
+
+/**
+ * Riconcilia il mirror Dexie (db.pois) con lo stato server, oltre al semplice
+ * merge additivo:
+ *  1. TOMBSTONE — i POI cancellati sul server (shared_pois_tombstones) vengono
+ *     RIMOSSI dal mirror e dagli snapshot idb-keyval delle aree. Prima la sync
+ *     era solo additiva: un POI eliminato restava per sempre nel PWA offline.
+ *  2. EVICTION — pota i record non aggiornati da oltre la TTL (mirror illimitato).
+ * Best-effort, idempotente. Allineata alla logica nativa DeltaSyncLogic
+ * (prima le tombstone, poi gli upsert: un upsert nella stessa finestra vince).
+ */
+export const reconcileDexieMirror = async () => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+
+  // 1. Tombstone → delete (non solo merge).
+  try {
+    const since = (await get(TOMBSTONE_SYNC_KEY) as number) || 0;
+    const sinceIso = new Date(since).toISOString();
+    const { data: tombs, error } = await supabase
+      .from('shared_pois_tombstones')
+      .select('id, deleted_at')
+      .gt('deleted_at', sinceIso)
+      .order('deleted_at', { ascending: false })
+      .limit(10000);
+    if (!error && Array.isArray(tombs) && tombs.length > 0) {
+      const deadIds = tombs.map((t: any) => String(t.id));
+      const deadSet = new Set(deadIds);
+      try { await db.pois.bulkDelete(deadIds); } catch { /* best effort */ }
+      // Rimuovi anche dagli snapshot idb-keyval delle aree scaricate.
+      const areas = (await get('offline_map_areas_list') as OfflineMapArea[]) || [];
+      for (const a of areas) {
+        const stored = (await get(`offline_area_pois_${a.id}`) as any[]) || [];
+        if (stored.length) {
+          const kept = stored.filter(p => !deadSet.has(String(p.id)));
+          if (kept.length !== stored.length) await set(`offline_area_pois_${a.id}`, kept);
+        }
+      }
+      console.log(`[OfflineStorage] Tombstone applicate: rimossi ${deadIds.length} POI cancellati sul server.`);
+    }
+    await set(TOMBSTONE_SYNC_KEY, Date.now());
+  } catch (e) {
+    console.warn('[OfflineStorage] Riconciliazione tombstone fallita:', e);
+  }
+
+  // 2. Eviction dei record stantii.
+  const removed = await prunePoisOlderThan(DEXIE_PRUNE_TTL_MS);
+  if (removed > 0) console.log(`[OfflineStorage] Eviction Dexie: rimossi ${removed} POI stantii.`);
+};
+
 export const syncOfflineAreasIfStale = async (maxAgeMs = SYNC_MAX_AGE_MS) => {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  // Riconciliazione mirror (tombstone + eviction) SEMPRE, anche senza aree
+  // scaricate: i POI cancellati sul server devono sparire dal PWA offline.
+  await reconcileDexieMirror();
   const list = await get('offline_map_areas_list') as OfflineMapArea[] || [];
   if (list.length === 0) return;
 

@@ -270,9 +270,12 @@ export function isGenericUtilityName(name?: string | null): boolean {
   const genericWords = [
     "parcheggio", "parco", "giardino", "giardinetti", "giardinetto", "villa",
     "parking", "park", "garden", "playground", "posteggio", "sosta", "stazionamento",
-    "luogo d'interesse", "luogo d interesse", "area camper", "area sosta", "area di sosta", "sito", "punto"
+    "luogo d'interesse", "luogo d interesse", "area camper", "area sosta", "area di sosta", "sito", "punto",
+    // Placeholder generici del vecchio import CSV/OSM (nessun contenuto): vanno nascosti
+    "punto di interesse", "punto d'interesse", "punto d interesse",
+    "luogo di interesse", "point of interest", "points of interest"
   ];
-  
+
   if (genericWords.includes(lower)) return true;
 
   const genericRegex = /^(parcheggio|parco|giardino|giardini|giardinetto|giardinetti|parking|park|garden|area verde|area di sosta|area sosta|posteggio|sosta)\b/i;
@@ -699,6 +702,11 @@ function MapArea({
   const overpassAbortRef = useRef<AbortController | null>(null);
   const googlePlacesAbortRef = useRef<AbortController | null>(null);
   const wikiAbortRef = useRef<AbortController | null>(null);
+  // Long-press del bottone "posizione": stato LOCALE al componente. Prima
+  // viveva su window (`longPressTimer`/`isLongPress`), condiviso tra istanze
+  // e mai ripulito allo smontaggio.
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isLongPressRef = useRef(false);
 
   // Cleanup completo per gli unmount reali (hot reload, error boundary):
   // il timer di debounce e i fetch in volo non devono sopravvivere al componente.
@@ -706,6 +714,7 @@ function MapArea({
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       fetchSeqRef.current++; // invalida le risposte in volo
       overpassAbortRef.current?.abort();
       googlePlacesAbortRef.current?.abort();
@@ -957,7 +966,12 @@ function MapArea({
       ]);
 
       if (data && !error) {
-        dbPois = (data as any[]).map((item: any) => {
+        dbPois = (data as any[])
+          // Stesso filtro del ramo select diretto e dei POI community: mai
+          // mostrare bozze o POI nascosti/senza nome. Prima il ramo RPC li
+          // mappava soltanto (status incluso) ma non li scartava.
+          .filter((item: any) => item.is_hidden !== true && item.status !== 'draft' && (item.nome || item.name))
+          .map((item: any) => {
           // Mappa categoria OSM → categoria UI
           const osmToUiCategory: Record<string, string> = {
             church: "chiese", museum: "musei", viewpoint: "panorami",
@@ -1364,7 +1378,8 @@ function MapArea({
           if (res.ok) {
             const data = await res.json();
             const pages = data.query?.pages || {};
-            return Object.values(pages).map((p: any) => {
+            const wikiRowsToSave: any[] = [];
+            const wikiPois = Object.values(pages).map((p: any) => {
               const coords = p.coordinates?.[0];
               const rawLat = coords?.lat;
               const rawLon = coords?.lon;
@@ -1416,22 +1431,39 @@ function MapArea({
                 hidden: !isSelected // Keep it but mark as hidden to help deduplication if needed
               };
 
-              // Persist silently to DB so they become available to everyone globally
-              supabase.from('shared_pois').upsert({
-                id: wikiPoi.id,
-                lat: wikiPoi.lat,
-                lon: wikiPoi.lon,
-                name: wikiPoi.name,
-                category: wikiPoi.category,
-                technical_data: { wikipedia_raw: p },
-                description_ai: wikiPoi.wikipedia_extract,
-                created_at: new Date().toISOString()
-              }, { onConflict: "id" }).then(({ error }) => {
-                if (error) console.warn("[MapArea] Failed to persist wiki POI to DB:", error);
-              });
+              // Accumula per un UNICO upsert batch a fine mappatura: prima ogni
+              // POI Wikipedia faceva la sua upsert singola (~200 richieste a
+              // shared_pois per ogni pan/zoom della mappa). Solo coordinate
+              // valide, così una riga NaN non fa fallire l'intero chunk.
+              if (Number.isFinite(latNum) && Number.isFinite(lonNum)) {
+                wikiRowsToSave.push({
+                  id: wikiPoi.id,
+                  lat: wikiPoi.lat,
+                  lon: wikiPoi.lon,
+                  name: wikiPoi.name,
+                  category: wikiPoi.category,
+                  technical_data: { wikipedia_raw: p },
+                  description_ai: wikiPoi.wikipedia_extract,
+                  created_at: new Date().toISOString()
+                });
+              }
 
               return wikiPoi;
             }).filter((poi: any) => poi !== null && typeof poi.lat === "number" && Number.isFinite(poi.lat) && !isNaN(poi.lat) && typeof poi.lon === "number" && Number.isFinite(poi.lon) && !isNaN(poi.lon) && !poi.hidden);
+
+            // Persist in blocco (chunk da 50, stesso pattern di newPoisToSave):
+            // fire-and-forget, non ritarda il primo paint dei pin.
+            if (wikiRowsToSave.length > 0) {
+              (async () => {
+                for (let i = 0; i < wikiRowsToSave.length; i += 50) {
+                  const chunk = wikiRowsToSave.slice(i, i + 50);
+                  const { error } = await supabase.from('shared_pois').upsert(chunk, { onConflict: "id" });
+                  if (error) console.warn("[MapArea] Failed to persist wiki POIs to DB:", error);
+                }
+              })();
+            }
+
+            return wikiPois;
           }
         } catch (e: any) {
             console.warn("Wiki fetch skipped:", e.message);
@@ -2730,32 +2762,32 @@ function MapArea({
               <button
                 type="button"
                 onMouseDown={() => {
-                  const timer = setTimeout(() => {
-                    (window as any).isLongPress = true;
+                  isLongPressRef.current = false;
+                  longPressTimerRef.current = setTimeout(() => {
+                    isLongPressRef.current = true;
                     handleMyLocation(true);
                   }, 600);
-                  (window as any).longPressTimer = timer;
                 }}
                 onMouseUp={() => {
-                  clearTimeout((window as any).longPressTimer);
-                  if (!(window as any).isLongPress) {
+                  if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                  if (!isLongPressRef.current) {
                     handleMyLocation(false);
                   }
-                  (window as any).isLongPress = false;
+                  isLongPressRef.current = false;
                 }}
                 onTouchStart={() => {
-                  const timer = setTimeout(() => {
-                    (window as any).isLongPress = true;
+                  isLongPressRef.current = false;
+                  longPressTimerRef.current = setTimeout(() => {
+                    isLongPressRef.current = true;
                     handleMyLocation(true);
                   }, 600);
-                  (window as any).longPressTimer = timer;
                 }}
                 onTouchEnd={() => {
-                  clearTimeout((window as any).longPressTimer);
-                  if (!(window as any).isLongPress) {
+                  if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+                  if (!isLongPressRef.current) {
                     handleMyLocation(false);
                   }
-                  (window as any).isLongPress = false;
+                  isLongPressRef.current = false;
                 }}
                 className={`p-2 rounded-full transition-all active:scale-90 relative ${
                   followMode

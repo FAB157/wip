@@ -102,6 +102,33 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // SICUREZZA: prima QUALSIASI chiamante con la anon key pubblica poteva
+    // seminare/curare/sovrascrivere shared_pois con la service key (backdoor
+    // scrittura globale). Ora serve la service role key (server/cron) o un JWT
+    // di un utente ADMIN; la sola anon key pubblica viene rifiutata.
+    {
+      const authHeader = req.headers.get("Authorization") || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY") || "";
+      let authorized = !!token && !!supabaseKey && token === supabaseKey;
+      if (!authorized && token && token !== anonKey) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser(token);
+          if (user) {
+            const { data: prof } = await supabase
+              .from("user_profiles").select("is_admin").eq("id", user.id).single();
+            authorized = prof?.is_admin === true;
+          }
+        } catch (_e) { /* non autorizzato */ }
+      }
+      if (!authorized) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // ==========================================
     // MODULE 1: DISCOVERY (Nearby Search Seeder)
     // ==========================================
@@ -165,7 +192,8 @@ serve(async (req) => {
           lat: numericLat,
           lon: numericLon,
           category: itemCat || "monumenti",
-          status: "verified",
+          // Seed automatico: 'auto', MAI 'verified' (nessuna revisione umana).
+          status: "auto",
           is_locked: false,
           flag_review: false,
           created_at: new Date().toISOString()
@@ -461,8 +489,10 @@ serve(async (req) => {
           });
         }
 
-        // If already enriched and complete, return cache (Self-Healing logic for null columns)
-        if (cachedRecord.status === "verified" && cachedRecord.description_long) {
+        // If already enriched and complete, return cache (Self-Healing logic for null columns).
+        // Accetta anche 'auto' (la curatela automatica ora scrive 'auto', non
+        // 'verified'): senza questo si ri-curava a ogni chiamata → costi inutili.
+        if ((cachedRecord.status === "verified" || cachedRecord.status === "auto") && cachedRecord.description_long) {
           console.log(`[ORACLE Enrich-Now] Record already enriched and complete. Returning cached copy.`);
           return new Response(JSON.stringify({ ...cachedRecord, from_cache: true }), {
             status: 200,
@@ -499,8 +529,9 @@ serve(async (req) => {
     throw new Error(`Unsupported action: ${action}`);
 
   } catch (err: any) {
+    // Dettaglio solo nei log; al client un messaggio generico.
     console.error("[ORACLE Manager POI] Server execution error:", err.message);
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: "manager_poi_failed" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -719,7 +750,9 @@ Dati Tecnici: "${technicalDetails}"`;
     description_long: synthesis.description_long || synthesis.description_short,
     photo_url: imageUrl || `https://source.unsplash.com/800x600/?${encodeURIComponent(resolvedName + ' Italy')}`,
     image_url: imageUrl || `https://source.unsplash.com/800x600/?${encodeURIComponent(resolvedName + ' Italy')}`,
-    status: "verified",
+    // Curatela automatica → 'auto', MAI 'verified' (la revisione umana): prima
+    // promuoveva a verified anche contenuti generati/potenzialmente allucinati.
+    status: "auto",
     is_locked: false,
     flag_review: flagReview,
     last_reviewed_at: new Date().toISOString()

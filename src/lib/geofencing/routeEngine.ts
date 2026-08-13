@@ -5,6 +5,7 @@
  */
 
 import type { TransportMode } from './transportDetector';
+import { OSRM_FOOT_BASE } from '../../services/osrmService';
 
 export interface LatLng {
   lat: number;
@@ -28,9 +29,11 @@ export interface RouteResult {
   fromCache: boolean;
 }
 
-// OSRM pubblico - sostituisci con self-hosted se necessario
-const OSRM_FOOT = 'https://router.project-osrm.org/route/v1/foot';
-const OSRM_CAR  = 'https://router.project-osrm.org/route/v1/driving';
+// OSRM: il profilo FOOT usa la base condivisa OSRM_FOOT_BASE (grafo pedonale
+// reale FOSSGIS — il demo pubblico "foot" era in realtà il grafo AUTO).
+// PRODUZIONE: OSRM self-hosted o Mapbox "walking". Il profilo AUTO resta sul
+// demo pubblico (grafo corretto per la guida).
+const OSRM_CAR = 'https://router.project-osrm.org/route/v1/driving';
 
 const CACHE_TTL_MS = 30_000;      // 30 secondi cache per stesso percorso
 const REQUEST_TIMEOUT_MS = 4_000; // 4 secondi timeout
@@ -105,8 +108,12 @@ function buildInstruction(step: any, mode: TransportMode): string {
     return street ? `Svolta ${dir} in ${street}` : `Svolta ${dir}`;
   }
   if (type === 'roundabout' || type === 'rotary') {
-    const exit = maneuver.exit || '';
-    return `Alla rotonda prendi la ${exit}ª uscita${street ? ` su ${street}` : ''}`;
+    const exitN = Number(maneuver.exit);
+    const onStreet = street ? ` su ${street}` : '';
+    // Con exit assente usciva "la ª uscita" (ordinale vuoto): guard esplicito.
+    return exitN > 0
+      ? `Alla rotonda prendi la ${exitN}ª uscita${onStreet}`
+      : `Prosegui alla rotonda${onStreet}`;
   }
   return street ? `Continua su ${street} per ${dist}m` : `Continua dritto per ${dist}m`;
 }
@@ -127,8 +134,10 @@ export async function getRoute(
     return { ...cached.result, fromCache: true };
   }
 
-  const base = mode === 'driving' ? OSRM_CAR : OSRM_FOOT;
-  const url = `${base}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=polyline&steps=true&annotations=false`;
+  // OSRM_FOOT_BASE termina già con "…/foot/"; il profilo AUTO usa "…/driving/".
+  const url = mode === 'driving'
+    ? `${OSRM_CAR}/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=polyline&steps=true&annotations=false`
+    : `${OSRM_FOOT_BASE}${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=polyline&steps=true&annotations=false`;
 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
@@ -180,6 +189,23 @@ export async function getRoute(
  * Distanza residua sul percorso dalla posizione attuale
  * Trova il punto più vicino sulla polyline e calcola distanza rimanente
  */
+// Proiezione punto→segmento (frame equirettangolare locale), identica a
+// roadSnap.projectToSeg (non esportata da quel modulo). Restituisce il punto
+// proiettato e la distanza in metri DAL SEGMENTO (non dal vertice).
+function projectToSegLL(p: LatLng, a: LatLng, b: LatLng): { lat: number; lng: number; distM: number } {
+  const cosLat = Math.cos((p.lat * Math.PI) / 180) || 1;
+  const px = p.lng * cosLat, py = p.lat;
+  const ax = a.lng * cosLat, ay = a.lat;
+  const bx = b.lng * cosLat, by = b.lat;
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const snapLat = ay + t * dy;
+  const snapLng = (ax + t * dx) / cosLat;
+  return { lat: snapLat, lng: snapLng, distM: haversineDistance(p, { lat: snapLat, lng: snapLng }) };
+}
+
 export function getRemainingDistance(
   currentPos: LatLng,
   routeGeometry: LatLng[]
@@ -188,17 +214,20 @@ export function getRemainingDistance(
     return { remaining: 0, closestIndex: 0, offRouteDistance: 0 };
   }
 
+  // Fuori-rotta = distanza dalla PROIEZIONE sul segmento più vicino, non dal
+  // vertice: con vertici distanti la distanza-al-vertice gonfiava l'off-route e
+  // faceva scattare ricalcoli fantasma anche stando sul tracciato.
   let minDist = Infinity;
   let closestIndex = 0;
-
+  let proj: LatLng = routeGeometry[0];
   for (let i = 0; i < routeGeometry.length - 1; i++) {
-    const d = haversineDistance(currentPos, routeGeometry[i]);
-    if (d < minDist) { minDist = d; closestIndex = i; }
+    const p = projectToSegLL(currentPos, routeGeometry[i], routeGeometry[i + 1]);
+    if (p.distM < minDist) { minDist = p.distM; closestIndex = i; proj = { lat: p.lat, lng: p.lng }; }
   }
 
-  // Distanza residua dalla posizione più vicina alla fine
-  let remaining = 0;
-  for (let i = closestIndex; i < routeGeometry.length - 1; i++) {
+  // Distanza residua: dalla proiezione al vertice successivo, poi fino alla fine.
+  let remaining = haversineDistance(proj, routeGeometry[closestIndex + 1]);
+  for (let i = closestIndex + 1; i < routeGeometry.length - 1; i++) {
     remaining += haversineDistance(routeGeometry[i], routeGeometry[i + 1]);
   }
 

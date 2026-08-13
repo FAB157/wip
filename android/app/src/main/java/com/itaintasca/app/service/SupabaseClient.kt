@@ -29,6 +29,11 @@ class SupabaseClient {
     // CATEGORY_MAP in GeofenceBroadcastReceiver.kt
     private val categoryMap = mapOf(
         "monumenti" to listOf("monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"),
+        // castelli/archeo: chiavi dedicate del web (useGeofencing.ts) che
+        // seguono `monumenti` di default; restano incluse in monumenti sopra,
+        // ma esposte a parte per rispettare un eventuale toggle separato.
+        "castelli" to listOf("castle", "castelli"),
+        "archeo" to listOf("ruins", "archaeological_site", "archeo"),
         "musei" to listOf("museum", "gallery", "musei"),
         "chiese" to listOf("church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"),
         "panorami" to listOf("viewpoint", "park", "panorami"),
@@ -36,6 +41,9 @@ class SupabaseClient {
         "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
         "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
         "consigli" to listOf("information", "tourism_information", "office", "consigli"),
+        // Gemme: chiave del toggle web (useGeofencing.ts). Nel prodotto sono
+        // "sempre attive", ma esposta per parità di mappa.
+        "gemme" to listOf("gemme"),
         // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
         "community" to listOf("community")
     )
@@ -329,12 +337,19 @@ class SupabaseClient {
                 poiType = catFromDb,
                 guideDefault = map["guide_default"]?.toString() ?: "nicky",
                 isGem = isGem,
-                teaserText = teaser
+                teaserText = teaser,
+                // Raggi da footprint reale (perimetro OSM). Usati solo se il POI
+                // ha un ingresso (entrance_lat/lon) — vedi GeofenceManager.
+                alertRadius = (map["alert_radius"] as? Number)?.toInt(),
+                geofenceRadius = (map["geofence_radius"] as? Number)?.toInt()
             )
         }
 
         return if (uiCategories.isEmpty()) {
-            val culturalCats = listOf("monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti", "museum", "gallery", "musei", "church", "place_of_worship", "cathedral", "chiese", "viewpoint", "park", "panorami")
+            // Default "insieme vuoto" allineato al web (useGeofencing.ts):
+            // { monumenti, musei, chiese } attivi; panorami OFF. Prima il nativo
+            // includeva viewpoint/park/panorami di default, il web no.
+            val culturalCats = listOf("monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti", "museum", "gallery", "musei", "church", "place_of_worship", "cathedral", "chiese")
             pois.filter { it.isGem || culturalCats.contains(it.poiType) }
         } else {
             pois.filter { poi -> 

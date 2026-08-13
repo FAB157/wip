@@ -1,7 +1,11 @@
 /**
  * SmartGeofenceManager.ts
- * Orchestratore principale del sistema geofencing navigatore-style
- * 
+ * Orchestratore del sistema geofencing web navigatore-style.
+ *
+ * ⚠️ WEB = RADAR-ONLY: NON montato in produzione. I trigger geofence reali sono
+ * gestiti dal servizio nativo (Android/iOS), attivo anche a WebView spenta.
+ * Questo orchestratore resta come base web/foreground di riferimento.
+ *
  * Flusso:
  * GPS position → TransportDetector → CategoryFilter → WaypointTracker
  *             → TriggerManager → AudioDirector → UI callbacks

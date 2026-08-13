@@ -14,6 +14,10 @@ installNativeApiFetch();
 // sistema", che senza uno scrittore restava sempre vuota).
 import { installGlobalErrorLogger } from './lib/errorLogger';
 installGlobalErrorLogger();
+// Feature flag (kill switch dal pannello admin): fetch all'avvio, fail-open.
+// Va DOPO installNativeApiFetch, che riscrive i path /api/ per il nativo.
+import { refreshFeatureFlags } from './lib/featureFlags';
+refreshFeatureFlags();
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -23,13 +27,10 @@ const queryClient = new QueryClient({
   },
 });
 
-if ('serviceWorker' in navigator && !window.location.protocol.includes('file')) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(err => {
-      console.warn('SW Registration failed:', err);
-    });
-  });
-}
+// La registrazione del service worker è gestita da vite-plugin-pwa
+// (injectRegister:'auto' in vite.config.ts): registrarlo di nuovo qui a mano
+// causava una doppia registrazione di /sw.js. Rimosso: il plugin è l'unico
+// proprietario del SW.
 
 import { ErrorBoundary } from './components/ErrorBoundary';
 import AppLockGate from './components/AppLockGate';

@@ -1,12 +1,11 @@
 /**
- * predictive.ts — nucleo predittivo condiviso del geofencing WIP.
+ * predictive.ts — nucleo predittivo (CPA) dello stack geofencing WEB.
  *
- * PORT ESATTO di:
- *   - android/app/src/main/java/com/itaintasca/app/geofence/PredictiveTrigger.kt
- *   - ios/App/App/PredictiveTrigger.swift
- *
- * Le tre implementazioni devono restare allineate: costanti, soglie e ordine
- * dei rami decisionali. Se cambiate un numero qui, cambiatelo in tutte e tre.
+ * ⚠️ WEB = RADAR-ONLY: questo modulo è usato solo da SmartGeofenceManager, che
+ * NON è montato in produzione (i trigger reali sono nativi). Nasce come port
+ * concettuale di PredictiveTrigger.kt / PredictiveTrigger.swift, ma NON è un
+ * "port esatto" vincolante: il nativo è autonomo e non dipende da questi valori.
+ * Le costanti qui sotto restano libere di divergere.
  *
  * PROBLEMA CHE RISOLVE
  * --------------------

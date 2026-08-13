@@ -3,12 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
 import { getGuideCharacter, setGuideCharacter } from "./lib/guideSettings";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "./lib/supabase";
 import { usePredictiveDownload } from "./hooks/usePredictiveDownload";
-import ProfileScreen from "./components/ProfileScreen";
+// Pannelli pesanti caricati a richiesta (React.lazy): niente più nel bundle
+// iniziale, così il first-paint è più leggero. Vengono comunque montati al
+// primo accesso e poi mantenuti montati (stato preservato) per plan/profile.
+const ProfileScreen = lazy(() => import("./components/ProfileScreen"));
 import LoginScreen from "./components/LoginScreen";
 import PermissionsModal from "./components/PermissionsModal";
 import { locationService } from "./services/locationService";
@@ -20,18 +23,19 @@ import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl } from "./lib/api";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
-import { Headphones, MapPin } from "lucide-react";
+import { Headphones, MapPin, Loader2 } from "lucide-react";
 import { Language, getTranslation } from "./lib/i18n";
 import { Capacitor } from '@capacitor/core';
+import { Geolocation } from '@capacitor/geolocation';
 // import { Purchases } from '@revenuecat/purchases-capacitor';
 
 import MapArea from "./components/MapArea";
 import CategoryChips from "./components/CategoryChips";
 import PoiDetailSheet from "./components/PoiDetailSheet";
 import BottomNav from "./components/BottomNav";
-import PlanScreen from "./components/PlanScreen";
-import EventsScreen from "./components/EventsScreen";
-import CameraScreen from "./components/CameraScreen";
+const PlanScreen = lazy(() => import("./components/PlanScreen"));
+const EventsScreen = lazy(() => import("./components/EventsScreen"));
+const CameraScreen = lazy(() => import("./components/CameraScreen"));
 import VisionCardSheet from "./components/VisionCardSheet";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
@@ -43,6 +47,38 @@ import ZeroCreditsBanner from "./components/ZeroCreditsBanner";
 import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
 import ToastHost from "./components/ToastHost";
+import { useFeatureFlag } from "./lib/featureFlags";
+
+// Pannello mostrato al posto di una schermata spenta col kill switch admin.
+function FeatureOffNotice({ onBack, language }: { onBack: () => void; language: Language }) {
+  return (
+    <div className="flex-1 w-full flex flex-col items-center justify-center gap-3 p-8 text-center bg-surface">
+      <div className="text-4xl">🛠️</div>
+      <div className="font-black text-primary text-lg">
+        {language === 'IT' ? 'Funzione in manutenzione' : 'Feature under maintenance'}
+      </div>
+      <p className="text-sm text-on-surface-variant max-w-xs">
+        {language === 'IT'
+          ? 'Questa sezione è temporaneamente disattivata. Torna a trovarci tra poco.'
+          : 'This section is temporarily disabled. Please check back soon.'}
+      </p>
+      <button onClick={onBack} className="mt-2 px-5 py-2.5 rounded-xl bg-primary text-white font-black text-sm">
+        {language === 'IT' ? 'Torna alla mappa' : 'Back to map'}
+      </button>
+    </div>
+  );
+}
+
+// Fallback mostrato mentre un pannello lazy (plan/events/camera/profile)
+// scarica il proprio chunk: uno spinner neutro su bg-surface, così il passaggio
+// di tab non mostra uno sfarfallio bianco o un salto visivo.
+function TabLoadingFallback() {
+  return (
+    <div className="flex-1 w-full h-full flex items-center justify-center bg-surface">
+      <Loader2 className="w-7 h-7 animate-spin text-primary/70" />
+    </div>
+  );
+}
 
 // Centro iniziale finché l'utente non muove la mappa. Reference stabile: un
 // array inline come prop faceva ripartire i fetch di EventsScreen a ogni
@@ -58,7 +94,14 @@ export default function App() {
   // Utente della sessione precedente: serve a distinguere un semplice
   // refresh del token da un vero cambio account / logout.
   const sessionUserIdRef = useRef<string | null>(null);
-  const [language, setLanguageState] = useState<Language>(() => (localStorage.getItem("wip_language") as Language) || "IT");
+  const [language, setLanguageState] = useState<Language>(() => {
+    const stored = localStorage.getItem("wip_language") as Language;
+    // DE è temporaneamente nascosto dal selettore (traduzione incompleta): un
+    // utente rimasto su DE vedrebbe la UI in EN via fallback senza poterla
+    // riselezionare — lo riportiamo a EN in modo esplicito e coerente.
+    if (stored === ("DE" as Language)) { localStorage.setItem("wip_language", "EN"); return "EN" as Language; }
+    return stored || "IT";
+  });
   // Centro e raggio della mappa VISUALIZZATA: è il riferimento geografico di
   // tutte le ricerche esterne (Viator, GetYourGuide, Virgilio, Ticketmaster).
   // Prima erano ancorate a una costante, quindi spostare la mappa su un'altra
@@ -71,7 +114,22 @@ export default function App() {
 
   // --- 2. Navigation & UI ---
   const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("profile");
+  // Kill switch dal pannello admin (feature flag): una tab spenta mostra un
+  // avviso di manutenzione invece della schermata.
+  const eventsEnabled = useFeatureFlag('events_tab');
+  const cameraEnabled = useFeatureFlag('vision_camera');
   const [previousTab, setPreviousTab] = useState<string | null>(null);
+  // Tab già visitate: i pannelli lazy plan/profile vengono montati SOLO al
+  // primo accesso e poi restano montati (con display:none quando inattivi), per
+  // preservare lo stato come prima. 'profile' è la tab iniziale, quindi parte
+  // già montata. events/camera restano invece a montaggio condizionale.
+  const [mountedTabs, setMountedTabs] = useState<Set<string>>(() => new Set(["profile"]));
+  // Aggiornamento in fase di render (pattern React ufficiale per lo stato
+  // derivato): monta la tab corrente PRIMA del paint, così il primo accesso
+  // non mostra un frame vuoto prima dello spinner del Suspense.
+  if (!mountedTabs.has(activeTab)) {
+    setMountedTabs(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
+  }
   const [isRadarMode, setIsRadarMode] = useState(false);
   // Scheda Vision (riconoscimento fotocamera): NON è un POI, ha una vista dedicata
   const [visionCard, setVisionCard] = useState<any | null>(null);
@@ -219,6 +277,28 @@ export default function App() {
     localStorage.setItem("wip_language", lang);
   }, []);
 
+  // Allinea l'attributo lang del documento alla lingua UI (a11y/SEO): copre sia
+  // l'avvio sia i cambi lingua successivi.
+  useEffect(() => {
+    try { document.documentElement.lang = language.toLowerCase(); } catch {}
+  }, [language]);
+
+  // Banner leggero mostrato agli avvii successivi se il permesso di posizione è
+  // stato negato: le audioguide automatiche non possono partire. Solo su
+  // nativo e solo dopo l'onboarding (durante il quale ci pensa PermissionsModal).
+  const [showLocDeniedBanner, setShowLocDeniedBanner] = useState(false);
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform() || !permissionsGranted) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await Geolocation.checkPermissions();
+        if (!cancelled && (status as any)?.location === 'denied') setShowLocDeniedBanner(true);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [permissionsGranted]);
+
   const handleToggleAudioGuide = useCallback((active: boolean) => {
     console.log(`[App.tsx] Audio Guide toggle: ${active}`);
     setIsAudioGuideActive(active);
@@ -342,6 +422,14 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     if (params.get('pin')) {
       setActiveTab('profile');
+    }
+    // Pianificazione di gruppo (ondata 7): ?groupplan=PIN apre il tab Piani
+    // sulla stanza; il PIN passa a PlanScreen via localStorage perché il tab
+    // può montare più tardi (login, onboarding).
+    const groupPin = params.get('groupplan');
+    if (groupPin && /^\d{6}$/.test(groupPin)) {
+      try { localStorage.setItem('wip_group_plan_join', groupPin); } catch { /* ok */ }
+      setActiveTab('plan');
     }
 
     return () => subscription?.unsubscribe();
@@ -677,6 +765,23 @@ export default function App() {
         
         {session?.user && <ZeroCreditsBanner userId={session.user.id} />}
 
+        {/* Avviso leggero: posizione negata → audioguide automatiche off. */}
+        {showLocDeniedBanner && (
+          <div className="shrink-0 bg-amber-500 text-white px-4 py-1.5 flex items-center justify-between gap-2 text-[11px] font-bold z-[900]">
+            <span className="flex items-center gap-1.5 min-w-0">
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">
+                {language === 'IT'
+                  ? 'Posizione disattivata: le audioguide automatiche non partono.'
+                  : 'Location off: automatic audio guides are disabled.'}
+              </span>
+            </span>
+            <button onClick={() => setShowLocDeniedBanner(false)} className="shrink-0 underline uppercase tracking-wide">
+              {language === 'IT' ? 'Chiudi' : 'Dismiss'}
+            </button>
+          </div>
+        )}
+
         {/* TAB: MAPPA */}
         <div className={`flex-1 w-full overflow-hidden ${activeTab === "map" ? "h-full relative block" : "absolute inset-0 invisible opacity-0 pointer-events-none -z-10"}`}>
           <MapArea selectedCategories={selectedCategories} onSelectPoi={handleSelectPoi} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} activeTab={activeTab} isRadarMode={isRadarMode} radarPois={radarPois} />
@@ -722,12 +827,14 @@ export default function App() {
         {/* ALTRE TAB — i container restano montati (stato preservato), la
             transizione slide+fade è sul wrapper interno: quando il tab si
             attiva il display passa a flex e motion anima l'ingresso. */}
+        {mountedTabs.has("plan") && (
         <div className={`flex-1 w-full overflow-hidden ${activeTab === "plan" ? "flex flex-col relative" : "hidden"}`}>
           <motion.div
             className="flex-1 flex flex-col min-h-0"
             animate={activeTab === "plan" ? { opacity: 1, x: 0 } : { opacity: 0, x: 24 }}
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
+          <Suspense fallback={<TabLoadingFallback />}>
           <PlanScreen
             guideMode={guideMode}
             setGuideMode={setGuideMode}
@@ -740,45 +847,63 @@ export default function App() {
             externalPlan={activePlan}
             setExternalPlan={setActivePlan}
           />
+          </Suspense>
           </motion.div>
         </div>
+        )}
 
-        {activeTab === "events" && (
+        {activeTab === "events" && !eventsEnabled && (
+          <FeatureOffNotice onBack={() => setActiveTab("map")} language={language} />
+        )}
+        {activeTab === "events" && eventsEnabled && (
           <motion.div
             className="flex-1 w-full overflow-hidden flex flex-col relative"
             initial={{ opacity: 0, x: 32 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
-            <EventsScreen mapCenter={mapCenter} mapRadiusKm={mapRadiusKm} onClose={() => setActiveTab("map")} language={language} />
+            <Suspense fallback={<TabLoadingFallback />}>
+              <EventsScreen mapCenter={mapCenter} mapRadiusKm={mapRadiusKm} onClose={() => setActiveTab("map")} language={language} />
+            </Suspense>
           </motion.div>
         )}
-        {activeTab === "camera" && <CameraScreen onRecognize={(data) => {
-          // Foto riconosciuta (ha l'immagine scattata o una scheda salvata):
-          // apre la scheda Vision dedicata, NON un finto POI.
-          if (data.image || data.card_id) {
-            setVisionCard(data);
-            return;
-          }
-          // Percorso Radar AR: è un vero POI del DB, apre la scheda POI classica
-          setVisionText(data.spiegazione_audio || "");
-          setSelectedPoi({ ...data, id: data.id || `vision-${Date.now()}` });
-          setActiveTab("map");
-        }} onClose={() => setActiveTab("map")} language={language} />}
+        {activeTab === "camera" && !cameraEnabled && (
+          <FeatureOffNotice onBack={() => setActiveTab("map")} language={language} />
+        )}
+        {activeTab === "camera" && cameraEnabled && (
+          <Suspense fallback={<TabLoadingFallback />}>
+            <CameraScreen onRecognize={(data) => {
+              // Foto riconosciuta (ha l'immagine scattata o una scheda salvata):
+              // apre la scheda Vision dedicata, NON un finto POI.
+              if (data.image || data.card_id) {
+                setVisionCard(data);
+                return;
+              }
+              // Percorso Radar AR: è un vero POI del DB, apre la scheda POI classica
+              setVisionText(data.spiegazione_audio || "");
+              setSelectedPoi({ ...data, id: data.id || `vision-${Date.now()}` });
+              setActiveTab("map");
+            }} onClose={() => setActiveTab("map")} language={language} />
+          </Suspense>
+        )}
 
         {visionCard && (
           <VisionCardSheet card={visionCard} language={language} onClose={() => setVisionCard(null)} />
         )}
 
+        {mountedTabs.has("profile") && (
         <div className={`flex-1 w-full overflow-hidden ${activeTab === "profile" ? "flex flex-col relative" : "hidden"}`}>
           <motion.div
             className="flex-1 flex flex-col min-h-0"
             animate={activeTab === "profile" ? { opacity: 1, x: 0 } : { opacity: 0, x: 24 }}
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
+          <Suspense fallback={<TabLoadingFallback />}>
           <ProfileScreen guideMode={guideMode} setGuideMode={setGuideMode} itinerary={itinerary} onSelectPoi={handleSelectPoi} defaultLocation={defaultLocation} setDefaultLocation={updateDefaultLocation} userSession={session} onSignOut={async () => { await supabase.auth.signOut(); setSession(null); }} onRemovePoi={removePoiById} onClearItinerary={async () => setItinerary([])} language={language} setLanguage={setLanguage} />
+          </Suspense>
           </motion.div>
         </div>
+        )}
 
         <ApproachBanner language={language} />
 

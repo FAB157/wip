@@ -1,11 +1,16 @@
 export type Language = "IT" | "EN" | "FR" | "ES" | "DE" | "RU" | "ZH";
 
-export const LANGUAGES: Record<Language, { label: string; flag: string }> = {
+// NB: il tedesco (DE) è nascosto dal selettore finché la UI non è tradotta:
+// ~95% delle stringhe cade ancora sul fallback EN, quindi offrirlo come
+// "Deutsch" era fuorviante. Le stringhe DE già presenti nel dizionario NON
+// vengono toccate (un utente che l'aveva scelto continua a funzionare). Per
+// riabilitarlo basta rimuovere il commento sulla riga DE.
+export const LANGUAGES: Partial<Record<Language, { label: string; flag: string }>> = {
   IT: { label: "Italiano", flag: "🇮🇹" },
   EN: { label: "English", flag: "🇬🇧" },
   FR: { label: "Français", flag: "🇫🇷" },
   ES: { label: "Español", flag: "🇪🇸" },
-  DE: { label: "Deutsch", flag: "🇩🇪" },
+  // DE: { label: "Deutsch", flag: "🇩🇪" }, // nascosto: traduzioni incomplete
   RU: { label: "Русский", flag: "🇷🇺" },
   ZH: { label: "中文 (Zhōngwén)", flag: "🇨🇳" },
 };
@@ -3517,6 +3522,19 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ES: "Experiencias y entradas de socios",
     RU: "Впечатления и билеты от партнёров",
     ZH: "来自合作伙伴的体验与门票"
+  },
+  free_only: {
+    IT: "Gratis", EN: "Free", FR: "Gratuit", ES: "Gratis",
+    DE: "Gratis", RU: "Бесплатно", ZH: "免费"
+  },
+  free_only_desc: {
+    IT: "Solo tappe gratuite: parchi, panorami, musei gratis (pasti esclusi)",
+    EN: "Free stops only: parks, viewpoints, free museums (meals excluded)",
+    FR: "Uniquement des étapes gratuites : parcs, panoramas, musées gratuits (repas exclus)",
+    ES: "Solo paradas gratuitas: parques, miradores, museos gratis (comidas excluidas)",
+    DE: "Nur kostenlose Stopps: Parks, Aussichtspunkte, freie Museen (Mahlzeiten ausgenommen)",
+    RU: "Только бесплатные места: парки, смотровые площадки, бесплатные музеи (кроме еды)",
+    ZH: "只含免费景点：公园、观景点、免费博物馆（餐饮除外）"
   },
   budget_label: {
     IT: "Budget", EN: "Budget", FR: "Budget", ES: "Presupuesto", RU: "Бюджет", ZH: "预算"
