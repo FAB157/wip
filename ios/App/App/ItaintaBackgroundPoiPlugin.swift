@@ -327,8 +327,10 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
      * best-effort. Alla ricezione sincronizza subito il mirror.
      */
     @objc func setUserContext(_ call: CAPPluginCall) {
-        prefs.set(call.getString("userId") ?? "", forKey: ListeningHistoryStore.prefUserId)
-        prefs.set(call.getString("accessToken") ?? "", forKey: ListeningHistoryStore.prefAccessToken)
+        // userId/accessToken in Keychain (SecureSessionStore), non più in
+        // UserDefaults in chiaro: vedi WipSupabaseClient.swift.
+        SecureSessionStore.set(call.getString("userId"), forKey: ListeningHistoryStore.prefUserId)
+        SecureSessionStore.set(call.getString("accessToken"), forKey: ListeningHistoryStore.prefAccessToken)
         ListeningHistoryStore.shared.syncFromCloud()
         call.resolve()
     }

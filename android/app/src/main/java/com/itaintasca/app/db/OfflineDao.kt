@@ -25,6 +25,25 @@ interface OfflineDao {
     @Query("DELETE FROM offline_packages WHERE id = :id")
     suspend fun deletePackageRow(id: String)
 
+    /**
+     * Checkpoint di un download in corso: cursore keyset raggiunto (resume) e,
+     * per il download pieno (non delta sync), i byte già ricevuti finora — così
+     * un retry riparte da qui invece che da pagina 1 e lo storage cap vede una
+     * stima realistica anche a download interrotto.
+     */
+    @Query(
+        "UPDATE offline_packages SET pendingCursorUpdated = :cursorUpdated, " +
+            "pendingCursorId = :cursorId, sizeBytes = :sizeBytes WHERE id = :id"
+    )
+    suspend fun updateDownloadCheckpoint(id: String, cursorUpdated: String?, cursorId: String?, sizeBytes: Long)
+
+    /** Come [updateDownloadCheckpoint] ma senza toccare sizeBytes (delta sync). */
+    @Query(
+        "UPDATE offline_packages SET pendingCursorUpdated = :cursorUpdated, " +
+            "pendingCursorId = :cursorId WHERE id = :id"
+    )
+    suspend fun updateDownloadCursor(id: String, cursorUpdated: String?, cursorId: String?)
+
     // --- POI ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPois(pois: List<OfflinePoiEntity>)

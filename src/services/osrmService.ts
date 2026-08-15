@@ -26,6 +26,8 @@ export interface RouteStep {
   distance: number;
   maneuverType: string;
   maneuverModifier?: string;
+  /** Nome della strada del segmento (da OSRM `step.name`), se non vuoto. */
+  name?: string;
 }
 
 export interface WalkingRoute {
@@ -47,12 +49,16 @@ type ManeuverPhrases = {
   roundabout: string;
   /** Rotonda CON numero di uscita: "prendi la 2ª uscita" ecc. */
   roundaboutExit: (n: number) => string;
-  right: string;
-  left: string;
-  straight: string;
-  slightRight: string;
-  slightLeft: string;
-  uturn: string;
+  // Manovre con nome via OPZIONALE: OSRM lo espone in step.name, ma lo
+  // restituisce vuoto per le strade senza nome (percorsi pedonali,
+  // scorciatoie...) — in quel caso queste funzioni ricadono sulla frase
+  // generica invariata (nessuna interpolazione con stringa vuota).
+  right: (name?: string) => string;
+  left: (name?: string) => string;
+  straight: (name?: string) => string;
+  slightRight: (name?: string) => string;
+  slightLeft: (name?: string) => string;
+  uturn: (name?: string) => string;
 };
 
 /** Ordinale inglese: 1st/2nd/3rd/4th… (per "take the Nth exit"). */
@@ -65,51 +71,72 @@ const MANEUVER_LANGS: Record<string, ManeuverPhrases> = {
   it: {
     arrive: p => `Sei arrivato a ${p}`, destination: 'destinazione', depart: 'Inizia il percorso',
     roundabout: 'Prendi la rotonda', roundaboutExit: n => `Alla rotonda prendi la ${n}ª uscita`,
-    right: 'gira a destra', left: 'gira a sinistra',
-    straight: 'continua dritto', slightRight: 'mantieni la destra', slightLeft: 'mantieni la sinistra',
-    uturn: 'fai inversione',
+    right: name => name ? `Gira a destra in ${name}` : 'gira a destra',
+    left: name => name ? `Gira a sinistra in ${name}` : 'gira a sinistra',
+    straight: name => name ? `Continua dritto su ${name}` : 'continua dritto',
+    slightRight: name => name ? `Mantieni la destra su ${name}` : 'mantieni la destra',
+    slightLeft: name => name ? `Mantieni la sinistra su ${name}` : 'mantieni la sinistra',
+    uturn: name => name ? `Fai inversione su ${name}` : 'fai inversione',
   },
   en: {
     arrive: p => `You have arrived at ${p}`, destination: 'your destination', depart: 'Start the route',
     roundabout: 'Take the roundabout', roundaboutExit: n => `At the roundabout take the ${enOrdinal(n)} exit`,
-    right: 'turn right', left: 'turn left',
-    straight: 'continue straight', slightRight: 'keep right', slightLeft: 'keep left',
-    uturn: 'make a U-turn',
+    right: name => name ? `Turn right onto ${name}` : 'turn right',
+    left: name => name ? `Turn left onto ${name}` : 'turn left',
+    straight: name => name ? `Continue straight on ${name}` : 'continue straight',
+    slightRight: name => name ? `Keep right onto ${name}` : 'keep right',
+    slightLeft: name => name ? `Keep left onto ${name}` : 'keep left',
+    uturn: name => name ? `Make a U-turn onto ${name}` : 'make a U-turn',
   },
   fr: {
     arrive: p => `Vous êtes arrivé à ${p}`, destination: 'destination', depart: 'Commencez le trajet',
     roundabout: 'Prenez le rond-point', roundaboutExit: n => `Au rond-point prenez la ${n === 1 ? '1re' : `${n}e`} sortie`,
-    right: 'tournez à droite', left: 'tournez à gauche',
-    straight: 'continuez tout droit', slightRight: 'serrez à droite', slightLeft: 'serrez à gauche',
-    uturn: 'faites demi-tour',
+    right: name => name ? `Tournez à droite sur ${name}` : 'tournez à droite',
+    left: name => name ? `Tournez à gauche sur ${name}` : 'tournez à gauche',
+    straight: name => name ? `Continuez tout droit sur ${name}` : 'continuez tout droit',
+    slightRight: name => name ? `Serrez à droite sur ${name}` : 'serrez à droite',
+    slightLeft: name => name ? `Serrez à gauche sur ${name}` : 'serrez à gauche',
+    uturn: name => name ? `Faites demi-tour sur ${name}` : 'faites demi-tour',
   },
   es: {
     arrive: p => `Has llegado a ${p}`, destination: 'tu destino', depart: 'Inicia el recorrido',
     roundabout: 'Toma la rotonda', roundaboutExit: n => `En la rotonda toma la ${n}ª salida`,
-    right: 'gira a la derecha', left: 'gira a la izquierda',
-    straight: 'sigue recto', slightRight: 'mantente a la derecha', slightLeft: 'mantente a la izquierda',
-    uturn: 'da la vuelta',
+    right: name => name ? `Gira a la derecha en ${name}` : 'gira a la derecha',
+    left: name => name ? `Gira a la izquierda en ${name}` : 'gira a la izquierda',
+    straight: name => name ? `Sigue recto por ${name}` : 'sigue recto',
+    slightRight: name => name ? `Mantente a la derecha en ${name}` : 'mantente a la derecha',
+    slightLeft: name => name ? `Mantente a la izquierda en ${name}` : 'mantente a la izquierda',
+    uturn: name => name ? `Da la vuelta en ${name}` : 'da la vuelta',
   },
   de: {
     arrive: p => `Sie haben ${p} erreicht`, destination: 'Ihr Ziel', depart: 'Route starten',
     roundabout: 'Nehmen Sie den Kreisverkehr', roundaboutExit: n => `Nehmen Sie am Kreisverkehr die ${n}. Ausfahrt`,
-    right: 'rechts abbiegen', left: 'links abbiegen',
-    straight: 'geradeaus weiter', slightRight: 'rechts halten', slightLeft: 'links halten',
-    uturn: 'wenden',
+    right: name => name ? `Rechts abbiegen auf ${name}` : 'rechts abbiegen',
+    left: name => name ? `Links abbiegen auf ${name}` : 'links abbiegen',
+    straight: name => name ? `Geradeaus weiter auf ${name}` : 'geradeaus weiter',
+    slightRight: name => name ? `Rechts halten auf ${name}` : 'rechts halten',
+    slightLeft: name => name ? `Links halten auf ${name}` : 'links halten',
+    uturn: name => name ? `Wenden auf ${name}` : 'wenden',
   },
   ru: {
     arrive: p => `Вы прибыли: ${p}`, destination: 'пункт назначения', depart: 'Начните маршрут',
     roundabout: 'Проезжайте круговой перекрёсток', roundaboutExit: n => `На кольце сверните на ${n}-й съезд`,
-    right: 'поверните направо', left: 'поверните налево',
-    straight: 'продолжайте прямо', slightRight: 'держитесь правее', slightLeft: 'держитесь левее',
-    uturn: 'развернитесь',
+    right: name => name ? `Поверните направо на ${name}` : 'поверните направо',
+    left: name => name ? `Поверните налево на ${name}` : 'поверните налево',
+    straight: name => name ? `Продолжайте прямо по ${name}` : 'продолжайте прямо',
+    slightRight: name => name ? `Держитесь правее на ${name}` : 'держитесь правее',
+    slightLeft: name => name ? `Держитесь левее на ${name}` : 'держитесь левее',
+    uturn: name => name ? `Развернитесь на ${name}` : 'развернитесь',
   },
   zh: {
     arrive: p => `您已到达${p}`, destination: '目的地', depart: '开始路线',
     roundabout: '进入环岛', roundaboutExit: n => `在环岛走第${n}个出口`,
-    right: '右转', left: '左转',
-    straight: '直行', slightRight: '靠右行驶', slightLeft: '靠左行驶',
-    uturn: '掉头',
+    right: name => name ? `右转进入${name}` : '右转',
+    left: name => name ? `左转进入${name}` : '左转',
+    straight: name => name ? `沿${name}直行` : '直行',
+    slightRight: name => name ? `靠右行驶进入${name}` : '靠右行驶',
+    slightLeft: name => name ? `靠左行驶进入${name}` : '靠左行驶',
+    uturn: name => name ? `在${name}掉头` : '掉头',
   },
 };
 
@@ -120,9 +147,13 @@ export function translateManeuver(
   lang: string,
   poiName?: string,
   exit?: number,
+  streetName?: string,
 ): string {
   const l = (lang || 'it').toLowerCase().slice(0, 2);
   const t = MANEUVER_LANGS[l] || MANEUVER_LANGS.en;
+  // OSRM restituisce '' (non undefined) per le strade senza nome: va trattato
+  // come "assente", altrimenti si otterrebbe "gira a destra in " a vuoto.
+  const name = streetName && streetName.trim() ? streetName.trim() : undefined;
 
   if (type === 'arrive') return t.arrive(poiName || t.destination);
   if (type === 'depart') return t.depart;
@@ -135,19 +166,19 @@ export function translateManeuver(
   switch (modifier) {
     case 'right':
     case 'sharp right':
-      return t.right;
+      return t.right(name);
     case 'left':
     case 'sharp left':
-      return t.left;
+      return t.left(name);
     case 'slight right':
-      return t.slightRight;
+      return t.slightRight(name);
     case 'slight left':
-      return t.slightLeft;
+      return t.slightLeft(name);
     case 'uturn':
-      return t.uturn;
+      return t.uturn(name);
     case 'straight':
     default:
-      return t.straight;
+      return t.straight(name);
   }
 }
 
@@ -177,13 +208,18 @@ export async function fetchWalkingRoute(
     const steps: RouteStep[] = legSteps.map((s: any) => {
       const type = s.maneuver?.type ?? 'continue';
       const modifier = s.maneuver?.modifier;
+      // Nome via del segmento (risposta OSRM standard, legs[].steps[].name).
+      // OSRM lo restituisce '' per le strade senza nome: normalizzato a
+      // undefined qui, così i consumatori non devono ripetere il controllo.
+      const name: string | undefined = typeof s.name === 'string' && s.name.trim() ? s.name.trim() : undefined;
       const [lon, lat] = s.maneuver?.location ?? [from.lon, from.lat];
       return {
-        instruction: translateManeuver(type, modifier, lang, poiName, s.maneuver?.exit),
+        instruction: translateManeuver(type, modifier, lang, poiName, s.maneuver?.exit, name),
         location: { lat, lon },
         distance: s.distance ?? 0,
         maneuverType: type,
         maneuverModifier: modifier,
+        name,
       };
     });
 

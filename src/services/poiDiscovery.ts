@@ -11,6 +11,7 @@ import {
 } from '../lib/poiCategories';
 import {
   findExistingOsmIds,
+  filterCrossSourceDuplicates,
   insertAutoPois,
   saveIndexedArea,
   type AutoPoiInput,
@@ -116,9 +117,16 @@ export async function runOverpassDiscovery(
     if (!existing.has(osmId)) fresh.push(poi);
   }
 
-  if (fresh.length > 0) {
-    result.inserted = await insertAutoPois(fresh);
-    result.freshPois = fresh;
+  // Dedup cross-source: findExistingOsmIds copre solo lo stesso id/fonte
+  // (es. lo stesso nodo Overpass ri-scoperto), ma non un POI geograficamente
+  // vicino con nome simile gia' inserito da una fonte diversa (es. Foursquare
+  // con id "fsq-…"). Scarta questi candidati prima dell'insert per non
+  // duplicare la riga per lo stesso luogo reale.
+  const deduped = await filterCrossSourceDuplicates(fresh);
+
+  if (deduped.length > 0) {
+    result.inserted = await insertAutoPois(deduped);
+    result.freshPois = deduped;
 
     // --- AUTO-ENRICHMENT BACKGROUND REMOVED ---
     // (L'arricchimento avviene on-demand al click sul pin per non intasare il rate limit)

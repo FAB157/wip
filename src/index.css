@@ -33,9 +33,11 @@
   
   --color-background: #fdfbf7; /* Panna */
   --color-on-background: #1e3a8a;
+  --color-surface-warm: #f8f5f0;
 
   --radius-xl: 1.5rem;
   --radius-2xl: 2rem;
+  --radius-3xl: 2.5rem;
 }
 
 @layer base {

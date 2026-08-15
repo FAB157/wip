@@ -133,14 +133,22 @@ public class WipBackgroundAudioService extends Service {
     private void ensurePlayer() {
         if (exoPlayer != null) return;
 
+        // USAGE_ASSISTANCE_NAVIGATION_GUIDANCE (invece di USAGE_MEDIA): con
+        // USAGE_MEDIA ExoPlayer richiede AUDIOFOCUS_GAIN (esclusivo), quindi la
+        // guida METTEVA IN PAUSA la musica di sottofondo di altre app invece di
+        // abbassarla. Con la guidance ExoPlayer richiede
+        // AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK, cioè "duck": stesso comportamento
+        // di iOS (sempre duck) e del teaser Android
+        // (GeofenceBroadcastReceiver/AudioPrefetchManager, che già usano
+        // ASSISTANCE_NAVIGATION_GUIDANCE + GAIN_TRANSIENT_MAY_DUCK).
         AudioAttributes attrs = new AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
+                .setUsage(C.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH)
                 .build();
 
         exoPlayer = new ExoPlayer.Builder(this)
-                // true => ExoPlayer richiede/abbandona l'audio focus da solo:
-                // mette in pausa quando arriva una chiamata, abbassa il volume di Maps, ecc.
+                // true => ExoPlayer richiede/abbandona l'audio focus da solo in base
+                // agli AudioAttributes sopra: duck (non pausa) la musica di altre app.
                 .setAudioAttributes(attrs, true)
                 .setHandleAudioBecomingNoisy(true)
                 .build();

@@ -311,12 +311,16 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
       </AnimatePresence>
 
       {/* Main Bar / Expanded Chat */}
-      <motion.div 
+      {/* bottom: BottomNav è alta 4rem + safe-area (vedi BottomNav.tsx) — qui
+          serve un margine reale sopra, non 8px: con la tastiera software o
+          differenze di viewport mobile la barra finiva nascosta sotto il
+          menu, mic e invio inclusi (non cliccabili). */}
+      <motion.div
         layout
         initial={{ y: 50, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         className={`fixed left-1/2 -translate-x-1/2 w-[95%] max-w-md rounded-3xl border border-gray-100/50 z-[1000] overflow-hidden flex flex-col transition-all duration-300 ${
-        isExpanded ? 'bg-white shadow-2xl bottom-[calc(4.5rem+env(safe-area-inset-bottom))] h-[65vh]' : 'bg-white/60 backdrop-blur-xl shadow-lg bottom-[calc(4.5rem+env(safe-area-inset-bottom))] p-1.5'
+        isExpanded ? 'bg-white shadow-2xl bottom-[calc(6rem+env(safe-area-inset-bottom))] h-[65vh]' : 'bg-white/60 backdrop-blur-xl shadow-lg bottom-[calc(6rem+env(safe-area-inset-bottom))] p-1.5'
       }`}
       >
         {/* Expanded Header */}
@@ -352,7 +356,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
         {isExpanded && (
           <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/50">
             {messages.length === 0 && !isOptimizing && (
-              <div className="text-center text-gray-400 text-sm mt-10">
+              <div className="text-center text-gray-500 text-sm mt-10">
                 Scrivi un messaggio per chattare con WIP o modificare il tuo itinerario.
               </div>
             )}

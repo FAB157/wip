@@ -25,6 +25,30 @@ function hasRpc(): boolean {
   return typeof (supabase as any).rpc === 'function';
 }
 
+/**
+ * Cache-priming "per il prossimo utente" via server (POST /api/poi/cache-enrichment).
+ * Sostituisce gli update diretti del client su shared_pois, bloccati dall'RLS
+ * hardening del 14/08/2026 (UPDATE solo admin). Il server accetta una
+ * whitelist di campi e scrive SOLO quelli oggi vuoti sulla riga: il contenuto
+ * già pubblicato non è sovrascrivibile. Best-effort: nessun errore all'utente.
+ */
+export async function primePoiCache(
+  poiId: string | number,
+  fields: Partial<Record<'description_long' | 'description_ai' | 'description_short' | 'audio_script' | 'image_url' | 'photo_url', string>>,
+): Promise<void> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) return;
+    const { getApiUrl } = await import('../lib/api');
+    await fetch(getApiUrl('/api/poi/cache-enrichment'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ poiId: String(poiId), fields }),
+    });
+  } catch { /* best-effort */ }
+}
+
 // --- Lettura POI vicini (da shared_pois) --------------------------------
 export async function getPoiById(id: string): Promise<NearbyPoi | null> {
   // Try Dexie first
@@ -529,6 +553,138 @@ export async function findExistingOsmIds(osmIds: string[]): Promise<Set<string>>
     console.warn('[poiRepository] findExistingOsmIds', e);
   }
   return result;
+}
+
+// --- Dedup cross-source per prossimita' geografica + nome simile --------
+/**
+ * Normalizza un nome POI per il confronto: minuscolo, senza diacritici,
+ * senza punteggiatura, spazi collassati. "Duomo di Milano" e "DUOMO DI
+ * MILANO!" normalizzano allo stesso valore.
+ */
+function normalizePoiNameForCompare(name: string): string {
+  return String(name || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // rimuove i diacritici (accenti)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Distanza di Levenshtein classica (DP O(n*m)); i nomi POI sono corti. */
+function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[] = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prevDiag = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prevDiag : 1 + Math.min(prevDiag, dp[j], dp[j - 1]);
+      prevDiag = tmp;
+    }
+  }
+  return dp[n];
+}
+
+/**
+ * True se due nomi POI sono abbastanza simili da poter essere lo stesso
+ * luogo visto da fonti diverse (es. OSM "Duomo di Milano" vs Foursquare
+ * "Duomo"). Soglie scelte:
+ * - uno e' sottostringa dell'altro (>=3 char dopo normalizzazione) → match
+ *   diretto: molto comune tra fonti diverse avere nomi abbreviati/parziali;
+ * - altrimenti Levenshtein normalizzata (distanza / lunghezza massima) <= 0.3
+ *   → tollera piccole variazioni di grafia/spazi/abbreviazioni (es. "Chiesa
+ *   di San Marco" vs "Chiesa San Marco") senza scambiare per duplicati due
+ *   nomi genuinamente diversi (soglia 0.3 = fino al 30% dei caratteri
+ *   differenti, valore empirico standard per il fuzzy-matching di toponimi).
+ */
+function namesAreSimilarEnough(nameA: string, nameB: string): boolean {
+  const a = normalizePoiNameForCompare(nameA);
+  const b = normalizePoiNameForCompare(nameB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a))) return true;
+  const dist = levenshteinDistance(a, b);
+  const maxLen = Math.max(a.length, b.length);
+  return maxLen > 0 && dist / maxLen <= 0.3;
+}
+
+/** Raggio (metri) entro cui due POI di fonti diverse con nome simile sono
+ * considerati lo stesso luogo. 45m assorbe l'offset GPS/geocoding tipico tra
+ * sorgenti diverse (OSM/Foursquare/Geoapify) su un edificio con footprint
+ * ampio, restando abbastanza stretto da non confondere due esercizi vicini
+ * sulla stessa via. */
+const CROSS_SOURCE_DEDUP_RADIUS_METERS = 45;
+
+/**
+ * Dedup cross-source: findExistingOsmIds confronta solo l'id esatto della
+ * STESSA fonte (stesso nodo OSM ri-scoperto), ma non si accorge di un POI
+ * geograficamente vicino con nome simile gia' presente da una fonte diversa
+ * (es. gia' inserito via Foursquare con id "fsq-…", poi Overpass lo ritrova
+ * con un osm_id diverso → riga duplicata per lo stesso luogo reale). Questa
+ * funzione va ad AGGIUNGERSI a findExistingOsmIds, non a sostituirla.
+ *
+ * Query una singola volta il bounding box che copre tutti i candidati (invece
+ * di una RPC per candidato) e confronta localmente con haversineMeters +
+ * namesAreSimilarEnough. Ritorna il subset di `candidates` SENZA un match
+ * vicino+simile gia' in shared_pois (qualsiasi status/fonte).
+ */
+export async function filterCrossSourceDuplicates(
+  candidates: AutoPoiInput[],
+): Promise<AutoPoiInput[]> {
+  if (candidates.length === 0) return candidates;
+  try {
+    // ~gradi equivalenti al raggio di dedup; bounding box approssimato (come
+    // il fallback bbox di getNearbyPois quando non c'e' RPC PostGIS diretta
+    // per un set di punti sparsi).
+    const delta = CROSS_SOURCE_DEDUP_RADIUS_METERS / 111000;
+    const lats = candidates.map((c) => c.lat);
+    const lons = candidates.map((c) => c.lon);
+    const minLat = Math.min(...lats) - delta;
+    const maxLat = Math.max(...lats) + delta;
+    const minLon = Math.min(...lons) - delta;
+    const maxLon = Math.max(...lons) + delta;
+
+    const { data, error } = await supabase
+      .from('shared_pois')
+      .select('id, name, lat, lon')
+      .gte('lat', minLat).lte('lat', maxLat)
+      .gte('lon', minLon).lte('lon', maxLon);
+
+    if (error) {
+      console.warn('[poiRepository] filterCrossSourceDuplicates query:', error.message);
+      return candidates; // in dubbio non blocchiamo l'inserimento per un errore di rete
+    }
+    const nearby = (data as any[] | null) ?? [];
+    if (nearby.length === 0) return candidates;
+
+    const kept: AutoPoiInput[] = [];
+    let skipped = 0;
+    for (const cand of candidates) {
+      const isDuplicate = nearby.some((row) =>
+        typeof row.lat === 'number' && typeof row.lon === 'number' &&
+        haversineMeters(cand.lat, cand.lon, row.lat, row.lon) <= CROSS_SOURCE_DEDUP_RADIUS_METERS &&
+        namesAreSimilarEnough(cand.name, row.name || ''),
+      );
+      if (isDuplicate) {
+        skipped++;
+      } else {
+        kept.push(cand);
+      }
+    }
+    if (skipped > 0) {
+      console.log(`[poiRepository] filterCrossSourceDuplicates: scartati ${skipped}/${candidates.length} candidati (gia' presenti da altra fonte entro ${CROSS_SOURCE_DEDUP_RADIUS_METERS}m con nome simile)`);
+    }
+    return kept;
+  } catch (e) {
+    console.warn('[poiRepository] filterCrossSourceDuplicates ex', e);
+    return candidates;
+  }
 }
 
 export interface AutoPoiInput {

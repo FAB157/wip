@@ -29,7 +29,6 @@ export default function AdminCounters() {
 
   // Stats States
   const [apiLogs, setApiLogs] = useState<ApiLogGroup[]>([]);
-  const [affiliateClicks, setAffiliateClicks] = useState<{poiName: string, count: number}[]>([]);
   // null = conteggio non disponibile (errore/permessi), distinto dallo 0 reale.
   const [dbCounts, setDbCounts] = useState<Record<string, number | null>>({
     usersCount: 0,
@@ -84,7 +83,6 @@ export default function AdminCounters() {
       await Promise.all([
         fetchApiUsageLogs(startIso, endIso),
         fetchDatabaseCounters(startIso, endIso),
-        fetchAffiliateLogs(startIso, endIso),
         fetchEnrichedSample(startIso, endIso),
         fetchSeededSample(startIso, endIso)
       ]);
@@ -206,37 +204,6 @@ export default function AdminCounters() {
       console.warn('[Analytics] fetchApiUsageLogs catch exception:', err);
       loadSeedLogs();
       setIsTableMissing(true);
-    }
-  };
-
-  const fetchAffiliateLogs = async (start: string, end: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('affiliate_clicks')
-        .select('*')
-        .gte('created_at', start)
-        .lte('created_at', end)
-        .limit(999999);
-
-      if (error) {
-        setAffiliateClicks([]);
-        return;
-      }
-      
-      const groups: Record<string, number> = {};
-      (data || []).forEach((row: any) => {
-        const poi = row.poi_name || 'Sconosciuto';
-        groups[poi] = (groups[poi] || 0) + 1;
-      });
-
-      const aggregated = Object.entries(groups)
-        .map(([poiName, count]) => ({ poiName, count }))
-        .sort((a, b) => b.count - a.count);
-
-      setAffiliateClicks(aggregated);
-    } catch (err) {
-      console.warn('[AdminCounters] fetchAffiliateLogs error:', err);
-      setAffiliateClicks([]);
     }
   };
 
@@ -594,49 +561,6 @@ export default function AdminCounters() {
                 </div>
               </div>
             ))}
-          </div>
-        )}
-      </div>
-
-      {/* Affiliate Analytics */}
-      <div className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-outline-variant pb-3">
-          <h4 className="font-black text-sm text-[#FF5100] uppercase tracking-wider flex items-center gap-2">
-            <span className="text-xl">🎟️</span>
-            Statistiche Affiliazione GetYourGuide
-          </h4>
-        </div>
-
-        {affiliateClicks.length === 0 ? (
-          <div className="py-12 text-center text-on-surface-variant opacity-60">
-            <p className="font-bold text-sm">Nessun click registrato</p>
-            <p className="text-xs mt-1">Non ci sono click in uscita verso GetYourGuide in questo periodo.</p>
-            <p className="text-[10px] mt-4 opacity-50">I click mostrano le intenzioni d'acquisto. Verifica le vendite reali sul portale partner di GetYourGuide.</p>
-          </div>
-        ) : (
-          <div>
-            <div className="flex items-center gap-4 mb-4">
-               <div className="p-4 bg-orange-50 rounded-2xl border border-orange-100 flex-1">
-                  <p className="text-[10px] font-black text-orange-400 uppercase tracking-wider">Totale Click Uscenti</p>
-                  <p className="text-2xl font-black text-[#FF5100]">
-                    {affiliateClicks.reduce((sum, item) => sum + item.count, 0)}
-                  </p>
-               </div>
-            </div>
-            <p className="text-[11px] font-black text-on-surface-variant uppercase mb-3">Top Attrazioni Cliccate</p>
-            <div className="space-y-2">
-              {affiliateClicks.map((item, idx) => (
-                <div key={item.poiName} className="flex items-center justify-between p-3 bg-surface-variant rounded-xl border border-outline-variant">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-black text-on-surface-variant w-4">{idx + 1}.</span>
-                    <span className="text-sm font-bold text-on-surface">{item.poiName}</span>
-                  </div>
-                  <span className="text-xs font-black text-[#FF5100] bg-orange-100 px-2 py-1 rounded-md">
-                    {item.count} click
-                  </span>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </div>

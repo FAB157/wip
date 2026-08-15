@@ -3,6 +3,7 @@ package com.itaintasca.app.service
 import android.util.Log
 import com.itaintasca.app.BuildConfig
 import com.itaintasca.app.db.PoiEntity
+import com.itaintasca.app.geofence.CategoryMap
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import okhttp3.*
@@ -23,30 +24,6 @@ class SupabaseClient {
         
     private val gson = Gson()
     private val TAG = "SupabaseClient"
-
-    // Mappa tra categorie UI (del setup) e categorie DB reali
-    // Tenere allineata a isCategoryAllowed (src/hooks/useGeofencing.ts) e a
-    // CATEGORY_MAP in GeofenceBroadcastReceiver.kt
-    private val categoryMap = mapOf(
-        "monumenti" to listOf("monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"),
-        // castelli/archeo: chiavi dedicate del web (useGeofencing.ts) che
-        // seguono `monumenti` di default; restano incluse in monumenti sopra,
-        // ma esposte a parte per rispettare un eventuale toggle separato.
-        "castelli" to listOf("castle", "castelli"),
-        "archeo" to listOf("ruins", "archaeological_site", "archeo"),
-        "musei" to listOf("museum", "gallery", "musei"),
-        "chiese" to listOf("church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"),
-        "panorami" to listOf("viewpoint", "park", "panorami"),
-        "locali" to listOf("restaurant", "cafe", "bar", "fast_food", "pub", "locali"),
-        "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
-        "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
-        "consigli" to listOf("information", "tourism_information", "office", "consigli"),
-        // Gemme: chiave del toggle web (useGeofencing.ts). Nel prodotto sono
-        // "sempre attive", ma esposta per parità di mappa.
-        "gemme" to listOf("gemme"),
-        // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
-        "community" to listOf("community")
-    )
 
     suspend fun fetchPoisNearby(
         lat: Double,
@@ -125,19 +102,38 @@ class SupabaseClient {
      * manca traduce/rigenera dai campi italiani di shared_pois e salva). Prima
      * il nativo leggeva i campi italiani grezzi: un utente straniero, in auto
      * col Day Pass, sentiva testo italiano con voce nella sua lingua.
+     *
+     * ROLLOUT ANTI-ABUSO FASE 1 (2026-08-14): questa rotta oggi è aperta
+     * (nessuna auth) perché il chiamante — questo prefetch in background — non
+     * inviava mai un token utente. Da qui in poi lo invia SE disponibile
+     * (accessToken letto da SecurePrefs dai chiamanti), ma la richiesta resta
+     * valida anche senza: il server per ora ACCETTA il token senza richiederlo
+     * (nessun 401), per non rompere l'audioguida automatica sulle installazioni
+     * non ancora aggiornate. La fase 2 (server che rifiuta senza token) va
+     * fatta solo quando questa build sarà diffusa alla maggioranza degli utenti.
      */
-    suspend fun fetchAudioguideText(poiId: String, lang: String, character: String): String? = withContext(Dispatchers.IO) {
+    suspend fun fetchAudioguideText(
+        poiId: String,
+        lang: String,
+        character: String,
+        accessToken: String? = null
+    ): String? = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
                 put("poiId", poiId)
                 put("lang", lang)
                 put("character", character)
             }.toString().toRequestBody("application/json".toMediaType())
-            val request = Request.Builder()
+            val requestBuilder = Request.Builder()
                 .url("https://wip.guide/api/poi/audioguide")
                 .post(body)
                 .addHeader("Content-Type", "application/json")
-                .build()
+            // Solo se presente: nessun header quando manca, la richiesta resta
+            // identica a quella di oggi (vedi commento fase 1 sopra).
+            if (!accessToken.isNullOrBlank()) {
+                requestBuilder.addHeader("Authorization", "Bearer $accessToken")
+            }
+            val request = requestBuilder.build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val obj = JSONObject(response.body?.string() ?: "{}")
@@ -306,7 +302,7 @@ class SupabaseClient {
 
         val targetDbCategories = mutableSetOf<String>()
         uiCategories.forEach { uiCat ->
-            categoryMap[uiCat]?.let { targetDbCategories.addAll(it) }
+            CategoryMap.MAP[uiCat]?.let { targetDbCategories.addAll(it) }
         }
 
         val pois = rawList.map { map ->
@@ -349,8 +345,7 @@ class SupabaseClient {
             // Default "insieme vuoto" allineato al web (useGeofencing.ts):
             // { monumenti, musei, chiese } attivi; panorami OFF. Prima il nativo
             // includeva viewpoint/park/panorami di default, il web no.
-            val culturalCats = listOf("monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti", "museum", "gallery", "musei", "church", "place_of_worship", "cathedral", "chiese")
-            pois.filter { it.isGem || culturalCats.contains(it.poiType) }
+            pois.filter { it.isGem || CategoryMap.DEFAULT_CULTURAL_CATEGORIES.contains(it.poiType) }
         } else {
             pois.filter { poi -> 
                 val poiCat = (poi.poiType ?: "").lowercase()

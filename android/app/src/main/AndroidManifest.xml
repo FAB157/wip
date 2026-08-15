@@ -31,6 +31,31 @@
                 <data android:scheme="itainta" android:host="poi" />
             </intent-filter>
 
+            <!-- App Link (Android 6+) per i link di conferma email / reset password
+                 inviati da Supabase Auth, che puntano a https://wip.guide/auth/callback
+                 (vedi LoginScreen.tsx confirmRedirect / resetPasswordForEmail). Con
+                 autoVerify="true" + assetlinks.json pubblicato su wip.guide/.well-known/,
+                 Android apre l'app direttamente invece del browser, saltando il passaggio
+                 manuale "torna nell'app e rifai login".
+                 Scope volutamente limitato a /auth/*: NON copre la root (usata anche da
+                 ?pin=/?groupplan=) né /privacy, /support, /terms, /delete-account, che
+                 restano link normali aperti dal browser di sistema.
+                 ATTENZIONE: autoVerify funziona solo se assetlinks.json è raggiungibile
+                 su https://wip.guide/.well-known/assetlinks.json con lo SHA-256 reale
+                 del certificato di firma (vedi public/.well-known/assetlinks.json:
+                 oggi contiene solo un placeholder). Finché non è pubblicato con
+                 l'impronta vera, Android NON verifica il dominio e questo intent-filter
+                 resta silenzioso (il link continuerà ad aprirsi nel browser). -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="wip.guide"
+                    android:pathPrefix="/auth" />
+            </intent-filter>
+
         </activity>
 
         <provider

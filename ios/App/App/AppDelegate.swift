@@ -2,14 +2,30 @@ import UIKit
 import Capacitor
 import CoreLocation
 import UserNotifications
+import BackgroundTasks
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
 
     var window: UIWindow?
 
+    /// Refresh opportunistico dei pacchetti offline (WipPackageDownloadManager):
+    /// senza questo, i pacchetti restano stantii finché l'utente non apre
+    /// l'app e preme "Aggiorna" a mano. L'OS decide QUANDO concederlo (uso
+    /// app, batteria, rete) — non è un cron, è un "se capita l'occasione".
+    /// Identifier dichiarato anche in Info.plist sotto
+    /// BGTaskSchedulerPermittedIdentifiers (obbligatorio, altrimenti il
+    /// submit lancia in silenzio senza effetto).
+    static let offlineRefreshTaskId = "com.itaintasca.app.offline-refresh"
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+
+        // La registrazione DEVE avvenire prima che il lancio finisca (requisito
+        // BGTaskScheduler): è quello che permette all'OS di risvegliare l'app
+        // più avanti. Va fatta una volta sola, ad ogni avvio (non è persistita).
+        registerOfflineRefreshTask()
+        scheduleOfflineRefresh()
 
         // Rilancio (anche in background, per un evento location dell'OS):
         // equivalente di BootReceiver/START_STICKY su Android — se il servizio
@@ -106,5 +122,76 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         prefs.set(poiId, forKey: "pending_deeplink_poi")
         prefs.set(guide, forKey: "pending_deeplink_guide")
         prefs.set(Date().timeIntervalSince1970 * 1000, forKey: "pending_deeplink_ts")
+    }
+
+    // MARK: - Refresh pacchetti offline in background
+
+    /// Nessun handler registrato = l'OS non ci sveglierà mai per questo
+    /// identifier, in silenzio. Il cast forzato a BGAppRefreshTask è sicuro:
+    /// è l'unico identifier che registriamo ed è dichiarato come
+    /// BGAppRefreshTaskRequest sotto, mai come BGProcessingTaskRequest.
+    private func registerOfflineRefreshTask() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.offlineRefreshTaskId,
+            using: nil
+        ) { task in
+            guard let refreshTask = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            self.handleOfflineRefresh(task: refreshTask)
+        }
+    }
+
+    /// Richiesta opportunistica, non prima di ~6h da ora: i pacchetti offline
+    /// sono testi statici (i POI cambiano di rado), non serve un refresh
+    /// aggressivo che consumi batteria — mirror lato client della cadenza
+    /// "nightly" del cron server /api/poi/batch-enrich.
+    private func scheduleOfflineRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: Self.offlineRefreshTaskId)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 6 * 60 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            // Comune in simulatore/debug o se il sistema rifiuta la richiesta
+            // (troppe già in coda): non fatale, un prossimo avvio dell'app o
+            // l'apertura manuale con "Aggiorna" restano il percorso primario.
+            print("[AppDelegate] scheduleOfflineRefresh fallita: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleOfflineRefresh(task: BGAppRefreshTask) {
+        // Ri-schedula SUBITO, non a fine lavoro: se il task scade o l'app
+        // viene terminata a metà, il prossimo giro è già in coda — altrimenti
+        // il refresh si fermerebbe silenziosamente al primo problema.
+        scheduleOfflineRefresh()
+
+        let manager = WipPackageDownloadManager()
+        var finished = false
+        // expirationHandler e la completion di syncAllPackages possono
+        // arrivare da thread diversi: entrambe toccano `finished` e
+        // `task.setTaskCompleted`, quindi vanno serializzate sulla main
+        // queue — altrimenti una race potrebbe chiamare setTaskCompleted
+        // due volte (l'OS lo logga come errore di programmazione).
+        task.expirationHandler = {
+            DispatchQueue.main.async {
+                // L'OS sta revocando il tempo assegnato: niente da annullare
+                // esplicitamente, le richieste di rete in corso verranno
+                // semplicemente ignorate al completamento (nessuna scrittura
+                // a metà: ogni pagina viene già persistita atomicamente).
+                if !finished {
+                    finished = true
+                    task.setTaskCompleted(success: false)
+                }
+            }
+        }
+        manager.syncAllPackages {
+            DispatchQueue.main.async {
+                if !finished {
+                    finished = true
+                    task.setTaskCompleted(success: true)
+                }
+            }
+        }
     }
 }

@@ -32,6 +32,17 @@ class PackageDownloadManager(private val context: Context) {
         private const val BUNDLE_URL = "https://wip.guide/api/area/bundle"
         private const val PAGE_SIZE = 500
         const val EVENT_PROGRESS = "offlinePackageProgress"
+
+        /**
+         * Limite di storage totale per i pacchetti offline, in MB. Regolabile:
+         * i pacchetti sono solo testo (1-3 MB ciascuno), quindi 2GB coprono
+         * centinaia di aree prima che scatti l'eviction LRU.
+         */
+        const val MAX_OFFLINE_STORAGE_MB = 2048L
+        private const val MAX_OFFLINE_STORAGE_BYTES = MAX_OFFLINE_STORAGE_MB * 1024 * 1024
+
+        /** Margine minimo di spazio libero sul device sotto cui non si scarica nulla. */
+        private const val MIN_FREE_DEVICE_BYTES = 50L * 1024 * 1024
     }
 
     private val db = PoiDatabase.getInstance(context)
@@ -48,14 +59,73 @@ class PackageDownloadManager(private val context: Context) {
         radiusKm: Double,
         language: String
     ): OfflinePackageEntity {
+        ensureStorageBudget(id)
+
+        // Resume: un tentativo precedente interrotto (status "downloading" per
+        // crash/kill, o "error" per rete caduta) ha già persistito il cursore
+        // keyset raggiunto — si riparte da lì invece che da pagina 1 (v. runPages).
+        val existing = db.offlineDao().getPackage(id)
+        val isResume = existing != null &&
+            (existing.status == "downloading" || existing.status == "error") &&
+            !existing.pendingCursorUpdated.isNullOrEmpty()
+
         db.offlineDao().upsertPackage(
-            OfflinePackageEntity(
+            (existing ?: OfflinePackageEntity(
                 id = id, name = name, centerLat = lat, centerLon = lon,
                 radiusKm = radiusKm, language = language,
-                downloadedAt = System.currentTimeMillis(), status = "downloading"
-            )
+                downloadedAt = System.currentTimeMillis()
+            )).copy(status = "downloading", lastAccessedAt = System.currentTimeMillis())
         )
-        return runPages(id, name, lat, lon, radiusKm, language, since = null)
+
+        return runPages(
+            id, name, lat, lon, radiusKm, language, since = null,
+            resumeCursorUpdated = if (isResume) existing?.pendingCursorUpdated else null,
+            resumeCursorId = if (isResume) existing?.pendingCursorId else null,
+            resumeSizeBytes = if (isResume) (existing?.sizeBytes ?: 0L) else 0L
+        )
+    }
+
+    /**
+     * Cap di storage (punto 1): se lo spazio già occupato dai pacchetti offline
+     * esistenti (esclusa l'entry che stiamo per (ri)scaricare) è al limite,
+     * libera spazio evictando i pacchetti meno usati di recente (LRU su
+     * lastAccessedAt, fallback downloadedAt per righe migrate senza storico)
+     * finché non si scende sotto [MAX_OFFLINE_STORAGE_BYTES] o non ne resta
+     * nessuno. Se anche dopo aver evictato TUTTI i pacchetti lo spazio libero
+     * reale sul device è sotto la soglia di sicurezza, fallisce subito invece
+     * di lasciare che il download riempia il disco.
+     */
+    private suspend fun ensureStorageBudget(newPackageId: String) {
+        val dao = db.offlineDao()
+        var others = dao.getAllPackages().filter { it.id != newPackageId }
+        var occupied = others.sumOf { it.sizeBytes }
+
+        while (occupied > MAX_OFFLINE_STORAGE_BYTES && others.isNotEmpty()) {
+            val lru = others.minByOrNull { pkg ->
+                if (pkg.lastAccessedAt > 0L) pkg.lastAccessedAt else pkg.downloadedAt
+            } ?: break
+            Log.w(
+                TAG,
+                "Storage cap ${MAX_OFFLINE_STORAGE_MB}MB superato: eviction LRU pacchetto " +
+                    "${lru.id} (${lru.sizeBytes} bytes, ultimo uso ${lru.lastAccessedAt})"
+            )
+            deletePackage(lru.id)
+            others = others.filter { it.id != lru.id }
+            occupied = others.sumOf { it.sizeBytes }
+        }
+
+        val freeBytes = try {
+            context.filesDir.usableSpace
+        } catch (e: Exception) {
+            Long.MAX_VALUE
+        }
+        if (freeBytes in 0L until MIN_FREE_DEVICE_BYTES) {
+            throw IOException(
+                "Spazio insufficiente sul dispositivo per il pacchetto offline " +
+                    "(${freeBytes / (1024 * 1024)}MB liberi, anche dopo aver rimosso i pacchetti " +
+                    "offline meno usati): libera spazio sul telefono e riprova."
+            )
+        }
     }
 
     /** Delta sync: solo POI modificati dopo lastSyncAt + tombstone. */
@@ -83,14 +153,22 @@ class PackageDownloadManager(private val context: Context) {
         lon: Double,
         radiusKm: Double,
         language: String,
-        since: String?
+        since: String?,
+        resumeCursorUpdated: String? = null,
+        resumeCursorId: String? = null,
+        resumeSizeBytes: Long = 0L
     ): OfflinePackageEntity {
-        var cursorUpdated: String? = null
-        var cursorId: String? = null
+        // Resume (punto 2): riparte dal cursore keyset persistito da un run
+        // precedente interrotto, invece che da pagina 1. bytes riparte dal
+        // totale già accumulato in quel run: rappresenta già la size cumulativa,
+        // non solo quella di QUESTO giro di pagine.
+        var cursorUpdated: String? = resumeCursorUpdated
+        var cursorId: String? = resumeCursorId
+        val isResuming = !resumeCursorUpdated.isNullOrEmpty()
         var generatedAt: String? = null
         var total = 0
         var received = 0
-        var bytes = 0L
+        var bytes = resumeSizeBytes
 
         try {
             do {
@@ -181,6 +259,18 @@ class PackageDownloadManager(private val context: Context) {
                 val next = json.optJSONObject("nextCursor")
                 cursorUpdated = next?.strOrNull("cursorUpdated")
                 cursorId = next?.strOrNull("cursorId")
+
+                // Checkpoint (punto 2): persiste il cursore raggiunto ad ogni pagina,
+                // così un crash/kill a metà download riprende da qui invece che da
+                // pagina 1. Per il download pieno (since == null) salva anche i byte
+                // cumulativi, che alimentano il cap di storage (punto 1) anche a
+                // download interrotto; per il delta sync lascia sizeBytes intatto,
+                // lo aggiorna solo il calcolo finale sotto.
+                if (since == null) {
+                    db.offlineDao().updateDownloadCheckpoint(id, cursorUpdated, cursorId, bytes)
+                } else {
+                    db.offlineDao().updateDownloadCursor(id, cursorUpdated, cursorId)
+                }
             } while (!cursorUpdated.isNullOrEmpty())
 
             vacuumRtree()
@@ -194,16 +284,27 @@ class PackageDownloadManager(private val context: Context) {
                 radiusKm = radiusKm,
                 language = language,
                 poiCount = db.offlineDao().countPoisForPackage(id),
-                sizeBytes = (existing?.sizeBytes ?: 0L).let { if (since == null) bytes else it + bytes },
+                // since != null: delta sync, si somma al totale esistente.
+                // since == null: download pieno o resume, `bytes` è già il
+                // cumulativo (seedato da resumeSizeBytes in caso di resume).
+                sizeBytes = if (since != null) (existing?.sizeBytes ?: 0L) + bytes else bytes,
                 downloadedAt = existing?.downloadedAt ?: System.currentTimeMillis(),
+                lastAccessedAt = System.currentTimeMillis(),
                 // generatedAt della prima pagina: ciò che è cambiato DURANTE il
                 // download verrà ripreso dal prossimo delta, mai perso.
                 lastSyncAt = generatedAt ?: since,
-                status = "ready"
+                status = "ready",
+                // Download completato: nessun checkpoint pendente da riprendere.
+                pendingCursorUpdated = null,
+                pendingCursorId = null
             )
             db.offlineDao().upsertPackage(pkg)
             notifyProgress(id, received, total, "ready")
-            Log.d(TAG, "Package $id ready: ${pkg.poiCount} POIs, ${pkg.sizeBytes} bytes (delta=${since != null})")
+            Log.d(
+                TAG,
+                "Package $id ready: ${pkg.poiCount} POIs, ${pkg.sizeBytes} bytes " +
+                    "(delta=${since != null}, resumed=$isResuming)"
+            )
             return pkg
         } catch (e: Exception) {
             Log.e(TAG, "Package $id failed: ${e.message}")

@@ -35,8 +35,8 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
         <div className="space-y-4 mb-8">
            <p className="text-sm font-bold text-gray-600 text-center leading-relaxed">
              {language === 'IT'
-               ? 'Italia in Tasca raccoglie i dati sulla tua posizione per abilitare il commento audio automatico dei monumenti anche quando l\'app è chiusa o non in uso.'
-               : 'Italia in Tasca collects location data to enable automatic audio commentary of monuments even when the app is closed or not in use.'
+               ? 'WIP raccoglie i dati sulla tua posizione per abilitare il commento audio automatico dei monumenti anche quando l\'app è chiusa o non in uso.'
+               : 'WIP collects location data to enable automatic audio commentary of monuments even when the app is closed or not in use.'
              }
            </p>
 
@@ -57,7 +57,7 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
               </ul>
            </div>
 
-           <p className="text-[10px] text-gray-400 font-bold text-center">
+           <p className="text-[10px] text-gray-500 font-bold text-center">
              {language === 'IT'
                ? 'Puoi disattivare questa funzione in qualsiasi momento dalle impostazioni.'
                : 'You can disable this feature at any time from the settings.'
@@ -74,7 +74,7 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
           </button>
           <button
             onClick={onDecline}
-            className="w-full py-3 text-gray-400 font-black text-xs uppercase tracking-widest hover:text-gray-600 transition-colors"
+            className="w-full py-3 text-gray-500 font-black text-xs uppercase tracking-widest hover:text-gray-600 transition-colors"
           >
             {language === 'IT' ? 'Non ora' : 'Not now'}
           </button>

@@ -41,6 +41,17 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     private var isSpeaking = false
     private var activeItem: SpeechItem?
     private let prefs = UserDefaults.standard
+    /// True tra un .began e il successivo .ended di un'interruzione audio
+    /// (chiamata in arrivo, altra app che ruba la sessione…) mentre un item
+    /// era in corso: dice a handleInterruptionEnded se c'è qualcosa da
+    /// riprendere.
+    private var pausedForInterruption = false
+    /// Rete di sicurezza: se isSpeaking resta true oltre questo timeout senza
+    /// che il delegate di completamento scatti (interruzione gestita male dal
+    /// sistema, item anomalo…) sblocchiamo comunque la coda invece di restare
+    /// mute per sempre. 45s è ampiamente sopra la durata di un teaser/frase.
+    private static let watchdogTimeoutS: TimeInterval = 45
+    private var watchdogTimer: Timer?
 
     /// Callback eventi verso il plugin (teaserStarted/teaserFinished), stesso
     /// payload di broadcastTeaserEvent Android: {poiId, kind}.
@@ -51,6 +62,22 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     private override init() {
         super.init()
         synthesizer.delegate = self
+        // Senza questo observer un'interruzione (chiamata in arrivo, altra app
+        // che attiva la sessione audio…) sospende TTS/MP3 a livello di sistema
+        // ma AVSpeechSynthesizer/AVAudioPlayer non sparano mai un delegate di
+        // completamento: isSpeaking restava bloccato a true per sempre e la
+        // coda si fermava. Stesso pattern di WipBackgroundAudioPlugin.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        watchdogTimer?.invalidate()
     }
 
     func enqueue(_ item: SpeechItem) {
@@ -144,6 +171,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         if let path = next.audioFile,
            FileManager.default.fileExists(atPath: path),
            playMp3(path: path) {
+            armWatchdog()
             return
         }
 
@@ -161,6 +189,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         utterance.voice = Self.voiceForLanguage(prefs.string(forKey: "language") ?? "it")
         utterance.volume = 1.0
         synthesizer.speak(utterance)
+        armWatchdog()
     }
 
     /// Toglie emoji e pittogrammi dal testo da leggere: AVSpeechSynthesizer
@@ -202,7 +231,9 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
             try session.setActive(true)
-        } catch { }
+        } catch {
+            print("[SpeechQueue] attivazione AVAudioSession fallita: \(error.localizedDescription)")
+        }
     }
 
     private func deactivateAudioSessionIfIdle() {
@@ -210,7 +241,115 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
+    // MARK: - Interruzioni audio (chiamate in arrivo, altra app che ruba la
+    // sessione…) e watchdog di sicurezza
+
+    /// Stesso pattern di WipBackgroundAudioPlugin.handleInterruption: .began
+    /// mette in pausa in modo pulito (mai isSpeaking bloccato a true), .ended
+    /// riprende se il sistema lo consente o chiude l'item e passa oltre.
+    @objc private func handleInterruption(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
+
+        DispatchQueue.main.async {
+            if type == .began {
+                self.handleInterruptionBegan()
+            } else if type == .ended {
+                let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                self.handleInterruptionEnded(shouldResume: options.contains(.shouldResume))
+            }
+        }
+    }
+
+    private func handleInterruptionBegan() {
+        guard isSpeaking else { return }
+        // Niente watchdog durante l'interruzione: una chiamata può durare ben
+        // più di watchdogTimeoutS e non è un item bloccato, è in pausa legittima.
+        cancelWatchdog()
+        if synthesizer.isSpeaking {
+            synthesizer.pauseSpeaking(at: .word)
+        }
+        audioPlayer?.pause()
+        pausedForInterruption = true
+    }
+
+    private func handleInterruptionEnded(shouldResume: Bool) {
+        guard pausedForInterruption else { return }
+        pausedForInterruption = false
+        guard isSpeaking else { return }
+        guard shouldResume else {
+            // Il sistema non garantisce la ripresa (es. priorità andata a
+            // un'altra app): chiudi l'item corrente in modo pulito e prosegui
+            // con la coda, mai bloccata in attesa di un resume che non arriva.
+            finishActiveSpeech(notifyJs: true)
+            processNext()
+            deactivateAudioSessionIfIdle()
+            return
+        }
+        activateAudioSession()
+        if synthesizer.isPaused {
+            synthesizer.continueSpeaking()
+            armWatchdog()
+        } else if let player = audioPlayer {
+            player.play()
+            armWatchdog()
+        } else {
+            // Nulla da riprendere (concluso nel frattempo): libera la coda.
+            finishActiveSpeech(notifyJs: true)
+            processNext()
+            deactivateAudioSessionIfIdle()
+        }
+    }
+
+    private func armWatchdog() {
+        watchdogTimer?.invalidate()
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: Self.watchdogTimeoutS, repeats: false) { [weak self] _ in
+            self?.handleWatchdogTimeout()
+        }
+    }
+
+    private func cancelWatchdog() {
+        watchdogTimer?.invalidate()
+        watchdogTimer = nil
+    }
+
+    /// Se il delegate di completamento (TTS o MP3) non scatta entro
+    /// watchdogTimeoutS — interruzione gestita male dal sistema, item
+    /// anomalo… — sblocca comunque la coda invece di restare mute a
+    /// oltranza. Stessa disciplina di stopSpeaking: se il synth sta ancora
+    /// "parlando" (o in pausa) lo fermiamo e lasciamo che didCancel chiuda lo
+    /// stato, invece di chiamare finishActiveSpeech due volte sull'item
+    /// sbagliato.
+    private func handleWatchdogTimeout() {
+        guard isSpeaking else { return }
+        print("[SpeechQueue] watchdog: nessun completamento entro \(Int(Self.watchdogTimeoutS))s, sblocco la coda")
+        pausedForInterruption = false
+        if let player = audioPlayer {
+            // AVAudioPlayer.stop() non chiama il delegate: chiudiamo noi.
+            player.stop()
+            audioPlayer = nil
+            finishActiveSpeech(notifyJs: true)
+            processNext()
+            deactivateAudioSessionIfIdle()
+            return
+        }
+        if synthesizer.isSpeaking || synthesizer.isPaused {
+            // didCancel chiuderà lo stato e farà ripartire la coda.
+            synthesizer.stopSpeaking(at: .immediate)
+            return
+        }
+        // Nessun motore attivo ma isSpeaking risultava true (stato incoerente):
+        // sblocca comunque.
+        finishActiveSpeech(notifyJs: true)
+        processNext()
+        deactivateAudioSessionIfIdle()
+    }
+
     private func finishActiveSpeech(notifyJs: Bool) {
+        cancelWatchdog()
+        pausedForInterruption = false
         let item = activeItem
         activeItem = nil
         isSpeaking = false

@@ -305,7 +305,7 @@ export default function AdminSystemErrors() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-400">Caricamento...</td></tr>
+                  <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-500">Caricamento...</td></tr>
                 ) : filteredGroups.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="p-12 text-center">
@@ -329,7 +329,7 @@ export default function AdminSystemErrors() {
                       </td>
                       <td className="px-4 py-3 max-w-md">
                         <div className="text-xs font-bold text-on-surface break-words">{g.sample}</div>
-                        <div className="text-[10px] text-gray-400 mt-0.5">
+                        <div className="text-[10px] text-gray-500 mt-0.5">
                           <span className="px-1.5 py-0.5 bg-slate-100 rounded font-black">{g.source}</span>
                           {g.platforms.size > 0 && <span className="ml-1.5">{[...g.platforms].join(' · ')}</span>}
                         </div>
@@ -342,7 +342,7 @@ export default function AdminSystemErrors() {
                       </td>
                       <td className="px-4 py-3"><Trend counts={g.daily} /></td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="text-[10px] text-gray-400 font-mono">{new Date(g.first).toLocaleDateString('it-IT')}</div>
+                        <div className="text-[10px] text-gray-500 font-mono">{new Date(g.first).toLocaleDateString('it-IT')}</div>
                         <div className="text-xs font-bold text-on-surface">{new Date(g.last).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</div>
                       </td>
                     </tr>
@@ -368,7 +368,7 @@ export default function AdminSystemErrors() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={5} className="p-8 text-center text-sm text-gray-400">Caricamento...</td></tr>
+                  <tr><td colSpan={5} className="p-8 text-center text-sm text-gray-500">Caricamento...</td></tr>
                 ) : paged.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="p-12 text-center">
@@ -388,13 +388,13 @@ export default function AdminSystemErrors() {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="text-xs font-bold text-on-surface">{d.toLocaleDateString('it-IT')}</div>
-                        <div className="text-[10px] text-gray-400 font-mono">{d.toLocaleTimeString('it-IT')}</div>
+                        <div className="text-[10px] text-gray-500 font-mono">{d.toLocaleTimeString('it-IT')}</div>
                       </td>
                       <td className="px-4 py-3">
                         <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded-lg text-[11px] font-black border border-slate-200">
                           {err.source || 'N/D'}
                         </span>
-                        {err.platform && <div className="text-[10px] text-gray-400 mt-1">{err.platform}</div>}
+                        {err.platform && <div className="text-[10px] text-gray-500 mt-1">{err.platform}</div>}
                       </td>
                       <td className="px-4 py-3 max-w-xs">
                         <div className="text-xs font-medium text-red-700 break-words">{err.msg}</div>

@@ -23,6 +23,12 @@ jobs:
         run: npm install
 
       - name: Build Web App
+        # VITE_REVENUECAT_IOS_KEY: senza questa chiave (appl_...) main.tsx NON
+        # inizializza RevenueCat su iOS e lo shop mostra "nessun pacchetto" —
+        # acquisti in-app morti nell'IPA. Il secret va creato in
+        # Settings → Secrets and variables → Actions del repo GitHub.
+        env:
+          VITE_REVENUECAT_IOS_KEY: ${{ secrets.REVENUECAT_IOS_KEY }}
         run: npm run build
 
       - name: Sync Capacitor

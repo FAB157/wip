@@ -4,7 +4,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
-import { getGuideCharacter, setGuideCharacter } from "./lib/guideSettings";
+import { getGuideCharacter, setGuideCharacter, isCategoryAllowed } from "./lib/guideSettings";
+import { getBlockedCommunityPoiIds, refreshBlockedCommunityPois } from "./lib/communityModeration";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "./lib/supabase";
 import { usePredictiveDownload } from "./hooks/usePredictiveDownload";
@@ -95,11 +96,10 @@ export default function App() {
   // refresh del token da un vero cambio account / logout.
   const sessionUserIdRef = useRef<string | null>(null);
   const [language, setLanguageState] = useState<Language>(() => {
+    // DE è tornata una lingua UI completa il 14/08/2026 (dizionario tradotto,
+    // selettore riabilitato): la vecchia coercizione DE→EN qui avrebbe
+    // continuato a scippare la scelta agli utenti tedeschi a ogni avvio.
     const stored = localStorage.getItem("wip_language") as Language;
-    // DE è temporaneamente nascosto dal selettore (traduzione incompleta): un
-    // utente rimasto su DE vedrebbe la UI in EN via fallback senza poterla
-    // riselezionare — lo riportiamo a EN in modo esplicito e coerente.
-    if (stored === ("DE" as Language)) { localStorage.setItem("wip_language", "EN"); return "EN" as Language; }
     return stored || "IT";
   });
   // Centro e raggio della mappa VISUALIZZATA: è il riferimento geografico di
@@ -113,7 +113,7 @@ export default function App() {
   const { bundleState, closeBundle, triggerBundleCheck } = usePredictiveDownload();
 
   // --- 2. Navigation & UI ---
-  const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("profile");
+  const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("map");
   // Kill switch dal pannello admin (feature flag): una tab spenta mostra un
   // avviso di manutenzione invece della schermata.
   const eventsEnabled = useFeatureFlag('events_tab');
@@ -539,39 +539,81 @@ export default function App() {
     return () => { handle?.remove?.(); };
   }, [globalChatConfig.isOpen, routeModalConfig.isOpen, selectedPoi, isRadarMode, activeTab]);
 
+  // App Link (Android) / Universal Link (iOS): i link di conferma email e di
+  // reset password inviati da Supabase Auth ora puntano a
+  // https://wip.guide/auth/callback (vedi LoginScreen.tsx). Se il dominio è
+  // verificato (assetlinks.json / apple-app-site-association pubblicati con
+  // fingerprint/Team ID reali, vedi public/.well-known/), il sistema apre
+  // l'app già installata invece del browser — ma la WebView NON naviga
+  // davvero su quell'URL (resta su capacitor://localhost): supabase-js non
+  // vede mai l'hash con i token, quindi PASSWORD_RECOVERY non scatterebbe da
+  // solo. Li estraiamo a mano dall'URL ricevuto e applichiamo la sessione;
+  // l'effect onAuthStateChange qui sopra fa il resto (aggiorna `session`,
+  // e per un vero reset noi soli mettiamo isRecovering per mostrare
+  // "Nuova Password", esattamente come già fa su web via l'hash della pagina).
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let handle: any = null;
+    (async () => {
+      try {
+        const { App: CapApp } = await import('@capacitor/app');
+        handle = await CapApp.addListener('appUrlOpen', async ({ url }: { url: string }) => {
+          try {
+            const parsed = new URL(url);
+            // Supabase mette i token nel fragment (#access_token=...&type=recovery);
+            // per sicurezza si prova anche la query string se un giorno cambiasse flow.
+            const raw = parsed.hash && parsed.hash.length > 1 ? parsed.hash.slice(1) : parsed.search.replace(/^\?/, '');
+            const params = new URLSearchParams(raw);
+            const access_token = params.get('access_token');
+            const refresh_token = params.get('refresh_token');
+            const type = params.get('type');
+            if (access_token && refresh_token) {
+              const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+              if (!error && type === 'recovery') setIsRecovering(true);
+            }
+          } catch (e) {
+            console.warn('[App.tsx] appUrlOpen: URL non valido', url, e);
+          }
+        });
+      } catch (e) {
+        console.warn('[App.tsx] appUrlOpen listener non registrato', e);
+      }
+    })();
+    return () => { handle?.remove?.(); };
+  }, []);
+
   // Check initial categories on mount (But DO NOT sync active service state automatically)
   useEffect(() => {
     if (!permissionsGranted) return;
     const init = async () => {
       locationService.startWatching();
+      // Blocklist community dal server (best-effort): riempie la cache locale
+      // usata dai filtri di mappa e radar per gli autori bloccati.
+      refreshBlockedCommunityPois();
     };
     init();
 
     const handlePoisUpdated = (e: any) => {
       let pois = Array.isArray(e.detail) ? e.detail : [];
-      
-      // Filtra per categorie attive (allineamento con la logica web)
-      const activeCats = (() => {
+
+      // Filtro per categorie attive con la MAPPA categoria→bucket condivisa
+      // (isCategoryAllowed): il vecchio confronto diretto tra i bucket del
+      // setup ("musei") e il tag grezzo del POI ("museum") non combaciava mai
+      // per i POI scaricati dal servizio nativo → il radar mostrava quasi
+      // solo gemme. In più si nascondono i POI community degli autori
+      // bloccati (App Store Guideline 1.2).
+      const activeSubcats = (() => {
         try {
           const stored = localStorage.getItem('wip_active_subcategories');
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            return Object.keys(parsed).filter(k => parsed[k]);
-          }
+          if (stored) return JSON.parse(stored);
         } catch {}
         // Default allineato al setup GeoControl (monumenti/musei/chiese attivi)
-        return ['monumenti', 'musei', 'chiese'];
+        return { monumenti: true, musei: true, chiese: true };
       })();
-
-      if (activeCats.length > 0) {
-        pois = pois.filter((p: any) => {
-          const cat = (p.category || p.poiType || '').toLowerCase();
-          // Gemme "Default Assoluto • Sempre Attive" (checkbox disabilitata nel
-          // setup): passano sempre, come nel servizio nativo.
-          const isGem = p.premium || p.is_gem || cat === 'gemme';
-          return isGem || activeCats.includes(cat);
-        });
-      }
+      const blockedCommunity = getBlockedCommunityPoiIds();
+      pois = pois.filter((p: any) =>
+        isCategoryAllowed({ category: p.category || p.poiType, premium: p.premium, is_gem: p.is_gem }, activeSubcats)
+        && !((p.category || p.poiType || '').toLowerCase() === 'community' && blockedCommunity.has(String(p.id ?? p.poiId ?? ''))));
 
       const uniquePois: any[] = [];
       const seen = new Set<string>();
@@ -602,12 +644,18 @@ export default function App() {
       setActiveTab("plan");
     };
 
-    // Listen for category updates from Setup page
+    // Listen for category updates from Setup page. Riflette sui chip mappa
+    // SOLO le chiavi che i chip possiedono (vedi MAP_FILTER_KEYS sopra): il
+    // setup GeoControl salva anche musei/chiese/panorami/consigli/castelli/
+    // archeo, che i chip non conoscono — riversarle tutte in selectedCategories
+    // cancellava dalla mappa "locali"/"utilita"/"famiglie" ad ogni modifica
+    // del setup GeoControl (sovrascritti dalla lista, mai riselezionati).
     const handleSettingsUpdated = () => {
       const stored = localStorage.getItem('wip_active_subcategories');
       if (stored) {
         const parsed = JSON.parse(stored);
-        const cats = Object.keys(parsed).filter(k => parsed[k]);
+        const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community'];
+        const cats = MAP_FILTER_KEYS.filter(k => parsed[k]);
         // Anche la lista vuota va rispettata ("Deseleziona tutti"): prima
         // veniva ignorata e restava attiva la selezione precedente.
         setSelectedCategories(cats);
@@ -730,9 +778,15 @@ export default function App() {
     // espliciti e il trigger web li legge con semantica `?? true` (chiave
     // assente = attiva). Riscrivere solo le chiavi true cancellava le
     // deselezioni dell'utente, che tornavano attive al riavvio.
+    // Tocchiamo SOLO le chiavi che i chip mappa possiedono davvero
+    // (CategoryChips.CATEGORIES): le chiavi del setup GeoControl senza
+    // equivalente qui (musei/chiese/panorami/consigli/castelli/archeo)
+    // restavano azzerate ad ogni tap sui chip mappa, disattivando a sua
+    // insaputa le categorie audioguida scelte dall'utente in GeoControl.
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community'];
     let obj: Record<string, boolean> = {};
     try { obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { obj = {}; }
-    Object.keys(obj).forEach(k => { obj[k] = selectedCategories.includes(k); });
+    MAP_FILTER_KEYS.forEach(k => { obj[k] = selectedCategories.includes(k); });
     selectedCategories.forEach(c => { obj[c] = true; });
     localStorage.setItem('wip_active_subcategories', JSON.stringify(obj));
 

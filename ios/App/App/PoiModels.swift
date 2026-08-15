@@ -83,15 +83,30 @@ struct OfflinePoi: Codable {
     var descriptionShort: String?
     var audioText: String?
     var updatedAt: String?
+    /// Ingresso calibrato sul perimetro reale (footprint OSM), come per i POI
+    /// online (vedi Poi.entranceLat/entranceLon). NON ancora presente nella
+    /// risposta server di /api/area/bundle (area_bundle_pois non li seleziona
+    /// a oggi, 13/08/2026: verificato in
+    /// supabase/migrations/20260813110000_poi_visibility_offline_canonical.sql)
+    /// — il campo è qui pronto per quando arriverà lato server, di modo che i
+    /// pacchetti offline non debbano cambiare schema una seconda volta. Finché
+    /// il server non lo manda resta nil su ogni pagina scaricata (vedi
+    /// WipPackageDownloadManager) e il default membrowise nil mantiene
+    /// decodificabili i pacchetti già scaricati con lo schema vecchio.
+    var entranceLat: Double? = nil
+    var entranceLon: Double? = nil
 
     func toPoi() -> Poi {
         // Preserva i raggi calibrati sul perimetro (footprint) che il pacchetto
         // offline già trasporta: prima venivano scartati e il trigger usava solo
-        // i raggi di modalità. L'ingresso reale non è nel bundle offline, quindi
-        // di fatto il footprint entra in gioco solo per i POI online (dove
+        // i raggi di modalità. L'ingresso reale non è ancora nel bundle offline
+        // di produzione (vedi commento su entranceLat/entranceLon sopra), quindi
+        // di fatto oggi il footprint entra in gioco solo per i POI online (dove
         // entranceLat/Lon sono valorizzati) — vedi effectiveRadii/BackgroundPoiManager.
+        // Se/quando il server li aggiunge, passano qui automaticamente: nessun
+        // altro cambiamento richiesto, effectiveRadii già gestisce hasEntrance.
         Poi(id: id, nome: nome, lat: lat, lon: lon,
-            entranceLat: nil, entranceLon: nil,
+            entranceLat: entranceLat, entranceLon: entranceLon,
             poiType: poiType ?? category, guideDefault: "nicky",
             isGem: isGem, isFromItinerary: false, teaserText: teaserText,
             alertRadius: alertRadius, arrivalRadius: arrivalRadius)

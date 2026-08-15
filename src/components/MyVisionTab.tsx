@@ -153,7 +153,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
     <div className="space-y-6">
       {Object.entries(groupByDate(list)).map(([date, items]) => (
         <div key={date}>
-          <h4 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
+          <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
           {galleryView === 'list' ? (
             <div className="flex flex-col gap-2">
               {(items as any[]).map((c: any) => {
@@ -174,7 +174,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
                     </div>
                     <div className="min-w-0 flex-1">
                       <h4 title={c.name} className="font-black text-gray-900 line-clamp-1 text-sm leading-tight">{c.name}</h4>
-                      <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 mt-0.5">
+                      <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1 mt-0.5">
                         {c.city && (<><MapPin className="w-2.5 h-2.5" />{c.city} · </>)}
                         {c.created_at ? new Date(c.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : ''}
                       </p>
@@ -232,7 +232,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
                       <p className="text-[10px] text-gray-500 leading-snug line-clamp-3 mt-1">{c.description_short}</p>
                     )}
                     <div className="flex items-center justify-between gap-2 mt-auto pt-2">
-                      <p className="text-[10px] font-bold text-gray-400">
+                      <p className="text-[10px] font-bold text-gray-500">
                         {c.created_at
                           ? new Date(c.created_at).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
                           : ''}
@@ -298,7 +298,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
 
       {view === 'mine' ? (
         loading ? (
-          <div className="py-20 flex flex-col items-center justify-center text-gray-400">
+          <div className="py-20 flex flex-col items-center justify-center text-gray-500">
             <Loader2 className="w-10 h-10 animate-spin mb-4" />
             <p className="font-bold text-sm tracking-tight">Caricamento delle tue Vision…</p>
           </div>
@@ -317,7 +317,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
           renderGrid(cards, true)
         )
       ) : communityLoading || communityCards === null ? (
-        <div className="py-20 flex flex-col items-center justify-center text-gray-400">
+        <div className="py-20 flex flex-col items-center justify-center text-gray-500">
           <Loader2 className="w-10 h-10 animate-spin mb-4" />
           <p className="font-bold text-sm tracking-tight">Caricamento WIP Community…</p>
         </div>

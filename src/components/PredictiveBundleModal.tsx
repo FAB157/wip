@@ -214,7 +214,7 @@ export default function PredictiveBundleModal({
                   transition={{ ease: "linear" }}
                 />
               </div>
-              <p className="text-right text-[10px] text-gray-400 font-black mt-2">{progress.current} / {progress.total}</p>
+              <p className="text-right text-[10px] text-gray-500 font-black mt-2">{progress.current} / {progress.total}</p>
             </div>
           </div>
         ) : completed ? (

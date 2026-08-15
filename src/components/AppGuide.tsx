@@ -480,7 +480,7 @@ export default function AppGuide({ language }: AppGuideProps) {
           </ul>
           <H>Privacy in breve</H>
           <P>La posizione serve solo a farti da guida (anche in background, se lo autorizzi) e non viene venduta a terzi. I dati del profilo sono protetti da Supabase con crittografia; i pagamenti passano da Stripe/Google Play e non vediamo mai la tua carta. L'informativa completa è in Profilo → Privacy, dove trovi anche i tuoi diritti GDPR (accesso, rettifica, cancellazione).</P>
-          <p className="text-[10px] text-gray-400 font-bold mt-2">ItaInta / WIP — World in Pocket · Carrara (MS), Italia</p>
+          <p className="text-[10px] text-gray-500 font-bold mt-2">ItaInta / WIP — World in Pocket · Carrara (MS), Italia</p>
         </>
       ),
     },
@@ -511,7 +511,7 @@ export default function AppGuide({ language }: AppGuideProps) {
       <div className="flex justify-between items-center mb-4">
         <div>
           <h2 className="text-2xl font-black text-gray-900">{isItalian ? "Manuale d'Uso Dettagliato" : "Detailed User Manual"}</h2>
-          <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{isItalian ? "Tutte le funzioni e i tasti spiegati" : "All features and buttons explained"}</p>
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{isItalian ? "Tutte le funzioni e i tasti spiegati" : "All features and buttons explained"}</p>
         </div>
         <button
           onClick={handleExportPDF}

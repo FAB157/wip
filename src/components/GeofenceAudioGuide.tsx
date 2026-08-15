@@ -5,6 +5,7 @@ import { Download, AlertTriangle, X } from 'lucide-react';
 import { Language } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
+import { isCategoryAllowed } from '../lib/guideSettings';
 
 interface GeofenceAudioGuideProps {
   isActive: boolean;
@@ -57,17 +58,14 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       let count = rawCount;
       try {
         const stored = localStorage.getItem('wip_active_subcategories');
-        const activeCats = stored ? Object.keys(JSON.parse(stored)).filter(k => JSON.parse(stored)[k]) : [];
+        const activeSubcats: Record<string, boolean> = stored ? JSON.parse(stored) : {};
 
-        let filteredPois = rawPois;
-        if (activeCats.length > 0) {
-          filteredPois = rawPois.filter((p: any) => {
-            const cat = (p.category || p.poiType || '').toLowerCase();
-            // Gemme sempre attive: stesso criterio del radar (App.tsx) e del nativo
-            const isGem = p.premium || p.is_gem || cat === 'gemme';
-            return isGem || activeCats.includes(cat);
-          });
-        }
+        // Stesso confronto categoria→bucket del nativo (isCategoryAllowed):
+        // confrontare activeCats direttamente col tag grezzo del POI non
+        // combaciava mai, quindi il conteggio del banner ignorava di fatto
+        // la selezione categorie del setup GeoControl.
+        const filteredPois = rawPois.filter((p: any) =>
+          isCategoryAllowed({ category: p.category || p.poiType, premium: p.premium, is_gem: p.is_gem }, activeSubcats));
 
         const uniquePois: any[] = [];
         const seen = new Set<string>();

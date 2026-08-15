@@ -26,7 +26,7 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
           </div>
           <div>
             <h2 className="text-2xl font-black text-gray-900">{isItalian ? "Listino Servizi" : "Service Prices"}</h2>
-            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">{isItalian ? "Trasparenza totale sui consumi" : "Full transparency on usage"}</p>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">{isItalian ? "Trasparenza totale sui consumi" : "Full transparency on usage"}</p>
           </div>
         </div>
 
@@ -120,7 +120,7 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
         )}
 
         <footer className="mt-8 pt-6 border-t border-gray-100 text-center">
-          <div className="flex items-center justify-center gap-2 text-[10px] font-black text-gray-300 uppercase tracking-[0.2em]">
+          <div className="flex items-center justify-center gap-2 text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
             <ShieldCheck className="w-3 h-3" /> {isItalian ? "Crediti protetti e senza scadenza" : "Credits protected & never expire"}
           </div>
         </footer>
@@ -143,7 +143,7 @@ function PriceItem({ icon, name, price, unit, desc }: { icon: React.ReactNode, n
             <Coins className="w-3 h-3 text-amber-600" />
           </div>
         </div>
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">{unit}</p>
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">{unit}</p>
         <p className="text-xs text-gray-500 leading-snug">{desc}</p>
       </div>
     </div>

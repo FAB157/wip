@@ -57,9 +57,43 @@ final class PoiStore {
         spendLedger = readFile(ledgerFile) ?? []
     }
 
+    /// Prima un `try?` unico ingoiava qualunque errore (file assente, permessi,
+    /// JSON corrotto) azzerando in silenzio l'intera categoria (es. tutti i
+    /// pacchetti offline, o tutto il trigger state) senza log né possibilità di
+    /// recupero. Ora: file assente = normale (prima esecuzione), nessun log;
+    /// qualunque altro errore di lettura viene loggato; un JSON presente ma
+    /// corrotto viene messo in quarantena (rinominato) invece di essere perso,
+    /// e SOLO quella categoria riparte vuota.
     private func readFile<T: Decodable>(_ url: URL) -> T? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            print("[PoiStore] lettura fallita per \(url.lastPathComponent): \(error.localizedDescription)")
+            return nil
+        }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            print("[PoiStore] JSON corrotto in \(url.lastPathComponent) (\(error)): metto in quarantena, riparto vuoto solo per questa categoria.")
+            quarantineCorruptedFile(url)
+            return nil
+        }
+    }
+
+    /// Rinomina un file JSON corrotto con suffisso .corrupted-<timestamp>
+    /// invece di lasciarlo perdere/sovrascrivere silenziosamente al prossimo
+    /// writeFile: resta recuperabile per debug lato supporto.
+    private func quarantineCorruptedFile(_ url: URL) {
+        let suffix = Int(Date().timeIntervalSince1970)
+        let quarantined = url.deletingLastPathComponent()
+            .appendingPathComponent("\(url.lastPathComponent).corrupted-\(suffix)")
+        do {
+            try FileManager.default.moveItem(at: url, to: quarantined)
+        } catch {
+            print("[PoiStore] impossibile mettere in quarantena \(url.lastPathComponent): \(error.localizedDescription)")
+        }
     }
 
     private func writeFile<T: Encodable>(_ value: T, to url: URL) {
@@ -137,6 +171,20 @@ final class PoiStore {
         queue.sync { loadIfNeeded(); return Array(packages.values).sorted { $0.downloadedAt > $1.downloadedAt } }
     }
 
+    // TODO(perf): chiamato una volta per pagina scaricata (vedi
+    // WipPackageDownloadManager.fetchPage, pageSize=500): ogni pagina
+    // riscrive per intero offlinePois + packageRefs cumulati su disco (JSON
+    // encode + write .atomic dell'intero dizionario), costo IO superlineare
+    // sul numero di pagine di un'area grande. Non ho reso la scrittura
+    // batched/differita perché il commento in testa a
+    // WipPackageDownloadManager.swift ("ogni pagina viene scritta subito con
+    // upsert idempotenti") documenta la persistenza-per-pagina come scelta
+    // voluta per resilienza a crash/uccisione dell'app a metà di un download
+    // grande — e non posso compilare/testare su questa macchina un refactor
+    // che cambi quella garanzia. Se si vuole procedere: accumulare in memoria
+    // e fare writeFile ogni N pagine (es. 10) con un flush esplicito garantito
+    // a fine download in WipPackageDownloadManager.finish()/fail(), così si
+    // perde al più un batch invece di tutto il progresso.
     func upsertOfflinePois(_ pois: [OfflinePoi], packageId: String) {
         queue.sync {
             loadIfNeeded()

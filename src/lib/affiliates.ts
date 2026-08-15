@@ -121,13 +121,14 @@ export function ensureAffiliateUrl(url: string): string {
 // pannello admin "Statistiche Affiliazione"). Best-effort: NON deve mai
 // bloccare o ritardare l'apertura del link — chiamare senza await.
 
-export type AffiliateProvider = 'gyg' | 'viator' | 'ticketmaster' | 'other';
+export type AffiliateProvider = 'gyg' | 'viator' | 'tiqets' | 'ticketmaster' | 'other';
 
 /** Deduce il provider dall'URL di destinazione. */
 export function providerFromUrl(url: string): AffiliateProvider {
   const u = (url || '').toLowerCase();
   if (u.includes('getyourguide.')) return 'gyg';
   if (u.includes('viator') || u.includes('vi.me')) return 'viator';
+  if (u.includes('tiqets.')) return 'tiqets';
   if (u.includes('ticketmaster.')) return 'ticketmaster';
   return 'other';
 }
@@ -174,4 +175,17 @@ export function viatorSearchUrl(city: string): string {
   return ensureViatorAffiliateUrl(
     `https://www.viator.com/searchResults/all?text=${encodeURIComponent(city)}`
   );
+}
+
+/**
+ * Home Tiqets nella lingua dell'utente: ripiego quando la chip mappa non
+ * trova biglietti nella zona (vedi MapArea/wip-open-experiences). A
+ * differenza di Viator/GYG, Tiqets non ha una pagina di ricerca generica per
+ * testo libero (solo pagine città con slug/ID, es. /it/attrazioni-roma-c...):
+ * niente URL "search" costruibile lato client, quindi qui si passa sempre
+ * dall'API /api/tiqets per ottenere un link prodotto reale e già affiliato.
+ */
+export function tiqetsHomeUrl(lang: string): string {
+  const l = (lang || 'it').toLowerCase().slice(0, 2);
+  return `https://www.tiqets.com/${l}/`;
 }

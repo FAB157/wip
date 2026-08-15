@@ -125,11 +125,13 @@ export const getUserProfile = async (userId: string = "mock-user-id"): Promise<U
     // (e rigenerava 100 earned_credits: exploit di crediti infiniti).
     const { data, error } = await supabase.from('user_profiles').select('*').eq('id', userId).maybeSingle();
     if (data) {
-      // Admin di servizio: solo l'account owner. Il vecchio "|| id === 'mock-user-id'"
-      // dava is_admin a chiunque non fosse loggato.
-      if (data.email?.toLowerCase() === 'marmidicarrara@gmail.com') {
-        data.is_admin = true;
-      }
+      // is_admin è autoritativo dal DB (vedi anche App.tsx, select su
+      // user_profiles.is_admin). In passato qui si forzava is_admin=true per
+      // l'email owner anche quando la riga DB diceva il contrario: una
+      // doppia fonte di verità che rendeva impossibile revocare l'admin da
+      // DB per quell'account. Rimosso: se quell'email deve restare admin, il
+      // flag va garantito nella riga DB (il fallback di bootstrap più sotto
+      // lo fa già alla creazione della riga, quando non esiste ancora).
       return data as UserProfile;
     }
     rowMissing = !error;
@@ -158,6 +160,13 @@ export const getUserProfile = async (userId: string = "mock-user-id"): Promise<U
     const sessionEmail = sessionUser?.email;
     if (sessionEmail) {
       fallbackProfile.email = sessionEmail;
+      // A differenza del blocco sopra, questo fallback viene scritto su DB
+      // SOLO se rowMissing è true (riga confermata assente, vedi upsert con
+      // ignoreDuplicates più sotto): è un bootstrap one-shot alla creazione
+      // della riga per l'account owner, non un override di una riga
+      // esistente. Se in futuro is_admin=false viene impostato in DB per
+      // questa email, questo fallback non lo riscrive (la riga esiste già,
+      // quindi non è più rowMissing).
       if (sessionEmail.toLowerCase() === 'marmidicarrara@gmail.com') {
         fallbackProfile.is_admin = true;
       }

@@ -51,8 +51,12 @@ if (Capacitor.isNativePlatform()) {
       Purchases.configure({ apiKey: iosRevenueCatKey });
     }
   } else if (Capacitor.getPlatform() === 'android') {
-    // Inserita la vera API Key di Android
-    Purchases.configure({ apiKey: "goog_mhKBjLsBGliaBGvHlmkUNWxPCMK" });
+    // Chiave pubblica RevenueCat Android da env (VITE_REVENUECAT_ANDROID_KEY),
+    // con fallback alla chiave hardcoded storica se la env var non è
+    // impostata: retrocompatibile, nessuna build rompe l'init RevenueCat
+    // per mancanza della variabile.
+    const androidRevenueCatKey = import.meta.env.VITE_REVENUECAT_ANDROID_KEY || "goog_mhKBjLsBGliaBGvHlmkUNWxPCMK";
+    Purchases.configure({ apiKey: androidRevenueCatKey });
   }
 }
 

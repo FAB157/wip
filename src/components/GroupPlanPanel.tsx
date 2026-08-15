@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { Users, Share2, RefreshCw, ArrowLeft, Sparkles, Check, Loader2 } from 'lucide-react';
+import {
+  Users, Share2, RefreshCw, ArrowLeft, Sparkles, Check, Loader2,
+  Palette, UtensilsCrossed, Trees, Mountain, ShoppingBag, Camera,
+  Building2, Ticket, PartyPopper,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { Language } from '../lib/i18n';
@@ -52,13 +57,13 @@ interface GroupPlanPanelProps {
   onBack: () => void;
 }
 
-const INTEREST_OPTIONS = [
-  { id: 'arte', label: '🎨 Arte' },
-  { id: 'gastronomia', label: '🍝 Gastronomia' },
-  { id: 'natura', label: '🌿 Natura' },
-  { id: 'avventura', label: '⛰️ Avventura' },
-  { id: 'shopping', label: '🛍️ Shopping' },
-  { id: 'fotografia', label: '📸 Fotografia' },
+const INTEREST_OPTIONS: { id: string; label: string; icon: LucideIcon }[] = [
+  { id: 'arte', label: 'Arte', icon: Palette },
+  { id: 'gastronomia', label: 'Gastronomia', icon: UtensilsCrossed },
+  { id: 'natura', label: 'Natura', icon: Trees },
+  { id: 'avventura', label: 'Avventura', icon: Mountain },
+  { id: 'shopping', label: 'Shopping', icon: ShoppingBag },
+  { id: 'fotografia', label: 'Fotografia', icon: Camera },
 ];
 
 const BUDGET_ORDER = ['economico', 'standard', 'lusso'] as const;
@@ -244,20 +249,25 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
     if (voteInterests.length === 0) { notify('Scegli almeno un interesse.'); return; }
     setBusy(true);
     try {
-      const res = await fetch(getApiUrl('/api/group-plan/vote'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pin: session.pin,
-          memberId: getMemberId(),
-          name: voteName.trim(),
-          interests: voteInterests,
-          budget: voteBudget,
-          ritmo: voteRitmo,
-          mustSee: voteMustSee.trim(),
-          noGo: voteNoGo.trim(),
-        }),
+      const body = JSON.stringify({
+        pin: session.pin,
+        memberId: getMemberId(),
+        name: voteName.trim(),
+        interests: voteInterests,
+        budget: voteBudget,
+        ritmo: voteRitmo,
+        mustSee: voteMustSee.trim(),
+        noGo: voteNoGo.trim(),
       });
+      // Il server rileva un raro conflitto di scrittura quando due amici
+      // votano nello stesso istante (409): un solo ritentativo con un breve
+      // ritardo casuale risolve praticamente sempre senza che l'utente se ne
+      // accorga, invece di mostrargli un errore per un problema temporaneo.
+      let res = await fetch(getApiUrl('/api/group-plan/vote'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      if (res.status === 409) {
+        await new Promise(r => setTimeout(r, 300 + Math.random() * 400));
+        res = await fetch(getApiUrl('/api/group-plan/vote'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      }
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || 'Invio del voto fallito');
       const s = await fetchSession(session.pin);
@@ -302,12 +312,12 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       {view === 'home' && (
         <div className="space-y-3">
           <button type="button" onClick={() => setView('create')} className={`${card} w-full text-left hover:border-primary/30 transition-all active:scale-[0.98]`}>
-            <div className="text-2xl mb-1">🏗️</div>
+            <div className="mb-1"><Building2 className="w-6 h-6 text-primary" /></div>
             <div className="text-sm font-black text-primary">Crea una stanza</div>
             <div className="text-[11px] font-bold text-gray-400 mt-0.5">Scegli la destinazione, ottieni un PIN da condividere in chat e raccogli i voti degli amici.</div>
           </button>
           <button type="button" onClick={() => setView('join')} className={`${card} w-full text-left hover:border-primary/30 transition-all active:scale-[0.98]`}>
-            <div className="text-2xl mb-1">🎟️</div>
+            <div className="mb-1"><Ticket className="w-6 h-6 text-primary" /></div>
             <div className="text-sm font-black text-primary">Ho un PIN</div>
             <div className="text-[11px] font-bold text-gray-400 mt-0.5">Un amico ti ha invitato? Inserisci il PIN a 6 cifre e vota le tue preferenze — non serve un account.</div>
           </button>
@@ -435,9 +445,9 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
                   type="button"
                   onClick={() => setVoteInterests(prev => prev.includes(opt.id) ? prev.filter(i => i !== opt.id) : [...prev, opt.id])}
                   aria-pressed={voteInterests.includes(opt.id)}
-                  className={`px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${voteInterests.includes(opt.id) ? 'bg-primary text-white shadow' : 'bg-gray-50 text-gray-500 border border-outline-variant/20'}`}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${voteInterests.includes(opt.id) ? 'bg-primary text-white shadow' : 'bg-gray-50 text-gray-500 border border-outline-variant/20'}`}
                 >
-                  {opt.label}
+                  <opt.icon className="w-3.5 h-3.5" /> {opt.label}
                 </button>
               ))}
             </div>
@@ -476,7 +486,7 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
 
       {view === 'voted' && session && (
         <div className={`${card} text-center space-y-3`}>
-          <div className="text-4xl">🎉</div>
+          <div className="flex justify-center"><PartyPopper className="w-9 h-9 text-primary" /></div>
           <p className="text-sm font-black text-primary">Preferenze inviate!</p>
           <p className="text-[11px] font-bold text-gray-400">
             Hanno votato in {session.members.length}. Quando tutti hanno votato, {session.organizerName} fonde le preferenze e genera l'itinerario di gruppo.

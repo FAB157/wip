@@ -19,7 +19,10 @@ coroutines = "1.11.0"
 room = "2.8.4"
 compileSdk = "37"
 minSdk = "24"
-targetSdk = "35"
+# Allineato a variables.gradle (rootProject.ext.targetSdkVersion), l'unico
+# valore effettivamente usato da app/build.gradle. Google Play rifiuta gli
+# update sotto API 36 dal 31/08/2026.
+targetSdk = "36"
 
 [libraries]
 androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }

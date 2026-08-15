@@ -136,6 +136,36 @@ export function radiiForTransport(
   return { alert, trigger };
 }
 
+// --- Categorie ammesse per il trigger audioguida -------------------------
+// Fonte di verità JS per la stessa logica di GeofenceBroadcastReceiver.CATEGORY_MAP
+// (Kotlin) / PoiCategories.map (Swift): traduce la categoria GREZZA del POI
+// (tag OSM-like salvato in shared_pois.category) nel bucket del setup
+// GeoControl (monumenti/musei/chiese/panorami/castelli/archeo/consigli/community/gemme).
+// Usata da locationService.ts e GeofenceAudioGuide.tsx: prima confrontavano
+// direttamente activeCategories (nomi bucket) con la categoria grezza del POI
+// ("museum", "church", "viewpoint"...), un confronto che non poteva mai
+// combaciare → il filtro per categoria del radar/audioguida sul web non
+// applicava di fatto la selezione dell'utente.
+export function isCategoryAllowed(
+  poi: { category?: string | null; premium?: boolean; is_gem?: boolean },
+  activeSubcats: Record<string, boolean>,
+): boolean {
+  const cat = (poi.category || '').toLowerCase();
+  if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
+  if (['monument', 'artwork', 'monumenti', 'attraction'].includes(cat)) return activeSubcats.monumenti ?? true;
+  if (['castle', 'castelli'].includes(cat)) return activeSubcats.castelli ?? activeSubcats.monumenti ?? true;
+  if (['ruins', 'archaeological_site', 'archeo'].includes(cat)) return activeSubcats.archeo ?? activeSubcats.monumenti ?? true;
+  if (['church', 'chiese', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale',
+       'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia',
+       'shrine', 'santuario'].includes(cat)) return activeSubcats.chiese ?? true;
+  if (['viewpoint', 'park', 'panorami'].includes(cat)) return activeSubcats.panorami ?? true;
+  if (['museum', 'gallery', 'musei'].includes(cat)) return activeSubcats.musei ?? true;
+  if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))
+    return activeSubcats.consigli ?? false;
+  if (cat === 'community') return activeSubcats.community ?? false;
+  return false; // categorie commerciali/utilitarie (locali/utilita/famiglie) → mai audioguida
+}
+
 // --- Modalita' attivazione ---------------------------------------------
 export function getActivationMode(): ActivationMode {
   try {

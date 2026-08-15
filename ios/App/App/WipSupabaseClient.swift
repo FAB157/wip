@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /**
  * Port iOS di service/SupabaseClient.kt. Stessa RPC nearby_pois, stesso
@@ -83,7 +84,17 @@ final class WipSupabaseClient {
     /// shared_pois e salva. Prima il nativo leggeva i campi italiani grezzi:
     /// un utente straniero, in auto col Day Pass, sentiva testo italiano letto
     /// con voce nella sua lingua. Ora il testo è già nella lingua giusta.
-    func fetchAudioguideText(poiId: String, lang: String, character: String, completion: @escaping (String?) -> Void) {
+    ///
+    /// ROLLOUT ANTI-ABUSO FASE 1 (2026-08-14): questa rotta oggi è aperta
+    /// (nessuna auth) perché il chiamante — questo prefetch/trigger in
+    /// background — non inviava mai un token utente. Da qui in poi lo invia SE
+    /// disponibile (accessToken da SecureSessionStore, passato dai chiamanti in
+    /// BackgroundPoiManager), ma la richiesta resta valida anche senza: il
+    /// server per ora ACCETTA il token senza richiederlo (nessun 401), per non
+    /// rompere l'audioguida automatica sulle installazioni non ancora
+    /// aggiornate. La fase 2 (server che rifiuta senza token) va fatta solo
+    /// quando questa build sarà diffusa alla maggioranza degli utenti.
+    func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, completion: @escaping (String?) -> Void) {
         guard let url = URL(string: "https://wip.guide/api/poi/audioguide") else {
             completion(nil); return
         }
@@ -91,6 +102,11 @@ final class WipSupabaseClient {
         req.httpMethod = "POST"
         req.timeoutInterval = 30
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Solo se presente: nessun header quando manca, la richiesta resta
+        // identica a quella di oggi (vedi commento fase 1 sopra).
+        if let accessToken = accessToken, !accessToken.isEmpty {
+            req.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "poiId": poiId, "lang": lang, "character": character
         ])
@@ -286,6 +302,83 @@ final class WipSupabaseClient {
 }
 
 /**
+ * Wrapper minimale Keychain per le due chiavi di sessione (userId, access
+ * token). Prima vivevano in chiaro in UserDefaults.standard — leggibili da
+ * un backup non cifrato del device o da un dump del container app. Con
+ * kSecAttrAccessibleAfterFirstUnlock restano leggibili anche dal servizio in
+ * background a schermo spento (stesso requisito di prima) ma non finiscono
+ * più nei backup in chiaro né nel plist delle preferenze.
+ *
+ * migrateFromUserDefaultsIfNeeded sposta un valore legacy ancora presente in
+ * UserDefaults (installazioni aggiornate da una versione precedente) e lo
+ * rimuove dal plist: va chiamata una sola volta, qui all'init di
+ * ListeningHistoryStore (singleton, quindi si esegue una sola volta a
+ * processo).
+ */
+enum SecureSessionStore {
+    private static let service = "com.itaintasca.app.session"
+
+    static func set(_ value: String?, forKey key: String) {
+        guard let value = value, !value.isEmpty else {
+            delete(key)
+            return
+        }
+        let data = Data(value.utf8)
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        if SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess {
+            let update: [String: Any] = [
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            ]
+            SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        } else {
+            var addQuery = query
+            addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            SecItemAdd(addQuery as CFDictionary, nil)
+        }
+    }
+
+    static func get(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func delete(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
+    /// One-shot: se `legacyKey` è ancora in UserDefaults la sposta in
+    /// Keychain (senza sovrascrivere un valore Keychain già presente) e la
+    /// rimuove dal plist, cosi non resta duplicata in chiaro.
+    static func migrateFromUserDefaultsIfNeeded(legacyKey: String, prefs: UserDefaults) {
+        guard let legacyValue = prefs.string(forKey: legacyKey), !legacyValue.isEmpty else { return }
+        if get(legacyKey) == nil {
+            set(legacyValue, forKey: legacyKey)
+        }
+        prefs.removeObject(forKey: legacyKey)
+    }
+}
+
+/**
  * Storico ascolti lato nativo: mirror locale (UserDefaults) dei poi_id già
  * ascoltati + registrazione best-effort su user_listening_history.
  *
@@ -297,6 +390,8 @@ final class WipSupabaseClient {
  * ritentata alla sync successiva. Fail-closed: in dubbio NON è acquistato.
  *
  * Stesse chiavi prefs del port Android (ListeningHistoryStore.kt): allineare.
+ * userId/accessToken (prefUserId/prefAccessToken) sono in Keychain via
+ * SecureSessionStore, non più in UserDefaults — vedi SecureSessionStore sopra.
  */
 final class ListeningHistoryStore {
     static let shared = ListeningHistoryStore()
@@ -309,6 +404,11 @@ final class ListeningHistoryStore {
     private let client = WipSupabaseClient()
     // Serializza le letture/scritture del mirror (receiver + plugin + sync)
     private let queue = DispatchQueue(label: "com.itaintasca.listeninghistory")
+
+    init() {
+        SecureSessionStore.migrateFromUserDefaultsIfNeeded(legacyKey: Self.prefUserId, prefs: prefs)
+        SecureSessionStore.migrateFromUserDefaultsIfNeeded(legacyKey: Self.prefAccessToken, prefs: prefs)
+    }
 
     /// Mirror locale, vale anche offline. In dubbio: NON acquistato.
     func isAlreadyPurchased(_ poiId: String) -> Bool {
@@ -348,9 +448,9 @@ final class ListeningHistoryStore {
     /// scarica gli id dal cloud e li UNISCE al mirror (mai sostituire: gli
     /// ascolti offline non sincronizzati non vanno persi), poi ritenta i pending.
     func syncFromCloud() {
-        let userId = prefs.string(forKey: Self.prefUserId) ?? ""
+        let userId = SecureSessionStore.get(Self.prefUserId) ?? ""
         guard !userId.isEmpty else { return }
-        let token = prefs.string(forKey: Self.prefAccessToken)
+        let token = SecureSessionStore.get(Self.prefAccessToken)
         client.fetchListeningHistoryPoiIds(userId: userId, accessToken: token) { [weak self] cloudIds in
             guard let self = self, let cloudIds = cloudIds else { return }
             self.queue.async {
@@ -364,9 +464,9 @@ final class ListeningHistoryStore {
 
     /// Da chiamare su `queue`. Ritenta l'insert cloud delle voci pending.
     private func flushPending() {
-        let userId = prefs.string(forKey: Self.prefUserId) ?? ""
+        let userId = SecureSessionStore.get(Self.prefUserId) ?? ""
         guard !userId.isEmpty else { return }
-        let token = prefs.string(forKey: Self.prefAccessToken)
+        let token = SecureSessionStore.get(Self.prefAccessToken)
         let pending = prefs.stringArray(forKey: Self.prefPending) ?? []
         for raw in pending {
             guard let data = raw.data(using: .utf8),

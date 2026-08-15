@@ -27,6 +27,12 @@ const POI_TRIGGER_M = 80;       // audioguida automatica entro 80 m dal POI scel
 const OFF_ROUTE_M = 45;         // oltre 45 m dal tracciato = fuori rotta
 const OFF_ROUTE_FIXES = 2;      // fix GPS consecutivi fuori rotta prima del ricalcolo
 const RECALC_COOLDOWN_MS = 20000;
+// Fix GPS con accuratezza peggiore di questa soglia (metri) non vengono usati
+// per lo snap-to-route / fuori-rotta / distanza-da-manovra: un fix "ballerino"
+// (es. sotto copertura scarsa) farebbe scattare ricalcoli fantasma o letture
+// di manovra premature/mancate. Stesso valore di MIN_GPS_ACCURACY in
+// SmartGeofenceManager.ts, per coerenza tra i due moduli di navigazione.
+const MAX_GPS_ACCURACY_M = 80;
 
 const REROUTE_PHRASES: Record<string, string> = {
   it: 'Percorso ricalcolato',
@@ -322,8 +328,14 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
         const here: LatLon = { lat: loc.latitude, lon: loc.longitude };
 
-        // Audioguide dei POI scelti lungo il percorso
+        // Audioguide dei POI scelti lungo il percorso (posizione "raw": la
+        // soglia di trigger è larga, 80 m, un fix impreciso non è un problema).
         checkRoutePois(here);
+
+        // Fix GPS poco accurato: non lo usiamo per la navigazione attiva
+        // (snap-to-route, fuori-rotta, distanza dalla manovra, arrivo) — si
+        // aspetta semplicemente il prossimo fix migliore.
+        if (loc.accuracy > MAX_GPS_ACCURACY_M) return;
 
         // Distanza residua LUNGO IL TRACCIATO (non in linea d'aria) + ETA.
         // In linea d'aria un percorso a U dava ETA assurde ("200 m" con 15

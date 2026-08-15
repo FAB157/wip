@@ -22,7 +22,7 @@ interface EditablePoi {
   lon: number;
   category: string | null;
   status: string | null;
-  website: string | null;
+  contact_website: string | null;
   contact_phone: string | null;
   description_short: string | null;
   is_gem: boolean | null;
@@ -86,7 +86,7 @@ export default function AdminPoiMapEditor() {
     try {
       const { data, error } = await supabase
         .from('shared_pois')
-        .select('id, name, lat, lon, category, status, website, contact_phone, description_short, is_gem')
+        .select('id, name, lat, lon, category, status, contact_website, contact_phone, description_short, is_gem')
         .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
         .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
         .limit(400);
@@ -105,7 +105,7 @@ export default function AdminPoiMapEditor() {
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from('shared_pois')
-        .select('id, name, lat, lon, category, status, website, contact_phone, description_short, is_gem')
+        .select('id, name, lat, lon, category, status, contact_website, contact_phone, description_short, is_gem')
         .ilike('name', `%${searchTerm.trim()}%`)
         .limit(8);
       setSearchResults((data || []) as EditablePoi[]);
@@ -128,7 +128,7 @@ export default function AdminPoiMapEditor() {
     if (!selected) return;
     // Solo i campi davvero cambiati viaggiano verso il server
     const changes: any = {};
-    (['name', 'category', 'status', 'lat', 'lon', 'website', 'contact_phone', 'description_short', 'is_gem'] as (keyof EditablePoi)[]).forEach(k => {
+    (['name', 'category', 'status', 'lat', 'lon', 'contact_website', 'contact_phone', 'description_short', 'is_gem'] as (keyof EditablePoi)[]).forEach(k => {
       if (form[k] !== undefined && String(form[k] ?? '') !== String(selected[k] ?? '')) changes[k] = form[k];
     });
     if (Object.keys(changes).length === 0) { notify('Nessuna modifica da salvare.'); return; }
@@ -181,7 +181,7 @@ export default function AdminPoiMapEditor() {
                 <button key={r.id} onClick={() => openPoi(r)}
                   className="w-full text-left px-3 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 border-b border-gray-50 last:border-0">
                   {r.name}
-                  <span className="block text-[10px] font-medium text-gray-400">{r.category || 'senza categoria'} · {r.status || 'n/d'}</span>
+                  <span className="block text-[10px] font-medium text-gray-500">{r.category || 'senza categoria'} · {r.status || 'n/d'}</span>
                 </button>
               ))}
             </div>
@@ -244,7 +244,7 @@ export default function AdminPoiMapEditor() {
         {/* Pannello di modifica */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-2.5" style={{ minHeight: 520 }}>
           {!selected ? (
-            <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 gap-2 py-16">
+            <div className="h-full flex flex-col items-center justify-center text-center text-gray-500 gap-2 py-16">
               <MapPin className="w-8 h-8" />
               <p className="text-sm font-bold">Seleziona un POI sulla mappa<br />o cercalo per nome.</p>
             </div>
@@ -254,20 +254,20 @@ export default function AdminPoiMapEditor() {
                 <h4 className="font-black text-primary text-sm leading-tight">{selected.name}</h4>
                 <button onClick={() => { setSelected(null); setForm({}); }} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
               </div>
-              <p className="text-[10px] font-mono text-gray-400 break-all">{selected.id}</p>
+              <p className="text-[10px] font-mono text-gray-500 break-all">{selected.id}</p>
 
-              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Nome
+              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Nome
                 <input value={String(form.name ?? '')} onChange={e => setField('name', e.target.value)}
                   className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
               </label>
 
               <div className="grid grid-cols-2 gap-2">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Categoria
+                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Categoria
                   <input list="poi-cats" value={String(form.category ?? '')} onChange={e => setField('category', e.target.value)}
                     className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
                   <datalist id="poi-cats">{CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c} />)}</datalist>
                 </label>
-                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Status
+                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Status
                   <select value={String(form.status ?? 'auto')} onChange={e => setField('status', e.target.value)}
                     className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800">
                     {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
@@ -276,25 +276,25 @@ export default function AdminPoiMapEditor() {
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Lat
+                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Lat
                   <input type="number" step="0.000001" value={String(form.lat ?? '')} onChange={e => setField('lat', Number(e.target.value))}
                     className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono text-gray-800" />
                 </label>
-                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Lon
+                <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Lon
                   <input type="number" step="0.000001" value={String(form.lon ?? '')} onChange={e => setField('lon', Number(e.target.value))}
                     className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-mono text-gray-800" />
                 </label>
               </div>
 
-              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Sito web
-                <input value={String(form.website ?? '')} onChange={e => setField('website', e.target.value)} placeholder="https://…"
+              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Sito web
+                <input value={String(form.contact_website ?? '')} onChange={e => setField('contact_website', e.target.value)} placeholder="https://…"
                   className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800" />
               </label>
-              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Telefono
+              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Telefono
                 <input value={String(form.contact_phone ?? '')} onChange={e => setField('contact_phone', e.target.value)}
                   className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800" />
               </label>
-              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Descrizione breve
+              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Descrizione breve
                 <textarea rows={2} value={String(form.description_short ?? '')} onChange={e => setField('description_short', e.target.value)}
                   className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 resize-none" />
               </label>
@@ -303,7 +303,7 @@ export default function AdminPoiMapEditor() {
                 💎 Gemma nascosta
               </label>
 
-              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-400">Causale (facoltativa, va nello storico)
+              <label className="block text-[10px] font-black uppercase tracking-wider text-gray-500">Causale (facoltativa, va nello storico)
                 <input value={reason} onChange={e => setReason(e.target.value)} placeholder="es. coordinate sbagliate segnalate da utente"
                   className="mt-1 w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800" />
               </label>
@@ -312,7 +312,7 @@ export default function AdminPoiMapEditor() {
                 className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-xl text-xs font-black uppercase tracking-wider disabled:opacity-50">
                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Salva modifiche
               </button>
-              <p className="text-[10px] text-gray-400 flex items-center gap-1">
+              <p className="text-[10px] text-gray-500 flex items-center gap-1">
                 <History className="w-3 h-3" /> Il diff finisce in Errori di Sistema (sorgente <b>poi_editor</b>, livello info).
               </p>
             </>

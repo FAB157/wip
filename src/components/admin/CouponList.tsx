@@ -134,7 +134,7 @@ export default function CouponList({ coupons, setIsLoading, onMessage, onChanged
                   ))}
                   {coupons.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-gray-400 font-medium text-xs">
+                      <td colSpan={5} className="p-8 text-center text-gray-500 font-medium text-xs">
                         Nessun coupon nel sistema. Creane uno col form qui sopra.
                       </td>
                     </tr>

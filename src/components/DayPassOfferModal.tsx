@@ -51,7 +51,7 @@ export default function DayPassOfferModal({ isOpen, city, poisCount, onClose }: 
             <DayPassCard />
             <button
               onClick={onClose}
-              className="w-full text-center text-sm text-gray-400 mt-3 py-1 hover:text-gray-600"
+              className="w-full text-center text-sm text-gray-500 mt-3 py-1 hover:text-gray-600"
             >
               Non ora
             </button>

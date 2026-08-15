@@ -302,18 +302,18 @@ export default function AdminVisionCommunity() {
             className={`bg-white rounded-2xl p-3 border shadow-sm text-center transition-all ${status === t.key ? 'border-primary/40 ring-1 ring-primary/20' : 'border-gray-100 hover:border-gray-200'}`}
           >
             <div className={`text-2xl font-black ${t.cls}`}>{counts[t.key]}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-gray-400">{t.label}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-gray-500">{t.label}</div>
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="py-16 flex flex-col items-center text-gray-400">
+        <div className="py-16 flex flex-col items-center text-gray-500">
           <Loader2 className="w-8 h-8 animate-spin mb-3" />
           <p className="text-sm font-bold">Caricamento coda…</p>
         </div>
       ) : cards.length === 0 ? (
-        <div className="py-16 text-center text-gray-400 text-sm font-bold">
+        <div className="py-16 text-center text-gray-500 text-sm font-bold">
           Nessuna scheda {status === 'pending' ? 'in attesa di revisione' : status === 'approved' ? 'pubblicata' : 'rifiutata'}.
         </div>
       ) : (
@@ -359,13 +359,13 @@ export default function AdminVisionCommunity() {
                         )}
                       </div>
                     </div>
-                    <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1 mt-0.5">
+                    <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1 mt-0.5">
                       <MapPin className="w-3 h-3" />
                       {card.city || 'Località sconosciuta'}
                       {card.lat != null && <span>· {Number(card.lat).toFixed(5)}, {Number(card.lon).toFixed(5)}</span>}
                     </p>
                     {card.created_at && (
-                      <p className="text-[10px] text-gray-400 font-medium mt-0.5">
+                      <p className="text-[10px] text-gray-500 font-medium mt-0.5">
                         {new Date(card.created_at).toLocaleString('it-IT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
                       </p>
                     )}
@@ -468,9 +468,9 @@ export default function AdminVisionCommunity() {
 
                 {attachMode === card.id && (
                   <div className="px-3 pb-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-2">POI entro ~500 m, ufficiali o Community (la foto entra nella loro galleria)</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-2">POI entro ~500 m, ufficiali o Community (la foto entra nella loro galleria)</p>
                     {attachCandidates.length === 0 ? (
-                      <p className="text-[11px] text-gray-400 font-bold">Nessun POI nelle vicinanze.</p>
+                      <p className="text-[11px] text-gray-500 font-bold">Nessun POI nelle vicinanze.</p>
                     ) : (
                       <div className="space-y-1.5 max-h-48 overflow-y-auto">
                         {attachCandidates.map((p: any) => (
@@ -481,7 +481,7 @@ export default function AdminVisionCommunity() {
                               {p.category === 'community' && (
                                 <span className="text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md bg-violet-100 text-violet-700">Community</span>
                               )}
-                              <span className="text-[9px] font-black text-gray-400">{p._dist} m · {p.category === 'community' ? 'community' : p.category}</span>
+                              <span className="text-[9px] font-black text-gray-500">{p._dist} m · {p.category === 'community' ? 'community' : p.category}</span>
                             </span>
                           </button>
                         ))}

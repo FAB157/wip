@@ -154,7 +154,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
                     {(profile?.purchased_credits || 0) + (profile?.earned_credits || 0)} Crediti
                   </span>
                 </div>
-                <span className="text-[10px] font-bold text-gray-400 truncate max-w-[150px]">{currentUserEmail}</span>
+                <span className="text-[10px] font-bold text-gray-500 truncate max-w-[150px]">{currentUserEmail}</span>
               </div>
             </div>
           </div>
@@ -168,10 +168,10 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
               <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center gap-1.5">
                   <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Progresso XP</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Progresso XP</span>
                 </div>
                 <span className="text-[10px] font-black text-gray-900">
-                  {profile?.xp_points || 0} <span className="text-gray-400">/ {nextLevel ? nextLevel.xp_required : (profile?.xp_points || 0)} XP</span>
+                  {profile?.xp_points || 0} <span className="text-gray-500">/ {nextLevel ? nextLevel.xp_required : (profile?.xp_points || 0)} XP</span>
                 </span>
               </div>
 
@@ -186,7 +186,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
 
               {nextLevel && (
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-[9px] font-bold text-gray-400">Obiettivo: {nextLevel.title}</span>
+                  <span className="text-[9px] font-bold text-gray-500">Obiettivo: {nextLevel.title}</span>
                   {nextLevel.reward_credits > 0 && (
                     <span className="flex items-center gap-1 bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border border-amber-200">
                       🏆 {nextLevel.reward_credits} 🪙
@@ -201,7 +201,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
               onClick={() => onOpenMyVision?.()}
               className="flex-1 bg-white rounded-[1.5rem] p-4 border border-gray-100 shadow-sm flex flex-col justify-center hover:border-gray-200 transition-all"
             >
-              <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1 leading-none text-center">My Vision</span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1 leading-none text-center">My Vision</span>
               <div className="flex items-center justify-center gap-1.5">
                 <Camera className="w-3 h-3 text-rose-500" />
                 <span className="text-xl font-black text-gray-900 leading-none">{visionCount}</span>

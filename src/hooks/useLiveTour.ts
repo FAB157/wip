@@ -63,14 +63,14 @@ function subscribeModuleChannel(pin: string, leader: boolean) {
   channel
     .on('broadcast', { event: 'audio-start' }, (payload: any) => {
       if (!moduleIsLeader) {
-        // Follower: riproduci l'audio sbloccato dal leader
-        const { audioUrl, textToSpeak, poiName } = payload.payload || {};
-        if (audioUrl) {
-          locationService.playAudioUrl(audioUrl);
-        } else if (textToSpeak) {
+        // Follower: riproduci l'audio sbloccato dal leader.
+        // NB: il leader trasmette solo { textToSpeak, poiName } (vedi
+        // locationService.ts, dispatch di 'wip-leader-audio-start') — un
+        // audioUrl non viene mai incluso nel payload, quindi non c'è un
+        // ramo "riproduci da URL" da gestire qui.
+        const { textToSpeak, poiName } = payload.payload || {};
+        if (textToSpeak) {
           locationService.playAudio(textToSpeak, poiName || 'Punto di interesse', 'monumenti');
-        }
-        if (audioUrl || textToSpeak) {
           window.dispatchEvent(new CustomEvent('wip-live-audio', {
             detail: { poiName, message: `📻 Il leader ha sbloccato: ${poiName || 'un luogo'}` }
           }));

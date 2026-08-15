@@ -35,7 +35,7 @@
     "@capacitor/network": "^7.0.0",
     "@capgo/capacitor-native-biometric": "^6.0.0",
     "@google/genai": "^1.29.0",
-    "@revenuecat/purchases-capacitor": "^13.2.2",
+    "@revenuecat/purchases-capacitor": "^11.3.2",
     "@stripe/stripe-js": "^9.6.0",
     "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.1.14",

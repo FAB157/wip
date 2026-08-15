@@ -231,6 +231,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         if let loc = manager.location { workQueue.async { self.handleLocation(loc) } }
     }
 
+    /// Revoca del permesso posizione a runtime (Impostazioni → Posizione → Mai):
+    /// senza questo handler il manager restava "attivo" ma cieco, con lo stato
+    /// nella UI fermo all'ultimo messaggio. Fermiamo gli update e avvisiamo il
+    /// JS; se il permesso torna authorized non serve fare nulla qui, il flusso
+    /// di start esistente (start / restartFromPrefsIfActive) gestisce la ripartenza.
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        guard status == .denied || status == .restricted, isRunning else { return }
+        isRunning = false
+        locationManager.stopUpdatingLocation()
+        updateStatus("Audioguida in pausa", "⚠️ Permesso posizione revocato: riattivalo dalle Impostazioni per usare l'audioguida")
+    }
+
     private func handleLocation(_ location: CLLocation) {
         if lastQueryLocation == nil && currentPois.isEmpty {
             updateStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
@@ -494,10 +507,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// Raggi operativi per un POI: max(raggio di modalità, raggio da footprint
     /// OSM) SOLO se il POI ha un ingresso reale (entrance). I default 50/150 di
     /// un POI non processato sono indistinguibili da raggi calibrati, quindi il
-    /// footprint entra in gioco solo con entranceLat/Lon valorizzati (di norma i
-    /// POI online; il bundle offline non trasporta l'ingresso). Il max non
-    /// riduce MAI i default di modalità: una piazza ottiene un raggio grande,
-    /// una statua resta stretta. Mirror di radiiForTransport (guideSettings.ts).
+    /// footprint entra in gioco solo con entranceLat/Lon valorizzati. Oggi sono
+    /// valorizzati solo per i POI online: /api/area/bundle (pacchetti offline)
+    /// non li restituisce ancora, quindi OfflinePoi.toPoi() li passa nil finché
+    /// il server non li aggiunge (vedi commento in PoiModels.swift) — nessuna
+    /// modifica qui necessaria per quel giorno, questo gate basta già. Il max
+    /// non riduce MAI i default di modalità: una piazza ottiene un raggio
+    /// grande, una statua resta stretta. Mirror di radiiForTransport (guideSettings.ts).
     private func effectiveRadii(for poi: Poi, isDriving: Bool) -> (alert: Double, arrival: Double) {
         var alert = isDriving ? alertRadiusCar : alertRadiusWalk
         var arrival = isDriving ? arrivalRadiusCar : arrivalRadiusWalk
@@ -509,6 +525,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             if fpArrival > 0 { arrival = max(arrival, fpArrival) }
         }
         return (alert, arrival)
+    }
+
+    // Helper senza force-unwrap per il ramo EXITED→pending della finestra
+    // predittiva allargata: record nil (mai stato persistito per questo POI)
+    // non è un caso anomalo, significa semplicemente "non ancora pronto per
+    // un nuovo tentativo" — stesso esito del vecchio `record != nil && ...`.
+    private func isExitedRetriggerReady(_ record: TriggerStateRecord?) -> Bool {
+        guard let record = record else { return false }
+        return (nowMs() - record.updatedAt) > approachRetriggerCooldownMs
     }
 
     private func evaluateTriggers(at location: CLLocation) {
@@ -631,7 +656,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // Il TTL 24h ora copre anche PASSED (prima lo bypassava e un
                 // POI superato ri-arrivava al primo rientro); EXITED recente
                 // blocca il rientro-da-rumore-GPS con un cooldown più corto.
-                let age = record != nil ? (nowMs() - record!.updatedAt) : Double.infinity
+                // record nil è lo stato normale al primo incontro col POI
+                // (nessun trigger persistito ancora): age = infinito, cioè
+                // "mai bloccato" — niente force-unwrap, stesso risultato.
+                let age: Double
+                if let record = record {
+                    age = nowMs() - record.updatedAt
+                } else {
+                    age = Double.infinity
+                }
                 let blockedArrival =
                     ((state == .arrivedFired || state == .passed) && age < arrivalRetriggerTtlMs) ||
                     (state == .exited && age < arrivalAfterExitCooldownMs)
@@ -643,8 +676,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // recupera la latenza. Dentro `evaluate` il vincolo su t_cpa
             // impedisce comunque gli annunci troppo anticipati.
             } else if c.dist <= alertRad * 3 && (state == .pending ||
-                (state == .exited && record != nil &&
-                 (nowMs() - record!.updatedAt) > approachRetriggerCooldownMs)) {
+                (state == .exited && isExitedRetriggerReady(record))) {
                 // Predittore CPA al posto del vecchio filtro ±60°: valuta se
                 // l'utente è realmente IN ROTTA e se il momento è quello
                 // giusto, invece di limitarsi a vetare le direzioni sbagliate.
@@ -775,7 +807,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         } else {
             // Testo NELLA LINGUA dell'utente (get-or-create per-lingua), non i
             // campi italiani grezzi: così l'MP3 prefetchato è già tradotto.
-            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault) { text in
+            // Token utente se disponibile (rollout fase 1, vedi WipSupabaseClient
+            // .fetchAudioguideText): mai bloccante se assente.
+            let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault, accessToken: audioguideToken) { text in
                 AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: text)
             }
         }
@@ -813,7 +848,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         let speakAndNotify: (Poi) -> Void = { [weak self] poi in
             guard let self = self else { return }
             let teaser = poi.teaserText?.trimmingCharacters(in: .whitespaces)
-            let fullMsg = (teaser?.isEmpty == false) ? "\(arrivalMsg) \(teaser!)" : "\(arrivalMsg) \(fallbackTeaser)"
+            // teaser nil/vuoto è normale (non tutti i POI hanno un teaser
+            // dedicato): fallbackTeaser copre già quel caso, quindi if-let
+            // invece del force-unwrap non cambia alcun comportamento.
+            let fullMsg: String
+            if let teaser = teaser, !teaser.isEmpty {
+                fullMsg = "\(arrivalMsg) \(teaser)"
+            } else {
+                fullMsg = "\(arrivalMsg) \(fallbackTeaser)"
+            }
 
             SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                 text: fullMsg, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
@@ -908,7 +951,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         playFullText(localText, nil)
                     }
                 } else if self.isOnline {
-                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault) { fetched in
+                    // Token utente se disponibile (rollout fase 1, vedi
+                    // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
+                    let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault, accessToken: audioguideToken) { fetched in
                         self.workQueue.async {
                             guard let fetched = fetched, !fetched.isEmpty else {
                                 playFullText(nil, nil) // → notifica col tasto Ascolta
@@ -1277,7 +1323,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 play(localText, nil)
             }
         } else if isOnline {
-            supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: guideCharacter) { fetched in
+            // Token utente se disponibile (rollout fase 1, vedi
+            // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
+            let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+            supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: guideCharacter, accessToken: audioguideToken) { fetched in
                 self.workQueue.async {
                     guard let fetched = fetched, !fetched.isEmpty else {
                         play(nil, nil) // → notifica "non disponibile"

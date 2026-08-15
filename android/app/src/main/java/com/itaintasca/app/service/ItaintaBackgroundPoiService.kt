@@ -18,6 +18,7 @@ import com.itaintasca.app.db.PoiEntity
 import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
+import com.itaintasca.app.geofence.CategoryMap
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
 import com.itaintasca.app.geofence.PredictiveTrigger
@@ -45,8 +46,12 @@ class ItaintaBackgroundPoiService : Service() {
         const val NOTIF_ID = 4004
         const val ACTION_STOP = "com.itaintasca.app.STOP"
         const val ACTION_SYNC_SELECTION = "com.itaintasca.app.SYNC_SELECTION"
-        // Il filtro categorie (CATEGORY_MAP) vive in GeofenceBroadcastReceiver e
-        // SupabaseClient: qui non serve più, il servizio non valuta trigger.
+        // Heartbeat letto da ServiceWatchdog: aggiornato a ogni fix GPS
+        // processato, così il watchdog riavvia solo un servizio davvero
+        // bloccato invece di farlo ciecamente ogni 15 min.
+        const val PREF_LAST_HEARTBEAT = "lastHeartbeatAt"
+        // Il filtro categorie (CategoryMap) vive in geofence/CategoryMap.kt,
+        // condiviso da GeofenceBroadcastReceiver e SupabaseClient.
 
         // Dopo un fetch fallito (galleria, zona senza segnale) non riproviamo a
         // ogni update GPS (2-5s) ma al massimo ogni 20s.
@@ -139,6 +144,14 @@ class ItaintaBackgroundPoiService : Service() {
             // al boot). Ora si degrada: niente promozione → stopSelf pulito, i
             // geofence dell'OS restano la rete di sicurezza.
             Log.w(TAG, "startForeground non consentito (background start): ${e.message}")
+            // Non ci si arrende in silenzio se l'audioguida dovrebbe essere
+            // attiva: si pianifica un retry ravvicinato (30s, vedi
+            // ServiceWatchdog.scheduleRetry) invece di aspettare i 15 min
+            // della catena normale — la restrizione è spesso temporanea
+            // (si risolve quando l'utente riapre l'app).
+            if (isReallyActive) {
+                ServiceWatchdog.scheduleRetry(this)
+            }
             stopSelf()
             return START_NOT_STICKY
         }
@@ -312,6 +325,13 @@ class ItaintaBackgroundPoiService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val location = result.lastLocation ?: return
+
+                // Heartbeat per ServiceWatchdog: scritto a OGNI fix processato
+                // (IDLE incluso, ~20s/batch 60s a piedi) così il watchdog sa
+                // che il servizio è vivo senza doverlo riavviare alla cieca.
+                getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit {
+                    putLong(PREF_LAST_HEARTBEAT, System.currentTimeMillis())
+                }
 
                 if (lastQueryLocation == null && currentPois.isEmpty()) {
                     updateNotificationAndStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
@@ -585,9 +605,9 @@ class ItaintaBackgroundPoiService : Service() {
 
     /**
      * Le categorie attive filtrano anche il percorso predittivo.
-     * Delega a GeofenceBroadcastReceiver, dove vive CATEGORY_MAP: una
-     * seconda copia della mappa qui si sarebbe disallineata al primo
-     * cambio di categorie nella UI.
+     * Delega a GeofenceBroadcastReceiver.isCategoryActive, che a sua volta usa
+     * la copia unica CategoryMap.MAP: una seconda copia della mappa qui si
+     * sarebbe disallineata al primo cambio di categorie nella UI.
      */
     private fun isPoiCategorySelected(poi: PoiEntity): Boolean =
         GeofenceBroadcastReceiver.isCategoryActive(poi, selectedCategories)
@@ -738,7 +758,19 @@ class ItaintaBackgroundPoiService : Service() {
                     // Prima di questo fallback il servizio offline restava CONGELATO
                     // all'ultimo fetch riuscito: i geofence non venivano mai
                     // ri-registrati durante lo spostamento.
-                    if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(this@ItaintaBackgroundPoiService)) {
+                    //
+                    // isOnline() da solo si accontenta di NET_CAPABILITY_VALIDATED:
+                    // una rete "zombie" (es. captive portal di un hotel/bar che ha
+                    // validato l'uscita ma poi la blocca, o un access point morto)
+                    // la supera comunque, e il fetch sotto falliva con un timeout
+                    // meno chiaro invece di degradare subito al pacchetto offline.
+                    // probe() (HEAD reale al backend, timeout aggressivo) è chiamato
+                    // SOLO se isOnline() è già vero, per non pagare un round-trip di
+                    // rete quando è ovvio che siamo offline.
+                    val hasRealConnectivity = com.itaintasca.app.offline.ConnectivityMonitor
+                        .isOnline(this@ItaintaBackgroundPoiService) &&
+                        com.itaintasca.app.offline.ConnectivityMonitor.probe()
+                    if (!hasRealConnectivity) {
                         if (!refreshFromOfflineDb(location)) {
                             lastFetchFailedAt = System.currentTimeMillis()
                         }
@@ -900,16 +932,11 @@ class ItaintaBackgroundPoiService : Service() {
             // Default "insieme vuoto" allineato al web (useGeofencing.ts):
             // { monumenti, musei, chiese } attivi, panorami OFF. Prima il nativo
             // includeva viewpoint/park/panorami di default (divergenza dal web).
-            val culturalCats = listOf(
-                "monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti",
-                "museum", "gallery", "musei", "church", "place_of_worship", "cathedral",
-                "chiese"
-            )
-            return culturalCats.contains(cat)
+            return CategoryMap.DEFAULT_CULTURAL_CATEGORIES.contains(cat)
         }
         if (selectedCategories.contains(cat)) return true
         return selectedCategories.any {
-            com.itaintasca.app.geofence.GeofenceBroadcastReceiver.CATEGORY_MAP[it]?.contains(cat) == true
+            CategoryMap.MAP[it]?.contains(cat) == true
         }
     }
 

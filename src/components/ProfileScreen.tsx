@@ -1351,13 +1351,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               <div className="flex bg-gray-100/80 p-1.5 rounded-2xl mb-6">
                 <button
                   onClick={() => setItinerariSubTab('ai')}
-                  className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'ai' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'ai' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-600'}`}
                 >
                   ITINERARI AI
                 </button>
                 <button
                   onClick={() => setItinerariSubTab('premium')}
-                  className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'premium' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'premium' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-600'}`}
                 >
                   GUIDE PREMIUM
                 </button>
@@ -1399,7 +1399,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           </div>
                         </div>
                       </div>
-                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
                          Creato il {new Date(itineraryDb.created_at || Date.now()).toLocaleDateString('it-IT')}
                       </p>
                       <div className="flex mt-auto pt-2 gap-2 flex-wrap">
@@ -1470,7 +1470,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             </span>
                           </div>
                         </div>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
                            {new Date(guide.created_at || Date.now()).toLocaleDateString('it-IT')}
                         </p>
                         <div className="flex mt-auto pt-3">
@@ -1537,16 +1537,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             </svg>
                             <div className="absolute inset-0 flex flex-col items-center justify-center">
                               <span className="text-3xl font-black text-gray-900">{currentLvl.level}</span>
-                              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Livello</span>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Livello</span>
                             </div>
                           </div>
                           
                           <div className="flex-1 w-full text-center md:text-left">
-                            <p className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-1">Status Attuale</p>
+                            <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mb-1">Status Attuale</p>
                             <h3 className="text-3xl font-black text-gray-900 mb-2">{currentLvl.title}</h3>
                             
                             <div className="flex flex-col gap-1">
-                              <span className="font-black text-xl text-gray-900">{userXP} <span className="text-sm font-bold text-gray-400">/ {nextLvl ? nextLvl.xp_required : userXP} XP</span></span>
+                              <span className="font-black text-xl text-gray-900">{userXP} <span className="text-sm font-bold text-gray-500">/ {nextLvl ? nextLvl.xp_required : userXP} XP</span></span>
                               {nextLvl && (
                                 <div className="flex flex-col items-center md:items-start gap-1">
                                   <p className="text-xs font-bold text-gray-500">
@@ -1594,7 +1594,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                     🏆 +{lvl.reward_credits} Crediti
                                   </span>
                                 ) : (
-                                  <span className="text-gray-400">Nessun premio</span>
+                                  <span className="text-gray-500">Nessun premio</span>
                                 )}
                               </div>
                             </div>
@@ -1689,7 +1689,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             <div className="relative z-10 flex-1">
                               <div className="text-3xl mb-2">{challenge.icon}</div>
                               <h5 className="font-black text-gray-900 text-sm leading-tight mb-1 line-clamp-2">{challenge.name}</h5>
-                              <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 line-clamp-2">
+                              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 line-clamp-2">
                                 Visita {challenge.threshold} luoghi ({challenge.category_trigger === 'all' ? 'Tutti' : (challenge.category_trigger || '').replace(/_/g, ' ')})
                               </p>
                             </div>
@@ -1702,11 +1702,11 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                 />
                               </div>
                               <div className="flex justify-between items-center text-[9px] font-black uppercase tracking-wider">
-                                <span className={isCompleted ? 'text-green-600' : 'text-gray-400'}>
+                                <span className={isCompleted ? 'text-green-600' : 'text-gray-500'}>
                                   {visits} / {challenge.threshold}
                                 </span>
                                 {(challenge.reward_credits || 0) > 0 && !isCompleted && (
-                                  <span className="text-gray-400">
+                                  <span className="text-gray-500">
                                     +{challenge.reward_credits} 🪙
                                   </span>
                                 )}
@@ -1721,7 +1721,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       })}
                     </div>
                     {gamificationChallenges.length === 0 && (
-                      <p className="text-xs text-gray-400 text-center py-6 font-medium">
+                      <p className="text-xs text-gray-500 text-center py-6 font-medium">
                         Non ci sono missioni attive al momento.
                       </p>
                     )}
@@ -1745,7 +1745,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               className="space-y-4"
             >
                 {isLoading ? (
-                  <div className="py-20 flex flex-col items-center justify-center text-gray-400">
+                  <div className="py-20 flex flex-col items-center justify-center text-gray-500">
                     <Loader2 className="w-10 h-10 animate-spin mb-4" />
                     <p className="font-bold text-sm tracking-tight">{getTranslation('loading_history', language)}</p>
                   </div>
@@ -1774,7 +1774,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       }, {} as any)
                     ).map(([date, items]: any) => (
                       <div key={date}>
-                        <h4 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
+                        <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 mb-3 sticky top-0 bg-[#f8f5f0] py-2 z-10">{date}</h4>
                         <div className="grid grid-cols-2 gap-3">
                           {items.map((item, idx) => {
                             // POI completo dal repository (null se sparito dal DB / offline)
@@ -1828,7 +1828,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                   <p className="text-[10px] text-gray-500 leading-snug line-clamp-3 mt-1">{cardDescription}</p>
                                 )}
                                 <div className="flex items-center justify-between gap-2 mt-auto pt-2">
-                                  <p className="text-[10px] font-bold text-gray-400 flex items-center gap-1">
+                                  <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1">
                                     <Volume2 className="w-3 h-3" />
                                     {new Date(item.listened_at).toLocaleTimeString('it-IT', {hour: '2-digit', minute:'2-digit'})}
                                   </p>
@@ -1845,7 +1845,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                       {language === 'IT' ? 'Riascolta' : 'Replay'}
                                     </button>
                                   ) : (
-                                    <span className="text-[9px] font-bold text-gray-300 uppercase tracking-wider">
+                                    <span className="text-[9px] font-bold text-gray-600 uppercase tracking-wider">
                                       {language === 'IT' ? 'Non disponibile' : 'Unavailable'}
                                     </span>
                                   )}
@@ -1884,7 +1884,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   </div>
                   <div>
                     <h2 className="text-2xl font-black text-gray-900">Centro Assistenza</h2>
-                    <p className="text-sm font-bold text-gray-400">Siamo qui per aiutarti</p>
+                    <p className="text-sm font-bold text-gray-500">Siamo qui per aiutarti</p>
                   </div>
                 </div>
 
@@ -1895,7 +1895,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                     <div className="flex-1">
                       <h4 className="font-black text-gray-900">Email di Assistenza</h4>
-                      <p className="text-xs font-bold text-gray-400">Risposta entro 24 ore lavorative</p>
+                      <p className="text-xs font-bold text-gray-500">Risposta entro 24 ore lavorative</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </a>
@@ -1925,7 +1925,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                     <div className="flex-1">
                       <h4 className="font-black text-gray-900">Segnala un problema tecnico</h4>
-                      <p className="text-xs font-bold text-gray-400">Email precompilata con i dati diagnostici del dispositivo</p>
+                      <p className="text-xs font-bold text-gray-500">Email precompilata con i dati diagnostici del dispositivo</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </button>
@@ -1941,7 +1941,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                     <div className="flex-1">
                       <h4 className="font-black text-gray-900">Manuale d'uso dell'app</h4>
-                      <p className="text-xs font-bold text-gray-400">Tutte le funzioni spiegate passo passo (anche in PDF)</p>
+                      <p className="text-xs font-bold text-gray-500">Tutte le funzioni spiegate passo passo (anche in PDF)</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </button>
@@ -2704,10 +2704,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                          <span className="text-lg">💎</span>
                          <div className="flex flex-col">
                            <span className="text-xs font-black text-primary tracking-tight">
-                             {language === 'EN' ? 'EXCLUSIVE GEMS' : language === 'FR' ? 'GEMMES EXCLUSIVES' : language === 'ES' ? 'GEMAS EXCLUSIVAS' : language === 'RU' ? 'ЭКСКЛЮЗИВНЫЕ ЖЕМЧУЖИНЫ' : language === 'ZH' ? '专属隐藏瑰宝 (GEMS)' : 'GEMME ESCLUSIVE'}
+                             {language === 'EN' ? 'EXCLUSIVE GEMS' : language === 'FR' ? 'GEMMES EXCLUSIVES' : language === 'ES' ? 'GEMAS EXCLUSIVAS' : language === 'DE' ? 'EXKLUSIVE PERLEN' : language === 'RU' ? 'ЭКСКЛЮЗИВНЫЕ ЖЕМЧУЖИНЫ' : language === 'ZH' ? '专属隐藏瑰宝 (GEMS)' : 'GEMME ESCLUSIVE'}
                            </span>
                            <span className="text-[9px] font-bold text-primary/65 uppercase tracking-wide leading-none mt-0.5">
-                             {language === 'EN' ? 'Absolute Default • Recommended' : language === 'FR' ? 'Défaut Absolu • Recommandé' : language === 'ES' ? 'Predeterminato • Recomendado' : language === 'RU' ? 'Рекомендуется по умолчанию' : language === 'ZH' ? '系统推荐 • 默认激活' : 'Default Assoluto • Sempre Attive'}
+                             {language === 'EN' ? 'Absolute Default • Recommended' : language === 'FR' ? 'Défaut Absolu • Recommandé' : language === 'ES' ? 'Predeterminato • Recomendado' : language === 'DE' ? 'Standardmäßig aktiv • Empfohlen' : language === 'RU' ? 'Рекомендуется по умолчанию' : language === 'ZH' ? '系统推荐 • 默认激活' : 'Default Assoluto • Sempre Attive'}
                            </span>
                          </div>
                        </div>
@@ -2979,7 +2979,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               Questa azione è irreversibile. Tutti i tuoi dati, crediti e progressi verranno eliminati definitivamente.
             </p>
             <div className="mb-6">
-              <label className="text-xs font-black text-gray-400 uppercase tracking-widest mb-2 block text-center">
+              <label className="text-xs font-black text-gray-500 uppercase tracking-widest mb-2 block text-center">
                 Scrivi "elimina" per confermare
               </label>
               <input 
@@ -3061,7 +3061,7 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
     <button 
       onClick={onClick}
       className={`flex items-center justify-center gap-2 pb-3 border-b-2 transition-all cursor-pointer whitespace-nowrap px-1
-        ${active ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-400 hover:text-gray-600'}
+        ${active ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-600'}
       `}
     >
       <div className={`flex items-center justify-center ${active ? 'text-gray-900' : 'text-gray-400'}`}>
@@ -3102,7 +3102,7 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
       <div className="p-6 flex-1 flex flex-col">
         <div className="flex items-center gap-2 mb-2">
           {getCardIcon(poi)}
-          <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
+          <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
             {poi.category || 'Monumento'}
           </span>
         </div>

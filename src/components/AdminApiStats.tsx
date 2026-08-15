@@ -24,6 +24,7 @@ const COST_MAP: Record<string, number> = {
   'deepseek-chat': 0.00020,
   'deepseek_v4_flash': 0.00020,
   'groq-llama-3.3-70b-versatile': 0.00,
+  'groq-openai/gpt-oss-120b': 0.00,
   'groq_llama': 0.00,
   'gemini_flash': 0.005,
   'gemini_vision': 0.005,
@@ -471,9 +472,9 @@ export default function AdminApiStats() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {loading ? (
-                <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-400">Caricamento...</td></tr>
+                <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-500">Caricamento...</td></tr>
               ) : stats.length === 0 ? (
-                <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-400">Nessun dato per il periodo selezionato.</td></tr>
+                <tr><td colSpan={6} className="p-8 text-center text-sm text-gray-500">Nessun dato per il periodo selezionato.</td></tr>
               ) : stats.map((stat) => (
                 <tr key={stat.key} className="hover:bg-gray-50/50 transition-colors">
                   <td className="px-4 py-3">
@@ -564,9 +565,9 @@ export default function AdminApiStats() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {loading ? (
-                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-400">Caricamento transazioni...</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-500">Caricamento transazioni...</td></tr>
               ) : pagedLogs.length === 0 ? (
-                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-400">Nessuna transazione trovata.</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-500">Nessuna transazione trovata.</td></tr>
               ) : pagedLogs.map(row => {
                 const d = new Date(row.created_at);
                 const isExpanded = expandedRow === row.id;
@@ -576,7 +577,7 @@ export default function AdminApiStats() {
                     <tr className={`hover:bg-gray-50/60 transition-colors ${isExpanded ? 'bg-blue-50/30' : ''}`}>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="text-xs font-bold text-on-surface">{d.toLocaleDateString('it-IT')}</div>
-                        <div className="text-[10px] text-gray-400 font-mono">{d.toLocaleTimeString('it-IT')}</div>
+                        <div className="text-[10px] text-gray-500 font-mono">{d.toLocaleTimeString('it-IT')}</div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
@@ -588,7 +589,7 @@ export default function AdminApiStats() {
                               {row.user_email}
                             </div>
                             {row.resolvedUserId && (
-                              <div className="text-[9px] font-mono text-gray-400 max-w-[160px] truncate">{row.resolvedUserId}</div>
+                              <div className="text-[9px] font-mono text-gray-500 max-w-[160px] truncate">{row.resolvedUserId}</div>
                             )}
                           </div>
                         </div>

@@ -55,14 +55,27 @@
 	<key>NSCameraUsageDescription</key>
 	<string>La fotocamera serve per la funzione Vision che riconosce i monumenti inquadrati.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Il microfono potrebbe essere usato per i comandi vocali della guida.</string>
-	<!-- Solo i background mode realmente implementati: 'fetch' e
-	     'remote-notification' erano dichiarati senza handler né entitlement
-	     push — in App Review sono solo domande in più. -->
+	<string>Il microfono è usato per dettare a voce le domande alla guida AI durante l'ascolto delle audioguide.</string>
+	<!-- Solo i background mode realmente implementati: 'remote-notification'
+	     era dichiarato senza entitlement push — in App Review è solo una
+	     domanda in più. 'fetch' invece ORA ha un handler reale (vedi
+	     BGTaskSchedulerPermittedIdentifiers sotto e AppDelegate.swift,
+	     registerOfflineRefreshTask/scheduleOfflineRefresh): richiesto da
+	     BGAppRefreshTaskRequest, non solo dal vecchio
+	     performFetchWithCompletionHandler (mai usato qui). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 		<string>location</string>
+		<string>fetch</string>
+	</array>
+	<!-- Refresh opportunistico dei pacchetti offline (WipPackageDownloadManager):
+	     ogni identifier che AppDelegate passa a BGTaskScheduler.register/submit
+	     deve comparire qui, altrimenti la registrazione/submit fallisce in
+	     silenzio (nessun crash, ma l'OS non risveglierà mai l'app). -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.itaintasca.app.offline-refresh</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

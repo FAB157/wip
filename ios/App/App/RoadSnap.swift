@@ -10,7 +10,9 @@ import CoreLocation
 /// momento dello snap non serve rete (indice gia' in memoria).
 ///
 /// NB: NON testato sul campo. Conservativo per costruzione (worst case = GPS
-/// grezzo). Il file va aggiunto al target Xcode (come TriggerTelemetry.swift).
+/// grezzo). Già nel target Xcode "App" (Sources build phase in
+/// project.pbxproj, come TriggerTelemetry.swift) — questo commento diceva
+/// il contrario ma era rimasto stantio da quando il file non c'era ancora.
 final class RoadSnap {
     static let shared = RoadSnap()
     private init() { loadCached() }

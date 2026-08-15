@@ -30,6 +30,10 @@ class BootReceiver : BroadcastReceiver() {
                     // negativa del Play). Il servizio riparte alla riapertura
                     // dell'app; i geofence dell'OS restano la rete di sicurezza.
                     Log.w("BootReceiver", "Avvio al boot non consentito: ${e.message}")
+                    // Retry ravvicinato invece di arrendersi fino alla riapertura
+                    // manuale dell'app: la stessa catena usata dal servizio quando
+                    // startForeground viene rigettato (vedi ServiceWatchdog.scheduleRetry).
+                    com.itaintasca.app.service.ServiceWatchdog.scheduleRetry(context)
                 }
             }
         }

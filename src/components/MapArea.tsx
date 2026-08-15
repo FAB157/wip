@@ -27,17 +27,19 @@ import {
   Polyline,
 } from "react-leaflet";
 import L from "leaflet";
-import { Search, Crosshair, Loader2, Info, X, MapPin, Headphones } from "lucide-react";
+import MarkerClusterGroup from "react-leaflet-cluster";
+import { Search, Crosshair, Loader2, Info, X, MapPin, Headphones, WifiOff } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
 import { setCachedPoiDetails, getCachedPoiDetails, getCachedCityName } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
-import { gygSearchUrl, viatorSearchUrl, trackAffiliateClick } from "../lib/affiliates";
+import { gygSearchUrl, viatorSearchUrl, tiqetsHomeUrl, trackAffiliateClick } from "../lib/affiliates";
 import { supabase } from "../lib/supabase";
 import { Language, getTranslation } from "../lib/i18n";
 import { logApiCall } from "../lib/apiLogger";
 import { locationService } from "../services/locationService";
 import { haversineMeters } from "../lib/geo";
+import { supabaseCircuitBreaker } from "../lib/circuitBreaker";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -46,6 +48,10 @@ import { db } from "../lib/db";
 
 // Fix for default marker icons in Leaflet
 import "leaflet/dist/leaflet.css";
+// Clustering marker (react-leaflet-cluster): CSS non più auto-importata dalla
+// v3+ della libreria, va inclusa esplicitamente.
+import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
+import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 
 const INITIAL_CENTER: [number, number] = [44.0792, 10.1];
 
@@ -503,8 +509,13 @@ function MapArea({
   const [center, setCenter] = useState<[number, number]>(INITIAL_CENTER);
   const [mapZoom, setMapZoom] = useState(13);
 
+  // Stato di rete del dispositivo (Capacitor Network + fallback navigator.onLine):
+  // pilota il banner offline discreto più sotto.
+  const isOnline = useNetworkStatus();
+
   // Chip partner in home (CategoryChips): apre la ricerca Viator/GetYourGuide
-  // con la città del centro mappa già compilata e il codice affiliato.
+  // (o i biglietti Tiqets) con la zona del centro mappa già compilata e il
+  // codice affiliato.
   useEffect(() => {
     const openExperiences = async (e: Event) => {
       const partner = (e as CustomEvent).detail?.partner;
@@ -517,7 +528,31 @@ function MapArea({
       try {
         city = await fetchCityNameQueued(c.lat, c.lng);
       } catch { /* senza città si apre la home del partner */ }
-      const url = partner === 'viator' ? viatorSearchUrl(city) : gygSearchUrl(city);
+
+      let url: string;
+      if (partner === 'tiqets') {
+        // Tiqets non ha una pagina di ricerca testuale generica (solo
+        // pagine città con slug/ID): si passa dall'API prodotti già usata da
+        // PlanScreen/EventsScreen e si apre il primo biglietto della zona,
+        // che arriva dal server già affiliato (mai riscritto, vedi fetchTiqetsProducts).
+        const lang = (language || 'IT').toLowerCase();
+        url = tiqetsHomeUrl(lang);
+        try {
+          const res = await fetch('/api/tiqets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lat: c.lat, lon: c.lng, radius: 30, cityName: city, lang })
+          });
+          if (res.ok) {
+            const products = await res.json();
+            const first = Array.isArray(products) ? products.find((p: any) => p?.url) : null;
+            if (first?.url) url = first.url;
+          }
+        } catch { /* fallback alla home Tiqets già impostato in url */ }
+      } else {
+        url = partner === 'viator' ? viatorSearchUrl(city) : gygSearchUrl(city);
+      }
+
       trackAffiliateClick(url, `Ricerca esperienze ${city || 'zona corrente'}`, city, 'home_chip');
       if (win) {
         win.location.href = url;
@@ -527,7 +562,7 @@ function MapArea({
     };
     window.addEventListener('wip-open-experiences', openExperiences);
     return () => window.removeEventListener('wip-open-experiences', openExperiences);
-  }, []);
+  }, [language]);
 
   // NOTA refactoring: qui c'era una seconda pipeline POI "DB-first"
   // (useMapPois + PoiCard) mai renderizzata: il suo risultato era shadowato
@@ -586,13 +621,24 @@ function MapArea({
   // --- LOCAL STORAGE CATEGORIES ---
   // Rimosso activeSubcats perché causava bug di stale state rispetto a selectedCategories
 
+  // Ref sempre allineati a pois/radarPois: servono a evitare che il listener
+  // 'focus-poi' venga rimosso e ri-registrato a ogni fetch/merge POI durante
+  // il pan della mappa (pois cambia in continuazione). L'effetto sotto che
+  // registra il listener resta con deps [] e legge i dati aggiornati da qui.
+  const poisRef = useRef<Poi[]>(pois);
+  const radarPoisRef = useRef<any[]>(radarPois);
+  useEffect(() => {
+    poisRef.current = pois;
+    radarPoisRef.current = radarPois;
+  }, [pois, radarPois]);
+
   useEffect(() => {
     const handleFocusPoi = (e: any) => {
       if (e.detail) focusPoiOnMap(e.detail);
     };
     window.addEventListener('focus-poi', handleFocusPoi);
     return () => window.removeEventListener('focus-poi', handleFocusPoi);
-  }, [pois, radarPois]); // Dependencies to ensure focusPoiOnMap is using latest data
+  }, []); // Registrato una sola volta: handleFocusPoi non chiude più su pois/radarPois
 
   // "Apri sulla mappa" da Mappe Offline: centra sull'area scaricata senza
   // passare da alcun geocoder (funziona offline, le tile sono in cache).
@@ -613,6 +659,27 @@ function MapArea({
   const [isLoadingPois, setIsLoadingPois] = useState(false);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({});
+  // Circuit breaker (src/lib/circuitBreaker.ts, condiviso con poiRepository.ts):
+  // true quando le RPC del fetch mappa vengono rifiutate perché il breaker è
+  // aperto (troppi fallimenti di rete recenti), non per un singolo errore isolato.
+  const [mapDataDegraded, setMapDataDegraded] = useState(false);
+
+  // poiRepository.ts (non toccato qui) dispatcha questo evento quando TUTTE le
+  // fonti del radar (RPC + fallback diretto + Dexie) sono risultate vuote:
+  // riusiamo lo stesso banner del fetchErrors di mappa, con una chiave dedicata.
+  useEffect(() => {
+    const handleRadarDegraded = () => {
+      setFetchErrors((prev) => ({
+        ...prev,
+        db: language === 'IT'
+          ? "Impossibile aggiornare i luoghi vicini. Riprova più tardi."
+          : "Unable to refresh nearby places. Please try again later.",
+      }));
+    };
+    window.addEventListener('wip-radar-degraded', handleRadarDegraded);
+    return () => window.removeEventListener('wip-radar-degraded', handleRadarDegraded);
+  }, [language]);
+
   const [userLocation, setUserLocation] = useState<[number, number] | null>(
     null,
   );
@@ -814,8 +881,16 @@ function MapArea({
         .gte('lat', south).lte('lat', north)
         .gte('lon', west).lte('lon', east)
         .limit(300);
+      // Denylist status COMPLETA (isVisiblePoiStatus): il solo check su
+      // 'draft' lasciava visibili i POI community auto-sospesi dalle
+      // segnalazioni utente (status 'needs_revision') e quelli rifiutati.
+      // In più si nascondono i contenuti degli autori bloccati dall'utente
+      // (App Store Guideline 1.2, cache locale da /api/community/blocked-pois).
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      const { getBlockedCommunityPoiIds } = await import('../lib/communityModeration');
+      const blockedIds = getBlockedCommunityPoiIds();
       return (data || [])
-        .filter((i: any) => i.is_hidden !== true && i.status !== 'draft' && i.name)
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name && !blockedIds.has(String(i.id)))
         .map((i: any) => ({
           id: i.id,
           lat: Number(i.lat),
@@ -932,6 +1007,7 @@ function MapArea({
     setIsLoadingPois(true);
     setIsRateLimited(false);
     setFetchErrors({});
+    setMapDataDegraded(false);
 
     // Carica i POI dall'area geografica salvati in Supabase per il merge ibrido
     let dbPois: Poi[] = [];
@@ -948,20 +1024,62 @@ function MapArea({
       // sommavano le latenze e ritardavano il primo paint dei pin.
       const UTILITY_UI_CATS = ['locali', 'utilita', 'famiglie'];
       const wantsUtility = activeCategories.some(c => UTILITY_UI_CATS.includes(c));
+
+      // Circuit breaker condiviso con poiRepository.ts (src/lib/circuitBreaker.ts):
+      // le due RPC del fetch mappa passano da qui invece che dritte su
+      // supabase.rpc(). Se il breaker è aperto (troppi fallimenti di rete
+      // recenti) la chiamata viene rifiutata subito e, oltre al log, lo
+      // segnaliamo con mapDataDegraded invece di lasciare la mappa
+      // silenziosamente vuota.
+      const runPoiRpc = async (
+        fn: () => Promise<{ data: any; error: any }>,
+        label: string,
+      ): Promise<{ data: any; error: any }> => {
+        try {
+          return await supabaseCircuitBreaker.execute(async () => {
+            const res = await fn();
+            if (res.error) throw new Error(res.error.message);
+            return res;
+          });
+        } catch (e: any) {
+          if (/circuit breaker is open/i.test(e?.message || "")) {
+            console.warn(`[MapArea] Circuit breaker aperto, salto ${label}`);
+            setMapDataDegraded(true);
+            // Riusa lo stesso banner/chiave "db" del listener wip-radar-degraded:
+            // stessa causa di fondo (RPC dati luoghi non raggiungibile).
+            setFetchErrors((prev) => ({
+              ...prev,
+              db: language === 'IT'
+                ? "Troppi errori di rete recenti: pausa di sicurezza sul caricamento dei luoghi dal database."
+                : "Too many recent network errors: pausing place loading from the database as a safety measure.",
+            }));
+          } else {
+            console.warn(`[MapArea] ${label} fallita:`, e?.message || e);
+          }
+          return { data: null, error: e };
+        }
+      };
+
       const [{ data, error }, utilRes] = await Promise.all([
-        supabase.rpc('nearby_pois', {
-          p_lat: center.lat,
-          p_lon: center.lng,
-          radius_m: Math.min(radius, 25000),
-          limit_num: 1000
-        }),
+        runPoiRpc(
+          () => supabase.rpc('nearby_pois', {
+            p_lat: center.lat,
+            p_lon: center.lng,
+            radius_m: Math.min(radius, 25000),
+            limit_num: 1000
+          }),
+          'nearby_pois',
+        ),
         wantsUtility
-          ? supabase.rpc('get_utility_pois', {
-              user_lat: center.lat,
-              user_lon: center.lng,
-              radius_meters: Math.min(radius, 25000),
-              limit_num: 400
-            })
+          ? runPoiRpc(
+              () => supabase.rpc('get_utility_pois', {
+                user_lat: center.lat,
+                user_lon: center.lng,
+                radius_meters: Math.min(radius, 25000),
+                limit_num: 400
+              }),
+              'get_utility_pois',
+            )
           : Promise.resolve({ data: null, error: null } as any)
       ]);
 
@@ -1187,7 +1305,22 @@ function MapArea({
               }
             }
 
-            if (!success || !res) throw new Error("Overpass API error on all mirrors: " + (lastError?.message || ""));
+            if (!success || !res) {
+              // Tutti e 4 i mirror hanno fallito (rete, timeout o errore HTTP):
+              // il ramo UI del banner "overpass" esiste già (righe più sotto),
+              // solo mai alimentato finora. Guardia sul fetchSeq: se nel
+              // frattempo è già partito un fetch più recente, non sovrascrivere
+              // il suo stato con un errore ormai superato.
+              if (fetchSeq === fetchSeqRef.current) {
+                setFetchErrors((prev) => ({
+                  ...prev,
+                  overpass: language === 'IT'
+                    ? "Servizio mappe OpenStreetMap non raggiungibile. Alcuni luoghi potrebbero mancare."
+                    : "OpenStreetMap map service unreachable. Some places may be missing.",
+                }));
+              }
+              throw new Error("Overpass API error on all mirrors: " + (lastError?.message || ""));
+            }
             const data = await res.json();
 
             return data.elements
@@ -2415,7 +2548,20 @@ function MapArea({
               <Marker position={userLocation} icon={userIcon} />
             )}
 
-          {poiMarkers}
+          {/* Clustering: senza, città dense mettevano fino a ~2000 L.divIcon
+              simultanei nel DOM. disableClusteringAtZoom alto: quando l'utente
+              è già zoomato su un singolo isolato i pin restano individuali,
+              come prima del clustering. */}
+          <MarkerClusterGroup
+            chunkedLoading
+            maxClusterRadius={60}
+            disableClusteringAtZoom={19}
+            spiderfyOnMaxZoom
+            showCoverageOnHover={false}
+            zoomToBoundsOnClick
+          >
+            {poiMarkers}
+          </MarkerClusterGroup>
 
           {/* Popup condiviso: uno solo per tutta la mappa. key per poi.id così
               cambiando POI la scheda rimonta pulita (stati e fetch propri). */}
@@ -2460,7 +2606,25 @@ function MapArea({
         </MapContainer>
       </div>
 
-
+      {/* Banner offline discreto: stessa famiglia visiva del badge "Follow ON"
+          qui sotto (pillola blur, testo maiuscolo). useNetworkStatus() era
+          già importato ma mai invocato. */}
+      <AnimatePresence>
+        {!isOnline && (
+          <motion.div
+            key="offline-banner"
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[1000] pointer-events-none"
+          >
+            <div className="bg-slate-800/80 dark:bg-slate-900/80 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2">
+              <WifiOff className="w-3 h-3" />
+              {language === 'IT' ? 'Sei offline' : "You're offline"}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {followMode && (
@@ -2514,7 +2678,7 @@ function MapArea({
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] font-black text-amber-900 leading-tight uppercase tracking-tight">
-                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : key)}
+                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : (key === "db" ? (language === 'IT' ? "Luoghi Vicini" : "Nearby Places") : key))}
                 </p>
                 <p className="text-[10px] text-amber-800/90 leading-tight mt-1 font-medium">
                   {String(error)}

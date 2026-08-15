@@ -2,6 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Navigation, Loader2, MapPin, Crosshair, Search, Info } from 'lucide-react';
 import { getTranslation, Language } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
+import { haversineMeters } from '../lib/geo';
+import { notify } from '../lib/toast';
+
+// Oltre questa distanza in linea d'aria il tragitto a piedi è irrealistico
+// per la maggior parte degli utenti: prima si procedeva silenziosamente
+// anche per decine di km, ora si avvisa (non bloccante) prima della scansione.
+const LONG_WALK_WARNING_M = 8000;
 
 interface RoutePoisModalProps {
   isOpen: boolean;
@@ -101,6 +108,21 @@ export default function RoutePoisModal({
       return;
     }
     if (!origin || !endCoords) return;
+
+    // Avviso non bloccante per tragitti irrealistici a piedi: prima si
+    // procedeva silenziosamente con la scansione POI qualunque fosse la
+    // distanza (anche decine di km in linea d'aria).
+    const straightLineM = haversineMeters(origin.lat, origin.lon, endCoords.lat, endCoords.lon);
+    if (straightLineM > LONG_WALK_WARNING_M) {
+      const km = (straightLineM / 1000).toFixed(1);
+      notify(
+        isIt
+          ? `Il percorso è di oltre ${km} km in linea d'aria: potrebbe richiedere molto tempo a piedi.`
+          : `The route is over ${km} km in a straight line: it may take a long time on foot.`,
+        'info',
+      );
+    }
+
     let cancelled = false;
     setLoading(true);
     setScanError(false);
@@ -217,7 +239,7 @@ export default function RoutePoisModal({
 
           {/* ── Punto di partenza ── */}
           <div className="space-y-2">
-            <p className="text-[11px] font-black uppercase tracking-widest text-gray-400">
+            <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">
               {isIt ? 'Punto di partenza' : 'Starting point'}
             </p>
             <div className="flex gap-2">
@@ -293,7 +315,7 @@ export default function RoutePoisModal({
 
           {/* ── POI lungo il percorso ── */}
           {!origin ? (
-            <div className="text-center py-8 text-sm text-gray-400 font-medium">
+            <div className="text-center py-8 text-sm text-gray-500 font-medium">
               {isIt ? 'Scegli il punto di partenza per scansionare il percorso.' : 'Choose a starting point to scan the route.'}
             </div>
           ) : loading ? (
@@ -304,7 +326,7 @@ export default function RoutePoisModal({
           ) : scanError ? (
             <div className="text-center py-8">
               <p className="text-sm text-red-500 font-bold">{isIt ? 'Errore durante la scansione del percorso.' : 'Route scan failed.'}</p>
-              <p className="text-xs text-gray-400 mt-1">{isIt ? 'Puoi comunque avviare la navigazione.' : 'You can still start navigating.'}</p>
+              <p className="text-xs text-gray-500 mt-1">{isIt ? 'Puoi comunque avviare la navigazione.' : 'You can still start navigating.'}</p>
             </div>
           ) : routePois.length === 0 ? (
             <div className="text-center py-8">

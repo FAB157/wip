@@ -182,7 +182,7 @@ export default function VisionCommentModal({ cardId, image, refunded = true, onC
           </button>
         </div>
 
-        <p className="px-5 pb-4 -mt-2 text-[10px] text-gray-400 text-center flex items-center justify-center gap-1">
+        <p className="px-5 pb-4 -mt-2 text-[10px] text-gray-500 text-center flex items-center justify-center gap-1">
           <Sparkles className="w-3 h-3" />
           Se la foto verrà approvata diventerà un luogo WIP Community
         </p>

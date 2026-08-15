@@ -200,10 +200,15 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: - Audio session
 
+    /// L'audioguida completa deve duckare la musica di sottofondo, non
+    /// metterla in pausa: stesso comportamento di SpeechQueue.activateAudioSession
+    /// (teaser/annunci) e allineato al fix gemello lato Android sulla guida
+    /// "Elite" — prima qui `options: []` era esclusivo (stop netto di
+    /// Spotify/Musica) mentre il resto dell'app abbassa soltanto.
     private func activateAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio, options: [])
+            try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
             try session.setActive(true)
         } catch {
             CAPLog.print("[WipBackgroundAudio] AVAudioSession error: \(error)")

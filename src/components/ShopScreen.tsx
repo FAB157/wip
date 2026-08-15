@@ -96,7 +96,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
         setLoading(false);
       }
     } else {
-      // 🌐 WEB / iOS: STRIPE CHECKOUT
+      // 🌐 Solo WEB/PWA: STRIPE CHECKOUT (su nativo, iOS incluso, si passa dal ramo RevenueCat sopra)
       try {
         // getApiUrl: su app nativa l'URL relativo non raggiunge il server
         // (origin file:// / capacitor://) — il checkout non partiva mai da iOS.

@@ -142,7 +142,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-black text-primary leading-none">{pack.price}</div>
-                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Acquisto Singolo</div>
+                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">Acquisto Singolo</div>
               </div>
             </div>
 

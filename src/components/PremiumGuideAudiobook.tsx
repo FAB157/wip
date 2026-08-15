@@ -151,7 +151,7 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
       >
         <span className="flex items-center gap-2 font-black text-primary text-sm">
           <Headphones className="w-4 h-4" /> Audio-libro della guida
-          <span className="text-[10px] font-bold text-gray-400">({chapters.length} capitoli)</span>
+          <span className="text-[10px] font-bold text-gray-500">({chapters.length} capitoli)</span>
         </span>
         {open ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
       </button>
@@ -172,7 +172,7 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
                 </button>
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-black text-primary truncate">{ch.title}</p>
-                  <p className="text-[10px] text-gray-400">
+                  <p className="text-[10px] text-gray-500">
                     {isActive
                       ? (loading ? `Preparo la voce… (${blockIdx}/${blockCount})` : `In ascolto · parte ${blockIdx} di ${blockCount}`)
                       : `~${Math.max(1, Math.round(ch.text.length / 900))} min`}
@@ -186,7 +186,7 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
               </div>
             );
           })}
-          <p className="text-[10px] text-gray-400 px-1 pt-1">
+          <p className="text-[10px] text-gray-500 px-1 pt-1">
             La prima lettura di ogni capitolo genera la voce (qualche secondo); le successive partono all'istante.
           </p>
         </div>

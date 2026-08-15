@@ -4,9 +4,6 @@ const config: CapacitorConfig = {
   appId: 'com.itaintasca.app',
   appName: 'WIP',
   webDir: 'dist',
-  server: {
-    cleartext: true
-  },
   ios: {
     // Le notifiche POI (azione ▶ Ascolta, tap = deep link) le gestisce
     // AppDelegate: senza questo flag il NotificationRouter di Capacitor

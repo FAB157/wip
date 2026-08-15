@@ -33,7 +33,7 @@ export default function ActionButton({
   const stateClasses = active
     ? "bg-secondary border-secondary text-white shadow-secondary/20 active:scale-95"
     : isPrimary
-      ? "bg-blue-600 border-blue-600 text-white shadow-blue-600/20 hover:bg-blue-700 active:scale-95"
+      ? "bg-primary border-primary text-white shadow-primary/20 hover:bg-primary/90 active:scale-95"
       : "bg-white/40 border-white text-[#1e3a8a] hover:bg-white/80 active:scale-95";
 
   if (disabled) {
@@ -46,7 +46,7 @@ export default function ActionButton({
 
   if (onClick) {
     return (
-      <button onClick={onClick} className={`${baseClasses} ${stateClasses}`} style={isPrimary ? { backgroundColor: "#2563eb", color: "#ffffff", borderColor: "#2563eb" } : {}}>
+      <button onClick={onClick} className={`${baseClasses} ${stateClasses}`}>
         {content}
       </button>
     );
@@ -58,7 +58,7 @@ export default function ActionButton({
       target="_blank"
       rel="noopener noreferrer"
       className={`${baseClasses} ${stateClasses}`}
-      style={isPrimary ? { backgroundColor: "#2563eb", color: "#ffffff", borderColor: "#2563eb", textDecoration: "none" } : {}}
+      style={isPrimary ? { textDecoration: "none" } : {}}
     >
       {content}
     </a>

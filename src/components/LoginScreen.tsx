@@ -98,7 +98,12 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
         // Il link di conferma email deve atterrare sulla PWA di produzione:
         // su nativo window.location.origin è capacitor://localhost e il link
         // non potrebbe mai tornare nell'app.
-        const confirmRedirect = Capacitor.isNativePlatform() ? 'https://wip.guide' : window.location.origin;
+        // Path dedicato /auth/callback (invece della bare root) così l'App
+        // Link Android / Universal Link iOS può essere delimitato a QUEL path
+        // senza intercettare anche /privacy, /support, i link ?pin=/?groupplan=
+        // e le altre pagine su wip.guide. Sul web non cambia nulla: la SPA non
+        // ha un router e ignora il pathname (vedi App.tsx).
+        const confirmRedirect = Capacitor.isNativePlatform() ? 'https://wip.guide/auth/callback' : window.location.origin;
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
@@ -141,7 +146,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     if (!email) { setError('Inserisci la tua email per reinviare la conferma.'); return; }
     setLoading(true);
     try {
-      const redirectTo = Capacitor.isNativePlatform() ? 'https://wip.guide' : window.location.origin;
+      const redirectTo = Capacitor.isNativePlatform() ? 'https://wip.guide/auth/callback' : window.location.origin;
       const { error } = await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: redirectTo } });
       if (error) throw error;
       notify('Email di conferma reinviata: controlla la casella (anche lo Spam).');
@@ -238,9 +243,10 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       // Su app nativa window.location.origin è capacitor://localhost: il link
       // email non potrebbe mai tornare qui. Si usa la PWA di produzione, dove
       // il flusso PASSWORD_RECOVERY → "Nuova Password" funziona già; poi
-      // l'utente rientra nell'app con la nuova password.
+      // l'utente rientra nell'app con la nuova password. Path dedicato
+      // /auth/callback: vedi commento su confirmRedirect più sopra.
       const redirectTo = Capacitor.isNativePlatform()
-        ? 'https://wip.guide'
+        ? 'https://wip.guide/auth/callback'
         : window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) throw error;

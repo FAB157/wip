@@ -222,7 +222,7 @@ export default function AdminReports() {
             </thead>
             <tbody className="divide-y divide-gray-50">
               {isLoading ? (
-                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-400">Caricamento...</td></tr>
+                <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-500">Caricamento...</td></tr>
               ) : filteredReports.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="p-12 text-center">
@@ -238,7 +238,7 @@ export default function AdminReports() {
                   <tr key={report.id} className={`hover:bg-gray-50/60 transition-colors ${isPending ? 'bg-orange-50/20' : ''}`}>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="text-xs font-bold text-on-surface">{d.toLocaleDateString('it-IT')}</div>
-                      <div className="text-[10px] text-gray-400 font-mono">{d.toLocaleTimeString('it-IT')}</div>
+                      <div className="text-[10px] text-gray-500 font-mono">{d.toLocaleTimeString('it-IT')}</div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -265,7 +265,7 @@ export default function AdminReports() {
                     </td>
                     <td className="px-4 py-3 max-w-[160px]">
                       <div className="text-xs text-gray-600 truncate" title={report.details || ''}>
-                        {report.details || <span className="text-gray-400 italic">Nessun dettaglio</span>}
+                        {report.details || <span className="text-gray-500 italic">Nessun dettaglio</span>}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -306,7 +306,7 @@ export default function AdminReports() {
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs text-gray-400 italic">Gestita</span>
+                        <span className="text-xs text-gray-500 italic">Gestita</span>
                       )}
                     </td>
                   </tr>

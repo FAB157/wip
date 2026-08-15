@@ -54,7 +54,7 @@ export default function LiveTourPanel() {
           <h2 className="text-xl font-black text-gray-900 mb-1">
             {isLeader ? "Sei il Leader del Tour" : "Sei connesso al Tour"}
           </h2>
-          <p className="text-sm font-bold text-gray-400 max-w-xs mb-6">
+          <p className="text-sm font-bold text-gray-500 max-w-xs mb-6">
             {isLeader 
               ? "Tutti quelli connessi al tuo PIN ascolteranno gratuitamente l'audio quando sbloccherai un punto."
               : "Tieni il telefono acceso. Quando il leader sbloccherà un luogo, l'audio partirà in automatico qui!"}
@@ -62,7 +62,7 @@ export default function LiveTourPanel() {
 
           <div className="bg-gray-50 p-4 rounded-2xl w-full flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">PIN del Gruppo</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">PIN del Gruppo</p>
               <p className="text-3xl font-black tracking-[0.2em] text-gray-900">{activeSession.pin}</p>
             </div>
             <button
@@ -84,7 +84,7 @@ export default function LiveTourPanel() {
           </div>
 
           {isLeader && (
-            <p className="mt-3 text-[11px] font-bold text-gray-400 max-w-xs">
+            <p className="mt-3 text-[11px] font-bold text-gray-500 max-w-xs">
               Puoi navigare liberamente nell'app: il tour resta attivo e ogni audioguida che avvii arriva a tutto il gruppo.
             </p>
           )}

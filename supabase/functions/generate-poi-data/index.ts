@@ -139,6 +139,12 @@ serve(async (req) => {
     let description = "";
     let isGem = false;
     let fallbackTriggered = false;
+    // true SOLO quando l'AI ha esaminato il luogo e lo ha esplicitamente
+    // rifiutato come generico/non documentato (parsed.error === true).
+    // Distinto dai fallback "tecnici" (chiave mancante, API down, eccezione):
+    // in quel caso non sappiamo se il luogo sia valido o meno, qui invece
+    // l'AI ha già dato un verdetto negativo che va rispettato.
+    let aiRejectedAsGeneric = false;
 
     // --- PHASE A: PRIMARY AI TRY (Gemini) ---
     const geminiKey = Deno.env.get("GEMINI_API_KEY") || Deno.env.get("VITE_GEMINI_API_KEY");
@@ -179,8 +185,9 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
           const parsed = JSON.parse(text || "{}");
 
           if (parsed.error === true) {
-            console.log(`[Edge Function] AI rejected generic landmark: "${name}". Triggering Silent Fallback...`);
+            console.log(`[Edge Function] AI rejected generic landmark: "${name}". Skipping fabricated placeholder.`);
             fallbackTriggered = true;
+            aiRejectedAsGeneric = true;
           } else if (parsed.description) {
             description = parsed.description;
             isGem = parsed.is_gem === true;
@@ -202,17 +209,24 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
     }
 
     // --- PHASE B: FREE FALLBACK (Database & Coordinate Seed) ---
-    if (fallbackTriggered) {
+    // Il placeholder "Punto geografico..." viene generato SOLO per i fallback
+    // tecnici (chiave mancante, API down, eccezione): in quei casi non
+    // sappiamo nulla sul luogo. Se invece l'AI lo ha esplicitamente rifiutato
+    // come generico, non fabbrichiamo alcuna descrizione (vedi Phase C).
+    if (fallbackTriggered && !aiRejectedAsGeneric) {
       console.log(`[Edge Function] Google Places BYPASSED. Seeding default coordinate details for: "${name}"`);
       description = `Punto geografico di interesse situato alle coordinate lat ${numericLat.toFixed(4)}, lon ${numericLon.toFixed(4)} nel territorio di ${city || "Italia"}. Monumento e punto di interesse storico individuato via satellite.`;
     }
 
     // --- PHASE C: UPSERT TO DATABASE ---
-    // Standardized geospatial ID: deterministic ID (4 decimal precision, e.g. "43_7212_10_3944")
-    const latId = numericLat.toFixed(4).replace('.', '_');
-    const lonId = numericLon.toFixed(4).replace('.', '_');
+    // Standardized geospatial ID: deterministic ID (5 decimal precision, ~1.1m,
+    // e.g. "43_72123_10_39441") — prima era a 4 decimali (~11m), risoluzione
+    // troppo grossolana: due POI reali distinti entro la stessa cella potevano
+    // collidere sullo stesso id e sovrascriversi a vicenda.
+    const latId = numericLat.toFixed(5).replace('.', '_');
+    const lonId = numericLon.toFixed(5).replace('.', '_');
     const poiId = `${latId}_${lonId}`;
-    
+
     // Unsplash cover photo generator
     const defaultImage = `https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=800`;
 
@@ -222,12 +236,20 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
       lon: numericLon,
       name: name,
       category: category || "monumenti",
-      description_ai: description,
-      image_url: defaultImage,
-      is_gem: isGem,
+      // Se l'AI ha rifiutato il luogo come generico non c'è nulla di reale da
+      // salvare: niente descrizione fabbricata né foto stock spacciata per
+      // copertina del luogo.
+      description_ai: aiRejectedAsGeneric ? "" : description,
+      image_url: aiRejectedAsGeneric ? null : defaultImage,
+      is_gem: aiRejectedAsGeneric ? false : isGem,
       // MAI 'verified' da una funzione automatica (non è una revisione umana):
       // 'verified' promuoveva contenuti generati/allucinati. Sempre 'auto'.
-      status: "auto",
+      // Se l'AI ha rifiutato il luogo come generico/non documentato, la riga
+      // viene comunque scritta (idempotenza: evita di richiamare l'AI ad ogni
+      // richiesta per la stessa cella) ma con status 'rejected', che è tra gli
+      // HIDDEN_POI_STATUSES di src/services/poiRepository.ts — quindi mai
+      // visibile né triggerabile lato client.
+      status: aiRejectedAsGeneric ? "rejected" : "auto",
       last_reviewed_at: new Date().toISOString(),
       reviewed_by: null
     };
@@ -266,7 +288,10 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
       ...finalPoi,
       riconosciuto: true,
       scoperto: false,
-      confermato_da_database: true
+      // false quando l'AI ha rifiutato il luogo come generico/non documentato:
+      // niente contenuto reale è stato prodotto né confermato, non spacciamo
+      // il placeholder salvato per idempotenza come "confermato".
+      confermato_da_database: !aiRejectedAsGeneric
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -114,9 +114,17 @@ async function processItineraryStream(
 
   let res: Response;
   try {
+    // Il server richiede login (401 senza token) e dal 14/08/2026 fa anche
+    // l'ADDEBITO (pre-addebito + conguaglio sui giorni consegnati): il client
+    // non scala più crediti da sé, aggiorna solo il saldo mostrato.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
     res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -203,7 +211,11 @@ async function processItineraryStream(
       ? "Hai raggiunto il limite di itinerari. Riprova domani."
       : errorMessage === "FEATURE_DISABLED"
         ? "La generazione itinerari è temporaneamente in manutenzione. Riprova più tardi."
-        : `Errore dal server AI: ${errorMessage}`);
+        : errorMessage === "INSUFFICIENT_CREDITS"
+          ? "Crediti insufficienti per generare l'itinerario. Ricarica il wallet e riprova."
+          : errorMessage === "CHARGE_FAILED"
+            ? "Problema temporaneo con l'addebito dei crediti. Nessun credito è stato scalato: riprova tra poco."
+            : `Errore dal server AI: ${errorMessage}`);
   }
 
   if (!fullJson.trim()) {
@@ -473,7 +485,7 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
         <h5 className="text-sm font-black text-primary line-clamp-2 mb-1 group-hover/card:opacity-80 transition-colors">
           {exp.name}
         </h5>
-        <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold text-gray-400">
+        <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold text-gray-500">
           {exp.duration && <span className="flex items-center gap-1 bg-gray-50 px-2 py-0.5 rounded-full"><Clock className="w-3 h-3" /> {exp.duration}</span>}
           {exp.rating && exp.rating !== "Nuovo" && <span className="flex items-center gap-1 bg-yellow-50 text-yellow-700 px-2 py-0.5 rounded-full"><Star className="w-3 h-3" /> {exp.rating}</span>}
         </div>
@@ -728,6 +740,11 @@ export default function PlanScreen({
           for (let j = 0; j < validIdx.length - 1; j++) {
             // La tratta vale solo tra tappe CONSECUTIVE nell'itinerario
             if (validIdx[j + 1] !== validIdx[j] + 1) continue;
+            // Le tappe 'trasferimento' (roadtrip, ondata 7) sono spostamenti
+            // inter-città di decine/centinaia di km: hanno già la loro card
+            // dedicata con km e durata reali. Un badge "🚶 N min · taxi ~340€"
+            // calcolato da OSRM su quella tratta non avrebbe senso.
+            if (tappe[validIdx[j]]?.tipo === 'trasferimento' || tappe[validIdx[j + 1]]?.tipo === 'trasferimento') continue;
             const leg = legs[j];
             if (!leg) continue;
             const km = (leg.distance || 0) / 1000;
@@ -1357,7 +1374,12 @@ export default function PlanScreen({
         giorno.tappe.forEach(tappa => {
           const lat = tappa.coordinate?.lat || 0;
           const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-          if (lat !== 0 && lon !== 0 && tappa.tipo !== 'ristorante' && tappa.tipo !== 'pausa' && tappa.tipo !== 'spostamento') {
+          // 'trasferimento' (roadtrip, ondata 7): coordinate del centro della
+          // città di arrivo, non un luogo visitabile — non deve diventare un
+          // POI geofenceable, altrimenti il servizio nativo lo attiverebbe
+          // semplicemente passando vicino alla città, leggendo il racconto
+          // del viaggio come se fosse l'audioguida di un luogo reale.
+          if (lat !== 0 && lon !== 0 && tappa.tipo !== 'ristorante' && tappa.tipo !== 'pausa' && tappa.tipo !== 'spostamento' && tappa.tipo !== 'trasferimento') {
             const stableId = `iti-${tappa.titolo_tappa.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}`;
             allPoisToUpsert.push({
               id: stableId,
@@ -1651,22 +1673,13 @@ export default function PlanScreen({
     return (m?.[1] || titolo.split(' ')[0] || '').trim();
   };
 
-  // Conguaglio costi: si paga per i giorni EFFETTIVAMENTE generati. Se l'AI
-  // produce meno giorni di quelli addebitati in anticipo (prompt troncato,
-  // JSON parziale), la differenza torna subito all'utente.
-  const settleItineraryCost = async (userId: string, chargedDays: number, plan: any) => {
-    // Addebito CLIENT-SIDE alla consegna (pattern storico dell'app): si paga
-    // SOLO in caso di generazione riuscita, sui giorni realmente consegnati (se
-    // il modello ne produce meno del richiesto per troncamento/JSON parziale).
-    // Charge-on-success evita sia il rimborso (niente da restituire su
-    // fallimento: non si è addebitato) sia il doppio addebito col server, che
-    // per queste rotte NON scala crediti (vedi nota di reconciliation).
-    const deliveredDays = Math.max(1, Math.min(
-      Math.max(1, Math.floor(chargedDays)),
-      Array.isArray(plan?.giorni) && plan.giorni.length > 0 ? plan.giorni.length : chargedDays
-    ));
-    const cost = PRICING_LIST.itinerary_daily * deliveredDays;
-    try { await consumeCredits(userId, cost); } catch { /* saldo già verificato dal gate; edge concorrente non blocca il contenuto già generato */ }
+  // Dal 14/08/2026 l'addebito è INTERAMENTE SERVER-SIDE dentro
+  // /api/groq/itinerary-stream (pre-addebito sui giorni richiesti + conguaglio
+  // a fine stream sui giorni consegnati, rimborso su fallimento): l'addebito
+  // client era bypassabile via curl (itinerari gratis a saldo zero).
+  // Questa funzione resta come punto unico di refresh del saldo in UI dopo la
+  // consegna — NON deve mai più chiamare consumeCredits (doppio addebito).
+  const settleItineraryCost = async (userId: string, _chargedDays: number, _plan: any) => {
     notifyCreditsChanged({ userId });
   };
 
@@ -1688,10 +1701,10 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
-    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
-    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
-    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
+    // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
+    // UX anticipata ("crediti insufficienti" senza round-trip); il server
+    // rifiuta comunque con INSUFFICIENT_CREDITS se il saldo non basta.
     if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
@@ -2174,10 +2187,10 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
-    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
-    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
-    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
+    // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
+    // UX anticipata ("crediti insufficienti" senza round-trip); il server
+    // rifiuta comunque con INSUFFICIENT_CREDITS se il saldo non basta.
     if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
@@ -2345,10 +2358,10 @@ export default function PlanScreen({
     const totalItineraryCost = PRICING_LIST.itinerary_daily * numDaysForPricing;
     const confirmed = await creditConfirm.requestConfirmation(totalItineraryCost, "Itinerario AI PRO (" + numDaysForPricing + " giorni)", bal.total);
     if (!confirmed) return;
-    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
-    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
-    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
-    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
+    // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
+    // UX anticipata ("crediti insufficienti" senza round-trip); il server
+    // rifiuta comunque con INSUFFICIENT_CREDITS se il saldo non basta.
     if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
@@ -2440,9 +2453,16 @@ export default function PlanScreen({
     setLoading(true);
 
     try {
+      // Il server richiede login (401 senza token) anche qui, per chiudere la
+      // generazione anonima via curl; la funzione resta gratuita per l'utente.
+      const { data: raSess } = await supabase.auth.getSession();
+      const raToken = raSess?.session?.access_token;
       const res = await fetch('/api/groq/radius-alternatives', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(raToken ? { Authorization: `Bearer ${raToken}` } : {}),
+        },
         body: JSON.stringify({
           baseLocation,
           ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
@@ -2822,6 +2842,15 @@ export default function PlanScreen({
     silent = false
   ): Promise<Array<{ city: string; lat: number; lon: number }> | null> => {
     if (activeDestinations.length < 2) return null;
+    // Distanza in linea d'aria tra due punti (km): usata solo come controllo
+    // di plausibilità sul geocoding, non per i tempi di guida (calcolati dal
+    // server con lo stesso fattore strada).
+    const airKm = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
+      const R = 6371, toRad = (x: number) => x * Math.PI / 180;
+      const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(h));
+    };
     const legs: Array<{ city: string; lat: number; lon: number }> = [];
     for (let i = 0; i < activeDestinations.length; i++) {
       const cityName = activeDestinations[i];
@@ -2829,6 +2858,20 @@ export default function PlanScreen({
       if (!c) {
         if (!silent) notify(`"${cityName}" — ${getTranslation('err_location_not_found', language)}`);
         return null;
+      }
+      // Un nome di città comune (es. un piccolo paese omonimo di una città
+      // estera) può risolversi silenziosamente nel posto sbagliato: se la
+      // tappa geocodificata dista più di 2500 km dalla precedente è quasi
+      // certamente un errore di geocoding, non un roadtrip intercontinentale
+      // reale — meglio fermarsi qui, a costo zero, che generare un itinerario
+      // con una tappa nel continente sbagliato.
+      const prev = legs[legs.length - 1];
+      if (prev) {
+        const dist = airKm(prev, c);
+        if (dist > 2500) {
+          if (!silent) notify(`"${cityName}" è stata trovata a ${Math.round(dist)} km da "${legs[0].city}": controlla il nome della città (potrebbe esistere un omonimo altrove).`);
+          return null;
+        }
       }
       legs.push({ city: cityName.trim(), lat: c.lat, lon: c.lon });
     }
@@ -3078,10 +3121,10 @@ export default function PlanScreen({
     if (!confirmed) {
       return;
     }
-    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
-    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
-    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
-    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
+    // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
+    // UX anticipata ("crediti insufficienti" senza round-trip); il server
+    // rifiuta comunque con INSUFFICIENT_CREDITS se il saldo non basta.
     if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
@@ -3227,10 +3270,10 @@ export default function PlanScreen({
     if (!confirmed) {
        return;
     }
-    // Addebito CLIENT-SIDE alla consegna (settleItineraryCost, solo su success):
-    // consumeCredits scala i crediti SERVER-SIDE via token (POST /api/credits/consume).
-    // La rotta /api/groq/itinerary-stream NON scala crediti da sé → nessun doppio
-    // addebito. Il gate di saldo qui sotto replica solo la UX "crediti insufficienti".
+    // Addebito SERVER-SIDE (14/08/2026): /api/groq/itinerary-stream pre-addebita
+    // e fa il conguaglio sui giorni consegnati. Il gate di saldo qui sotto è solo
+    // UX anticipata ("crediti insufficienti" senza round-trip); il server
+    // rifiuta comunque con INSUFFICIENT_CREDITS se il saldo non basta.
     if (bal.total < totalItineraryCost) {
       notify(getTranslation('err_insufficient_credits', language));
       setShowShop(true);
@@ -4219,7 +4262,7 @@ export default function PlanScreen({
                     >
                       <div className="text-2xl mb-1">{t.emoji}</div>
                       <div className="text-xs font-black text-primary leading-tight">{t.title}</div>
-                      <div className="text-[10px] font-bold text-gray-400 mt-0.5">{t.destination} · {t.days} {t.days === 1 ? 'giorno' : 'giorni'}</div>
+                      <div className="text-[10px] font-bold text-gray-500 mt-0.5">{t.destination} · {t.days} {t.days === 1 ? 'giorno' : 'giorni'}</div>
                     </button>
                   ))}
                 </div>
@@ -5461,7 +5504,7 @@ export default function PlanScreen({
                                 <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
                                   📍 {tappeTotal} {getTranslation('stops_count', language)}
                                 </span>
-                                {date && <span className="text-[10px] font-bold text-gray-400">{date}</span>}
+                                {date && <span className="text-[10px] font-bold text-gray-500">{date}</span>}
                               </div>
                             </div>
                             <button
@@ -6028,7 +6071,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`vi-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddViatorToDay(gIdx, exp)} color="#FF5100" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun tour Viator trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun tour Viator trovato.</div>}
                           </motion.div>
                         )}
 
@@ -6040,7 +6083,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`gyg-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddGygToDay(gIdx, exp)} color="#0071eb" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun tour GetYourGuide trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun tour GetYourGuide trovato.</div>}
                           </motion.div>
                         )}
 
@@ -6052,7 +6095,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`tm-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddTicketmasterToDay(gIdx, exp)} color="#1e3a8a" />
                                 ))}
                                 </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun evento Ticketmaster trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun evento Ticketmaster trovato.</div>}
                           </motion.div>
                         )}
 
@@ -6064,7 +6107,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`tq-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddTiqetsToDay(gIdx, exp)} color="#7c3aed" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-400 font-bold">Nessun biglietto Tiqets trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun biglietto Tiqets trovato.</div>}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -6140,7 +6183,7 @@ export default function PlanScreen({
                   <p className="font-black text-sm text-primary">
                     {getTranslation('from_my_location', language)}
                   </p>
-                  <p className="text-[11px] text-gray-400 font-medium">
+                  <p className="text-[11px] text-gray-500 font-medium">
                     {navGpsCoords
                       ? `GPS: ${navGpsCoords.lat.toFixed(4)}, ${navGpsCoords.lng.toFixed(4)}`
                       : getTranslation('acquiring_gps', language)}
@@ -6246,7 +6289,7 @@ export default function PlanScreen({
                 </a>
               </div>
 
-              <p className="text-center text-[10px] text-gray-400 font-medium">
+              <p className="text-center text-[10px] text-gray-500 font-medium">
                 {language === 'IT'
                   ? 'Tutte le tappe del giorno saranno incluse come waypoint'
                   : "All day's stops will be included as waypoints"}

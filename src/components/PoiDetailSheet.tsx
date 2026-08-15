@@ -42,7 +42,11 @@ import {
   Square,
   MessageSquare,
   Flag,
-  AlertTriangle
+  AlertTriangle,
+  ShieldCheck,
+  Ruler,
+  Compass,
+  Layers
 } from "lucide-react";
 import { GoogleGenAI } from "@google/genai";
 import AttractionImage from "./AttractionImage";
@@ -206,6 +210,18 @@ export default function PoiDetailSheet({
     fee?: string;
     capacity?: string;
     type?: string;
+  } | null>(null);
+
+  // Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona)
+  // mostrati come chip con icone lucide, separati dal testo descrittivo/TTS.
+  const [technicalData, setTechnicalData] = useState<{
+    inception?: string;
+    architect?: string;
+    style?: string;
+    material?: string;
+    height?: string;
+    city?: string;
+    wikivoyage_dest?: string;
   } | null>(null);
 
   const [generatedText, setGeneratedText] = useState<string | null>(null);
@@ -575,6 +591,7 @@ export default function PoiDetailSheet({
     setTripData(null);
     setWikiData(null);
     setParkingData(null);
+    setTechnicalData(null);
     setIsTyping(false);
     setDisplayedText("");
     
@@ -600,6 +617,7 @@ export default function PoiDetailSheet({
         setTripData(null);
         setWikiData(null);
         setParkingData(null);
+        setTechnicalData(null);
         setDisplayedText("");
         setIsStreaming(false);
         setIsLoading(true);
@@ -718,6 +736,7 @@ export default function PoiDetailSheet({
         if (cached.tripData) setTripData(cached.tripData);
         if (cached.parkingData) setParkingData(cached.parkingData);
         if (cached.generatedText) setGeneratedText(cached.generatedText);
+        if (cached.technicalData) setTechnicalData(cached.technicalData);
 
         // La scheda si accontenta della cache SOLO se contiene già un testo
         // esteso. Con la sola descrizione breve del pin (o con la sola foto)
@@ -782,6 +801,7 @@ export default function PoiDetailSheet({
               if (cachedNow.tripData) setTripData(cachedNow.tripData);
               if (cachedNow.parkingData) setParkingData(cachedNow.parkingData);
               if (cachedNow.generatedText) setGeneratedText(cachedNow.generatedText);
+              if (cachedNow.technicalData) setTechnicalData(cachedNow.technicalData);
             }
             setIsLoading(false);
             setIsStreaming(false);
@@ -818,16 +838,19 @@ export default function PoiDetailSheet({
                 const fullDesc = dbData.full_description || dbData.description_long || dbData.description_ai;
                 if (fullDesc && fullDesc.length > 30) {
                   const techData = dbData.technical_data || {};
-                  // Dati tecnici come testo aggiuntivo
-                  const techLines: string[] = [];
-                  if (techData.inception) techLines.push(`📅 Anno: ${techData.inception}`);
-                  if (techData.architect) techLines.push(`🏗️ Architetto: ${techData.architect}`);
-                  if (techData.style)     techLines.push(`🏛️ Stile: ${techData.style}`);
-                  if (techData.material)  techLines.push(`🧱 Materiale: ${techData.material}`);
-                  if (techData.height)    techLines.push(`📏 Altezza: ${techData.height}`);
-                  if (techData.city)      techLines.push(`📍 Comune: ${techData.city}`);
-                  if (techData.wikivoyage_dest) techLines.push(`🧭 Zona: ${techData.wikivoyage_dest}`);
-                  const finalDesc = techLines.length > 0 ? `${fullDesc}\n\n${techLines.join(' · ')}` : fullDesc;
+                  // Dati tecnici mostrati come chip con icone (vedi render),
+                  // non più incollati come testo emoji dentro la descrizione/TTS.
+                  const techPayload = {
+                    inception: techData.inception || undefined,
+                    architect: techData.architect || undefined,
+                    style: techData.style || undefined,
+                    material: techData.material || undefined,
+                    height: techData.height || undefined,
+                    city: techData.city || undefined,
+                    wikivoyage_dest: techData.wikivoyage_dest || undefined,
+                  };
+                  const hasTechData = Object.values(techPayload).some(Boolean);
+                  const finalDesc = fullDesc;
 
                   // Practical info
                   let phone = ''; let website = '';
@@ -851,8 +874,9 @@ export default function PoiDetailSheet({
                   if (active) {
                     setWikiData(wikiPayload);
                     setTripData(tripPayload);
+                    if (hasTechData) setTechnicalData(techPayload);
                     if (storedAudioScript) setGeneratedText(storedAudioScript);
-                    setCachedPoiDetails(poi.id, { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript });
+                    setCachedPoiDetails(poi.id, { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
                     setIsLoading(false);
                   }
                   return; // ✅ Dati DB trovati
@@ -2400,17 +2424,18 @@ export default function PoiDetailSheet({
         },
       });
 
-      // Salva silenziosamente nel database i dati ricchi trovati (immagine e descrizione breve), 
-      // in modo che il PIN sulla mappa sia già pronto per il prossimo utente.
+      // Salva silenziosamente i dati ricchi trovati (immagine e descrizione
+      // breve) per il prossimo utente — via server (/api/poi/cache-enrichment):
+      // l'update diretto su shared_pois è bloccato dall'RLS (UPDATE solo
+      // admin) e falliva in silenzio. La rotta scrive solo i campi vuoti.
       if (poiItem.id) {
-        supabase.from('shared_pois').update({
-          description_ai: extract,
-          image_url: thumbnail,
-          description_short: finalDescription
-        }).eq('id', poiItem.id).then(({error}) => {
-          if (error) console.debug("Error updating shared_pois cache:", error);
-          else console.log("✅ POI image and summary saved to shared_pois for next user!", title);
-        });
+        import('../services/poiRepository').then(({ primePoiCache }) => {
+          primePoiCache(poiItem.id, {
+            ...(extract ? { description_ai: extract } : {}),
+            ...(thumbnail ? { image_url: thumbnail } : {}),
+            ...(finalDescription ? { description_short: finalDescription } : {}),
+          });
+        }).catch(() => {});
       }
 
       setTripData((prev) => {
@@ -2479,7 +2504,10 @@ export default function PoiDetailSheet({
           <div className="w-12 h-1.5 bg-on-surface-variant/20 rounded-full" />
         </div>
 
-        <div className="overflow-y-auto no-scrollbar">
+        {/* overflow-x-hidden: la scheda deve restare fissa orizzontalmente
+            (mai scorrere/spostarsi a destra o sinistra), qualunque contenuto
+            interno provi a sforare la larghezza. */}
+        <div className="overflow-y-auto overflow-x-hidden no-scrollbar">
           <div className="relative h-[240px] px-4">
             <div className="w-full h-full rounded-2xl overflow-hidden relative group">
               <AttractionImage
@@ -2911,6 +2939,48 @@ export default function PoiDetailSheet({
               </div>
             )}
 
+            {/* Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona):
+                chip con icone lucide al posto delle emoji native, fuori dal testo/TTS. */}
+            {technicalData && (
+              <div className="flex flex-wrap gap-2 mb-6">
+                {technicalData.inception && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Calendar className="w-3.5 h-3.5 text-primary" /> {technicalData.inception}
+                  </span>
+                )}
+                {technicalData.architect && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <User className="w-3.5 h-3.5 text-primary" /> {technicalData.architect}
+                  </span>
+                )}
+                {technicalData.style && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Landmark className="w-3.5 h-3.5 text-primary" /> {technicalData.style}
+                  </span>
+                )}
+                {technicalData.material && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Layers className="w-3.5 h-3.5 text-primary" /> {technicalData.material}
+                  </span>
+                )}
+                {technicalData.height && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Ruler className="w-3.5 h-3.5 text-primary" /> {technicalData.height}
+                  </span>
+                )}
+                {technicalData.city && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <MapPin className="w-3.5 h-3.5 text-primary" /> {technicalData.city}
+                  </span>
+                )}
+                {technicalData.wikivoyage_dest && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Compass className="w-3.5 h-3.5 text-primary" /> {technicalData.wikivoyage_dest}
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Dettagli dell'Opera / Visione IA */}
             <PoiExtraDetails poi={poi} language={language} />
 
@@ -2949,7 +3019,7 @@ export default function PoiDetailSheet({
 
             {/* Pulsante Segnalazione Errore */}
             <div className="mt-6 mb-4 text-center">
-              <button 
+              <button
                 onClick={() => setShowReportModal(true)}
                 className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-orange-500 transition-colors"
               >
@@ -2957,6 +3027,42 @@ export default function PoiDetailSheet({
                 Hai notato un errore in questo luogo? Segnalalo
               </button>
             </div>
+
+            {/* UGC (App Store Guideline 1.2): sui POI WIP Community l'utente
+                può segnalare il CONTENUTO come offensivo e bloccare l'autore
+                (risolto server-side, l'identità non arriva mai al client). */}
+            {String(poi?.category || '').toLowerCase() === 'community' && (
+              <div className="mb-6 flex items-center justify-center gap-4">
+                <button
+                  onClick={async () => {
+                    if (!window.confirm('Segnalare questo contenuto della community come inappropriato o offensivo? La segnalazione è anonima e verrà esaminata dalla moderazione.')) return;
+                    const { reportCommunityContent } = await import('../lib/communityModeration');
+                    const r = await reportCommunityContent(String(poi.id), 'inappropriate');
+                    notify(r.ok
+                      ? (r.hidden ? 'Contenuto segnalato e sospeso in attesa di revisione. Grazie!' : 'Segnalazione inviata alla moderazione. Grazie!')
+                      : 'Impossibile inviare la segnalazione: accedi e riprova.', r.ok ? 'success' : undefined);
+                  }}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  <Flag className="w-3 h-3" />
+                  Segnala contenuto
+                </button>
+                <span className="text-slate-300">·</span>
+                <button
+                  onClick={async () => {
+                    if (!window.confirm("Bloccare l'autore di questo contenuto? Non vedrai più i suoi contenuti community sulla mappa.")) return;
+                    const { blockCommunityAuthor } = await import('../lib/communityModeration');
+                    const ok = await blockCommunityAuthor(String(poi.id));
+                    notify(ok ? 'Autore bloccato: i suoi contenuti non ti verranno più mostrati.' : 'Impossibile bloccare: accedi e riprova.', ok ? 'success' : undefined);
+                    if (ok) onClose();
+                  }}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  <ShieldCheck className="w-3 h-3" />
+                  Blocca autore
+                </button>
+              </div>
+            )}
           </div>
         </div>
         <AnimatePresence>

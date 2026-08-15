@@ -126,7 +126,7 @@ export default function UserManageModal({ user, onClose, onChanged }: { user: an
               <Wallet className="w-5 h-5" /> Gestione utente
             </h3>
             <p className="text-xs font-bold text-gray-600 mt-0.5">{user.email || 'senza email'}</p>
-            <p className="text-[10px] font-mono text-gray-400">{user.id}</p>
+            <p className="text-[10px] font-mono text-gray-500">{user.id}</p>
           </div>
           <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
         </div>
@@ -143,7 +143,7 @@ export default function UserManageModal({ user, onClose, onChanged }: { user: an
           </div>
           <div className={`rounded-2xl p-3 text-center border ${isBanned ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200/60'}`}>
             <div className={`text-xl font-black ${isBanned ? 'text-red-600' : 'text-emerald-700'}`}>{authStatus ? (isBanned ? 'SOSPESO' : 'ATTIVO') : '…'}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-gray-400">
+            <div className="text-[9px] font-black uppercase tracking-widest text-gray-500">
               {authStatus?.last_sign_in_at ? `ultimo accesso ${new Date(authStatus.last_sign_in_at).toLocaleDateString('it-IT')}` : 'Stato account'}
             </div>
           </div>
@@ -167,7 +167,7 @@ export default function UserManageModal({ user, onClose, onChanged }: { user: an
               {adjusting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Applica'}
             </button>
           </div>
-          <p className="text-[10px] text-gray-400">Ogni rettifica lascia una riga nel libro mastro e nell'audit (Errori di Sistema → user_admin).</p>
+          <p className="text-[10px] text-gray-500">Ogni rettifica lascia una riga nel libro mastro e nell'audit (Errori di Sistema → user_admin).</p>
         </div>
 
         {/* Sospensione */}
@@ -197,9 +197,9 @@ export default function UserManageModal({ user, onClose, onChanged }: { user: an
           </div>
           {txError && <p className="text-[11px] font-bold text-amber-600">{txError}</p>}
           {transactions === null ? (
-            <div className="py-6 text-center text-gray-400 text-xs font-bold">Caricamento…</div>
+            <div className="py-6 text-center text-gray-500 text-xs font-bold">Caricamento…</div>
           ) : transactions.length === 0 ? (
-            !txError && <div className="py-6 text-center text-gray-400 text-xs font-bold">Nessun movimento registrato.</div>
+            !txError && <div className="py-6 text-center text-gray-500 text-xs font-bold">Nessun movimento registrato.</div>
           ) : (
             <div className="border border-gray-100 rounded-2xl overflow-hidden divide-y divide-gray-50 max-h-64 overflow-y-auto">
               {transactions.map(tx => (
@@ -209,7 +209,7 @@ export default function UserManageModal({ user, onClose, onChanged }: { user: an
                     : <ArrowDownCircle className="w-4 h-4 text-red-400 shrink-0" />}
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-bold text-gray-800 truncate">{tx.description || tx.type || 'movimento'}</p>
-                    <p className="text-[10px] text-gray-400">
+                    <p className="text-[10px] text-gray-500">
                       {new Date(tx.created_at).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
                       {tx.source ? ` · ${tx.source}` : ''}
                     </p>

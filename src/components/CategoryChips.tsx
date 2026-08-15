@@ -184,6 +184,13 @@ export default function CategoryChips({
           <span className="text-sm">🌍</span>
           <span className="whitespace-nowrap">GetYourGuide</span>
         </button>
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent('wip-open-experiences', { detail: { partner: 'tiqets' } }))}
+          className="flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm bg-[#7c3aed] text-white border-violet-300 hover:scale-105 active:scale-95"
+        >
+          <Ticket className="w-3.5 h-3.5" />
+          <span className="whitespace-nowrap">Tiqets</span>
+        </button>
       </div>
 
       {/* ── Sub-filter rows: visibili per TUTTE le categorie attive ── */}

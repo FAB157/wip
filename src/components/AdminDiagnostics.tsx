@@ -263,7 +263,7 @@ export default function AdminDiagnostics() {
     },
     {
       id: 'ping_groq',
-      name: 'Salute Groq (LLaMA)',
+      name: 'Salute Groq (GPT-OSS)',
       description: 'Ping ai server di Groq per operazioni on-the-fly.',
       icon: <Activity className="w-5 h-5" />,
       status: 'idle',
@@ -356,20 +356,6 @@ export default function AdminDiagnostics() {
             resolve({ status: 'failed', message: `Errore logico: ${e.message}`, solution: 'Contatta il programmatore per riparare il codice matematico.' });
           }
         });
-      }
-    },
-    {
-      id: 'audio_queue',
-      name: 'Gestore Coda Audio',
-      description: 'Verifica che il provider audio sia collegato al gestore della coda.',
-      icon: <Volume2 className="w-5 h-5" />,
-      status: 'idle',
-      run: async () => {
-        const { audioQueueManager } = await import('../lib/AudioQueueManager');
-        if ((audioQueueManager as any).audioProvider) {
-          return { status: 'passed', message: 'Provider audio collegato correttamente. La coda può riprodurre suoni.' };
-        }
-        return { status: 'failed', message: 'Provider audio non rilevato.', solution: 'Assicurati che locationService.init() sia chiamato all\'avvio dell\'app.' };
       }
     },
     {

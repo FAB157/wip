@@ -98,7 +98,20 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
           <section>
             <h3 className="text-lg font-black text-gray-900 flex items-center gap-2">
               <FileText className="w-4 h-4 text-blue-500" />
-              5. I Tuoi Diritti (GDPR)
+              5. Età Minima
+            </h3>
+            <p>
+              L'app non è destinata a minori di 13 anni e non raccogliamo consapevolmente dati personali
+              di minori di 13 anni. Se ritieni che un minore ci abbia fornito dati personali, scrivi a{' '}
+              <a href="mailto:support@wip.guide" className="text-blue-600 font-bold">support@wip.guide</a>:
+              provvederemo a cancellarli il prima possibile.
+            </p>
+          </section>
+
+          <section>
+            <h3 className="text-lg font-black text-gray-900 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-blue-500" />
+              6. I Tuoi Diritti (GDPR)
             </h3>
             <p>
               In conformità al Regolamento UE 2016/679 (GDPR) hai diritto di: accedere ai tuoi dati, chiederne la rettifica o la
@@ -117,7 +130,7 @@ export default function PrivacyPolicy({ language }: PrivacyPolicyProps) {
           <section>
             <h3 className="text-lg font-black text-gray-900 flex items-center gap-2">
               <FileText className="w-4 h-4 text-blue-500" />
-              6. Termini d'Uso Essenziali
+              7. Termini d'Uso Essenziali
             </h3>
             <ul className="list-disc pl-5 space-y-1">
               <li>I crediti acquistati non hanno scadenza e non sono trasferibili ad altri account; quelli bonus/omaggio possono essere revocati in caso di abuso.</li>

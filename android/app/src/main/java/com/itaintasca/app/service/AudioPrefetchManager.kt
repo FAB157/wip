@@ -164,7 +164,10 @@ object AudioPrefetchManager {
             if (!local.isNullOrBlank() && pkgLang != null && pkgLang.equals(lang, ignoreCase = true)) {
                 local
             } else {
-                SupabaseClient().fetchAudioguideText(poiId, lang, character)?.takeIf { it.isNotBlank() }
+                // Token utente se disponibile (rollout fase 1, vedi commento su
+                // SupabaseClient.fetchAudioguideText): mai bloccante se assente.
+                val token = SecurePrefs.get(context).getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+                SupabaseClient().fetchAudioguideText(poiId, lang, character, token)?.takeIf { it.isNotBlank() }
             }
         } catch (_: Exception) {
             null

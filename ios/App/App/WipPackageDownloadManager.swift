@@ -82,6 +82,32 @@ final class WipPackageDownloadManager {
         store.allPackages()
     }
 
+    /// Sync incrementale di TUTTI i pacchetti "ready", uno alla volta (stessa
+    /// prudenza del refresh manuale: niente raffiche di download paralleli).
+    /// Pacchetti "downloading" (già in corso altrove) o "error" (serve un
+    /// nuovo tentativo esplicito dell'utente) sono saltati. Riusa syncPackage
+    /// così com'è — nessuna logica di delta duplicata qui, solo l'iterazione.
+    /// Chiamato dal refresh opportunistico in background (BGAppRefreshTask,
+    /// vedi AppDelegate.swift) per evitare pacchetti offline stantii finché
+    /// l'utente non apre l'app e preme "Aggiorna".
+    func syncAllPackages(completion: @escaping () -> Void) {
+        let ids = listPackages().filter { $0.status == "ready" }.map { $0.id }
+        syncNext(ids: ids, index: 0, completion: completion)
+    }
+
+    private func syncNext(ids: [String], index: Int, completion: @escaping () -> Void) {
+        guard index < ids.count else {
+            completion()
+            return
+        }
+        syncPackage(id: ids[index]) { [weak self] _ in
+            // Un pacchetto fallito (rete assente, server giù) non deve
+            // bloccare gli altri: l'errore è già persistito su status="error"
+            // da fail(), qui si prosegue e basta.
+            self?.syncNext(ids: ids, index: index + 1, completion: completion)
+        }
+    }
+
     // MARK: - Paginazione
 
     private struct PageState {
@@ -178,7 +204,13 @@ final class WipPackageDownloadManager {
                     teaserText: p["teaser_text"] as? String,
                     descriptionShort: p["description_short"] as? String,
                     audioText: p["audio_text"] as? String,
-                    updatedAt: p["updated_at"] as? String
+                    updatedAt: p["updated_at"] as? String,
+                    // /api/area/bundle non li restituisce ancora (vedi commento
+                    // su OfflinePoi.entranceLat in PoiModels.swift): letti già
+                    // qui, pronti per quando il server li aggiungerà, nil finché
+                    // non arrivano — nessun contratto server inventato.
+                    entranceLat: (p["entrance_lat"] as? NSNumber)?.doubleValue,
+                    entranceLon: (p["entrance_lon"] as? NSNumber)?.doubleValue
                 ))
             }
             if !pois.isEmpty {

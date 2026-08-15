@@ -94,9 +94,12 @@ object ListeningHistoryStore {
         try {
             if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return
             val p = prefs(appContext)
-            val userId = p.getString(PREF_USER_ID, "") ?: ""
+            // userId/accessToken vivono nello store cifrato (SecurePrefs), non
+            // più in chiaro dentro "ItaintaPrefs".
+            val securePrefs = SecurePrefs.get(appContext)
+            val userId = securePrefs.getString(PREF_USER_ID, "") ?: ""
             if (userId.isBlank()) return
-            val token = p.getString(PREF_ACCESS_TOKEN, "") ?: ""
+            val token = securePrefs.getString(PREF_ACCESS_TOKEN, "") ?: ""
             val cloudIds = SupabaseClient().fetchListeningHistoryPoiIds(userId, token) ?: return
             synchronized(this) {
                 val ids = (p.getStringSet(PREF_LISTENED_IDS, emptySet()) ?: emptySet()).toMutableSet()
@@ -115,9 +118,11 @@ object ListeningHistoryStore {
         try {
             if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return
             val p = prefs(appContext)
-            val userId = p.getString(PREF_USER_ID, "") ?: ""
+            // userId/accessToken: stesso store cifrato di syncFromCloud.
+            val securePrefs = SecurePrefs.get(appContext)
+            val userId = securePrefs.getString(PREF_USER_ID, "") ?: ""
             if (userId.isBlank()) return
-            val token = p.getString(PREF_ACCESS_TOKEN, "") ?: ""
+            val token = securePrefs.getString(PREF_ACCESS_TOKEN, "") ?: ""
             val pending = (p.getStringSet(PREF_PENDING, emptySet()) ?: emptySet()).toList()
             if (pending.isEmpty()) return
             val client = SupabaseClient()

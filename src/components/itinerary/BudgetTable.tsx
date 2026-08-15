@@ -86,7 +86,7 @@ function BudgetEntry({ icon, label, detail, price, bg }: { icon: React.ReactNode
         {icon}
       </div>
       <div className="flex-1">
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">{label}</p>
         <p className="text-sm font-medium text-gray-700">{detail}</p>
       </div>
       <div className="font-mono font-bold text-primary whitespace-nowrap">

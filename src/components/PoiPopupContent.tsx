@@ -343,24 +343,20 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                     
                     if (isMounted) { setData({...groqData}); setCachedPoiDetails(poi.id, groqData); }
                     
-                    // Prepara update object
-                    const updateObj: any = {
-                       description_long: parsedFinal.description_long,
-                       description_ai: parsedFinal.description_long,
-                       description_short: parsedFinal.description_short,
-                       audio_script: parsedFinal.audio_script,
-                       is_gem: parsedFinal.is_gem ?? poi.is_gem
-                    };
-                    if (foundImage) {
-                       updateObj.image_url = foundImage;
-                       updateObj.photo_url = foundImage;
-                    }
-
-                    // Salva nel DB principale (Supabase)
-                    supabase.from('shared_pois').update(updateObj).eq('id', poi.id).then(({error}) => {
-                       if (error) console.error("Error saving Groq stream POI:", error);
-                       else console.log(`✅ Groq stream completed and saved to DB for ${poi.name}`);
-                    });
+                    // Cache-priming via server (/api/poi/cache-enrichment):
+                    // l'update diretto su shared_pois è bloccato dall'RLS
+                    // (UPDATE solo admin) e falliva in silenzio. La rotta
+                    // scrive solo i campi ancora vuoti; is_gem NON si manda
+                    // (deciderlo spetta a curazione/admin, mai al client).
+                    import('../services/poiRepository').then(({ primePoiCache }) => {
+                       primePoiCache(poi.id, {
+                          description_long: parsedFinal.description_long,
+                          description_ai: parsedFinal.description_long,
+                          description_short: parsedFinal.description_short,
+                          audio_script: parsedFinal.audio_script,
+                          ...(foundImage ? { image_url: foundImage, photo_url: foundImage } : {})
+                       });
+                    }).catch(() => {});
                     
                     // Evento globale
                     window.dispatchEvent(new CustomEvent('poi-enriched', { detail: {
@@ -602,7 +598,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
               {poi.name}
             </h3>
             {data?.subtext && (
-              <p className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1">
+              <p className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1">
                 <MapPin className="w-2.5 h-2.5 flex-shrink-0" />
                 {data.subtext}
               </p>
@@ -644,7 +640,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
               <>
                 <button
                   onClick={() => setExpanded(e => !e)}
-                  className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-gray-400 hover:text-gray-600 transition-colors"
+                  className="flex items-center gap-1 mt-1.5 text-[10px] font-bold text-gray-500 hover:text-gray-600 transition-colors"
                 >
                   {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   {expanded ? getTranslation("show_less", language) : getTranslation("show_more", language)}
@@ -663,7 +659,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                     {/* Dati tecnici (da Wikidata) */}
                     {hasTechData && (
                       <div className="bg-gray-50 rounded-xl p-2.5 space-y-1">
-                        <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mb-1">{getTranslation("poi_historical_data", language)}</p>
+                        <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide mb-1">{getTranslation("poi_historical_data", language)}</p>
                         {techData.inception && (
                           <div className="flex items-center gap-1.5 text-[10px] text-gray-700">
                             <Clock className="w-3 h-3 text-gray-400 flex-shrink-0" />
@@ -694,7 +690,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                     {/* Informazioni pratiche */}
                     {data.practicalInfo && (
                       <div className="bg-gray-50 rounded-xl p-2.5">
-                        <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wide mb-1">{getTranslation("poi_practical_info", language)}</p>
+                        <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide mb-1">{getTranslation("poi_practical_info", language)}</p>
                         <p className="text-[10px] text-gray-600 leading-relaxed">{data.practicalInfo}</p>
                       </div>
                     )}

@@ -517,7 +517,10 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
     fun setUserContext(call: PluginCall) {
         val userId = call.getString("userId") ?: ""
         val accessToken = call.getString("accessToken") ?: ""
-        context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).edit()
+        // Identità utente cifrata (EncryptedSharedPreferences): prima
+        // userId/accessToken erano in chiaro in "ItaintaPrefs" insieme a
+        // impostazioni non sensibili. Le altre prefs restano invariate.
+        com.itaintasca.app.service.SecurePrefs.get(context).edit()
             .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_USER_ID, userId)
             .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, accessToken)
             .apply()

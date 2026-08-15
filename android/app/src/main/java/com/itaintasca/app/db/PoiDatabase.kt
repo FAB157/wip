@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 6
+    version = 7
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -111,6 +111,19 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 6→7: cap storage pacchetti offline (eviction LRU) + resume download.
+        // Migration REALE (mai distruttiva, stesso motivo della 4→5): le colonne
+        // sono nullable/con default → nessuna riga esistente viene toccata nel
+        // contenuto, solo estesa. lastAccessedAt parte da 0 sulle righe vecchie
+        // (trattate come "meno recenti" nell'eviction finché non riscaricate).
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `offline_packages` ADD COLUMN `lastAccessedAt` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `offline_packages` ADD COLUMN `pendingCursorUpdated` TEXT")
+                db.execSQL("ALTER TABLE `offline_packages` ADD COLUMN `pendingCursorId` TEXT")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         private val rtreeCallback = object : Callback() {
@@ -126,7 +139,7 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
                     // domani una migration mancante (es. 6→7 dimenticata) o un
                     // downgrade NON deve azzerare offline_packages/pois/ledger.

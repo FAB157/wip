@@ -37,6 +37,8 @@ import com.itaintasca.app.db.toPoiEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -111,37 +113,25 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         @Volatile
         private var activeMediaPlayer: android.media.MediaPlayer? = null
 
-        // Mappa tra categorie UI (del setup) e categorie DB reali
-        // Tenere allineata a isCategoryAllowed (src/hooks/useGeofencing.ts) e a
-        // categoryMap in SupabaseClient.kt
-        // Pubblica: è la copia canonica, usata anche dal filtro offline del service.
-        val CATEGORY_MAP = mapOf(
-            "monumenti" to listOf("monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"),
-            // castelli/archeo: chiavi dedicate del web (useGeofencing.ts) che
-            // seguono `monumenti` di default. Restano dentro monumenti sopra,
-            // ma esposte a parte per rispettare un eventuale toggle separato.
-            "castelli" to listOf("castle", "castelli"),
-            "archeo" to listOf("ruins", "archaeological_site", "archeo"),
-            "musei" to listOf("museum", "gallery", "musei"),
-            "chiese" to listOf("church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"),
-            "panorami" to listOf("viewpoint", "park", "panorami"),
-            "locali" to listOf("restaurant", "cafe", "bar", "fast_food", "pub", "locali"),
-            // Sync con CategoryChips/MapArea web: esperienze_locali eliminata,
-            // i mercati (marketplace) confluiscono in utilita
-            "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
-            "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie"),
-            // Gemme: chiave del toggle web. Nel prodotto sono "sempre attive",
-            // ma esposta per parità di mappa (vedi isPoiCategoryActive).
-            "gemme" to listOf("gemme"),
-            // Toggle "Consigli" del setup GeoControl: presente in SupabaseClient.kt
-            // e PoiModels.swift (iOS) — senza questa riga i POI consigli venivano
-            // scaricati ma il receiver li scartava al trigger.
-            "consigli" to listOf("information", "tourism_information", "office", "consigli"),
-            // WIP Community (Vision approvate): default OFF, MAI in culturalCats
-            // — si attiva solo col toggle dedicato. Sync: SupabaseClient.kt,
-            // PoiModels.swift, isCategoryAllowed (useGeofencing.ts).
-            "community" to listOf("community")
-        )
+        // Mappa tra categorie UI (del setup) e categorie DB reali.
+        // Copia unica in CategoryMap.kt (usata anche da SupabaseClient.kt e dal
+        // filtro offline del service): qui resta solo un alias per non rompere
+        // i riferimenti esistenti a GeofenceBroadcastReceiver.CATEGORY_MAP.
+        val CATEGORY_MAP = CategoryMap.MAP
+
+        // Sincronizzazione tra il loop predittivo in-process del servizio
+        // (firePredictedApproach) e il path broadcast dell'OS
+        // (handleEnterTransitions → handleApproach/handleArrival): entrambi
+        // possono valutare e "sparare" lo stesso trigger per lo stesso POI
+        // quasi simultaneamente, e la sola lettura-poi-scrittura su Room
+        // (TriggerState) non è una transazione atomica. Un Mutex per-POI
+        // (coroutine-friendly: tutto questo file gira già su coroutines)
+        // serializza "leggi stato → decidi → scrivi" così i due path non
+        // possono processare due volte lo stesso arrivo/avvicinamento.
+        private val triggerLocks = java.util.concurrent.ConcurrentHashMap<String, Mutex>()
+
+        private fun lockForPoi(poiId: String): Mutex =
+            triggerLocks.getOrPut(poiId) { Mutex() }
 
         /**
          * Ferma subito il teaser nativo e svuota la coda. Chiamato dal JS (plugin)
@@ -850,8 +840,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
     private suspend fun handleApproach(
         context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, db: PoiDatabase, speak: Boolean = true, distanceM: Float? = null
-    ) {
+    ): Unit = lockForPoi(poiId).withLock {
         val poi = db.poiDao().getPoiById(poiId) ?: return
+        // Ri-verifica SOTTO LOCK: il loop predittivo del servizio e questo
+        // path broadcast possono arrivare qui quasi insieme per lo stesso
+        // POI. Se nel frattempo (fuori lock) l'altro path ha già sparato
+        // l'approach o l'arrivo, non ripetiamo voce+notifica.
+        val stateNow = db.poiDao().getTriggerState(poiId)?.state ?: TriggerState.PENDING
+        if (stateNow == TriggerState.APPROACH_FIRED || stateNow == TriggerState.ARRIVED_FIRED) {
+            Log.d(TAG, "handleApproach: $poiId già $stateNow, doppio trigger evitato")
+            return
+        }
         db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.APPROACH_FIRED))
         sendEventToPlugin(context, "poiApproaching", poiId, name, poi.lat, poi.lon, distanceM)
 
@@ -896,8 +895,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
     private suspend fun handleArrival(
         context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, isAutomaticMode: Boolean, db: PoiDatabase, distanceM: Float? = null
-    ) {
+    ): Unit = lockForPoi(poiId).withLock {
         var poi = db.poiDao().getPoiById(poiId)
+        if (poi == null) {
+            // Senza il POI nel DB locale non abbiamo lat/lon reali: prima si
+            // procedeva comunque e l'evento "arrivato" partiva verso il JS con
+            // 0.0,0.0 (banner/notifica sul punto sbagliato). Meglio scartare
+            // l'evento: il prossimo fetch/refresh ripopolerà Room.
+            Log.w(TAG, "handleArrival: POI $poiId non trovato nel DB locale, evento poiArrived scartato")
+            return
+        }
+        // Ri-verifica SOTTO LOCK: stesso motivo di handleApproach — il loop
+        // predittivo del servizio e il path broadcast possono decidere
+        // l'arrivo quasi insieme per lo stesso POI.
+        val stateNow = db.poiDao().getTriggerState(poiId)?.state
+        if (stateNow == TriggerState.ARRIVED_FIRED) {
+            Log.d(TAG, "handleArrival: $poiId già ARRIVED_FIRED, doppio trigger evitato")
+            return
+        }
         db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
         sendEventToPlugin(context, "poiArrived", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0, distanceM)
 
@@ -995,8 +1010,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
                 ) {
                     // Testo NELLA LINGUA dell'utente (get-or-create per-lingua),
-                    // non i campi italiani grezzi di shared_pois.
-                    fullText = SupabaseClient().fetchAudioguideText(poiId, lang, poi?.guideDefault ?: "nicky")
+                    // non i campi italiani grezzi di shared_pois. Token utente se
+                    // disponibile (rollout fase 1, vedi SupabaseClient
+                    // .fetchAudioguideText): mai bloccante se assente.
+                    val audioguideToken = com.itaintasca.app.service.SecurePrefs.get(context)
+                        .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+                    fullText = SupabaseClient().fetchAudioguideText(poiId, lang, poi?.guideDefault ?: "nicky", audioguideToken)
                 }
                 if (mp3File == null && !fullText.isNullOrBlank() &&
                     com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
@@ -1010,6 +1029,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         prefs.edit().putInt("daypass_used", passUsed + 1).apply()
                     }
                     enqueue(context, SpeechItem(fullText ?: "", isGem, isItinerary, poiId, priority, kind = "arrival", audioFile = mp3File?.absolutePath))
+                    if (mp3File == null && !fullText.isNullOrBlank()) {
+                        // Prefetch/redirect MP3 falliti (rete lenta o server freddo):
+                        // l'intera audioguida viene letta dal TTS robotico di sistema
+                        // invece della voce AI. Evento per il JS (stesso canale di
+                        // poiArrived/poiApproaching) così può mostrare un avviso tipo
+                        // "voce di riserva, rete lenta" invece di degradare in silenzio.
+                        sendEventToPlugin(context, "audioQualityDegraded", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0)
+                    }
                     // Info aggiuntive incluse nel pass (1 livello): la descrizione
                     // breve se distinta dal testo guida.
                     // Stessa guardia lingua della guida: niente descrizione IT

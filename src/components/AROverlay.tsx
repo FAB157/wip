@@ -389,7 +389,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
               </button>
               <button
                 onClick={() => { setNeedsIosPermission(false); setPermissionsGranted(true); }}
-                className="w-full py-3 mt-2 text-gray-400 text-sm font-bold"
+                className="w-full py-3 mt-2 text-gray-500 text-sm font-bold"
               >
                 Salta (mostra tutti i POI)
               </button>

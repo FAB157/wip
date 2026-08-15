@@ -1,4 +1,4 @@
-import { Map as MapIcon, Calendar, Camera, User, Headphones } from "lucide-react";
+import { Map as MapIcon, Calendar, Camera, User, Headphones, PartyPopper } from "lucide-react";
 import { ReactNode, useState, useEffect } from "react";
 import { Language, getTranslation } from "../lib/i18n";
 
@@ -30,7 +30,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
   };
 
   return (
-    <div className="w-full sm:max-w-none bg-[#fcfaf8]-container-lowest/90 flex-shrink-0 backdrop-blur-xl border-t border-amber-100/60 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] px-2 z-[100] relative print:hidden">
+    <div className="w-full sm:max-w-none bg-[#fcfaf8]-container-lowest/90 flex-shrink-0 backdrop-blur-xl border-t border-amber-100/60 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] flex justify-around items-center h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] px-1 z-[100] relative print:hidden">
       <NavItem
         icon={<MapIcon className="w-5 h-5" />}
         label={getTranslation("explore", language)}
@@ -45,6 +45,12 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
           if (onPlanClick) onPlanClick();
           else setActiveTab("plan");
         }}
+      />
+      <NavItem
+        icon={<PartyPopper className="w-5 h-5" />}
+        label={getTranslation("eventi", language)}
+        active={activeTab === "events"}
+        onClick={() => setActiveTab("events")}
       />
       <div className="flex flex-col items-center justify-center -mt-9 relative z-10 w-[70px]">
         <button
@@ -71,7 +77,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
       <div className="relative flex flex-col items-center justify-center -mb-2">
         <button
           onClick={() => setIsAudioGuideActive(!isAudioGuideActive)}
-          className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 min-h-[48px] min-w-[64px] transition-all cursor-pointer ${isAudioGuideActive ? "text-secondary scale-105 font-bold" : "text-slate-500 font-medium hover:text-secondary"}`}
+          className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 min-h-[48px] min-w-[56px] transition-all cursor-pointer ${isAudioGuideActive ? "text-secondary scale-105 font-bold" : "text-slate-500 font-medium hover:text-secondary"}`}
         >
           <div className={`w-6 h-6 relative flex items-center justify-center ${isAudioGuideActive ? "text-secondary" : "text-slate-500"}`}>
             <Headphones className="w-full h-full" />
@@ -120,7 +126,7 @@ function NavItem({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 min-h-[48px] min-w-[64px] transition-all cursor-pointer ${colorClass} ${active ? "scale-105" : ""}`}
+      className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 min-h-[48px] min-w-[56px] transition-all cursor-pointer ${colorClass} ${active ? "scale-105" : ""}`}
     >
       <div className={`w-6 h-6 flex items-center justify-center ${active ? "text-primary" : "text-slate-500"}`}>{icon}</div>
       <span className={`text-[9px] uppercase tracking-wider ${active ? "text-primary" : "text-slate-500"}`}>

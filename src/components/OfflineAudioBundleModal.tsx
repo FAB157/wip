@@ -132,7 +132,7 @@ export default function OfflineAudioBundleModal({
               copre tutte le audioguide del viaggio per 24 ore. */}
           <div className="mb-6">
             <DayPassCard compact />
-            <p className="text-[10px] font-bold text-gray-400 text-center mt-2">
+            <p className="text-[10px] font-bold text-gray-500 text-center mt-2">
               {language === 'IT'
                 ? 'Con il Day Pass le audioguide delle prossime 24 ore sono incluse: il bundle qui sotto serve solo se vuoi i file audio permanenti.'
                 : 'With the Day Pass all audio guides for the next 24 hours are included: the bundle below is only for permanent audio files.'}
@@ -194,7 +194,7 @@ export default function OfflineAudioBundleModal({
               </label>
             ))}
             {culturalPois.length === 0 && (
-              <p className="text-xs text-gray-400 font-bold text-center py-4">Nessuna tappa culturale trovata in questo itinerario.</p>
+              <p className="text-xs text-gray-500 font-bold text-center py-4">Nessuna tappa culturale trovata in questo itinerario.</p>
             )}
           </div>
         </div>
@@ -207,9 +207,9 @@ export default function OfflineAudioBundleModal({
                 {language === 'IT' ? 'Totale Bundle' : 'Bundle Total'}
               </p>
               <div className="text-2xl font-black text-primary flex items-baseline gap-1">
-                {totalCost} <span className="text-xs text-gray-400 font-bold">Crediti</span>
+                {totalCost} <span className="text-xs text-gray-500 font-bold">Crediti</span>
               </div>
-              <p className="text-[10px] font-bold text-gray-400 mt-0.5">
+              <p className="text-[10px] font-bold text-gray-500 mt-0.5">
                 {language === 'IT' ? 'Audio permanente, tuo per sempre.' : 'Permanent audio, yours forever.'}
               </p>
             </div>

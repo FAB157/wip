@@ -30,6 +30,12 @@ async function regenerate(params: {
   mode: GuideCharacter;
   lang: string;
   previousText?: string;
+  /**
+   * Istruzione di focus FIDATA (es. "Chiedi di piu'"): il server la tratta
+   * fuori dal blocco <materiale> non fidato, cosi' non rischia di essere
+   * ignorata insieme a un eventuale tentativo di prompt-injection dentro `text`.
+   */
+  focusInstruction?: string;
 }): Promise<string | null> {
   try {
     // getApiUrl: sull'app nativa il path relativo non raggiunge le API Vercel.
@@ -57,8 +63,13 @@ export async function getOrCreateAudioguideText(
   language: string,
   character: GuideCharacter,
 ): Promise<string | null> {
-  // 1. cache (la SELECT su poi_audioguides resta consentita dalla RLS)
-  const cached = await getAudioguide(poi.id, language, character);
+  // 1. cache (la SELECT su poi_audioguides resta consentita dalla RLS).
+  //    poi_audioguides.language e' scritto SEMPRE in MAIUSCOLO lato server
+  //    (IT/EN/...): normalizziamo qui per non perdere la cache locale quando
+  //    `language` arriva in minuscolo dal chiamante. Il valore originale
+  //    (`language`) resta invariato per le chiamate HTTP piu' sotto.
+  const languageDb = language.toUpperCase();
+  const cached = await getAudioguide(poi.id, languageDb, character);
   if (cached?.audio_text) {
     await incrementAudioguidePlay(cached.id);
     return cached.audio_text;
@@ -130,16 +141,24 @@ export async function askMore(
   if (level < 1 || level > MAX_ASK_MORE_LEVEL) return null;
 
   const focus = LEVEL_FOCUS[level];
-  const details = await getAudioguide(poi.id, language, character);
+  // language in poi_audioguides e' MAIUSCOLO lato server (vedi normalizzazione
+  // in getOrCreateAudioguideText); non tocchiamo `language` originale, che qui
+  // sotto va comunque a /api/regenerate.
+  const details = await getAudioguide(poi.id, language.toUpperCase(), character);
   const baseInfo =
     details?.audio_text ||
     `${poi.name}${poi.category ? ` (${poi.category})` : ''}`;
 
+  // L'istruzione di focus va in `focusInstruction`, NON concatenata dentro
+  // `text`: quest'ultimo e' trattato dal server come materiale non fidato
+  // (anti-prompt-injection) e delimitato/ignorato come fonte di comandi, il
+  // che farebbe ignorare anche la richiesta legittima dell'app.
   return regenerate({
-    text: `${baseInfo}\n\nApprofondisci in particolare: ${focus}. Massimo 200 parole.`,
+    text: baseInfo,
     poiName: poi.name,
     mode: character,
     lang: language,
     previousText,
+    focusInstruction: `Approfondisci in particolare: ${focus}. Massimo 200 parole.`,
   });
 }

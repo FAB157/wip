@@ -10,11 +10,9 @@ import { getOrCreateAudioguideText } from './audioguideService';
 import { recordListening } from '../lib/listeningHistory';
 import type { GeofencePoi } from '../types/poi';
 import { fetchWalkingRoute } from './osrmService';
-import { getMapboxRoute, getRoadDistance, getNextNavInstruction } from '../lib/mapboxRouter';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
-import { audioQueueManager } from '../lib/AudioQueueManager';
-import { radiiForTransport, resolveTransportMode, getTransportPreference, markPlayed } from '../lib/guideSettings';
+import { radiiForTransport, resolveTransportMode, getTransportPreference, markPlayed, isCategoryAllowed } from '../lib/guideSettings';
 
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
@@ -430,6 +428,22 @@ class LocationService {
       this.activeCategories = categories;
   }
 
+  /**
+   * Legge le categorie attive del setup GeoControl (stessa chiave letta dal
+   * nativo in startNativeBackgroundService). Fonte corretta per il filtro
+   * categoria dell'audioguida: this.activeCategories arriva invece dai chip
+   * mappa (CategoryChips), un elenco di categorie diverso e non compatibile
+   * col confronto per-tag fatto da isCategoryAllowed.
+   */
+  private readActiveSubcats(): Record<string, boolean> {
+    try {
+      const stored = localStorage.getItem('wip_active_subcategories');
+      return stored ? JSON.parse(stored) : {};
+    } catch {
+      return {};
+    }
+  }
+
   public syncSettings(itinerary: any[], guideMode: 'nicky' | 'dante', language: Language, isTourActive: boolean, isMuted?: boolean) {
     this.guideMode = guideMode;
     this.language = language;
@@ -476,15 +490,10 @@ class LocationService {
       const { getGeofencePois } = await import('./poiRepository');
       let pois = await getGeofencePois(loc.latitude, loc.longitude, userId, 1000);
 
-      if (this.activeCategories.length > 0) {
-        pois = pois.filter(p => {
-          const cat = (p.category || '').toLowerCase();
-          // Gemme sempre attive (checkbox bloccata nel setup GeoControl),
-          // come nel filtro nativo (SupabaseClient.parsePoiList).
-          const isGem = p.premium || p.is_gem || cat === 'gemme';
-          return isGem || this.activeCategories.includes(cat);
-        });
-      }
+      // Filtro categoria allineato al setup GeoControl (stessa mappa
+      // categoria→bucket del nativo), non ai chip mappa (CategoryChips).
+      const activeSubcats = this.readActiveSubcats();
+      pois = pois.filter(p => isCategoryAllowed(p, activeSubcats));
 
       this.geofenceCandidates = pois;
       window.dispatchEvent(new CustomEvent('pois-updated', { detail: pois }));
@@ -718,16 +727,12 @@ class LocationService {
           const userId = sessionData?.session?.user?.id || null;
           const { getGeofencePois } = await import('./poiRepository');
           let pois = await getGeofencePois(update.latitude, update.longitude, userId, 1000);
-          
-          if (this.activeCategories.length > 0) {
-            pois = pois.filter(p => {
-              const cat = (p.category || '').toLowerCase();
-              // Gemme sempre attive, allineato al percorso nativo
-              const isGem = p.premium || p.is_gem || cat === 'gemme';
-              return isGem || this.activeCategories.includes(cat);
-            });
-          }
-          
+
+          // Stesso filtro di triggerWebPoiFetch: categorie del setup
+          // GeoControl, non i chip mappa.
+          const activeSubcats = this.readActiveSubcats();
+          pois = pois.filter(p => isCategoryAllowed(p, activeSubcats));
+
           this.geofenceCandidates = pois;
           window.dispatchEvent(new CustomEvent('pois-updated', { detail: pois }));
         } catch (e) {

@@ -3,13 +3,14 @@ import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
-  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet
+  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
 import AdminEditor from './AdminEditor';
 import AdminDiagnostics from './AdminDiagnostics';
 import AdminApiStats from './AdminApiStats';
+import AdminAffiliateStats from './AdminAffiliateStats';
 import AdminEnrichedPois from './AdminEnrichedPois';
 import AdminSystemErrors from './AdminSystemErrors';
 import AdminReports from './AdminReports';
@@ -23,7 +24,7 @@ import LevelForm from './admin/LevelForm';
 import UserEditModal from './admin/UserEditModal';
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'gamification' | 'health' | 'api_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
   // Utente aperto nella gestione completa (movimenti, rettifiche, sospensione)
   const [managedUser, setManagedUser] = useState<any | null>(null);
   const [pendingReports, setPendingReports] = useState<number>(0);
@@ -535,6 +536,15 @@ export default function AdminPanel() {
             API & Costi
           </button>
           <button
+            onClick={() => setActiveTab('affiliate_stats')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'affiliate_stats' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
+            }`}
+          >
+            <Ticket className="w-4 h-4" />
+            Affiliazioni
+          </button>
+          <button
             onClick={() => setActiveTab('enriched_pois')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
               activeTab === 'enriched_pois' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
@@ -571,6 +581,7 @@ export default function AdminPanel() {
       </div>
 
       {activeTab === 'api_stats' && <AdminApiStats />}
+      {activeTab === 'affiliate_stats' && <AdminAffiliateStats />}
       {activeTab === 'enriched_pois' && <AdminEnrichedPois />}
       {activeTab === 'system_errors' && <AdminSystemErrors />}
       {activeTab === 'vision' && <AdminVisionCommunity />}
@@ -706,12 +717,12 @@ export default function AdminPanel() {
                                 <span className="font-bold text-gray-700">Tot. consumati</span>
                                 <span className="font-black text-rose-600">{stats.totConsumed}</span>
                               </div>
-                              <p className="text-[9px] text-gray-400 mt-2 leading-snug">Da credit_transactions: copre i movimenti dall'attivazione dello storico in poi.</p>
+                              <p className="text-[9px] text-gray-500 mt-2 leading-snug">Da credit_transactions: copre i movimenti dall'attivazione dello storico in poi.</p>
                             </div>
                             <div className="bg-white rounded-xl p-3 border border-gray-100">
                               <p className="font-black uppercase tracking-wider text-[10px] text-on-surface-variant/60 mb-2">Servizi usati (log API)</p>
                               {Object.keys(stats.services).length === 0 ? (
-                                <p className="text-gray-400">Nessun servizio registrato</p>
+                                <p className="text-gray-500">Nessun servizio registrato</p>
                               ) : (
                                 Object.entries(stats.services)
                                   .sort((a: any, b: any) => b[1] - a[1])
@@ -727,12 +738,12 @@ export default function AdminPanel() {
                             <div className="bg-white rounded-xl p-3 border border-gray-100">
                               <p className="font-black uppercase tracking-wider text-[10px] text-on-surface-variant/60 mb-2">Day Pass ({stats.passes})</p>
                               {stats.passRows.length === 0 ? (
-                                <p className="text-gray-400">Nessun pass acquistato</p>
+                                <p className="text-gray-500">Nessun pass acquistato</p>
                               ) : (
                                 stats.passRows.map((p: any, i: number) => (
                                   <div key={i} className="flex justify-between py-0.5">
                                     <span className="font-bold text-gray-700">{new Date(p.activated_at).toLocaleDateString()}</span>
-                                    <span className={`font-black ${new Date(p.expires_at) > new Date() ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                    <span className={`font-black ${new Date(p.expires_at) > new Date() ? 'text-emerald-600' : 'text-gray-500'}`}>
                                       {p.guides_used}/{p.guides_cap} guide{new Date(p.expires_at) > new Date() ? ' · attivo' : ''}
                                     </span>
                                   </div>
@@ -742,12 +753,12 @@ export default function AdminPanel() {
                             <div className="bg-white rounded-xl p-3 border border-gray-100">
                               <p className="font-black uppercase tracking-wider text-[10px] text-on-surface-variant/60 mb-2">Ultimi ascolti ({stats.guides} luoghi)</p>
                               {stats.lastListened.length === 0 ? (
-                                <p className="text-gray-400">Nessuna audioguida ascoltata</p>
+                                <p className="text-gray-500">Nessuna audioguida ascoltata</p>
                               ) : (
                                 stats.lastListened.map((l: any, i: number) => (
                                   <div key={i} className="flex justify-between py-0.5 gap-2">
                                     <span className="font-bold text-gray-700 truncate">{l.poi_name || '—'}</span>
-                                    <span className="text-gray-400 shrink-0">{l.listened_at ? new Date(l.listened_at).toLocaleDateString() : ''}</span>
+                                    <span className="text-gray-500 shrink-0">{l.listened_at ? new Date(l.listened_at).toLocaleDateString() : ''}</span>
                                   </div>
                                 ))
                               )}
@@ -761,7 +772,7 @@ export default function AdminPanel() {
                 })}
                 {filteredUsers.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-10 text-center text-xs font-medium text-gray-400">
+                    <td colSpan={6} className="p-10 text-center text-xs font-medium text-gray-500">
                       {isLoading
                         ? 'Caricamento utenti...'
                         : searchTerm
@@ -986,7 +997,7 @@ export default function AdminPanel() {
                         {challenge.reward_credits > 0 ? (
                           <span className="text-emerald-600">+{challenge.reward_credits} Crediti</span>
                         ) : (
-                          <span className="text-gray-400">Nessuno (Solo XP)</span>
+                          <span className="text-gray-500">Nessuno (Solo XP)</span>
                         )}
                       </td>
                       <td className="p-4 text-right flex items-center justify-end gap-2">
@@ -1009,7 +1020,7 @@ export default function AdminPanel() {
                   ))}
                   {gamificationChallenges.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-8 text-center text-gray-400 font-medium text-xs">
+                      <td colSpan={4} className="p-8 text-center text-gray-500 font-medium text-xs">
                         Nessuna sfida configurata. Creane una col form qui sopra.
                       </td>
                     </tr>
@@ -1072,7 +1083,7 @@ export default function AdminPanel() {
                   ))}
                   {gamificationLevels.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-gray-400 font-medium text-xs">
+                      <td colSpan={5} className="p-8 text-center text-gray-500 font-medium text-xs">
                         Nessun livello trovato. Aggiungine uno qui sopra.
                       </td>
                     </tr>

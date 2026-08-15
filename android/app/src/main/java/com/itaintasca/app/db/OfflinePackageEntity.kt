@@ -22,7 +22,20 @@ data class OfflinePackageEntity(
     val downloadedAt: Long = 0L,
     /** ISO-8601 (meta.generatedAt del server): base del prossimo delta sync */
     val lastSyncAt: String? = null,
-    val status: String = "downloading" // downloading | ready | error
+    val status: String = "downloading", // downloading | ready | error
+    /**
+     * Ultimo utilizzo (download/resync completato): chiave della eviction LRU
+     * quando lo storage offline supera MAX_OFFLINE_STORAGE_MB. Righe migrate da
+     * schema precedente hanno 0 → trattate come "più vecchie" nell'eviction.
+     */
+    val lastAccessedAt: Long = 0L,
+    /**
+     * Checkpoint della paginazione keyset (vedi PackageDownloadManager.runPages):
+     * un download interrotto riparte da qui invece che da pagina 1. Azzerati a
+     * download completato.
+     */
+    val pendingCursorUpdated: String? = null,
+    val pendingCursorId: String? = null
 )
 
 /**
