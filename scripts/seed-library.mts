@@ -122,9 +122,25 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig as NodeJS.Signals, () => { console.log(`${ts()} ${sig}: chiudo dopo l'item in corso.`); stop = true; });
 }
 
+// Il database può essere momentaneamente in ginocchio (è successo il
+// 18/08/2026: PGRST002 su tutte le rotte per un'ora). In quel caso NON si
+// insiste e non si esce sbattendo la porta — pm2 riavvierebbe subito
+// aggiungendo carico: si aspetta in silenzio, con un sondaggio ogni 5
+// minuti, e si comincia solo quando il database è tornato.
+async function attendiDatabase(): Promise<Set<string>> {
+  for (let tentativo = 1; ; tentativo++) {
+    try {
+      return await loadSeeded();
+    } catch (e: any) {
+      console.warn(`${ts()} database non disponibile (${String(e.message).slice(0, 120)}) — riprovo tra 5 minuti [${tentativo}]`);
+      await sleep(5 * 60 * 1000);
+    }
+  }
+}
+
 const all = getPriorityDescriptors();
 const state = loadState();
-let seeded = await loadSeeded();
+let seeded = await attendiDatabase();
 console.log(`${ts()} avvio su ${API} — catalogo ${all.length} descrittori, ${seeded.size} già in biblioteca, ${all.length - seeded.size} da fare.`);
 
 let salvati = 0, scartati = 0, rimandati = 0, daUltimoRefresh = 0, erroriDiFila = 0;
@@ -185,7 +201,12 @@ for (const d of all) {
 
   if (++daUltimoRefresh >= REFRESH_EVERY) {
     daUltimoRefresh = 0;
-    try { seeded = await loadSeeded(); } catch (e: any) { console.warn(`${ts()} refresh lista fallito: ${e.message}`); }
+    try { seeded = await loadSeeded(); } catch (e: any) {
+      // Se il database si è appena piantato, meglio fermarsi qui che
+      // continuare a generare item che non riusciremmo a salvare.
+      console.warn(`${ts()} refresh lista fallito (${String(e.message).slice(0, 120)}): aspetto che il database torni.`);
+      seeded = await attendiDatabase();
+    }
   }
   await sleep(PAUSE);
 }
