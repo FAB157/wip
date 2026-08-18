@@ -243,7 +243,12 @@ const VIATOR_DESTINATION_MAP: Record<string, number> = {
   "tel aviv": 22156,
 };
 
-const VIATOR_API_HOST = process.env.VIATOR_PRODUCTION === 'true' ? "api.viator.com" : "api.sandbox.viator.com";
+// Host valutato AL MOMENTO DELLA CHIAMATA, non all'import: nel bundle di
+// produzione (dist/server.cjs) questo modulo viene inizializzato PRIMA che
+// server.ts esegua dotenv.config(), quindi una costante qui leggerebbe sempre
+// un process.env vuoto e finirebbe sulla sandbox — che con una chiave di
+// produzione risponde 401 "Invalid API Key" (visto sul droplet il 18/08/2026).
+const viatorApiHost = () => (process.env.VIATOR_PRODUCTION === 'true' ? "api.viator.com" : "api.sandbox.viator.com");
 
 async function resolveDestinationId(cityName: string, apiKey: string): Promise<number | null> {
   if (!cityName) return null;
@@ -269,7 +274,7 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
       // sempre e si finiva sul fallback freetext dei prodotti.
       pagination: { start: 1, count: 5 }
     };
-    const res = await axios.post(`https://${VIATOR_API_HOST}/partner/search/freetext`, payload, {
+    const res = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, payload, {
       headers: {
         "exp-api-key": apiKey,
         "Accept": "application/json;version=2.0",
@@ -289,7 +294,7 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
     }
     
     // In alternativa, tentiamo l'API /locations/search (se supportata dal sandbox v2)
-    const locRes = await axios.post(`https://${VIATOR_API_HOST}/partner/locations/search`, {
+    const locRes = await axios.post(`https://${viatorApiHost()}/partner/locations/search`, {
       locations: [{ locationName: cityName }]
     }, {
       headers: {
@@ -374,7 +379,7 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
         currency: "EUR",
         pagination: { start: 1, count: 8 }
       };
-      const freeRes = await axios.post(`https://${VIATOR_API_HOST}/partner/search/freetext`, freePayload, {
+      const freeRes = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, freePayload, {
         headers: {
           "exp-api-key": apiKey,
           "Accept": "application/json;version=2.0",
@@ -407,7 +412,7 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
       currency: "EUR"
     };
     
-    const prodRes = await axios.post(`https://${VIATOR_API_HOST}/partner/products/search`, prodPayload, {
+    const prodRes = await axios.post(`https://${viatorApiHost()}/partner/products/search`, prodPayload, {
       headers: {
         "exp-api-key": apiKey,
         "Accept": "application/json;version=2.0",
