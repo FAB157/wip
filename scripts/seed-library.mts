@@ -97,10 +97,15 @@ async function loadSeeded(): Promise<Set<string>> {
   return out;
 }
 
+// Attesa massima per un item: deve SUPERARE il budget sincrono del server
+// (LIB_SYNC_BUDGET_MS: 270s su Vercel, 900s sul droplet), altrimenti si
+// abortisce dal lato client una generazione che sta ancora lavorando — e il
+// lavoro fatto si perde comunque, perché l'item viene salvato solo alla fine.
+const TIMEOUT_MS = (Number(K('LIB_SYNC_BUDGET_MS')) || 270000) + 90000;
+
 async function generate(d: any): Promise<{ status: number; body: any }> {
   const ctrl = new AbortController();
-  // La rotta ha un budget sincrono di 270s dentro il maxDuration 300s.
-  const to = setTimeout(() => ctrl.abort(), 320000);
+  const to = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const r = await fetch(`${API}/api/library/request`, {
       method: 'POST',

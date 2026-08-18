@@ -8015,18 +8015,16 @@ ${description}
 
   app.get("/api/admin/beni-culturali", rateLimiter, requireAdmin, async (req, res) => {
     try {
-      const { q, country, tier, source, promoted, limit, offset } = req.query as any;
-      // GUARDIA ANTI-INCIDENTE (18/08/2026): la ricerca testuale libera e il
-      // filtro "solo già POI" sono esattamente le due query che hanno messo
-      // giù il DB di produzione — su 1,8 M di righe senza indici sono
-      // scansioni sequenziali complete che bruciano il budget di Disk IO.
-      // Finché la migration 20260818120000_beni_culturali_indici.sql non è
-      // applicata, si accettano SOLO se accompagnate da un filtro per fonte,
-      // che riduce l'insieme a un ordine di grandezza gestibile.
-      if ((q || promoted === 'si') && !source) {
+      const { q, comune, country, tier, source, promoted, limit, offset } = req.query as any;
+      // Gli indici trigram sono in produzione dal 18/08: la ricerca per nome
+      // sull'intero atlante sta sotto il secondo. Resta una sola eccezione —
+      // "solo già POI" è un `or=(... not.is.null)` che nessun indice copre e
+      // che su 1,8 M di righe costa 5 secondi: lo si accetta solo con un
+      // filtro per fonte, che passa dall'indice (source, name).
+      if (promoted === 'si' && !source) {
         return res.status(400).json({
-          error: 'Scegli prima una fonte (es. FAI o Catalogo MiC): senza indici la ricerca '
-            + "sull'intero atlante (1,8 milioni di beni) manda in timeout il database.",
+          error: 'Per elencare i beni già collegati a un POI scegli prima una fonte: '
+            + "sull'intero atlante quella query non ha un indice e costa troppo.",
           serve: 'source',
         });
       }
@@ -8037,9 +8035,16 @@ ${description}
       // "promosso" = ha già un POI turistico collegato, in un verso o nell'altro.
       if (promoted === 'si') filtri.push('or=(promoted_poi_id.not.is.null,matched_poi_id.not.is.null)');
       if (promoted === 'no') filtri.push('promoted_poi_id.is.null', 'matched_poi_id.is.null');
+      // Una colonna per volta, MAI `or=(name.ilike…,comune.ilike…)`: l'OR fra
+      // due indici GIN produce un piano scadente e costa 4,7s, mentre le due
+      // ricerche separate stanno a 629ms e 283ms. Il comune ha il suo campo.
       if (q) {
         const t = String(q).replace(/[(),*]/g, ' ').trim();
-        if (t) filtri.push(`or=(name.ilike.*${encodeURIComponent(t)}*,comune.ilike.*${encodeURIComponent(t)}*)`);
+        if (t) filtri.push(`name=ilike.*${encodeURIComponent(t)}*`);
+      }
+      if (comune) {
+        const t = String(comune).replace(/[(),*]/g, ' ').trim();
+        if (t) filtri.push(`comune=ilike.*${encodeURIComponent(t)}*`);
       }
       const lim = Math.min(Number(limit) || 50, 200);
       const off = Number(offset) || 0;
@@ -9719,8 +9724,21 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
 
   function libraryUserPrompt(d: any, ctxBlock: string): string {
     const angleBrief = LIB_ANGLE_BRIEFS[d.angle] || '';
+    // La finestra oraria in TESTA al prompt, non solo dentro i vincoli: nei
+    // porti il modello la ignorava sistematicamente (misurato il 18/08/2026:
+    // 4 item di Venezia su 4 scartati per l'ultima tappa oltre la scadenza,
+    // tutti e 3 i tentativi). Detta come conto aritmetico è molto più
+    // difficile da ignorare.
+    const finestra = (() => {
+      if (d.kind !== 'port' && d.kind !== 'airport') return '';
+      const buffer = Number(d.constraints?.returnBufferHours) || LIB_DEFAULT_BUFFER[d.kind];
+      const oreUtili = Math.max(1, d.hours - buffer);
+      const target = libFmtHM(LIB_DAY_START_MIN + Math.round(oreUtili * 60) - 30);
+      return `FINESTRA ORARIA OBBLIGATORIA: dalle 09:00 alle ${target}, cioè ${Math.floor(oreUtili)} ore scarse in tutto, rientro incluso. NESSUN orario dell'itinerario può superare le ${target}. Conta le ore prima di scrivere le tappe: se non ci stanno, TOGLI TAPPE — non allungare la giornata.`;
+    })();
     const parts = [
       `Crea un itinerario ottimizzato di ${d.days} ${d.days === 1 ? 'giorno' : 'giorni'} per "${d.title}" a ${d.city}${d.country ? ` (${d.country})` : ''}.`,
+      finestra,
       `LA DESTINAZIONE SI TROVA ESATTAMENTE ALLE COORDINATE lat ${d.coords.lat}, lon ${d.coords.lon}. Tutte le tappe devono trovarsi in quella città/area, NON in località omonime o in altri paesi.`,
       `TAGLIO EDITORIALE "${d.angle}"${d.theme ? ` (tema: ${d.theme})` : ''}${angleBrief ? `: ${angleBrief}` : ''}.`,
       d.brief ? `BRIEF EDITORIALE SPECIFICO (vincolante):\n${d.brief}` : '',
@@ -9743,8 +9761,12 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
 
   async function libraryGenerateItinerary(d: any, ctxBlock: string, feedback: string[] | null, engine: string = 'agnes'): Promise<any> {
     const sys = librarySystemPrompt(d);
+    // Se il problema è la scadenza di rientro, dire "correggi" non basta: il
+    // modello riscrive lo stesso programma con altri nomi. Gli si dice cosa
+    // fare materialmente, cioè togliere tappe.
+    const sforaScadenza = (feedback || []).some((p) => /oltre la scadenza/i.test(String(p)));
     const fb = feedback && feedback.length
-      ? `\n\nPROBLEMI RILEVATI DALLA REVISIONE PRECEDENTE — questa è la rigenerazione correttiva, correggili TUTTI:\n- ${feedback.slice(0, 12).join('\n- ')}`
+      ? `\n\nPROBLEMI RILEVATI DALLA REVISIONE PRECEDENTE — questa è la rigenerazione correttiva, correggili TUTTI:\n- ${feedback.slice(0, 12).join('\n- ')}${sforaScadenza ? '\n\nCOME SI CORREGGE LA SCADENZA: elimina una o due tappe (le meno importanti, non il rientro) e accorcia le durate finché l\'ultima tappa si conclude PRIMA dell\'orario indicato. Un itinerario con tre tappe che rispetta l\'orario è corretto; uno con sei tappe che sfora è da buttare.' : ''}`
       : '';
     const baseUser = libraryUserPrompt(d, ctxBlock);
     if (d.days <= LIB_SINGLE_CALL_MAX_DAYS) {
