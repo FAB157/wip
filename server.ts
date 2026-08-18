@@ -158,10 +158,15 @@ async function callUniversalAi(
       // llama-3.3-70b-versatile dismesso da Groq il 16/08/2026:
       // openai/gpt-oss-120b è il rimpiazzo raccomandato (stesso tier gratuito).
       finalModel = options.model || "openai/gpt-oss-120b";
+      // Le options vengono passate pari pari all'SDK: i campi di controllo
+      // NOSTRI (strictEngine, excludeEngines) sono sconosciuti a Groq e
+      // farebbero un 400 — vanno tolti qui, una volta per tutte, invece di
+      // ricordarsi caso per caso di non impostarli.
+      const { strictEngine: _se, excludeEngines: _ee, ...groqOptions } = options as any;
       const r = await groqInstance.chat.completions.create({
         messages,
         model: finalModel,
-        ...options
+        ...groqOptions
       });
       textContent = r.choices?.[0]?.message?.content || "";
       responseData = r;
@@ -222,7 +227,7 @@ async function callUniversalAi(
   // fa parte della promessa al cliente, es. podcast e guide d'autore).
   // "gemini" è escluso dalle code: tryEngine non lo gestisce e restituiva
   // sempre false, mascherando la catena reale nei log.
-  const engineQueue = options.strictEngine
+  const baseQueue = options.strictEngine
     ? [primaryEngine]
     : primaryEngine === "agnes"
       ? ["agnes", "groq", "deepseek"]
@@ -231,6 +236,14 @@ async function callUniversalAi(
         // Groq (arricchimento POI, teaser, contenuti brevi): fallback su
         // Agnes come richiesto, DeepSeek solo come ultima rete di sicurezza.
         : ["groq", "agnes", "deepseek"];
+
+  // options.excludeEngines = motori vietati per QUESTA chiamata, fallback
+  // compreso. Regola del committente (18/08/2026): DeepSeek è a pagamento e
+  // si usa SOLO quando c'è un utente che aspetta in diretta, MAI nei lavori
+  // in background — dove rientrava di nascosto in fondo alla coda di
+  // fallback di agnes e di groq.
+  const vietati = new Set((options.excludeEngines || []).map((e: string) => String(e)));
+  const engineQueue = baseQueue.filter((e) => !vietati.has(e));
 
   let success = false;
   let lastError = null;
@@ -9749,9 +9762,15 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
 
   // ── GENERAZIONE (Agnes primario; a blocchi da 2 giorni oltre i 3) ───────
   async function libraryCallGenerator(systemPrompt: string, userPrompt: string, feature: string, engine: string = 'agnes'): Promise<any> {
+    // DeepSeek SOLO quando è stato chiesto esplicitamente, cioè quando c'è un
+    // utente in attesa (live:true su /api/library/request). Nella semina di
+    // massa il motore è agnes e DeepSeek non deve rientrare nemmeno come
+    // fallback: è l'unico a pagamento della catena.
+    const opts: any = { temperature: 0.7, response_format: { type: 'json_object' }, max_tokens: 8192 };
+    if (engine !== 'deepseek') opts.excludeEngines = ['deepseek'];
     const resp = await callUniversalAi(engine as any,
       [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
-      { temperature: 0.7, response_format: { type: 'json_object' }, max_tokens: 8192 },
+      opts,
       feature, supabaseUrl, supabaseServiceKey, null);
     if (resp?.truncated) throw new Error('output del generatore troncato (finish_reason=length)');
     const obj = libParseJsonLoose(resp?.data);
@@ -10036,7 +10055,11 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         const opts: any = { temperature: 0.2, response_format: { type: 'json_object' } };
         // strictEngine NON sul ramo groq: lì le options vengono passate
         // pari pari all'SDK (...options) e un campo sconosciuto è un 400.
+        // Su groq serve però il divieto esplicito: la sua coda di fallback
+        // finisce su DeepSeek, che qui non deve MAI entrare (revisione di
+        // ogni tentativo = costi fuori controllo, ed è lavoro di background).
         if (eng !== 'groq') opts.strictEngine = true;
+        else opts.excludeEngines = ['deepseek'];
         const resp = await callUniversalAi(eng,
           [{ role: 'system', content: sys }, { role: 'user', content: user }],
           opts, 'library_verify', supabaseUrl, supabaseServiceKey, null);

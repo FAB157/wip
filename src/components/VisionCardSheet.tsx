@@ -183,12 +183,18 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
   };
 
   return (
-    <div className="fixed inset-0 z-[2500] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center">
+    <div
+      className="fixed inset-0 z-[2500] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center"
+      // Tocco fuori dalla scheda = chiudi: su telefono è il gesto che si
+      // prova per primo, e l'Escape non esiste.
+      onClick={onClose}
+    >
       <motion.div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={card.nome || 'Scheda Vision'}
+        onClick={(e) => e.stopPropagation()}
         initial={{ y: 80, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', damping: 26, stiffness: 300 }}
@@ -204,12 +210,18 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
             </div>
           )}
           <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/70 to-transparent" />
+          {/* Velo scuro in alto: senza, i pulsanti bianchi sparivano sulle
+              foto chiare (segnalato su una foto di spiaggia). */}
+          <div className="absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/45 to-transparent pointer-events-none" />
+          {/* Maniglia da bottom sheet: dice a colpo d'occhio che la scheda
+              si chiude. */}
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 w-10 h-1.5 rounded-full bg-white/70 pointer-events-none sm:hidden" />
           <button
             onClick={onClose}
             aria-label="Chiudi"
-            className="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white active:scale-90 transition-transform"
+            className="absolute top-4 right-4 w-11 h-11 rounded-full bg-white text-slate-900 flex items-center justify-center shadow-lg ring-1 ring-black/10 active:scale-90 transition-transform"
           >
-            <X className="w-5 h-5" />
+            <X className="w-6 h-6" />
           </button>
           {photo && (
             <div className="absolute top-4 left-4 flex gap-2">
@@ -274,6 +286,16 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
           <p className="text-[10px] text-slate-400 text-center mt-2">
             Scheda generata dall'AI e salvata nella tua collezione.
           </p>
+
+          {/* Terza via d'uscita, in fondo al testo: chi legge tutta la scheda
+              si ritrova il pulsante sotto il pollice invece di dover tornare
+              in cima a cercare la X. */}
+          <button
+            onClick={onClose}
+            className="w-full mt-5 py-3.5 rounded-2xl bg-slate-100 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform"
+          >
+            Chiudi
+          </button>
         </div>
       </motion.div>
     </div>

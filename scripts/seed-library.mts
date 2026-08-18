@@ -20,9 +20,8 @@
 // Perché /api/library/request e non /seed o /seed-cron: quelle due vogliono
 // il CRON_SECRET o un token admin; /request è pubblica per disegno (la
 // generazione è gratuita) e permette di scegliere qui l'ordine e di saltare
-// da soli ciò che è già fatto. `live: true` = motore DeepSeek: su Vercel
-// Agnes andrebbe comunque in timeout a 60s (impiega 2-4 minuti) bruciando
-// un minuto per chiamata.
+// da soli ciò che è già fatto. Si chiama SENZA `live`, quindi con Agnes:
+// DeepSeek è a pagamento e va usato solo quando c'è un utente in attesa.
 //
 // Uso:   pm2 start ecosystem.config.cjs --only seed-library
 //        pm2 logs seed-library
@@ -110,7 +109,12 @@ async function generate(d: any): Promise<{ status: number; body: any }> {
     const r = await fetch(`${API}/api/library/request`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ descriptor: d, live: true }),
+      // NIENTE live:true. `live` significa "c'è un utente che aspetta" e
+      // accende DeepSeek, che è a pagamento: regola del committente, DeepSeek
+      // solo in diretta, mai nella semina di massa. Qui il motore è Agnes con
+      // Groq di riserva; sono più lenti (2-4 minuti a chiamata) ma sul
+      // droplet non c'è nessun limite di tempo.
+      body: JSON.stringify({ descriptor: d }),
       signal: ctrl.signal,
     });
     const txt = await r.text();
