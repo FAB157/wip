@@ -18,12 +18,14 @@ import com.itaintasca.app.db.PoiEntity
 import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
+import com.itaintasca.app.geofence.ActivityMonitor
 import com.itaintasca.app.geofence.CategoryMap
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
 import com.itaintasca.app.geofence.PredictiveTrigger
 import com.itaintasca.app.geofence.RoadSnap
 import com.itaintasca.app.geofence.TriggerTelemetry
+import com.itaintasca.app.widget.WipWidgetProvider
 import kotlinx.coroutines.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -113,12 +115,25 @@ class ItaintaBackgroundPoiService : Service() {
     // sovrapporsi alle query su Room).
     private val predictiveBusy = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    // ── Gate anti-teletrasporto GPS (fusione GPS + Activity Recognition) ──
+    // Ultimo fix ACCETTATO e fix "sospetto" in attesa di conferma: fermo da
+    // >5 min (STILL) + salto >100 m = quasi certamente rumore GPS, non un
+    // vero spostamento. Vedi isGpsTeleport().
+    private var lastAcceptedFix: Location? = null
+    private var suspectFix: Location? = null
+
     override fun onCreate() {
         super.onCreate()
         db = PoiDatabase.getInstance(this)
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
         geofenceManager = GeofenceManager(this)
         createNotificationChannel()
+        // Fusione GPS + movimento (fail-safe: senza permesso/Play Services non
+        // fa nulla e il comportamento resta identico a prima).
+        ActivityMonitor.start(this)
+        // «Salute del viaggio»: baseline del contapassi appena il service
+        // nasce (fail-safe: senza permesso/sensore non fa nulla).
+        StepTracker.record(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -274,12 +289,63 @@ class ItaintaBackgroundPoiService : Service() {
         }
         if (target == guideMode) { modeSwitchStreak = 0; return }
         modeSwitchStreak++
-        if (modeSwitchStreak < 3) return
+        // CORROBORAZIONE ACTIVITY RECOGNITION (leggera, sopra l'isteresi GPS
+        // esistente): se i sensori confermano il target il cambio scatta con
+        // 2 fix invece di 3 (meno latenza reale in auto); se lo contraddicono
+        // si resta prudenti a 4. Senza dato (UNKNOWN) → 3, identico a prima.
+        val act = ActivityMonitor.currentType(this)
+        val onFoot = act == com.google.android.gms.location.DetectedActivity.WALKING ||
+            act == com.google.android.gms.location.DetectedActivity.ON_FOOT
+        val inVehicle = act == com.google.android.gms.location.DetectedActivity.IN_VEHICLE
+        val requiredStreak = when {
+            inVehicle && target == "driving" -> 2
+            onFoot && target == "walking" -> 2
+            inVehicle && target == "walking" -> 4
+            onFoot && target == "driving" -> 4
+            else -> 3
+        }
+        if (modeSwitchStreak < requiredStreak) return
         modeSwitchStreak = 0
         guideMode = target
         getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit { putString("guideMode", guideMode) }
         lastQueryLocation = null
         Log.d(TAG, "Travel mode switched to $guideMode (${kmh.toInt()} km/h)")
+    }
+
+    /**
+     * Gate anti-teletrasporto: con l'utente FERMO (STILL da >5 min secondo
+     * l'Activity Recognition) un salto di posizione >100 m in un solo fix è
+     * quasi certamente rumore GPS (canyon urbano, indoor, rimbalzo Wi-Fi) e
+     * NON un vero spostamento: valutare quel fix produrrebbe falsi trigger.
+     *
+     * Anti-blocco: il fix sospetto viene memorizzato; se il fix SUCCESSIVO lo
+     * conferma (entro 150 m) lo spostamento era reale e si accetta — così un
+     * trasloco vero (es. risveglio del GPS dopo un tunnel) non resta soppresso
+     * per sempre. Fail-safe: senza dato attività (permesso negato, niente Play
+     * Services) stillForMs è 0 e il gate non scatta mai.
+     */
+    private fun isGpsTeleport(location: Location): Boolean {
+        val prev = lastAcceptedFix
+        val stillMs = ActivityMonitor.stillForMs(this)
+        if (prev != null && stillMs > 5 * 60_000L) {
+            val jump = prev.distanceTo(location)
+            if (jump > 100f) {
+                val suspect = suspectFix
+                if (suspect != null && suspect.distanceTo(location) <= 150f) {
+                    // Due fix coerenti fra loro: lo spostamento è reale.
+                    suspectFix = null
+                    lastAcceptedFix = location
+                    Log.d(TAG, "Salto GPS confermato dal secondo fix (${jump.toInt()}m): accettato")
+                    return false
+                }
+                suspectFix = location
+                Log.w(TAG, "Teletrasporto GPS ignorato: salto ${jump.toInt()}m con utente fermo da ${stillMs / 1000}s")
+                return true
+            }
+        }
+        suspectFix = null
+        lastAcceptedFix = location
+        return false
     }
 
     /** Ripristina le impostazioni salvate quando il servizio riparte senza extras. */
@@ -329,9 +395,23 @@ class ItaintaBackgroundPoiService : Service() {
                 // Heartbeat per ServiceWatchdog: scritto a OGNI fix processato
                 // (IDLE incluso, ~20s/batch 60s a piedi) così il watchdog sa
                 // che il servizio è vivo senza doverlo riavviare alla cieca.
+                // lastFixLat/Lon: ultima posizione nota per il widget home
+                // (WipWidgetProvider calcola il POI più vicino da Room).
                 getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit {
                     putLong(PREF_LAST_HEARTBEAT, System.currentTimeMillis())
+                    putFloat("lastFixLat", location.latitude.toFloat())
+                    putFloat("lastFixLon", location.longitude.toFloat())
                 }
+
+                // «Salute del viaggio»: aggiorna il bucket passi del giorno
+                // (throttle interno 1/min, listener one-shot: costo ~zero).
+                StepTracker.record(this@ItaintaBackgroundPoiService)
+
+                // GATE ANTI-TELETRASPORTO (Activity Recognition): fermo da >5
+                // min e posizione che salta di colpo >100 m = falso trigger da
+                // rumore GPS → il fix si logga e si ignora. Fail-safe: senza
+                // stato attività il gate non scatta mai.
+                if (isGpsTeleport(location)) return
 
                 if (lastQueryLocation == null && currentPois.isEmpty()) {
                     updateNotificationAndStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
@@ -834,6 +914,9 @@ class ItaintaBackgroundPoiService : Service() {
                         }
                         updateNotificationAndStatus("Audioguida attiva", "${pois.size} luoghi monitorati")
                         sendEventToPlugin("poisDownloaded", gson.toJson(pois))
+                        // Widget home: dati freschi (POI più vicino) senza
+                        // aspettare il refresh periodico dei 30 min.
+                        WipWidgetProvider.pushUpdate(this@ItaintaBackgroundPoiService)
                         
                         // ✅ [SCOPERTA GEMME] - Se troviamo una gemma vicina mai vista, inviamo notifica specifica
                         val newGems = pois.filter { it.isGem }
@@ -916,6 +999,7 @@ class ItaintaBackgroundPoiService : Service() {
 
             updateNotificationAndStatus("Audioguida attiva (offline)", "${pois.size} luoghi dal pacchetto offline")
             sendEventToPlugin("poisDownloaded", gson.toJson(pois))
+            WipWidgetProvider.pushUpdate(this@ItaintaBackgroundPoiService)
             Log.d(TAG, "Offline window: ${pois.size} POIs from local packages")
             true
         } catch (e: Exception) {
@@ -1100,6 +1184,7 @@ class ItaintaBackgroundPoiService : Service() {
         locationCallback = null
 
         geofenceManager.removeAllGeofences()
+        ActivityMonitor.stop(this)
 
         // Suggerimento al GC e rilascio risorse pesanti
         currentPois = emptyList()

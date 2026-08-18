@@ -1,21 +1,29 @@
 // =====================================================================
-// ITAINTA · NavigationOverlay — overlay del navigatore pedonale
-// Mostra istruzione corrente, distanza alla prossima svolta, distanza e
-// tempo stimato alla destinazione, e il pulsante STOP.
-// Si pilota con i valori restituiti da useWalkingNavigation.
+// ITAINTA · NavigationOverlay — overlay del navigatore pedonale "WIP Nav"
+// Impaginato come un navigatore vero: freccia della manovra, distanza alla
+// svolta in evidenza, istruzione per esteso, barra di avanzamento e piede
+// con distanza/tempo/orario d'arrivo. Si pilota con useWalkingNavigation.
 // =====================================================================
 
 import { createPortal } from 'react-dom';
-import { Navigation2, Flag, Clock, X, Volume2 } from 'lucide-react';
-import type { NavState } from '../hooks/useWalkingNavigation';
+import {
+  Flag, Clock, X, Volume2, Footprints, Navigation2, ArrowUp, ArrowUpLeft,
+  ArrowUpRight, ArrowLeft, ArrowRight, CornerUpLeft, CornerUpRight,
+  RotateCcw, RotateCw, RefreshCw, MapPin,
+} from 'lucide-react';
+import type { NavState, ManeuverInfo } from '../hooks/useWalkingNavigation';
 import { getTranslation, type Language } from '../lib/i18n';
 
 interface NavigationOverlayProps {
   state: NavState;
   currentInstruction: string | null;
+  /** Manovra strutturata: decide QUALE freccia disegnare. */
+  currentManeuver?: ManeuverInfo | null;
   distanceToNext: number | null;
   distanceToDestination: number | null;
   etaSeconds: number | null;
+  /** Avanzamento 0..1 per la barra in cima. */
+  progress?: number | null;
   poiName?: string;
   onStop: () => void;
   onNextStop?: () => void;
@@ -36,12 +44,51 @@ function fmtEta(sec: number | null): string {
   return min < 1 ? '<1 min' : `${min} min`;
 }
 
+/** Orario stimato di arrivo (come nei navigatori): adesso + ETA. */
+function fmtArrivalClock(sec: number | null, language: Language): string | null {
+  if (sec == null) return null;
+  const at = new Date(Date.now() + sec * 1000);
+  try {
+    return at.toLocaleTimeString(String(language || 'IT').toLowerCase(), {
+      hour: '2-digit', minute: '2-digit',
+    });
+  } catch {
+    return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  }
+}
+
+/**
+ * Icona direzionale della manovra. OSRM espone type + modifier: qui si
+ * traducono nella freccia che l'utente si aspetta di vedere (prima c'era
+ * sempre e comunque la stessa icona generica, inutile a colpo d'occhio).
+ */
+function maneuverIcon(m?: ManeuverInfo | null) {
+  const type = (m?.type || '').toLowerCase();
+  const mod = (m?.modifier || '').toLowerCase();
+
+  if (type === 'arrive') return Flag;
+  if (type === 'depart') return Footprints;
+  if (type === 'reroute') return RefreshCw;
+  if (type === 'roundabout' || type === 'rotary') return mod.includes('left') ? RotateCcw : RotateCw;
+  if (mod === 'uturn') return RotateCcw;
+  if (mod === 'sharp left') return ArrowLeft;
+  if (mod === 'sharp right') return ArrowRight;
+  if (mod === 'slight left') return ArrowUpLeft;
+  if (mod === 'slight right') return ArrowUpRight;
+  if (mod === 'left') return CornerUpLeft;
+  if (mod === 'right') return CornerUpRight;
+  if (mod === 'straight' || type === 'continue' || type === 'new name') return ArrowUp;
+  return Navigation2;
+}
+
 export default function NavigationOverlay({
   state,
   currentInstruction,
+  currentManeuver,
   distanceToNext,
   distanceToDestination,
   etaSeconds,
+  progress,
   poiName,
   onStop,
   onNextStop,
@@ -52,71 +99,143 @@ export default function NavigationOverlay({
 
   const arrived = state === 'arrived';
   const t = (k: string) => getTranslation(k, language);
+  const Icon = maneuverIcon(arrived ? { type: 'arrive' } : currentManeuver);
+  // Svolta imminente: la freccia pulsa piano, come nei navigatori.
+  const imminent = state === 'navigating' && distanceToNext != null && distanceToNext <= 30;
+  const pct = Math.round(Math.min(1, Math.max(0, progress ?? 0)) * 100);
+  const arrivalClock = fmtArrivalClock(etaSeconds, language);
 
   // Portal su body: il banner vive dentro il tab "plan", che riceve
   // display:none quando si apre la scheda POI (cambio tab automatico al
   // trigger audio) — un fixed dentro un antenato nascosto sparisce. Col
   // portal il banner resta visibile durante tutta la navigazione.
   return createPortal(
-    <div className="fixed top-0 left-0 right-0 z-[1200] p-3 pointer-events-none">
-      <div className="mx-auto max-w-md rounded-2xl bg-primary/95 text-secondary shadow-2xl pointer-events-auto border border-secondary/20 backdrop-blur-md">
-        <div className="flex items-center gap-3 p-4">
-          <div className="shrink-0 rounded-full bg-secondary text-primary p-2.5">
-            {arrived ? <Flag size={22} /> : <Navigation2 size={22} />}
+    <div
+      className="fixed top-0 left-0 right-0 z-[1200] px-3 pointer-events-none"
+      style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
+    >
+      <div className="mx-auto max-w-md overflow-hidden rounded-[1.75rem] bg-primary text-white shadow-2xl ring-1 ring-white/10 pointer-events-auto">
+
+        {/* Avanzamento sul percorso */}
+        {!arrived && (
+          <div className="h-1 w-full bg-white/15" role="presentation">
+            <div
+              className="h-full bg-secondary transition-[width] duration-700 ease-out"
+              style={{ width: `${pct}%` }}
+            />
           </div>
-          <div className="min-w-0 flex-1">
-            {state === 'routing' && <p className="text-sm text-secondary/80">{t('nav_calculating')}</p>}
-            {state === 'navigating' && (
-              <>
-                <p className="truncate text-base font-semibold">
+        )}
+
+        {/* ── ARRIVATO ─────────────────────────────────────────────── */}
+        {arrived ? (
+          <div className="p-4">
+            <div className="flex items-start gap-3.5">
+              <div className="shrink-0 grid place-items-center w-14 h-14 rounded-2xl bg-secondary text-primary shadow-lg">
+                <Flag size={26} strokeWidth={2.5} />
+              </div>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-secondary">
+                  {t('nav_arrived')}
+                </p>
+                {poiName && (
+                  <p className="mt-1 text-lg font-black leading-tight text-white">{poiName}</p>
+                )}
+              </div>
+              <button
+                onClick={onStop}
+                aria-label={t('nav_stop')}
+                className="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            {onNextStop && (
+              <button
+                onClick={onNextStop}
+                className="mt-3 w-full rounded-2xl bg-secondary py-3 text-primary text-xs font-black uppercase tracking-widest shadow-md active:scale-[0.98] transition-transform"
+              >
+                {t('nav_next_stop')}
+              </button>
+            )}
+          </div>
+        ) : state === 'routing' ? (
+          /* ── CALCOLO PERCORSO ───────────────────────────────────── */
+          <div className="flex items-center gap-3.5 p-4">
+            <div className="shrink-0 grid place-items-center w-14 h-14 rounded-2xl bg-white/10">
+              <Navigation2 size={24} className="text-secondary motion-safe:animate-pulse" />
+            </div>
+            <p className="flex-1 text-sm font-bold text-white/80">{t('nav_calculating')}</p>
+            <button
+              onClick={onStop}
+              aria-label={t('nav_stop')}
+              className="shrink-0 grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        ) : (
+          /* ── IN NAVIGAZIONE ─────────────────────────────────────── */
+          <>
+            <div className="flex items-start gap-3.5 p-4 pb-3">
+              {/* Freccia della manovra */}
+              <div
+                className={`shrink-0 grid place-items-center w-16 h-16 rounded-2xl bg-secondary text-primary shadow-lg ${
+                  imminent ? 'motion-safe:animate-pulse' : ''
+                }`}
+              >
+                <Icon size={32} strokeWidth={2.75} />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                {/* Distanza alla svolta: il numero che si guarda camminando */}
+                <p className="text-3xl font-black leading-none tabular-nums text-secondary">
+                  {distanceToNext != null ? fmtMeters(distanceToNext) : fmtMeters(distanceToDestination)}
+                </p>
+                <p className="mt-1.5 text-[15px] font-bold leading-snug text-white line-clamp-2">
                   {currentInstruction || t('nav_proceed')}
                 </p>
-                {distanceToNext != null && (
-                  <p className="text-xs text-secondary/60">{t('nav_in')} {fmtMeters(distanceToNext)}</p>
-                )}
-              </>
-            )}
-            {arrived && (
-              <div className="flex flex-col items-start gap-2">
-                <p className="text-base font-semibold">{poiName ? `${t('nav_arrived_at')} ${poiName} 🎉` : `${t('nav_arrived')} 🎉`}</p>
-                {onNextStop && (
+              </div>
+
+              <div className="shrink-0 flex flex-col gap-2">
+                <button
+                  onClick={onStop}
+                  aria-label={t('nav_stop')}
+                  className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
+                >
+                  <X size={18} />
+                </button>
+                {onRepeat && (
                   <button
-                    onClick={onNextStop}
-                    className="mt-1 bg-secondary hover:bg-secondary/90 text-primary font-bold py-1.5 px-3 rounded-lg text-xs transition-colors"
+                    onClick={onRepeat}
+                    aria-label={t('nav_repeat')}
+                    className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
                   >
-                    {t('nav_next_stop')}
+                    <Volume2 size={17} />
                   </button>
                 )}
               </div>
-            )}
-          </div>
-          {state === 'navigating' && onRepeat && (
-            <button
-              onClick={onRepeat}
-              aria-label={t('nav_repeat')}
-              className="shrink-0 rounded-full bg-white/10 p-2 hover:bg-white/20"
-            >
-              <Volume2 size={18} />
-            </button>
-          )}
-          <button
-            onClick={onStop}
-            aria-label={t('nav_stop')}
-            className="shrink-0 rounded-full bg-white/10 p-2 hover:bg-white/20"
-          >
-            <X size={18} />
-          </button>
-        </div>
+            </div>
 
-        {state === 'navigating' && (
-          <div className="flex items-center justify-between border-t border-secondary/20 px-4 py-2 text-xs text-secondary/80">
-            <span className="inline-flex items-center gap-1">
-              <Flag size={13} /> {fmtMeters(distanceToDestination)}
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Clock size={13} /> {fmtEta(etaSeconds)}
-            </span>
-          </div>
+            {/* Piede: quanto manca alla meta, in tre numeri */}
+            <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-2.5 text-white/75">
+              {poiName && (
+                <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-bold">
+                  <MapPin size={13} className="shrink-0 text-secondary" />
+                  <span className="truncate">{poiName}</span>
+                </span>
+              )}
+              <span className="ml-auto inline-flex shrink-0 items-center gap-3.5 text-[11px] font-bold tabular-nums">
+                <span className="inline-flex items-center gap-1.5">
+                  <Flag size={13} className="text-secondary" /> {fmtMeters(distanceToDestination)}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock size={13} className="text-secondary" />
+                  {fmtEta(etaSeconds)}
+                  {arrivalClock && <span className="text-white/55">· {arrivalClock}</span>}
+                </span>
+              </span>
+            </div>
+          </>
         )}
       </div>
     </div>,

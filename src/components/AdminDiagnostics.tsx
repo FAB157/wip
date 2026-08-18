@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { KNOWN_FLAGS } from '../lib/featureFlags';
-import { Activity, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Database, Wifi, Smartphone, HardDrive, Map, Award, Trash2, Bell, ShieldCheck, Globe2, Volume2, Navigation, Bird, ToggleLeft } from 'lucide-react';
+import { Activity, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Database, Wifi, Smartphone, HardDrive, Map, Award, Trash2, Bell, ShieldCheck, Globe2, Volume2, Navigation, Bird, ToggleLeft, BookOpen } from 'lucide-react';
 
 // Header di autenticazione admin condiviso dalle sezioni canarino e flag.
 const adminAuthHeaders = async (): Promise<Record<string, string>> => {
@@ -184,6 +184,307 @@ function FlagsSection() {
   );
 }
 
+// ── TELEMETRIA TRIGGER: aggregati 14 giorni (web/android/ios) ───────────
+// Fonte: /api/admin/trigger-telemetry (aggregati giornalieri in api_cache,
+// alimentati da /api/telemetry/trigger e /api/telemetry/feedback).
+function TriggerTelemetrySection() {
+  const [days, setDays] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(getApiUrl('/api/admin/trigger-telemetry'), { headers: await adminAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setDays(Array.isArray(data?.days) ? data.days : []);
+    } catch (e: any) {
+      setError(`Caricamento fallito: ${e?.message || e}`);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  // Somma dei 14 giorni per piattaforma + feedback
+  const totals: Record<string, { fired: number; suppressed: number; skipped: number }> = {
+    web: { fired: 0, suppressed: 0, skipped: 0 },
+    android: { fired: 0, suppressed: 0, skipped: 0 },
+    ios: { fired: 0, suppressed: 0, skipped: 0 },
+  };
+  const feedback = { ok: 0, early: 0, wrong: 0 };
+  for (const d of days) {
+    for (const p of ['web', 'android', 'ios']) {
+      totals[p].fired += Number(d?.[p]?.fired) || 0;
+      totals[p].suppressed += Number(d?.[p]?.suppressed) || 0;
+      totals[p].skipped += Number(d?.[p]?.skipped) || 0;
+    }
+    feedback.ok += Number(d?.feedback?.ok) || 0;
+    feedback.early += Number(d?.feedback?.early) || 0;
+    feedback.wrong += Number(d?.feedback?.wrong) || 0;
+  }
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Activity className="w-5 h-5 text-primary" />
+          <div>
+            <h3 className="font-black text-primary text-sm">🎯 Telemetria trigger (14 gg)</h3>
+            <p className="text-[11px] text-on-surface-variant">
+              Trigger audioguida scattati/soppressi per piattaforma e feedback degli utenti dal player.
+            </p>
+          </div>
+        </div>
+        <button onClick={load} disabled={loading} className="p-1.5 rounded-lg text-on-surface-variant hover:text-blue-600 disabled:opacity-40" title="Ricarica">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+      {error && <div className="text-[11px] font-bold text-red-600">{error}</div>}
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento telemetria...</div>
+      ) : days.length === 0 ? (
+        <div className="text-xs text-on-surface-variant italic">Nessun dato negli ultimi 14 giorni (la telemetria si popola con l'uso dell'app).</div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10px] font-black uppercase text-on-surface-variant border-b border-outline-variant">
+                  <th className="text-left py-1.5 pr-2">Piattaforma</th>
+                  <th className="text-right py-1.5 px-2">Scattati</th>
+                  <th className="text-right py-1.5 px-2">Soppressi</th>
+                  <th className="text-right py-1.5 pl-2">Saltati</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(['web', 'android', 'ios'] as const).map(p => (
+                  <tr key={p} className="border-b border-outline-variant/40">
+                    <td className="py-1.5 pr-2 font-bold text-primary uppercase">{p}</td>
+                    <td className="py-1.5 px-2 text-right font-black text-emerald-600">{totals[p].fired}</td>
+                    <td className="py-1.5 px-2 text-right font-bold text-amber-600">{totals[p].suppressed}</td>
+                    <td className="py-1.5 pl-2 text-right font-bold text-on-surface-variant">{totals[p].skipped}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+            <span className="text-on-surface-variant">Feedback utenti:</span>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">👍 OK: {feedback.ok}</span>
+            <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">⏱ Troppo presto: {feedback.early}</span>
+            <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-700">❌ Sbagliato: {feedback.wrong}</span>
+            <span className="ml-auto text-on-surface-variant/60 font-medium">{days.length} {days.length === 1 ? 'giorno' : 'giorni'} con dati</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── REPLAY GPS: riproduzione di tracce reali nel geofencing web ─────────
+// Il replay SOSPENDE il watch GPS reale finché è in corso (mai due sorgenti
+// di posizione insieme) e lo riattiva alla fine. Solo per il pannello admin.
+function GpsReplaySection() {
+  const [trace, setTrace] = useState<any[] | null>(null);
+  const [traceName, setTraceName] = useState('');
+  const [stats, setStats] = useState<any>({ running: false, sent: 0, total: 0, fired: 0, suppressed: 0 });
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState('');
+  const [canaryMsg, setCanaryMsg] = useState('');
+  const [canarySending, setCanarySending] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    import('../lib/geofencing/gpsReplay').then(m => {
+      if (alive) setRecording(m.isRecordingEnabled());
+    }).catch(() => {});
+    // Poll leggero delle statistiche del replay in corso
+    const t = setInterval(async () => {
+      try {
+        const m = await import('../lib/geofencing/gpsReplay');
+        if (alive) setStats(m.getReplayStats());
+      } catch { /* modulo non caricabile */ }
+    }, 600);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError('');
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const m = await import('../lib/geofencing/gpsReplay');
+      const points = m.loadTrace(text);
+      setTrace(points);
+      setTraceName(`${file.name} (${points.length} punti)`);
+    } catch (err: any) {
+      setTrace(null);
+      setTraceName('');
+      setError(`Traccia non valida: ${err?.message || err}`);
+    }
+    e.target.value = '';
+  };
+
+  const useRecorded = async () => {
+    setError('');
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      const points = m.getRecordedTrace();
+      if (points.length === 0) { setError('Nessuna traccia registrata su questo dispositivo (attiva la registrazione e cammina).'); return; }
+      setTrace(points);
+      setTraceName(`traccia registrata (${points.length} punti)`);
+    } catch (err: any) {
+      setError(String(err?.message || err));
+    }
+  };
+
+  const start = async () => {
+    setError('');
+    if (!trace) return;
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      const ok = m.startReplay(trace as any, 10);
+      if (!ok) setError('Replay già in corso.');
+    } catch (err: any) {
+      setError(String(err?.message || err));
+    }
+  };
+
+  const stop = async () => {
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      m.stopReplay();
+    } catch { /* ignore */ }
+  };
+
+  const toggleRecording = async () => {
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      const next = !m.isRecordingEnabled();
+      m.setRecordingEnabled(next);
+      setRecording(next);
+    } catch { /* ignore */ }
+  };
+
+  const download = async () => {
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      m.exportTrace();
+    } catch { /* ignore */ }
+  };
+
+  // Invia la traccia corrente (caricata o registrata) come traccia di
+  // riferimento del canarino notturno (check 'Replay geofencing'): l'admin
+  // conferma/inserisce gli id dei POI attesi — quelli visti scattare durante
+  // il replay locale. Max 3 tracce lato server, stesso nome = sostituzione.
+  const sendToCanary = async () => {
+    setError('');
+    setCanaryMsg('');
+    try {
+      const m = await import('../lib/geofencing/gpsReplay');
+      const points = (trace && trace.length > 0) ? trace : m.getRecordedTrace();
+      if (!points || points.length < 2) {
+        setError('Nessuna traccia disponibile: carica un file o registra un percorso prima.');
+        return;
+      }
+      const expectedRaw = window.prompt(
+        'ID dei POI ATTESI su questa traccia (separati da virgola).\nSono i trigger che il canarino notturno dovrà far scattare — usa quelli visti durante il replay locale:',
+        ''
+      );
+      if (expectedRaw === null) return;
+      const expected = expectedRaw.split(',').map(s => s.trim()).filter(Boolean);
+      const defaultName = `traccia-${new Date().toISOString().slice(0, 10)}`;
+      const name = window.prompt('Nome della traccia canary (stesso nome = sostituzione):', defaultName);
+      if (name === null) return;
+      setCanarySending(true);
+      const res = await fetch(getApiUrl('/api/admin/canary/traces'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ name: name.trim() || defaultName, points, expected }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setCanaryMsg(`✅ Traccia inviata al canarino: ${(data.traces || []).map((t: any) => `${t.name} (${t.points} punti, ${t.expected?.length ?? 0} attesi)`).join(' · ')}`);
+    } catch (err: any) {
+      setError(`Invio traccia canary fallito: ${err?.message || err}`);
+    } finally {
+      setCanarySending(false);
+    }
+  };
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex items-center gap-2">
+        <Navigation className="w-5 h-5 text-primary" />
+        <div>
+          <h3 className="font-black text-primary text-sm">🛰️ Replay GPS — harness di test geofencing web</h3>
+          <p className="text-[11px] text-on-surface-variant">
+            Riproduce una traccia GPS reale (accelerata x10) nel geofencing web. Durante il replay il GPS reale
+            viene sospeso e riattivato alla fine: non avviarlo con un tour in corso.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="px-3 py-2 rounded-xl bg-surface-variant text-primary text-xs font-black cursor-pointer border border-outline-variant hover:bg-outline-variant/40">
+          📂 Carica traccia (.json)
+          <input type="file" accept=".json,application/json" onChange={onFile} className="hidden" />
+        </label>
+        <button onClick={useRecorded} className="px-3 py-2 rounded-xl bg-surface-variant text-primary text-xs font-black border border-outline-variant hover:bg-outline-variant/40">
+          📼 Usa traccia registrata
+        </button>
+        {stats.running ? (
+          <button onClick={stop} className="px-4 py-2 rounded-xl bg-red-500 text-white text-xs font-black flex items-center gap-1.5">
+            <XCircle className="w-3.5 h-3.5" /> Stop replay
+          </button>
+        ) : (
+          <button onClick={start} disabled={!trace} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-black flex items-center gap-1.5 disabled:opacity-40">
+            <Play className="w-3.5 h-3.5" /> Avvia replay x10
+          </button>
+        )}
+      </div>
+
+      {traceName && <div className="text-[11px] font-bold text-primary">Traccia pronta: {traceName}</div>}
+      {error && <div className="text-[11px] font-bold text-red-600">{error}</div>}
+
+      {(stats.running || stats.sent > 0) && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+          <span className={`px-2 py-0.5 rounded-full ${stats.running ? 'bg-blue-100 text-blue-700 animate-pulse' : 'bg-gray-100 text-gray-600'}`}>
+            {stats.running ? 'IN CORSO' : 'TERMINATO'} — {stats.sent}/{stats.total} punti
+          </span>
+          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">🎯 Trigger scattati: {stats.fired}</span>
+          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">🚫 Soppressi: {stats.suppressed}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-outline-variant/50">
+        <button
+          onClick={toggleRecording}
+          className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-colors ${recording ? 'bg-red-50 border-red-200 text-red-600' : 'bg-surface-variant border-outline-variant text-primary'}`}
+        >
+          {recording ? '⏺ Registrazione ATTIVA (tocca per fermare)' : '⏺ Registra i miei spostamenti (wip_gps_record)'}
+        </button>
+        <button onClick={download} className="px-3 py-1.5 rounded-xl text-[11px] font-black bg-surface-variant border border-outline-variant text-primary">
+          💾 Scarica traccia registrata
+        </button>
+        <button
+          onClick={sendToCanary}
+          disabled={canarySending}
+          className="px-3 py-1.5 rounded-xl text-[11px] font-black bg-surface-variant border border-outline-variant text-primary disabled:opacity-40"
+          title="Invia la traccia corrente (caricata o registrata) come riferimento del check 'Replay geofencing' del canarino notturno"
+        >
+          {canarySending ? '📤 Invio…' : '📤 Usa come traccia canary'}
+        </button>
+      </div>
+      {canaryMsg && <div className="text-[11px] font-bold text-emerald-700">{canaryMsg}</div>}
+    </div>
+  );
+}
+
 type TestStatus = 'idle' | 'running' | 'passed' | 'failed' | 'warning';
 
 // Una sola chiamata autenticata all'endpoint diagnostics, condivisa (con cache
@@ -203,6 +504,105 @@ const fetchDiagnostics = async (): Promise<any> => {
   diagCache = { t: Date.now(), p };
   return p;
 };
+
+// ── 📚 SEMINA LIBRERIA: genera a lotti gli itinerari del catalogo ───────
+// POST /api/library/seed {limit} (Bearer admin): il server prende i
+// prossimi descrittori non ancora generati, li genera/verifica e li salva
+// in libreria. Ripetibile: si preme finché remaining non arriva a 0.
+function LibrarySeedSection() {
+  const [running, setRunning] = useState(false);
+  const [last, setLast] = useState<{ processed: number; saved: number; failed: number; remaining: number | null } | null>(null);
+  const [failedSlugs, setFailedSlugs] = useState<string[]>([]);
+  const [runs, setRuns] = useState(0);
+  const [error, setError] = useState('');
+
+  const seed = async () => {
+    if (running) return;
+    setRunning(true);
+    setError('');
+    try {
+      const res = await fetch(getApiUrl('/api/library/seed'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
+        body: JSON.stringify({ limit: 5 }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      // `failed` può essere un conteggio o direttamente l'elenco di slug;
+      // eventuali slug falliti possono anche arrivare a parte.
+      const failedRaw = data?.failed;
+      const slugs: string[] = Array.isArray(failedRaw)
+        ? failedRaw.map((f: any) => String(f?.slug ?? f))
+        : Array.isArray(data?.failedSlugs) ? data.failedSlugs.map(String)
+        : Array.isArray(data?.errors) ? data.errors.map((f: any) => String(f?.slug ?? f))
+        : [];
+      setLast({
+        processed: Number(data?.processed) || 0,
+        saved: Number(data?.saved) || 0,
+        failed: Array.isArray(failedRaw) ? failedRaw.length : Number(failedRaw) || 0,
+        remaining: data?.remaining === undefined || data?.remaining === null ? null : Number(data.remaining),
+      });
+      if (slugs.length) setFailedSlugs(prev => [...slugs, ...prev].slice(0, 50));
+      setRuns(n => n + 1);
+    } catch (e: any) {
+      setError(`Semina fallita: ${e?.message || e}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="bg-surface rounded-2xl p-4 border border-outline-variant space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <BookOpen className={`w-5 h-5 ${error ? 'text-red-500' : last ? 'text-emerald-500' : 'text-gray-400'}`} />
+          <div>
+            <h3 className="font-black text-primary text-sm">📚 Semina libreria</h3>
+            <p className="text-[11px] text-on-surface-variant">
+              Genera i prossimi itinerari del catalogo (5 alla volta, verificati da 2 AI). Ripeti finché "restanti" non arriva a 0.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={seed}
+          disabled={running}
+          className="self-start px-4 py-2 rounded-xl bg-primary text-white text-xs font-black flex items-center gap-1.5 disabled:opacity-50"
+        >
+          {running
+            ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Genero (~1 min a itinerario)...</>
+            : <><Play className="w-3.5 h-3.5" /> Genera prossimi 5</>}
+        </button>
+      </div>
+
+      {last && (
+        <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
+          <span className="px-2.5 py-1 rounded-full bg-blue-100 text-blue-700">{last.processed} processati</span>
+          <span className="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700">{last.saved} salvati</span>
+          <span className={`px-2.5 py-1 rounded-full ${last.failed > 0 ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500'}`}>{last.failed} falliti</span>
+          {last.remaining !== null && (
+            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">{last.remaining} restanti</span>
+          )}
+          {runs > 1 && <span className="text-[11px] text-on-surface-variant/70 font-medium">({runs} lotti in questa sessione)</span>}
+        </div>
+      )}
+
+      {failedSlugs.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[10px] font-black text-red-600 uppercase tracking-widest">Slug falliti (ultimi {failedSlugs.length})</p>
+          <div className="max-h-32 overflow-y-auto space-y-1">
+            {failedSlugs.map((s, i) => (
+              <div key={`${s}_${i}`} className="text-[11px] font-mono font-bold text-red-700 bg-red-50 border border-red-100 rounded-lg px-2.5 py-1">
+                {s}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {error && <div className="text-[11px] font-bold text-red-600">{error}</div>}
+    </div>
+  );
+}
 
 interface DiagnosticTest {
   id: string;
@@ -925,6 +1325,9 @@ export default function AdminDiagnostics() {
           diagnostica, visibile prima ancora di lanciare i test manuali */}
       <CanarySection />
       <FlagsSection />
+      <TriggerTelemetrySection />
+      <GpsReplaySection />
+      <LibrarySeedSection />
 
       {/* Riepilogo esito: appare dopo il primo giro di test */}
       {summary.ran > 0 && (

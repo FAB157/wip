@@ -152,14 +152,50 @@ export function isCategoryAllowed(
 ): boolean {
   const cat = (poi.category || '').toLowerCase();
   if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
-  if (['monument', 'artwork', 'monumenti', 'attraction'].includes(cat)) return activeSubcats.monumenti ?? true;
+  // Monumenti: include il patrimonio costruito importato in fase 2 (piazze,
+  // ponti, fontane, teatri, palazzi, torri, grattacieli, cimiteri monumentali,
+  // biblioteche storiche, mulini, acquedotti, osservatori, stadi).
+  if (['monument', 'artwork', 'monumenti', 'attraction',
+       'square', 'bridge', 'fountain', 'theatre', 'opera_house', 'palace',
+       'tower', 'skyscraper', 'cemetery', 'library', 'windmill', 'aqueduct',
+       'observatory', 'stadium',
+       // Fasi 3-5: archeologia romana, difensivo, industria, memoria,
+       // trasporti storici, cultura, scienza.
+       'birthplace', 'house_museum', 'necropolis', 'catacomb', 'fortress',
+       'city_walls', 'villa', 'harbour', 'mine', 'chimney', 'funicular',
+       'amphitheatre', 'roman_baths', 'triumphal_arch', 'obelisk', 'mausoleum',
+       'market_hall', 'train_station', 'dam', 'watermill', 'prison', 'museum_ship',
+       'archaeological_park', 'memorial', 'sculpture', 'university', 'town_hall',
+       'roman_theatre', 'roman_circus', 'roman_villa', 'domus', 'city_gate',
+       'coastal_tower', 'stronghold', 'quarry', 'saltworks', 'racetrack',
+       'racecourse', 'ski_jump', 'war_cemetery', 'concentration_camp',
+       'rack_railway', 'pier', 'shipyard', 'archive', 'radio_telescope', 'hydro_plant',
+      ].includes(cat)) return activeSubcats.monumenti ?? true;
   if (['castle', 'castelli'].includes(cat)) return activeSubcats.castelli ?? activeSubcats.monumenti ?? true;
   if (['ruins', 'archaeological_site', 'archeo'].includes(cat)) return activeSubcats.archeo ?? activeSubcats.monumenti ?? true;
   if (['church', 'chiese', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale',
        'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia',
-       'shrine', 'santuario'].includes(cat)) return activeSubcats.chiese ?? true;
-  if (['viewpoint', 'park', 'panorami'].includes(cat)) return activeSubcats.panorami ?? true;
-  if (['museum', 'gallery', 'musei'].includes(cat)) return activeSubcats.musei ?? true;
+       'shrine', 'santuario',
+       // Sottotipi religiosi importati dalle fasi 3-5: NESSUN chip nuovo,
+       // confluiscono tutti nel filtro "chiese" già esistente.
+       'cathedral', 'basilica', 'baptistery', 'bell_tower', 'cloister', 'crypt',
+       'abbey', 'synagogue', 'mosque', 'temple',
+      ].includes(cat)) return activeSubcats.chiese ?? true;
+  // Panorami e NATURA: oltre a belvedere e parchi, le verticali naturali
+  // (spiagge, cascate, grotte, vette, sorgenti termali, isole, riserve, fari,
+  // funivie panoramiche). Confluiscono qui invece di avere una categoria
+  // propria perché "panorami" è già cablata ovunque — web, Kotlin, iOS, chip,
+  // traduzioni — e soprattutto è già abilitata all'audioguida.
+  if (['viewpoint', 'park', 'panorami',
+       'beach', 'waterfall', 'cave', 'peak', 'spring', 'island', 'cliff', 'bay', 'lake',
+       'glacier', 'volcano', 'nature_reserve', 'lighthouse', 'aerialway', 'natura',
+       // All'aperto (fase 2): sentieri, strade panoramiche, alberi monumentali,
+       // deserti, foreste, giardini storici.
+       'trail', 'scenic_road', 'tree', 'desert', 'forest', 'garden',
+       'botanical_garden', 'geopark', 'via_ferrata', 'ski_resort',
+      ].includes(cat)) return activeSubcats.panorami ?? true;
+  if (['museum', 'gallery', 'musei', 'art_museum', 'natural_history_museum',
+       'art_gallery', 'house_museum'].includes(cat)) return activeSubcats.musei ?? true;
   if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))
     return activeSubcats.consigli ?? false;
   if (cat === 'community') return activeSubcats.community ?? false;

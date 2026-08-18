@@ -4,4 +4,13 @@
     <string name="title_activity_main">WIP</string>
     <string name="package_name">com.itaintasca.app</string>
     <string name="custom_url_scheme">com.itaintasca.app</string>
+
+    <!-- Widget home screen WIP -->
+    <string name="wip_widget_name">WIP — Radar tascabile</string>
+    <string name="wip_widget_description">Saldo crediti, prossima tappa dell\'itinerario e POI più vicino a colpo d\'occhio.</string>
+    <string name="wip_widget_next_stop_label">PROSSIMA TAPPA</string>
+    <string name="wip_widget_nearest_label">VICINO A TE</string>
+    <string name="wip_widget_credits_fmt">%1$s crediti</string>
+    <string name="wip_widget_empty_value">—</string>
+    <string name="wip_widget_refresh_glyph">⟳</string>
 </resources>

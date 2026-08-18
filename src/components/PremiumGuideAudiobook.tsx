@@ -1,8 +1,11 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { Headphones, Play, Pause, Loader2, ChevronDown, ChevronUp, Square } from 'lucide-react';
+import { Headphones, Play, Pause, Loader2, ChevronDown, ChevronUp, Square, Mic, BookOpen, Globe, RefreshCw } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
 import { notify } from '../lib/toast';
+import { downloadGuideAsEpub, getAccessToken, saveGuideLocally } from '../services/premiumGuideService';
+import { azureVoiceName } from '../services/ttsService';
+import { PRICING_LIST, notifyCreditsChanged } from '../lib/pricing';
 import type { PremiumGuideContent } from '../services/premiumGuideService';
 import type { Language } from '../lib/i18n';
 
@@ -12,6 +15,11 @@ import type { Language } from '../lib/i18n';
  * storage: il primo ascolto genera, i successivi sono gratis e istantanei).
  * I capitoli lunghi vengono spezzati in blocchi da ~2.300 caratteri letti in
  * sequenza, per restare nei limiti della sintesi vocale.
+ *
+ * Se il chiamante passa `hash` (guida già salvata in itinerary_guides) il
+ * pannello mostra anche gli strumenti post-acquisto: export EPUB gratuito,
+ * traduzione a metà prezzo, rigenerazione gratuita di un singolo giorno e il
+ * podcast «Intervista impossibile» (Nicky + personaggio storico, due voci).
  */
 
 const VOICE_BY_LANG: Record<string, string> = {
@@ -63,7 +71,22 @@ function buildChapters(content: PremiumGuideContent): Chapter[] {
   return chapters;
 }
 
-export default function PremiumGuideAudiobook({ content, language }: { content: PremiumGuideContent; language: Language }) {
+interface PremiumGuideAudiobookProps {
+  content: PremiumGuideContent;
+  language: Language;
+  /** Hash della guida salvata in itinerary_guides: abilita gli strumenti post-acquisto */
+  hash?: string;
+  /** Il contenuto della guida è cambiato (traduzione/rigenerazione giorno): il chiamante aggiorna la vista */
+  onContentUpdate?: (content: PremiumGuideContent) => void;
+}
+
+const TRANSLATE_LANGS: { code: string; label: string }[] = [
+  { code: 'IT', label: 'Italiano' }, { code: 'EN', label: 'English' },
+  { code: 'FR', label: 'Français' }, { code: 'ES', label: 'Español' },
+  { code: 'DE', label: 'Deutsch' }, { code: 'RU', label: 'Русский' }, { code: 'ZH', label: '中文' },
+];
+
+export default function PremiumGuideAudiobook({ content, language, hash, onContentUpdate }: PremiumGuideAudiobookProps) {
   const chapters = useMemo(() => buildChapters(content), [content]);
   const [open, setOpen] = useState(false);
   const [activeChapter, setActiveChapter] = useState<number | null>(null);
@@ -74,6 +97,16 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const sessionRef = useRef(0); // invalida le riproduzioni superate
 
+  // ── Strumenti post-acquisto ──
+  const [ivState, setIvState] = useState<'idle' | 'confirm' | 'loading' | 'playing'>('idle');
+  const [ivGuest, setIvGuest] = useState('');
+  const [ivSeg, setIvSeg] = useState({ cur: 0, tot: 0 });
+  const [epubBusy, setEpubBusy] = useState(false);
+  const [trLang, setTrLang] = useState('EN');
+  const [trState, setTrState] = useState<'idle' | 'confirm' | 'loading'>('idle');
+  const [regenDay, setRegenDay] = useState(0);
+  const [regenBusy, setRegenBusy] = useState(false);
+
   const stop = () => {
     sessionRef.current++;
     if (audioRef.current) {
@@ -83,6 +116,7 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
     setPlaying(false);
     setLoading(false);
     setActiveChapter(null);
+    setIvState(s => (s === 'loading' || s === 'playing') ? 'idle' : s);
   };
 
   useEffect(() => () => stop(), []);
@@ -141,6 +175,148 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
     else { a.pause(); setPlaying(false); }
   };
 
+  // Riproduce un blob audio sul player condiviso, rispettando la sessione.
+  const playBlob = async (blob: Blob, session: number): Promise<void> => {
+    if (sessionRef.current !== session) return;
+    const url = URL.createObjectURL(blob);
+    const audio = audioRef.current || new Audio();
+    audioRef.current = audio;
+    audio.src = url;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        audio.onended = () => resolve();
+        audio.onerror = () => reject(new Error('playback'));
+        audio.play().catch(reject);
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  // ── «Intervista impossibile»: Nicky + personaggio storico, due voci ──
+  // Stesso prezzo del podcast giornaliero; la generazione (testo) è cachata
+  // server-side per (città, personaggio, lingua), i segmenti TTS su storage.
+  const playImpossibleInterview = async () => {
+    if (ivState === 'loading' || ivState === 'playing') return;
+    if (ivState === 'idle') { setIvState('confirm'); return; }
+    stop();
+    const session = ++sessionRef.current;
+    setIvState('loading');
+    try {
+      const destination = content.citta_intro?.titolo || content.guida_titolo || '';
+      const pois = (content.giorni || []).flatMap(g => g.pois || []).map(p => ({ name: p.titolo })).slice(0, 8);
+      const res = await fetch(getApiUrl('/api/podcast/impossible-interview'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
+        body: JSON.stringify({ destination, pois, language }),
+      });
+      if (res.status === 401) { notify('Accedi per generare l’intervista.'); setIvState('idle'); return; }
+      if (res.status === 402) { notify('Crediti insufficienti per l’intervista.'); setIvState('idle'); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      notifyCreditsChanged();
+      const segments: { speaker: string; text: string }[] = data.segments || [];
+      if (!segments.length) throw new Error('no_segments');
+      setIvGuest(data.character || '');
+      setIvSeg({ cur: 0, tot: segments.length });
+      setIvState('playing');
+      // Le due voci esistenti: Nicky (femminile) e la voce "dante" (maschile)
+      const nickyVoice = azureVoiceName(String(language), 'nicky');
+      const guestVoice = azureVoiceName(String(language), 'dante');
+      for (let i = 0; i < segments.length; i++) {
+        if (sessionRef.current !== session) return;
+        setIvSeg({ cur: i + 1, tot: segments.length });
+        const voice = segments[i].speaker === 'NICKY' ? nickyVoice : guestVoice;
+        // Segmenti brevi (battute 1-3 frasi): un file TTS per battuta,
+        // riprodotti in sequenza come già fa l'audiolibro a blocchi.
+        const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: segments[i].text, voice });
+        if (!ok || !blob) throw new Error('tts');
+        await playBlob(blob, session);
+      }
+      if (sessionRef.current === session) setIvState('idle');
+    } catch (e) {
+      console.error('[Intervista] errore:', e);
+      if (sessionRef.current === session) {
+        notify('Intervista interrotta: riprova tra qualche istante.');
+        setIvState('idle');
+      }
+    }
+  };
+
+  // ── Export EPUB (gratuito: contenuto già pagato) ──
+  const handleEpub = async () => {
+    if (!hash || epubBusy) return;
+    setEpubBusy(true);
+    try {
+      const ok = await downloadGuideAsEpub(hash, content.guida_titolo, String(language));
+      if (!ok) notify('Export EPUB non riuscito. Riprova.');
+    } catch {
+      notify('Export EPUB non riuscito. Riprova.');
+    } finally {
+      setEpubBusy(false);
+    }
+  };
+
+  // ── Traduzione della guida acquistata (metà prezzo) ──
+  const translateCost = Math.round((PRICING_LIST.premium_guide_daily * Math.max(1, (content.giorni || []).length)) / 2);
+  const handleTranslate = async () => {
+    if (!hash || trState === 'loading') return;
+    if (trState === 'idle') { setTrState('confirm'); return; }
+    setTrState('loading');
+    try {
+      const res = await fetch(getApiUrl('/api/premium-guide/translate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
+        body: JSON.stringify({ hash, targetLanguage: trLang }),
+      });
+      if (res.status === 401) { notify('Accedi per tradurre la guida.'); setTrState('idle'); return; }
+      if (res.status === 402) { notify('Crediti insufficienti per la traduzione.'); setTrState('idle'); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      notifyCreditsChanged();
+      if (data?.content) {
+        // Copia offline della traduzione (hash derivato) + aggiornamento vista
+        saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash: data.hash || `${hash}_tr_${trLang}`, fromCache: false }).catch(() => {});
+        onContentUpdate?.(data.content);
+        notify(data.cached ? 'Traduzione già disponibile: nessun addebito.' : 'Guida tradotta!');
+      }
+      setTrState('idle');
+    } catch (e) {
+      console.error('[Traduzione guida] errore:', e);
+      notify('Traduzione non riuscita: nessun credito perso, riprova.');
+      setTrState('idle');
+    }
+  };
+
+  // ── Rigenerazione GRATUITA di un singolo giorno (guida già pagata) ──
+  const handleRegenDay = async () => {
+    if (!hash || regenBusy) return;
+    setRegenBusy(true);
+    try {
+      const res = await fetch(getApiUrl('/api/premium-guide/regenerate-day'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getAccessToken()}` },
+        body: JSON.stringify({ hash, dayIndex: regenDay, language }),
+      });
+      if (res.status === 401) { notify('Accedi per aggiornare la guida.'); return; }
+      if (res.status === 402) { notify('Guida non trovata: usa la generazione completa.'); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data?.content) {
+        // Aggiorna anche la copia offline (IndexedDB), altrimenti la
+        // prossima apertura ripescherebbe il giorno vecchio dalla cache locale.
+        saveGuideLocally({ content: data.content, media_manifest: data.media_manifest || {}, hash, fromCache: false }).catch(() => {});
+        onContentUpdate?.(data.content);
+        notify(`Giorno ${(content.giorni?.[regenDay]?.giorno) ?? regenDay + 1} aggiornato (gratuito).`);
+      }
+    } catch (e) {
+      console.error('[Rigenera giorno] errore:', e);
+      notify('Aggiornamento del giorno non riuscito. Riprova.');
+    } finally {
+      setRegenBusy(false);
+    }
+  };
+
   if (chapters.length === 0) return null;
 
   return (
@@ -189,6 +365,115 @@ export default function PremiumGuideAudiobook({ content, language }: { content: 
           <p className="text-[10px] text-gray-500 px-1 pt-1">
             La prima lettura di ogni capitolo genera la voce (qualche secondo); le successive partono all'istante.
           </p>
+
+          {/* ── «Intervista impossibile» ── */}
+          <div className={`flex items-center gap-3 rounded-xl px-3 py-2 ${ivState !== 'idle' ? 'bg-amber-500/5 border border-amber-500/30' : 'bg-[#f8f5f0]'}`}>
+            <button
+              onClick={() => (ivState === 'playing' || ivState === 'loading') ? togglePause() : playImpossibleInterview()}
+              className="w-9 h-9 shrink-0 rounded-full bg-amber-600 text-white flex items-center justify-center active:scale-95 transition-transform"
+              aria-label="Intervista impossibile"
+            >
+              {ivState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4" />}
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-black text-primary truncate">🎙️ Intervista impossibile</p>
+              <p className="text-[10px] text-gray-500">
+                {ivState === 'confirm' ? `Costa ${PRICING_LIST.podcast_daily} crediti: premi di nuovo per confermare`
+                  : ivState === 'loading' ? 'Cerco l’ospite e scrivo l’intervista…'
+                  : ivState === 'playing' ? `In onda con ${ivGuest || 'l’ospite'} · battuta ${ivSeg.cur}/${ivSeg.tot}`
+                  : 'Nicky intervista un personaggio storico della tua destinazione'}
+              </p>
+            </div>
+            {ivState === 'playing' && (
+              <button onClick={stop} className="p-2 text-red-500 hover:text-red-600" aria-label="Ferma l'intervista">
+                <Square className="w-4 h-4 fill-current" />
+              </button>
+            )}
+          </div>
+
+          {/* ── Strumenti sulla guida salvata (solo con hash) ── */}
+          {hash && (
+            <div className="space-y-1.5 pt-1">
+              {/* EPUB gratuito */}
+              <button
+                onClick={handleEpub}
+                disabled={epubBusy}
+                className="w-full flex items-center gap-3 rounded-xl px-3 py-2 bg-[#f8f5f0] hover:bg-primary/5 transition-colors disabled:opacity-60"
+              >
+                <span className="w-9 h-9 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                  {epubBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookOpen className="w-4 h-4" />}
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block text-xs font-black text-primary">📖 Scarica EPUB</span>
+                  <span className="block text-[10px] text-gray-500">Gratuito: il contenuto è già tuo</span>
+                </span>
+              </button>
+
+              {/* Traduzione a metà prezzo */}
+              <div className="flex items-center gap-2 rounded-xl px-3 py-2 bg-[#f8f5f0]">
+                <span className="w-9 h-9 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                  {trState === 'loading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Globe className="w-4 h-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-black text-primary">🌍 Traduci in…</p>
+                  <p className="text-[10px] text-gray-500">
+                    {trState === 'confirm' ? `Costa ${translateCost} crediti (metà prezzo): conferma`
+                      : trState === 'loading' ? 'Traduco la guida a blocchi…'
+                      : `Metà prezzo (${translateCost} crediti); già tradotta = gratis`}
+                  </p>
+                </div>
+                <select
+                  value={trLang}
+                  onChange={e => { setTrLang(e.target.value); setTrState('idle'); }}
+                  disabled={trState === 'loading'}
+                  className="text-[11px] font-bold text-primary bg-white border border-gray-200 rounded-lg px-1.5 py-1"
+                  aria-label="Lingua di destinazione"
+                >
+                  {TRANSLATE_LANGS.filter(l => l.code !== String(language)).map(l => (
+                    <option key={l.code} value={l.code}>{l.label}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleTranslate}
+                  disabled={trState === 'loading'}
+                  className={`text-[11px] font-black px-2.5 py-1.5 rounded-lg text-white ${trState === 'confirm' ? 'bg-amber-600' : 'bg-primary'} disabled:opacity-60`}
+                >
+                  {trState === 'confirm' ? 'Conferma' : 'Traduci'}
+                </button>
+              </div>
+
+              {/* Rigenerazione gratuita di un giorno */}
+              {(content.giorni || []).length > 0 && (
+                <div className="flex items-center gap-2 rounded-xl px-3 py-2 bg-[#f8f5f0]">
+                  <span className="w-9 h-9 shrink-0 rounded-full bg-primary/10 text-primary flex items-center justify-center">
+                    {regenBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-black text-primary">Hai cambiato l'itinerario?</p>
+                    <p className="text-[10px] text-gray-500">Rigenera solo quel giorno: gratis, guida già pagata</p>
+                  </div>
+                  <select
+                    value={regenDay}
+                    onChange={e => setRegenDay(Number(e.target.value))}
+                    disabled={regenBusy}
+                    className="text-[11px] font-bold text-primary bg-white border border-gray-200 rounded-lg px-1.5 py-1"
+                    aria-label="Giorno da aggiornare"
+                  >
+                    {(content.giorni || []).map((g, i) => (
+                      <option key={i} value={i}>Giorno {g.giorno ?? i + 1}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleRegenDay}
+                    disabled={regenBusy}
+                    className="text-[11px] font-black px-2.5 py-1.5 rounded-lg bg-primary text-white disabled:opacity-60"
+                  >
+                    Aggiorna
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

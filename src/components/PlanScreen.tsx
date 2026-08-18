@@ -2,7 +2,7 @@
 // modulo → "new Map()" (linkByName) esplodeva con "is not a constructor".
 import { Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, Coins, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -29,7 +29,12 @@ import PremiumGuideRenderer from './PremiumGuideRenderer';
 import PremiumGuideAudiobook from './PremiumGuideAudiobook';
 import { parsePartialJSON } from '../lib/partialJsonParser';
 import OfflineAudioBundleModal from './OfflineAudioBundleModal';
-import { templatesForNow, type SeasonalTemplate } from '../lib/seasonalTemplates';
+import { templatesForNow, loadTemplateTranslations, SEASONAL_THEMES, type SeasonalTemplate, type SeasonalTheme, type TemplateI18nMap } from '../lib/seasonalTemplates';
+import SeasonalCatalogSheet from './SeasonalCatalogSheet';
+import TransitEscapesSheet from './TransitEscapesSheet';
+import PilgrimWaysSheet from './PilgrimWaysSheet';
+import ItineraryLibrarySheet from './ItineraryLibrarySheet';
+import type { StopPrefill, RoutePrefill } from '../lib/transitCatalog';
 import GroupPlanPanel, { type MergedGroupPrefs } from './GroupPlanPanel';
 import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
@@ -37,6 +42,7 @@ import LoadingQuiz from './LoadingQuiz';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
 import { mapItineraryCategoryToMapCategory } from '../services/poiRepository';
 import BudgetTable from './itinerary/BudgetTable';
+import CalendarExportButton from './CalendarExportButton';
 import ItineraryStop from './itinerary/ItineraryStop';
 import TravelInfo from './itinerary/TravelInfo';
 /** Valori inviati al server (restano in italiano, è il contratto dell'API);
@@ -50,6 +56,18 @@ const RADIUS_PRESETS = ['100', '300', '500'] as const;
  *  i giorni reali non esistono ancora. */
 const PREMIUM_DAY_SLOT = 999;
 
+/** Massimo di carte-evento reali (Ticketmaster) mescolate nel mazzo Swip. */
+const MAX_EVENT_CARDS = 5;
+
+/** Data evento leggibile sulla carta (es. "sab 22 agosto"). */
+function formatEventCardDate(isoDate: string, language: string): string {
+  try {
+    return new Date(`${isoDate}T12:00:00`).toLocaleDateString((language || 'IT').toLowerCase(), {
+      weekday: 'short', day: 'numeric', month: 'long'
+    });
+  } catch { return isoDate; }
+}
+
 /**
  * Sostituzioni tappa gratuite per OGNI giorno dell'itinerario.
  * Oltre questa soglia la sostituzione costa `PRICING_LIST.replace_stop`.
@@ -57,6 +75,24 @@ const PREMIUM_DAY_SLOT = 999;
  * ma non più di 3 sullo stesso giorno.
  */
 const FREE_REPLACEMENTS_PER_DAY = 3;
+
+/**
+ * Temi disponibili per "➕ Aggiungi un giorno" / "➕ Tappa vicina"
+ * (/api/itinerary/extend): gli STESSI angoli editoriali della Libreria
+ * (src/lib/libraryDescriptors.ts, PORT_ZONE_ANGLES — id/label ripresi qui
+ * a mano per non appesantire il bundle client con l'intero catalogo).
+ * Un match esatto id+città-tra-le-30-curate fa scattare lato server il
+ * percorso cache (più economico e quasi istantaneo); "Sorprendimi" (tema
+ * vuoto) salta sempre la cache e lascia decidere all'AI.
+ */
+const EXTEND_DAY_THEMES: { id: string; label: string }[] = [
+  { id: 'classica', label: 'Classica' },
+  { id: 'gastronomica', label: 'Gastronomica' },
+  { id: 'famiglie', label: 'Famiglie' },
+  { id: 'nascosta', label: 'Nascosta' },
+  { id: 'arte-storia', label: 'Arte e storia' },
+  { id: 'relax-panorami', label: 'Relax e panorami' },
+];
 
 /** Oltre questa distanza dal centroide, i preferiti scelti sono troppo
  *  sparsi per un itinerario sensato: si avvisa prima di far pagare. */
@@ -71,6 +107,31 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
   const a = Math.sin(dLat / 2) ** 2
     + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Mini-guida «Big five» gratuita: massimo di città DIVERSE al giorno per
+ *  device (localStorage). Rileggere la stessa città non consuma il limite. */
+const BIG_FIVE_DAILY_MAX = 3;
+
+/**
+ * Gate anti-abuso client-side della mini-guida gratuita: registra la città
+ * nel contatore giornaliero e dice se si può procedere. Storage rotto o
+ * pieno → si lascia passare (è un lead magnet, non un paywall).
+ */
+function bigFiveDailyGate(cityNorm: string): boolean {
+  try {
+    const oggi = new Date().toISOString().slice(0, 10);
+    let rec: any = null;
+    try { rec = JSON.parse(localStorage.getItem('wip_bigfive_daily') || 'null'); } catch { /* corrotto */ }
+    if (!rec || rec.date !== oggi || !Array.isArray(rec.cities)) rec = { date: oggi, cities: [] };
+    if (rec.cities.includes(cityNorm)) return true;
+    if (rec.cities.length >= BIG_FIVE_DAILY_MAX) return false;
+    rec.cities.push(cityNorm);
+    localStorage.setItem('wip_bigfive_daily', JSON.stringify(rec));
+    return true;
+  } catch {
+    return true;
+  }
 }
 
 /** Interessi della modalità Raggio: le etichette vengono da i18n
@@ -573,6 +634,11 @@ export default function PlanScreen({
   const [endTime, setEndTime] = useState(() => loadPlanPref('endTime', '20:00'));
   const [selectedInterests, setSelectedInterests] = useState<string[]>(() => loadPlanPref<string[]>('interests', []));
   const [specialRequests, setSpecialRequests] = useState('');
+  // Indirizzo hotel/alloggio (form_a, opzionale): se valorizzato diventa il
+  // punto di partenza del Giorno 1 invece del generico centro città. Niente
+  // cache condivisa quando presente, come per specialRequests: cambia troppo
+  // l'itinerario perché sia corretto servire una versione generica in cache.
+  const [accommodationAddress, setAccommodationAddress] = useState('');
   // I default devono coincidere con le option delle select in renderAdvancedSettings
   const [budget, setBudget] = useState<'economico' | 'standard' | 'lusso'>(() => loadPlanPref('budget', 'standard' as const));
   const [viaggiatori, setViaggiatori] = useState<'solo' | 'coppia' | 'famiglia' | 'gruppo'>(() => loadPlanPref('viaggiatori', 'coppia' as const));
@@ -827,13 +893,167 @@ export default function PlanScreen({
   };
   // Template stagionali (ondata 6): un tap pre-compila il form; la
   // generazione resta all'utente perché costa crediti.
+  // Filtro a chips, paginazione (7 alla volta) e sheet catalogo completo.
+  const [tplFilter, setTplFilter] = useState<'tutti' | 'nascosti' | SeasonalTheme>('tutti');
+  const [tplShown, setTplShown] = useState(7);
+  const [showSeasonalCatalog, setShowSeasonalCatalog] = useState(false);
+  // Itinerari speciali (porti/scali e cammini): due sheet dedicate.
+  const [showTransitSheet, setShowTransitSheet] = useState(false);
+  const [showPilgrimSheet, setShowPilgrimSheet] = useState(false);
+  // 📚 Libreria itinerari: catalogo di itinerari già generati e verificati
+  // (rotte /api/library/*). Il prefill arriva dai link nelle sheet
+  // Sosta breve / Cammini ("Vedi gli itinerari pronti per questo porto").
+  const [showLibrarySheet, setShowLibrarySheet] = useState(false);
+  // `group` pre-seleziona una macro-categoria (es. 'cultura') senza un chip
+  // preciso — stesso meccanismo di `kind`, usato dalla card "Ispirazioni &
+  // temi" invece che da un porto/cammino specifico.
+  const [libraryPrefill, setLibraryPrefill] = useState<{ kind?: string; group?: string; city?: string; query?: string } | null>(null);
+  const openLibrary = (pre?: { kind?: string; group?: string; city?: string; query?: string }) => {
+    setLibraryPrefill(pre || null);
+    setShowLibrarySheet(true);
+  };
+  // Coordinate CURATE delle tappe di un cammino pre-compilato: consultate da
+  // buildRoadtripLegs PRIMA del geocoding (frazioni e località minori spesso
+  // geocodificano male; le coordinate redazionali vincono).
+  const presetLegCoordsRef = useRef<Record<string, { lat: number; lon: number }>>({});
+  const seasonTemplates = useMemo(() => templatesForNow(new Date(), {
+    theme: tplFilter !== 'tutti' && tplFilter !== 'nascosti' ? tplFilter : undefined,
+    soloNascosti: tplFilter === 'nascosti',
+  }), [tplFilter]);
+  // Ispirazioni multilingua: con UI non italiana le card curate mostrano
+  // title/specialRequests tradotti (fetch batch una volta, cache client 7gg,
+  // fallback silenzioso all'italiano). Con UI in italiano: zero chiamate.
+  const [tplI18n, setTplI18n] = useState<TemplateI18nMap>({});
+  useEffect(() => {
+    if (String(language).toUpperCase() === 'IT') { setTplI18n({}); return; }
+    let vivo = true;
+    // Tutti i template del periodo (senza filtro): copre anche i cambi chips.
+    loadTemplateTranslations(language, templatesForNow(new Date()))
+      .then(m => { if (vivo) setTplI18n(m); })
+      .catch(() => { /* fallback: italiano */ });
+    return () => { vivo = false; };
+  }, [language]);
   const applyTemplate = (t: SeasonalTemplate) => {
+    const tr = tplI18n[t.id];
     setDestinations([t.destination]);
     setDestCoords(null);
     setDays(t.days);
     setSelectedInterests(t.interests);
-    setSpecialRequests(t.specialRequests);
-    notify(`Template "${t.title}" applicato: controlla il form e premi Genera.`);
+    setSpecialRequests(tr?.specialRequests || t.specialRequests);
+    notify(`Template "${tr?.title || t.title}" applicato: controlla il form e premi Genera.`);
+  };
+
+  // ── Itinerari speciali: pre-fill dalle sheet Sosta breve / Cammini ──
+  // Gemelli di applyTemplate. La generazione (e il costo) restano un gesto
+  // esplicito dell'utente; il vincolo di rientro vive in specialRequests.
+  const applySpecialStop = (p: StopPrefill) => {
+    presetLegCoordsRef.current = {};
+    setDestinations([p.destination]);
+    // Coordinate curate: ancorano il geocoding (label === destinations[0]
+    // fa sì che resolveDestCoords le usi senza richiamare /api/geocode).
+    setDestCoords(p.coords ? { lat: p.coords.lat, lon: p.coords.lon, label: p.destination } : null);
+    setDays(1);
+    setSelectedInterests(p.interests);
+    setSpecialRequests(p.specialRequests);
+    setShowTransitSheet(false);
+    notify(`${p.label} applicato: controlla il form e premi Genera.`, 'success');
+  };
+  const applySpecialRoute = (p: RoutePrefill) => {
+    // Le tappe del cammino diventano il roadtrip multi-città (legs):
+    // coordinate curate in mappa, consultate da buildRoadtripLegs.
+    const preset: Record<string, { lat: number; lon: number }> = {};
+    for (const l of p.legs) {
+      if (Number.isFinite(l.lat) && Number.isFinite(l.lon)) {
+        preset[l.city.trim().toLowerCase()] = { lat: l.lat as number, lon: l.lon as number };
+      }
+    }
+    presetLegCoordsRef.current = preset;
+    setDestinations(p.legs.map(l => l.city));
+    const first = p.legs[0];
+    setDestCoords(first && Number.isFinite(first.lat) && Number.isFinite(first.lon)
+      ? { lat: first.lat as number, lon: first.lon as number, label: first.city }
+      : null);
+    setDays(clampDays(p.days));
+    setSelectedInterests(p.interests);
+    setSpecialRequests(p.specialRequests);
+    setRitmo('rilassato'); // il ritmo del cammino è lento per definizione
+    setShowPilgrimSheet(false);
+    notify(`${p.label}: tappe caricate come roadtrip. Controlla il form e premi Genera.`, 'success');
+  };
+
+  // ── 📚 Libreria: "Usa questo itinerario (gratis)" ──────────────────────
+  // Salva l'item della libreria in user_itineraries con lo STESSO flusso di
+  // un itinerario generato (savePlanToSupabase: id, titolo, dati_itinerario,
+  // podcast_cache, POI condivisi) e lo apre subito nel viewer. Da qui in poi
+  // Guida Premium, podcast, PDF, calendario e racconto funzionano perché il
+  // piano ha titolo/destinazione/giorni nello stesso formato.
+  const activateLibraryItinerary = async (itin: any, meta: any) => {
+    try {
+      const copia = structuredClone(itin);
+      // Id NUOVO per utente: l'upsert su user_itineraries è per id, riusare
+      // lo stesso id della libreria per due utenti farebbe collidere le righe.
+      copia.id = crypto.randomUUID();
+      copia.titolo = `📚 ${String(copia.titolo || meta?.title || 'Itinerario').replace(/^📚\s*/, '')}`;
+      if (!copia.destinazione && meta?.city) copia.destinazione = meta.city;
+      // Stato del viewer azzerato come nel resume da "I miei itinerari"
+      setDbItineraryId(null);
+      setLockedStops({});
+      setExpandedStops({});
+      setPodcastCache(copia.podcast_cache || {});
+      setCacheDiscount(null);
+      setGeneratedPlan(copia);
+      setPlannerMode('view');
+      setShowLibrarySheet(false);
+      await savePlanToSupabase(copia);
+      notify('Salvato nei tuoi itinerari ✅ — guida premium, podcast e PDF sono già attivi.', 'success');
+    } catch (e) {
+      console.error('[Libreria] attivazione fallita:', e);
+      notify('Non sono riuscito a salvare l’itinerario: riprova tra poco.');
+    }
+  };
+
+  // «Big five» gratuita (lead magnet): mini-guida dei 5 imperdibili della
+  // destinazione scelta, letta in una sheet. Il server è cache-first per
+  // (città, lingua); qui si tiene anche una piccola cache di sessione.
+  const [bigFive, setBigFive] = useState<{
+    open: boolean; loading: boolean; city: string; guide: any | null; error: string | null;
+  }>({ open: false, loading: false, city: '', guide: null, error: null });
+  const bigFiveCacheRef = useRef<Record<string, any>>({});
+  const openBigFive = async () => {
+    // Nome pulito della città: l'etichetta scelta dall'autocomplete se c'è,
+    // altrimenti il testo digitato (solo la parte prima della virgola).
+    const city = (destCoords?.label || destinations[0] || '').split(',')[0].trim();
+    if (city.length < 2) return;
+    const norm = city.toLowerCase();
+    if (!bigFiveDailyGate(norm)) {
+      notify('Hai già letto le mini-guide gratuite di 3 città oggi ✨ Torna domani per la prossima, o genera subito l\'itinerario di questa.');
+      return;
+    }
+    const hit = bigFiveCacheRef.current[`${norm}_${language}`];
+    if (hit) { setBigFive({ open: true, loading: false, city, guide: hit, error: null }); return; }
+    setBigFive({ open: true, loading: true, city, guide: null, error: null });
+    try {
+      const res = await fetch(getApiUrl('/api/city-big-five'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city, lang: String(language || 'IT').toLowerCase() }),
+        signal: AbortSignal.timeout(90000),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.guide?.luoghi?.length) throw new Error(data?.error || 'no-guide');
+      bigFiveCacheRef.current[`${norm}_${language}`] = data.guide;
+      setBigFive({ open: true, loading: false, city, guide: data.guide, error: null });
+    } catch {
+      // Fallimento: la città non deve consumare uno dei 3 slot del giorno.
+      try {
+        const rec = JSON.parse(localStorage.getItem('wip_bigfive_daily') || 'null');
+        if (rec && Array.isArray(rec.cities)) {
+          rec.cities = rec.cities.filter((c: string) => c !== norm);
+          localStorage.setItem('wip_bigfive_daily', JSON.stringify(rec));
+        }
+      } catch { /* pazienza */ }
+      setBigFive(b => ({ ...b, loading: false, error: 'La mini-guida non è disponibile in questo momento. Riprova tra qualche minuto.' }));
+    }
   };
 
   const applyRainPlan = () => {
@@ -1588,9 +1808,11 @@ export default function PlanScreen({
   const {
     state: navState,
     currentInstruction,
+    currentManeuver,
     distanceToNext,
     distanceToDestination,
     etaSeconds,
+    progress: navProgress,
     routeGeometry,
     startNavigation,
     stopNavigation,
@@ -2234,8 +2456,11 @@ export default function PlanScreen({
       // La casella "Gratis" cambia radicalmente le tappe: slot cache separato
       soloGratis ? 'fr1' : 'fr0'
     ].join('_');
-    // Le richieste speciali sono libere e personali: niente cache (né lettura né scrittura)
-    const cacheUsable = specialRequests.trim().length === 0;
+    // Le richieste speciali sono libere e personali: niente cache (né lettura né scrittura).
+    // Stesso discorso per l'indirizzo dell'alloggio: cambia il punto di
+    // partenza del Giorno 1, quindi l'itinerario non è più intercambiabile
+    // con quello (generico) in cache.
+    const cacheUsable = specialRequests.trim().length === 0 && accommodationAddress.trim().length === 0;
 
     // Prova a recuperare l'itinerario dalla cache condivisa Supabase (costo e tempo zero!)
     if (cacheUsable) try {
@@ -2274,6 +2499,17 @@ export default function PlanScreen({
     // tappa per tappa e, chiudendo il quiz, lo si vede costruire in diretta.
     setPlannerMode('view');
 
+    // L'indirizzo dell'alloggio, se compilato, entra come istruzione esplicita
+    // nella richiesta senza toccare lo state visibile di specialRequests
+    // (restano due campi separati in UI, uniti solo qui per il generatore).
+    const accommodationTrimmed = accommodationAddress.trim();
+    const specialRequestsForGeneration = accommodationTrimmed
+      ? [
+          `Punto di partenza del Giorno 1 (e possibilmente base per il rientro serale): ${accommodationTrimmed}.`,
+          specialRequests.trim(),
+        ].filter(Boolean).join(' ')
+      : specialRequests;
+
     try {
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination,
@@ -2283,7 +2519,7 @@ export default function PlanScreen({
         startTime,
         endTime,
         interests: selectedInterests,
-        specialRequests,
+        specialRequests: specialRequestsForGeneration,
         includeEvents,
         includeTours,
         soloGratis,
@@ -2854,7 +3090,10 @@ export default function PlanScreen({
     const legs: Array<{ city: string; lat: number; lon: number }> = [];
     for (let i = 0; i < activeDestinations.length; i++) {
       const cityName = activeDestinations[i];
-      const c = i === 0 && firstCoords ? firstCoords : await geocodeCity(cityName);
+      // Coordinate curate degli itinerari speciali (cammini): vincono sul
+      // geocoding, che sulle frazioni di tappa sbaglia facilmente.
+      const preset = presetLegCoordsRef.current[cityName.trim().toLowerCase()];
+      const c = i === 0 && firstCoords ? firstCoords : (preset || await geocodeCity(cityName));
       if (!c) {
         if (!silent) notify(`"${cityName}" — ${getTranslation('err_location_not_found', language)}`);
         return null;
@@ -2953,6 +3192,76 @@ export default function PlanScreen({
     }
   };
 
+  /**
+   * Finestra date del viaggio ricavata dal mese scelto nel form: senza mese
+   * non c'è finestra (e quindi NIENTE carte-evento nel mazzo). Se il mese è
+   * già passato quest'anno si assume l'anno prossimo; se è quello corrente
+   * si parte da oggi, così non si propongono eventi già conclusi.
+   */
+  const getTripDateWindow = (): { start: Date; end: Date } | null => {
+    const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
+    if (idx < 0) return null;
+    const now = new Date();
+    const year = idx < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
+    const start = idx === now.getMonth() && year === now.getFullYear() ? now : new Date(year, idx, 1);
+    const end = new Date(year, idx + 1, 0, 23, 59, 59);
+    return end > start ? { start, end } : null;
+  };
+
+  /**
+   * Carte-evento per il mazzo dello Swip: eventi REALI Ticketmaster attorno
+   * alla destinazione e dentro la finestra del viaggio. Qualunque problema
+   * (chiave assente, rete, zero eventi, date mancanti) restituisce [] e il
+   * mazzo resta identico a oggi: zero regressioni.
+   */
+  const fetchSwipeEventCards = async (coords: { lat: number; lon: number } | null): Promise<any[]> => {
+    try {
+      const win = getTripDateWindow();
+      if (!coords || !win) return [];
+      // Stesso formato data di EventsScreen (ISO senza millisecondi).
+      const startDateTime = win.start.toISOString().split('.')[0] + 'Z';
+      const endDateTime = win.end.toISOString().split('.')[0] + 'Z';
+      const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${coords.lat}&lon=${coords.lon}&radius=50&startDateTime=${startDateTime}&endDateTime=${endDateTime}`));
+      if (!res.ok) return [];
+      const data = await res.json();
+      const raw: any[] = data?._embedded?.events || [];
+      const seen = new Set<string>();
+      const cards: any[] = [];
+      for (const item of raw) {
+        const date = item?.dates?.start?.localDate || '';
+        const nameKey = String(item?.name || '').toLowerCase().trim();
+        // Servono nome, link e una DATA certa: senza data l'evento non è
+        // fissabile come tappa a orario bloccato.
+        if (!item?.id || !nameKey || !item?.url || !date || seen.has(nameKey)) continue;
+        seen.add(nameKey);
+        const venue = item?._embedded?.venues?.[0];
+        const time = String(item?.dates?.start?.localTime || '').slice(0, 5);
+        const desc = item.info || item.pleaseNote || item.classifications?.[0]?.segment?.name || 'Evento dal vivo';
+        cards.push({
+          _uid: `ev_${item.id}`,
+          _isEvent: true,
+          _eventDate: date,
+          _eventTime: time,
+          _eventVenue: venue?.name || '',
+          titolo_tappa: item.name,
+          tipo: 'evento',
+          ora: time,
+          attivita: venue?.name ? `${desc} — ${venue.name}` : desc,
+          image_url: item.images?.[0]?.url || '',
+          link_info: ensureAffiliateUrl(item.url),
+          coordinate: {
+            lat: Number(venue?.location?.latitude) || 0,
+            lng: Number(venue?.location?.longitude) || 0
+          }
+        });
+        if (cards.length >= MAX_EVENT_CARDS) break;
+      }
+      return cards;
+    } catch {
+      return [];
+    }
+  };
+
   const handleFetchCandidates = async () => {
     if (!destinations[0] || destinations[0].trim().length < 3) {
       notify(getTranslation('err_valid_destination', language));
@@ -2978,6 +3287,9 @@ export default function PlanScreen({
     setBrokenImages({});
     setExpandedCard(null);
     try {
+      // Le carte-evento si caricano IN PARALLELO ai candidati: non allungano
+      // l'attesa e se falliscono il mazzo resta quello di sempre.
+      const eventCardsPromise = fetchSwipeEventCards(coords);
       const res = await fetch('/api/groq/candidates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2997,10 +3309,17 @@ export default function PlanScreen({
         // Id stabile e univoco per ogni carta: il render usava
         // `id_tappa || titolo_tappa` come key React e due attrazioni omonime
         // senza id facevano riusare il nodo sbagliato durante l'animazione.
-        setCandidates(data.candidates.map((c: any, i: number) => ({
+        const baseDeck = data.candidates.map((c: any, i: number) => ({
           ...c,
           _uid: c.id_tappa ? `c_${c.id_tappa}` : `c_${i}_${String(c.titolo_tappa || '').slice(0, 24)}`
-        })));
+        }));
+        // Mescola fino a 5 eventi reali nel mazzo: mai in prima posizione,
+        // circa uno ogni 4 carte, senza mai sostituire le attrazioni.
+        const eventCards = await eventCardsPromise;
+        eventCards.forEach((ev: any, i: number) => {
+          baseDeck.splice(Math.min(2 + i * 4, baseDeck.length), 0, ev);
+        });
+        setCandidates(baseDeck);
       } else {
         notify(getTranslation('no_attractions_found', language));
         setPlannerMode('tinder_form');
@@ -3140,8 +3459,26 @@ export default function PlanScreen({
       // Prima si inviava solo `titolo_tappa`: coordinate, tipo e soprattutto
       // il link affiliato delle esperienze Viator/GYG/Ticketmaster aggiunte
       // con "+" andavano persi, e con loro la commissione.
-      const poisList = likedCandidates.map(c => c.titolo_tappa);
-      const poisDetailed = likedCandidates.map(c => ({
+      // Le carte-evento con data certa NON passano tra i POI liberi: diventano
+      // tappe BLOCCATE a orario fisso (il server le mantiene identiche e ci
+      // costruisce attorno il resto dell'itinerario).
+      const likedEvents = likedCandidates.filter(c => c._isEvent && c._eventDate);
+      const likedPlaces = likedCandidates.filter(c => !(c._isEvent && c._eventDate));
+      const eventLockedStops = likedEvents.map(ev => ({
+        titolo_tappa: ev.titolo_tappa,
+        tipo: 'evento',
+        data: ev._eventDate,
+        ora: ev._eventTime || '',
+        attivita: `Evento con biglietto${ev._eventVenue ? ` presso ${ev._eventVenue}` : ''}: tappa fissa, non spostabile.`,
+        ...(ev.link_info ? { link_info: ev.link_info } : {})
+      }));
+      // Ridondanza voluta: oltre a lockedStops, la frase esplicita in
+      // linguaggio naturale àncora data e orario dell'evento nel prompt.
+      const eventRequests = likedEvents.map(ev =>
+        `Il giorno ${ev._eventDate}${ev._eventTime ? ` alle ore ${ev._eventTime}` : ''} l'utente ha il biglietto per "${ev.titolo_tappa}"${ev._eventVenue ? ` a ${ev._eventVenue}` : ''}: fissa questa tappa in quel giorno e a quell'orario.`
+      ).join(' ');
+      const poisList = likedPlaces.map(c => c.titolo_tappa);
+      const poisDetailed = likedPlaces.map(c => ({
         nome: c.titolo_tappa,
         tipo: c.tipo || 'attrazione',
         descrizione: c.attivita || '',
@@ -3157,8 +3494,12 @@ export default function PlanScreen({
         interests: selectedInterests.length > 0 ? selectedInterests : ['generale'],
         pois: poisList,
         poisDetailed,
-        lockedStops: [],
-        specialRequests: specialRequests || 'Usa rigorosamente le attrazioni selezionate per strutturare le tappe principali.',
+        lockedStops: eventLockedStops,
+        specialRequests: [
+          specialRequests || 'Usa rigorosamente le attrazioni selezionate per strutturare le tappe principali.',
+          eventRequests
+        ].filter(Boolean).join(' '),
+        ...(mese ? { mese } : {}),
         includeEvents,
         includeTours,
         soloGratis,
@@ -3764,6 +4105,127 @@ export default function PlanScreen({
     setNewStop({ ora: '', titolo_tappa: '', attivita: '', consiglio_guida: '', tempo_necessario: '', tipo: 'visita', lat: '', lng: '' });
   };
 
+  // ── "➕ Aggiungi un giorno" / "➕ Tappa vicina" (gita fuori porta) ──────
+  // Estende un itinerario ESISTENTE e già salvato via /api/itinerary/extend
+  // (server-side: pre-addebito pieno + conguaglio automatico a metà prezzo
+  // se il giorno viene servito dalla cache della Libreria).
+  const [extendPanelMode, setExtendPanelMode] = useState<'closed' | 'day' | 'nearby'>('closed');
+  const [extendTheme, setExtendTheme] = useState<string>(''); // '' = "Sorprendimi"
+  const [extendNearbyQuery, setExtendNearbyQuery] = useState('');
+  const [extendNearbySuggestions, setExtendNearbySuggestions] = useState<any[]>([]);
+  const [extendNearbyPicked, setExtendNearbyPicked] = useState<{ description: string; lat: number; lon: number } | null>(null);
+  const [extendNearbySearching, setExtendNearbySearching] = useState(false);
+  const [extendLoading, setExtendLoading] = useState(false);
+  // Dismiss del quiz durante l'attesa di "Aggiungi un giorno"/"Gita fuori
+  // porta" (separato da quizDismissed della generazione principale, così
+  // chiudere l'uno non nasconde l'altro se capitano in momenti diversi).
+  const [extendQuizDismissed, setExtendQuizDismissed] = useState(false);
+
+  // Stesso pattern debounced di /api/geocode già usato per il campo
+  // destinazione principale (vedi l'useEffect su `destinations`/`focusedDestIdx`
+  // più sopra): qui è scoped al solo pannello "tappa vicina", per non
+  // interferire con lo stato del roadtrip multi-città.
+  useEffect(() => {
+    if (extendPanelMode !== 'nearby' || extendNearbyPicked || extendNearbyQuery.trim().length < 3) {
+      setExtendNearbySuggestions([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setExtendNearbySearching(true);
+      try {
+        const res = await fetch(getApiUrl(`/api/geocode?q=${encodeURIComponent(extendNearbyQuery)}&lang=${language.toLowerCase()}&limit=5`));
+        if (res.ok) {
+          const data = await res.json();
+          setExtendNearbySuggestions(Array.isArray(data.features) ? data.features : []);
+        }
+      } catch (e) {
+        console.error('Extend nearby geocode error:', e);
+      } finally {
+        setExtendNearbySearching(false);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [extendNearbyQuery, extendPanelMode, extendNearbyPicked, language]);
+
+  const handleExtendItinerary = async (mode: 'day' | 'nearby') => {
+    if (!generatedPlan?.id) return;
+    if (mode === 'nearby' && !extendNearbyPicked) {
+      notify('Scegli prima una destinazione dall\'elenco', 'error');
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentUserId = sessionData?.session?.user?.id;
+    if (!currentUserId) {
+      notify('Accedi per continuare', 'error');
+      return;
+    }
+
+    const bal = await getWalletBalance(currentUserId);
+    setCurrentBalance(bal.total);
+    const cost = PRICING_LIST.extend_itinerary_day;
+    const label = mode === 'day'
+      ? `Aggiungi un giorno${extendTheme ? ` — ${EXTEND_DAY_THEMES.find(t => t.id === extendTheme)?.label || extendTheme}` : ''}`
+      : `Gita fuori porta — ${extendNearbyPicked?.description || extendNearbyQuery}`;
+    const confirmed = await creditConfirm.requestConfirmation(cost, label, bal.total);
+    if (!confirmed) return;
+    if (bal.total < cost) {
+      notify(getTranslation('err_insufficient_credits', language));
+      setShowShop(true);
+      return;
+    }
+
+    setExtendLoading(true);
+    setExtendQuizDismissed(false);
+    try {
+      const token = sessionData?.session?.access_token;
+      const res = await fetch(getApiUrl('/api/itinerary/extend'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({
+          itineraryId: generatedPlan.id,
+          mode,
+          theme: extendTheme || 'sorprendimi',
+          language,
+          ...(mode === 'nearby' ? {
+            city: extendNearbyPicked?.description || extendNearbyQuery,
+            lat: extendNearbyPicked?.lat,
+            lon: extendNearbyPicked?.lon,
+          } : {}),
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.giorno) {
+        const newPlan = {
+          ...generatedPlan,
+          giorni: [...generatedPlan.giorni, data.giorno],
+          totale_viaggio: data.totale_viaggio || (generatedPlan as any).totale_viaggio,
+        };
+        setGeneratedPlan(newPlan);
+        // Stesso salvataggio incrementale delle altre modifiche: oltre a
+        // ri-scrivere user_itineraries (il server l'ha già fatto), aggiorna
+        // shared_pois/enrichment e la copia idb offline per le nuove tappe.
+        savePlanToSupabase(newPlan);
+        notifyCreditsChanged({ userId: currentUserId });
+        notify(data.cached ? 'Giorno aggiunto (dalla Libreria, metà prezzo)!' : 'Giorno aggiunto!', 'success');
+        setExtendPanelMode('closed');
+        setExtendTheme('');
+        setExtendNearbyQuery('');
+        setExtendNearbyPicked(null);
+      } else {
+        // Fallimento: il server ha già rimborsato server-side.
+        notifyCreditsChanged({ userId: currentUserId });
+        notify(data?.message || getTranslation('err_generation_refunded', language), 'error');
+      }
+    } catch (err) {
+      console.error('Extend itinerary error:', err);
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(getTranslation('err_generation_refunded', language), 'error');
+    } finally {
+      setExtendLoading(false);
+    }
+  };
+
   const toggleInterest = (id: string) => {
     setSelectedInterests(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
@@ -4185,6 +4647,21 @@ export default function PlanScreen({
                 </div>
               </button>
 
+              {/* 📚 Libreria itinerari: catalogo già generato e verificato,
+                  usarli è gratis (niente generazione, niente crediti) */}
+              <button
+                onClick={() => openLibrary()}
+                className="w-full p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border border-amber-200/60 shadow-sm flex items-center gap-3 group hover:shadow-md hover:border-amber-400/50 transition-all"
+              >
+                <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                  <span className="text-lg">📚</span>
+                </div>
+                <div className="text-left flex-1">
+                  <h3 className="text-xs font-black text-gray-900">Libreria itinerari</h3>
+                  <p className="text-[10px] text-gray-600 font-bold">Centinaia di itinerari pronti e verificati: porti, scali, cammini, cinema, fioriture… Gratis.</p>
+                </div>
+              </button>
+
               {/* I Miei Itinerari (tasto lungo) + Offline */}
               <div className="flex gap-3">
                 <button
@@ -4248,24 +4725,130 @@ export default function PlanScreen({
               exit={{ opacity: 0, scale: 0.95 }}
               className="space-y-8 pt-4"
             >
-              {/* Template stagionali curati (ondata 6): proposti in base al
-                  periodo, un tap pre-compila destinazione+giorni+interessi */}
+              {/* Template stagionali curati (ondata 6, esteso): proposti in
+                  base al periodo (mese corrente + 2), chips di tema, 7 card
+                  alla volta e sheet col catalogo completo (curati + AI) */}
               <div className="space-y-2">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">✨ Ispirazioni di stagione</label>
+                <div className="flex items-center justify-between pl-1 pr-1">
+                  <label className="text-[11px] font-black text-primary uppercase tracking-widest">✨ Ispirazioni di stagione</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowSeasonalCatalog(true)}
+                    className="text-[11px] font-black text-primary/70 hover:text-primary transition"
+                  >
+                    Vedi tutte →
+                  </button>
+                </div>
+                <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
+                  {([
+                    { id: 'tutti' as const, label: 'Tutti', emoji: '' },
+                    { id: 'nascosti' as const, label: 'Nascosti', emoji: '💎' },
+                    ...SEASONAL_THEMES.map(th => ({ id: th.id, label: th.label, emoji: th.emoji })),
+                  ]).map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => { setTplFilter(c.id); setTplShown(7); }}
+                      className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-black transition-all border ${
+                        tplFilter === c.id
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-white text-gray-500 border-outline-variant/30 hover:border-primary/30'
+                      }`}
+                    >
+                      {c.emoji ? `${c.emoji} ` : ''}{c.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
-                  {templatesForNow().map(t => (
+                  {seasonTemplates.slice(0, tplShown).map(t => (
                     <button
                       key={t.id}
                       type="button"
                       onClick={() => applyTemplate(t)}
                       className="shrink-0 w-44 text-left bg-white border border-outline-variant/20 rounded-2xl p-3 shadow-sm hover:border-primary/30 hover:shadow-md transition-all active:scale-95"
                     >
-                      <div className="text-2xl mb-1">{t.emoji}</div>
-                      <div className="text-xs font-black text-primary leading-tight">{t.title}</div>
-                      <div className="text-[10px] font-bold text-gray-500 mt-0.5">{t.destination} · {t.days} {t.days === 1 ? 'giorno' : 'giorni'}</div>
+                      <div className="text-2xl mb-1">{t.emoji}{t.hiddenGem ? ' 💎' : ''}</div>
+                      <div className="text-xs font-black text-primary leading-tight">{tplI18n[t.id]?.title || t.title}</div>
+                      <div className="text-[10px] font-bold text-gray-500 mt-0.5">
+                        {t.destination}{t.country && t.country !== 'Italia' ? ` · ${t.country}` : ''} · {t.days} {t.days === 1 ? 'giorno' : 'giorni'}
+                      </div>
                     </button>
                   ))}
+                  {seasonTemplates.length > tplShown && (
+                    <button
+                      type="button"
+                      onClick={() => setTplShown(n => n + 7)}
+                      className="shrink-0 w-28 flex flex-col items-center justify-center gap-1 bg-primary/5 border border-primary/20 rounded-2xl p-3 text-primary hover:bg-primary/10 transition-all active:scale-95"
+                    >
+                      <span className="text-lg">✨</span>
+                      <span className="text-[10px] font-black leading-tight text-center">Mostra altre</span>
+                    </button>
+                  )}
+                  {seasonTemplates.length === 0 && (
+                    <p className="text-[11px] font-bold text-gray-400 px-1 py-3">Nessuna ispirazione per questo filtro nel periodo.</p>
+                  )}
                 </div>
+              </div>
+
+              {/* Itinerari speciali: due verticali dedicate con identità
+                  proprie — sosta breve (porti/scali, ore contate) e cammini
+                  (ritmo lento). Il tap apre la sheet, la sheet pre-compila. */}
+              <div className="space-y-2">
+                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">🧭 Itinerari speciali</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTransitSheet(true)}
+                    className="text-left bg-white border border-outline-variant/20 rounded-2xl p-2.5 shadow-sm hover:border-primary/30 hover:shadow-md transition-all active:scale-95"
+                  >
+                    <div className="text-xl mb-1">🛳✈️</div>
+                    <div className="text-[11px] font-black text-primary leading-tight">Sosta breve</div>
+                    <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Porti e scali: il meglio nelle ore che hai.
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPilgrimSheet(true)}
+                    className="text-left bg-white border border-emerald-200/60 rounded-2xl p-2.5 shadow-sm hover:border-emerald-400 hover:shadow-md transition-all active:scale-95"
+                  >
+                    <div className="text-xl mb-1">🥾</div>
+                    <div className="text-[11px] font-black text-emerald-700 leading-tight">Cammini</div>
+                    <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Tappe e timbri già pensati.
+                    </div>
+                  </button>
+                  {/* 🎭 Ispirazioni & temi: apre la libreria pre-filtrata sulla
+                      macro-categoria "cultura" (cinema/libri/musica/arte/
+                      storia/scienza/sport/moda), stesso meccanismo di
+                      prefill di porto/cammino ma sull'intero gruppo. */}
+                  <button
+                    type="button"
+                    onClick={() => openLibrary({ group: 'cultura' })}
+                    className="text-left bg-white border border-indigo-200/60 rounded-2xl p-2.5 shadow-sm hover:border-indigo-400 hover:shadow-md transition-all active:scale-95"
+                  >
+                    <div className="text-xl mb-1">🎭</div>
+                    <div className="text-[11px] font-black text-indigo-700 leading-tight">Ispirazioni & temi</div>
+                    <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Cinema, arte, musica, storia…
+                    </div>
+                  </button>
+                </div>
+                {/* 📚 Libreria: itinerari GIÀ generati e verificati (gratis),
+                    porta d'accesso "a tutto" senza alcun filtro pre-impostato */}
+                <button
+                  type="button"
+                  onClick={() => openLibrary()}
+                  className="w-full text-left bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200/60 rounded-2xl p-3 shadow-sm hover:border-amber-400/60 hover:shadow-md transition-all active:scale-[0.99] flex items-center gap-3"
+                >
+                  <div className="text-2xl shrink-0">📚</div>
+                  <div>
+                    <div className="text-xs font-black text-amber-800 leading-tight">Libreria itinerari</div>
+                    <div className="text-[10px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Centinaia di itinerari pronti e verificati, da usare gratis senza generarli.
+                    </div>
+                  </div>
+                </button>
               </div>
 
               <div className="space-y-6">
@@ -4398,6 +4981,24 @@ export default function PlanScreen({
                       <span>Roadtrip multi-città: i giorni verranno ripartiti tra le città e i trasferimenti diventano tappe con km e tempi reali. In auto tieni attiva l'audioguida GPS: i luoghi lungo il percorso si raccontano da soli.</span>
                     </div>
                   )}
+
+                  {/* «Big five» gratuita: card discreta sotto la destinazione
+                      scelta, apre la mini-guida in una sheet leggibile. */}
+                  {(destinations[0] || '').trim().length >= 3 && (
+                    <button
+                      type="button"
+                      onClick={openBigFive}
+                      className="mt-2 w-full flex items-center gap-2.5 text-left bg-amber-50/70 border border-amber-200/60 rounded-2xl px-3 py-2.5 hover:bg-amber-50 transition-all active:scale-[0.99]"
+                    >
+                      <span className="text-xl leading-none shrink-0">📖</span>
+                      <span className="min-w-0">
+                        <span className="block text-[11px] font-black text-amber-900 leading-tight truncate">
+                          I 5 imperdibili di {(destCoords?.label || destinations[0]).split(',')[0].trim()}
+                        </span>
+                        <span className="block text-[10px] font-bold text-amber-700/70">Mini-guida gratuita, da leggere subito</span>
+                      </span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="space-y-3">
@@ -4454,10 +5055,25 @@ export default function PlanScreen({
                 </div>
                 
                 <div className="space-y-3">
+                  <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("accommodation_label", language)}</label>
+                  <div className="relative">
+                    <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-primary/30" />
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      placeholder={getTranslation("accommodation_placeholder", language)}
+                      className="w-full pl-12 pr-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
+                      value={accommodationAddress}
+                      onChange={(e) => setAccommodationAddress(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
                   <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("special_requests", language)}</label>
-                  <input 
-                    type="text" 
-                    placeholder={getTranslation("placeholder_interests", language)} 
+                  <input
+                    type="text"
+                    placeholder={getTranslation("placeholder_interests", language)}
                     className="w-full px-4 py-4 bg-white rounded-2xl border border-outline-variant/10 shadow-sm focus:ring-2 focus:ring-primary/20 outline-none font-bold text-on-surface text-sm"
                     value={specialRequests}
                     onChange={(e) => setSpecialRequests(e.target.value)}
@@ -4931,6 +5547,11 @@ export default function PlanScreen({
                 </div>
               </div>
 
+              {/* Mese del viaggio: serve alle carte-evento del mazzo (eventi
+                  reali Ticketmaster filtrati sulle date giuste). Senza mese
+                  il mazzo resta di sole attrazioni, come prima. */}
+              {renderMonthSelect('focus:ring-rose-300/40')}
+
               {/* Categorie */}
               <div>
                 <label className="block text-xs font-black text-primary uppercase tracking-widest mb-3">{getTranslation('attraction_types', language)}</label>
@@ -5064,6 +5685,12 @@ export default function PlanScreen({
                         }
                         className={`bg-white rounded-[2rem] border border-gray-100 shadow-xl overflow-hidden ${isTop ? 'relative z-10 cursor-grab active:cursor-grabbing' : 'absolute inset-x-0 top-0 z-0 pointer-events-none'}`}
                       >
+                        {/* Badge per gli eventi reali (Ticketmaster) mescolati nel mazzo */}
+                        {card._isEvent && (
+                          <span className="absolute top-3 left-3 z-20 px-2.5 py-1 bg-indigo-600 text-white rounded-full text-[10px] font-black shadow-md pointer-events-none">
+                            🎫 Evento reale
+                          </span>
+                        )}
                         {/* Card content: foto reale se disponibile, altrimenti
                             sfondo tematico per categoria con medaglione. */}
                         {(card.image_url || card.imageUrl || card.photo_url) && !brokenImages[card._uid] ? (
@@ -5088,6 +5715,7 @@ export default function PlanScreen({
                             : card.tipo === 'ristorante' ? 'from-rose-200 via-orange-100 to-amber-50'
                             : card.tipo === 'parco' ? 'from-emerald-200 via-green-100 to-lime-50'
                             : card.tipo === 'esperienza' ? 'from-sky-200 via-cyan-100 to-blue-50'
+                            : card.tipo === 'evento' ? 'from-indigo-200 via-blue-100 to-violet-50'
                             : 'from-blue-200 via-sky-100 to-slate-50'
                           }`}>
                             {/* Cerchi decorativi di profondità */}
@@ -5096,7 +5724,7 @@ export default function PlanScreen({
                             {/* Medaglione con icona */}
                             <div className="relative w-24 h-24 rounded-full bg-white/80 backdrop-blur-sm border border-white shadow-xl flex items-center justify-center">
                               <span className="text-5xl drop-shadow-sm">
-                                {card.tipo === 'museo' ? '🏛️' : card.tipo === 'chiesa' ? '⛪' : card.tipo === 'monumento' ? '🗿' : card.tipo === 'ristorante' ? '🍕' : card.tipo === 'parco' ? '🌿' : card.tipo === 'esperienza' ? '🎟️' : '📍'}
+                                {card.tipo === 'museo' ? '🏛️' : card.tipo === 'chiesa' ? '⛪' : card.tipo === 'monumento' ? '🗿' : card.tipo === 'ristorante' ? '🍕' : card.tipo === 'parco' ? '🌿' : card.tipo === 'esperienza' ? '🎟️' : card.tipo === 'evento' ? '🎫' : '📍'}
                               </span>
                             </div>
                           </div>
@@ -5107,6 +5735,13 @@ export default function PlanScreen({
                             <span className="text-[10px] text-gray-500 font-bold">{card.ora}</span>
                           </div>
                           <h3 className="text-lg font-black text-gray-900 leading-tight pointer-events-none">{card.titolo_tappa}</h3>
+                          {/* Data/orario/venue dell'evento reale: like = tappa
+                              bloccata a questo orario nell'itinerario. */}
+                          {card._isEvent && card._eventDate && (
+                            <p className="text-xs font-black text-indigo-700 pointer-events-none">
+                              📅 {formatEventCardDate(card._eventDate, language)}{card._eventTime ? ` · ore ${card._eventTime}` : ''}{card._eventVenue ? ` · ${card._eventVenue}` : ''}
+                            </p>
+                          )}
                           {/* La descrizione era troncata a 3 righe dentro un
                               blocco `pointer-events-none`: illeggibile e
                               impossibile da espandere. Ora si può aprire. */}
@@ -5705,12 +6340,28 @@ export default function PlanScreen({
                   >
                     <Sparkles className="w-4 h-4" /> {getTranslation("regenerate", language)}
                   </button>
-                  <button 
+                  <button
                     onClick={() => setShowPremiumGuideModal(true)}
                     className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-amber-600 text-white rounded-2xl flex items-center gap-2 font-bold hover:from-yellow-600 hover:to-amber-700 transition-all shadow-md text-sm shadow-amber-500/20"
                   >
                     📖 {getTranslation("premium_guide_btn", language)}
                   </button>
+                  {/* Export .ics: le date esatte non esistono (il form ha solo
+                      il mese), quindi la modalina chiede la data di inizio;
+                      il default arriva dalla finestra del mese scelto. */}
+                  <CalendarExportButton
+                    itinerary={generatedPlan}
+                    defaultStart={(() => {
+                      // Primo giorno del mese scelto nel form (anno prossimo se
+                      // il mese è già passato); la modalina ripiega su domani
+                      // quando la data non è futura.
+                      const idx = MONTH_VALUES.indexOf(mese as (typeof MONTH_VALUES)[number]);
+                      if (idx < 0) return null;
+                      const now = new Date();
+                      const year = idx < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
+                      return new Date(year, idx, 1);
+                    })()}
+                  />
                   <button 
                     onClick={() => {
                       const oldTitle = document.title;
@@ -6116,6 +6767,118 @@ export default function PlanScreen({
                   </div>
                 ))}
 
+                {/* ➕ Aggiungi un giorno / ➕ Tappa vicina (gita fuori porta):
+                    estende l'itinerario ESISTENTE e già salvato via
+                    /api/itinerary/extend. Stesso pannello sia per un piano
+                    generato normalmente sia per uno attivato dalla Libreria
+                    (nessuna differenza di trattamento). */}
+                {generatedPlan.id && (
+                  <div className="mt-8 print:hidden bg-white p-6 rounded-[2rem] border border-dashed border-primary/20 space-y-4">
+                    {extendPanelMode === 'closed' ? (
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <button
+                          type="button"
+                          onClick={() => { setExtendPanelMode('day'); setExtendTheme(''); }}
+                          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-primary/10 text-primary rounded-2xl font-black text-sm hover:bg-primary/20 transition-colors"
+                        >
+                          <Plus className="w-4 h-4" /> ➕ Aggiungi un giorno
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setExtendPanelMode('nearby'); setExtendTheme(''); setExtendNearbyQuery(''); setExtendNearbyPicked(null); }}
+                          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-secondary/10 text-secondary rounded-2xl font-black text-sm hover:bg-secondary/20 transition-colors"
+                        >
+                          <Compass className="w-4 h-4" /> ➕ Tappa vicina (gita fuori porta)
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="font-black text-primary text-sm uppercase tracking-widest">
+                            {extendPanelMode === 'day' ? '➕ Nuovo giorno' : '➕ Gita fuori porta'}
+                          </h4>
+                          <button type="button" onClick={() => setExtendPanelMode('closed')} className="p-1.5 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition-colors">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+
+                        {extendPanelMode === 'nearby' && (
+                          <div className="relative">
+                            {extendNearbyPicked ? (
+                              <div className="flex items-center justify-between px-4 py-3 bg-secondary/5 border border-secondary/20 rounded-xl">
+                                <span className="text-sm font-bold text-secondary flex items-center gap-2 min-w-0">
+                                  <MapPin className="w-4 h-4 shrink-0" /> <span className="truncate">{extendNearbyPicked.description}</span>
+                                </span>
+                                <button type="button" onClick={() => { setExtendNearbyPicked(null); setExtendNearbyQuery(''); }} className="text-gray-400 hover:text-gray-600 shrink-0">
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <input
+                                  type="text"
+                                  value={extendNearbyQuery}
+                                  onChange={e => setExtendNearbyQuery(e.target.value)}
+                                  placeholder="Cerca una città vicina…"
+                                  className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none focus:ring-2 focus:ring-secondary/20"
+                                />
+                                {extendNearbySearching && <Loader2 className="w-4 h-4 animate-spin absolute right-3 top-3.5 text-gray-400" />}
+                                {extendNearbySuggestions.length > 0 && (
+                                  <div className="absolute z-10 mt-1 w-full bg-white border border-gray-100 rounded-xl shadow-lg overflow-hidden">
+                                    {extendNearbySuggestions.map((s: any) => (
+                                      <button
+                                        type="button"
+                                        key={s.id || s.description}
+                                        onClick={() => { setExtendNearbyPicked({ description: s.description || s.display_name, lat: s.lat, lon: s.lon }); setExtendNearbySuggestions([]); }}
+                                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 border-b border-gray-50 last:border-0"
+                                      >
+                                        {s.description || s.display_name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+
+                        <div>
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Tema del giorno</p>
+                          <div className="flex flex-wrap gap-2">
+                            {EXTEND_DAY_THEMES.map(th => (
+                              <button
+                                key={th.id}
+                                type="button"
+                                onClick={() => setExtendTheme(th.id)}
+                                className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${extendTheme === th.id ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-primary/30'}`}
+                              >
+                                {th.label}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              onClick={() => setExtendTheme('')}
+                              className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${!extendTheme ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-primary/30'}`}
+                            >
+                              ✨ Sorprendimi
+                            </button>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={extendLoading || (extendPanelMode === 'nearby' && !extendNearbyPicked)}
+                          onClick={() => handleExtendItinerary(extendPanelMode as 'day' | 'nearby')}
+                          className="w-full flex items-center justify-center gap-2 px-5 py-3 bg-primary text-white rounded-2xl font-black text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                        >
+                          {extendLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                          {extendLoading ? 'Genero…' : `Genera (${PRICING_LIST.extend_itinerary_day} crediti)`}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {generatedPlan.giorni.some(g => g.tappe.some(t => t.coordinate && t.coordinate.lat !== 0)) && (
                   <div className="mt-8 break-inside-avoid print:hidden">
                     <h3 className="font-black text-primary uppercase tracking-widest text-xs mb-4">{getTranslation("itinerary_map", language)}</h3>
@@ -6308,9 +7071,11 @@ export default function PlanScreen({
             state={navState}
             language={language}
             currentInstruction={currentInstruction}
+            currentManeuver={currentManeuver}
             distanceToNext={distanceToNext}
             distanceToDestination={distanceToDestination}
             etaSeconds={etaSeconds}
+            progress={navProgress}
             poiName={navDayIndex !== null && navStopIndex !== null
               ? generatedPlan?.giorni[navDayIndex]?.tappe[navStopIndex]?.titolo_tappa
               : undefined}
@@ -6356,6 +7121,24 @@ export default function PlanScreen({
           <span className="text-xs font-black uppercase tracking-widest">
             {getTranslation('wip_working', language)}
           </span>
+        </div>
+      )}
+
+      {/* Quiz anche durante l'attesa di "Aggiungi un giorno"/"Gita fuori
+          porta" (~1 minuto, prima solo l'etichetta "Genero…" sul bottone). */}
+      {extendLoading && !extendQuizDismissed && (
+        <LoadingQuiz
+          destination={extendPanelMode === 'nearby' ? (extendNearbyPicked?.description || extendNearbyQuery || destinations[0] || 'la tua destinazione') : (destinations[0] || 'la tua destinazione')}
+          quizLength={3}
+          userId={currentUserId || ''}
+          language={language}
+          onDismiss={() => setExtendQuizDismissed(true)}
+        />
+      )}
+      {extendLoading && extendQuizDismissed && (
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
+          <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+          <span className="text-xs font-black uppercase tracking-widest">Genero…</span>
         </div>
       )}
 
@@ -6410,7 +7193,7 @@ export default function PlanScreen({
             </div>
             <div className="flex-1 overflow-y-auto bg-gray-100 p-2 sm:p-8" id="premium-guide-viewer-container-plan">
               {/* Audio-libro: fuori dal contenitore PDF, così non finisce in stampa */}
-              <PremiumGuideAudiobook content={guideToRender.content} language={language} />
+              <PremiumGuideAudiobook content={guideToRender.content} language={language} hash={guideToRender.hash} onContentUpdate={(c: any) => setGuideToRender(g => g ? { ...g, content: c } : g)} />
               <PremiumGuideRenderer
                 content={guideToRender.content}
                 mediaManifest={guideToRender.media}
@@ -6481,6 +7264,113 @@ export default function PlanScreen({
       {showShop && currentUserId && (
         <div className="fixed inset-0 z-[10001] bg-white">
           <ShopScreen userId={currentUserId} language={language} onClose={() => setShowShop(false)} />
+        </div>
+      )}
+
+      {/* CATALOGO ISPIRAZIONI DI STAGIONE (sheet a tutto schermo) */}
+      {showSeasonalCatalog && (
+        <SeasonalCatalogSheet
+          language={language}
+          onClose={() => setShowSeasonalCatalog(false)}
+          onApply={(t) => { applyTemplate(t); setShowSeasonalCatalog(false); }}
+        />
+      )}
+
+      {/* ITINERARI SPECIALI: sosta breve (porti & aeroporti) e cammini */}
+      {showTransitSheet && (
+        <TransitEscapesSheet
+          language={language}
+          onClose={() => setShowTransitSheet(false)}
+          onApply={applySpecialStop}
+          onOpenLibrary={openLibrary}
+        />
+      )}
+      {showPilgrimSheet && (
+        <PilgrimWaysSheet
+          language={language}
+          onClose={() => setShowPilgrimSheet(false)}
+          onApply={applySpecialRoute}
+          onOpenLibrary={openLibrary}
+        />
+      )}
+
+      {/* 📚 LIBRERIA ITINERARI (sheet a tutto schermo, sopra le altre) */}
+      {showLibrarySheet && (
+        <ItineraryLibrarySheet
+          language={language}
+          userId={currentUserId || undefined}
+          initialQuery={libraryPrefill?.query || ''}
+          initialKind={libraryPrefill?.kind || ''}
+          initialGroup={libraryPrefill?.group || ''}
+          initialCity={libraryPrefill?.city || ''}
+          onClose={() => { setShowLibrarySheet(false); setLibraryPrefill(null); }}
+          onUse={activateLibraryItinerary}
+        />
+      )}
+
+      {/* MINI-GUIDA «BIG FIVE» GRATUITA (sheet leggibile, niente PDF) */}
+      {bigFive.open && (
+        <div className="fixed inset-0 z-[10002] bg-white flex flex-col">
+          <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-gray-100 shrink-0">
+            <h2 className="font-black text-primary text-lg truncate pr-2">📖 I 5 imperdibili di {bigFive.city}</h2>
+            <button
+              onClick={() => setBigFive(b => ({ ...b, open: false }))}
+              className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition shrink-0"
+              aria-label="Chiudi"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 pb-10">
+            {bigFive.loading && (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-gray-400">
+                <Loader2 className="w-6 h-6 animate-spin" />
+                <p className="text-xs font-bold">La redazione prepara la mini-guida di {bigFive.city}…</p>
+              </div>
+            )}
+            {!bigFive.loading && bigFive.error && (
+              <p className="text-center text-xs font-bold text-gray-400 py-12">{bigFive.error}</p>
+            )}
+            {!bigFive.loading && bigFive.guide && (
+              <div className="max-w-xl mx-auto pt-5 space-y-6">
+                <div>
+                  <h3 className="text-xl font-black text-primary leading-tight">{bigFive.guide.titolo}</h3>
+                  {bigFive.guide.introduzione && (
+                    <p className="text-sm text-gray-600 leading-relaxed mt-2">{bigFive.guide.introduzione}</p>
+                  )}
+                </div>
+                {(bigFive.guide.luoghi || []).map((l: any, i: number) => (
+                  <div key={i} className="space-y-1.5">
+                    <h4 className="text-sm font-black text-primary">{i + 1}. {l.nome}</h4>
+                    <p className="text-sm text-gray-700 leading-relaxed">{l.racconto}</p>
+                    {l.consiglio && (
+                      <p className="text-[12px] font-bold text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                        💡 {l.consiglio}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {bigFive.guide.invito && (
+                  <p className="text-sm text-gray-600 leading-relaxed italic border-t border-gray-100 pt-4">
+                    {bigFive.guide.invito}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBigFive(b => ({ ...b, open: false }));
+                    // La Guida d'Autore nasce dall'itinerario: se c'è già un
+                    // piano si apre il modale, altrimenti si guida al form.
+                    if (generatedPlan && currentUserId) setShowPremiumGuideModal(true);
+                    else notify('Genera prima l\'itinerario: a piano pronto troverai la Guida d\'Autore completa 📖');
+                  }}
+                  className="w-full py-3 rounded-2xl bg-primary text-white text-sm font-black active:scale-95 transition-transform"
+                >
+                  {getTranslation('premium_guide_btn', language)}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -26,6 +26,10 @@ export const CATEGORIES: Category[] = [
   { id: "famiglie", label: "Famiglie", icon: <span className="text-sm">🛝</span> },
   // Le Vision approvate dei viaggiatori (pin magenta 📸). Spenta di default.
   { id: "community", label: "WIP Community", icon: <span className="text-sm">📸</span> },
+  // Atlante dei beni vincolati (tabella beni_culturali, ~1,78 M nel mondo):
+  // layer informativo, scheda ridotta e niente audioguida. Spenta di default,
+  // e in mappa solo a zoom alto: a scala di continente sarebbe illeggibile.
+  { id: "beni_culturali", label: "Beni Culturali", icon: <span className="text-sm">🏺</span> },
   { id: "eventi", label: "Eventi", icon: <span className="text-sm">🎪</span> }
 ];
 

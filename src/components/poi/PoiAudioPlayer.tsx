@@ -6,10 +6,11 @@ import {
 } from 'lucide-react';
 import { getTranslation, Language } from '../../lib/i18n';
 import { useAudioState } from '../../hooks/useAudioState';
-import { locationService } from '../../services/locationService';
+import { locationService, parseDuetLines } from '../../services/locationService';
 import { getApiUrl } from '../../lib/api';
+import { notify } from '../../lib/toast';
 
-export type GuideRegister = 'standard' | 'breve' | 'bambini';
+export type GuideRegister = 'standard' | 'breve' | 'bambini' | 'duetto';
 
 interface PoiAudioPlayerProps {
   localGuideMode: "nicky" | "dante";
@@ -109,6 +110,12 @@ export default function PoiAudioPlayer({
     });
   }, [displayText]);
 
+  // 🎭 Duetto: se il testo è un dialogo NICKY:/DANTE: la trascrizione mostra
+  // le battute col nome del parlante in grassetto; la battuta in riproduzione
+  // (audioState.duetIndex, aggiornata da locationService) resta evidenziata.
+  const duetLines = useMemo(() => parseDuetLines(displayText), [displayText]);
+  const activeDuetLine = isCurrentPoi ? audioState.duetIndex : -1;
+
   const playRatio = isCurrentPoi && audioState.duration > 0 ? audioState.currentTime / audioState.duration : -1;
   const activeSentence = playRatio >= 0 ? sentences.findIndex(s => playRatio >= s.start && playRatio < s.end) : -1;
   const activeRef = useRef<HTMLSpanElement | null>(null);
@@ -120,7 +127,7 @@ export default function PoiAudioPlayer({
       const target = el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2;
       box.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
     }
-  }, [activeSentence]);
+  }, [activeSentence, activeDuetLine]);
 
   // ── Riprendi: salvataggio posizione + chip ────────────────────────────
   const [savedPos, setSavedPos] = useState<{ t: number; d: number } | null>(() => {
@@ -240,6 +247,58 @@ export default function PoiAudioPlayer({
     return () => clearInterval(id);
   }, [sleepMin]);
 
+  // ── 🎧 Audio direzionale + 🤫 Modalità silenziosa (persistenti) ────────
+  const [directionalOn, setDirectionalOn] = useState(() => {
+    try { return localStorage.getItem('wip_directional_audio') === '1'; } catch { return false; }
+  });
+  const [silentOn, setSilentOn] = useState(() => {
+    try { return localStorage.getItem('wip_silent_mode') === '1'; } catch { return false; }
+  });
+  const toggleDirectional = () => {
+    const next = !directionalOn;
+    setDirectionalOn(next);
+    // Chiamata NEL gesto: su iOS il permesso bussola si chiede solo qui.
+    locationService.setDirectionalAudio(next).catch(() => { /* fail-safe */ });
+  };
+  const toggleSilent = () => {
+    const next = !silentOn;
+    setSilentOn(next);
+    locationService.setSilentMode(next);
+  };
+
+  // ── ⏱ Feedback trigger geofencing (barra a un tap, max 1 ogni 30 min) ──
+  // locationService emette 'wip-trigger-feedback-request' a fine/chiusura di
+  // un'audioguida partita da trigger (o subito, in modalità silenziosa).
+  const [feedbackReq, setFeedbackReq] = useState<{ poiId: string; lat: number | null; lon: number | null } | null>(null);
+  useEffect(() => {
+    const onReq = (e: any) => {
+      const d = e?.detail || {};
+      if (d.poiId && String(d.poiId) === String(poi?.id)) {
+        setFeedbackReq({ poiId: String(d.poiId), lat: d.lat ?? null, lon: d.lon ?? null });
+      }
+    };
+    window.addEventListener('wip-trigger-feedback-request', onReq);
+    return () => window.removeEventListener('wip-trigger-feedback-request', onReq);
+  }, [poi?.id]);
+
+  const sendTriggerFeedback = (verdict: 'ok' | 'early' | 'wrong') => {
+    const req = feedbackReq;
+    setFeedbackReq(null);
+    if (!req) return;
+    // Best-effort: la rotta può non esistere ancora — ogni errore è silenzioso
+    try {
+      fetch(getApiUrl('/api/telemetry/feedback'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          poiId: req.poiId, verdict, lat: req.lat, lon: req.lon,
+          platform: 'web', ts: Date.now(),
+        }),
+      }).catch(() => { /* rotta assente/offline: nessun rumore */ });
+    } catch { /* ignore */ }
+    notify('Grazie! Il tuo feedback migliora i trigger per tutti.', 'success');
+  };
+
   return (
     <div className="relative bg-white rounded-[2rem] p-6 mb-8 border border-secondary shadow-xl shadow-secondary/5 overflow-hidden">
       <div className="absolute -top-24 -right-24 w-48 h-48 bg-secondary/10 blur-[80px] rounded-full" />
@@ -270,10 +329,11 @@ export default function PoiAudioPlayer({
               </button>
             </div>
 
-            {/* Registro (ondata 4): versione standard, breve (~40s) o per
-                bambini — generata on-demand e cachata per registro */}
-            <div className="flex items-center gap-1.5 mb-3 bg-background p-1 rounded-full w-fit">
-              {([['standard', 'Standard'], ['breve', '⚡ Breve'], ['bambini', '🧒 Bimbi']] as [GuideRegister, string][]).map(([key, label]) => (
+            {/* Registro (ondata 4): versione standard, breve (~40s), per
+                bambini o duetto 🎭 (dialogo Nicky & Dante a due voci) —
+                generata on-demand e cachata per registro */}
+            <div className="flex items-center flex-wrap gap-1.5 mb-3 bg-background p-1 rounded-full w-fit">
+              {([['standard', 'Standard'], ['breve', '⚡ Breve'], ['bambini', '🧒 Bimbi'], ['duetto', '🎭 Duetto']] as [GuideRegister, string][]).map(([key, label]) => (
                 <button
                   key={key}
                   onClick={() => setGuideRegister(key)}
@@ -318,6 +378,49 @@ export default function PoiAudioPlayer({
           </div>
         </div>
 
+        {/* ⏱ Feedback trigger: barra leggera a un tap, una volta sola e
+            throttlata (30 min) — appare a fine/chiusura di una guida partita
+            dal geofencing. L'invio è best-effort e sempre silenzioso. */}
+        <AnimatePresence>
+          {feedbackReq && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              className="flex items-center flex-wrap gap-1.5 mb-4 bg-surface-warm/60 border border-secondary/20 rounded-2xl px-3 py-2"
+            >
+              <span className="text-[10px] font-black text-primary/70 uppercase tracking-wide mr-1">
+                Com'era il momento dell'audioguida?
+              </span>
+              <button
+                onClick={() => sendTriggerFeedback('ok')}
+                className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
+              >
+                ⏱ Momento giusto
+              </button>
+              <button
+                onClick={() => sendTriggerFeedback('early')}
+                className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
+              >
+                ⏰ Troppo presto
+              </button>
+              <button
+                onClick={() => sendTriggerFeedback('wrong')}
+                className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
+              >
+                📍 Non ero qui
+              </button>
+              <button
+                onClick={() => setFeedbackReq(null)}
+                aria-label="Chiudi la richiesta di feedback"
+                className="ml-auto p-1 text-primary/40 hover:text-primary/70 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Trascrizione sincronizzata: la frase in ascolto si evidenzia e
             resta centrata nel riquadro; a volume zero si legge come un libro */}
         <div
@@ -330,6 +433,21 @@ export default function PoiAudioPlayer({
               <span className="font-bold">
                 {isRegenerating ? getTranslation("regenerating_label", language) : getTranslation("loading_dots", language)}
               </span>
+            </div>
+          ) : duetLines ? (
+            /* 🎭 Duetto: battute col parlante in grassetto; quella in
+               riproduzione (voce corrispondente) resta evidenziata */
+            <div className="not-italic space-y-2">
+              {duetLines.map((l, i) => (
+                <p key={i} className={i === activeDuetLine ? "bg-secondary/15 rounded-lg px-1.5 py-0.5 transition-colors" : "transition-colors"}>
+                  <strong className={l.speaker === 'nicky' ? 'text-secondary' : 'text-primary'}>
+                    {l.speaker === 'nicky' ? 'Nicky' : 'Dante'}:
+                  </strong>{' '}
+                  <span ref={i === activeDuetLine ? activeRef : undefined} className={i === activeDuetLine ? 'font-bold text-primary' : ''}>
+                    {l.text}
+                  </span>
+                </p>
+              ))}
             </div>
           ) : sentences.length > 0 ? (
             sentences.map((s, i) => (
@@ -381,6 +499,32 @@ export default function PoiAudioPlayer({
         <div className="flex items-center justify-center gap-2 mb-4 text-primary/70 bg-primary/5 py-2 px-4 rounded-xl border border-primary/10">
           <Headphones className="w-4 h-4 shrink-0" />
           <span className="text-[10px] font-bold uppercase tracking-wide text-center">Usa le cuffie per un'esperienza ottimale</span>
+        </div>
+
+        {/* Preferenze audio persistenti: 🎧 pan direzionale verso il POI (web,
+            fail-safe totale senza sensori) e 🤫 modalità silenziosa (i trigger
+            geofencing vibrano e mostrano il testo invece di parlare) */}
+        <div className="flex items-center justify-center flex-wrap gap-2 mb-4">
+          <button
+            onClick={toggleDirectional}
+            aria-pressed={directionalOn}
+            title="In cuffia l'audio arriva dalla direzione del luogo (serve la bussola del telefono)"
+            className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-colors ${
+              directionalOn ? "bg-secondary text-white shadow-sm" : "bg-surface-warm/60 text-primary/60 hover:bg-surface-warm"
+            }`}
+          >
+            🎧 Audio direzionale{directionalOn ? " · ON" : ""}
+          </button>
+          <button
+            onClick={toggleSilent}
+            aria-pressed={silentOn}
+            title="Ai trigger automatici niente voce: vibrazione e testo da leggere, con play manuale"
+            className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-colors ${
+              silentOn ? "bg-primary text-white shadow-sm" : "bg-surface-warm/60 text-primary/60 hover:bg-surface-warm"
+            }`}
+          >
+            🤫 Modalità silenziosa{silentOn ? " · ON" : ""}
+          </button>
         </div>
 
         <div className="flex items-center justify-center gap-6 mb-8">

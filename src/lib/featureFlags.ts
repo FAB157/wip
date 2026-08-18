@@ -19,6 +19,7 @@ export const KNOWN_FLAGS: Array<{ key: string; label: string; desc: string }> = 
   { key: 'events_tab', label: 'Tab Eventi', desc: 'Schermata eventi e biglietti (gate client)' },
   { key: 'vision_camera', label: 'Camera / Vision', desc: 'Scatto e riconoscimento monumenti (gate client)' },
   { key: 'itinerary_generation', label: 'Generazione itinerari', desc: 'Spegne la rotta AI lato server (vale anche per le vecchie build native)' },
+  { key: 'web_foreground_triggers', label: 'Trigger web foreground', desc: 'Audioguide per prossimità su PWA/browser in foreground (gate client, no nativo)' },
 ];
 
 let flags: Record<string, boolean> = {};

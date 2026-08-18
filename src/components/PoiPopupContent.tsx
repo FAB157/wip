@@ -18,6 +18,7 @@ import { getGuideCharacter } from '../lib/guideSettings';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
+import { getTranslatedPoiName } from '../lib/poiNameI18n';
 
 const ItaintaBackgroundPoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
   ? registerPlugin<any>('ItaintaBackgroundPoiPlugin') 
@@ -42,6 +43,15 @@ function checkPoiAccessibility(poi: any): boolean {
 const UTILITY_CATEGORIES = ["locali", "utilita", "famiglie", "esperienze_locali"];
 function isUtilityPoi(poi: any): boolean {
   return UTILITY_CATEGORIES.includes(poi.category || poi.baseCategory);
+}
+
+// Beni di SOLO atlante: vincolati ma non turistici (o non ancora confermati
+// visitabili). Scheda ridotta e nessuna audioguida, per decisione di prodotto.
+// I beni di fascia A/B sono invece POI veri in shared_pois e non arrivano mai
+// qui con questo flag: MapArea lo valorizza solo quando manca promoted_poi_id,
+// così chi è turistico conserva la scheda piena anche aperto dalla chip atlante.
+function isHeritageAtlasPoi(poi: any): boolean {
+  return poi?.isHeritageAtlas === true;
 }
 
 export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers }: PoiPopupContentProps) {
@@ -88,6 +98,24 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
   const { toggleFavorite, isFavorite: checkFavorite } = useFavorites();
   const isFavorite = checkFavorite(String(poi.id));
+
+  // ── Nome locale + traduzione nella lingua UI ──────────────────────
+  // Best-effort e silenzioso (src/lib/poiNameI18n.ts): usa i riferimenti
+  // wikidata/wikipedia del POI (tag OSM o technical_data). Se non c'è
+  // nulla di utile non si mostra niente: mai spinner, mai errori.
+  const [nameTranslation, setNameTranslation] = useState<string | null>(null);
+  const wikidataRef = (poi as any).wikidata || data?.technicalData?.wikidata_id || null;
+  const wikipediaRef = (poi as any).wikipedia || data?.technicalData?.wikipedia_url || data?.wikiUrl || null;
+  useEffect(() => {
+    let alive = true;
+    setNameTranslation(null);
+    if (!poi?.name || (!wikidataRef && !wikipediaRef)) return;
+    getTranslatedPoiName(
+      { id: String(poi.id), name: poi.name, wikidata: wikidataRef, wikipedia: wikipediaRef },
+      language
+    ).then((t) => { if (alive) setNameTranslation(t); }).catch(() => {});
+    return () => { alive = false; };
+  }, [poi.id, poi.name, language, wikidataRef, wikipediaRef]);
 
   const handleFavoriteToggle = async () => {
     await toggleFavorite(poi);
@@ -137,6 +165,19 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       // ── UTILITY: stop qui. La card leggera non ha bisogno né di
       // /api/poi/details (le utility non stanno in shared_pois) né dello
       // stream Groq: apertura istantanea con nome+foto+città.
+      // ── ATLANTE: stop qui, per lo stesso motivo delle utility. Questi beni
+      // non stanno in shared_pois e non hanno audioguida: interrogare
+      // /api/poi/details e Groq costerebbe tempo e crediti per niente.
+      if (isHeritageAtlasPoi(poi)) {
+        const atlData = {
+          ...baseData,
+          description: poi.description || baseData.description || "",
+          tags: ["patrimonio"],
+        };
+        if (isMounted) { setData(atlData); setLoading(false); setCachedPoiDetails(String(poi.id), atlData); }
+        return;
+      }
+
       if (isUtilityPoi(poi)) {
         const cityName = await fetchCityNameQueued(poi.lat, poi.lon).catch(() => "");
         const utilData = {
@@ -456,6 +497,50 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // Utility Categories use a simplified card
   const isUtility = isUtilityPoi(poi);
 
+  // Scheda ridotta dell'atlante: nome, tipologia, indirizzo e navigazione.
+  // Niente audioguida e niente bottone "scopri": è un bene vincolato che non
+  // risulta visitabile, e prometterne una guida sarebbe scorretto.
+  if (isHeritageAtlasPoi(poi)) {
+    const tipologia = poi.description || (poi as any).subCategory || "";
+    return (
+      <div className="w-[280px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col">
+        <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
+          <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
+        </div>
+
+        <div className="px-4 pt-5 pb-4 flex flex-col">
+          <div className="flex items-center gap-1.5 mb-2">
+            <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
+              🏺 {getTranslation("beni_culturali_tutelato", language)}
+            </span>
+          </div>
+
+          <h3 className="font-bold text-[15px] text-gray-900 leading-tight mb-1">{poi.name}</h3>
+
+          {tipologia && (
+            <p className="text-[12px] text-gray-600 line-clamp-2 mb-2 capitalize">{tipologia}</p>
+          )}
+
+          {(poi as any).address && (
+            <p className="text-[11px] text-gray-500 leading-snug mb-3">📍 {(poi as any).address}</p>
+          )}
+
+          <p className="text-[10px] text-gray-400 italic leading-snug mb-3">
+            {getTranslation("beni_culturali_no_guida", language)}
+          </p>
+
+          <button
+            onClick={handleNavigate}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
+            style={{ background: "linear-gradient(135deg, #78716c, #000)" }}
+          >
+            <Navigation className="w-4 h-4" /> Naviga
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isUtility) {
     return (
       <div className="w-[280px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
@@ -597,6 +682,12 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             <h3 className="font-bold text-[15px] text-gray-900 leading-tight break-words">
               {poi.name}
             </h3>
+            {/* Traduzione del nome nella lingua UI (stile "— St. Vitalis Square") */}
+            {nameTranslation && (
+              <p className="text-[11px] italic text-gray-400 leading-tight break-words mt-0.5">
+                {nameTranslation}
+              </p>
+            )}
             {data?.subtext && (
               <p className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1">
                 <MapPin className="w-2.5 h-2.5 flex-shrink-0" />

@@ -7,7 +7,7 @@
 // =====================================================================
 
 import type { GuideCharacter } from '../types/poi';
-import { Capacitor } from '@capacitor/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { getNativeAudioUri } from '../lib/capacitor/nativeAudioHelper';
 import { getApiUrl } from '../lib/api';
@@ -167,6 +167,49 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
   }
 }
 
+/** Plugin nativo (Android/iOS): registrato una volta sola, solo su nativo. */
+const nativePoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
+  ? registerPlugin<any>('ItaintaBackgroundPoiPlugin')
+  : null;
+
+/**
+ * Pronuncia una frase breve con la voce TTS di SISTEMA, accodandola alla coda
+ * nativa dei teaser (unica coda: "Sei arrivato" e il teaser non si accavallano).
+ * Ritorna true solo se la frase è stata davvero presa in carico: se il servizio
+ * in background non è attivo la coda scarterebbe l'item, quindi si risponde
+ * false e il chiamante ripiega sul TTS di rete.
+ * `priority` 0 = massima, come gli item d'itinerario.
+ */
+async function speakViaNativeQueue(
+  text: string,
+  opts?: { poiId?: string; kind?: string; priority?: number },
+): Promise<boolean> {
+  if (!nativePoiPlugin) return false;
+  try {
+    const res = await nativePoiPlugin.speakText({
+      text,
+      poiId: opts?.poiId,
+      kind: opts?.kind || 'nav',
+      priority: opts?.priority ?? 0,
+    });
+    return res?.ok === true;
+  } catch {
+    // Metodo assente (build nativa più vecchia del JS) o errore: si ripiega.
+    return false;
+  }
+}
+
+/**
+ * Annuncio d'arrivo con la voce di sistema: "Sei arrivato a X" entra nella
+ * STESSA coda del teaser, quindi il teaser parte subito dopo senza
+ * sovrapporsi, e solo allora scatta la logica normale dell'audioguida
+ * (notifica ▶ Ascolta / paywall). Tutto offline e a costo zero.
+ * Ritorna false su web o se la coda non ha preso in carico la frase.
+ */
+export async function speakArrivalNative(text: string, poiId?: string): Promise<boolean> {
+  return speakViaNativeQueue(text, { poiId, kind: 'arrival', priority: 0 });
+}
+
 /**
  * Fallback NATIVO per le frasi brevi (turn-by-turn): scarica l'MP3 Azure con lo
  * stesso canale delle audioguide (postForAudioBlob evita la corruzione binaria
@@ -174,10 +217,18 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
  * errore → niente voce, come prima.
  */
 async function speakInstructionNative(text: string, lang: string, character: GuideCharacter): Promise<void> {
+  // 1) VOCE DI SISTEMA (coda TTS nativa dei teaser). È la strada preferita:
+  //    funziona OFFLINE, parte all'istante (niente MP3 da scaricare), non
+  //    costa nulla — su un percorso di 27 manovre erano 27 chiamate Azure —
+  //    e chiede il fuoco audio come un navigatore (USAGE_ASSISTANCE_
+  //    NAVIGATION_GUIDANCE / .voicePrompt+.duckOthers): abbassa l'audioguida
+  //    e ci parla sopra invece di restare muta come faceva prima.
+  if (await speakViaNativeQueue(text)) return;
+
   try {
-    // Se un'audioguida è già in riproduzione sul player nativo NON la
-    // interrompiamo (romperemmo il tracking di fine traccia → onEnd anticipato):
-    // in questo raro overlap l'istruzione resta silenziosa, come prima.
+    // Ripiego Azure. Qui vale ancora la vecchia cautela: se un'audioguida sta
+    // suonando sul player nativo non la interrompiamo (romperemmo il tracking
+    // di fine traccia → onEnd anticipato).
     if (nativePlaybackActive) return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     const { ok, blob } = await postForAudioBlob(
@@ -329,6 +380,25 @@ export async function speakAudioguide(
       console.warn('[ttsService] Error in speakAudioguide online neural TTS:', e);
       /* fallthrough al fallback */
     }
+  }
+
+  // Fallback NATIVO senza rete: nella WebView Android `speechSynthesis` spesso
+  // NON esiste, quindi offline l'audioguida restava del tutto MUTA. La si legge
+  // con la voce di sistema (stessa coda dei teaser, che ducka la musica). La
+  // fine resta stimata come nel ramo Web Speech qui sotto: la coda nativa non
+  // espone un callback di fine per questa chiamata.
+  if (await speakViaNativeQueue(text, { kind: 'guide', priority: 2 })) {
+    try {
+      window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
+    } catch { /* ignore */ }
+    clearFallback();
+    emitAudioState(true, true);
+    const estimatedMs = Math.max(3000, (text.length / 15) * 1000) + 2000;
+    fallbackWatchdog = setTimeout(() => {
+      emitAudioState(false, false);
+      if (onEnd) onEnd();
+    }, estimatedMs);
+    return;
   }
 
   // Fallback gratuito (Web Speech). Usiamo un'utterance PROPRIA con onend/onerror

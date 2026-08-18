@@ -880,17 +880,31 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         val prefix = if (isItinerary) "📍 Tappa: " else if (isGem) "💎 " else ""
         val priority = if (isItinerary) 0 else if (isGem) 1 else 2
-        if (speak) {
+        // MODALITÀ «SOLO VIBRAZIONE + TESTO» (wip_silent_mode='1' in
+        // CapacitorStorage): niente voce, vibrazione breve doppia e teaser
+        // leggibile nella notifica. Stato/eventi/prefetch restano identici:
+        // nessun trigger perso.
+        val silentMode = com.itaintasca.app.service.WebViewPrefs.isSilentMode(context)
+        if (speak && !silentMode) {
             enqueue(context, SpeechItem("$prefix$approachMsg", isGem, isItinerary, poiId, priority, kind = "approach"))
         }
-        vibrate(context, if (isItinerary || isGem) longArrayOf(0, 300, 100, 500) else longArrayOf(0, 500))
+        if (silentMode) {
+            vibrate(context, longArrayOf(0, 150, 100, 150))
+        } else {
+            vibrate(context, if (isItinerary || isGem) longArrayOf(0, 300, 100, 500) else longArrayOf(0, 500))
+        }
         val notifTitle = if (isItinerary) "📍 Tappa Itinerario" else "Esplorazione"
         // Raggio reale della modalità corrente, non "150m" fisso: in auto
         // l'alert scatta a 300 m e la notifica mentiva (stesso fix di iOS).
         val guideModeNow = prefs.getString("guideMode", "walking") ?: "walking"
         val alertRadNow = if (guideModeNow == "driving") prefs.getFloat("alertRadiusCar", 300f)
                           else prefs.getFloat("alertRadiusWalk", 150f)
-        showNotification(context, "$notifTitle: $name", "A circa ${alertRadNow.toInt()}m. Tocca per i dettagli.", poiId, guide, false)
+        // In modalità silenziosa il teaser (se già disponibile) va nella
+        // notifica in versione espandibile: è l'unico canale di contenuto.
+        val approachBigText = if (silentMode && !poi.teaserText.isNullOrBlank()) {
+            "$approachMsg\n\n${poi.teaserText}"
+        } else null
+        showNotification(context, "$notifTitle: $name", "A circa ${alertRadNow.toInt()}m. Tocca per i dettagli.", poiId, guide, false, bigText = approachBigText)
     }
 
     private suspend fun handleArrival(
@@ -963,8 +977,18 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val teaser = poi?.teaserText
         val fullMsg = if (!teaser.isNullOrBlank()) "$arrivalMsg $teaser" else "$arrivalMsg $fallbackTeaser"
 
-        enqueue(context, SpeechItem(fullMsg, isGem, isItinerary, poiId, priority, kind = "arrival"))
-        vibrate(context, longArrayOf(0, 400, 200, 400))
+        // MODALITÀ «SOLO VIBRAZIONE + TESTO» (wip_silent_mode='1'): niente TTS
+        // né audio — vibrazione breve doppia e teaser per intero nella notifica
+        // (BigTextStyle, sotto). Stato Room, eventi al plugin e recovery teaser
+        // restano identici: il trigger non va perso e il contenuto resta
+        // disponibile nell'app.
+        val silentMode = com.itaintasca.app.service.WebViewPrefs.isSilentMode(context)
+        if (!silentMode) {
+            enqueue(context, SpeechItem(fullMsg, isGem, isItinerary, poiId, priority, kind = "arrival"))
+            vibrate(context, longArrayOf(0, 400, 200, 400))
+        } else {
+            vibrate(context, longArrayOf(0, 150, 100, 150))
+        }
 
         // DAY PASS: con pass attivo WIP fa tutto da solo — dopo il teaser accoda
         // l'audioguida COMPLETA (+ info aggiuntive) in coda TTS, online e
@@ -977,7 +1001,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // tasto "Ascolta" (per-listen a crediti, plugin playOfflineGuide).
         // Solo con app NON in foreground: in foreground se ne occupa il JS
         // (mai due voci sovrapposte).
-        if (isAutomaticMode && !isAppInForeground(context)) {
+        // In modalità silenziosa la catena audio del pass NON parte (e il pass
+        // NON si consuma): l'utente potrà ascoltare dal tasto della scheda.
+        if (isAutomaticMode && !silentMode && !isAppInForeground(context)) {
             val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
                 .isAlreadyPurchased(context, poiId)
             val passUsed = prefs.getInt("daypass_used", 0)
@@ -1056,7 +1082,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
         }
 
-        if (isAutomaticMode) {
+        if (silentMode) {
+            // Notifica d'arrivo con il TESTO del teaser ben leggibile: è il
+            // sostituto della voce. Niente launchApp: aprirebbe l'app che in
+            // automatico farebbe partire l'audio.
+            showNotification(context, "Arrivo a $name", teaser ?: fallbackTeaser, poiId, guide, true, bigText = fullMsg)
+        } else if (isAutomaticMode) {
             showNotification(context, "Sei arrivato!", "Avvio audioguida di $name", poiId, guide, true)
             launchApp(context, poiId, guide)
         } else {
@@ -1142,7 +1173,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         else { @Suppress("DEPRECATION") vibrator.vibrate(pattern, -1) }
     }
 
-    private fun showNotification(context: Context, title: String, text: String, poiId: String, guide: String, isArrival: Boolean = false) {
+    private fun showNotification(context: Context, title: String, text: String, poiId: String, guide: String, isArrival: Boolean = false, bigText: String? = null) {
         // DUE CANALI DISTINTI, non uno con importanza variabile.
         //
         // Prima si usava lo stesso id "geofencing_channel" ricreandolo con
@@ -1190,6 +1221,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             .setAutoCancel(true)
             .setContentIntent(pIntent)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+
+        // Modalità «solo vibrazione + testo»: il teaser sostituisce la voce,
+        // quindi deve essere leggibile per intero (BigTextStyle espandibile).
+        if (!bigText.isNullOrBlank()) {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+        }
 
         if (isArrival) {
             builder.setVibrate(longArrayOf(0, 500, 200, 500))

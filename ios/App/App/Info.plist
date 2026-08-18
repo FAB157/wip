@@ -56,6 +56,11 @@
 	<string>La fotocamera serve per la funzione Vision che riconosce i monumenti inquadrati.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Il microfono è usato per dettare a voce le domande alla guida AI durante l'ascolto delle audioguide.</string>
+	<!-- Gating sensori anti-teletrasporto GPS (MotionActivityGate.swift):
+	     se l'utente nega il permesso il comportamento resta identico a prima
+	     (fail-safe, nessuna soppressione dei trigger). -->
+	<key>NSMotionUsageDescription</key>
+	<string>I dati di movimento (fermo, camminata, veicolo) servono solo a evitare falsi avvisi dell'audioguida quando il segnale GPS salta mentre sei fermo. Non vengono condivisi né usati per pubblicità.</string>
 	<!-- Solo i background mode realmente implementati: 'remote-notification'
 	     era dichiarato senza entitlement push — in App Review è solo una
 	     domanda in più. 'fetch' invece ORA ha un handler reale (vedi

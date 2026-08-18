@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { getApiUrl } from '../lib/api';
 import { 
   BarChart3, Calendar, Database, Eye, RefreshCw, Users, FileText, 
   MapPin, Brain, Headphones, Globe, Activity, TrendingUp, AlertCircle 
@@ -639,6 +640,98 @@ export default function AdminCounters() {
         )}
       </div>
 
+      {/* Export contabile: CSV delle transazioni crediti (Excel italiano) */}
+      <ExportContabileSection />
+
+    </div>
+  );
+}
+
+// ── EXPORT CONTABILE ────────────────────────────────────────────────
+// Scarica il CSV di credit_transactions dal server (rotta admin protetta):
+// BOM UTF-8 e separatore ';' per aprirlo direttamente in Excel italiano.
+// Default: il mese scorso. Range massimo 90 giorni (limite lato server).
+function ExportContabileSection() {
+  const [from, setFrom] = useState<string>(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth() - 1, 1).toISOString().split('T')[0];
+  });
+  const [to, setTo] = useState<string>(() => {
+    const d = new Date();
+    // Ultimo giorno del mese scorso
+    return new Date(d.getFullYear(), d.getMonth(), 0).toISOString().split('T')[0];
+  });
+  const [downloading, setDownloading] = useState(false);
+  const [error, setError] = useState('');
+
+  const download = async () => {
+    setDownloading(true);
+    setError('');
+    try {
+      const { data: s } = await supabase.auth.getSession();
+      const token = s?.session?.access_token;
+      if (!token) throw new Error('Sessione admin scaduta: rifai il login.');
+      const res = await fetch(
+        getApiUrl(`/api/admin/export/transactions?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json())?.error || msg; } catch { /* corpo non JSON */ }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `transazioni_${from}_${to}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e: any) {
+      setError(e?.message || 'Download fallito');
+    }
+    setDownloading(false);
+  };
+
+  return (
+    <div className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
+      <div className="flex items-center justify-between border-b border-outline-variant pb-3">
+        <h4 className="font-black text-sm text-primary uppercase tracking-wider flex items-center gap-2">
+          <FileText className="w-5 h-5 text-secondary" />
+          🧾 Export contabile (transazioni crediti)
+        </h4>
+      </div>
+      <p className="text-xs text-on-surface-variant">
+        CSV di tutte le transazioni crediti (acquisti, consumi, rimborsi, rettifiche admin) nel periodo scelto,
+        con email utente dove disponibile. Formato Excel italiano (separatore ';'). Range massimo: 90 giorni.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="date"
+          value={from}
+          onChange={e => setFrom(e.target.value)}
+          className="bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold text-primary focus:ring-2 focus:ring-primary/25 shadow-sm"
+        />
+        <span className="text-xs font-bold text-on-surface-variant/60">a</span>
+        <input
+          type="date"
+          value={to}
+          onChange={e => setTo(e.target.value)}
+          className="bg-surface border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold text-primary focus:ring-2 focus:ring-primary/25 shadow-sm"
+        />
+        <button
+          onClick={download}
+          disabled={downloading || !from || !to}
+          className="px-4 py-2 rounded-xl bg-primary text-secondary text-xs font-black uppercase tracking-wider flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
+        >
+          {downloading
+            ? (<><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Preparazione...</>)
+            : (<>💾 Scarica CSV</>)}
+        </button>
+      </div>
+      {error && <div className="text-[11px] font-bold text-red-600">{error}</div>}
     </div>
   );
 }

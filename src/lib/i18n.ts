@@ -70,6 +70,9 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   , DE: "Profil"},
   
   // Category Chips
+  beni_culturali: { IT: "Beni Culturali", EN: "Cultural Heritage", FR: "Patrimoine culturel", ES: "Patrimonio cultural", DE: "Kulturgüter", RU: "Культурное наследие", ZH: "文化遗产" },
+  beni_culturali_tutelato: { IT: "Bene culturale tutelato", EN: "Protected heritage site", FR: "Bien culturel protégé", ES: "Bien cultural protegido", DE: "Geschütztes Kulturgut", RU: "Охраняемый объект наследия", ZH: "受保护文化遗产" },
+  beni_culturali_no_guida: { IT: "Scheda informativa: questo bene non ha audioguida", EN: "Information only: this site has no audio guide", FR: "Fiche d'information : ce bien n'a pas d'audioguide", ES: "Ficha informativa: este bien no tiene audioguía", DE: "Nur Information: zu diesem Kulturgut gibt es keinen Audioguide", RU: "Только справка: у этого объекта нет аудиогида", ZH: "仅供参考：此地点没有语音导览" },
   monumenti: {
     IT: "Monumenti",
     EN: "Monuments",
@@ -546,6 +549,24 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Особые пожелания (Опционально)",
     ZH: "个性化需求（选填）"
   , DE: "Besondere Wünsche (optional)"},
+  accommodation_label: {
+    IT: "Dove alloggi (Opzionale)",
+    EN: "Where you're staying (Optional)",
+    FR: "Où vous logez (Optionnel)",
+    ES: "Dónde te alojas (Opcional)",
+    RU: "Где вы остановитесь (Опционально)",
+    ZH: "住宿地点（选填）",
+    DE: "Wo Sie übernachten (optional)"
+  },
+  accommodation_placeholder: {
+    IT: "Es. Hotel Roma, via Nazionale 12",
+    EN: "E.g. Hotel Roma, Via Nazionale 12",
+    FR: "Ex. Hôtel Roma, via Nazionale 12",
+    ES: "Ej. Hotel Roma, via Nazionale 12",
+    RU: "Напр. Hotel Roma, via Nazionale 12",
+    ZH: "例如：Hotel Roma, via Nazionale 12",
+    DE: "Z. B. Hotel Roma, Via Nazionale 12"
+  },
   btn_generate: {
     IT: "GENERA ITINERARIO",
     EN: "GENERATE ITINERARY",

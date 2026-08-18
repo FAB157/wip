@@ -24,7 +24,48 @@ export type PoiCategory =
   | 'monumenti'
   | 'musei'
   | 'chiese'
-  | 'panorami';
+  | 'panorami'
+  // Verticali NATURALI (harvest non culturale, 16/08/2026): confluiscono
+  // nel filtro "panorami" — vedi guideSettings.isCategoryAllowed,
+  // CategoryMap.kt e PoiCategories.map (iOS), che vanno tenuti allineati.
+  | 'natura'
+  | 'beach'
+  | 'bay'
+  | 'lake'
+  | 'island'
+  | 'waterfall'
+  | 'spring'
+  | 'cave'
+  | 'peak'
+  | 'cliff'
+  | 'glacier'
+  | 'volcano'
+  | 'nature_reserve'
+  | 'lighthouse'
+  | 'aerialway'
+  | 'winery'
+  // Fase 2 (17/08/2026): patrimonio costruito, musei tematici, all'aperto,
+  // famiglie. Confluiscono nei rami esistenti — vedi isCategoryAllowed.
+  | 'square' | 'bridge' | 'fountain' | 'theatre' | 'opera_house' | 'palace'
+  | 'tower' | 'skyscraper' | 'cemetery' | 'library' | 'windmill' | 'aqueduct'
+  | 'observatory' | 'stadium' | 'monastery'
+  | 'art_museum' | 'natural_history_museum'
+  | 'trail' | 'scenic_road' | 'tree' | 'desert' | 'forest' | 'garden'
+  | 'aquarium' | 'water_park'
+  // Fasi 3-5 (17/08/2026)
+  | 'birthplace' | 'house_museum' | 'necropolis' | 'catacomb' | 'fortress'
+  | 'city_walls' | 'villa' | 'harbour' | 'mine' | 'chimney' | 'funicular'
+  | 'amphitheatre' | 'roman_baths'
+  | 'triumphal_arch' | 'obelisk' | 'mausoleum' | 'abbey' | 'synagogue' | 'mosque'
+  | 'temple' | 'botanical_garden' | 'market_hall' | 'train_station' | 'dam'
+  | 'watermill' | 'prison' | 'museum_ship' | 'archaeological_park' | 'geopark'
+  | 'memorial' | 'sculpture' | 'university' | 'town_hall' | 'via_ferrata' | 'shrine'
+  | 'roman_theatre' | 'roman_circus' | 'roman_villa' | 'domus'
+  | 'city_gate' | 'coastal_tower' | 'stronghold' | 'quarry' | 'saltworks'
+  | 'racetrack' | 'racecourse' | 'ski_resort' | 'ski_jump'
+  | 'war_cemetery' | 'concentration_camp' | 'rack_railway' | 'pier' | 'shipyard'
+  | 'art_gallery' | 'archive' | 'radio_telescope' | 'hydro_plant'
+  | 'cathedral' | 'basilica' | 'baptistery' | 'bell_tower' | 'cloister' | 'crypt';
 
 export type PoiSource = 'csv' | 'overpass_auto';
 export type PoiStatus = 'approved' | 'auto' | 'deleted';

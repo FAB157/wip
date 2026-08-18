@@ -143,6 +143,31 @@ const CoverPage = ({
         </div>
       )}
 
+      {/* Dedica regalo (opzionale): stile elegante da prima pagina */}
+      {content.dedica && (
+        <div style={{
+          borderTop: `1px solid ${C.gold}`,
+          borderBottom: `1px solid ${C.gold}`,
+          padding: '18px 28px',
+          margin: '0 0 28px',
+          maxWidth: '560px',
+          textAlign: 'center',
+        }}>
+          <div style={{ color: C.gold, fontSize: '11px', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '8px' }}>
+            🎁 Dedica
+          </div>
+          <p style={{
+            color: 'rgba(255,255,255,0.95)',
+            fontSize: '18px',
+            fontStyle: 'italic',
+            lineHeight: 1.6,
+            margin: 0,
+          }}>
+            {content.dedica}
+          </p>
+        </div>
+      )}
+
       {/* Intro box */}
       <div style={{
         background: 'rgba(255,255,255,0.10)',
@@ -181,6 +206,80 @@ const CoverPage = ({
     </div>
   </div>
 );
+
+// ─── Sommario cliccabile ─────────────────────────────────────────────────────
+// Indice per giorno e per POI con anchor interni: nel visualizzatore i link
+// scorrono alla sezione; nei viewer PDF/HTML che supportano i link interni
+// restano navigabili. Zero costi AI: è solo impaginazione.
+const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string }) => {
+  const goTo = (e: React.MouseEvent, id: string) => {
+    // Nel viewer (SPA senza router) l'href "#id" non deve toccare la history
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  if (!giorni?.length) return null;
+  return (
+    <div style={{
+      background: C.white,
+      padding: '48px 48px',
+      pageBreakBefore: 'always',
+      pageBreakAfter: 'always',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', borderBottom: `3px solid ${C.gold}`, paddingBottom: '14px', marginBottom: '28px' }}>
+        <h2 style={{ color: C.navy, fontSize: '34px', fontWeight: 900, margin: 0 }}>Sommario</h2>
+        <span style={{ color: C.light, fontSize: '12px', letterSpacing: '2px', textTransform: 'uppercase' }}>Indice della guida</span>
+      </div>
+      {giorni.map((giorno: any, gIdx: number) => {
+        const dayId = `${anchorPrefix}-day-${gIdx}`;
+        return (
+          <div key={gIdx} style={{ marginBottom: '22px', pageBreakInside: 'avoid' }}>
+            <a
+              href={`#${dayId}`}
+              onClick={(e) => goTo(e, dayId)}
+              style={{ display: 'flex', alignItems: 'center', gap: '12px', textDecoration: 'none', marginBottom: '10px' }}
+            >
+              <span style={{
+                background: C.navy, color: C.gold, fontWeight: 900, fontSize: '11px',
+                letterSpacing: '1.5px', textTransform: 'uppercase', padding: '4px 12px', borderRadius: '4px', flexShrink: 0,
+              }}>
+                Giorno {giorno.giorno ?? gIdx + 1}
+              </span>
+              <span style={{ color: C.navy, fontWeight: 900, fontSize: '17px' }}>
+                {giorno.titolo_giorno || `Giorno ${giorno.giorno ?? gIdx + 1}`}
+              </span>
+            </a>
+            <ul style={{ listStyle: 'none', margin: 0, padding: '0 0 0 14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {(giorno.pois || []).map((poi: any, pIdx: number) => {
+                const poiId = `${anchorPrefix}-poi-${gIdx}-${pIdx}`;
+                return (
+                  <li key={pIdx}>
+                    <a
+                      href={`#${poiId}`}
+                      onClick={(e) => goTo(e, poiId)}
+                      style={{ display: 'flex', alignItems: 'baseline', gap: '10px', textDecoration: 'none' }}
+                    >
+                      <span style={{ color: C.gold, fontWeight: 900, fontSize: '12px', flexShrink: 0, width: '34px' }}>
+                        {(giorno.giorno ?? gIdx + 1)}.{pIdx + 1}
+                      </span>
+                      <span style={{ color: C.mid, fontSize: '14px', borderBottom: `1px dotted ${C.border}`, flex: 1 }}>
+                        {poi.titolo || 'Punto di interesse'}
+                      </span>
+                      {poi.categoria_pdf && (
+                        <span style={{ color: C.light, fontSize: '10px', letterSpacing: '1px', textTransform: 'uppercase', flexShrink: 0 }}>
+                          {poi.categoria_pdf}
+                        </span>
+                      )}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 // ─── City Intro Page ─────────────────────────────────────────────────────────
 const CityIntroPage = ({
@@ -681,18 +780,26 @@ export default function PremiumGuideRenderer({
       {/* ── COVER ── */}
       <CoverPage content={content} coverImg={coverImg} styleLabel={styleLabel} styleMeta={styleMeta} />
 
+      {/* ── SOMMARIO CLICCABILE ── */}
+      <TocPage giorni={content.giorni || []} anchorPrefix={containerId} />
+
       {/* ── CITY INTRO ── */}
       <CityIntroPage citta_intro={content.citta_intro} mediaManifest={mediaManifest} />
 
       {/* ── DAYS ── */}
       {(content.giorni || []).map((giorno, gIdx) => (
         <React.Fragment key={gIdx}>
-          <DayDivider giorno={giorno} tema={(giorno as any).tema_giorno} />
+          {/* Anchor del giorno per i link del sommario */}
+          <div id={`${containerId}-day-${gIdx}`}>
+            <DayDivider giorno={giorno} tema={(giorno as any).tema_giorno} />
+          </div>
 
           {(giorno.pois || []).map((poi, pIdx) => {
             const imgUrl = mediaManifest[poi.poi_id] || (poi as any).image_url;
             return (
-              <PoiBlock key={poi.poi_id || pIdx} poi={poi} imgUrl={imgUrl} />
+              <div key={poi.poi_id || pIdx} id={`${containerId}-poi-${gIdx}-${pIdx}`}>
+                <PoiBlock poi={poi} imgUrl={imgUrl} />
+              </div>
             );
           })}
         </React.Fragment>

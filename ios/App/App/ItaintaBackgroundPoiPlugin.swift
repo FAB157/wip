@@ -37,14 +37,17 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "deleteOfflinePackage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkOfflineTtsVoice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openTtsVoiceInstall", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "speakText", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setUserContext", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setWalletBalance", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "setSilentMode", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setDayPass", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getDayPassState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "consumeDayPassGuide", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getOfflineSpendState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "markSpendReconciled", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "playOfflineGuide", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "playOfflineGuide", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getHealthStats", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -318,6 +321,31 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         }
     }
 
+    /**
+     * Port di speakText Android: pronuncia una frase con AVSpeechSynthesizer
+     * accodandola alla stessa coda sequenziale dei teaser. Serve al JS per le
+     * indicazioni di navigazione e per l'annuncio d'arrivo — funziona offline
+     * e non può sovrapporsi al teaser (unica coda, un item alla volta).
+     * Se il servizio non è attivo la coda scarta gli item: si risponde
+     * ok=false così il JS ripiega sul TTS di rete invece di restare muto.
+     */
+    @objc func speakText(_ call: CAPPluginCall) {
+        let text = (call.getString("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return call.reject("Missing text") }
+        guard prefs.bool(forKey: "isServiceActive") else {
+            return call.resolve(["ok": false, "reason": "service_inactive"])
+        }
+        SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
+            text: text,
+            isGem: false,
+            isItinerary: false,
+            poiId: call.getString("poiId"),
+            priority: call.getInt("priority") ?? 0,
+            kind: call.getString("kind") ?? "nav"
+        ))
+        call.resolve(["ok": true])
+    }
+
     // MARK: - Billing offline (stesse chiavi prefs di Android)
 
     /**
@@ -337,6 +365,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
 
     @objc func setWalletBalance(_ call: CAPPluginCall) {
         prefs.set(call.getInt("credits") ?? 0, forKey: "wallet_snapshot_credits")
+        call.resolve()
+    }
+
+    /// Modalità «solo vibrazione + testo»: il WebView non ha
+    /// @capacitor/preferences, quindi il toggle passa da qui e scrive la
+    /// chiave CapacitorStorage letta da BackgroundPoiManager.isSilentMode.
+    @objc func setSilentMode(_ call: CAPPluginCall) {
+        let enabled = call.getBool("enabled") ?? false
+        prefs.set(enabled ? "1" : "0", forKey: "CapacitorStorage.wip_silent_mode")
         call.resolve()
     }
 
@@ -452,5 +489,17 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         )
         ret["ok"] = true
         call.resolve(ret)
+    }
+
+    /**
+     * «Salute del viaggio»: passi/km/piani per giorno (oggi + 6 precedenti)
+     * dal contapassi di sistema (CMPedometer, vedi HealthStats.swift).
+     * Contapassi assente o Motion negato → {available:false}, mai un reject:
+     * la card JS si nasconde e basta. Stesso formato di StepTracker Android.
+     */
+    @objc func getHealthStats(_ call: CAPPluginCall) {
+        HealthStats.shared.fetch { result in
+            call.resolve(result)
+        }
     }
 }

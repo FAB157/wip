@@ -14,9 +14,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { locationService } from '../services/locationService';
 import { fetchWalkingRoute, type WalkingRoute } from '../services/osrmService';
-import { speakInstruction } from '../services/ttsService';
+import { speakInstruction, speakArrivalNative } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
 import { notify } from '../lib/toast';
+import { reportTrigger } from '../lib/geofencing/telemetry';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
@@ -99,12 +100,27 @@ export interface RoutePoi {
   [key: string]: any;
 }
 
+/**
+ * Manovra corrente in forma STRUTTURATA (non solo la frase): serve
+ * all'overlay per disegnare la freccia giusta invece di un'icona generica.
+ */
+export interface ManeuverInfo {
+  type: string;
+  modifier?: string;
+  /** Nome della via della manovra, se OSRM lo espone. */
+  street?: string;
+}
+
 export interface UseWalkingNavigationResult {
   state: NavState;
   currentInstruction: string | null;
+  /** Manovra corrente (tipo + direzione) per l'icona direzionale. */
+  currentManeuver: ManeuverInfo | null;
   distanceToNext: number | null;
   distanceToDestination: number | null;
   etaSeconds: number | null;
+  /** Avanzamento sul percorso, 0..1 (null se non ancora calcolabile). */
+  progress: number | null;
   routeGeometry: [number, number][];
   startNavigation: (target: NavTarget, originOverride?: LatLon | null, routePois?: RoutePoi[]) => Promise<void>;
   stopNavigation: () => void;
@@ -115,9 +131,11 @@ export interface UseWalkingNavigationResult {
 export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResult {
   const [state, setState] = useState<NavState>('idle');
   const [currentInstruction, setCurrentInstruction] = useState<string | null>(null);
+  const [currentManeuver, setCurrentManeuver] = useState<ManeuverInfo | null>(null);
   const [distanceToNext, setDistanceToNext] = useState<number | null>(null);
   const [distanceToDestination, setDistanceToDestination] = useState<number | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
   const [routeGeometry, setRouteGeometry] = useState<[number, number][]>([]);
 
   const routeRef = useRef<WalkingRoute | null>(null);
@@ -133,6 +151,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const lastRecalcRef = useRef(0);
   const recalcInFlightRef = useRef(false);
   const wakeLockRef = useRef<any>(null);
+  // Lunghezza totale del tracciato corrente: denominatore della barra di
+  // avanzamento. Si aggiorna a ogni ricalcolo (la barra si riadatta da sé).
+  const routeTotalRef = useRef(0);
   // False finché l'utente non si avvicina al tracciato (solo con origine
   // personalizzata): sospende ricalcolo e arrivo finché non è "sul percorso".
   const joinedRouteRef = useRef(true);
@@ -153,6 +174,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // alla destinazione: distanza residua = remaining[vertice più vicino].
   const setRoute = (route: WalkingRoute) => {
     routeRef.current = route;
+    routeTotalRef.current = Math.max(route.distance, 1);
     const g = route.geometry;
     const remaining = new Array<number>(g.length).fill(0);
     for (let i = g.length - 2; i >= 0; i--) {
@@ -198,6 +220,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       if (d <= POI_TRIGGER_M) {
         const lastTrig = (window as any).__wipLastPoiTrigger;
         const isDup = lastTrig && String(lastTrig.id) === String(p.id) && Date.now() - lastTrig.ts < 60000;
+        // Telemetria web: trigger scattato o soppresso dal dedupe (cooldown 60s)
+        if (isDup) reportTrigger('suppressed', { poiId: p.id });
+        else reportTrigger('fired', { poiId: p.id });
         if (!isDup) {
           (window as any).__wipLastPoiTrigger = { id: String(p.id), ts: Date.now() };
           window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
@@ -238,6 +263,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         lastRecalcRef.current = Date.now();
         const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
         setCurrentInstruction(phrase);
+        setCurrentManeuver({ type: 'reroute' });
         speakInstruction(phrase, language);
       }
     } catch { /* rete assente: si continua col vecchio tracciato */ }
@@ -254,12 +280,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     pendingPoisRef.current = [];
     remainingFromVertexRef.current = [];
     offRouteCountRef.current = 0;
+    routeTotalRef.current = 0;
     releaseWakeLock();
     setState('idle');
     setCurrentInstruction(null);
+    setCurrentManeuver(null);
     setDistanceToNext(null);
     setDistanceToDestination(null);
     setEtaSeconds(null);
+    setProgress(null);
     setRouteGeometry([]);
   }, []);
 
@@ -315,9 +344,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       }
       setRoute(route);
       setState('navigating');
-      setCurrentInstruction(route.steps[0]?.instruction ?? null);
+      const first = route.steps[0];
+      setCurrentInstruction(first?.instruction ?? null);
+      setCurrentManeuver(first ? { type: first.maneuverType, modifier: first.maneuverModifier, street: first.name } : null);
       setDistanceToDestination(Math.round(route.distance));
       setEtaSeconds(Math.round(route.distance / WALK_SPEED_MS));
+      setProgress(0);
       acquireWakeLock();
 
       // Sottoscrizione al flusso GPS condiviso
@@ -346,6 +378,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const dDest = remaining;
         setDistanceToDestination(Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist)));
         setEtaSeconds(Math.round((dDest + nearest.dist) / WALK_SPEED_MS));
+        setProgress(Math.min(1, Math.max(0, 1 - dDest / routeTotalRef.current)));
 
         // Aggancio al tracciato (origine personalizzata): da qui in poi
         // ricalcolo e arrivo tornano attivi.
@@ -357,13 +390,19 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // Arrivo (in linea d'aria: conta la vicinanza fisica alla meta)
         if (joinedRouteRef.current && dDestAir <= ARRIVE_DISTANCE_M) {
           setState('arrived');
+          setProgress(1);
+          setCurrentManeuver({ type: 'arrive' });
           releaseWakeLock();
           const arriveStep = r.steps[r.steps.length - 1];
-          speakInstruction(
-            arriveStep?.instruction ||
-              (language.toLowerCase().startsWith('it') ? `Sei arrivato a ${t.poiName || ''}` : `You arrived`),
-            language,
-          );
+          const arrivePhrase = arriveStep?.instruction ||
+            (language.toLowerCase().startsWith('it') ? `Sei arrivato a ${t.poiName || ''}` : `You arrived`);
+          // Su nativo l'annuncio entra nella coda TTS dei teaser marcato come
+          // 'arrival' col poiId: così il teaser del POI parte SUBITO DOPO senza
+          // sovrapporsi (unica coda), e solo allora scatta la logica normale
+          // dell'audioguida. Su web (o se la coda non lo prende in carico)
+          // si ricade sul percorso di sempre.
+          void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
+            .then(taken => { if (!taken) speakInstruction(arrivePhrase, language); });
           window.dispatchEvent(
             new CustomEvent('wip-nav-arrived', { detail: { poiId: t.poiId, poiName: t.poiName } }),
           );
@@ -381,6 +420,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             if (!spokenRef.current.has(idx)) {
               spokenRef.current.add(idx);
               setCurrentInstruction(step.instruction);
+              setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
               speakInstruction(step.instruction, language);
               // Trigger local notification for background Android
               locationService.sendLocalNotification("Indicazione Stradale", step.instruction);
@@ -388,7 +428,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;
           } else {
+            // In avvicinamento: mostra la manovra CHE DEVE ANCORA ARRIVARE,
+            // non l'ultima annunciata. Prima il banner diceva "gira a destra"
+            // (svolta già fatta) accanto ai metri della svolta SUCCESSIVA:
+            // testo e distanza si riferivano a due manovre diverse.
             setDistanceToNext(Math.round(dStep));
+            setCurrentInstruction(step.instruction);
+            setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
             break;
           }
         }
@@ -407,9 +453,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   return {
     state,
     currentInstruction,
+    currentManeuver,
     distanceToNext,
     distanceToDestination,
     etaSeconds,
+    progress,
     routeGeometry,
     startNavigation,
     stopNavigation,

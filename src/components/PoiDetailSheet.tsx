@@ -181,10 +181,11 @@ export default function PoiDetailSheet({
   const [reportDetails, setReportDetails] = useState('');
   const [isReporting, setIsReporting] = useState(false);
   const [localGuideMode, setLocalGuideMode] = useState<"nicky" | "dante">(guideMode);
-  // Registro dell'audioguida (ondata 4): standard, breve (~40s) o bambini.
-  // Codificato nel guide_character (es. "nicky_breve"): stessa cache
-  // poi_audioguides per (poi, lingua, personaggio+registro), zero migration.
-  const [guideRegister, setGuideRegister] = useState<'standard' | 'breve' | 'bambini'>('standard');
+  // Registro dell'audioguida (ondata 4): standard, breve (~40s), bambini o
+  // duetto (🎭 dialogo Nicky & Dante letto a due voci dal client).
+  // Codificato nel guide_character (es. "nicky_breve", "nicky_duetto"): stessa
+  // cache poi_audioguides per (poi, lingua, personaggio+registro), zero migration.
+  const [guideRegister, setGuideRegister] = useState<'standard' | 'breve' | 'bambini' | 'duetto'>('standard');
   const charKeyFor = (mode: "nicky" | "dante") => guideRegister === 'standard' ? mode : `${mode}_${guideRegister}`;
   const creditConfirm = useCreditConfirmation();
   const hasAutoPlayedRef = useRef<string | null>(null);
@@ -195,6 +196,28 @@ export default function PoiDetailSheet({
     description?: string;
     pageUrl?: string;
   } | null>(null);
+
+  // ── Indirizzo del POI (colonna shared_pois.address, batch cataloghi
+  //    patrimonio 15/08/2026). I POI che arrivano dalla RPC nearby non portano
+  //    ancora la colonna: mini-fetch di riserva alla prima apertura. Se non
+  //    c'è indirizzo (né in colonna né nel batch) la riga non si mostra.
+  const [poiAddress, setPoiAddress] = useState<string | null>((poi as any)?.address || null);
+  useEffect(() => {
+    let alive = true;
+    setPoiAddress((poi as any)?.address || null);
+    if (!poi?.id || (poi as any)?.address) return;
+    supabase
+      .from('shared_pois')
+      .select('address, city')
+      .eq('id', String(poi.id))
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive && data?.address) {
+          setPoiAddress(data.city ? `${data.address}, ${data.city}` : data.address);
+        }
+      }, () => { /* best-effort: nessun indirizzo, nessuna riga */ });
+    return () => { alive = false; };
+  }, [poi?.id]);
 
   const [tripData, setTripData] = useState<{
     rating?: string | null;
@@ -1248,7 +1271,12 @@ export default function PoiDetailSheet({
   }, [poi, visionText, guideMode, isOnline]);
 
   const toggleSpeech = async (forceRefresh = false) => {
-    let textToSpeak = poi?.audioScript || generatedText || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio;
+    // Con un registro diverso da standard (breve/bimbi/duetto) il copione da
+    // leggere è quello GENERATO per quel registro: audio_script in DB è la
+    // versione standard e con la vecchia precedenza suonava sempre quella.
+    let textToSpeak = guideRegister !== 'standard'
+      ? (generatedText || poi?.audioScript || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio)
+      : (poi?.audioScript || generatedText || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio);
 
     if (audioState.isPlaying && audioState.poiId === String(poi?.id)) {
       locationService.pauseGuideAudio();
@@ -2569,6 +2597,22 @@ export default function PoiDetailSheet({
           </div>
 
           <div className="px-6 pt-4 pb-[calc(2rem+env(safe-area-inset-bottom))]">
+            {/* Indirizzo (shared_pois.address, dai cataloghi del patrimonio):
+                tap = apre le indicazioni. Nascosto se non disponibile. */}
+            {poiAddress && (
+              <button
+                onClick={() => {
+                  const q = encodeURIComponent(`${poi.lat},${poi.lon}`);
+                  window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
+                }}
+                className="flex items-center gap-2 mb-3 text-left w-full group"
+              >
+                <MapPin className="w-4 h-4 text-primary/60 shrink-0" />
+                <span className="text-sm font-bold text-primary/80 group-hover:text-primary transition-colors leading-snug">
+                  {poiAddress}
+                </span>
+              </button>
+            )}
             {/* Contatti strutturati (telefono / sito / orari) da OSM+Wikidata,
                 resi come bottoni d'azione — SOLO per le categorie turistico-
                 culturali (musei, monumenti, chiese, archeo, teatri, attrazioni),

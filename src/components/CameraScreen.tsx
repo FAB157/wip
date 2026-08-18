@@ -15,12 +15,81 @@ import { locationService } from '../services/locationService';
 import { getLocalMuseumPassExpiry, fetchMuseumPassStatus, buyMuseumPass, formatPassRemaining } from '../lib/museumPass';
 import AROverlay from './AROverlay';
 import VisionCommentModal from './VisionCommentModal';
+import { db } from '../lib/db';
+import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
+import { getNearbyPois } from '../services/poiRepository';
+
+// ── «Da reel a itinerario» (modalità 📱 Screenshot) ────────────────────────
+// Luogo estratto dal server (/api/vision mode:'screenshot'): name/city dal
+// modello, found/lat/lon/label dal geocoding server-side (Mapbox).
+type ReelPlace = {
+  name: string;
+  city?: string | null;
+  found: boolean;
+  lat?: number | null;
+  lon?: number | null;
+  label?: string | null;
+};
+
+// Wishlist esterna: luoghi del reel SENZA un POI corrispondente nel DB
+// (entro 150 m). Vive solo in localStorage, max 100 voci (le più vecchie
+// escono). Un futuro aggancio potrà proporne l'esplorazione.
+const REEL_WISHLIST_KEY = 'wip_reel_wishlist';
+const REEL_WISHLIST_MAX = 100;
+
+// Ponte verso il pianificatore: i luoghi selezionati del reel finiscono qui
+// e si naviga alla tab Plan. Formato: { city: string, places: [{ name, lat,
+// lon }], ts: epoch ms } — lat/lon null se il geocoding non ha trovato nulla.
+// TODO(PlanScreen): consumare 'wip_reel_to_plan' all'apertura della tab Plan
+// (prefill destinazione + tappe). NON implementato qui: un altro agente sta
+// lavorando su PlanScreen, la chiave è pensata per quell'aggancio futuro.
+const REEL_TO_PLAN_KEY = 'wip_reel_to_plan';
 
 interface CameraScreenProps {
   onRecognize: (data: any) => void;
   onClose?: () => void;
   language: Language;
 }
+
+// ── CODA VISION OFFLINE ─────────────────────────────────────────────────────
+// Foto scattate senza rete: finiscono in Dexie (db.visionQueue) e vengono
+// riconosciute (con addebito) al ritorno online. Mai base64 in stato React.
+const VISION_QUEUE_MAX = 10;
+const VISION_QUEUE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 giorni
+const VISION_QUEUE_MAX_ATTEMPTS = 3;
+
+// Errore di RETE (la fetch non ha mai raggiunto il server → nessun addebito):
+// TypeError "Failed to fetch" (Chrome), "Load failed" (Safari), NetworkError.
+const isNetworkError = (e: any): boolean => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
+  const msg = String(e?.message || '').toLowerCase();
+  return e instanceof TypeError || msg.includes('failed to fetch') || msg.includes('load failed') || msg.includes('networkerror') || msg.includes('network request failed');
+};
+
+// Compressione per la coda: lato max 1280 px, JPEG qualità 0.7. Le foto
+// scattate/scelte in-app sono già ridotte a ≤800 px e passano invariate;
+// il ricampionamento scatta solo se in futuro arrivasse un'immagine più
+// grande. In caso di errore si tiene l'originale: meglio che perdere la foto.
+const compressForQueue = (dataUrl: string, maxSide = 1280, quality = 0.7): Promise<string> =>
+  new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width <= maxSide && height <= maxSide) return resolve(dataUrl);
+      const scale = maxSide / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(dataUrl);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 
 export default function CameraScreen({ onRecognize, onClose, language }: CameraScreenProps) {
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -34,7 +103,18 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // Vision opere musei (ondata 7): in modalità "Opera" il server riceve
   // mode:'artwork' → prompt da storico dell'arte, cache GPS bypassata (due
   // opere distano pochi metri). Col Pass Museo attivo la scansione è inclusa.
-  const [visionTarget, setVisionTarget] = useState<'place' | 'artwork'>('place');
+  // Modalità "Natura": mode:'nature' → prompt da naturalista, cache GPS
+  // standard attiva (due scatti dello stesso panorama riusano la scheda).
+  // Modalità "Screenshot" («Da reel a itinerario»): mode:'screenshot' → il
+  // server estrae i luoghi citati nello screenshot e li geocodifica; niente
+  // cache GPS (lo screenshot non c'entra con la posizione), stesso costo
+  // photo_search.
+  const [visionTarget, setVisionTarget] = useState<'place' | 'artwork' | 'nature' | 'screenshot'>('place');
+  // Risultato dell'estrazione reel: apre lo sheet "Luoghi trovati".
+  const [reelResult, setReelResult] = useState<{ places: ReelPlace[]; sourceHint?: string } | null>(null);
+  // Indici (in reelResult.places) dei luoghi spuntati nella checklist.
+  const [reelSelected, setReelSelected] = useState<Set<number>>(new Set());
+  const [reelBusy, setReelBusy] = useState(false);
   const { quotaToast, showQuotaToast, closeQuotaToast } = useQuotaToast();
   
   const creditConfirm = useCreditConfirmation();
@@ -50,6 +130,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [, setTick] = useState(0);
   const passActive = passExpiresAt !== null && passExpiresAt > Date.now();
+  // Coda Vision offline: nello stato React vive SOLO il conteggio (mai i
+  // base64, che restano in Dexie e vengono letti uno alla volta).
+  const [queueCount, setQueueCount] = useState(0);
+  const [queueProcessing, setQueueProcessing] = useState(false);
+  const processingQueueRef = useRef(false);
 
   useEffect(() => {
     fetchMuseumPassStatus().then(setPassExpiresAt);
@@ -57,6 +142,122 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     const t = setInterval(() => setTick(x => x + 1), 30_000);
     return () => clearInterval(t);
   }, []);
+
+  // ── Coda Vision offline: purge, contatore e ripartenza ─────────────────
+  // Al mount: scarta le voci >7 giorni, aggiorna il banner e (se c'è rete)
+  // processa subito la coda. Poi resta in ascolto dell'evento 'online'.
+  useEffect(() => {
+    let disposed = false;
+    (async () => {
+      try {
+        await db.visionQueue.where('ts').below(Date.now() - VISION_QUEUE_MAX_AGE_MS).delete();
+        const n = await db.visionQueue.count();
+        if (!disposed) setQueueCount(n);
+      } catch { /* IndexedDB non disponibile: niente coda offline */ }
+      processVisionQueue();
+    })();
+    const onOnline = () => { processVisionQueue(); };
+    window.addEventListener('online', onOnline);
+    return () => { disposed = true; window.removeEventListener('online', onOnline); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** Accoda una foto scattata offline (max 10 in coda, compressa via canvas). */
+  const enqueueOfflinePhoto = async (base64Image: string, lat: number | null, lon: number | null) => {
+    try {
+      await db.visionQueue.where('ts').below(Date.now() - VISION_QUEUE_MAX_AGE_MS).delete();
+      const count = await db.visionQueue.count();
+      if (count >= VISION_QUEUE_MAX) {
+        notify(`Coda offline piena (${VISION_QUEUE_MAX} foto): torna online per svuotarla prima di scattare ancora.`);
+        setQueueCount(count);
+        return;
+      }
+      const dataUrl = await compressForQueue(`data:image/jpeg;base64,${base64Image}`);
+      await db.visionQueue.add({ dataUrl, lat, lon, mode: visionTarget, ts: Date.now(), attempts: 0 });
+      setQueueCount(count + 1);
+      notify('📶 Sei offline: foto salvata in coda, verrà riconosciuta appena torni online.');
+    } catch (e) {
+      console.warn('[Vision] Accodamento offline fallito:', e);
+      setError('Sei offline e la foto non può essere salvata in coda. Riprova quando torni in rete.');
+    }
+  };
+
+  /**
+   * Processa la coda in sequenza col flusso normale (/api/vision, addebito al
+   * momento del processamento). Voce rimossa a successo; a errore non-rete
+   * resta in coda (max 3 tentativi, poi scartata con notifica); a errore di
+   * rete si interrompe tutto e si riproverà al prossimo evento 'online'.
+   */
+  const processVisionQueue = async () => {
+    if (processingQueueRef.current) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    processingQueueRef.current = true;
+    let processedUserId: string | null = null;
+    try {
+      await db.visionQueue.where('ts').below(Date.now() - VISION_QUEUE_MAX_AGE_MS).delete();
+      const ids = await db.visionQueue.orderBy('ts').primaryKeys();
+      if (!ids.length) return;
+      setQueueProcessing(true);
+      const { data: sessionData } = await supabase.auth.getSession();
+      processedUserId = sessionData?.session?.user?.id || null;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const accessToken = sessionData?.session?.access_token;
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+      for (const id of ids) {
+        // Una voce alla volta in memoria: mai l'intera coda di base64 insieme.
+        const item = await db.visionQueue.get(id as number);
+        if (!item) continue;
+        try {
+          const res = await fetch(getApiUrl('/api/vision'), {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              imageBase64: item.dataUrl,
+              lat: item.lat,
+              lon: item.lon,
+              ...(item.mode && item.mode !== 'place' ? { mode: item.mode } : {})
+            })
+          });
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            await db.visionQueue.delete(id as number);
+            notify(data?.riconosciuto
+              ? `✅ Foto in coda riconosciuta: ${data?.nome || 'scheda in My Vision'}`
+              : 'Foto in coda non riconosciuta: crediti rimborsati, la trovi in My Vision.');
+            try { window.dispatchEvent(new CustomEvent('wip-vision-updated')); } catch { /* ok */ }
+          } else {
+            // Errore applicativo (401/402/429/500): la rete c'è, si conta il tentativo.
+            if (res.status === 402) notify('Crediti insufficienti per le foto in coda: ricarica dallo store.');
+            const attempts = (item.attempts || 0) + 1;
+            if (attempts >= VISION_QUEUE_MAX_ATTEMPTS) {
+              await db.visionQueue.delete(id as number);
+              notify(`Una foto in coda è stata scartata dopo ${VISION_QUEUE_MAX_ATTEMPTS} tentativi falliti (errore ${res.status}).`);
+            } else {
+              await db.visionQueue.update(id as number, { attempts });
+            }
+          }
+        } catch (e) {
+          if (isNetworkError(e)) break; // ancora offline: si riprova al prossimo 'online'
+          const attempts = (item.attempts || 0) + 1;
+          if (attempts >= VISION_QUEUE_MAX_ATTEMPTS) {
+            await db.visionQueue.delete(id as number);
+            notify(`Una foto in coda è stata scartata dopo ${VISION_QUEUE_MAX_ATTEMPTS} tentativi falliti.`);
+          } else {
+            await db.visionQueue.update(id as number, { attempts });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[Vision] Elaborazione coda offline fallita:', e);
+    } finally {
+      processingQueueRef.current = false;
+      setQueueProcessing(false);
+      try { setQueueCount(await db.visionQueue.count()); } catch { /* ok */ }
+      // Gli addebiti/rimborsi delle voci processate sono avvenuti server-side.
+      if (processedUserId) notifyCreditsChanged({ userId: processedUserId });
+    }
+  };
 
   // ── Prima card guidata (ondata 3) ──────────────────────────────────────
   // Al primo ingresso in camera un overlay in 3 passi spiega il gesto e la
@@ -246,10 +447,100 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
     }
   };
 
-  const analyzeImage = async (base64Image: string) => {
+  // ── «Da reel a itinerario»: estrazione luoghi da uno screenshot ─────────
+  // Flusso separato da analyzeImage: niente GPS, niente coda offline (lo
+  // screenshot resta in galleria, si può ricaricare quando torna la rete),
+  // niente scheda My Vision. Il server risponde { mode:'screenshot',
+  // places:[{name, city, found, lat, lon, label}], sourceHint }.
+  const analyzeScreenshot = async (base64Image: string) => {
     setIsScanning(true);
     setError('');
-    
+
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setIsScanning(false);
+      setPreviewImage(null);
+      setError('Per estrarre i luoghi da uno screenshot serve la connessione: lo screenshot resta in galleria, riprova quando torni online.');
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentUserId = sessionData?.session?.user?.id || 'mock-user-id';
+
+    // Conferma UX del costo (stesso photo_search): l'addebito vero è server-side.
+    setIsScanning(false);
+    const bal = await getWalletBalance(currentUserId);
+    setCurrentBalance(bal.total);
+    const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.photo_search, 'Da reel a itinerario');
+    if (!confirmed) { setPreviewImage(null); return; }
+    setIsScanning(true);
+
+    logApiCall('gemini_vision', 'reel_screenshot');
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      const accessToken = sessionData?.session?.access_token;
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+      const res = await fetch(getApiUrl('/api/vision'), {
+        method: 'POST',
+        headers,
+        // NIENTE lat/lon: il contenuto dello screenshot non c'entra con la
+        // posizione dell'utente (il server bypassa comunque la cache GPS).
+        body: JSON.stringify({ imageBase64: base64Image, mode: 'screenshot' })
+      });
+
+      if (res.status === 401) {
+        setError('Accedi con il tuo account per usare la Visione AI.');
+        return;
+      }
+      if (res.status === 402) {
+        notify('Crediti insufficienti. Visita lo store per ricaricare.');
+        openCreditShop();
+        return;
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        throw new Error(errData?.error || "Errore durante l'analisi dello screenshot");
+      }
+
+      const data = await res.json();
+      const places: ReelPlace[] = Array.isArray(data?.places) ? data.places : [];
+      if (places.length === 0) {
+        // Il server ha già rimborsato (refunded) quando non estrae nulla.
+        setError(`Nessun luogo trovato nello screenshot.${data?.refunded ? ' Crediti rimborsati.' : ''} Prova con un'immagine dove i nomi dei posti si leggono chiaramente.`);
+        return;
+      }
+      setReelResult({ places, sourceHint: data?.sourceHint || '' });
+      setReelSelected(new Set(places.map((_: ReelPlace, i: number) => i)));
+    } catch (err: any) {
+      console.error(err);
+      if (isNetworkError(err)) {
+        setError('Connessione persa durante l\'analisi: lo screenshot resta in galleria, riprova quando torni online.');
+        return;
+      }
+      const errMsg = (err.message || '').toLowerCase();
+      if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('rate limit')) {
+        setError(getTranslation('camera_error_quota', language));
+      } else {
+        setError(err.message || getTranslation('camera_error_failed', language));
+      }
+    } finally {
+      setIsScanning(false);
+      setPreviewImage(null);
+      notifyCreditsChanged({ userId: currentUserId });
+    }
+  };
+
+  const analyzeImage = async (base64Image: string) => {
+    // Modalità 📱 Screenshot: flusso dedicato (sopra), vale sia per la foto
+    // scattata (schermo di un altro telefono) sia per il file dalla galleria.
+    if (visionTarget === 'screenshot') {
+      await analyzeScreenshot(base64Image);
+      return;
+    }
+    setIsScanning(true);
+    setError('');
+
     // Prova a recuperare le coordinate GPS
     let gpsLat: number | null = null;
     let gpsLon: number | null = null;
@@ -272,6 +563,16 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       console.debug("Could not get GPS coordinates for Camera Vision cache:", e);
     }
 
+    // ── OFFLINE: non perdere la foto ─────────────────────────────────────
+    // Senza rete niente riconoscimento (e niente addebito): la foto va in
+    // coda Dexie e verrà processata (con addebito) al ritorno online.
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setIsScanning(false);
+      setPreviewImage(null);
+      await enqueueOfflinePhoto(base64Image, gpsLat, gpsLon);
+      return;
+    }
+
     // La cache GPS condivisa e l'addebito ora vivono SOLO nel server
     // (/api/vision): la cache era scrivibile con la anon key (avvelenabile)
     // e il prelievo crediti client-side era bypassabile via cURL. Qui resta
@@ -286,7 +587,9 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       setCurrentBalance(bal.total);
       const confirmed = await creditConfirm.requestConfirmation(
         PRICING_LIST.photo_search,
-        visionTarget === 'artwork' ? "Visione AI — Opera d'arte" : "Visione AI"
+        visionTarget === 'artwork' ? "Visione AI — Opera d'arte"
+          : visionTarget === 'nature' ? "Visione AI — Natura"
+          : "Visione AI"
       );
       if (!confirmed) return;
       setIsScanning(true);
@@ -313,7 +616,8 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
           lon: gpsLon,
           // Modalità "Opera" (ondata 7): il server identifica l'opera
           // inquadrata (quadro/statua/reperto), non l'edificio del GPS.
-          ...(visionTarget === 'artwork' ? { mode: 'artwork' } : {})
+          // Modalità "Natura": prompt da naturalista, categoria 'natura'.
+          ...(visionTarget !== 'place' ? { mode: visionTarget } : {})
         })
       });
 
@@ -352,6 +656,13 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       }
     } catch (err: any) {
       console.error(err);
+      // Rete caduta DURANTE la fetch (mai arrivata al server → nessun
+      // addebito): la foto non si perde, va in coda offline.
+      if (isNetworkError(err)) {
+        setPreviewImage(null);
+        await enqueueOfflinePhoto(base64Image, gpsLat, gpsLon);
+        return;
+      }
       // Match case-insensitive: il server risponde "Quota Exceeded" (maiuscolo).
       const errMsg = (err.message || '').toLowerCase();
       if (errMsg.includes('429') || errMsg.includes('quota') || errMsg.includes('rate limit')) {
@@ -366,6 +677,105 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
       notifyCreditsChanged({ userId: currentUserId });
       try { window.dispatchEvent(new CustomEvent('wip-vision-updated')); } catch {}
     }
+  };
+
+  // ── Azioni dello sheet "Luoghi trovati" ─────────────────────────────────
+
+  /**
+   * 💛 Salva nei preferiti i luoghi selezionati: se entro 150 m dalle
+   * coordinate geocodificate esiste un POI del DB (poiRepository.getNearbyPois)
+   * si salva QUEL POI via favorites.ts (mai upsert diretto su saved_pois);
+   * altrimenti la voce finisce nella wishlist esterna 'wip_reel_wishlist'.
+   */
+  const saveReelToFavorites = async () => {
+    if (!reelResult || reelBusy) return;
+    setReelBusy(true);
+    try {
+      let inFavorites = 0;
+      let inWishlist = 0;
+      let wishlist: any[] = [];
+      try { wishlist = JSON.parse(localStorage.getItem(REEL_WISHLIST_KEY) || '[]'); } catch { wishlist = []; }
+      if (!Array.isArray(wishlist)) wishlist = [];
+
+      for (const idx of reelSelected) {
+        const p = reelResult.places[idx];
+        if (!p) continue;
+
+        let matched: any = null;
+        if (p.found && p.lat != null && p.lon != null) {
+          try {
+            const near = await getNearbyPois(p.lat, p.lon, 150);
+            matched = (near || [])
+              .filter((x: any) => x && x.lat != null && x.lon != null)
+              .sort((a: any, b: any) => (a.distance_meters ?? 0) - (b.distance_meters ?? 0))[0] || null;
+          } catch { matched = null; }
+        }
+
+        if (matched) {
+          // toggleFavoritePoi è un toggle: si aggiunge SOLO se non è già
+          // tra i preferiti (altrimenti lo toglieremmo).
+          const already = getLocalFavorites().some((f: any) => String(f.poi_id || f.id) === String(matched.id));
+          if (!already) await toggleFavoritePoi(matched);
+          inFavorites++;
+        } else {
+          const key = `${p.name}|${p.city || ''}`.toLowerCase();
+          if (!wishlist.some((w: any) => `${w?.name || ''}|${w?.city || ''}`.toLowerCase() === key)) {
+            wishlist.push({ name: p.name, city: p.city || null, lat: p.lat ?? null, lon: p.lon ?? null, ts: Date.now() });
+          }
+          inWishlist++;
+        }
+      }
+
+      while (wishlist.length > REEL_WISHLIST_MAX) wishlist.shift();
+      try { localStorage.setItem(REEL_WISHLIST_KEY, JSON.stringify(wishlist)); } catch { /* storage pieno: pazienza */ }
+
+      const parts: string[] = [];
+      if (inFavorites > 0) parts.push(`${inFavorites} nei preferiti`);
+      if (inWishlist > 0) parts.push(`${inWishlist} nella wishlist (non ancora sulla mappa WIP)`);
+      notify(parts.length > 0 ? `💛 Salvati: ${parts.join(', ')}.` : 'Seleziona almeno un luogo da salvare.');
+    } finally {
+      setReelBusy(false);
+    }
+  };
+
+  /** 🗺 Centra la mappa sul luogo geocodificato (eventi esistenti di App/MapArea). */
+  const showReelPlaceOnMap = (p: ReelPlace, idx: number) => {
+    if (!p.found || p.lat == null || p.lon == null) return;
+    // 'wip-open-map-area' porta alla tab mappa; 'focus-poi' (listener in
+    // MapArea) centra e apre il popup. Il POI sintetico ha i soli campi che
+    // focusPoiOnMap usa (id/name/lat/lon).
+    window.dispatchEvent(new CustomEvent('wip-open-map-area'));
+    window.dispatchEvent(new CustomEvent('focus-poi', {
+      detail: { id: `reel-${idx}-${p.name}`, name: p.name, lat: p.lat, lon: p.lon, category: 'community', description_long: p.label || '' }
+    }));
+  };
+
+  /**
+   * ✨ Crea itinerario: salva i luoghi selezionati in 'wip_reel_to_plan' e
+   * naviga alla tab Plan con l'evento esistente 'wip-itinerary-checkin'
+   * (App.tsx → setActiveTab("plan")). Il prefill in PlanScreen è un aggancio
+   * futuro: vedi il TODO sulla costante REEL_TO_PLAN_KEY.
+   */
+  const createReelItinerary = () => {
+    if (!reelResult) return;
+    const chosen = [...reelSelected].map(i => reelResult.places[i]).filter(Boolean);
+    if (chosen.length === 0) { notify('Seleziona almeno un luogo per l\'itinerario.'); return; }
+    // Città prevalente tra i luoghi estratti (per il prefill destinazione).
+    const cityCount: Record<string, number> = {};
+    chosen.forEach(p => {
+      const c = (p.city || '').trim();
+      if (c) cityCount[c] = (cityCount[c] || 0) + 1;
+    });
+    const city = Object.entries(cityCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
+    try {
+      localStorage.setItem(REEL_TO_PLAN_KEY, JSON.stringify({
+        city,
+        places: chosen.map(p => ({ name: p.name, lat: p.lat ?? null, lon: p.lon ?? null })),
+        ts: Date.now()
+      }));
+    } catch { /* storage pieno: la navigazione resta valida */ }
+    setReelResult(null);
+    window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: 'reel-to-plan' } }));
   };
 
   return (
@@ -456,22 +866,38 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         <p className="text-xs text-secondary/40 font-medium max-w-[200px] text-center mx-auto">
           {visionTarget === 'artwork'
             ? "Inquadra un quadro, una statua o un reperto: WIP riconosce l'opera e te la racconta come un'audioguida."
+            : visionTarget === 'nature'
+            ? 'Inquadra una pianta, un animale o un panorama: WIP li riconosce e ti racconta habitat e curiosità da naturalista.'
+            : visionTarget === 'screenshot'
+            ? 'Carica lo screenshot di un reel o di un articolo ("5 posti da vedere a…"): WIP estrae i luoghi citati e li trasforma in preferiti o in un itinerario.'
             : 'Scansiona per riconoscere il punto di interesse: la scheda finisce in My Vision e sblocchi 10 XP.'}
         </p>
 
         <div className="flex flex-col gap-4 w-full max-w-xs">
-          {/* Vision opere musei (ondata 7): selettore Luogo/Opera */}
+          {/* Coda Vision offline: foto scattate senza rete, in attesa */}
+          {queueCount > 0 && (
+            <div className="w-full px-4 py-3 rounded-2xl border border-sky-400/30 bg-sky-400/10 backdrop-blur-md text-left">
+              <p className="text-xs font-black text-sky-300">
+                {queueProcessing
+                  ? `⏳ Riconoscimento di ${queueCount} foto in coda…`
+                  : `📶 ${queueCount} foto in coda — verranno riconosciute appena torni online`}
+              </p>
+            </div>
+          )}
+          {/* Selettore modalità: Luogo / Opera (ondata 7) / Natura / Screenshot */}
           <div className="w-full flex items-center gap-1 p-1 bg-surface/10 border border-white/10 rounded-2xl backdrop-blur-md">
             {([
               { key: 'place', label: '📍 Luogo' },
               { key: 'artwork', label: '🖼️ Opera' },
+              { key: 'nature', label: '🌿 Natura' },
+              { key: 'screenshot', label: '📱 Screenshot' },
             ] as const).map(opt => (
               <button
                 key={opt.key}
                 type="button"
                 onClick={() => setVisionTarget(opt.key)}
                 aria-pressed={visionTarget === opt.key}
-                className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all active:scale-95 ${
+                className={`flex-1 py-2.5 px-0.5 rounded-xl text-[11px] font-black transition-all active:scale-95 ${
                   visionTarget === opt.key ? 'bg-primary text-white shadow-lg' : 'text-secondary/50 hover:text-secondary'
                 }`}
               >
@@ -479,23 +905,50 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
               </button>
             ))}
           </div>
-          <button
-            onClick={openCamera}
-            disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_0_40px_rgba(var(--color-primary),0.3)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
-          >
-            <Camera className="w-5 h-5" />
-            <span>Scatta Foto</span>
-          </button>
+          {visionTarget === 'screenshot' ? (
+            <>
+              {/* «Da reel a itinerario»: l'azione primaria è caricare lo
+                  screenshot dalla galleria; la fotocamera resta per
+                  fotografare lo schermo di un altro dispositivo. */}
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                disabled={isScanning}
+                className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_0_40px_rgba(var(--color-primary),0.3)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <ImageIcon className="w-5 h-5" />
+                <span>Carica screenshot</span>
+              </button>
 
-          <button
-            onClick={() => galleryInputRef.current?.click()}
-            disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-surface/10 text-secondary font-black text-base rounded-2xl border border-white/10 backdrop-blur-md active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
-          >
-            <ImageIcon className="w-5 h-5" />
-            <span>Scegli dalla Galleria</span>
-          </button>
+              <button
+                onClick={openCamera}
+                disabled={isScanning}
+                className="w-full flex items-center justify-center gap-3 py-4 bg-surface/10 text-secondary font-black text-base rounded-2xl border border-white/10 backdrop-blur-md active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <Camera className="w-5 h-5" />
+                <span>Scatta Foto</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={openCamera}
+                disabled={isScanning}
+                className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_0_40px_rgba(var(--color-primary),0.3)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <Camera className="w-5 h-5" />
+                <span>Scatta Foto</span>
+              </button>
+
+              <button
+                onClick={() => galleryInputRef.current?.click()}
+                disabled={isScanning}
+                className="w-full flex items-center justify-center gap-3 py-4 bg-surface/10 text-secondary font-black text-base rounded-2xl border border-white/10 backdrop-blur-md active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <ImageIcon className="w-5 h-5" />
+                <span>Scegli dalla Galleria</span>
+              </button>
+            </>
+          )}
 
           {/* PASS MUSEO — dentro un museo il geofencing tace per design:
               l'esperienza indoor è inquadrare le opere, col pass è illimitata */}
@@ -624,6 +1077,97 @@ const resizeImage = (file: File, maxWidth = 800, maxHeight = 800): Promise<strin
         serviceName={creditConfirm.serviceName}
         language={language}
       />
+
+      {/* Sheet «Luoghi trovati» — «Da reel a itinerario» (📱 Screenshot) */}
+      <AnimatePresence>
+        {reelResult && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 bg-black/70 backdrop-blur-sm flex items-end justify-center"
+          >
+            <motion.div
+              initial={{ y: 60, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 60, opacity: 0 }}
+              transition={{ type: 'tween', duration: 0.22, ease: 'easeOut' }}
+              className="w-full max-w-md bg-[#111827] border-t border-x border-white/15 rounded-t-3xl p-5 pb-8 text-white shadow-2xl max-h-[80%] flex flex-col"
+            >
+              <div className="flex items-start justify-between gap-3 mb-1">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-black">📱 Luoghi trovati</h3>
+                  {reelResult.sourceHint ? (
+                    <p className="text-[11px] font-bold text-white/50 truncate">{reelResult.sourceHint}</p>
+                  ) : null}
+                </div>
+                <button
+                  onClick={() => setReelResult(null)}
+                  aria-label="Chiudi"
+                  className="w-9 h-9 shrink-0 rounded-full bg-surface/10 border border-white/15 flex items-center justify-center active:scale-90 transition-transform"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-[11px] font-bold text-white/40 mb-3">Spunta i luoghi che ti interessano, poi salvali o trasformali in un itinerario.</p>
+
+              {/* Checklist: nome, città, ✓ trovato sulla mappa / ⚠ non trovato */}
+              <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-2 mb-4">
+                {reelResult.places.map((p, idx) => (
+                  <div key={`${idx}-${p.name}`} className="flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-surface/10 border border-white/10">
+                    <input
+                      type="checkbox"
+                      checked={reelSelected.has(idx)}
+                      onChange={() => setReelSelected(prev => {
+                        const next = new Set(prev);
+                        if (next.has(idx)) next.delete(idx); else next.add(idx);
+                        return next;
+                      })}
+                      className="w-4 h-4 shrink-0 accent-[rgb(var(--color-primary))]"
+                      aria-label={`Seleziona ${p.name}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-black truncate">{p.name}</p>
+                      <p className="text-[11px] font-bold text-white/50 truncate">
+                        {p.city ? `${p.city} · ` : ''}
+                        {p.found ? '✓ trovato sulla mappa' : '⚠ non trovato'}
+                      </p>
+                    </div>
+                    {p.found && p.lat != null && p.lon != null && (
+                      <button
+                        onClick={() => showReelPlaceOnMap(p, idx)}
+                        className="shrink-0 px-2.5 py-2 rounded-xl bg-surface/10 border border-white/15 text-sm active:scale-90 transition-transform"
+                        aria-label={`Vedi ${p.name} sulla mappa`}
+                        title="Vedi sulla mappa"
+                      >
+                        🗺
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2.5">
+                <button
+                  onClick={saveReelToFavorites}
+                  disabled={reelBusy || reelSelected.size === 0}
+                  className="w-full flex items-center justify-center gap-2 py-3 bg-surface/10 border border-white/15 rounded-2xl font-black text-sm active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
+                >
+                  {reelBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>💛</span>}
+                  <span>Salva nei preferiti</span>
+                </button>
+                <button
+                  onClick={createReelItinerary}
+                  disabled={reelBusy || reelSelected.size === 0}
+                  className="w-full flex items-center justify-center gap-2 py-3.5 bg-primary rounded-2xl font-black text-sm uppercase tracking-wide active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
+                >
+                  ✨ Crea itinerario con questi luoghi
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Foto non riconosciuta: racconto "perché è speciale" (WIP Community) */}
       {commentCard && (

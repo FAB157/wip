@@ -8,6 +8,7 @@ import {
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
 import AdminEditor from './AdminEditor';
+import AdminBeniCulturali from './AdminBeniCulturali';
 import AdminDiagnostics from './AdminDiagnostics';
 import AdminApiStats from './AdminApiStats';
 import AdminAffiliateStats from './AdminAffiliateStats';
@@ -24,7 +25,7 @@ import LevelForm from './admin/LevelForm';
 import UserEditModal from './admin/UserEditModal';
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
   // Utente aperto nella gestione completa (movimenti, rettifiche, sospensione)
   const [managedUser, setManagedUser] = useState<any | null>(null);
   const [pendingReports, setPendingReports] = useState<number>(0);
@@ -509,6 +510,15 @@ export default function AdminPanel() {
             Editor POI
           </button>
           <button
+            onClick={() => setActiveTab('beni_culturali')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'beni_culturali' ? 'bg-white text-stone-700 shadow-sm' : 'text-primary/60 hover:text-stone-700'
+            }`}
+          >
+            <span className="text-sm">🏺</span>
+            Beni Culturali
+          </button>
+          <button
             onClick={() => setActiveTab('poi_map')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
               activeTab === 'poi_map' ? 'bg-white text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
@@ -586,6 +596,7 @@ export default function AdminPanel() {
       {activeTab === 'system_errors' && <AdminSystemErrors />}
       {activeTab === 'vision' && <AdminVisionCommunity />}
       {activeTab === 'poi_map' && <AdminPoiMapEditor />}
+      {activeTab === 'beni_culturali' && <AdminBeniCulturali />}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 
       {activeTab === 'users' && (

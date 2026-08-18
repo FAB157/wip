@@ -1,6 +1,6 @@
 // "Map as MapIcon": il nome nudo oscurava la Map NATIVA di JS in tutto il
 // modulo → "new Map()" (historyPoiDetails) esplodeva con "is not a constructor".
-import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins } from 'lucide-react';
+import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { ReactNode, useState, useEffect, lazy, Suspense } from 'react';
 import { useSwipeable } from 'react-swipeable';
@@ -22,6 +22,8 @@ import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineSt
 import { Language, getTranslation, LANGUAGES } from '../lib/i18n';
 import B2BPartner from './B2BPartner';
 import { FAVORITES_EVENT } from '../lib/favorites';
+import { list as listNotifications, markAllRead as markAllNotificationsRead, unreadCount as notificationsUnreadCount, formatRelativeTime, NOTIFICATION_CENTER_EVENT, WipNotification } from '../lib/notificationCenter';
+import { parseImportFile, importPlacesAsFavorites, ImportReport, MAX_IMPORT_ENTRIES } from '../lib/importGoogleMaps';
 import { getListeningHistory, ListeningHistoryEntry, LISTENING_HISTORY_EVENT, deleteListeningHistory } from '../lib/listeningHistory';
 import { wipeLocalUserData } from '../lib/userSession';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
@@ -34,6 +36,7 @@ import { BIOMETRIC_PREF_KEY, isBiometricPrefEnabled } from './LoginScreen';
 import { APPLOCK_PREF_KEY } from './AppLockGate';
 import { Skeleton } from './SkeletonLoader';
 import { EmptyState } from './EmptyState';
+import CalendarExportButton from './CalendarExportButton';
 interface ProfileScreenProps {
   guideMode: 'nicky' | 'dante';
   setGuideMode: (mode: 'nicky' | 'dante') => void;
@@ -55,6 +58,8 @@ import AppGuide from './AppGuide';
 import PriceList from './PriceList';
 import FreeFeaturesModal from './FreeFeaturesModal';
 import OfflineMapsTab from './OfflineMapsTab';
+import RainGuaranteeCard from './RainGuaranteeCard';
+import { PilgrimCertificateAction } from './PilgrimWaysSheet';
 import ProminentDisclosure from './ProminentDisclosure';
 import { PRICING_LIST } from '../lib/pricing';
 import LiveTourPanel from './LiveTourPanel';
@@ -261,6 +266,19 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     try { return JSON.parse(localStorage.getItem('wip_gamification_challenges') || '[]'); } catch { return []; }
   });
   const [userXP, setUserXP] = useState(() => parseInt(localStorage.getItem('wip_user_xp') || '0', 10));
+
+  // Centro notifiche in-app: badge non lette + pannello campanella 🔔
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifUnread, setNotifUnread] = useState<number>(() => notificationsUnreadCount());
+  const [notifItems, setNotifItems] = useState<WipNotification[]>(() => listNotifications());
+  useEffect(() => {
+    const refreshNotifs = () => {
+      setNotifUnread(notificationsUnreadCount());
+      setNotifItems(listNotifications());
+    };
+    window.addEventListener(NOTIFICATION_CENTER_EVENT, refreshNotifs);
+    return () => window.removeEventListener(NOTIFICATION_CENTER_EVENT, refreshNotifs);
+  }, []);
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -1164,7 +1182,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       )}
 
       {/* Header Profile - Minimalist Light Mode */}
-      <div className="px-6 pt-16 pb-6 bg-white border-b border-gray-100 shrink-0">
+      <div className="px-6 pt-16 pb-6 bg-white border-b border-gray-100 shrink-0 relative">
+        {/* Campanella centro notifiche (in testa alla pagina) */}
+        <button
+          onClick={() => setNotifOpen(true)}
+          className="absolute top-16 right-6 z-20 p-2.5 bg-white rounded-full border border-gray-100 shadow-sm text-primary hover:bg-gray-50 transition-colors"
+          aria-label="Apri il centro notifiche"
+        >
+          <Bell className="w-5 h-5" />
+          {notifUnread > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center">
+              {notifUnread > 99 ? '99+' : notifUnread}
+            </span>
+          )}
+        </button>
         <UserProfileSummary
           session={userSession}
           userName={userName}
@@ -1272,6 +1303,15 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
           </div>
         </div>
       </div>
+
+      {/* Pannello centro notifiche 🔔 */}
+      {notifOpen && (
+        <NotificationCenterPanel
+          items={notifItems}
+          onClose={() => setNotifOpen(false)}
+          onMarkAllRead={markAllNotificationsRead}
+        />
+      )}
 
       {/* Content Area */}
       <div {...(activeTab === 'admin' ? {} : swipeHandlers)} className="flex-1 p-6">
@@ -1402,6 +1442,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
                          Creato il {new Date(itineraryDb.created_at || Date.now()).toLocaleDateString('it-IT')}
                       </p>
+                      {/* Garanzia pioggia: link discreto solo per gli itinerari
+                          degli ultimi 7 giorni (il componente si nasconde da sé) */}
+                      <RainGuaranteeCard itinerary={itineraryDb} language={language} />
+                      {/* 🥾 Attestato del Pellegrino: compare solo sugli
+                          itinerari-cammino COMPLETATI (si nasconde da sé) */}
+                      <PilgrimCertificateAction itinerary={itineraryDb} />
                       <div className="flex mt-auto pt-2 gap-2 flex-wrap">
                         <button
                           onClick={() => generateTripStory(itineraryDb)}
@@ -1411,6 +1457,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         >
                           {storyLoadingId === itineraryDb.id ? 'Scrivo…' : '📖 Racconto'}
                         </button>
+                        {/* Export .ics riusa la stessa modalina di PlanScreen;
+                            qui non c'è un mese di riferimento → default domani. */}
+                        <CalendarExportButton
+                          itinerary={itineraryDb.dati_itinerario}
+                          fallbackTitle={itineraryDb.titolo}
+                          buttonLabel="📅 Calendario"
+                          buttonClassName="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-colors"
+                        />
                         {(() => {
                           // Deeplink con COORDINATE quando disponibili (il nome
                           // tappa da solo porta Maps su destinazioni ambigue);
@@ -2167,6 +2221,15 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   </div>
                 </div>
               </div>
+
+              {/* 💳 Movimenti crediti: ultime 50 righe del libro mastro (collassabile) */}
+              <CreditMovementsSection userId={userSession?.user?.id} />
+
+              {/* 📥 Importa da Google Maps: CSV Takeout / GeoJSON → preferiti WIP */}
+              <GoogleMapsImportSection />
+
+              {/* 🌐 eSIM per viaggiatori: link affiliati tracciati via /api/out */}
+              <EsimSection />
 
               {/* Sicurezza: cambio password + sblocco biometrico */}
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
@@ -2951,7 +3014,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             </div>
             <div className="flex-1 overflow-y-auto bg-gray-100 p-2 sm:p-8" id="premium-guide-viewer-container">
               {/* Audio-libro: fuori dal contenitore PDF, così non finisce in stampa */}
-              <PremiumGuideAudiobook content={guideToRender.content} language={language} />
+              <PremiumGuideAudiobook content={guideToRender.content} language={language} hash={guideToRender.hash} onContentUpdate={(c: any) => setGuideToRender((g: any) => g ? { ...g, content: c } : g)} />
               <PremiumGuideRenderer
                 content={guideToRender.content}
                 mediaManifest={guideToRender.media}
@@ -3112,6 +3175,415 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
         </p>
       </div>
     </motion.div>
+  );
+}
+
+/**
+ * Pannello del centro notifiche (campanella 🔔 in testa al profilo): lista
+ * delle notifiche registrate da lib/notificationCenter (più recente in alto,
+ * orario relativo) + "Segna tutte come lette".
+ */
+function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
+  items: WipNotification[];
+  onClose: () => void;
+  onMarkAllRead: () => void;
+}) {
+  const unread = items.filter(i => !i.letta).length;
+  return (
+    <div className="fixed inset-0 z-[400]" role="dialog" aria-label="Centro notifiche">
+      {/* Backdrop: chiude al tocco */}
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, y: -12 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="absolute top-14 right-3 left-3 sm:left-auto sm:w-[380px] bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden flex flex-col max-h-[70vh]"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h4 className="font-black text-primary text-sm flex items-center gap-2">
+            <Bell className="w-4 h-4" /> Notifiche
+            {unread > 0 && (
+              <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">{unread}</span>
+            )}
+          </h4>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400" aria-label="Chiudi">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="py-12 px-6 text-center">
+              <Bell className="w-8 h-8 mx-auto text-gray-200 mb-2" />
+              <p className="text-xs font-bold text-gray-400">Nessuna notifica per ora.</p>
+              <p className="text-[10px] text-gray-300 mt-1">Qui trovi i luoghi incontrati e gli avvisi dell'audioguida.</p>
+            </div>
+          ) : (
+            items.map(n => (
+              <div key={n.id} className={`px-5 py-3 border-b border-gray-50 ${n.letta ? 'bg-white' : 'bg-blue-50/50'}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-xs font-black text-gray-900 leading-snug">{n.titolo}</p>
+                  {!n.letta && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0 mt-1" />}
+                </div>
+                {n.corpo && <p className="text-[11px] font-bold text-gray-500 leading-snug mt-0.5">{n.corpo}</p>}
+                <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">{formatRelativeTime(n.ts)}</p>
+              </div>
+            ))
+          )}
+        </div>
+
+        {items.length > 0 && (
+          <button
+            onClick={onMarkAllRead}
+            disabled={unread === 0}
+            className="m-3 py-2.5 rounded-2xl bg-primary/10 text-primary text-[11px] font-black uppercase tracking-widest hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Segna tutte come lette
+          </button>
+        )}
+      </motion.div>
+    </div>
+  );
+}
+
+/**
+ * 💳 Movimenti crediti: ultime 50 righe di credit_transactions dell'utente
+ * (la RLS "select own" fa da filtro di sicurezza, il client filtra comunque
+ * per user_id). Collassabile, caricamento pigro alla prima apertura.
+ */
+function CreditMovementsSection({ userId }: { userId?: string }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
+  const [rows, setRows] = useState<any[]>([]);
+  const [filter, setFilter] = useState<'tutti' | 'spese' | 'ricariche' | 'rimborsi'>('tutti');
+
+  const isLogged = !!userId && !String(userId).startsWith('mock-user');
+
+  useEffect(() => {
+    if (!open || loaded || !isLogged) return;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('credit_transactions')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (error) throw error;
+        setRows(data || []);
+        setLoaded(true);
+      } catch (e: any) {
+        // RLS (403/42501), tabella assente (42P01/PGRST205) o rete: la pagina
+        // non si rompe, si mostra il messaggio garbato.
+        console.warn('[CreditMovements] Storico non leggibile:', e?.code || e?.status, e?.message || e);
+        setUnavailable(true);
+        setLoaded(true);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [open, loaded, isLogged, userId]);
+
+  // Etichette leggibili per le causali del libro mastro
+  const txLabel = (t: any): string => {
+    const amount = Number(t.amount) || 0;
+    switch (String(t.type || '').toLowerCase()) {
+      case 'consume': return 'Utilizzo servizio';
+      case 'purchase': return 'Ricarica crediti';
+      case 'refund': return 'Rimborso';
+      case 'bonus': return 'Bonus / Missione';
+      case 'admin_credit': return 'Rettifica assistenza (accredito)';
+      case 'admin_debit': return 'Rettifica assistenza (addebito)';
+      default: return amount >= 0 ? 'Accredito' : 'Addebito';
+    }
+  };
+
+  const matchesFilter = (t: any): boolean => {
+    const type = String(t.type || '').toLowerCase();
+    const amount = Number(t.amount) || 0;
+    if (filter === 'spese') return amount < 0;
+    if (filter === 'rimborsi') return type === 'refund';
+    if (filter === 'ricariche') return type !== 'refund' && amount > 0;
+    return true;
+  };
+
+  const visible = rows.filter(matchesFilter);
+
+  return (
+    <div className="bg-white rounded-3xl border border-outline-variant/10 shadow-sm mb-4 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between p-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
+            <Coins className="w-5 h-5" />
+          </div>
+          <div className="text-left">
+            <h4 className="font-black text-on-surface">💳 Movimenti crediti</h4>
+            <p className="text-xs font-bold text-on-surface-variant opacity-70">Ultimi 50 movimenti del tuo saldo</p>
+          </div>
+        </div>
+        {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+      </button>
+
+      {open && (
+        <div className="px-6 pb-6">
+          {!isLogged ? (
+            <p className="text-xs font-bold text-gray-400 text-center py-4">Accedi per vedere lo storico dei tuoi crediti.</p>
+          ) : loading ? (
+            <div className="flex items-center justify-center py-6 text-primary">
+              <Loader2 className="w-5 h-5 animate-spin" />
+            </div>
+          ) : unavailable ? (
+            <p className="text-xs font-bold text-gray-400 text-center py-4">Storico non disponibile al momento.</p>
+          ) : rows.length === 0 ? (
+            <p className="text-xs font-bold text-gray-400 text-center py-4">Nessun movimento registrato finora.</p>
+          ) : (
+            <>
+              {/* Filtro semplice */}
+              <div className="flex gap-1.5 mb-3 flex-wrap">
+                {([['tutti', 'Tutti'], ['spese', 'Spese'], ['ricariche', 'Ricariche'], ['rimborsi', 'Rimborsi']] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setFilter(key)}
+                    className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-colors ${
+                      filter === key ? 'bg-primary text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {visible.length === 0 ? (
+                <p className="text-xs font-bold text-gray-400 text-center py-4">Nessun movimento per questo filtro.</p>
+              ) : (
+                <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
+                  {visible.map((t: any) => {
+                    const amount = Number(t.amount) || 0;
+                    return (
+                      <div key={t.id} className="py-2.5 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black text-gray-900 truncate">{txLabel(t)}</p>
+                          {t.description && (
+                            <p className="text-[10px] font-bold text-gray-400 truncate">{t.description}</p>
+                          )}
+                          <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-0.5">
+                            {t.created_at ? new Date(t.created_at).toLocaleString('it-IT', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                          </p>
+                        </div>
+                        <span className={`shrink-0 text-sm font-black tabular-nums ${amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
+                          {amount >= 0 ? '+' : '−'}{Math.abs(amount)} 🪙
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 📥 Importa da Google Maps: CSV di Takeout "Luoghi salvati" o GeoJSON →
+ * matching sui POI WIP (lib/importGoogleMaps) → preferiti via lib/favorites.
+ */
+function GoogleMapsImportSection() {
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [report, setReport] = useState<ImportReport | null>(null);
+  const [showNotFound, setShowNotFound] = useState(false);
+
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Reset dell'input: lo stesso file deve poter essere ricaricato
+    e.target.value = '';
+    if (!file || busy) return;
+    setReport(null);
+    setShowNotFound(false);
+    try {
+      const text = await file.text();
+      const places = parseImportFile(file.name, text);
+      if (places.length === 0) {
+        notify('Nessun luogo riconosciuto nel file. Servono il CSV "Luoghi salvati" di Google Takeout o un GeoJSON.');
+        return;
+      }
+      setBusy(true);
+      setProgress({ done: 0, total: Math.min(places.length, MAX_IMPORT_ENTRIES) });
+      const result = await importPlacesAsFavorites(places, (done, total) => setProgress({ done, total }));
+      setReport(result);
+      if (result.imported.length > 0) {
+        notify(`Importati ${result.imported.length} luoghi nei preferiti!`);
+      }
+    } catch (err) {
+      console.error('[GoogleMapsImport] Import fallito:', err);
+      notify("Errore durante l'import del file.");
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  };
+
+  return (
+    <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="w-10 h-10 rounded-xl bg-rose-500/10 flex items-center justify-center text-rose-600">
+          <MapPin className="w-5 h-5" />
+        </div>
+        <div>
+          <h4 className="font-black text-on-surface">📥 Importa da Google Maps</h4>
+          <p className="text-xs font-bold text-on-surface-variant opacity-70">
+            I tuoi luoghi salvati diventano preferiti WIP
+          </p>
+        </div>
+      </div>
+
+      <p className="text-[11px] font-bold text-gray-500 leading-snug mb-3">
+        Esporta i "Luoghi salvati" da Google Takeout (CSV) o un file GeoJSON e caricalo qui:
+        cerchiamo ogni luogo tra i POI WIP (entro ~150 m) e lo aggiungiamo ai preferiti.
+        Massimo {MAX_IMPORT_ENTRIES} voci per import.
+      </p>
+
+      {busy && progress ? (
+        <div className="space-y-2">
+          <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0}%` }}
+            />
+          </div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 text-center">
+            Ricerca luoghi… {progress.done}/{progress.total}
+          </p>
+        </div>
+      ) : (
+        <label className="w-full flex items-center justify-center gap-2 py-3 bg-primary/10 hover:bg-primary/20 text-primary rounded-2xl cursor-pointer font-black text-[11px] uppercase tracking-widest transition-colors">
+          <Download className="w-4 h-4" /> Scegli il file (CSV o GeoJSON)
+          <input type="file" accept=".csv,.json,.geojson,text/csv,application/json" className="hidden" onChange={handleFile} />
+        </label>
+      )}
+
+      {report && (
+        <div className="mt-4 bg-[#f8f5f0] rounded-2xl p-4">
+          <p className="text-xs font-black text-gray-900 text-center">
+            ✅ {report.imported.length} importati · ⏭ {report.already.length} già preferiti · ❓ {report.notFound.length} non trovati
+          </p>
+          {report.skipped > 0 && (
+            <p className="text-[10px] font-bold text-gray-400 text-center mt-1">
+              {report.skipped} voci oltre il limite di {MAX_IMPORT_ENTRIES} sono state ignorate.
+            </p>
+          )}
+          {report.notFound.length > 0 && (
+            <div className="mt-2">
+              <button
+                onClick={() => setShowNotFound(s => !s)}
+                className="w-full text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-gray-700 flex items-center justify-center gap-1"
+              >
+                {showNotFound ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                Vedi i non trovati
+              </button>
+              {showNotFound && (
+                <ul className="mt-2 max-h-40 overflow-y-auto space-y-1">
+                  {report.notFound.map((name, i) => (
+                    <li key={`${name}-${i}`} className="text-[11px] font-bold text-gray-500 truncate">❓ {name}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 🌐 Internet in viaggio (eSIM): card affiliate verso provider eSIM per chi
+ * viaggia all'estero. I click passano da /api/out (src=esim) per il tracking
+ * mensile in api_cache. Gli URL affiliati arrivano dalle env client
+ * VITE_ESIM_AFF_AIRALO / VITE_ESIM_AFF_HOLAFLY / VITE_ESIM_AFF_SAILY: se
+ * assenti si usa l'URL pubblico del provider (nessuna commissione).
+ * Collassabile, visibile a tutti (anche gli italiani viaggiano all'estero).
+ */
+function EsimSection() {
+  const [open, setOpen] = useState(false);
+
+  // URL affiliato da env (deve restare sui domini in whitelist di /api/out),
+  // altrimenti fallback al sito pubblico del provider.
+  const providers = [
+    {
+      name: 'Airalo',
+      logo: '🅰️',
+      desc: 'eSIM dati per 200+ paesi, si attiva in 2 minuti',
+      affUrl: import.meta.env.VITE_ESIM_AFF_AIRALO || '',
+      fallbackUrl: 'https://www.airalo.com/',
+    },
+    {
+      name: 'Holafly',
+      logo: '🅷',
+      desc: 'Dati illimitati in molti paesi, niente sorprese in bolletta',
+      affUrl: import.meta.env.VITE_ESIM_AFF_HOLAFLY || '',
+      fallbackUrl: 'https://esim.holafly.com/',
+    },
+    {
+      name: 'Saily',
+      logo: '🆂',
+      desc: 'eSIM economica dei creatori di NordVPN, piani da pochi euro',
+      affUrl: import.meta.env.VITE_ESIM_AFF_SAILY || '',
+      fallbackUrl: 'https://saily.com/',
+    },
+  ];
+
+  const hasAffiliate = providers.some(p => !!p.affUrl);
+  const outLink = (p: { affUrl: string; fallbackUrl: string }) =>
+    getApiUrl(`/api/out?u=${encodeURIComponent(p.affUrl || p.fallbackUrl)}&src=esim`);
+
+  return (
+    <div className="bg-white rounded-3xl border border-outline-variant/10 shadow-sm mb-4 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between p-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-sky-500/10 flex items-center justify-center text-sky-600">
+            <Globe className="w-5 h-5" />
+          </div>
+          <div className="text-left">
+            <h4 className="font-black text-on-surface">🌐 Internet in viaggio (eSIM)</h4>
+            <p className="text-xs font-bold text-on-surface-variant opacity-70">Dati all'estero senza cambiare SIM</p>
+          </div>
+        </div>
+        {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+      </button>
+
+      {open && (
+        <div className="px-6 pb-6 space-y-3">
+          {providers.map((p) => (
+            <div key={p.name} className="flex items-center gap-3 p-3 rounded-2xl bg-gray-50 border border-gray-100">
+              <span className="text-2xl shrink-0" aria-hidden="true">{p.logo}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-black text-gray-900">{p.name}</p>
+                <p className="text-[11px] font-bold text-gray-500">{p.desc}</p>
+              </div>
+              <a
+                href={outLink(p)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 px-3 py-2 rounded-xl bg-primary text-white text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
+              >
+                Vedi le offerte
+              </a>
+            </div>
+          ))}
+          {hasAffiliate && (
+            <p className="text-[10px] font-bold text-gray-400 text-center pt-1">
+              Link con affiliazione: sostieni WIP senza costi extra.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

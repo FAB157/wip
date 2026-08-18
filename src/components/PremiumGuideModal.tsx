@@ -8,6 +8,7 @@ import {
   PremiumGuideContent,
   generatePremiumGuide,
   downloadGuideAsPdf,
+  downloadGuideAsEpub,
   uploadPdfToStorage,
   GUIDE_STYLE_META,
   getAccessToken,
@@ -56,6 +57,9 @@ export default function PremiumGuideModal({
   const [errorMsg, setErrorMsg]             = useState<string>('');
   const [streamingText, setStreamingText]   = useState<string>('');
   const [isDownloading, setIsDownloading]   = useState(false);
+  const [isEpubLoading, setIsEpubLoading]   = useState(false);
+  // Dedica regalo (opzionale): finisce in copertina, costo invariato
+  const [dedica, setDedica]                 = useState('');
   const [stepIndex, setStepIndex]           = useState(0);
   const [isPremiumUser, setIsPremiumUser]   = useState<boolean | null>(null);
   const [creditsLeft, setCreditsLeft]       = useState<number | null>(null);
@@ -110,7 +114,7 @@ export default function PremiumGuideModal({
       // scala i crediti in modo atomico e li restituisce se la generazione
       // fallisce. Il client non addebita più (niente doppio addebito), passa
       // solo il token; la modale di conferma sopra resta come UX.
-      const result = await generatePremiumGuide(itinerary, selectedStyle, userId, language);
+      const result = await generatePremiumGuide(itinerary, selectedStyle, userId, language, dedica);
 
       // Validazione d'esito: una guida senza giorni è un fallimento mascherato.
       // In quel caso il server ha già rimborsato (throw → catch server).
@@ -223,6 +227,21 @@ export default function PremiumGuideModal({
       notify(language === 'IT'
         ? "Errore nella generazione del podcast. Nessun credito è stato scalato."
         : "Podcast generation failed. No credits were charged.");
+    }
+  };
+
+  // Export EPUB gratuito: il contenuto è già stato pagato e cachato lato server.
+  const handleDownloadEpub = async () => {
+    if (!guideContent || !guideHash || isEpubLoading) return;
+    setIsEpubLoading(true);
+    try {
+      const ok = await downloadGuideAsEpub(guideHash, guideContent.guida_titolo, language);
+      if (!ok) notify(language === 'IT' ? 'Export EPUB non riuscito. Riprova.' : 'EPUB export failed. Retry.');
+    } catch (e) {
+      console.error('[PremiumGuide] EPUB export failed:', e);
+      notify(language === 'IT' ? 'Export EPUB non riuscito. Riprova.' : 'EPUB export failed. Retry.');
+    } finally {
+      setIsEpubLoading(false);
     }
   };
 
@@ -349,6 +368,24 @@ export default function PremiumGuideModal({
                   })}
                 </div>
 
+                {/* Dedica regalo (opzionale): versione stampabile/condivisibile */}
+                <div className="mt-5">
+                  <label className="block text-xs font-black text-[#1e3a8a] mb-1.5">
+                    🎁 Dedica (opzionale)
+                  </label>
+                  <input
+                    type="text"
+                    value={dedica}
+                    onChange={(e) => setDedica(e.target.value)}
+                    maxLength={300}
+                    placeholder='Es. "A Maria, per i tuoi 50 anni — Fabrizio"'
+                    className="w-full px-4 py-3 rounded-2xl border-2 border-outline-variant bg-[#f8f5f0] text-sm text-[#1e3a8a] placeholder:text-[#1e3a8a]/40 focus:border-primary focus:outline-none transition-colors"
+                  />
+                  <p className="text-[10px] text-[#1e3a8a]/50 mt-1">
+                    Appare in copertina con stile elegante: perfetta per la guida-regalo. Costo invariato.
+                  </p>
+                </div>
+
                 {/* Generate button */}
                 <button
                   onClick={handleGenerate}
@@ -416,6 +453,17 @@ export default function PremiumGuideModal({
                     >
                       {playingPodcast ? "In riproduzione" : "🎧 Podcast"}
                     </button>
+                    {/* EPUB gratuito: la guida esiste già, niente nuovo addebito */}
+                    {guideHash && (
+                      <button
+                        onClick={handleDownloadEpub}
+                        disabled={isEpubLoading}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary/10 text-primary text-xs font-black shadow-sm hover:bg-primary/20 transition-all disabled:opacity-60"
+                        title="Scarica la guida in formato EPUB (gratuito)"
+                      >
+                        {isEpubLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '📖'} EPUB
+                      </button>
+                    )}
                     <button
                       onClick={handleRegenerate}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-outline-variant bg-[#fcfaf8] text-xs font-semibold text-[#1e3a8a] hover:border-outline-variant/80 transition-colors"

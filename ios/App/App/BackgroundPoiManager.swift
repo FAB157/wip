@@ -65,6 +65,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private var alertRadiusCar: Double = 300
     private var arrivalRadiusCar: Double = 50
 
+    /// Modalità «solo vibrazione + testo»: il WebView la scrive col plugin
+    /// Preferences di Capacitor, che su iOS persiste in UserDefaults.standard
+    /// con il prefisso di gruppo "CapacitorStorage." — stessa chiave di
+    /// Android (parità: wip_silent_mode = '1'). Letta a ogni trigger, così un
+    /// cambio dalla UI vale subito senza riavviare il servizio.
+    private var isSilentMode: Bool {
+        prefs.string(forKey: "CapacitorStorage.wip_silent_mode") == "1"
+    }
+
     // Reachability (equivalente di ConnectivityMonitor.isOnline)
     private let pathMonitor = NWPathMonitor()
     private var isOnline = true
@@ -143,6 +152,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     func stop() {
         prefs.set(false, forKey: "isServiceActive")
+        MotionActivityGate.shared.stop()
         SpeechQueue.shared.stopSpeaking()
         isRunning = false
         locationManager.stopUpdatingLocation()
@@ -176,6 +186,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         ListeningHistoryStore.shared.syncFromCloud()
         // Igiene cache prefetch MP3: via i file più vecchi di 24h
         DispatchQueue.global(qos: .utility).async { AudioPrefetchManager.cleanup() }
+        // Gating sensori anti-teletrasporto GPS (fail-safe, vedi MotionActivityGate)
+        MotionActivityGate.shared.start()
         registerNotificationCategories()
         DispatchQueue.main.async {
             // In auto serve la qualità di fix massima: "Best" in macchina
@@ -245,6 +257,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     private func handleLocation(_ location: CLLocation) {
+        // GATING SENSORI (fail-safe): se Motion & Fitness dice che siamo fermi
+        // da >5 minuti e questo fix salta di >100 m dall'ultima posizione
+        // accettata, è un "teletrasporto GPS" — il fix viene IGNORATO del
+        // tutto (niente trigger, niente refresh, niente bonifiche): stato e
+        // cooldown restano identici. Senza permesso/sensore il gate è inerte.
+        if let jumpM = MotionActivityGate.shared.suppressedJumpMeters(fix: location) {
+            TriggerTelemetry.log(
+                poiId: "-", poiName: "motion-gate", phase: "gate",
+                result: PredictiveTrigger.Result(
+                    decision: .reject, tCpaSeconds: Double.nan, dCpaMeters: Double.nan,
+                    distanceNowMeters: jumpM, usedPrediction: false,
+                    reason: "motion-gate fermo>5min salto=\(Int(jumpM))m"
+                ),
+                location: location, isDriving: guideMode == "driving", radiusM: 0
+            )
+            return
+        }
         if lastQueryLocation == nil && currentPois.isEmpty {
             updateStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
         }
@@ -772,25 +801,40 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             prefix = ""
         }
         let priority = poi.isFromItinerary ? 0 : (poi.isGem ? 1 : 2)
-        if speak {
+        // MODALITÀ «SOLO VIBRAZIONE + TESTO» (wip_silent_mode): niente voce —
+        // aptico (solo foreground: in background iOS non consente vibrazioni
+        // esplicite, ci pensa la notifica senza suono) + notifica col testo.
+        // Stato/cooldown già aggiornati sopra: nessun trigger perso.
+        let silent = isSilentMode
+        if speak && !silent {
             SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                 text: "\(prefix)\(approachMsg)", isGem: poi.isGem,
                 isItinerary: poi.isFromItinerary, poiId: poi.id,
                 priority: priority, kind: "approach"
             ))
         }
-        vibrate()
+        if silent { silentHaptic() } else { vibrate() }
         let notifTitle = poi.isFromItinerary ? "📍 Tappa Itinerario" : "Esplorazione"
         // Distanza REALE, non la stringa fissa "circa 150m": il raggio di
         // alert cambia fra piedi (150 m) e auto (300 m), e l'utente vedeva
         // "150m" anche per un POI a 300 m o già superato.
         let realDist = lastFixLocation.map { Int($0.distance(from: poi.coordinate)) } ?? -1
         let distText = realDist >= 0 ? "A circa \(realDist) m." : ""
-        showNotification(
-            title: "\(notifTitle): \(poi.nome)",
-            body: "\(distText) Tocca per ascoltare.".trimmingCharacters(in: .whitespaces),
-            poiId: poi.id, guide: poi.guideDefault, isArrival: false
-        )
+        if silent {
+            // In silenzioso il testo fa il lavoro della voce: body esteso col
+            // messaggio di avvicinamento (già nella lingua dell'utente).
+            showNotification(
+                title: "\(notifTitle): \(poi.nome)",
+                body: "\(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces),
+                poiId: poi.id, guide: poi.guideDefault, isArrival: false
+            )
+        } else {
+            showNotification(
+                title: "\(notifTitle): \(poi.nome)",
+                body: "\(distText) Tocca per ascoltare.".trimmingCharacters(in: .whitespaces),
+                poiId: poi.id, guide: poi.guideDefault, isArrival: false
+            )
+        }
     }
 
     /// Prefetch dell'MP3 dell'audioguida (port di AudioPrefetchManager Android):
@@ -856,6 +900,28 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 fullMsg = "\(arrivalMsg) \(teaser)"
             } else {
                 fullMsg = "\(arrivalMsg) \(fallbackTeaser)"
+            }
+
+            // MODALITÀ «SOLO VIBRAZIONE + TESTO» (wip_silent_mode): niente
+            // SpeechQueue né auto-play (il pass NON si consuma) — aptico se
+            // l'app è in foreground e notifica SENZA suono col teaser ben
+            // visibile nel body. L'azione ▶ Ascolta resta il modo per sentire
+            // la guida. Stato ARRIVED_FIRED e cooldown già scritti sopra:
+            // macchina a stati identica, nessun trigger perso.
+            if self.isSilentMode {
+                self.silentHaptic(arrival: true)
+                // Il titolo dice già "sei arrivato": il body è tutto per il
+                // teaser (esteso), più l'istruzione per l'azione Ascolta.
+                // Niente force-unwrap (stile del file): if-let con fallback.
+                let teaserBody: String
+                if let t = teaser, !t.isEmpty { teaserBody = t } else { teaserBody = fallbackTeaser }
+                self.showNotification(
+                    title: "Sei arrivato a \(poi.nome)",
+                    body: "\(teaserBody)\n▶ Tieni premuto e scegli Ascolta per la guida audio.",
+                    poiId: poi.id, guide: poi.guideDefault, isArrival: true,
+                    withListenAction: true, muted: true
+                )
+                return
             }
 
             SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
@@ -1132,15 +1198,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         )
     }
 
-    private func showNotification(title: String, body: String, poiId: String, guide: String, isArrival: Bool, withListenAction: Bool = false) {
+    private func showNotification(title: String, body: String, poiId: String, guide: String, isArrival: Bool, withListenAction: Bool = false, muted: Bool = false) {
         postNotification(
             id: "poi_\(poiId)", title: title, body: body,
             poiId: poiId, guide: guide, timeSensitive: isArrival,
-            category: withListenAction ? Self.arrivalCategoryId : nil
+            category: withListenAction ? Self.arrivalCategoryId : nil,
+            muted: muted
         )
     }
 
-    private func postNotification(id: String, title: String, body: String, poiId: String, guide: String, timeSensitive: Bool, isCheckIn: Bool = false, category: String? = nil) {
+    private func postNotification(id: String, title: String, body: String, poiId: String, guide: String, timeSensitive: Bool, isCheckIn: Bool = false, category: String? = nil, muted: Bool = false) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -1148,7 +1215,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // Prima ogni notifica suonava allo stesso modo: un "ti stai
         // avvicinando" interrompeva quanto un arrivo. L'avvicinamento è
         // un'informazione, non un evento: silenzioso e passivo.
-        content.sound = timeSensitive ? .default : nil
+        // `muted` (modalità solo vibrazione + testo): resta time-sensitive
+        // e ben visibile, ma senza alcun suono.
+        content.sound = (timeSensitive && !muted) ? .default : nil
         // Il tap viene gestito in AppDelegate: salva il pending deep link
         // (stesso meccanismo di MainActivity Android con itainta://poi/…)
         content.userInfo = ["poiId": poiId, "guide": guide, "checkin": isCheckIn]
@@ -1177,6 +1246,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             }
         } else {
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        }
+    }
+
+    /// Feedback della modalità «solo vibrazione + testo»: aptico di sistema
+    /// (UINotificationFeedbackGenerator) SOLO con app in foreground — in
+    /// background iOS non consente vibrazioni esplicite, e a fare da sveglia
+    /// è la notifica senza suono. I generator vanno usati sul main thread.
+    private func silentHaptic(arrival: Bool = false) {
+        guard Self.isAppInForeground() else { return }
+        DispatchQueue.main.async {
+            let generator = UINotificationFeedbackGenerator()
+            generator.prepare()
+            generator.notificationOccurred(arrival ? .success : .warning)
         }
     }
 

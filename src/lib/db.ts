@@ -23,8 +23,22 @@ export interface LocalPoi {
   lastUpdated: number;
 }
 
+// Coda Vision offline: foto scattate senza rete, in attesa di essere
+// riconosciute (CameraScreen la processa al ritorno online). Il dataUrl è la
+// JPEG già compressa (lato max 1280 px): mai tenerla in stato React.
+export interface VisionQueueItem {
+  id: number;            // auto-increment (Dexie '++id')
+  dataUrl: string;       // data URL JPEG compressa
+  lat: number | null;
+  lon: number | null;
+  mode: string;          // 'place' | 'artwork' | 'nature'
+  ts: number;            // epoch ms dello scatto (indicizzato: purge >7 giorni)
+  attempts?: number;     // tentativi falliti non-rete (max 3, poi scartata)
+}
+
 const db = new Dexie('ItaliaInTascaDB') as Dexie & {
   pois: EntityTable<LocalPoi, 'id'>;
+  visionQueue: EntityTable<VisionQueueItem, 'id'>;
 };
 
 // Schema declaration:
@@ -33,6 +47,14 @@ const db = new Dexie('ItaliaInTascaDB') as Dexie & {
 // senza limite col passare delle aree visitate.
 db.version(1).stores({
   pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated'
+});
+
+// v2: AGGIUNGE la store visionQueue lasciando `pois` invariata (upgrade Dexie
+// additivo, nessuna perdita dati). `ts` è indicizzato per purge ed elaborazione
+// in ordine di scatto.
+db.version(2).stores({
+  pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated',
+  visionQueue: '++id, ts'
 });
 
 /**

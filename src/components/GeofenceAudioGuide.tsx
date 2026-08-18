@@ -6,6 +6,10 @@ import { Language } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
 import { isCategoryAllowed } from '../lib/guideSettings';
+import { useFeatureFlag } from '../lib/featureFlags';
+// Side-effect: attiva il registratore di tracce GPS (wip_gps_record) al load
+// dell'app — ascolta 'wip-location-update', non tocca locationService.
+import '../lib/geofencing/gpsReplay';
 
 interface GeofenceAudioGuideProps {
   isActive: boolean;
@@ -20,6 +24,26 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
     // Keep locationService settings synchronized dynamically as React states change
     locationService.syncSettings(itinerary, guideMode, language, isActive, isMuted);
   }, [isActive, isMuted, itinerary, guideMode, language]);
+
+  // Trigger web autonomi in FOREGROUND (solo PWA/browser): il geofencing di
+  // prossimità fuori da WIP Nav. Su nativo non parte mai (il service in
+  // background ha la stessa logica: niente doppi trigger). Kill switch admin:
+  // feature flag 'web_foreground_triggers' (fail-open).
+  const webTriggersOn = useFeatureFlag('web_foreground_triggers');
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+    if (!isActive || !webTriggersOn) return;
+    let alive = true;
+    import('../lib/geofencing/foregroundTriggers')
+      .then(m => { if (alive) m.startForegroundTriggers(); })
+      .catch(() => { /* modulo non caricabile: il resto dell'app non ne risente */ });
+    return () => {
+      alive = false;
+      import('../lib/geofencing/foregroundTriggers')
+        .then(m => m.stopForegroundTriggers())
+        .catch(() => { /* idem */ });
+    };
+  }, [isActive, webTriggersOn]);
 
   useEffect(() => {
     // NB: il listener 'wip-semi-play-audio' vive SOLO in useGeofencing

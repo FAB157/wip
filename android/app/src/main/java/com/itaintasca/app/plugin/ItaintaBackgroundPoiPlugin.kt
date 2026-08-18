@@ -33,6 +33,10 @@ import java.util.ArrayList
         Permission(
             alias = "notifications",
             strings = [Manifest.permission.POST_NOTIFICATIONS]
+        ),
+        Permission(
+            alias = "activity",
+            strings = [Manifest.permission.ACTIVITY_RECOGNITION]
         )
     ]
 )
@@ -138,11 +142,34 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 return
             }
         }
-        checkBatteryOptimization(call)
+        checkActivityRecognition(call)
     }
 
     @PermissionCallback
     private fun notificationCallback(call: PluginCall) {
+        checkActivityRecognition(call)
+    }
+
+    /**
+     * ACTIVITY_RECOGNITION (facoltativo, solo API 29+ — prima è install-time):
+     * abilita il gating trigger con sensori (anti-teletrasporto GPS +
+     * corroborazione piedi⇄auto in ItaintaBackgroundPoiService). Se l'utente
+     * nega si prosegue comunque: il servizio degrada in silenzio al
+     * comportamento senza sensori.
+     */
+    private fun checkActivityRecognition(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            getPermissionState("activity") != PermissionState.GRANTED
+        ) {
+            requestPermissionForAlias("activity", call, "activityCallback")
+            return
+        }
+        checkBatteryOptimization(call)
+    }
+
+    @PermissionCallback
+    private fun activityCallback(call: PluginCall) {
+        // Concesso o negato, si va avanti: il permesso è facoltativo.
         checkBatteryOptimization(call)
     }
 
@@ -220,6 +247,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             context.startService(intent)
         }
         com.itaintasca.app.service.ServiceWatchdog.schedule(context)
+        // Idempotente: copre il caso "permesso ACTIVITY_RECOGNITION appena
+        // concesso a servizio già vivo" (onCreate non viene richiamato).
+        com.itaintasca.app.geofence.ActivityMonitor.start(context)
         call.resolve()
     }
 
@@ -491,6 +521,50 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
     }
 
+    /**
+     * Pronuncia una frase con la voce TTS DI SISTEMA, accodandola alla stessa
+     * coda sequenziale dei teaser. Usata dal JS per le indicazioni di
+     * navigazione e per l'annuncio d'arrivo: funziona OFFLINE (niente Azure,
+     * niente download MP3, costo zero) e, condividendo la coda col teaser,
+     * non può sovrapporsi ad esso — "Sei arrivato" finisce, poi parte il
+     * teaser, poi la logica normale dell'audioguida.
+     *
+     * priority: 0 = massima (arrivo/itinerario), 2 = normale.
+     * Se il servizio non è attivo la coda scarta gli item: si risponde
+     * ok=false così il JS ripiega sul TTS di rete invece di restare muto.
+     */
+    @PluginMethod
+    fun speakText(call: PluginCall) {
+        val text = call.getString("text")?.trim().orEmpty()
+        if (text.isEmpty()) return call.reject("Missing text")
+        val ret = JSObject()
+        val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("isServiceActive", false)) {
+            ret.put("ok", false)
+            ret.put("reason", "service_inactive")
+            return call.resolve(ret)
+        }
+        return try {
+            com.itaintasca.app.geofence.GeofenceBroadcastReceiver.enqueue(
+                context,
+                com.itaintasca.app.geofence.GeofenceBroadcastReceiver.Companion.SpeechItem(
+                    text = text,
+                    isGem = false,
+                    isItinerary = false,
+                    poiId = call.getString("poiId"),
+                    priority = call.getInt("priority") ?: 0,
+                    kind = call.getString("kind") ?: "nav"
+                )
+            )
+            ret.put("ok", true)
+            call.resolve(ret)
+        } catch (e: Exception) {
+            ret.put("ok", false)
+            ret.put("reason", e.message ?: "enqueue_failed")
+            call.resolve(ret)
+        }
+    }
+
     // ------------------------------------------------------------------
     // BILLING OFFLINE — snapshot saldo, Day Pass, per-listen con registro
     // ------------------------------------------------------------------
@@ -504,6 +578,24 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val credits = call.getInt("credits") ?: 0
         context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
             .edit().putInt("wallet_snapshot_credits", credits).apply()
+        call.resolve()
+    }
+
+    /**
+     * Modalità «solo vibrazione + testo»: il WebView non ha accesso allo
+     * store CapacitorStorage (manca @capacitor/preferences), quindi il
+     * toggle passa da qui. Scriviamo in ENTRAMBI gli store letti dal
+     * nativo (CapacitorStorage per WebViewPrefs, ItaintaPrefs come
+     * fallback) così il service la vede al prossimo trigger.
+     */
+    @PluginMethod
+    fun setSilentMode(call: PluginCall) {
+        val enabled = call.getBoolean("enabled") ?: false
+        val v = if (enabled) "1" else "0"
+        context.getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE)
+            .edit().putString("wip_silent_mode", v).apply()
+        context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            .edit().putString("wip_silent_mode", v).apply()
         call.resolve()
     }
 
@@ -693,6 +785,46 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject("playOfflineGuide failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * «Salute del viaggio»: passi/km per giorno (oggi + 6 precedenti) dal
+     * bookkeeping di StepTracker su TYPE_STEP_COUNTER. Stesso formato di
+     * HealthStats.swift su iOS; floors è sempre 0 (Android non conta i piani).
+     * Permesso ACTIVITY_RECOGNITION mancante o sensore assente →
+     * {available:false}, MAI un reject: la card JS si nasconde e basta.
+     */
+    @PluginMethod
+    fun getHealthStats(call: PluginCall) {
+        if (!com.itaintasca.app.service.StepTracker.isAvailable(context)) {
+            val ret = JSObject()
+            ret.put("available", false)
+            call.resolve(ret)
+            return
+        }
+        // record() aggiorna il bucket di oggi con una lettura fresca del
+        // sensore (one-shot, callback su main thread o timeout 2 s).
+        com.itaintasca.app.service.StepTracker.record(context) {
+            try {
+                val arr = JSONArray()
+                com.itaintasca.app.service.StepTracker.lastDays(context, 7).forEach { d ->
+                    val o = JSONObject()
+                    o.put("date", d.date)
+                    o.put("steps", d.steps)
+                    o.put("distanceKm", d.distanceKm)
+                    o.put("floors", 0)
+                    arr.put(o)
+                }
+                val ret = JSObject()
+                ret.put("available", true)
+                ret.put("days", arr)
+                call.resolve(ret)
+            } catch (e: Exception) {
+                val ret = JSObject()
+                ret.put("available", false)
+                call.resolve(ret)
             }
         }
     }

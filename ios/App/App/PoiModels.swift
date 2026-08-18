@@ -167,18 +167,43 @@ enum BillingLogic {
 /// Tenere allineata a isCategoryAllowed (src/hooks/useGeofencing.ts).
 enum PoiCategories {
     static let map: [String: [String]] = [
-        "monumenti": ["monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti"],
+        // Monumenti: include il patrimonio costruito importato in fase 2
+        // (17/08/2026). Allineato a CategoryMap.kt e guideSettings.
+        "monumenti": ["monument", "castle", "castelli", "ruins", "archaeological_site", "archeo", "artwork", "attraction", "monumenti",
+                      "square", "bridge", "fountain", "theatre", "opera_house", "palace",
+                      "tower", "skyscraper", "cemetery", "library", "windmill", "aqueduct",
+                      "observatory", "stadium",
+                      // Fasi 3-5: nessun chip nuovo, tutto in "monumenti".
+                      "birthplace", "house_museum", "necropolis", "catacomb", "fortress",
+                      "city_walls", "villa", "harbour", "mine", "chimney", "funicular",
+                      "amphitheatre", "roman_baths", "triumphal_arch", "obelisk", "mausoleum",
+                      "market_hall", "train_station", "dam", "watermill", "prison", "museum_ship",
+                      "archaeological_park", "memorial", "sculpture", "university", "town_hall",
+                      "roman_theatre", "roman_circus", "roman_villa", "domus", "city_gate",
+                      "coastal_tower", "stronghold", "quarry", "saltworks", "racetrack",
+                      "racecourse", "ski_jump", "war_cemetery", "concentration_camp",
+                      "rack_railway", "pier", "shipyard", "archive", "radio_telescope", "hydro_plant"],
         // Chiavi dedicate del web (isCategoryAllowed): castelli/archeo seguono
         // "monumenti" nella UI ma, se un giorno arrivano come chiave a sé nella
         // lista `selected`, devono comunque attivare i rispettivi POI.
         "castelli": ["castle", "castelli"],
         "archeo": ["ruins", "archaeological_site", "archeo"],
-        "musei": ["museum", "gallery", "musei"],
-        "chiese": ["church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese"],
-        "panorami": ["viewpoint", "park", "panorami"],
+        "musei": ["museum", "gallery", "musei", "art_museum", "natural_history_museum", "art_gallery", "house_museum"],
+        "chiese": ["church", "chiesa", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario", "chiese",
+                   "baptistery", "bell_tower", "cloister", "crypt", "synagogue", "mosque", "temple"],
+        // Panorami e NATURA: le verticali naturali (spiagge, cascate, grotte,
+        // vette, sorgenti termali, isole, riserve, fari, funivie) confluiscono
+        // qui invece di avere una categoria propria — "panorami" è già cablata
+        // ovunque ed è già abilitata all'audioguida. Tenere allineato a
+        // guideSettings.isCategoryAllowed (web) e CategoryMap.kt (Android).
+        "panorami": ["viewpoint", "park", "panorami",
+                     "beach", "waterfall", "cave", "peak", "spring", "island", "cliff", "bay", "lake",
+                     "glacier", "volcano", "nature_reserve", "lighthouse", "aerialway", "natura",
+                     "trail", "scenic_road", "tree", "desert", "forest", "garden",
+                     "botanical_garden", "geopark", "via_ferrata", "ski_resort"],
         "locali": ["restaurant", "cafe", "bar", "fast_food", "pub", "locali"],
         "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"],
-        "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie"],
+        "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"],
         "consigli": ["information", "tourism_information", "office", "consigli"],
         // Gemme: chiave presente per completezza (passano comunque via isGem).
         "gemme": ["gemme"],

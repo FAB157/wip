@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget home screen WIP: solo view supportate da RemoteViews -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/wip_widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/wip_widget_bg"
+    android:padding="12dp">
+
+    <!-- Header: brand + crediti + refresh -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/wip_widget_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/app_name"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/wip_widget_credits"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/wip_widget_empty_value"
+            android:textColor="#FBBF24"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/wip_widget_refresh"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="10dp"
+            android:paddingEnd="2dp"
+            android:text="@string/wip_widget_refresh_glyph"
+            android:textColor="#93C5FD"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Prossima tappa itinerario -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/wip_widget_next_stop_label"
+        android:textColor="#93C5FD"
+        android:textSize="10sp" />
+
+    <TextView
+        android:id="@+id/wip_widget_next_stop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:text="@string/wip_widget_empty_value"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+
+    <!-- POI più vicino -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="@string/wip_widget_nearest_label"
+        android:textColor="#93C5FD"
+        android:textSize="10sp" />
+
+    <TextView
+        android:id="@+id/wip_widget_nearest"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:singleLine="true"
+        android:ellipsize="end"
+        android:text="@string/wip_widget_empty_value"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp" />
+</LinearLayout>

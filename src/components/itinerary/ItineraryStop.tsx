@@ -8,6 +8,7 @@ import {
 import { getTranslation, Language } from '../../lib/i18n';
 import { ensureAffiliateUrl } from '../../lib/affiliates';
 import { locationService } from '../../services/locationService';
+import { gramsForLeg, formatCo2, extractKmFromText } from '../../lib/carbonFootprint';
 
 interface ItineraryStopProps {
   key?: React.Key;
@@ -56,6 +57,20 @@ export default function ItineraryStop({
   const replaceLabel = replaceIsFree
     ? `${getTranslation("replace_action", language)} — ${getTranslation("free_label", language)} (${freeReplacementsLeft})`
     : `${getTranslation("replace_action", language)} — ${replaceCost ?? 0} ${getTranslation("credits_label", language)}`;
+
+  // ── Impronta CO₂ (🍃, informativa e leggera) ──────────────────────────
+  // Tratta verso la prossima tappa: CO₂ della sola variante in auto, sui km
+  // reali OSRM. Se i km mancano non si mostra nulla.
+  const legCo2Grams = legToNext ? gramsForLeg('car', legToNext.km) : null;
+  // Tappa "trasferimento" (roadtrip): i km vivono solo nel testo dell'AI
+  // ("~250 km"), quindi si estraggono da lì; il confronto col treno è un
+  // suggerimento curioso, mai un rimprovero.
+  const transferKm = tappa?.tipo === 'trasferimento'
+    ? extractKmFromText([tappa.attivita, tappa.spostamento_precedente, tappa.titolo_tappa].filter(Boolean).join(' '))
+    : null;
+  const transferCarG = transferKm != null ? gramsForLeg('car', transferKm) : null;
+  const transferTrainG = transferKm != null ? gramsForLeg('train', transferKm) : null;
+
   return (
     <div className="relative">
       {/* Dot on line */}
@@ -167,6 +182,17 @@ export default function ItineraryStop({
             {expanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
           </button>
         </div>
+
+        {/* CO₂ del trasferimento roadtrip: mostrato solo se i km sono stati
+            trovati nel testo della tappa. Tono leggero: un confronto curioso
+            con il treno, nessuna colpa. */}
+        {transferCarG != null && transferTrainG != null && (
+          <div className="mb-2 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 w-fit">
+            🍃 {formatCo2(transferCarG)} CO₂ {language === 'IT'
+              ? `in auto — in treno sarebbero ~${formatCo2(transferTrainG)}`
+              : `by car — by train it would be ~${formatCo2(transferTrainG)}`}
+          </div>
+        )}
 
         <AnimatePresence>
           {expanded && (
@@ -295,6 +321,13 @@ export default function ItineraryStop({
           🚗 {legToNext.carMin} min
           <span className="opacity-40">·</span>
           {legToNext.km.toFixed(1).replace('.', ',')} km
+          {/* CO₂ della variante in auto sui km reali della tratta (🍃) */}
+          {legCo2Grams != null && (
+            <>
+              <span className="opacity-40">·</span>
+              <span className="normal-case">🍃 {formatCo2(legCo2Grams)} CO₂</span>
+            </>
+          )}
           {legToNext.taxiEur > 0 && (
             <>
               <span className="opacity-40">·</span>

@@ -125,6 +125,9 @@ export default function AdminApiStats() {
   const [budgetInput, setBudgetInput] = useState('');
   const [budgetSaving, setBudgetSaving] = useState(false);
 
+  // ── Click affiliati: contatori mensili della rotta /api/out ──
+  const [affiliateMonths, setAffiliateMonths] = useState<any[] | null>(null);
+
   const adminHeaders = async (): Promise<Record<string, string>> => {
     const { data: s } = await supabase.auth.getSession();
     const token = s?.session?.access_token;
@@ -142,6 +145,20 @@ export default function AdminApiStats() {
           setBudgetInput(data.monthlyBudgetUsd ? String(data.monthlyBudgetUsd) : '');
         }
       } catch { /* la card resta in stato "n/d" */ }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/admin/affiliate-stats'), { headers: await adminHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          setAffiliateMonths(Array.isArray(data.months) ? data.months : []);
+        } else {
+          setAffiliateMonths([]);
+        }
+      } catch { setAffiliateMonths([]); }
     })();
   }, []);
 
@@ -454,6 +471,44 @@ export default function AdminApiStats() {
           <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
         </div>
       )}
+
+      {/* Click affiliati: contatori mensili della rotta /api/out (api_cache) */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="p-4 border-b border-gray-100 flex items-center gap-2">
+          <Globe className="w-4 h-4 text-primary" />
+          <h3 className="font-black text-sm text-primary uppercase tracking-wider">Click Affiliati (ultimi 6 mesi)</h3>
+        </div>
+        {affiliateMonths === null ? (
+          <div className="p-6 text-center text-sm text-gray-500">Caricamento click affiliati...</div>
+        ) : affiliateMonths.length === 0 || affiliateMonths.every(m => !m.total) ? (
+          <div className="p-6 text-center text-sm text-gray-500">Nessun click affiliato registrato negli ultimi 6 mesi.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100">
+                  {['Mese', 'Ticketmaster', 'Viator', 'GetYourGuide', 'Tiqets', 'Sagre/Mercati', 'Totale'].map(h => (
+                    <th key={h} className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-primary/60 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {affiliateMonths.map((m: any) => (
+                  <tr key={m.month} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-4 py-3 text-xs font-black text-on-surface">{m.month}</td>
+                    {['ticketmaster', 'viator', 'getyourguide', 'tiqets', 'local'].map(src => (
+                      <td key={src} className="px-4 py-3 text-xs font-bold text-on-surface-variant tabular-nums">
+                        {(m.clicks?.[src] || 0).toLocaleString('it-IT')}
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 text-xs font-black text-emerald-700 tabular-nums">{(m.total || 0).toLocaleString('it-IT')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Aggregated Stats Table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

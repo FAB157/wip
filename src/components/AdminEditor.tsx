@@ -60,6 +60,43 @@ export default function AdminEditor() {
   const [audioLang, setAudioLang] = useState<'IT' | 'EN' | 'FR' | 'DE' | 'ES' | 'ZH'>('IT');
   const [audioVoiceMode, setAudioVoiceMode] = useState<'nicky' | 'dante'>('nicky');
 
+  // Rinomina POI: se Vision ha sbagliato il riconoscimento (es. "svizzerino"
+  // invece di "Statua della Foca"), il nome va corretto QUI prima di rigenerare
+  // i testi, perché l'AI compone la descrizione a partire dal nome.
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+
+  useEffect(() => {
+    setEditingName(false);
+    setNameDraft(selectedPoi?.name || '');
+  }, [selectedPoi?.id]);
+
+  const saveName = async () => {
+    if (!selectedPoi) return;
+    const newName = nameDraft.trim();
+    if (!newName || newName === selectedPoi.name) {
+      setEditingName(false);
+      return;
+    }
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase
+        .from('shared_pois')
+        .update({ name: newName })
+        .eq('id', selectedPoi.id);
+      if (error) throw error;
+      updateLocalPoiState(selectedPoi.id, { name: newName });
+      setEditingName(false);
+      setMessage({ type: 'success', text: `Nome aggiornato in "${newName}". Ora rigenera i testi: l'AI userà il nome corretto.` });
+    } catch (err: any) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'Errore nel salvataggio del nome: ' + err.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Form states for manual POI creation
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [newPoiForm, setNewPoiForm] = useState({
@@ -794,8 +831,38 @@ export default function AdminEditor() {
               {/* Curation Workspace Header */}
               <div className="space-y-3">
                 <div className="flex flex-col sm:flex-row justify-between items-start gap-2 border-b border-outline-variant pb-3">
-                  <div>
-                    <h3 className="text-lg font-black text-primary leading-tight">{selectedPoi.name}</h3>
+                  <div className="min-w-0 flex-1">
+                    {editingName ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={nameDraft}
+                          onChange={e => setNameDraft(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') { setEditingName(false); setNameDraft(selectedPoi.name); } }}
+                          autoFocus
+                          placeholder="Nome del POI"
+                          className="flex-1 min-w-0 bg-surface border border-primary/30 rounded-xl px-3 py-1.5 text-sm font-black text-primary focus:ring-2 focus:ring-primary/20 outline-none"
+                        />
+                        <button
+                          onClick={saveName}
+                          disabled={isLoading || !nameDraft.trim()}
+                          title="Salva il nuovo nome"
+                          className="p-1.5 bg-primary text-secondary rounded-xl shrink-0 disabled:opacity-50 active:scale-95 transition-all"
+                        >
+                          <Check className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <h3 className="text-lg font-black text-primary leading-tight flex items-center gap-2">
+                        <span>{selectedPoi.name}</span>
+                        <button
+                          onClick={() => { setNameDraft(selectedPoi.name); setEditingName(true); }}
+                          title="Correggi il nome (poi rigenera i testi: l'AI userà il nome nuovo)"
+                          className="p-1 text-primary/50 hover:text-primary shrink-0 transition-colors"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                      </h3>
+                    )}
                     <p className="text-[10px] text-on-surface-variant font-mono mt-0.5 flex items-center gap-1">
                       <MapPin className="w-3 h-3 text-primary/65" /> {selectedPoi.id}
                     </p>

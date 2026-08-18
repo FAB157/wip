@@ -162,6 +162,11 @@ export function translateManeuver(
   if (type === 'roundabout' || type === 'rotary') {
     return typeof exit === 'number' && exit > 0 ? t.roundaboutExit(exit) : t.roundabout;
   }
+  // 'continue' = la strada PIEGA, non c'è un incrocio da svoltare: OSRM manda
+  // comunque modifier left/right e si finiva per dire "gira a destra in Via X"
+  // restando sulla stessa via (visto davvero sul percorso Avenza→Alberica,
+  // "continue/right" su Via Campiglia). Si annuncia come proseguimento.
+  if (type === 'continue' && modifier !== 'uturn') return t.straight(name);
 
   switch (modifier) {
     case 'right':

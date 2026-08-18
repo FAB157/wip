@@ -43,6 +43,8 @@ export interface PremiumGuideDay {
 export interface PremiumGuideContent {
   guida_titolo: string;
   sottotitolo?: string;
+  /** Dedica regalo (opzionale): appare in copertina, es. "A Maria, per i tuoi 50 anni — Fabrizio" */
+  dedica?: string;
   introduzione: string;
   citta_intro?: {
     titolo: string;
@@ -133,13 +135,18 @@ export async function generatePremiumGuide(
   itinerary: any,
   style: GuideStyle,
   userId: string,
-  language: string = 'IT'
+  language: string = 'IT',
+  dedica?: string
 ): Promise<GenerateGuideResult> {
   const hash = await computeItineraryHash(itinerary, style + "_" + language);
 
   // 1. Cache check
   const cached = await getCachedGuide(hash);
-  if (cached) return cached;
+  if (cached) {
+    // Guida già in cache (nessuna rigenerazione): la dedica resta solo locale.
+    if (dedica?.trim()) cached.content = { ...cached.content, dedica: dedica.trim() };
+    return cached;
+  }
 
   // 2. Call server endpoint (quota check + Groq + Unsplash are server-side)
   const response = await fetch('/api/premium-guide/generate', {
@@ -148,7 +155,7 @@ export async function generatePremiumGuide(
       'Content-Type': 'application/json',
       Authorization: `Bearer ${await getAccessToken()}`,
     },
-    body: JSON.stringify({ itinerary, style, userId, hash, language }),
+    body: JSON.stringify({ itinerary, style, userId, hash, language, dedica: dedica?.trim() || undefined }),
   });
 
   if (response.status === 403) {
@@ -378,6 +385,28 @@ export async function uploadPdfToStorage(
     console.error('[PremiumGuide] Upload exception:', err);
     return null;
   }
+}
+
+// ── Export EPUB (gratuito: contenuto già pagato) ─────────────────────────────
+// La rotta costruisce un EPUB 3 senza dipendenze dalla guida cachata in
+// itinerary_guides. postForAudioBlob: su nativo la fetch patchata da
+// CapacitorHttp corrompe i corpi binari, serve il percorso responseType blob.
+export async function downloadGuideAsEpub(hash: string, titolo: string, language: string = 'IT'): Promise<boolean> {
+  const { getApiUrl } = await import('../lib/api');
+  const { postForAudioBlob } = await import('../lib/audioFetch');
+  const { ok, blob } = await postForAudioBlob(getApiUrl('/api/premium-guide/epub'), { hash, language });
+  if (!ok || !blob) return false;
+  const epubBlob = new Blob([blob], { type: 'application/epub+zip' });
+  const filename = `WIP_${String(titolo || 'Guida').replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.epub`;
+  const url = URL.createObjectURL(epubBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return true;
 }
 
 // ── Helper: get current Supabase access token ────────────────────────────────

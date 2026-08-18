@@ -11,6 +11,11 @@ export const PRICING_LIST = {
   // `audio_guide * 0.5` = 7,5 crediti, un valore frazionario che il wallet
   // (e la RPC consume_credits) non è pensato per gestire.
   replace_stop: 8,
+  // "➕ Aggiungi un giorno" / "➕ Aggiungi una tappa vicina" (gita fuori
+  // porta) su un itinerario ESISTENTE. Prezzo pieno; se il giorno viene
+  // servito dalla cache della Libreria (già generato e verificato) il
+  // server rimborsa automaticamente metà del costo a fine richiesta.
+  extend_itinerary_day: 12,
   premium_guide_daily: 20, // Guida in PDF (per giorno)
   podcast_daily: 15,       // Podcast (per giorno)
   chat_session: 3,         // Chat sessione (10 messaggi)

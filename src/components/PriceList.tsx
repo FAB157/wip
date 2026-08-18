@@ -59,7 +59,9 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             name="Itinerario AI"
             price={String(PRICING_LIST.itinerary_daily)}
             unit="al giorno"
-            desc={isItalian ? "Creazione di un percorso su misura ottimizzato per i tuoi interessi." : "Creation of a tailored route optimized for your interests."}
+            desc={isItalian
+              ? "Creazione di un percorso su misura ottimizzato per i tuoi interessi. Garanzia pioggia inclusa in ogni itinerario: se piove quasi tutto il giorno, i crediti di quel giorno tornano indietro."
+              : "Creation of a tailored route optimized for your interests. Rain guarantee included with every itinerary: if it rains almost all day, that day's credits come back."}
           />
           <PriceItem
             icon={<Headphones className="w-5 h-5" />}

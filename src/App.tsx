@@ -49,6 +49,7 @@ import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
 import ToastHost from "./components/ToastHost";
 import { useFeatureFlag } from "./lib/featureFlags";
+import { record as recordNotification } from "./lib/notificationCenter";
 
 // Pannello mostrato al posto di una schermata spenta col kill switch admin.
 function FeatureOffNotice({ onBack, language }: { onBack: () => void; language: Language }) {
@@ -654,7 +655,7 @@ export default function App() {
       const stored = localStorage.getItem('wip_active_subcategories');
       if (stored) {
         const parsed = JSON.parse(stored);
-        const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community'];
+        const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali'];
         const cats = MAP_FILTER_KEYS.filter(k => parsed[k]);
         // Anche la lista vuota va rispettata ("Deseleziona tutti"): prima
         // veniva ignorata e restava attiva la selezione precedente.
@@ -747,6 +748,34 @@ export default function App() {
     };
   }, [handleSelectPoi]);
 
+  // Centro notifiche in-app: registra in localStorage (lib/notificationCenter)
+  // i trigger POI e gli stati audioguida già emessi come CustomEvent, così
+  // restano consultabili dalla campanella 🔔 del profilo anche dopo che il
+  // banner è sparito. Solo listener: nessuna UI qui.
+  useEffect(() => {
+    const onPoiTrigger = (e: any) => {
+      const d = e?.detail || {};
+      const nome = d.poi?.name || d.poiName || (d.poiId ? `POI ${d.poiId}` : 'Punto di interesse');
+      recordNotification({
+        tipo: 'poi',
+        titolo: `🔔 Audioguida: ${nome}`,
+        corpo: d.autoPlay ? 'Riproduzione avviata automaticamente' : 'Tocca per ascoltare la guida',
+        meta: { poiId: d.poiId ?? d.poi?.id },
+      });
+    };
+    const onGuideStatus = (e: any) => {
+      const text = typeof e?.detail === 'string' ? e.detail : e?.detail?.text;
+      if (!text) return;
+      recordNotification({ tipo: 'audioguida', titolo: '🎧 Stato audioguida', corpo: String(text) });
+    };
+    window.addEventListener('wip-poi-trigger', onPoiTrigger);
+    window.addEventListener('audioguide-status', onGuideStatus);
+    return () => {
+      window.removeEventListener('wip-poi-trigger', onPoiTrigger);
+      window.removeEventListener('audioguide-status', onGuideStatus);
+    };
+  }, []);
+
   // Ritorno dal checkout Stripe (/?payment=success|cancel): feedback
   // all'utente e pulizia dell'URL. I crediti li accredita il webhook,
   // qui diamo solo la conferma visiva.
@@ -783,7 +812,7 @@ export default function App() {
     // equivalente qui (musei/chiese/panorami/consigli/castelli/archeo)
     // restavano azzerate ad ogni tap sui chip mappa, disattivando a sua
     // insaputa le categorie audioguida scelte dall'utente in GeoControl.
-    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community'];
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali'];
     let obj: Record<string, boolean> = {};
     try { obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { obj = {}; }
     MAP_FILTER_KEYS.forEach(k => { obj[k] = selectedCategories.includes(k); });

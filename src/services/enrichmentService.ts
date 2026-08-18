@@ -67,6 +67,10 @@ export interface EnrichInput {
   lat: number;
   lon: number;
   category: PoiCategory | null;
+  /** QID Wikidata, se il POI ce l'ha: porta il server all'articolo ESATTO
+   *  invece della ricerca per coordinate (che fallisce sui luoghi estesi,
+   *  dove il centroide dista chilometri dall'articolo). */
+  wikidata?: string | null;
 }
 
 /** Chiama /api/poi/enrich (pipeline Oracle: wiki + edge + foto). */
@@ -84,6 +88,9 @@ async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> 
         lat: poi.lat,
         lon: poi.lon,
         category: poi.category ?? 'attraction',
+        // Il server lo usa per andare dritto all'articolo giusto e alla foto
+        // ufficiale (P18): prima era accettato e ignorato.
+        ...(poi.wikidata ? { wikidata: poi.wikidata } : {}),
         lang,
       }),
     });

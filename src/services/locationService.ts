@@ -44,10 +44,39 @@ export interface AudioState {
   progress: number;
   playbackSpeed: number;
   isMegaphone: boolean;
+  /** 🎭 Duetto: indice della battuta in riproduzione (-1 = non è un duetto). */
+  duetIndex: number;
 }
 
 export type LocationListener = (location: LocationUpdate) => void;
 export type AudioStateListener = (state: AudioState) => void;
+
+/**
+ * 🎭 Riconosce il formato "duetto" (registro nicky_duetto/dante_duetto): una
+ * battuta per riga, prefissata ESATTAMENTE da "NICKY:" o "DANTE:" (contratto
+ * col prompt server di regenerateAudioguideText). Le righe senza prefisso che
+ * seguono una battuta sono trattate come continuazione (battuta andata a capo).
+ * Ritorna null se il testo non è un duetto ben formato: il chiamante ricade
+ * sulla lettura intera con la voce del personaggio base.
+ */
+export function parseDuetLines(text: string | null | undefined): Array<{ speaker: 'nicky' | 'dante'; text: string }> | null {
+  if (!text) return null;
+  const rows = String(text).split(/\r?\n/).map(r => r.trim()).filter(Boolean);
+  if (rows.length < 2) return null;
+  const lines: Array<{ speaker: 'nicky' | 'dante'; text: string }> = [];
+  for (const row of rows) {
+    const m = row.match(/^(NICKY|DANTE)\s*:\s*(.+)$/i);
+    if (m) {
+      lines.push({ speaker: m[1].toLowerCase() === 'dante' ? 'dante' : 'nicky', text: m[2].trim() });
+    } else if (lines.length > 0) {
+      lines[lines.length - 1].text += ' ' + row;
+    } else {
+      // Testo prima della prima battuta: non è un duetto ben formato
+      return null;
+    }
+  }
+  return lines.length >= 2 ? lines : null;
+}
 
 class LocationService {
   private watchId: number | null = null;
@@ -94,7 +123,8 @@ class LocationService {
     duration: 0,
     progress: 0,
     playbackSpeed: 1,
-    isMegaphone: false
+    isMegaphone: false,
+    duetIndex: -1
   };
 
   private audioCtx: AudioContext | null = null;
@@ -103,7 +133,41 @@ class LocationService {
     highpass: BiquadFilterNode;
     lowpass: BiquadFilterNode;
     gain: GainNode;
+    /** 🎧 Pan direzionale: null dove StereoPannerNode non è supportato. */
+    panner: StereoPannerNode | null;
   } | null = null;
+  /**
+   * Sorgenti WebAudio già create per elemento: createMediaElementSource si può
+   * chiamare UNA SOLA volta per <audio> (la seconda lancia InvalidStateError).
+   * La WeakMap permette di ricostruire il grafo riusando la stessa source.
+   */
+  private mediaSources: WeakMap<HTMLAudioElement, MediaElementAudioSourceNode> = new WeakMap();
+  /** Elemento a cui è agganciato il grafo corrente (ricostruito se cambia). */
+  private audioNodesElement: HTMLAudioElement | null = null;
+
+  // ── 🎧 Audio direzionale (solo web): pan stereo verso il POI in ascolto ──
+  private directionalTimer: ReturnType<typeof setInterval> | null = null;
+  private orientationListener: ((e: DeviceOrientationEvent) => void) | null = null;
+  /** Heading bussola (gradi da nord, orario) o null se il sensore tace. */
+  private deviceHeading: number | null = null;
+  /** Pan corrente smussato (-0.8 … +0.8). */
+  private currentPan = 0;
+  /** Coordinate del POI in riproduzione (per il calcolo del bearing). */
+  private currentPoiCoords: { lat: number; lon: number } | null = null;
+
+  // ── 🎭 Duetto Nicky & Dante: battute in sequenza, una voce per battuta ──
+  private duetState: {
+    lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>;
+    index: number;
+    nextBlob: Promise<Blob | null> | null;
+    nextBlobIndex: number;
+  } | null = null;
+
+  // ── 🤫 Trigger geofencing: origine del play (per silenziosa + feedback) ──
+  /** Ultimo trigger geofencing con autoPlay (da 'wip-poi-trigger'). */
+  private lastGeoTrigger: { poiId: string; ts: number } | null = null;
+  /** true se la traccia corrente è partita da un trigger geofencing. */
+  private currentPlaybackFromTrigger = false;
 
   private lastWebPoiFetchTime: number = 0;
 // ... (rest of class until constructor)
@@ -147,6 +211,21 @@ class LocationService {
         if (settingsSyncTimer) clearTimeout(settingsSyncTimer);
         settingsSyncTimer = setTimeout(() => this.startNativeBackgroundService(), 1000);
       });
+
+      // Origine trigger: memorizza l'ultimo trigger geofencing con autoPlay.
+      // Serve a playAudio per distinguere il play automatico (geofence) dal
+      // play manuale: modalità silenziosa e barra feedback valgono solo per
+      // il primo.
+      window.addEventListener('wip-poi-trigger', (e: any) => {
+        const d = e?.detail || {};
+        const id = d.poiId ?? d.poi?.id;
+        if (id && d.autoPlay) this.lastGeoTrigger = { poiId: String(id), ts: Date.now() };
+      });
+
+      // 🎧 Audio direzionale già attivo da una sessione precedente: riparte
+      // senza gesto (il permesso bussola iOS, se serve, verrà richiesto al
+      // prossimo toggle; senza sensore il pan resta semplicemente a 0).
+      if (this.isDirectionalAudioEnabled()) this.startDirectionalUpdates();
 
       // Unlock audio on first interaction
       const unlock = () => {
@@ -309,6 +388,29 @@ class LocationService {
 
   /** Fine riproduzione (nativa o web): resetta lo stato e avvia il POI successivo in coda. */
   private handlePlaybackFinished() {
+    // 🎭 Duetto: è finita una BATTUTA, non la traccia — avanza alla prossima.
+    if (this.duetState && this.duetState.index + 1 < this.duetState.lines.length) {
+      const st = this.duetState;
+      this.releaseCurrentTrack();
+      this.playDuetLine(st.index + 1).then(ok => {
+        if (!ok && this.duetState === st) {
+          // Nessuna battuta successiva riproducibile: chiusura normale
+          this.clearDuetState();
+          this.handlePlaybackFinished();
+        }
+      });
+      return;
+    }
+    this.clearDuetState();
+
+    // ⏱ Feedback trigger: la traccia partita da geofence è finita — chiedi
+    // (throttlato) se il momento era quello giusto. poiId è ancora valorizzato.
+    if (this.currentPlaybackFromTrigger) {
+      this.currentPlaybackFromTrigger = false;
+      this.maybeRequestTriggerFeedback(this.audioState.poiId);
+    }
+    this.currentPoiCoords = null;
+
     this.releaseCurrentTrack();
     this.audioState.isPlaying = false;
     this.audioState.isActive = false;
@@ -337,7 +439,9 @@ class LocationService {
 
   /** true se una guida e' caricata (in play o in pausa), nativa o web. */
   private isGuidePlaybackActive(): boolean {
-    return this.isNativePlayback || this.activeGuideAudio !== null || this.fallbackUtterance !== null;
+    // duetState conta come attivo anche nel breve intervallo tra una battuta
+    // e la successiva (fetch del blob), quando activeGuideAudio è null.
+    return this.isNativePlayback || this.activeGuideAudio !== null || this.fallbackUtterance !== null || this.duetState !== null;
   }
 
   public getIsGuideMuted(): boolean { return this.isGuideMuted; }
@@ -382,22 +486,43 @@ class LocationService {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
         this.audioCtx = new AudioCtx();
       }
-      // Il grafo dei filtri (megafono) va agganciato appena speechPlayer
-      // esiste: prima veniva creato SOLO se il player c'era già alla prima
-      // chiamata, altrimenti restava scollegato per sempre e il megafono
-      // diventava un no-op silenzioso.
-      if (this.speechPlayer && !this.audioNodes) {
-        const source = this.audioCtx.createMediaElementSource(this.speechPlayer);
+      // Il grafo dei filtri (megafono + pan direzionale) va agganciato appena
+      // speechPlayer esiste: prima veniva creato SOLO se il player c'era già
+      // alla prima chiamata, altrimenti restava scollegato per sempre e il
+      // megafono diventava un no-op silenzioso. Se l'elemento cambia il grafo
+      // si ricostruisce, ma la MediaElementSource si riusa dalla WeakMap:
+      // createMediaElementSource è chiamabile UNA sola volta per elemento.
+      if (this.speechPlayer && (!this.audioNodes || this.audioNodesElement !== this.speechPlayer)) {
+        let source = this.mediaSources.get(this.speechPlayer);
+        if (!source) {
+          source = this.audioCtx.createMediaElementSource(this.speechPlayer);
+          this.mediaSources.set(this.speechPlayer, source);
+        } else {
+          try { source.disconnect(); } catch { /* mai connessa */ }
+        }
         const highpass = this.audioCtx.createBiquadFilter();
         highpass.type = "highpass";
         const lowpass = this.audioCtx.createBiquadFilter();
         lowpass.type = "lowpass";
         const gain = this.audioCtx.createGain();
+        // 🎧 StereoPanner solo dove supportato: senza, il grafo resta come prima
+        let panner: StereoPannerNode | null = null;
+        try {
+          if (typeof (this.audioCtx as any).createStereoPanner === 'function') {
+            panner = this.audioCtx.createStereoPanner();
+          }
+        } catch { panner = null; }
         source.connect(highpass);
         highpass.connect(lowpass);
         lowpass.connect(gain);
-        gain.connect(this.audioCtx.destination);
-        this.audioNodes = { source, highpass, lowpass, gain };
+        if (panner) {
+          gain.connect(panner);
+          panner.connect(this.audioCtx.destination);
+        } else {
+          gain.connect(this.audioCtx.destination);
+        }
+        this.audioNodes = { source, highpass, lowpass, gain, panner };
+        this.audioNodesElement = this.speechPlayer;
         this.updateAudioFilters();
       }
     } catch (e) {
@@ -418,6 +543,192 @@ class LocationService {
       lowpass.frequency.setTargetAtTime(22050, now, 0.1);
       gain.gain.setTargetAtTime(1.0, now, 0.1);
     }
+  }
+
+  // ── 🤫 Modalità silenziosa (vibra + testo) ────────────────────────────
+  // Chiave CONDIVISA coi service nativi Android/iOS: wip_silent_mode ('1'/'0').
+
+  public isSilentModeEnabled(): boolean {
+    try { return localStorage.getItem('wip_silent_mode') === '1'; } catch { return false; }
+  }
+
+  public setSilentMode(enabled: boolean) {
+    try { localStorage.setItem('wip_silent_mode', enabled ? '1' : '0'); } catch { /* storage bloccato */ }
+    // Ponte verso i service nativi: localStorage vive solo nel WebView, i
+    // service Kotlin/Swift leggono CapacitorStorage → il plugin scrive lì.
+    // Import dinamico e best-effort: su web o su build vecchie senza il
+    // metodo non deve succedere nulla.
+    (async () => {
+      try {
+        const { Capacitor, registerPlugin } = await import('@capacitor/core');
+        if (!Capacitor.isNativePlatform()) return;
+        const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
+        await plugin.setSilentMode({ enabled });
+      } catch { /* best-effort: il nativo si allineerà alla prossima build */ }
+    })();
+  }
+
+  /**
+   * Consuma (lettura distruttiva) l'origine trigger per questo POI: true se il
+   * play che sta partendo nasce da un trigger geofencing recente (< 2 min).
+   */
+  private consumeTriggerOrigin(poiId?: string): boolean {
+    const t = this.lastGeoTrigger;
+    if (!t || !poiId) return false;
+    if (t.poiId !== String(poiId) || Date.now() - t.ts > 2 * 60_000) return false;
+    this.lastGeoTrigger = null;
+    return true;
+  }
+
+  /**
+   * Barra feedback trigger ("Momento giusto / Troppo presto / Non ero qui"):
+   * emette 'wip-trigger-feedback-request' al massimo una volta ogni 30 minuti
+   * (throttle in localStorage). La UI vive in PoiAudioPlayer.
+   */
+  private maybeRequestTriggerFeedback(poiId: string | null) {
+    if (!poiId || typeof window === 'undefined') return;
+    try {
+      const last = Number(localStorage.getItem('wip_feedback_last_ask') || '0');
+      if (Date.now() - last < 30 * 60_000) return;
+      localStorage.setItem('wip_feedback_last_ask', String(Date.now()));
+    } catch { return; }
+    window.dispatchEvent(new CustomEvent('wip-trigger-feedback-request', {
+      detail: {
+        poiId: String(poiId),
+        lat: this.lastLocation?.latitude ?? null,
+        lon: this.lastLocation?.longitude ?? null,
+      }
+    }));
+  }
+
+  // ── 🎧 Audio direzionale in cuffia (solo web) ─────────────────────────
+  // Pan stereo (-0.8 … +0.8) verso il POI in riproduzione, calcolato da
+  // posizione utente + heading bussola + coordinate POI, aggiornato ~1/s con
+  // smoothing. Fail-safe totale: senza sensori/permessi/StereoPanner tutto
+  // suona esattamente come oggi (pan neutro o grafo invariato).
+
+  public isDirectionalAudioEnabled(): boolean {
+    try { return localStorage.getItem('wip_directional_audio') === '1'; } catch { return false; }
+  }
+
+  /**
+   * Da chiamare SU GESTO utente (toggle nel player): su iOS 13+ il permesso
+   * bussola si può richiedere solo dentro un gesto.
+   */
+  public async setDirectionalAudio(enabled: boolean): Promise<void> {
+    try { localStorage.setItem('wip_directional_audio', enabled ? '1' : '0'); } catch { /* storage bloccato */ }
+    if (!enabled) {
+      this.stopDirectionalUpdates();
+      return;
+    }
+    try {
+      const DOE: any = (window as any).DeviceOrientationEvent;
+      if (DOE && typeof DOE.requestPermission === 'function') {
+        await DOE.requestPermission().catch(() => null);
+      }
+    } catch { /* niente permesso: si userà l'heading GPS, o pan neutro */ }
+    this.startDirectionalUpdates();
+  }
+
+  private startDirectionalUpdates() {
+    if (typeof window === 'undefined') return;
+    if (!this.orientationListener) {
+      this.orientationListener = (e: DeviceOrientationEvent) => {
+        const wk = (e as any).webkitCompassHeading; // iOS: già gradi bussola
+        if (typeof wk === 'number' && Number.isFinite(wk)) {
+          this.deviceHeading = wk;
+        } else if (typeof e.alpha === 'number' && Number.isFinite(e.alpha)) {
+          // alpha: 0 = nord, cresce in senso antiorario → bussola = 360 - alpha
+          this.deviceHeading = (360 - e.alpha) % 360;
+        }
+      };
+      try {
+        window.addEventListener('deviceorientationabsolute' as any, this.orientationListener as any);
+        window.addEventListener('deviceorientation', this.orientationListener as any);
+      } catch { /* sensori assenti: pan neutro */ }
+    }
+    if (!this.directionalTimer) {
+      this.directionalTimer = setInterval(() => this.updateDirectionalPan(), 1000);
+    }
+  }
+
+  private stopDirectionalUpdates() {
+    if (this.directionalTimer) { clearInterval(this.directionalTimer); this.directionalTimer = null; }
+    if (this.orientationListener) {
+      try {
+        window.removeEventListener('deviceorientationabsolute' as any, this.orientationListener as any);
+        window.removeEventListener('deviceorientation', this.orientationListener as any);
+      } catch { /* ignore */ }
+      this.orientationListener = null;
+    }
+    this.deviceHeading = null;
+    this.currentPan = 0;
+    try {
+      if (this.audioNodes?.panner && this.audioCtx) {
+        this.audioNodes.panner.pan.setTargetAtTime(0, this.audioCtx.currentTime, 0.2);
+      }
+    } catch { /* ignore */ }
+  }
+
+  /** Bearing geografico (gradi da nord, orario) dal punto 1 al punto 2. */
+  private bearingTo(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const toRad = (d: number) => d * Math.PI / 180;
+    const dLon = toRad(lon2 - lon1);
+    const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+    const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+              Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+  }
+
+  /** Tick ~1/s: calcola il bearing relativo e aggiorna il pan con smoothing. */
+  private updateDirectionalPan() {
+    try {
+      if (!this.audioNodes?.panner || !this.audioCtx) return;
+      let target = 0;
+      const heading = this.deviceHeading ?? this.lastLocation?.heading ?? null;
+      if (
+        this.isDirectionalAudioEnabled() &&
+        this.activeGuideAudio &&                 // solo percorso web (grafo agganciato)
+        this.audioState.isPlaying &&
+        heading !== null &&
+        this.lastLocation && this.currentPoiCoords
+      ) {
+        const bearing = this.bearingTo(
+          this.lastLocation.latitude, this.lastLocation.longitude,
+          this.currentPoiCoords.lat, this.currentPoiCoords.lon
+        );
+        const rel = ((bearing - heading + 540) % 360) - 180; // -180 … 180
+        // sin(rel): +1 a destra, -1 a sinistra, 0 davanti/dietro; tetto ±0.8
+        target = Math.max(-0.8, Math.min(0.8, Math.sin(rel * Math.PI / 180) * 0.8));
+      }
+      // Smoothing: passo verso il target, mai salti secchi tra un tick e l'altro
+      this.currentPan += (target - this.currentPan) * 0.35;
+      if (Math.abs(this.currentPan) < 0.01 && target === 0) this.currentPan = 0;
+      this.audioNodes.panner.pan.setTargetAtTime(this.currentPan, this.audioCtx.currentTime, 0.25);
+    } catch { /* fail-safe: audio normale, pan invariato */ }
+  }
+
+  /** Risolve (best-effort, async) le coordinate del POI in riproduzione. */
+  private resolveCurrentPoiCoords(poiId: string) {
+    this.currentPoiCoords = null;
+    try {
+      const c: any = this.geofenceCandidates.find((p: any) => String(p.id) === poiId);
+      const lat = Number(c?.lat ?? c?.latitude);
+      const lon = Number(c?.lon ?? c?.longitude);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        this.currentPoiCoords = { lat, lon };
+        return;
+      }
+    } catch { /* si tenta dal repository */ }
+    import('./poiRepository')
+      .then(({ getPoiById }) => getPoiById(poiId))
+      .then((poi: any) => {
+        const lat = Number(poi?.lat), lon = Number(poi?.lon);
+        if (this.audioState.poiId === poiId && Number.isFinite(lat) && Number.isFinite(lon)) {
+          this.currentPoiCoords = { lat, lon };
+        }
+      })
+      .catch(() => { /* niente coordinate: pan neutro */ });
   }
 
   public setVibration(enabled: boolean) {
@@ -713,9 +1024,11 @@ class LocationService {
           this.lastTravelMode = mode;
         }
       }
-      // Notifica il banner di avvicinamento per aggiornare le distanze in tempo reale
+      // Notifica il banner di avvicinamento per aggiornare le distanze in tempo
+      // reale. accuracy inclusa: i trigger web foreground scartano i fix > 50 m
+      // (foregroundTriggers.ts) senza dover risalire al servizio.
       window.dispatchEvent(new CustomEvent('wip-location-update', {
-        detail: { lat: update.latitude, lon: update.longitude, heading: update.heading }
+        detail: { lat: update.latitude, lon: update.longitude, heading: update.heading, accuracy: update.accuracy }
       }));
 
       // [WEB/PWA FALLBACK] Fetch POIs per Radar se non siamo su app nativa Android e se la guida è attiva
@@ -802,6 +1115,21 @@ class LocationService {
   public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>): Promise<boolean> {
     if (this.isGuideMuted || !text) return false;
 
+    // 🤫 «Solo vibrazione + testo»: se il play nasce da un trigger geofencing
+    // e la modalità silenziosa è attiva, NIENTE audio (né addebito: siamo
+    // prima di authorize): vibrazione breve, banner col rimando al testo
+    // (già leggibile nella scheda aperta dal trigger) e richiesta feedback.
+    // L'origine viene consumata: il ▶ manuale successivo suona normalmente.
+    const fromTrigger = this.consumeTriggerOrigin(poiId);
+    if (fromTrigger && this.isSilentModeEnabled()) {
+      try { (navigator as any).vibrate?.([200, 100, 200]); } catch { /* niente vibrazione */ }
+      window.dispatchEvent(new CustomEvent('audioguide-status', {
+        detail: `🤫 ${poiName || 'Punto di interesse'}: modalità silenziosa — leggi il testo nella scheda o premi ▶ per ascoltare`
+      }));
+      this.maybeRequestTriggerFeedback(poiId || null);
+      return false;
+    }
+
     // Se stiamo già riproducendo questo specifico POI, facciamo solo toggle play/pause se richiesto esternamente
     // Ma qui la logica è "avvia riproduzione", quindi se è lo stesso e siamo in pausa, riprendiamo
     if (poiId && this.audioState.poiId === poiId && this.isGuidePlaybackActive()) {
@@ -840,9 +1168,28 @@ class LocationService {
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
     this.currentCharacter = character || this.guideMode;
+    // Origine trigger → a fine ascolto (o allo stop) parte la barra feedback.
+    this.currentPlaybackFromTrigger = fromTrigger;
+    // 🎧 Coordinate del POI per il pan direzionale (best-effort, async).
+    if (poiId) this.resolveCurrentPoiCoords(String(poiId));
     this.notifyAudioState();
 
     try {
+      // 🎭 Duetto: se il testo è un dialogo NICKY:/DANTE:, ogni battuta viene
+      // riprodotta in sequenza con la voce TTS del personaggio giusto,
+      // pre-caricando la successiva mentre suona la corrente.
+      const duetLines = parseDuetLines(text);
+      if (duetLines) {
+        const okDuet = await this.playDuet(duetLines);
+        if (okDuet) {
+          window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
+            detail: { textToSpeak: text, poiName }
+          }));
+          return true;
+        }
+        // Parsing/TTS del duetto fallito: si prosegue col percorso mono-voce
+        // (tutto il testo con la voce del personaggio base) — mai il silenzio.
+      }
       // Il personaggio scelto nella scheda POI (Nicky = femminile, Dante =
       // maschile) ha priorità sullo stato globale: senza questo override la
       // voce restava quella di guideMode (default Nicky) anche selezionando
@@ -944,6 +1291,73 @@ class LocationService {
     }
   }
 
+  // ── 🎭 Duetto Nicky & Dante ───────────────────────────────────────────
+
+  /** Scarica l'MP3 di una singola battuta con la voce del suo personaggio. */
+  private async fetchDuetBlob(line: { speaker: 'nicky' | 'dante'; text: string }): Promise<Blob | null> {
+    try {
+      const voice = this.getNeuralVoiceName(this.language, line.speaker);
+      const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: line.text, voice });
+      if (!ok || !blob || blob.size < 500 || blob.type.includes('json')) return null;
+      return blob;
+    } catch { return null; }
+  }
+
+  private clearDuetState() {
+    this.duetState = null;
+    if (this.audioState.duetIndex !== -1) this.audioState.duetIndex = -1;
+  }
+
+  /**
+   * Avvia il duetto: battute in sequenza, ognuna con la voce del suo
+   * personaggio. Ritorna false se nemmeno la prima battuta parte (il
+   * chiamante ricade sulla lettura mono-voce del testo intero).
+   */
+  private async playDuet(lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>): Promise<boolean> {
+    this.duetState = { lines, index: 0, nextBlob: null, nextBlobIndex: -1 };
+    const ok = await this.playDuetLine(0);
+    if (!ok) this.clearDuetState();
+    return ok;
+  }
+
+  /**
+   * Riproduce la battuta i e pre-carica la i+1 mentre questa suona. Una
+   * battuta il cui TTS fallisce viene SALTATA (si passa alla successiva)
+   * invece di fermare il dialogo. L'avanzamento a fine battuta avviene in
+   * handlePlaybackFinished (che copre sia il tag <audio> web sia ExoPlayer).
+   */
+  private async playDuetLine(i: number): Promise<boolean> {
+    const st = this.duetState;
+    if (!st || i >= st.lines.length) return false;
+    st.index = i;
+    const line = st.lines[i];
+    // Blob della battuta: pre-caricato dalla precedente quando possibile
+    const blobPromise = (st.nextBlobIndex === i && st.nextBlob) ? st.nextBlob : this.fetchDuetBlob(line);
+    // Pre-carica la battuta successiva MENTRE questa scarica/suona
+    if (i + 1 < st.lines.length) {
+      st.nextBlobIndex = i + 1;
+      st.nextBlob = this.fetchDuetBlob(st.lines[i + 1]);
+    } else {
+      st.nextBlob = null;
+      st.nextBlobIndex = -1;
+    }
+    const blob = await blobPromise.catch(() => null);
+    if (this.duetState !== st) return false; // stop o nuova traccia nel frattempo
+    if (!blob) {
+      if (i + 1 < st.lines.length) return this.playDuetLine(i + 1);
+      return false;
+    }
+    // La voce corrente pilota i metadati Media Session della battuta
+    this.currentCharacter = line.speaker;
+    this.audioState.duetIndex = i;
+    this.notifyAudioState();
+    const ok = await this.playAudioBlob(blob, line.text);
+    if (!ok && this.duetState === st && i + 1 < st.lines.length) {
+      return this.playDuetLine(i + 1);
+    }
+    return ok;
+  }
+
   public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<boolean> {
     if (this.isGuideMuted || !url) return false;
     if (this.isGuidePlaybackActive()) {
@@ -961,6 +1375,8 @@ class LocationService {
 
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
+    // 🎧 Coordinate per il pan direzionale anche sugli MP3 offline/acquistati
+    if (poiId) this.resolveCurrentPoiCoords(String(poiId));
     this.notifyAudioState();
 
     try {
@@ -1002,7 +1418,8 @@ class LocationService {
         this.audioState.currentTime = 0;
         this.notifyAudioState();
 
-        await this.recordPlaybackStart();
+        // 🎭 In un duetto quota/storico si registrano solo alla PRIMA battuta
+        if (!this.duetState || this.duetState.index === 0) await this.recordPlaybackStart();
         return true;
       } catch (e) {
         // Fallback in WebView: funziona solo con l'app in primo piano.
@@ -1049,7 +1466,8 @@ class LocationService {
       this.setupMediaSession(audio);
       this.notifyAudioState();
 
-      await this.recordPlaybackStart();
+      // 🎭 In un duetto quota/storico si registrano solo alla PRIMA battuta
+      if (!this.duetState || this.duetState.index === 0) await this.recordPlaybackStart();
       return true;
     } catch (e) {
       console.warn("[LocationService] Audio playback failed", e);
@@ -1179,6 +1597,15 @@ class LocationService {
     if (this.isStoppingGuide) return;
     this.isStoppingGuide = true;
     try {
+      // ⏱ Feedback trigger anche alla CHIUSURA manuale di una traccia partita
+      // da geofence (prima del reset di poiId qui sotto).
+      if (this.currentPlaybackFromTrigger) {
+        this.currentPlaybackFromTrigger = false;
+        this.maybeRequestTriggerFeedback(this.audioState.poiId);
+      }
+      // 🎭 Il duetto si interrompe con la traccia; niente avanzamento battute.
+      this.clearDuetState();
+      this.currentPoiCoords = null;
       if (this.activeGuideAudio) {
         this.activeGuideAudio.pause();
         this.activeGuideAudio.src = "";

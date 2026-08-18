@@ -40,6 +40,25 @@ module.exports = {
       time: true,
     },
     {
+      // Semina continua della biblioteca itinerari: chiama in ciclo
+      // /api/library/seed-cron su wip.guide (la generazione gira là, dove
+      // ci sono le chiavi dei motori; qui c'è solo il metronomo). Serve
+      // CRON_SECRET nel .env. È un ciclo infinito: se esce è un errore,
+      // quindi l'autorestart ha senso. Consuma pochissima memoria, ma vale
+      // la regola generale: non farlo girare insieme a mass-enrich.
+      name: 'seed-library',
+      script: 'node',
+      args: 'scripts/seed-library.mjs',
+      interpreter: 'none',
+      cwd: __dirname,
+      autorestart: true,
+      restart_delay: 30000,
+      min_uptime: 60000,
+      max_restarts: 20,
+      max_memory_restart: '150M',
+      time: true,
+    },
+    {
       // Ripassa i POI già arricchiti e li riscrive dove esistono fonti
       // verificate. Finisce: non è un servizio.
       name: 'wikidata-retro',

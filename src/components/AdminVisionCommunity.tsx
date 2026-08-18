@@ -200,12 +200,16 @@ export default function AdminVisionCommunity() {
     try {
       const token = await getToken();
       const pending = edits[card.id] || {};
-      const adminHint = [pending.name, pending.description_short, pending.description_long]
+      const adminHint = [pending.description_short, pending.description_long]
         .filter(Boolean).join(' — ');
+      // Il nome digitato dall'admin è AUTORITATIVO: viaggia in un campo suo,
+      // il server lo impone all'AI come nome vero del luogo (caso "svizzerino"
+      // → "Statua della Foca": tutte le descrizioni nascono dal nome giusto).
+      const adminName = String(pending.name || '').trim();
       const res = await fetch(getApiUrl('/api/admin/vision/ai-fill'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ cardId: card.id, adminHint }),
+        body: JSON.stringify({ cardId: card.id, adminHint, adminName: adminName || undefined }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.detail || data?.error || 'errore');
@@ -214,9 +218,14 @@ export default function AdminVisionCommunity() {
         ...prev,
         [card.id]: {
           ...(prev[card.id] || {}),
-          ...(f.name ? { name: f.name } : {}),
+          // Il nome scritto dall'admin non si tocca: l'AI lo rimpiazza solo
+          // se il campo era vuoto.
+          ...(f.name && !adminName ? { name: f.name } : {}),
           ...(f.city ? { city: f.city } : {}),
           ...(f.poi_type ? { poi_type: f.poi_type } : {}),
+          ...(f.artist ? { artist: f.artist } : {}),
+          ...(f.year ? { year: f.year } : {}),
+          ...(f.style ? { style: f.style } : {}),
           ...(f.description_short ? { description_short: f.description_short } : {}),
           ...(f.description_long ? { description_long: f.description_long } : {}),
           ...(f.history ? { history: f.history } : {}),
@@ -396,6 +405,14 @@ export default function AdminVisionCommunity() {
                       <input value={editVal(card, 'city')} onChange={e => setEdit(card.id, 'city', e.target.value)}
                         placeholder="Città" className="bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
                     </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <input value={editVal(card, 'artist')} onChange={e => setEdit(card.id, 'artist', e.target.value)}
+                        placeholder="Artista" className="bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
+                      <input value={editVal(card, 'year')} onChange={e => setEdit(card.id, 'year', e.target.value)}
+                        placeholder="Anno" className="bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
+                      <input value={editVal(card, 'style')} onChange={e => setEdit(card.id, 'style', e.target.value)}
+                        placeholder="Stile" className="bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800" />
+                    </div>
                     <textarea value={editVal(card, 'description_short')} onChange={e => setEdit(card.id, 'description_short', e.target.value)}
                       rows={2} placeholder="Descrizione breve" className="w-full bg-[#f8f5f0] border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-800 resize-none" />
                     <textarea value={editVal(card, 'description_long')} onChange={e => setEdit(card.id, 'description_long', e.target.value)}
@@ -449,11 +466,21 @@ export default function AdminVisionCommunity() {
                         </button>
                       )}
                       {isOpen && (
-                        <button disabled={busy} onClick={() => doUpdate(card)}
-                          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm active:scale-95 transition-all disabled:opacity-50">
-                          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                          Salva modifiche
-                        </button>
+                        <>
+                          {/* Rigenera i testi sul nome corretto (es. riconoscimento
+                              Vision sbagliato): compila il form, poi "Salva
+                              modifiche" propaga anche al POI community. */}
+                          <button disabled={busy} onClick={() => doAiFill(card)}
+                            className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-[10px] font-black uppercase tracking-wider active:scale-95 transition-all disabled:opacity-50">
+                            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                            Compila con AI
+                          </button>
+                          <button disabled={busy} onClick={() => doUpdate(card)}
+                            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 text-white rounded-xl text-[10px] font-black uppercase tracking-wider shadow-sm active:scale-95 transition-all disabled:opacity-50">
+                            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                            Salva modifiche
+                          </button>
+                        </>
                       )}
                       {card.published_poi_id === `vision-${card.id}` && (
                         <button disabled={busy} onClick={() => doDeletePoi(card)}

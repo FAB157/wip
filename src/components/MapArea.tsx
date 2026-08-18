@@ -40,6 +40,11 @@ import { logApiCall } from "../lib/apiLogger";
 import { locationService } from "../services/locationService";
 import { haversineMeters } from "../lib/geo";
 import { supabaseCircuitBreaker } from "../lib/circuitBreaker";
+import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servicesLayer";
+import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
+import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
+import type { ZtlAlertEvent } from "../lib/ztlAlert";
+import { fetchBathingSites, BATHING_QUALITY_LABEL, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -492,6 +497,94 @@ export const getDistanceFromLatLonInM = (
 };
 
 
+// ── Meteo sulla mappa (Open-Meteo, solo client) ──────────────────────
+// Cache 30 min in localStorage per cella di ~11 km (1 decimale): il chip
+// non deve costare una richiesta a ogni pan.
+interface MeteoData {
+  temp: number;      // temperatura attuale °C
+  code: number;      // WMO weather_code
+  rainProb: number;  // probabilità pioggia max nelle prossime 3 ore (%)
+}
+
+const METEO_TTL_MS = 30 * 60 * 1000;
+
+function weatherEmoji(code: number): string {
+  if (code === 0) return "☀️";
+  if (code === 1 || code === 2) return "🌤️";
+  if (code === 3) return "☁️";
+  if (code === 45 || code === 48) return "🌫️";
+  if (code >= 51 && code <= 57) return "🌦️";
+  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return "🌧️";
+  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return "🌨️";
+  if (code >= 95) return "⛈️";
+  return "🌡️";
+}
+
+async function fetchMeteoCached(lat: number, lon: number): Promise<MeteoData | null> {
+  const key = `wip_meteo_${lat.toFixed(1)}_${lon.toFixed(1)}`;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.ts === "number" && Date.now() - parsed.ts < METEO_TTL_MS && parsed.data) {
+        return parsed.data as MeteoData;
+      }
+    }
+  } catch { /* cache corrotta: rifetch */ }
+
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&current=temperature_2m,weather_code&hourly=precipitation_probability&forecast_days=1&timezone=auto`,
+      { signal: ctrl.signal }
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const j = await res.json();
+    const temp = j?.current?.temperature_2m;
+    const code = j?.current?.weather_code;
+    if (typeof temp !== "number") return null;
+
+    // Probabilità di pioggia massima nelle prossime 3 ore. Gli orari di
+    // Open-Meteo sono locali alla zona richiesta (timezone=auto): il parse
+    // nel fuso del browser è un'approssimazione accettabile (best-effort).
+    let rainProb = 0;
+    const times: string[] = Array.isArray(j?.hourly?.time) ? j.hourly.time : [];
+    const probs: number[] = Array.isArray(j?.hourly?.precipitation_probability) ? j.hourly.precipitation_probability : [];
+    const now = Date.now();
+    let idx = times.findIndex((t) => {
+      const ts = new Date(t).getTime();
+      return Number.isFinite(ts) && ts >= now;
+    });
+    if (idx < 0) idx = Math.max(0, times.length - 3);
+    for (let i = idx; i < Math.min(idx + 3, probs.length); i++) {
+      if (typeof probs[i] === "number" && probs[i] > rainProb) rainProb = probs[i];
+    }
+
+    const data: MeteoData = { temp, code: typeof code === "number" ? code : 0, rainProb };
+    try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch { /* quota piena */ }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+// Modalità "al coperto": evidenziazione VISIVA temporanea dei POI indoor
+// (musei, chiese, gallerie…). Non tocca i filtri persistenti dell'utente
+// (wip_active_subcategories): agisce solo sull'opacità dei marker.
+function isIndoorPoi(p: Poi): boolean {
+  const cat = String(p.baseCategory || p.category || "").toLowerCase();
+  if (cat === "musei" || cat === "chiese" || cat === "museum" || cat === "gallery" || cat === "church") return true;
+  const sub = String(p.subCategory || "").toLowerCase();
+  return sub === "museo" || sub === "chiesa" || sub === "luogo di culto" || sub === "galleria" || sub === "acquario";
+}
+
+// Escape minimo per i popup HTML dei marker servizi (nomi da OSM)
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 import PoiPopupContent from "./PoiPopupContent";
 import PoiRadarPanel from "./PoiRadarPanel";
 
@@ -775,6 +868,510 @@ function MapArea({
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLongPressRef = useRef(false);
 
+  // ── Layer servizi pratici (fontanelle 💧, bagni 🚻, panchine 🪑) ──────
+  // Toggle 🚰 nei controlli mappa: layerGroup Leaflet separato dai POI,
+  // alimentato da src/lib/servicesLayer.ts (Overpass, cache 24h).
+  const [servicesActive, setServicesActive] = useState(false);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  const servicesLayerRef = useRef<L.LayerGroup | null>(null);
+  // Centro dell'ultima query servizi: sopra 1,5 km di pan il layer si aggiorna
+  const servicesCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  // Posizione utente letta al momento dell'apertura del popup (mai stantia)
+  const userLocationRef = useRef<[number, number] | null>(null);
+  useEffect(() => { userLocationRef.current = userLocation; }, [userLocation]);
+
+  const loadServices = useCallback(async (lat: number, lon: number): Promise<boolean> => {
+    const map = mapRef.current;
+    if (!map) return false;
+    setServicesLoading(true);
+    try {
+      const points = await fetchServicesAround(lat, lon);
+      if (!servicesLayerRef.current) servicesLayerRef.current = L.layerGroup();
+      const group = servicesLayerRef.current;
+      group.clearLayers();
+
+      for (const pt of points) {
+        const icon = L.divIcon({
+          html: `<div style="width:22px;height:22px;border-radius:11px;background:#fff;border:1.5px solid #cbd5e1;box-shadow:0 1px 4px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;font-size:12px;">${SERVICE_EMOJI[pt.type]}</div>`,
+          className: "wip-service-marker",
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+          popupAnchor: [0, -12],
+        });
+        const marker = L.marker([pt.lat, pt.lon], { icon });
+        // Contenuto calcolato all'apertura: la distanza usa la posizione
+        // utente corrente, non quella di quando il layer è stato creato.
+        marker.bindPopup(() => {
+          const title = pt.name ? escapeHtml(pt.name) : SERVICE_LABEL[pt.type];
+          const subtitle = pt.name ? `<div style="font-size:10px;color:#6b7280;">${SERVICE_LABEL[pt.type]}</div>` : "";
+          const loc = userLocationRef.current;
+          const distHtml = loc
+            ? `<div style="font-size:10px;color:#374151;margin-top:2px;">📍 ${Math.round(getDistanceFromLatLonInM(loc[0], loc[1], pt.lat, pt.lon))} m da te</div>`
+            : "";
+          return `<div style="font-family:system-ui,sans-serif;min-width:120px;"><div style="font-size:12px;font-weight:700;color:#111827;">${SERVICE_EMOJI[pt.type]} ${title}</div>${subtitle}${distHtml}</div>`;
+        });
+        group.addLayer(marker);
+      }
+
+      if (!map.hasLayer(group)) group.addTo(map);
+      servicesCenterRef.current = { lat, lon };
+      return true;
+    } catch (e) {
+      // Overpass giù su tutti gli endpoint: niente crash, banner e toggle off
+      console.warn("[Servizi] fetch fallito:", e);
+      setFetchErrors((prev) => ({
+        ...prev,
+        servizi: language === 'IT'
+          ? "Servizi (fontanelle, bagni, panchine) non disponibili al momento. Riprova più tardi."
+          : "Services (fountains, toilets, benches) unavailable right now. Try again later.",
+      }));
+      return false;
+    } finally {
+      setServicesLoading(false);
+    }
+  }, [language]);
+
+  const toggleServices = useCallback(async () => {
+    const map = mapRef.current;
+    if (servicesActive) {
+      setServicesActive(false);
+      if (map && servicesLayerRef.current) map.removeLayer(servicesLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    setServicesActive(true);
+    const c = map.getCenter();
+    const ok = await loadServices(c.lat, c.lng);
+    if (!ok) setServicesActive(false);
+  }, [servicesActive, loadServices]);
+
+  // Aggiornamento del layer quando l'utente sposta la mappa di molto
+  // (>1,5 km dal centro dell'ultima query) mentre il toggle è attivo
+  useEffect(() => {
+    if (!servicesActive) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const onMoveEnd = () => {
+      const last = servicesCenterRef.current;
+      if (!last) return;
+      try {
+        const c = map.getCenter();
+        if (getDistanceFromLatLonInM(last.lat, last.lon, c.lat, c.lng) > 1500) {
+          loadServices(c.lat, c.lng);
+        }
+      } catch { /* bounds non pronti */ }
+    };
+    map.on("moveend", onMoveEnd);
+    return () => { map.off("moveend", onMoveEnd); };
+  }, [servicesActive, loadServices]);
+
+  // ── Fog of war dei luoghi visitati (src/lib/visitedFog.ts) ────────────
+  // Toggle 👣 nei controlli mappa: layer canvas di rettangoli Leaflet
+  // sulle celle ~150×150 m già calpestate — un "diario che si costruisce
+  // camminando", non una nebbia scura. Zero impatto col toggle spento:
+  // l'effetto esce subito e il layer non esiste.
+  const [fogActive, setFogActive] = useState(() => {
+    try { return localStorage.getItem('wip_fog_enabled') === '1'; } catch { return false; }
+  });
+  // Percentuale di esplorazione dell'area a schermo (null = mai calcolata)
+  const [fogCoverage, setFogCoverage] = useState<number | null>(null);
+  const fogLayerRef = useRef<L.LayerGroup | null>(null);
+  // Un renderer canvas dedicato: fino a ~1500 rettangoli senza costi DOM/SVG
+  const fogRendererRef = useRef<L.Renderer | null>(null);
+  // Retry se la mappa non è ancora pronta quando il toggle è già attivo
+  // (ripristino da localStorage al mount)
+  const [fogTick, setFogTick] = useState(0);
+  const fogFirstFixRef = useRef(false);
+
+  // markVisited al primo fix della mappa (i successivi arrivano dal
+  // listener 'wip-location-update' interno a visitedFog.ts)
+  useEffect(() => {
+    if (!userLocation || fogFirstFixRef.current) return;
+    fogFirstFixRef.current = true;
+    markVisited(userLocation[0], userLocation[1]);
+  }, [userLocation]);
+
+  const renderFog = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let viewBounds: L.LatLngBounds;
+    try { viewBounds = map.getBounds(); } catch { return; }
+    // Margine del 10%: niente celle "che spuntano" durante piccoli pan
+    const b = viewBounds.pad(0.1);
+    const cells = getVisitedCells({
+      south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast(),
+    });
+    if (!fogRendererRef.current) fogRendererRef.current = L.canvas({ padding: 0.2 });
+    if (!fogLayerRef.current) fogLayerRef.current = L.layerGroup();
+    const group = fogLayerRef.current;
+    group.clearLayers();
+    const style: L.PolylineOptions = {
+      stroke: false,                 // niente bordi: solo un velo di colore
+      fillColor: '#1e3a8a',          // blu brand
+      fillOpacity: 0.12,             // la mappa sotto resta leggibile
+      interactive: false,
+      renderer: fogRendererRef.current,
+    };
+    if (cells.length > 1500) {
+      // Troppe celle a schermo (zoom largo): aggrega in super-celle 2×2,
+      // stessa area coperta con ~1/4 dei rettangoli
+      const supers = new Map<string, { si: number; sj: number }>();
+      for (const c of cells) {
+        const si = Math.floor(c.i / 2);
+        const sj = Math.floor(c.j / 2);
+        supers.set(`${si}_${sj}`, { si, sj });
+      }
+      const step = FOG_CELL_DEG * 2;
+      for (const s of supers.values()) {
+        group.addLayer(L.rectangle(
+          [[s.si * step, s.sj * step], [(s.si + 1) * step, (s.sj + 1) * step]],
+          style,
+        ));
+      }
+    } else {
+      for (const c of cells) {
+        group.addLayer(L.rectangle([[c.south, c.west], [c.north, c.east]], style));
+      }
+    }
+    if (!map.hasLayer(group)) group.addTo(map);
+    // Badge "Hai esplorato ~X%": metrica su ciò che è davvero a schermo
+    setFogCoverage(cityCoveragePercent({
+      south: viewBounds.getSouth(), west: viewBounds.getWest(),
+      north: viewBounds.getNorth(), east: viewBounds.getEast(),
+    }));
+  }, []);
+
+  const toggleFog = useCallback(() => {
+    setFogActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_fog_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!fogActive) return;
+    const map = mapRef.current;
+    if (!map) {
+      // Toggle ripristinato prima che Leaflet esista: riprova a breve
+      const retry = setTimeout(() => setFogTick((t) => t + 1), 500);
+      return () => clearTimeout(retry);
+    }
+    renderFog();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // Throttle: il ridisegno avviene a mappa ferma, mai durante il pan
+    const onMoveEnd = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(renderFog, 250);
+    };
+    // Nuovi fix GPS mentre si cammina: la cella nuova appare con calma
+    const onLoc = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(renderFog, 3000);
+    };
+    map.on('moveend', onMoveEnd);
+    window.addEventListener('wip-location-update', onLoc);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      window.removeEventListener('wip-location-update', onLoc);
+      if (timer) clearTimeout(timer);
+      if (fogLayerRef.current && map.hasLayer(fogLayerRef.current)) {
+        map.removeLayer(fogLayerRef.current);
+      }
+      setFogCoverage(null);
+    };
+  }, [fogActive, fogTick, renderFog]);
+
+  // ── Allarme ZTL (src/lib/ztlAlert.ts) ─────────────────────────────────
+  // Toggle 🚫 nei controlli mappa: in auto (>20 km/h) avvisa quando la
+  // posizione (o la proiezione 150 m avanti) entra in una zona a traffico
+  // limitato mappata su OSM. Persistente ma default OFF.
+  const [ztlActive, setZtlActive] = useState(() => {
+    try { return localStorage.getItem('wip_ztl_enabled') === '1'; } catch { return false; }
+  });
+  const [ztlBanner, setZtlBanner] = useState<{ name: string; pre: boolean } | null>(null);
+  // Disclaimer una tantum sulla copertura OSM (flag localStorage)
+  const [ztlDisclaimer, setZtlDisclaimer] = useState(false);
+  const ztlLayerRef = useRef<L.LayerGroup | null>(null);
+  // Centro dell'ultimo fetch perimetri: sopra 5 km di pan si ricarica
+  const ztlCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  const ztlBannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Retry se la mappa non è ancora pronta (ripristino da localStorage al mount)
+  const [ztlTick, setZtlTick] = useState(0);
+
+  const onZtlAlert = useCallback((ev: ZtlAlertEvent) => {
+    // I nomi OSM spesso iniziano già con "ZTL" ("ZTL Centro Storico"):
+    // si toglie il prefisso per non leggere "ZTL ZTL ..." nel banner
+    const cleanName = ev.zone.name.replace(/^\s*(ZTL|Zona a Traffico Limitato)\s*[-–:]*\s*/i, '').trim();
+    setZtlBanner({ name: cleanName, pre: ev.preWarning });
+    if (ztlBannerTimerRef.current) clearTimeout(ztlBannerTimerRef.current);
+    ztlBannerTimerRef.current = setTimeout(() => setZtlBanner(null), 15000);
+    // Vibrazione: arriva anche con lo schermo in tasca
+    try { navigator.vibrate?.([250, 120, 250]); } catch { /* API assente */ }
+    // Beep vocale SOLO se non interferisce con audio già in corso
+    // (audioguida in riproduzione/caricata o TTS già attivo → solo banner+vibrazione)
+    try {
+      const audio = locationService.getAudioState();
+      if (!audio.isPlaying && !audio.isActive &&
+          'speechSynthesis' in window && !window.speechSynthesis.speaking) {
+        const u = new SpeechSynthesisUtterance(
+          language === 'IT' ? 'Attenzione, zona a traffico limitato' : 'Warning, limited traffic zone'
+        );
+        u.lang = language === 'IT' ? 'it-IT' : 'en-US';
+        u.rate = 1;
+        window.speechSynthesis.speak(u);
+      }
+    } catch { /* TTS best-effort: il banner resta comunque */ }
+  }, [language]);
+
+  const toggleZtl = useCallback(() => {
+    setZtlActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_ztl_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      // Onestà sulla copertura: al primo ON, disclaimer una tantum
+      if (next) {
+        try {
+          if (localStorage.getItem('wip_ztl_disclaimer_shown') !== '1') {
+            localStorage.setItem('wip_ztl_disclaimer_shown', '1');
+            setZtlDisclaimer(true);
+            setTimeout(() => setZtlDisclaimer(false), 12000);
+          }
+        } catch { /* senza storage il disclaimer riapparirà: accettabile */ }
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!ztlActive) return;
+    startZtlWatch(onZtlAlert);
+    const map = mapRef.current;
+    if (!map) {
+      // Toggle ripristinato prima che Leaflet esista: riprova a breve
+      const retry = setTimeout(() => setZtlTick((t) => t + 1), 500);
+      return () => { clearTimeout(retry); stopZtlWatch(); };
+    }
+    // Disegno dei perimetri vicini in rosso translucido (best-effort:
+    // se Overpass è giù il watch resta comunque attivo e riproverà da sé)
+    const loadZones = async (lat: number, lon: number) => {
+      try {
+        const zones = await fetchZtlZonesAround(lat, lon);
+        if (!ztlLayerRef.current) ztlLayerRef.current = L.layerGroup();
+        const group = ztlLayerRef.current;
+        group.clearLayers();
+        for (const z of zones) {
+          for (const ring of z.rings) {
+            const poly = L.polygon(ring, {
+              color: '#dc2626',
+              weight: 1.5,
+              opacity: 0.7,
+              fillColor: '#dc2626',
+              fillOpacity: 0.15,
+            });
+            poly.bindTooltip(`🚫 ${z.name}`, { sticky: true });
+            group.addLayer(poly);
+          }
+        }
+        if (!map.hasLayer(group)) group.addTo(map);
+        ztlCenterRef.current = { lat, lon };
+      } catch (e) {
+        console.warn('[ZTL] fetch perimetri fallito:', e);
+      }
+    };
+    try {
+      const c = map.getCenter();
+      loadZones(c.lat, c.lng);
+    } catch { /* mappa non pronta: ci pensa il moveend */ }
+    const onMoveEnd = () => {
+      try {
+        const c = map.getCenter();
+        const last = ztlCenterRef.current;
+        if (!last || getDistanceFromLatLonInM(last.lat, last.lon, c.lat, c.lng) > 5000) {
+          loadZones(c.lat, c.lng);
+        }
+      } catch { /* bounds non pronti */ }
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      stopZtlWatch();
+      map.off('moveend', onMoveEnd);
+      if (ztlLayerRef.current && map.hasLayer(ztlLayerRef.current)) {
+        map.removeLayer(ztlLayerRef.current);
+      }
+      if (ztlBannerTimerRef.current) clearTimeout(ztlBannerTimerRef.current);
+      setZtlBanner(null);
+    };
+  }, [ztlActive, ztlTick, onZtlAlert]);
+
+  // ── «Si può fare il bagno qui?» (src/lib/bathingWater.ts) ─────────────
+  // Toggle 🏖 nei controlli mappa: marker colorati con la classificazione
+  // annuale EEA delle acque di balneazione (dati aperti UE). Persistente,
+  // default OFF. Copertura solo Europa: fuori arrivano 0 siti, in silenzio.
+  // Il layer è visibile solo a zoom ≥9 (i siti sono puntuali).
+  const BATHING_MIN_ZOOM = 9;
+  // Atlante beni vincolati: 1,78 M di punti nel mondo. Sotto lo zoom 13
+  // (scala di quartiere) sarebbero migliaia di pin sovrapposti su una query
+  // inutilmente larga, quindi il layer semplicemente non si carica.
+  const BENI_CULTURALI_MIN_ZOOM = 13;
+  const [bathingActive, setBathingActive] = useState(() => {
+    try { return localStorage.getItem('wip_bathing_enabled') === '1'; } catch { return false; }
+  });
+  const [bathingLoading, setBathingLoading] = useState(false);
+  // Toast una tantum sulla copertura europea (flag localStorage)
+  const [bathingDisclaimer, setBathingDisclaimer] = useState(false);
+  const bathingLayerRef = useRef<L.LayerGroup | null>(null);
+  // Centro dell'ultimo fetch: sopra 10 km di pan il layer si aggiorna
+  const bathingCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  // Retry se la mappa non è ancora pronta (ripristino da localStorage al mount)
+  const [bathingTick, setBathingTick] = useState(0);
+
+  const loadBathingSites = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setBathingLoading(true);
+    try {
+      const sites = await fetchBathingSites({
+        south: bounds.getSouth(), west: bounds.getWest(),
+        north: bounds.getNorth(), east: bounds.getEast(),
+      });
+      if (!bathingLayerRef.current) bathingLayerRef.current = L.layerGroup();
+      const group = bathingLayerRef.current;
+      group.clearLayers();
+      for (const site of sites) {
+        const color = BATHING_QUALITY_COLOR[site.quality];
+        const icon = L.divIcon({
+          html: `<div style="width:14px;height:14px;border-radius:7px;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);"></div>`,
+          className: 'wip-bathing-marker',
+          iconSize: [14, 14],
+          iconAnchor: [7, 7],
+          popupAnchor: [0, -8],
+        });
+        const marker = L.marker([site.lat, site.lon], { icon });
+        const label = language === 'IT'
+          ? BATHING_QUALITY_LABEL[site.quality].it
+          : BATHING_QUALITY_LABEL[site.quality].en;
+        marker.bindPopup(
+          `<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:210px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">🏖 ${escapeHtml(site.name)}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;display:flex;align-items:center;gap:5px;">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:${color};flex:none;"></span>
+              ${language === 'IT' ? 'Qualità' : 'Quality'} ${site.year}: <b>${label}</b>
+            </div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${language === 'IT'
+              ? 'Classificazione ufficiale UE (EEA) — verifica i divieti temporanei in loco'
+              : 'Official EU classification (EEA) — check temporary bans on site'}</div>
+          </div>`
+        );
+        group.addLayer(marker);
+      }
+      // Il fetch è async: nel frattempo l'utente può aver zoomato sotto soglia
+      if (!map.hasLayer(group) && map.getZoom() >= BATHING_MIN_ZOOM) group.addTo(map);
+      const c = bounds.getCenter();
+      bathingCenterRef.current = { lat: c.lat, lon: c.lng };
+    } catch (e) {
+      // Servizio EEA giù: nessun crash, il layer resta com'era e si
+      // riproverà al prossimo pan (fuori Europa NON si passa di qui:
+      // arrivano semplicemente 0 siti)
+      console.warn('[Balneazione] fetch EEA fallito:', e);
+    } finally {
+      setBathingLoading(false);
+    }
+  }, [language]);
+
+  const toggleBathing = useCallback(() => {
+    setBathingActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_bathing_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      // Onestà sulla copertura: al primo ON, toast una tantum (solo Europa)
+      if (next) {
+        try {
+          if (localStorage.getItem('wip_bathing_disclaimer_shown') !== '1') {
+            localStorage.setItem('wip_bathing_disclaimer_shown', '1');
+            setBathingDisclaimer(true);
+            setTimeout(() => setBathingDisclaimer(false), 12000);
+          }
+        } catch { /* senza storage il toast riapparirà: accettabile */ }
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!bathingActive) return;
+    const map = mapRef.current;
+    if (!map) {
+      // Toggle ripristinato prima che Leaflet esista: riprova a breve
+      const retry = setTimeout(() => setBathingTick((t) => t + 1), 500);
+      return () => clearTimeout(retry);
+    }
+    const refresh = () => {
+      try {
+        if (map.getZoom() < BATHING_MIN_ZOOM) {
+          // Zoom troppo largo: layer nascosto ma dati/centro conservati
+          if (bathingLayerRef.current && map.hasLayer(bathingLayerRef.current)) {
+            map.removeLayer(bathingLayerRef.current);
+          }
+          return;
+        }
+        if (bathingLayerRef.current && !map.hasLayer(bathingLayerRef.current)) {
+          bathingLayerRef.current.addTo(map);
+        }
+        const c = map.getCenter();
+        const last = bathingCenterRef.current;
+        // Refresh solo su pan >10 km (le classificazioni non cambiano certo col pan)
+        if (!last || getDistanceFromLatLonInM(last.lat, last.lon, c.lat, c.lng) > 10000) {
+          loadBathingSites(map.getBounds());
+        }
+      } catch { /* bounds non pronti: ci pensa il prossimo moveend */ }
+    };
+    refresh();
+    map.on('moveend', refresh);
+    map.on('zoomend', refresh);
+    return () => {
+      map.off('moveend', refresh);
+      map.off('zoomend', refresh);
+      if (bathingLayerRef.current && map.hasLayer(bathingLayerRef.current)) {
+        map.removeLayer(bathingLayerRef.current);
+      }
+      bathingCenterRef.current = null; // al riaccendersi si ricarica subito
+    };
+  }, [bathingActive, bathingTick, loadBathingSites]);
+
+  // ── Meteo sulla mappa + modalità "al coperto" ─────────────────────────
+  const [meteo, setMeteo] = useState<MeteoData | null>(null);
+  const [indoorMode, setIndoorMode] = useState(false);
+  const [rainBannerDismissed, setRainBannerDismissed] = useState(false);
+  // Cella (1 decimale) dell'ultimo fetch riuscito: evita richieste a ogni pan
+  const meteoKeyRef = useRef<string>("");
+
+  const refreshMeteo = useCallback(async (lat: number, lon: number) => {
+    const key = `${lat.toFixed(1)}_${lon.toFixed(1)}`;
+    if (meteoKeyRef.current === key) return;
+    const m = await fetchMeteoCached(lat, lon);
+    if (m) {
+      meteoKeyRef.current = key;
+      setMeteo(m);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== undefined && activeTab !== "map") return;
+    const map = mapRef.current;
+    if (!map) return;
+    try {
+      const c = map.getCenter();
+      refreshMeteo(c.lat, c.lng);
+    } catch { /* mappa non pronta: ci pensa il moveend */ }
+    const onMoveEnd = () => {
+      try {
+        const c = map.getCenter();
+        refreshMeteo(c.lat, c.lng);
+      } catch { /* ignora */ }
+    };
+    map.on("moveend", onMoveEnd);
+    return () => { map.off("moveend", onMoveEnd); };
+  }, [activeTab, refreshMeteo]);
+
   // Cleanup completo per gli unmount reali (hot reload, error boundary):
   // il timer di debounce e i fetch in volo non devono sopravvivere al componente.
   // La mappa Leaflet viene già rimossa da react-leaflet (MapContainer chiama map.remove()).
@@ -905,6 +1502,70 @@ function MapArea({
           isFromDb: true,
           status: i.status || 'verified'
         } as Poi));
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * ATLANTE DEI BENI VINCOLATI (tabella `beni_culturali`, ~1,78 M nel mondo).
+   *
+   * È un layer informativo, non una categoria turistica: dentro c'è tutto il
+   * patrimonio protetto dai registri nazionali, comprese le cose che non si
+   * possono visitare. Da qui la scheda ridotta e nessuna audioguida.
+   *
+   * I beni di fascia A/B sono anche POI veri in shared_pois (colonna
+   * `promoted_poi_id`): quelli conservano la scheda completa con audioguida
+   * anche quando li si apre da questa chip, e se sono già in mappa come POI
+   * non vengono raddoppiati — il merge a valle li scarta per id.
+   *
+   * Zoom minimo alto: a scala regionale sarebbero decine di migliaia di pin.
+   */
+  const fetchBeniCulturaliInBounds = async (
+    south: number, west: number, north: number, east: number
+  ): Promise<Poi[]> => {
+    try {
+      const { data } = await supabase
+        .from('beni_culturali')
+        .select('id, name, lat, lon, tier, category_wip, typology, comune, address, description, promoted_poi_id, matched_poi_id, wikidata_id')
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        // Ordine per fascia (A < B < C in ordine alfabetico) perche' il limite
+        // di 400 si riempie sempre nelle citta' storiche: senza ordine, a
+        // Londra tornavano 357 case a schiera vincolate e nessun monumento.
+        // Cosi' i beni turistici vincono il taglio e il resto riempie.
+        .order('tier', { ascending: true })
+        .limit(400);
+      return (data || [])
+        .filter((i: any) => i.name && i.lat != null && i.lon != null)
+        .map((i: any) => {
+        // Due colonne portano allo stesso POI: `promoted_poi_id` quando il POI
+        // è nato promuovendo il bene, `matched_poi_id` quando il bene è stato
+        // agganciato a un POI che c'era già. Guardarne una sola raddoppiava il
+        // pin di ogni bene agganciato (tutti i 43 beni FAI, per esempio).
+        const poiCollegato = i.promoted_poi_id || i.matched_poi_id || null;
+        return ({
+          // Se il bene è già un POI, ne prende l'id: cliccandolo si apre la
+          // scheda completa e non si crea un doppione sulla mappa.
+          id: poiCollegato || `bc-atlante-${i.id}`,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          category: 'beni_culturali',
+          baseCategory: 'beni_culturali',
+          subCategory: i.category_wip || i.typology || '',
+          description: i.description || i.typology || '',
+          address: i.address || undefined,
+          city: i.comune || undefined,
+          is_gem: false,
+          isFromDb: true,
+          status: 'verified',
+          // Letto da PoiPopupContent per la scheda ridotta: vero solo per i
+          // beni di solo atlante, cioè quelli senza un POI corrispondente.
+          isHeritageAtlas: !poiCollegato,
+          heritageTier: i.tier,
+        } as unknown as Poi);
+        });
     } catch {
       return [];
     }
@@ -1167,6 +1828,21 @@ function MapArea({
           const seen = new Set(communityExtra.map(p => String(p.id)));
           dbPois = dbPois.filter(p => !seen.has(String(p.id))).concat(communityExtra);
           console.log(`[MapArea] +${communityExtra.length} POI community (fetch bbox dedicato)`);
+        }
+      }
+
+      // Atlante dei beni vincolati: tabella a parte, quindi fetch a parte.
+      // Solo da zoom 13 in su (quartiere): sotto sarebbero migliaia di pin
+      // sovrapposti e una query inutilmente larga.
+      if (activeCategories.includes('beni_culturali') && zoom >= BENI_CULTURALI_MIN_ZOOM) {
+        const beniExtra = await fetchBeniCulturaliInBounds(south, west, north, east);
+        if (beniExtra.length > 0) {
+          // I beni già presenti come POI (stesso id) restano quelli veri, con
+          // scheda e audioguida: si aggiungono solo quelli che mancano.
+          const giaInMappa = new Set(dbPois.map(p => String(p.id)));
+          const nuovi = beniExtra.filter(p => !giaInMappa.has(String(p.id)));
+          dbPois = dbPois.concat(nuovi);
+          console.log(`[MapArea] +${nuovi.length} beni culturali (${beniExtra.length - nuovi.length} già in mappa come POI)`);
         }
       }
     } catch (err: any) {
@@ -1872,9 +2548,18 @@ function MapArea({
         // riappariva (sfarfallio a lotti).
         if (merged.length > 500) {
             const currentCenter = bounds.getCenter();
+            // I beni di solo atlante sono gli ULTIMI a essere tenuti: sono un
+            // layer informativo e in una città storica sono tanti, quindi senza
+            // questa priorità sfratterebbero i POI turistici veri dal tetto dei
+            // 500. Gemme e siti con wikidata restano davanti a tutto.
+            const rank = (p: any) => {
+                if (p.is_gem || p.wikidata || p.category === 'gemme') return 0;
+                if (p.category === 'beni_culturali') return 2;
+                return 1;
+            };
             merged.sort((a: any, b: any) => {
-                const scoreA = (a.is_gem || a.wikidata || a.category === 'gemme') ? 0 : 1;
-                const scoreB = (b.is_gem || b.wikidata || b.category === 'gemme') ? 0 : 1;
+                const scoreA = rank(a);
+                const scoreB = rank(b);
                 if (scoreA !== scoreB) return scoreA - scoreB;
                 const keepA = prevIds.has(String(a.id)) ? 0 : 1;
                 const keepB = prevIds.has(String(b.id)) ? 0 : 1;
@@ -2284,23 +2969,34 @@ function MapArea({
       esperienze_locali: "#ea580c",
       attraction:        "#16a34a",
       community:         "#ec4899",
+      beni_culturali:    "#78716c",
     };
 
     // I POI WIP Community hanno SEMPRE il pin magenta: il colore della
     // sotto-categoria (monument, church...) non deve mai vincere, altrimenti
     // il pin community diventa indistinguibile da quello ufficiale accanto.
     const isCommunity = effectiveCat === "community";
+    // Stesso ragionamento per l'atlante: pin grigio pietra, spento di
+    // proposito. Sono beni vincolati senza audioguida, non devono competere
+    // visivamente con i POI turistici che stanno accanto.
+    const isAtlante = effectiveCat === "beni_culturali";
 
     let bgHex: string;
     if (isCommunity) {
       bgHex = CAT_HEX.community;
+    } else if (isAtlante) {
+      bgHex = CAT_HEX.beni_culturali;
     } else if (isGem) {
       bgHex = (CAT_HEX as any)[osmSubCat] || (CAT_HEX as any)[effectiveCat] || "#0f766e";
     } else {
       bgHex = (CAT_HEX as any)[osmSubCat] || (CAT_HEX as any)[effectiveCat] || "#6b7280";
     }
 
-    const emoji = (CATEGORY_EMOJIS as any)[osmSubCat] || (CATEGORY_EMOJIS as any)[effectiveCat] || "📍";
+    // Sull'atlante l'emoji della sotto-categoria (chiesa, castello...) darebbe
+    // un pin identico a quello turistico: qui vince sempre l'anfora.
+    const emoji = isAtlante
+      ? "🏺"
+      : (CATEGORY_EMOJIS as any)[osmSubCat] || (CATEGORY_EMOJIS as any)[effectiveCat] || "📍";
 
     const accessible = isAccessible(poi);
     const subIcon = getSubCategoryEmoji(poi.subCategory);
@@ -2434,6 +3130,9 @@ function MapArea({
       markerData.map(({ poi, position, icon }) => (
         <Marker
           key={`marker-${poi.id}`}
+          // Modalità "al coperto": i POI indoor restano pieni, gli altri si
+          // attenuano. Solo visuale: nessun filtro persistente viene toccato.
+          opacity={indoorMode && !isIndoorPoi(poi) ? 0.25 : 1}
           ref={(r) => {
             if (r) {
               markerRefs.current[poi.id] = r;
@@ -2452,7 +3151,7 @@ function MapArea({
           }}
         />
       )),
-    [markerData],
+    [markerData, indoorMode],
   );
 
   const focusPoiOnMap = (poi: Poi) => {
@@ -2626,6 +3325,224 @@ function MapArea({
         )}
       </AnimatePresence>
 
+      {/* ── Allarme ZTL: banner rosso ben visibile + disclaimer copertura ── */}
+      <div className="absolute top-[calc(2.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[1200] w-[calc(100%-4rem)] max-w-[420px] flex flex-col items-center gap-2 pointer-events-none">
+        <AnimatePresence>
+          {ztlBanner && (
+            <motion.div
+              key="ztl-alert"
+              initial={{ opacity: 0, y: -24, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -24 }}
+              className="pointer-events-auto w-full"
+            >
+              <div className="bg-red-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(220,38,38,0.5)] border border-red-300/60 px-4 py-3 flex items-start gap-2.5">
+                <span className="text-[20px] leading-none mt-0.5">🚫</span>
+                <p className="text-[13px] font-black leading-snug flex-1">
+                  {language === 'IT'
+                    ? (ztlBanner.pre
+                        ? `Stai per entrare nella ZTL${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — rischio multa`
+                        : `Sei nella ZTL${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — rischio multa`)
+                    : (ztlBanner.pre
+                        ? `Entering limited traffic zone${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — fine risk`
+                        : `Inside limited traffic zone${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — fine risk`)}
+                </p>
+                <button
+                  onClick={() => setZtlBanner(null)}
+                  aria-label={language === 'IT' ? 'Chiudi avviso ZTL' : 'Dismiss ZTL alert'}
+                  className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {ztlDisclaimer && (
+            <motion.div
+              key="ztl-disclaimer"
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              className="pointer-events-auto w-full"
+            >
+              <div className="bg-amber-500/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-amber-300/60 px-4 py-2.5 flex items-start gap-2">
+                <span className="text-[15px] leading-none mt-0.5">⚠️</span>
+                <p className="text-[11px] font-bold leading-snug flex-1">
+                  {language === 'IT'
+                    ? 'Copertura basata su OpenStreetMap: non tutte le ZTL sono mappate, verifica sempre la segnaletica.'
+                    : 'Coverage based on OpenStreetMap: not all restricted zones are mapped, always check road signs.'}
+                </p>
+                <button
+                  onClick={() => setZtlDisclaimer(false)}
+                  aria-label={language === 'IT' ? 'Chiudi' : 'Close'}
+                  className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Toast una tantum: copertura europea del layer balneazione */}
+        <AnimatePresence>
+          {bathingDisclaimer && (
+            <motion.div
+              key="bathing-disclaimer"
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              className="pointer-events-auto w-full"
+            >
+              <div className="bg-cyan-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-cyan-300/60 px-4 py-2.5 flex items-start gap-2">
+                <span className="text-[15px] leading-none mt-0.5">🏖</span>
+                <p className="text-[11px] font-bold leading-snug flex-1">
+                  {language === 'IT'
+                    ? 'Qualità delle acque di balneazione: classificazione annuale ufficiale UE (EEA). Copertura solo europea; avvicina la mappa per vedere i siti.'
+                    : 'Bathing water quality: official annual EU classification (EEA). Europe-only coverage; zoom in to see the sites.'}
+                </p>
+                <button
+                  onClick={() => setBathingDisclaimer(false)}
+                  aria-label={language === 'IT' ? 'Chiudi' : 'Close'}
+                  className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* ── Colonna controlli in alto a sinistra: meteo + servizi pratici ──
+          Angolo non invasivo: il banner offline sta al centro, gli errori a
+          destra, la ricerca in basso. */}
+      <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-3 z-[1000] flex flex-col items-start gap-2 pointer-events-none">
+        {/* Chip meteo (Open-Meteo, cache 30 min) */}
+        {meteo && (
+          <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
+            <span className="text-[14px] leading-none">{weatherEmoji(meteo.code)}</span>
+            {Math.round(meteo.temp)}°
+          </div>
+        )}
+
+        {/* Banner pioggia: propone l'evidenziazione dei luoghi al coperto */}
+        <AnimatePresence>
+          {meteo && meteo.rainProb >= 50 && !rainBannerDismissed && !indoorMode && (
+            <motion.div
+              key="rain-banner"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="pointer-events-auto max-w-[240px] bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-3"
+            >
+              <p className="text-[11px] font-bold text-[#1e3a8a] dark:text-white leading-snug">
+                🌧 {language === 'IT'
+                  ? 'Pioggia in arrivo — vuoi vedere i luoghi al coperto?'
+                  : 'Rain coming — want to see indoor places?'}
+              </p>
+              <div className="flex gap-1.5 mt-2">
+                <button
+                  onClick={() => { setIndoorMode(true); setRainBannerDismissed(true); }}
+                  className="px-2.5 py-1 bg-[#1e3a8a] text-white rounded-lg text-[10px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all"
+                >
+                  {language === 'IT' ? 'Al coperto' : 'Indoor'}
+                </button>
+                <button
+                  onClick={() => setRainBannerDismissed(true)}
+                  className="px-2.5 py-1 bg-black/5 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-lg text-[10px] font-bold hover:bg-black/10 active:scale-95 transition-all"
+                >
+                  {language === 'IT' ? 'No grazie' : 'No thanks'}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Pillola per disattivare l'evidenziazione "al coperto" */}
+        {indoorMode && (
+          <button
+            onClick={() => setIndoorMode(false)}
+            className="pointer-events-auto bg-[#1e3a8a]/90 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 active:scale-95 transition-all"
+          >
+            🏛 {language === 'IT' ? 'Al coperto attivo' : 'Indoor mode on'}
+            <X className="w-3 h-3" />
+          </button>
+        )}
+
+        {/* Toggle layer servizi pratici (fontanelle, bagni, panchine) */}
+        <button
+          onClick={toggleServices}
+          title={language === 'IT' ? 'Servizi: fontanelle, bagni, panchine' : 'Services: fountains, toilets, benches'}
+          aria-pressed={servicesActive}
+          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
+            servicesActive
+              ? 'bg-sky-600 text-white border-sky-400 ring-2 ring-sky-500/40'
+              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
+          }`}
+        >
+          {servicesLoading
+            ? <Loader2 className={`w-4 h-4 animate-spin ${servicesActive ? 'text-white' : 'text-[#1e3a8a]'}`} />
+            : <span className="text-[16px] leading-none">🚰</span>}
+        </button>
+
+        {/* Toggle fog of war: diario delle zone già esplorate a piedi */}
+        <button
+          onClick={toggleFog}
+          title={language === 'IT' ? 'Zone esplorate' : 'Explored areas'}
+          aria-pressed={fogActive}
+          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
+            fogActive
+              ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
+              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
+          }`}
+        >
+          <span className="text-[16px] leading-none">{fogActive ? '👣' : '🗺️'}</span>
+        </button>
+
+        {/* Toggle allarme ZTL: avviso in auto prima di entrare in zona a traffico limitato */}
+        <button
+          onClick={toggleZtl}
+          title={language === 'IT' ? 'Avviso ZTL (zone a traffico limitato)' : 'ZTL alert (limited traffic zones)'}
+          aria-pressed={ztlActive}
+          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
+            ztlActive
+              ? 'bg-red-600 text-white border-red-400 ring-2 ring-red-500/40'
+              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
+          }`}
+        >
+          <span className="text-[16px] leading-none">🚫</span>
+        </button>
+
+        {/* Toggle qualità acque di balneazione (dati EEA, solo Europa) */}
+        <button
+          onClick={toggleBathing}
+          title={language === 'IT' ? 'Qualità acque di balneazione (dati UE/EEA)' : 'Bathing water quality (EU/EEA data)'}
+          aria-pressed={bathingActive}
+          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
+            bathingActive
+              ? 'bg-cyan-600 text-white border-cyan-400 ring-2 ring-cyan-500/40'
+              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
+          }`}
+        >
+          {bathingLoading
+            ? <Loader2 className={`w-4 h-4 animate-spin ${bathingActive ? 'text-white' : 'text-[#1e3a8a]'}`} />
+            : <span className="text-[16px] leading-none">🏖</span>}
+        </button>
+
+        {/* Badge di copertura: quanto di quest'area è già stato calpestato */}
+        {fogActive && fogCoverage !== null && (
+          <div className="pointer-events-none bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 text-[10px] font-black text-[#1e3a8a] dark:text-white select-none whitespace-nowrap">
+            👣 {language === 'IT'
+              ? `Hai esplorato ~${Math.round(fogCoverage)}% di quest'area`
+              : `You've explored ~${Math.round(fogCoverage)}% of this area`}
+          </div>
+        )}
+      </div>
+
       <AnimatePresence>
         {followMode && (
           <motion.div
@@ -2678,7 +3595,7 @@ function MapArea({
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] font-black text-amber-900 leading-tight uppercase tracking-tight">
-                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : (key === "db" ? (language === 'IT' ? "Luoghi Vicini" : "Nearby Places") : key))}
+                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : (key === "db" ? (language === 'IT' ? "Luoghi Vicini" : "Nearby Places") : (key === "servizi" ? (language === 'IT' ? "Servizi" : "Services") : key)))}
                 </p>
                 <p className="text-[10px] text-amber-800/90 leading-tight mt-1 font-medium">
                   {String(error)}

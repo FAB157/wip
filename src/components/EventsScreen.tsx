@@ -13,6 +13,7 @@ import {
   Heart
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { get as idbGet } from "idb-keyval";
 import { logApiCall } from "../lib/apiLogger";
 import { supabase } from "../lib/supabase";
 import { getApiUrl } from "../lib/api";
@@ -26,6 +27,8 @@ interface EventData {
   name: string;
   description: string;
   date: string;
+  /** Orario di inizio (HH:MM) quando la fonte lo espone (Ticketmaster). */
+  time?: string;
   venueName: string;
   venueAddress?: string;
   url: string;
@@ -95,6 +98,25 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   );
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
+  // Filtro «Solo gratis» (badge 🆓 sulle card)
+  const [onlyFree, setOnlyFree] = useState(false);
+
+  // Viaggio attivo: destinazione dell'itinerario più recente (Supabase o
+  // copia locale wip_last_plan). Se presente, la ricerca eventi parte da lì
+  // con un chip visibile e un toggle per tornare alla posizione attuale.
+  const [activeTrip, setActiveTrip] = useState<{ city: string; lat: number; lon: number } | null>(null);
+  const [useTripCenter, setUseTripCenter] = useState(false);
+
+  // «Serata perfetta»: proposta AI aperitivo+cena+evento+rientro
+  const [eveningPlan, setEveningPlan] = useState<any | null>(null);
+  const [eveningLoading, setEveningLoading] = useState(false);
+  const [showEveningModal, setShowEveningModal] = useState(false);
+
+  // Centro effettivo di TUTTE le ricerche: la destinazione del viaggio attivo
+  // (se scelta) oppure il centro della mappa visualizzata (default invariato).
+  const searchCenter: [number, number] | undefined =
+    useTripCenter && activeTrip ? [activeTrip.lat, activeTrip.lon] : mapCenter;
+
   // Date filters
   const [startDate, setStartDate] = useState<string>(
     new Date().toISOString().split("T")[0],
@@ -114,10 +136,10 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   }, []);
 
   const fetchEvents = useCallback(async () => {
-    // Determine if we should clear results (if map center moved significantly or dates changed)
-    const centerMoved = prevCenterRef.current && mapCenter && (
-      Math.abs(prevCenterRef.current[0] - mapCenter[0]) > 0.1 || 
-      Math.abs(prevCenterRef.current[1] - mapCenter[1]) > 0.1
+    // Determine if we should clear results (if search center moved significantly or dates changed)
+    const centerMoved = prevCenterRef.current && searchCenter && (
+      Math.abs(prevCenterRef.current[0] - searchCenter[0]) > 0.1 ||
+      Math.abs(prevCenterRef.current[1] - searchCenter[1]) > 0.1
     );
     const datesChanged = prevDatesRef.current.start !== startDate || prevDatesRef.current.end !== endDate;
 
@@ -132,14 +154,14 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       });
     }
     
-    prevCenterRef.current = mapCenter;
+    prevCenterRef.current = searchCenter;
     prevDatesRef.current = { start: startDate, end: endDate };
 
     setLoading(true);
     setError(null);
-    
-    let currentLat = mapCenter?.[0] || 44.0792;
-    let currentLon = mapCenter?.[1] || 10.1;
+
+    let currentLat = searchCenter?.[0] || 44.0792;
+    let currentLon = searchCenter?.[1] || 10.1;
 
     try {
       // Reverse geocoding to get city name for sources that need it (like Virgilio)
@@ -180,7 +202,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
   // Dipendenze per VALORE (lat/lon), non per reference: un array inline nel
   // parent ricreava fetchEvents a ogni render e rilanciava le 4 API a pagamento.
-  }, [mapCenter?.[0], mapCenter?.[1], startDate, endDate, radius]);
+  }, [searchCenter?.[0], searchCenter?.[1], startDate, endDate, radius]);
 
   useEffect(() => {
     fetchEvents();
@@ -199,6 +221,55 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       }
     });
   }, [fetchEvents]);
+
+  // ── Viaggio attivo: pre-imposta la destinazione dell'itinerario recente ──
+  // Fonti (le stesse di PlanScreen/ProfileScreen): user_itineraries su
+  // Supabase (il più recente, max 14 giorni) e la copia locale wip_last_plan
+  // in IndexedDB. Senza viaggio il comportamento resta quello di default.
+  useEffect(() => {
+    (async () => {
+      try {
+        const derive = (plan: any): { city: string; lat: number; lon: number } | null => {
+          if (!plan) return null;
+          const cityName = String(plan.destinazione || plan.destination || (plan.titolo || '').split(':')[0] || '').trim();
+          for (const g of (plan.giorni || [])) {
+            for (const t of (g?.tappe || [])) {
+              const tLat = Number(t?.coordinate?.lat ?? t?.lat);
+              const tLon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon);
+              if (Number.isFinite(tLat) && Number.isFinite(tLon) && tLat !== 0) {
+                return { city: cityName || 'destinazione del viaggio', lat: tLat, lon: tLon };
+              }
+            }
+          }
+          return null;
+        };
+
+        let trip: { city: string; lat: number; lon: number } | null = null;
+        // 1. Itinerario più recente su Supabase (solo se aggiornato di recente)
+        try {
+          const { data: s } = await supabase.auth.getSession();
+          if (s?.session?.user?.id) {
+            const { data } = await supabase
+              .from('user_itineraries')
+              .select('dati_itinerario, updated_at')
+              .eq('user_id', s.session.user.id)
+              .order('updated_at', { ascending: false })
+              .limit(1);
+            const row: any = data?.[0];
+            if (row?.updated_at && Date.now() - new Date(row.updated_at).getTime() < 14 * 86400_000) {
+              trip = derive(row.dati_itinerario);
+            }
+          }
+        } catch { /* si passa alla copia locale */ }
+        // 2. Copia locale dell'ultimo piano generato (PlanScreen la aggiorna a ogni salvataggio)
+        if (!trip) trip = derive(await idbGet('wip_last_plan').catch(() => null));
+        if (trip) {
+          setActiveTrip(trip);
+          setUseTripCenter(true);
+        }
+      } catch { /* nessun viaggio attivo: default invariato */ }
+    })();
+  }, []);
 
   const loadVirgilio = async (lat: number, lon: number, cityName?: string) => {
     logApiCall('virgilio', 'ricerca_eventi_scraping');
@@ -346,13 +417,15 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
             name: item.name,
             description: item.info || item.description || "Dettagli sulla pagina ufficiale.",
             date: item.dates?.start?.localDate || "",
+            time: item.dates?.start?.localTime ? String(item.dates.start.localTime).slice(0, 5) : undefined,
             venueName: item._embedded?.venues?.[0]?.name || "Località non specificata",
             url: item.url,
             imageUrl: item.images?.[0]?.url || "https://images.unsplash.com/photo-1540039155732-6761b5f1e847?auto=format&fit=crop&q=80&w=400",
             source: "ticketmaster" as EventSource,
             lat: item._embedded?.venues?.[0]?.location?.latitude,
             lon: item._embedded?.venues?.[0]?.location?.longitude,
-            isFree: /gratuit|libero/.test(checkLower),
+            // Gratis se dichiarato nel testo O se il prezzo minimo listino è 0
+            isFree: /gratuit|libero/.test(checkLower) || item.priceRanges?.[0]?.min === 0,
             isFamily: /famigli|bambin/.test(checkLower),
             isMusic: /music|concert/.test(checkLower),
           };
@@ -374,8 +447,8 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   };
 
   const retrySource = (source: EventSource) => {
-    const lat = mapCenter?.[0] || 44.0792;
-    const lon = mapCenter?.[1] || 10.1;
+    const lat = searchCenter?.[0] || 44.0792;
+    const lon = searchCenter?.[1] || 10.1;
     if (source === "virgilio") loadVirgilio(lat, lon, city);
     if (source === "ticketmaster") loadTicketmaster(lat, lon, radius, city);
     if (source === "getyourguide") loadGetYourGuide(lat, lon, radius, city);
@@ -675,6 +748,59 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     }
   };
 
+  // ── Rilevamento «gratis» ───────────────────────────────────────────────
+  // Flag dalla source (mercati locali, priceRanges min 0) oppure testo
+  // esplicito; le frasi "cancellazione gratuita"/"free cancellation" dei
+  // tour NON contano come ingresso gratuito.
+  const isEventFree = (e: EventData): boolean => {
+    if (e.isFree) return true;
+    const txt = `${e.name} ${e.description}`.toLowerCase()
+      .replace(/cancellazione gratuita|annullamento gratuito|free cancellation/g, '');
+    return /ingresso (libero|gratuito)|entrata (libera|gratuita)|evento gratuito|\bgratis\b|\bgratuito\b|free (entry|admission|event)/.test(txt);
+  };
+
+  // ── Link affiliati via /api/out (tracking click server-side) ───────────
+  // Solo per le fonti partner e solo se l'host è nella whitelist del server:
+  // così un URL fuori whitelist resta un link diretto e non finisce in 400.
+  const AFFIL_OUT_HOST_RE = /(^|\.)((ticketmaster|livenation|getyourguide|gyg)\.[a-z]{2,3}(\.[a-z]{2})?|viator\.com|tiqets\.com|eventiesagre\.it|openstreetmap\.org)$/i;
+  const outUrl = (ev: EventData): string => {
+    const finalUrl = ensureAffiliateUrl(ev.url);
+    try {
+      const host = new URL(finalUrl).hostname;
+      if (["ticketmaster", "viator", "getyourguide", "tiqets", "local"].includes(ev.source) && AFFIL_OUT_HOST_RE.test(host)) {
+        return getApiUrl(`/api/out?u=${encodeURIComponent(finalUrl)}&src=${ev.source}`);
+      }
+    } catch { /* URL malformato: link diretto */ }
+    return finalUrl;
+  };
+
+  // ── «Serata perfetta» in un tap ────────────────────────────────────────
+  const requestEveningPlan = async () => {
+    const ref = deviceCoords || searchCenter;
+    if (!ref) return notify("Posizione non disponibile per comporre la serata.");
+    if (eveningPlan) { setShowEveningModal(true); return; }
+    setEveningLoading(true);
+    try {
+      const r = await fetch(getApiUrl("/api/evening-plan"), {
+        method: "POST",
+        signal: AbortSignal.timeout(60000),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: ref[0], lon: ref[1], lang: (language || "IT").toLowerCase() }),
+      });
+      const data = await r.json().catch(() => null);
+      if (!r.ok || !Array.isArray(data?.tappe) || data.tappe.length === 0) {
+        throw new Error(data?.error || "Proposta non disponibile");
+      }
+      setEveningPlan(data);
+      setShowEveningModal(true);
+    } catch (e) {
+      console.error("evening-plan error:", e);
+      notify("Serata perfetta non disponibile al momento, riprova tra poco.");
+    } finally {
+      setEveningLoading(false);
+    }
+  };
+
   // Solo eventi REALI dalle cinque sorgenti: niente più mock di riempimento.
   // Se non c'è nulla si mostra lo stato "nessun evento trovato".
   const displayEvents = [
@@ -701,9 +827,12 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       if (!inDateRange && e.source !== "viator") return false;
     }
 
-    // Distanza dal CENTRO DELLA MAPPA VISUALIZZATA (non dalla posizione GPS)
-    if (e.lat && e.lon && mapCenter) {
-      const distInKm = getDistanceFromLatLonInM(mapCenter[0], mapCenter[1], e.lat, e.lon) / 1000;
+    // Filtro «Solo gratis»
+    if (onlyFree && !isEventFree(e)) return false;
+
+    // Distanza dal CENTRO DI RICERCA (mappa visualizzata o viaggio attivo)
+    if (e.lat && e.lon && searchCenter) {
+      const distInKm = getDistanceFromLatLonInM(searchCenter[0], searchCenter[1], e.lat, e.lon) / 1000;
       // Viator ha il suo tetto: le esperienze oltre i 50 km non riguardano
       // il luogo che l'utente sta guardando.
       // Le sagre hanno coordinate approssimate (capoluogo di provincia):
@@ -740,6 +869,28 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     const sourcePriority: Record<string, number> = { ticketmaster: 0, virgilio: 1 };
     return (sourcePriority[a.source] || 0) - (sourcePriority[b.source] || 0);
   });
+
+  // ── «Stasera vicino a te» ──────────────────────────────────────────────
+  // Dalle 16 locali: 2-3 eventi di OGGI (dalle fonti già caricate) entro
+  // ~10 km dal punto di riferimento (GPS o centro di ricerca), ordinati per
+  // distanza. Solo filtro client dei dati già fetchati, nessuna nuova fonte.
+  const todayLocal = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
+  const tonightRef = deviceCoords || searchCenter;
+  const tonightEvents = (new Date().getHours() >= 16 && tonightRef)
+    ? displayEvents
+        .filter(e => ["ticketmaster", "viator", "getyourguide", "tiqets", "local"].includes(e.source))
+        .filter(e => e.date === todayLocal && Number.isFinite(Number(e.lat)) && Number.isFinite(Number(e.lon)))
+        .map(e => ({
+          ev: e,
+          dist: getDistanceFromLatLonInM(tonightRef[0], tonightRef[1], Number(e.lat), Number(e.lon)) / 1000,
+        }))
+        .filter(x => x.dist <= 10)
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 3)
+    : [];
 
   const openNavigation = (event: EventData) => {
     if (event.lat && event.lon) {
@@ -798,6 +949,76 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col gap-4">
+        {/* Viaggio attivo: chip destinazione + toggle posizione attuale */}
+        {activeTrip && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setUseTripCenter(true)}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-black transition-all border ${
+                useTripCenter
+                  ? 'bg-primary border-primary text-white shadow-md'
+                  : 'bg-surface-variant border-outline-variant text-on-surface-variant hover:bg-primary/10'
+              }`}
+            >
+              📍 Eventi a {activeTrip.city} (viaggio attivo)
+            </button>
+            <button
+              onClick={() => setUseTripCenter(false)}
+              className={`px-3 py-1.5 rounded-full text-[11px] font-black transition-all border ${
+                !useTripCenter
+                  ? 'bg-primary border-primary text-white shadow-md'
+                  : 'bg-surface-variant border-outline-variant text-on-surface-variant hover:bg-primary/10'
+              }`}
+            >
+              🧭 Posizione attuale
+            </button>
+          </div>
+        )}
+
+        {/* Serata perfetta in un tap */}
+        <button
+          onClick={requestEveningPlan}
+          disabled={eveningLoading}
+          className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-black py-3 rounded-2xl transition-all flex items-center justify-center gap-2 text-sm shadow-md disabled:opacity-60"
+        >
+          {eveningLoading ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" /> Preparo la tua serata...
+            </>
+          ) : (
+            <>🍸 Serata perfetta in un tap</>
+          )}
+        </button>
+
+        {/* 🌙 Stasera vicino a te (dalle 16, eventi di oggi entro ~10 km) */}
+        {tonightEvents.length > 0 && (
+          <div className="bg-gradient-to-br from-indigo-950 to-slate-900 rounded-3xl p-4 border border-indigo-800/40">
+            <h2 className="text-white font-black text-sm uppercase tracking-wider mb-3">🌙 Stasera vicino a te</h2>
+            <div className="flex flex-col gap-2">
+              {tonightEvents.map(({ ev, dist }) => (
+                <a
+                  key={`tonight-${ev.id}`}
+                  href={ev.url && ev.url !== '#' ? outUrl(ev) : undefined}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => ev.url && trackAffiliateClick(ev.url, ev.name, city, 'events_tonight')}
+                  className="flex items-center gap-3 bg-white/5 hover:bg-white/10 rounded-2xl px-3 py-2.5 transition-colors"
+                >
+                  <img src={ev.imageUrl} alt="" className="w-10 h-10 rounded-xl object-cover shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white text-xs font-bold truncate">{ev.name}</div>
+                    <div className="text-indigo-300 text-[10px] font-medium">
+                      {ev.time ? `ore ${ev.time} · ` : ''}{dist.toFixed(1)} km · {ev.source}
+                    </div>
+                  </div>
+                  {isEventFree(ev) && <span className="text-base shrink-0" title="Gratis">🆓</span>}
+                  <ExternalLink className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Source Status Badges */}
         <div className="flex flex-wrap gap-2 mb-2">
           {Object.entries(loadingSources).map(([source, isLoading]) => (
@@ -891,6 +1112,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                       {event.macroCategory}
                     </div>
                   )}
+                  {isEventFree(event) && (
+                    <div className="bg-emerald-600/90 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
+                      🆓 Gratis
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="p-5 flex flex-col flex-1">
@@ -926,14 +1152,14 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                       )}
                     </div>
                   </div>
-                  {(deviceCoords || mapCenter) && event.lat && event.lon && (
+                  {(deviceCoords || searchCenter) && event.lat && event.lon && (
                     <div className="flex items-center gap-2 text-sm text-on-surface-variant font-medium">
                       <span className="w-4 h-4 shrink-0 flex items-center justify-center">🚶</span>
                       <span>
                         {deviceCoords ? (
                           <>Ca. {(getDistanceFromLatLonInM(deviceCoords[0], deviceCoords[1], event.lat, event.lon) / 1000).toFixed(1)} km {getTranslation("events_km_from_you", language)}</>
                         ) : (
-                          <>Ca. {(getDistanceFromLatLonInM(mapCenter![0], mapCenter![1], event.lat, event.lon) / 1000).toFixed(1)} km {getTranslation("events_km_from_map", language)}</>
+                          <>Ca. {(getDistanceFromLatLonInM(searchCenter![0], searchCenter![1], event.lat, event.lon) / 1000).toFixed(1)} km {getTranslation("events_km_from_map", language)}</>
                         )}
                       </span>
                     </div>
@@ -960,7 +1186,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                   </button>
                   {event.url && event.url !== "#" ? (
                     <a
-                      href={ensureAffiliateUrl(event.url)}
+                      href={outUrl(event)}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={() => trackAffiliateClick(event.url, event.name, city, 'events_screen')}
@@ -1037,6 +1263,20 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
           <div className="w-px h-5 bg-white/10 shrink-0"></div>
 
+          {/* Solo gratis */}
+          <button
+            onClick={() => setOnlyFree(v => !v)}
+            className={`px-3 py-1 rounded-full text-[9px] font-black transition-all flex items-center gap-1 whitespace-nowrap border shrink-0 ${
+              onlyFree
+                ? 'bg-emerald-600 border-emerald-600 text-white shadow-md'
+                : 'bg-white/5 border-white/10 text-on-surface-variant hover:bg-white/10'
+            }`}
+          >
+            🆓 Solo gratis
+          </button>
+
+          <div className="w-px h-5 bg-white/10 shrink-0"></div>
+
           {/* Sorting */}
           <div className="flex items-center gap-2 shrink-0">
             <span className="text-[9px] font-black text-on-surface-variant uppercase tracking-widest mr-1 shrink-0">{getTranslation("events_sort", language)}</span>
@@ -1060,6 +1300,85 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           </div>
         </div>
       </div>
+
+      {/* Modale «Serata perfetta» */}
+      <AnimatePresence>
+        {showEveningModal && eveningPlan && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => setShowEveningModal(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 30, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 30, scale: 0.95 }}
+              className="bg-surface rounded-3xl shadow-2xl w-full max-w-md max-h-[85%] overflow-y-auto"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="sticky top-0 bg-surface/95 backdrop-blur-xl border-b border-outline-variant/20 px-5 py-4 flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-black text-on-surface leading-tight">🍸 {eveningPlan.titolo}</h2>
+                  {eveningPlan.budgetStimato && (
+                    <p className="text-xs font-bold text-primary mt-1">💶 Budget stimato: {eveningPlan.budgetStimato}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowEveningModal(false)}
+                  className="p-2 hover:bg-surface-variant rounded-full transition-colors text-on-surface-variant shrink-0"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 flex flex-col gap-3">
+                {(eveningPlan.tappe || []).map((t: any, i: number) => {
+                  const emoji = t.tipo === 'aperitivo' ? '🥂' : t.tipo === 'cena' ? '🍽️' : t.tipo === 'evento' ? '🎫' : '🚕';
+                  const mapsQuery = [t.nome, t.indirizzo].filter(Boolean).join(' ');
+                  return (
+                    <div key={i} className="bg-surface-variant/40 border border-outline-variant/40 rounded-2xl p-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">{emoji}</span>
+                        <span className="text-xs font-black text-primary tabular-nums">{t.ora}</span>
+                        <span className="text-[10px] font-black uppercase tracking-wider text-on-surface-variant">{t.tipo}</span>
+                      </div>
+                      <div className="text-sm font-bold text-on-surface">{t.nome}</div>
+                      {t.indirizzo && <div className="text-xs text-on-surface-variant mt-0.5">{t.indirizzo}</div>}
+                      {t.nota && <div className="text-xs text-on-surface-variant mt-1.5 leading-snug italic">{t.nota}</div>}
+                      <div className="flex gap-2 mt-2.5">
+                        {t.tipo !== 'rientro' && mapsQuery && (
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-[11px] font-black text-primary hover:underline"
+                          >
+                            <MapPin className="w-3 h-3" /> Apri in mappa
+                          </a>
+                        )}
+                        {t.link && (
+                          <a
+                            href={getApiUrl(`/api/out?u=${encodeURIComponent(t.link)}&src=ticketmaster`)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-[11px] font-black text-secondary hover:underline"
+                          >
+                            <ExternalLink className="w-3 h-3" /> Biglietti
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <p className="text-[10px] text-on-surface-variant text-center mt-1">
+                  Proposta generata con AI su locali ed eventi reali della zona: verifica orari e disponibilità.
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

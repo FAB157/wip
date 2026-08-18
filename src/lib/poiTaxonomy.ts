@@ -49,7 +49,7 @@ export function subCategoryToFilterId(subCat?: string | null): string {
  * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
  * anche da deselezionati.
  */
-export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community"] as const;
+export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community", "beni_culturali"] as const;
 
 /** Sub-chip disponibili per ogni macro (ids esatti di CategoryChips). */
 export const SUBS_BY_MACRO: Record<string, string[]> = {
@@ -61,6 +61,11 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   // WIP Community: i POI nati dalle foto Vision approvate. Nessun sub-chip:
   // il tipo reale (chiesa, statua...) vive in poi_type/subCategory.
   community: [],
+  // Atlante dei beni vincolati (tabella beni_culturali): un layer informativo,
+  // non una categoria turistica. Nessun sub-chip — dentro c'è di tutto, dalla
+  // cattedrale al muro di cinta, e i sub-chip culturali riguardano la mappa
+  // turistica.
+  beni_culturali: [],
 };
 
 const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
@@ -84,6 +89,11 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // reale (chiesa, statua, panorama) resta in subCategory ma non li sposta
   // mai in un'altra macro.
   if (raw === "community") return { macro: "community", subId: "" };
+
+  // Atlante dei beni vincolati: macro a sé. Va risolto PRIMA della logica
+  // culturale, perché molti di questi beni sono chiese o castelli e finirebbero
+  // sotto "monumenti", comparendo anche a chip atlante spenta.
+  if (raw === "beni_culturali") return { macro: "beni_culturali", subId: "" };
 
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
   // ma conservano la sotto-categoria culturale per i sub-chip.
