@@ -3397,7 +3397,11 @@ Assicurati che correctIndex sia un numero intero tra 0 e 2.`
         }
       ];
 
-      const response = await callUniversalAi("deepseek", messages, { response_format: { type: "json_object" }, temperature: 0.8 }, "trivia", supabaseUrl, supabaseServiceKey, groq);
+      // Quiz di intrattenimento mentre l'utente aspetta la guida: contenuto
+      // di contorno, va sui motori gratuiti (regola del committente: DeepSeek
+      // solo per itinerari, podcast e guide premium). Groq è anche più
+      // rapido, che qui è esattamente ciò che serve.
+      const response = await callUniversalAi("groq", messages, { response_format: { type: "json_object" }, temperature: 0.8 }, "trivia", supabaseUrl, supabaseServiceKey, groq);
 
       // callUniversalAi ritorna un oggetto: il vecchio response.replace()
       // lanciava TypeError DOPO aver pagato la generazione, quindi il quiz
@@ -10065,7 +10069,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // Revisore primario groq, con together come rete di sicurezza gratuita.
     // DeepSeek NON è più qui: chiamato su OGNI tentativo (anche quelli
     // scartati) ha fatto esplodere i costi. Resta come controllo finale
-    // UNICO su ciò che Groq ha già approvato, vedi libraryFinalReviewDeepseek.
+    // UNICO su ciò che Groq ha già approvato, vedi libraryFinalReview.
     const candidates = ['groq', 'mistral', 'together'].filter((e) => !String(genEngine || '').includes(e));
     const sys = `Sei un revisore SEVERO di itinerari di viaggio per un'app. Ricevi i vincoli editoriali e un itinerario JSON. Valuta senza sconti:
 1) REALISMO DEI TEMPI: durate di visita, spostamenti tra le coordinate dichiarate, orari dei pasti, code tipiche.
@@ -10117,18 +10121,21 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     await saveToCache(key, 'library_index', arr.slice(0, LIB_MAX_INDEX_ENTRIES));
   }
 
-  // ── CONTROLLO FINALE DeepSeek: UNA sola chiamata, solo su ciò che Groq ha
-  //    già approvato (mai sui tentativi scartati) — seconda opinione prima
-  //    di mostrarlo all'utente, a costo minimo invece che ad ogni tentativo.
-  //    Fail-open: se DeepSeek non risponde (saldo, saturazione) l'item passa
-  //    comunque, non deve bloccare l'intera pipeline di semina.
-  async function libraryFinalReviewDeepseek(itin: any, d: any): Promise<{ approved: boolean; problemi: string[] }> {
+  // ── CONTROLLO FINALE: UNA sola chiamata, solo su ciò che il primo revisore
+  //    ha già approvato (mai sui tentativi scartati) — seconda opinione prima
+  //    di mostrarlo all'utente. Girava su DeepSeek; dal 18/08/2026 sta sui
+  //    motori gratuiti, perché la regola del committente riserva DeepSeek a
+  //    itinerari on the fly, podcast e guide premium — una revisione, anche
+  //    se innescata dall'apertura di un utente, non è nessuna delle tre.
+  //    Fail-open: se nessun motore risponde l'item passa comunque, non deve
+  //    bloccare la pipeline.
+  async function libraryFinalReview(itin: any, d: any): Promise<{ approved: boolean; problemi: string[] }> {
     try {
       const sys = `Sei l'ultimo controllo qualità PRIMA della pubblicazione di un itinerario di viaggio in un'app. Ricevi vincoli e itinerario JSON già approvato da un primo revisore: cerca SOLO difetti gravi che il primo controllo potrebbe aver lasciato passare (tempi irrealistici, tappe generiche, incoerenza col brief, rischi pratici). Rispondi SOLO con un oggetto json: {"approved": true|false, "problemi": ["..."]}. Sii permissivo su dettagli minori: bocciare solo se davvero non pubblicabile.`;
       const user = `VINCOLI:\n${libraryConstraintsSummary(d)}\n\nITINERARIO GIÀ APPROVATO DA VERIFICARE (JSON):\n${JSON.stringify(itin)}`;
-      const resp = await callUniversalAi('deepseek',
+      const resp = await callUniversalAi('groq',
         [{ role: 'system', content: sys }, { role: 'user', content: user }],
-        { temperature: 0.2, response_format: { type: 'json_object' }, strictEngine: true, max_tokens: 1000 },
+        { temperature: 0.2, response_format: { type: 'json_object' }, max_tokens: 1000 },
         'library_final_review', supabaseUrl, supabaseServiceKey, null);
       const o = libParseJsonLoose(resp?.data);
       if (!o || typeof o.approved !== 'boolean') return { approved: true, problemi: [] };
@@ -10681,7 +10688,7 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       if (!obj?.itinerary) return res.status(404).json({ error: 'Item non presente in libreria.' });
       if (req.query.review === '1' && obj.meta && obj.meta.deepseekReviewed !== true) {
         const d = { city: obj.meta.city, country: obj.meta.country, days: obj.meta.days, angle: obj.meta.angle, theme: obj.meta.theme, kind: obj.meta.kind, hours: obj.meta.hours, coords: { lat: 0, lon: 0 }, constraints: {} };
-        const final = await libraryFinalReviewDeepseek(obj.itinerary, d);
+        const final = await libraryFinalReview(obj.itinerary, d);
         obj.meta.deepseekReviewed = true;
         obj.meta.deepseekApproved = final.approved;
         if (!final.approved) {
