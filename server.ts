@@ -9236,10 +9236,16 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // costerebbe soldi veri).
   async function libLoadSeededSlugs(): Promise<Set<string> | null> {
     try {
+      // ATTENZIONE: filtrare con cache_key=like.lib_item_* costa una
+      // SCANSIONE COMPLETA di api_cache (il LIKE non usa l'indice della
+      // chiave primaria con questa collation). Il 18/08/2026 quella query
+      // ha impiegato 117 secondi e ha contribuito a mettere in ginocchio
+      // il database (PGRST002 su tutte le rotte, app compresa). Si filtra
+      // per content_type, che ha un indice dedicato, con un tetto di righe.
       const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache`, {
-        params: { select: 'cache_key', cache_key: 'like.lib_item_*', limit: 100000 },
+        params: { select: 'cache_key', content_type: 'eq.library_itinerary', limit: 50000 },
         headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
-        timeout: 30000,
+        timeout: 20000,
       });
       if (!Array.isArray(r.data)) return null;
       const out = new Set<string>();

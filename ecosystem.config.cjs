@@ -40,15 +40,16 @@ module.exports = {
       time: true,
     },
     {
-      // Semina continua della biblioteca itinerari: chiama in ciclo
-      // /api/library/seed-cron su wip.guide (la generazione gira là, dove
-      // ci sono le chiavi dei motori; qui c'è solo il metronomo). Serve
-      // CRON_SECRET nel .env. È un ciclo infinito: se esce è un errore,
-      // quindi l'autorestart ha senso. Consuma pochissima memoria, ma vale
-      // la regola generale: non farlo girare insieme a mass-enrich.
+      // Semina continua della biblioteca itinerari: scorre il catalogo dei
+      // descrittori e chiede a wip.guide di generare quelli mancanti (la
+      // generazione gira là, dove stanno le chiavi dei motori; qui c'è solo
+      // il ciclo). Riparte da capo a ogni giro saltando ciò che è già fatto,
+      // quindi l'autorestart è voluto. Serve SUPABASE_SERVICE_ROLE_KEY nel
+      // .env (già presente). Vale la regola generale: non insieme a
+      // mass-enrich.
       name: 'seed-library',
-      script: 'node',
-      args: 'scripts/seed-library.mjs',
+      script: 'npx',
+      args: 'tsx scripts/seed-library.mts',
       interpreter: 'none',
       cwd: __dirname,
       autorestart: true,
