@@ -8016,6 +8016,20 @@ ${description}
   app.get("/api/admin/beni-culturali", rateLimiter, requireAdmin, async (req, res) => {
     try {
       const { q, country, tier, source, promoted, limit, offset } = req.query as any;
+      // GUARDIA ANTI-INCIDENTE (18/08/2026): la ricerca testuale libera e il
+      // filtro "solo già POI" sono esattamente le due query che hanno messo
+      // giù il DB di produzione — su 1,8 M di righe senza indici sono
+      // scansioni sequenziali complete che bruciano il budget di Disk IO.
+      // Finché la migration 20260818120000_beni_culturali_indici.sql non è
+      // applicata, si accettano SOLO se accompagnate da un filtro per fonte,
+      // che riduce l'insieme a un ordine di grandezza gestibile.
+      if ((q || promoted === 'si') && !source) {
+        return res.status(400).json({
+          error: 'Scegli prima una fonte (es. FAI o Catalogo MiC): senza indici la ricerca '
+            + "sull'intero atlante (1,8 milioni di beni) manda in timeout il database.",
+          serve: 'source',
+        });
+      }
       const filtri: string[] = [];
       if (country) filtri.push(`country=eq.${encodeURIComponent(String(country))}`);
       if (tier) filtri.push(`tier=eq.${encodeURIComponent(String(tier))}`);
@@ -9177,7 +9191,13 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // vercel.json): 270s di lavoro + margine per risposta/rete. Solo oltre
   // questo budget (caso raro) si risponde 202, SENZA proseguire in
   // background: si rilascia il lock e il retry del client rilancia da capo.
-  const LIB_REQUEST_SYNC_BUDGET_MS = 270000;
+  // Su Vercel il tetto è il maxDuration di vercel.json (300s), quindi 270s
+  // di lavoro + margine. Fuori dal serverless (droplet: `node dist/server.cjs`
+  // con la semina che gira in locale) non c'è nessun tetto e conviene
+  // alzarlo molto: con 270s la terza rigenerazione correttiva non fa in
+  // tempo a finire e il lavoro delle prime due viene buttato — misurato il
+  // 18/08/2026, 3 item su 7 persi così. Si alza con LIB_SYNC_BUDGET_MS.
+  const LIB_REQUEST_SYNC_BUDGET_MS = Math.min(1800000, Math.max(60000, Number(process.env.LIB_SYNC_BUDGET_MS) || 270000));
   // Semina: pausa tra un item e il successivo (memoria di progetto: i batch
   // senza throttle hanno saturato il Disk IO di Supabase) e tetto indice.
   const LIB_SEED_PAUSE_MS = 1500;

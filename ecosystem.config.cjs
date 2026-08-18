@@ -40,10 +40,34 @@ module.exports = {
       time: true,
     },
     {
+      // Copia locale dell'API (dist/server.cjs, buildata a parte e copiata
+      // qui): serve SOLO alla semina della biblioteca. Su Vercel la function
+      // muore a 300s e la terza rigenerazione correttiva non fa in tempo a
+      // finire — misurato il 18/08/2026: 3 item su 7 buttati a metà lavoro.
+      // Qui non c'è tetto (LIB_SYNC_BUDGET_MS=900000 nel .env) e si può usare
+      // anche Agnes, che impiega 2-4 minuti a chiamata.
+      // Aggiornamento: rifare `npx esbuild server.ts --bundle --platform=node
+      // --format=cjs --packages=external --outfile=dist/server.cjs` e copiare
+      // il file; il frontend NON serve (qui gira solo l'API).
+      name: 'wip-api',
+      script: 'node',
+      args: '--max-old-space-size=256 dist/server.cjs',
+      interpreter: 'none',
+      cwd: __dirname,
+      autorestart: true,
+      restart_delay: 5000,
+      min_uptime: 30000,
+      max_restarts: 20,
+      max_memory_restart: '330M',
+      time: true,
+    },
+    {
       // Semina continua della biblioteca itinerari: scorre il catalogo dei
       // descrittori e chiede a wip.guide di generare quelli mancanti (la
-      // generazione gira là, dove stanno le chiavi dei motori; qui c'è solo
-      // il ciclo). Riparte da capo a ogni giro saltando ciò che è già fatto,
+      // generazione gira sull'API indicata da LIB_API nel .env: sul droplet
+      // è http://127.0.0.1:3000, cioè il processo wip-api qui sopra, senza
+      // il tetto dei 300s di Vercel). Va quindi avviato DOPO wip-api.
+      // Riparte da capo a ogni giro saltando ciò che è già fatto,
       // quindi l'autorestart è voluto. Serve SUPABASE_SERVICE_ROLE_KEY nel
       // .env (già presente). Vale la regola generale: non insieme a
       // mass-enrich.
