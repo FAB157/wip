@@ -263,7 +263,11 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
     const payload = {
       searchTerm: cityName,
       searchTypes: [{ searchType: "DESTINATIONS" }],
-      currency: "EUR"
+      currency: "EUR",
+      // Senza pagination Viator risponde 400 "Missing pagination" anche con
+      // una chiave valida: la ricerca dinamica delle destinazioni falliva
+      // sempre e si finiva sul fallback freetext dei prodotti.
+      pagination: { start: 1, count: 5 }
     };
     const res = await axios.post(`https://${VIATOR_API_HOST}/partner/search/freetext`, payload, {
       headers: {

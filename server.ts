@@ -227,21 +227,38 @@ async function callUniversalAi(
   // fa parte della promessa al cliente, es. podcast e guide d'autore).
   // "gemini" è escluso dalle code: tryEngine non lo gestisce e restituiva
   // sempre false, mascherando la catena reale nei log.
+  // DeepSeek NON sta in nessuna coda di fallback: entra solo se lo chiede il
+  // chiamante come motore primario.
+  //
+  // Perché così, e non con un divieto per singola chiamata. Prima DeepSeek era
+  // in fondo a OGNI coda ("agnes, groq, deepseek" e "groq, agnes, deepseek"),
+  // e lo si teneva fuori dai lavori di massa passando `excludeEngines` punto
+  // per punto. Basta un punto che se ne dimentica e la spesa riparte: il
+  // 17-18/08 la semina della libreria ha fatto 1.370 chiamate in due giorni
+  // (library_gen_theme 602, library_verify 412, library_gen_port 252,
+  // library_gen_zone 104) proprio scivolando in coda alle catene di agnes e
+  // groq. Invertendo il default la regola diventa strutturale: chi vuole
+  // DeepSeek lo chiede, e si vede nel codice.
+  //
+  // Regola del committente (18/08/2026): DeepSeek è l'unico a pagamento della
+  // catena e si usa SOLO dove c'è un utente che aspetta in diretta —
+  // itinerari on the fly, guide premium, podcast. Mai in background.
+  //
+  // Chi restava senza rete adesso cade su Gemini (il fallback d'emergenza più
+  // sotto), che è gratuito.
   const baseQueue = options.strictEngine
     ? [primaryEngine]
     : primaryEngine === "agnes"
-      ? ["agnes", "groq", "deepseek"]
+      ? ["agnes", "groq"]
       : primaryEngine === "deepseek"
+        // Richiesto esplicitamente: parte da DeepSeek, ma se cade ripiega sui
+        // gratuiti invece di insistere a pagamento.
         ? ["deepseek", "agnes", "groq"]
-        // Groq (arricchimento POI, teaser, contenuti brevi): fallback su
-        // Agnes come richiesto, DeepSeek solo come ultima rete di sicurezza.
-        : ["groq", "agnes", "deepseek"];
+        : ["groq", "agnes"];
 
   // options.excludeEngines = motori vietati per QUESTA chiamata, fallback
-  // compreso. Regola del committente (18/08/2026): DeepSeek è a pagamento e
-  // si usa SOLO quando c'è un utente che aspetta in diretta, MAI nei lavori
-  // in background — dove rientrava di nascosto in fondo alla coda di
-  // fallback di agnes e di groq.
+  // compreso. Resta utile per vietare un motore specifico (es. escludere dal
+  // revisore lo stesso motore che ha generato).
   const vietati = new Set((options.excludeEngines || []).map((e: string) => String(e)));
   const engineQueue = baseQueue.filter((e) => !vietati.has(e));
 
@@ -763,11 +780,13 @@ async function streamUniversalAi(
     // Catena di fallback: il motore richiesto per primo, poi l'altro.
     // Il fallback scatta solo se il primario fallisce PRIMA di aver emesso
     // contenuto (altrimenti mischieremmo due output nello stesso stream).
-    // Groq primario (arricchimento POI e contenuti brevi) → Agnes come
-    // fallback richiesto → DeepSeek come ultima rete di sicurezza.
+    //
+    // Come nella versione non-streaming, DeepSeek NON è in coda a Groq: è
+    // l'unico a pagamento e ci finiva dentro di nascosto. Ci si arriva solo
+    // chiedendolo come primario (guide premium, podcast, itinerari in diretta).
     const wantsGroqFirst = primaryEngine === "groq";
     const engineQueue = wantsGroqFirst
-      ? ["groq", "agnes", "deepseek"]
+      ? ["groq", "agnes"]
       : ["deepseek", "agnes", "groq"];
     let lastErr: any = null;
 
@@ -9171,7 +9190,13 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
 
   // ── Costanti di taratura della libreria (tutte qui, commentate) ─────────
   // Punteggio minimo del revisore AI per salvare l'item.
-  const LIB_SCORE_MIN = 70;
+  // Soglia di approvazione del revisore. Abbassata da 70 a 60 il 18/08/2026
+  // su decisione del committente: con 70 la semina buttava itinerari da 65
+  // per rilievi minori (una durata sottostimata, un "contributo volontario"
+  // in una tappa gratis) dopo 4 minuti di lavoro — rendimento all'11%. Il
+  // controllo finale DeepSeek, che scatta quando un utente apre davvero
+  // l'itinerario, resta la seconda rete.
+  const LIB_SCORE_MIN = 60;
   // Margine di rientro di default (ore): porto = 1 (la nave non aspetta),
   // aeroporto = 2 (controlli + imbarco). Override: constraints.returnBufferHours.
   const LIB_DEFAULT_BUFFER: Record<string, number> = { port: 1, airport: 2 };
