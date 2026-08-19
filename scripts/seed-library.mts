@@ -102,26 +102,46 @@ async function loadSeeded(): Promise<Set<string>> {
 // lavoro fatto si perde comunque, perché l'item viene salvato solo alla fine.
 const TIMEOUT_MS = (Number(K('LIB_SYNC_BUDGET_MS')) || 270000) + 90000;
 
+// NON si usa fetch(): undici (il motore di fetch dentro Node) ha un
+// headersTimeout di 300 secondi che NON si disattiva col signal, e da quando
+// la generazione gira su Agnes ogni item ne impiega 4-6. Risultato misurato il
+// 19/08/2026: 82 "fetch failed" in 9 ore contro 13 esiti veri — il server
+// finiva e salvava l'item, il driver lo dava per perso e passava al
+// successivo, avviando una seconda generazione sopra la prima (di qui i
+// riavvii per memoria del processo API). http.request non ha quel tetto.
+//
+// Il corpo non contiene live:true: `live` significa "c'è un utente che
+// aspetta" e accende DeepSeek, che è a pagamento. Qui il motore è Agnes con
+// Groq di riserva: più lenti, ma gratuiti e senza limiti di tempo.
 async function generate(d: any): Promise<{ status: number; body: any }> {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-  try {
-    const r = await fetch(`${API}/api/library/request`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // NIENTE live:true. `live` significa "c'è un utente che aspetta" e
-      // accende DeepSeek, che è a pagamento: regola del committente, DeepSeek
-      // solo in diretta, mai nella semina di massa. Qui il motore è Agnes con
-      // Groq di riserva; sono più lenti (2-4 minuti a chiamata) ma sul
-      // droplet non c'è nessun limite di tempo.
-      body: JSON.stringify({ descriptor: d }),
-      signal: ctrl.signal,
-    });
-    const txt = await r.text();
-    let body: any = null;
-    try { body = JSON.parse(txt); } catch { body = { raw: txt.slice(0, 200) }; }
-    return { status: r.status, body };
-  } finally { clearTimeout(to); }
+  const payload = JSON.stringify({ descriptor: d });
+  const u = new URL(`${API}/api/library/request`);
+  const mod: any = u.protocol === 'https:' ? await import('node:https') : await import('node:http');
+  return new Promise((resolve, reject) => {
+    const req = mod.request(
+      {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: u.pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      },
+      (res: any) => {
+        let txt = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => { txt += c; });
+        res.on('end', () => {
+          let body: any = null;
+          try { body = JSON.parse(txt); } catch { body = { raw: txt.slice(0, 200) }; }
+          resolve({ status: res.statusCode || 0, body });
+        });
+      },
+    );
+    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error(`nessuna risposta entro ${Math.round(TIMEOUT_MS / 1000)}s`)));
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
