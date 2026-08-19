@@ -233,7 +233,7 @@ async function callUniversalAi(
       // quinto pozzo gratuito e la semina ne ha bisogno, perché groq, mistral
       // e together esauriscono le quote giornaliere nel giro di poche ore.
       if (!ai) return false;
-      finalModel = options.model?.startsWith('gemini') ? options.model : "gemini-2.5-flash";
+      finalModel = options.model?.startsWith('gemini') ? options.model : "gemini-flash-latest";
       const prompt = messages.map((m: any) => `${String(m.role).toUpperCase()}: ${m.content}`).join("\n");
       const genRes = await ai.models.generateContent({
         model: finalModel,
@@ -353,12 +353,12 @@ async function callUniversalAi(
       console.log("[Universal AI] Final Fallback: Attempting Gemini 2.5 Flash...");
       const prompt = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
       const genRes = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-flash-latest",
         contents: [{ role: "user", parts: [{ text: prompt }] }]
       });
       textContent = (genRes?.text || "").trim();
       if (textContent) {
-        finalModel = "gemini-2.5-flash";
+        finalModel = "gemini-flash-latest";
         success = true;
       }
     } catch (gemErr) {
@@ -943,7 +943,7 @@ async function _streamGemini(messages: any[], res: any) {
   if (!ai) throw new Error("Gemini safety net not available");
   let fullText = "";
   console.log("[Safety Net] Streaming via Gemini 2.5 Flash...");
-  const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" });
+  const model = ai.getGenerativeModel({ model: "gemini-flash-latest" });
   const prompt = messages.map(m => `${m.role === 'user' ? 'UTENTE' : 'SISTEMA'}: ${m.content}`).join("\n");
   const result = await model.generateContentStream(prompt);
   for await (const chunk of result.stream) {
@@ -3532,7 +3532,7 @@ Restituisci SOLO un oggetto JSON con il seguente formato:
       let usedEngine = "none";
       if (ai) {
         const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-flash-latest",
           contents: [
             { role: "user", parts: [{ text: systemPrompt }] }
           ],
@@ -6407,7 +6407,7 @@ Testo da tradurre (lingua originale: inglese):
 
 
         const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-flash-latest",
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           config: { responseMimeType: "application/json" }
         });
@@ -12219,7 +12219,7 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
 }`;
 
           const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
+            model: "gemini-flash-latest",
             contents: [{ role: "user", parts: [{ text: prompt }] }],
             config: { responseMimeType: "application/json" }
           });
@@ -15481,7 +15481,7 @@ Usa SEMPRE E SOLO questo schema JSON:
         } else {
            // Fallback base to gemini
            const aiRes = await ai.models.generateContent({
-             model: "gemini-2.5-flash",
+             model: "gemini-flash-latest",
              contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || JSON.stringify(m) }] })),
              config: { responseMimeType: "application/json" }
            });
