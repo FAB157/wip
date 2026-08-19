@@ -484,10 +484,25 @@ export default function ItineraryLibrarySheet({
             // live:true → l'utente è qui in attesa: il server usa DeepSeek
             // (più affidabile di Agnes) invece del motore gratuito di semina.
             body: JSON.stringify({ descriptor: d, live: true }),
-            signal: AbortSignal.timeout(120000),
+            // Il server lavora fino a 270s (LIB_SYNC_BUDGET_MS) prima di
+            // rispondere 202. Con l'attesa a 120s si mollava a metà strada e
+            // si mostrava un errore di rete mentre la generazione stava
+            // andando a buon fine: l'itinerario compariva in libreria pochi
+            // secondi dopo, ma l'utente aveva già letto "riprova".
+            signal: AbortSignal.timeout(150000),
           });
-        } catch {
-          throw new Error('Rete assente o server occupato: riprova tra poco.');
+        } catch (netErr: any) {
+          // Scaduta l'attesa NON vuol dire fallita: il server sta ancora
+          // generando. Si ritenta come per il 202, e al giro dopo l'item
+          // arriva dalla cache in un istante.
+          const scaduta = netErr?.name === 'TimeoutError' || netErr?.name === 'AbortError';
+          if (!scaduta) throw new Error('Rete assente: controlla la connessione e riprova.');
+          if (attempt === 3) {
+            throw new Error('Ci sto ancora lavorando: riapri la libreria tra un minuto, lo troverai pronto.');
+          }
+          setGenState(prev => ({ ...prev, [key]: 'Ci vuole ancora un momento, resto in attesa…' }));
+          await sleep(20000);
+          continue;
         }
         if (res.status === 202) {
           if (attempt === 3) {
