@@ -82,6 +82,35 @@ function personaDescription(character: 'nicky' | 'dante'): string {
     : 'guida locale fashion, moderna, trendy e amichevole: tono da "local guide" entusiasta, taglio lifestyle/fashion/trendy, atmosfera, selfie, vibe';
 }
 
+// --- QUOTE ESAURITE: PAUSA PER MOTORE ---------------------------------
+// Quando un motore risponde "rate limit" o "quota" non ha senso richiamarlo
+// subito: si segna fino a quando riprovare. I tetti a giornata (Groq: 200k
+// token/giorno) valgono ore, quelli al minuto pochi minuti — e quando il
+// messaggio dice "try again in 19m41s" si usa quel numero.
+const enginePausaFino: Record<string, number> = {};
+
+function engineInPausa(engine: string): boolean {
+  const fino = enginePausaFino[engine];
+  if (!fino) return false;
+  if (Date.now() >= fino) { delete enginePausaFino[engine]; return false; }
+  return true;
+}
+
+function segnaQuotaEsaurita(engine: string, err: any): void {
+  const msg = String(err?.response?.data?.error?.message || err?.message || '').toLowerCase();
+  const status = Number(err?.status || err?.response?.status || 0);
+  const isQuota = status === 429 || /rate.?limit|quota|tokens per day|tpd|too many requests|resource.?exhausted/i.test(msg);
+  if (!isQuota) return;
+  // "Please try again in 19m41.088s" / "in 32.5s"
+  const m = msg.match(/try again in\s+(?:(\d+)m)?([\d.]+)s/i);
+  let attesaMs = m
+    ? ((Number(m[1] || 0) * 60 + Math.ceil(Number(m[2] || 0))) * 1000)
+    : /per day|tpd|giornalier/i.test(msg) ? 3 * 60 * 60 * 1000 : 10 * 60 * 1000;
+  attesaMs = Math.min(6 * 60 * 60 * 1000, Math.max(30 * 1000, attesaMs)) + 5000;
+  enginePausaFino[engine] = Date.now() + attesaMs;
+  console.warn(`[Universal AI] ${engine} in pausa per ${Math.round(attesaMs / 60000)} minuti (quota esaurita).`);
+}
+
 // --- CENTRAL AI HELPER WITH FALLBACK & TOKEN TRACKING ---
 // Rotazione delle chiavi Agnes AI (load balancing come nello script di
 // enrichment massivo). Si resetta a ogni cold start serverless: va bene.
@@ -199,6 +228,28 @@ async function callUniversalAi(
       return true;
     }
 
+    if (engine === "gemini") {
+      // Gemini come motore di prima classe, non solo rete d'emergenza: è il
+      // quinto pozzo gratuito e la semina ne ha bisogno, perché groq, mistral
+      // e together esauriscono le quote giornaliere nel giro di poche ore.
+      if (!ai) return false;
+      finalModel = options.model?.startsWith('gemini') ? options.model : "gemini-2.5-flash";
+      const prompt = messages.map((m: any) => `${String(m.role).toUpperCase()}: ${m.content}`).join("\n");
+      const genRes = await ai.models.generateContent({
+        model: finalModel,
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        // Senza questo Gemini incornicia il JSON in un blocco markdown.
+        ...(options.response_format?.type === 'json_object'
+          ? { config: { responseMimeType: 'application/json' } }
+          : {}),
+      });
+      textContent = (genRes?.text || "").trim();
+      if (!textContent) return false;
+      responseData = genRes;
+      tokensUsed = genRes?.usageMetadata?.totalTokenCount || 0;
+      return true;
+    }
+
     if (engine === "mistral" && mistralKey) {
       // Terzo motore gratuito per la revisione libreria in background: dà
       // margine quando Groq esaurisce il tetto giornaliero di token, senza
@@ -251,7 +302,7 @@ async function callUniversalAi(
   // chiedendoli: ora fanno da rete quando groq esaurisce il tetto giornaliero
   // (200k token) — prima in quel caso restava solo agnes e ogni chiamata
   // costava 2-4 minuti.
-  const FREE_ENGINES = ["groq", "agnes", "together", "mistral"];
+  const FREE_ENGINES = ["groq", "agnes", "together", "mistral", "gemini"];
   const baseQueue = options.strictEngine
     ? [primaryEngine]
     : primaryEngine === "deepseek"
@@ -267,7 +318,14 @@ async function callUniversalAi(
   // compreso. Resta utile per vietare un motore specifico (es. escludere dal
   // revisore lo stesso motore che ha generato).
   const vietati = new Set((options.excludeEngines || []).map((e: string) => String(e)));
-  const engineQueue = baseQueue.filter((e) => !vietati.has(e));
+  const consentiti = baseQueue.filter((e) => !vietati.has(e));
+  // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
+  // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
+  // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
+  // Se però sono tutti in pausa si prova lo stesso: meglio un tentativo a
+  // vuoto che nessun contenuto.
+  const disponibili = consentiti.filter((e) => !engineInPausa(e));
+  const engineQueue = disponibili.length ? disponibili : consentiti;
 
   let success = false;
   let lastError = null;
@@ -281,6 +339,7 @@ async function callUniversalAi(
       }
     } catch (e: any) {
       lastError = e;
+      segnaQuotaEsaurita(eng, e);
       console.warn(`[Universal AI] ${eng} failed: ${e.message}. Trying next...`);
     }
   }
@@ -9741,7 +9800,7 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // Motori della semina, in ordine di rotazione: tutti gratuiti, i rapidi
   // per primi (groq ~30s per item, mistral e together in mezzo, agnes 2-4
   // minuti). Si alternano per non bruciare il tetto giornaliero di uno solo.
-  const LIB_BG_ENGINES = ['groq', 'mistral', 'together', 'agnes'];
+  const LIB_BG_ENGINES = ['groq', 'mistral', 'together', 'gemini', 'agnes'];
   let libBgEngineCounter = 0;
   // Semina: pausa tra un item e il successivo (memoria di progetto: i batch
   // senza throttle hanno saturato il Disk IO di Supabase) e tetto indice.
