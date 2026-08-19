@@ -8047,6 +8047,499 @@ ${description}
     }
   });
 
+  // --- SENTIERI E CAMMINI (OpenStreetMap) --------------------------------
+  //
+  // Nel mondo ci sono 280.999 oggetti `route=hiking` su OSM, 172.030 con un
+  // nome: i cammini europei (E9, E1…), i sentieri CAI, i percorsi locali.
+  //
+  // Perché NON un import di massa come le fontanelle: un percorso non è un
+  // punto, è una relazione con una geometria lunga chilometri. Su QLever
+  // estrarre le geometrie complete costa quasi 10 secondi ogni 3 righe, e il
+  // predicato del centroide di osm2rdf non risponde. Overpass invece con
+  // `out center` restituisce direttamente il punto rappresentativo, ed è
+  // tornato raggiungibile (verificato: overpass-api.de, 818 ms).
+  //
+  // Quindi: query per area, cache di un mese in api_cache, e se Overpass
+  // cade si serve la copia vecchia — un sentiero non cambia percorso.
+  app.get("/api/sentieri/vicino", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    const raggio = Math.min(Number((req.query as any).radius) || 15000, 40000);
+    const chiave = `sentieri_${lat.toFixed(2)}_${lon.toFixed(2)}_${raggio}`;
+    const CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', ...inCache.text_content });
+    }
+
+    // Escursionismo, cammini religiosi e vie ferrate: le tre cose che un
+    // camminatore cerca. Solo con nome — un sentiero senza nome non si
+    // racconta e non si cerca.
+    const query = `[out:json][timeout:25];
+(
+  relation["route"~"^(hiking|foot|pilgrimage)$"]["name"](around:${raggio},${lat},${lon});
+);
+out center tags 120;`;
+    const MIRROR = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter',
+    ];
+    for (const ep of MIRROR) {
+      try {
+        const r = await axios.post(ep, `data=${encodeURIComponent(query)}`, {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 30000,
+        });
+        const sentieri = (r.data?.elements || []).map((e: any) => ({
+          id: `osm-rel-${e.id}`,
+          nome: e.tags?.name,
+          tipo: e.tags?.route,
+          rete: e.tags?.network || null,          // iwn/nwn/rwn/lwn: internazionale → locale
+          simbolo: e.tags?.['osmc:symbol'] || null,
+          difficolta: e.tags?.sac_scale || null,
+          lunghezza: e.tags?.distance || null,
+          sito: e.tags?.website || null,
+          lat: e.center?.lat, lon: e.center?.lon,
+        })).filter((s: any) => s.nome && isFinite(s.lat) && isFinite(s.lon));
+
+        // Prima i cammini di rango più alto: un sentiero europeo interessa
+        // più di una passeggiata comunale.
+        const rango: Record<string, number> = { iwn: 0, nwn: 1, rwn: 2, lwn: 3 };
+        sentieri.sort((a: any, b: any) => (rango[a.rete] ?? 9) - (rango[b.rete] ?? 9));
+
+        const payload = { sentieri, attribuzione: '© contributori OpenStreetMap (ODbL)' };
+        await saveToCache(chiave, 'sentieri_osm', payload);
+        return res.json({ ok: true, fonte: 'overpass', ...payload });
+      } catch { /* mirror successivo */ }
+    }
+    if (inCache?.text_content) return res.json({ ok: true, fonte: 'cache_scaduta', ...inCache.text_content });
+    res.status(503).json({ error: 'Overpass non raggiungibile e nessuna copia in cache per questa zona' });
+  });
+
+  // --- QUALITÀ DELL'ARIA (OpenAQ → stazioni ufficiali) -------------------
+  //
+  // OpenAQ aggrega le centraline ufficiali: attorno a Firenze restituisce
+  // FI-GRAMSCI, FI-SIGNA, FI-SETTIGNANO, tutte marcate provider EEA. Uso
+  // commerciale consentito, con DOPPIA attribuzione dovuta: la fonte del
+  // dato (l'agenzia che gestisce la centralina) e OpenAQ come servizio.
+  //
+  // Due trappole trovate provando l'API il 19/08/2026:
+  // 1. `/measurements` restituisce dal PIÙ VECCHIO: chiedendo limit=1 si
+  //    ottiene una misura del 2023 e sembra che il servizio sia morto. Per
+  //    l'ultimo valore serve `/locations/{id}/latest`.
+  // 2. Alcune centraline sono DORMIENTI da anni pur comparendo nell'elenco
+  //    (FI-GRAMSCI: ultima attività marzo 2025). Vanno scartate guardando
+  //    `datetimeLast`, altrimenti si mostra come "aria di adesso" un dato
+  //    vecchio di un anno.
+  const AQI_SOGLIE: Record<string, number[]> = {
+    // Soglie orarie dell'Indice Europeo di Qualità dell'Aria (EEA).
+    pm25: [10, 20, 25, 50, 75],
+    pm10: [20, 40, 50, 100, 150],
+    no2: [40, 90, 120, 230, 340],
+    o3: [50, 100, 130, 240, 380],
+    so2: [100, 200, 350, 500, 750],
+  };
+  const AQI_LIVELLI = ['buona', 'discreta', 'media', 'scadente', 'scarsa', 'pessima'];
+
+  app.get("/api/aria/vicino", rateLimiter, async (req, res) => {
+    const chiaveApi = process.env.OPENAQ_API_KEY;
+    if (!chiaveApi) return res.status(503).json({ error: 'OPENAQ_API_KEY non configurata' });
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+
+    const chiave = `aria_${lat.toFixed(2)}_${lon.toFixed(2)}`;
+    const CACHE_MS = 60 * 60 * 1000; // le centraline pubblicano ogni ora
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', ...inCache.text_content });
+    }
+
+    const H = { 'X-API-Key': chiaveApi, Accept: 'application/json' };
+    try {
+      const el = await axios.get(`https://api.openaq.org/v3/locations`
+        + `?coordinates=${lat.toFixed(4)},${lon.toFixed(4)}&radius=25000&limit=10`, { headers: H, timeout: 20000 });
+      const scadenza = Date.now() - 48 * 60 * 60 * 1000; // dormiente oltre due giorni
+      const vive = (el.data?.results || []).filter((s: any) => {
+        const ultima = s.datetimeLast?.utc ? new Date(s.datetimeLast.utc).getTime() : 0;
+        return ultima > scadenza;
+      });
+      if (!vive.length) {
+        const vuoto = { stazione: null, misure: [], indice: null, attribuzione: 'OpenAQ.org' };
+        await saveToCache(chiave, 'aria_openaq', vuoto);
+        return res.json({ ok: true, fonte: 'openaq', ...vuoto });
+      }
+
+      // La più vicina fra quelle vive.
+      const s = vive[0];
+      const perSensore = new Map<number, string>();
+      for (const sen of s.sensors || []) if (sen?.id && sen?.parameter?.name) perSensore.set(sen.id, sen.parameter.name);
+
+      const ul = await axios.get(`https://api.openaq.org/v3/locations/${s.id}/latest`, { headers: H, timeout: 20000 });
+      const fresco = Date.now() - 6 * 60 * 60 * 1000; // solo misure delle ultime sei ore
+      const misure: any[] = [];
+      let peggiore = -1;
+      for (const m of ul.data?.results || []) {
+        const nome = perSensore.get(m.sensorsId);
+        const quando = m.datetime?.utc ? new Date(m.datetime.utc).getTime() : 0;
+        if (!nome || !AQI_SOGLIE[nome] || quando < fresco) continue;
+        const soglie = AQI_SOGLIE[nome];
+        let livello = soglie.findIndex((x) => Number(m.value) <= x);
+        if (livello === -1) livello = 5;
+        if (livello > peggiore) peggiore = livello;
+        misure.push({ parametro: nome, valore: Number(m.value), quando: m.datetime?.local || null, livello });
+      }
+
+      const payload = {
+        stazione: { nome: s.name, gestore: s.provider?.name || null, distanzaKm: s.distance ? Math.round(s.distance / 100) / 10 : null },
+        misure,
+        indice: peggiore >= 0 ? { livello: peggiore, etichetta: AQI_LIVELLI[peggiore] } : null,
+        // Doppia attribuzione: lo chiedono i termini di OpenAQ, perché i dati
+        // restano delle agenzie che gestiscono le centraline.
+        attribuzione: `Dati: ${s.provider?.name || 'agenzia locale'} via OpenAQ.org`,
+      };
+      await saveToCache(chiave, 'aria_openaq', payload);
+      res.json({ ok: true, fonte: 'openaq', ...payload });
+    } catch (e: any) {
+      if (inCache?.text_content) return res.json({ ok: true, fonte: 'cache_scaduta', ...inCache.text_content });
+      res.status(503).json({ error: e?.response?.data?.message || e?.message || 'OpenAQ non raggiungibile' });
+    }
+  });
+
+  // --- CHE NATURA C'È QUI (GBIF, dati aperti mondiali) -------------------
+  //
+  // GBIF raccoglie le osservazioni di specie di musei, università e scienza
+  // partecipata di tutto il mondo: gratuito, senza chiave, uso commerciale
+  // consentito con attribuzione. Attorno a Carrara ci sono 8.966
+  // osservazioni; attorno a un parco o a un sentiero diventano contenuto per
+  // l'audioguida, non solo un numero.
+  //
+  // Si chiedono le specie PIÙ OSSERVATE (facet su speciesKey) invece delle
+  // ultime osservazioni: dire "qui si vedono spesso il cinghiale e la
+  // farfalla Pararge aegeria" vale più di "il 27 marzo qualcuno ha visto un
+  // esemplare". I nomi comuni si risolvono con una seconda chiamata alle
+  // schede specie, in italiano se disponibile.
+  app.get("/api/natura/specie", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    const raggioKm = Math.min(Number((req.query as any).km) || 5, 25);
+    const gradi = raggioKm / 111;
+    const chiave = `natura_${lat.toFixed(2)}_${lon.toFixed(2)}_${raggioKm}`;
+    const CACHE_MS = 30 * 24 * 60 * 60 * 1000; // la fauna di un posto non cambia in un mese
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', ...inCache.text_content });
+    }
+
+    const box = `decimalLatitude=${(lat - gradi).toFixed(4)},${(lat + gradi).toFixed(4)}`
+      + `&decimalLongitude=${(lon - gradi).toFixed(4)},${(lon + gradi).toFixed(4)}`;
+    try {
+      const r = await axios.get(`https://api.gbif.org/v1/occurrence/search?${box}`
+        + `&hasCoordinate=true&limit=0&facet=speciesKey&facetLimit=12`, { timeout: 20000 });
+      const totale = r.data?.count || 0;
+      const conteggi = r.data?.facets?.[0]?.counts || [];
+      if (!conteggi.length) {
+        const vuoto = { totale, specie: [], attribuzione: 'Osservazioni: GBIF.org (CC BY 4.0)' };
+        await saveToCache(chiave, 'natura_gbif', vuoto);
+        return res.json({ ok: true, fonte: 'gbif', ...vuoto });
+      }
+
+      // Nomi delle specie: una chiamata per chiave, ma sono al massimo dodici
+      // e la risposta finisce in cache per un mese.
+      const specie: any[] = [];
+      for (const c of conteggi.slice(0, 12)) {
+        try {
+          const s = await axios.get(`https://api.gbif.org/v1/species/${c.name}`, { timeout: 10000 });
+          const d = s.data || {};
+          // Nome comune italiano se c'è, altrimenti inglese, altrimenti scientifico.
+          let comune: string | null = null;
+          try {
+            // limit alto: con 40 nomi capitava di non trovare l'italiano e di
+            // ripiegare sull'inglese (o peggio: i nomi comuni di GBIF sono
+            // contribuiti dagli utenti e qualcuno ha la lingua sbagliata, per
+            // questo la poiana è uscita col nome spagnolo).
+            const v = await axios.get(`https://api.gbif.org/v1/species/${c.name}/vernacularNames?limit=200`, { timeout: 10000 });
+            const nomi = v.data?.results || [];
+            const italiani = nomi.filter((n: any) => n.language === 'ita' && n.vernacularName);
+            // Fra più nomi italiani si prende il più corto: di solito è quello
+            // d'uso comune ("poiana") invece della variante descrittiva.
+            comune = italiani.sort((a: any, b: any) => a.vernacularName.length - b.vernacularName.length)[0]?.vernacularName
+              || nomi.find((n: any) => n.language === 'eng')?.vernacularName || null;
+          } catch { /* senza nome comune si usa lo scientifico */ }
+          specie.push({
+            scientifico: d.canonicalName || d.scientificName || null,
+            comune,
+            gruppo: d.class || d.phylum || null,
+            osservazioni: c.count,
+          });
+        } catch { /* specie non risolta: si salta */ }
+      }
+
+      const payload = { totale, specie, attribuzione: 'Osservazioni: GBIF.org (CC BY 4.0)' };
+      await saveToCache(chiave, 'natura_gbif', payload);
+      res.json({ ok: true, fonte: 'gbif', ...payload });
+    } catch (e: any) {
+      if (inCache?.text_content) return res.json({ ok: true, fonte: 'cache_scaduta', ...inCache.text_content });
+      res.status(503).json({ error: e?.message || 'GBIF non raggiungibile' });
+    }
+  });
+
+  // --- TEMPERATURA DEL MARE E ONDE (NOAA/NASA, dominio pubblico) ---------
+  //
+  // Terza e ultima fonte tolta a Open-Meteo, per lo stesso motivo del meteo:
+  // il loro piano gratuito è esplicitamente non-commerciale.
+  //
+  // Copernicus Marine sarebbe la scelta "europea", ma serve a un altro uso:
+  // il Data Store espone i dati in formato Zarr per analisi in blocco, e per
+  // leggere un singolo punto servono il toolbox Python e le credenziali. Il
+  // catalogo STAC è pubblico, i dati no. Per una lettura puntuale la strada
+  // giusta è ERDDAP.
+  //
+  // Si usa NASA JPL MUR (Multi-scale Ultra-high Resolution SST, 1 km) servito
+  // dall'ERDDAP di NOAA CoastWatch: nessuna registrazione, nessuna chiave,
+  // DOMINIO PUBBLICO (dati federali USA), quindi uso commerciale libero.
+  //
+  // Il trucco che rende la cosa praticabile: ERDDAP restituisce un punto per
+  // richiesta, ma `griddap` accetta INTERVALLI CON PASSO. Una sola chiamata
+  // copre l'intero riquadro della mappa (misurato: 121 celle in 843 ms, 6 KB)
+  // e poi ogni spiaggia prende la cella di mare più vicina.
+  app.get("/api/mare/griglia", rateLimiter, async (req, res) => {
+    const q = req.query as any;
+    const sud = Number(q.south), ovest = Number(q.west), nord = Number(q.north), est = Number(q.east);
+    if (![sud, ovest, nord, est].every(isFinite)) return res.status(400).json({ error: 'south, west, north, east richiesti' });
+    // Riquadro limitato: oltre i 3° la griglia diventa inutilmente grande.
+    const s = Math.max(sud, nord - 3), o = Math.max(ovest, est - 3);
+    const chiave = `mare_${s.toFixed(1)}_${o.toFixed(1)}_${nord.toFixed(1)}_${est.toFixed(1)}`;
+    const CACHE_MS = 3 * 60 * 60 * 1000; // il mare non cambia temperatura in un'ora
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', ...inCache.text_content });
+    }
+
+    // MUR è un prodotto satellitare: ha qualche giorno di latenza, quindi si
+    // chiede una data indietro invece dell'ultima disponibile (che darebbe
+    // celle vuote).
+    const giorno = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const passo = 10; // MUR ha celle di 0,01°: passo 10 ≈ un punto ogni 10 km
+    const url = 'https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41.json'
+      + `?analysed_sst%5B(${giorno}T09:00:00Z)%5D%5B(${s}):${passo}:(${nord})%5D%5B(${o}):${passo}:(${est})%5D`;
+    try {
+      const r = await axios.get(url, {
+        headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' },
+        timeout: 25000,
+      });
+      // Colonne: time, latitude, longitude, analysed_sst
+      const celle = (r.data?.table?.rows || [])
+        .filter((x: any[]) => x[3] !== null && x[3] !== undefined)
+        .map((x: any[]) => ({ lat: Number(x[1]), lon: Number(x[2]), t: Number(x[3]) }));
+      const payload = {
+        celle,
+        giorno,
+        attribuzione: 'Temperatura del mare: NASA JPL MUR via NOAA CoastWatch ERDDAP (dominio pubblico)',
+      };
+      await saveToCache(chiave, 'mare_sst', payload);
+      res.json({ ok: true, fonte: 'erddap', ...payload });
+    } catch (e: any) {
+      if (inCache?.text_content) return res.json({ ok: true, fonte: 'cache_scaduta', ...inCache.text_content });
+      res.status(503).json({ error: e?.message || 'ERDDAP non raggiungibile' });
+    }
+  });
+
+  // --- METEO, UV E CALDO PERCEPITO (MET Norway) --------------------------
+  //
+  // PERCHÉ NON PIÙ OPEN-METEO: i loro termini dicono «You may only use the
+  // free API services for non-commercial purposes» ed elencano fra gli usi
+  // commerciali proprio «apps that have subscriptions». WIP vende crediti.
+  // L'attribuzione CC-BY copre il DATO, non l'accesso al servizio gratuito,
+  // e loro si riservano di bloccare IP senza preavviso: significa meteo,
+  // sole e mare spenti da un giorno all'altro.
+  //
+  // MET Norway (istituto meteorologico norvegese) è gratuita ANCHE per uso
+  // commerciale — chiede solo uno User-Agent che identifichi l'applicazione.
+  // Ed è per questo che la chiamata sta QUI e non nel client: il browser non
+  // può impostare User-Agent, è un header vietato in fetch(). Passando dal
+  // server lo mettiamo, e in più la risposta si può mettere in cache per
+  // tutti invece che per singolo dispositivo.
+  //
+  // Attribuzione dovuta, da mostrare nell'interfaccia:
+  //   "Dati meteo: MET Norway (NLOD / CC BY 4.0)"
+  app.get("/api/meteo/punto", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    // Cella di ~11 km: la stessa granularità della cache del client, così
+    // due utenti nella stessa città condividono la risposta.
+    const chiave = `meteo_met_${lat.toFixed(1)}_${lon.toFixed(1)}`;
+    const CACHE_MS = 30 * 60 * 1000;
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', ...inCache.text_content });
+    }
+
+    // MET chiede coordinate con al massimo 4 decimali (troncare aiuta anche
+    // la loro cache).
+    const url = `https://api.met.no/weatherapi/locationforecast/2.0/complete`
+      + `?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`;
+    try {
+      const r = await axios.get(url, {
+        headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' },
+        timeout: 15000,
+      });
+      const serie = r.data?.properties?.timeseries || [];
+      if (!serie.length) throw new Error('nessuna previsione');
+
+      /**
+       * Temperatura percepita: MET non la fornisce, si calcola.
+       * Formula "Apparent Temperature" australiana (Steadman), quella usata
+       * anche dai servizi meteo europei: tiene conto di umidità e vento.
+       */
+      const percepita = (t: number, umidita: number, vento: number) => {
+        const e = (umidita / 100) * 6.105 * Math.exp((17.27 * t) / (237.7 + t));
+        return t + 0.33 * e - 0.70 * vento - 4.00;
+      };
+
+      // MET usa nomi di simbolo ("partlycloudy_day"); l'interfaccia ragiona
+      // in codici WMO come Open-Meteo. Si traduce per non toccare la UI.
+      const wmo = (simbolo: string): number => {
+        const s = String(simbolo || '').replace(/_(day|night|polartwilight)$/, '');
+        if (s === 'clearsky') return 0;
+        if (s === 'fair') return 1;
+        if (s === 'partlycloudy') return 2;
+        if (s === 'cloudy') return 3;
+        if (s.includes('fog')) return 45;
+        if (s.includes('thunder')) return 95;
+        if (s.includes('snow')) return 73;
+        if (s.includes('sleet')) return 67;
+        if (s.includes('showers')) return 80;
+        if (s.includes('heavyrain')) return 65;
+        if (s.includes('lightrain')) return 61;
+        if (s.includes('rain')) return 63;
+        return 1;
+      };
+
+      const ora0 = serie[0];
+      const d0 = ora0?.data?.instant?.details || {};
+      const t0 = Number(d0.air_temperature ?? 0);
+      const u0 = Number(d0.relative_humidity ?? 50);
+      const v0 = Number(d0.wind_speed ?? 0);
+
+      // Probabilità di pioggia massima nelle prossime 3 ore, come prima.
+      let rainProb = 0;
+      for (const p of serie.slice(0, 3)) {
+        const pr = Number(p?.data?.next_1_hours?.details?.probability_of_precipitation ?? 0);
+        if (pr > rainProb) rainProb = pr;
+      }
+
+      const prossimeOre: any[] = [];
+      let uvMassimoOggi = 0;
+      for (const p of serie.slice(0, 12)) {
+        const d = p?.data?.instant?.details || {};
+        const uv = Number(d.ultraviolet_index_clear_sky ?? 0);
+        if (uv > uvMassimoOggi) uvMassimoOggi = uv;
+        prossimeOre.push({
+          ora: String(p.time || '').slice(11, 16),
+          uv,
+          percepita: percepita(Number(d.air_temperature ?? 0), Number(d.relative_humidity ?? 50), Number(d.wind_speed ?? 0)),
+        });
+      }
+
+      const payload = {
+        temp: t0,
+        code: wmo(ora0?.data?.next_1_hours?.summary?.symbol_code || ora0?.data?.next_6_hours?.summary?.symbol_code),
+        rainProb,
+        uv: Number(d0.ultraviolet_index_clear_sky ?? 0),
+        percepita: percepita(t0, u0, v0),
+        umidita: u0,
+        vento: v0,
+        prossimeOre: prossimeOre.slice(0, 8),
+        oreCritiche: prossimeOre.filter((o) => o.uv >= 6).map((o) => o.ora),
+        uvMassimoOggi,
+        attribuzione: 'MET Norway (NLOD / CC BY 4.0)',
+      };
+      await saveToCache(chiave, 'meteo_met', payload);
+      res.json({ ok: true, fonte: 'met', ...payload });
+    } catch (e: any) {
+      // Se MET non risponde si serve la copia vecchia: meglio un meteo di
+      // mezz'ora fa che nessun meteo.
+      if (inCache?.text_content) return res.json({ ok: true, fonte: 'cache_scaduta', ...inCache.text_content });
+      res.status(503).json({ error: e?.message || 'MET Norway non raggiungibile' });
+    }
+  });
+
+  // --- SERVIZI PRATICI SULLA MAPPA (fontanelle, bagni, panchine) ---------
+  //
+  // Prima il client interrogava Overpass DIRETTAMENTE dal telefono, ed è il
+  // motivo per cui l'utente vedeva il layer "sempre fuori servizio":
+  // verificato il 19/08/2026, tutti e cinque i mirror Overpass pubblici
+  // (overpass-api.de, kumi.systems, private.coffee, osm.jp, maps.mail.ru)
+  // fallivano o andavano in timeout, mentre openstreetmap.org e Nominatim
+  // rispondevano in 200 ms — quindi non è la rete, è Overpass.
+  //
+  // Qui la chiamata passa dal server, che ha connettività migliore di una
+  // WebView e soprattutto una MEMORIA: ogni risposta buona finisce in
+  // api_cache per cella di ~1 km. Se Overpass è giù si serve la copia
+  // vecchia invece di non mostrare nulla — una fontanella non si sposta.
+  app.get("/api/services/nearby", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    const raggio = Math.min(Number((req.query as any).radius) || 2000, 5000);
+    const chiave = `servizi_${lat.toFixed(2)}_${lon.toFixed(2)}_${raggio}`;
+    const CACHE_MS = 30 * 24 * 60 * 60 * 1000; // un mese: sono oggetti fissi
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (inCache?.text_content && eta < CACHE_MS) {
+      return res.json({ ok: true, fonte: 'cache', punti: inCache.text_content });
+    }
+
+    const query = `[out:json][timeout:20];
+(
+  nwr["amenity"="drinking_water"](around:${raggio},${lat},${lon});
+  nwr["amenity"="toilets"](around:${raggio},${lat},${lon});
+  nwr["amenity"="bench"](around:${raggio},${lat},${lon});
+);
+out center 360;`;
+    const MIRROR = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter',
+      'https://overpass.osm.jp/api/interpreter',
+    ];
+    for (const ep of MIRROR) {
+      try {
+        const r = await axios.post(ep, `data=${encodeURIComponent(query)}`, {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: 25000,
+        });
+        const punti = (r.data?.elements || []).map((e: any) => ({
+          id: `${e.type}${e.id}`,
+          type: e.tags?.amenity,
+          lat: e.lat ?? e.center?.lat,
+          lon: e.lon ?? e.center?.lon,
+          name: e.tags?.name || undefined,
+        })).filter((p: any) => p.type && isFinite(p.lat) && isFinite(p.lon));
+        // Anche zero punti è una risposta valida (campagna senza servizi):
+        // si memorizza, altrimenti si ritenta Overpass a ogni pan.
+        await saveToCache(chiave, 'servizi_osm', punti);
+        return res.json({ ok: true, fonte: 'overpass', punti });
+      } catch { /* mirror successivo */ }
+    }
+
+    // Tutti i mirror giù: meglio dati vecchi che una mappa vuota.
+    if (inCache?.text_content) {
+      return res.json({ ok: true, fonte: 'cache_scaduta', punti: inCache.text_content });
+    }
+    res.status(503).json({ error: 'Overpass non raggiungibile e nessuna copia in cache per questa zona' });
+  });
+
   // --- EDITOR ATLANTE BENI CULTURALI -------------------------------------
   // `beni_culturali` è scrivibile solo con la service key (RLS: lettura
   // pubblica, scrittura service-only), quindi l'editor del pannello passa
@@ -9690,6 +10183,8 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
 Genera un itinerario in formato JSON.
 FONDAMENTALE: È un REQUISITO ASSOLUTO inserire SEMPRE il link al sito web (nel campo "link_info") per OGNI SINGOLA TAPPA. MAI inventarsi il sito internet - usa SOLO siti verificati. Se non esiste un sito verificato, lascia il campo vuoto invece di inventarlo.
 
+TEMPI GENEROSI: il difetto che fa bocciare più itinerari è la giornata troppo serrata. Per ogni tappa metti la durata REALE di una visita non di corsa (un museo importante 2-3 ore, una chiesa maggiore 45-60 minuti, un mercato 1 ora) e conta gli spostamenti a piedi con calma, code e soste comprese. Meglio una tappa in meno con tempi onesti che una in più con tempi impossibili.
+
 ${regoleGiornata}
 
 REGOLE LUNGHEZZA TESTI:
@@ -10089,13 +10584,26 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // scartati) ha fatto esplodere i costi. Resta come controllo finale
     // UNICO su ciò che Groq ha già approvato, vedi libraryFinalReview.
     const candidates = ['groq', 'mistral', 'together'].filter((e) => !String(genEngine || '').includes(e));
-    const sys = `Sei un revisore SEVERO di itinerari di viaggio per un'app. Ricevi i vincoli editoriali e un itinerario JSON. Valuta senza sconti:
+    // Rubrica ESPLICITA con esempi di soglia. Senza, i revisori si
+    // ammucchiavano tutti su 55: il 19/08/2026, su 87 scarti, 38 erano
+    // esattamente score=55 e 14 esattamente 45 — quasi sempre per una
+    // stima di tempi discutibile, non per un errore vero. Dire cosa merita
+    // 60 e cosa merita 40 sposta il giudizio dal "gusto" ai fatti.
+    const sys = `Sei il revisore di qualità di itinerari di viaggio per un'app. Ricevi i vincoli editoriali e un itinerario JSON. Valuta:
 1) REALISMO DEI TEMPI: durate di visita, spostamenti tra le coordinate dichiarate, orari dei pasti, code tipiche.
-2) SPECIFICITÀ: ogni tappa deve avere un nome proprio reale; tappe generiche ("passeggiata in centro", "un ristorante tipico") sono un difetto grave.
+2) SPECIFICITÀ: ogni tappa deve avere un nome proprio reale; tappe generiche ("passeggiata in centro", "un ristorante tipico") sono un difetto.
 3) SICUREZZA E FATTIBILITÀ PRATICA: zone, orari serali, chiusure note, sensatezza logistica.
 4) COERENZA con tema/taglio editoriale dichiarato e col brief.
 5) RISPETTO DEI VINCOLI elencati (scadenze di rientro, km/giorno, alloggi per i cammini, arrivo finale).
-Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "problemi": ["..."]}. score sotto ${LIB_SCORE_MIN} = da rifare; "problemi" elenca difetti CONCRETI e correggibili. Un itinerario mediocre, irrealistico o rischioso NON va approvato.`;
+
+COME SI ASSEGNA IL PUNTEGGIO (rubrica vincolante):
+- 85-100: nessun difetto sostanziale, si pubblica così.
+- ${LIB_SCORE_MIN}-84: PUBBLICABILE con difetti minori. Rientrano QUI, e non sotto: durate di visita o di spostamento discutibili entro ~30 minuti; un locale col nome plausibile ma che non riesci a verificare; una giornata un po' piena ma fattibile; descrizioni migliorabili; un prezzo indicativo impreciso.
+- 40-${LIB_SCORE_MIN - 1}: DA RIFARE per un errore CONCRETO e dimostrabile: tappa in un'altra città o a chilometri di distanza, orari impossibili (arrivo prima dell'apertura, sovrapposizioni, rientro oltre la scadenza), luogo palesemente inventato, vincolo esplicito del brief tradito (tappa a pagamento in una variante gratis, tema ignorato).
+- 0-39: inutilizzabile o pericoloso.
+
+Non abbassare il punteggio per prudenza generica o perché "si potrebbe fare meglio": se non sai indicare il difetto concreto, il punteggio sta sopra ${LIB_SCORE_MIN}. "approved" deve essere coerente col punteggio: true se score >= ${LIB_SCORE_MIN}.
+Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "problemi": ["..."]}, dove "problemi" elenca difetti CONCRETI e correggibili.`;
     const user = `VINCOLI:\n${libraryConstraintsSummary(d)}\n\nITINERARIO DA VALUTARE (JSON):\n${JSON.stringify(itin)}`;
     for (const eng of candidates) {
       try {
@@ -10218,7 +10726,11 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         console.warn(`[library] "${d.slug}" rimandato — ${reason}`);
         return { ok: false, reason, retryLater: true };
       }
-      if (rev.approved && rev.score >= LIB_SCORE_MIN) {
+      // Decide il PUNTEGGIO, non il booleano: i revisori si contraddicevano
+      // (visti score 72 e 75 con approved=false, cioè "va bene ma non lo
+      // approvo"). La rubrica del prompt lega il punteggio a difetti
+      // concreti, quindi è il dato più affidabile dei due.
+      if (rev.score >= LIB_SCORE_MIN) {
         const meta: any = {
           slug: d.slug, kind: d.kind, title: d.title, city: d.city, country: d.country,
           ...(d.theme ? { theme: d.theme } : {}),
@@ -13623,6 +14135,209 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     }
     return pts.filter((_, i) => keep[i]);
   };
+
+  // ===================================================================
+  // ROUTING PEDONALE — catena di riserva, dietro una rotta nostra
+  // ===================================================================
+  // PERCHE'. Finora il client chiamava DIRETTAMENTE routing.openstreetmap.de.
+  // Quel servizio e' ottimo — misurato il 19/08: 10 percorsi su 10, mediana
+  // 122 ms in cinque continenti — ma e' di FOSSGIS, un'associazione senza
+  // scopo di lucro, senza contratto ne' garanzia di continuita'. Se un giorno
+  // ci limitano, l'app resta senza indicazioni e non ce ne accorgiamo prima
+  // degli utenti.
+  //
+  // Qui il routing passa da noi, con quattro riserve in fila. Due vantaggi
+  // oltre alla continuita': le chiavi restano sul server (regola del progetto:
+  // nessuna chiave di terzi al client) e i percorsi si possono conservare.
+  //
+  // Si risponde nel DIALETTO OSRM perche' e' quello che il client gia' parla:
+  // cambia solo l'indirizzo di partenza, non una riga di logica di navigazione.
+  const ROUTE_TTL = 6 * 60 * 60 * 1000;      // 6h: i marciapiedi non si spostano
+  const routeCache = new Map<string, { ts: number; data: any }>();
+
+  /** Polilinea codificata di Valhalla: precisione 6 decimali (OSRM usa 5). */
+  const decodePolyline6 = (str: string): [number, number][] => {
+    const out: [number, number][] = [];
+    let i = 0, lat = 0, lon = 0;
+    while (i < str.length) {
+      let b = 0, shift = 0, result = 0;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+      shift = 0; result = 0;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lon += (result & 1) ? ~(result >> 1) : (result >> 1);
+      out.push([lon / 1e6, lat / 1e6]);       // [lon, lat] come GeoJSON
+    }
+    return out;
+  };
+
+  /** Manovre Valhalla (numeriche) → tipo/modificatore OSRM (testuali). */
+  const VALHALLA_MANEUVER: Record<number, { type: string; modifier?: string }> = {
+    1: { type: 'depart' }, 2: { type: 'depart' }, 3: { type: 'depart' },
+    4: { type: 'arrive' }, 5: { type: 'arrive' }, 6: { type: 'arrive' },
+    8: { type: 'continue' }, 9: { type: 'continue' },
+    10: { type: 'turn', modifier: 'slight right' }, 11: { type: 'turn', modifier: 'right' },
+    12: { type: 'turn', modifier: 'sharp right' },
+    13: { type: 'turn', modifier: 'uturn' }, 14: { type: 'turn', modifier: 'uturn' },
+    15: { type: 'turn', modifier: 'sharp left' }, 16: { type: 'turn', modifier: 'left' },
+    17: { type: 'turn', modifier: 'slight left' },
+    26: { type: 'roundabout' }, 27: { type: 'exit roundabout' },
+  };
+
+  /** Forma OSRM: e' il contratto con il client, non un dettaglio interno. */
+  const comeOsrm = (distance: number, duration: number, coords: [number, number][], steps: any[]) => ({
+    code: 'Ok',
+    routes: [{
+      distance, duration,
+      geometry: { type: 'LineString', coordinates: coords },
+      legs: [{ distance, duration, steps }],
+    }],
+    waypoints: [],
+  });
+
+  type FonteRoute = { nome: string; attiva: boolean; run: (a: number[], b: number[], lang: string) => Promise<any | null> };
+
+  const FONTI_ROUTE: FonteRoute[] = [
+    {
+      nome: 'fossgis-osrm', attiva: true,
+      // Gia' nel dialetto giusto: si passa attraverso senza conversioni.
+      run: async (a, b) => {
+        const r = await axios.get(
+          `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${a[0]},${a[1]};${b[0]},${b[1]}`,
+          { params: { overview: 'full', geometries: 'geojson', steps: true }, timeout: 6000 });
+        return r.data?.routes?.[0] ? r.data : null;
+      },
+    },
+    {
+      nome: 'fossgis-valhalla', attiva: true,
+      // Software DIVERSO dal primo: un guasto di OSRM non lo tocca. Stesso
+      // gestore pero', quindi non copre il rischio "FOSSGIS chiude".
+      run: async (a, b, lang) => {
+        const body = {
+          locations: [{ lat: a[1], lon: a[0] }, { lat: b[1], lon: b[0] }],
+          costing: 'pedestrian',
+          directions_options: { language: `${lang}-${lang.toUpperCase()}`, units: 'kilometers' },
+        };
+        const r = await axios.get('https://valhalla1.openstreetmap.de/route',
+          { params: { json: JSON.stringify(body) }, timeout: 7000 });
+        const leg = r.data?.trip?.legs?.[0];
+        if (!leg) return null;
+        const coords = decodePolyline6(leg.shape || '');
+        const steps = (leg.maneuvers || []).map((m: any) => {
+          const mv = VALHALLA_MANEUVER[m.type] || { type: 'continue' };
+          const punto = coords[m.begin_shape_index] || coords[0] || [b[0], b[1]];
+          return {
+            distance: (m.length || 0) * 1000,
+            duration: m.time || 0,
+            name: (m.street_names && m.street_names[0]) || '',
+            maneuver: { type: mv.type, modifier: mv.modifier, location: punto },
+          };
+        });
+        return comeOsrm((r.data.trip.summary?.length || 0) * 1000, r.data.trip.summary?.time || 0, coords, steps);
+      },
+    },
+    {
+      nome: 'openrouteservice', attiva: !!process.env.ORS_API_KEY,
+      // Gestore indipendente da FOSSGIS: e' la riserva che copre il rischio
+      // organizzativo, non solo quello tecnico. Piano gratuito a quota.
+      run: async (a, b) => {
+        const r = await axios.post('https://api.openrouteservice.org/v2/directions/foot-walking/geojson',
+          { coordinates: [a, b] },
+          { headers: { Authorization: process.env.ORS_API_KEY, 'Content-Type': 'application/json' }, timeout: 8000 });
+        const f = r.data?.features?.[0];
+        if (!f) return null;
+        const coords: [number, number][] = f.geometry?.coordinates || [];
+        const seg = f.properties?.segments?.[0];
+        const steps = (seg?.steps || []).map((s: any) => ({
+          distance: s.distance || 0, duration: s.duration || 0, name: s.name && s.name !== '-' ? s.name : '',
+          // ORS non da' il modificatore in forma OSRM: si tiene il testo suo,
+          // e il client ricade sulle frasi generiche. Meglio un'indicazione
+          // grezza che nessuna indicazione.
+          maneuver: { type: 'continue', instruction: s.instruction, location: coords[s.way_points?.[0] ?? 0] || a },
+        }));
+        return comeOsrm(seg?.distance || 0, seg?.duration || 0, coords, steps);
+      },
+    },
+    {
+      nome: 'geoapify', attiva: !!process.env.GEOAPIFY_API_KEY,
+      run: async (a, b) => {
+        const r = await axios.get('https://api.geoapify.com/v1/routing', {
+          params: { waypoints: `${a[1]},${a[0]}|${b[1]},${b[0]}`, mode: 'walk', details: 'instruction_details',
+            apiKey: process.env.GEOAPIFY_API_KEY }, timeout: 8000 });
+        const f = r.data?.features?.[0];
+        if (!f) return null;
+        const coords: [number, number][] = (f.geometry?.coordinates?.[0] || f.geometry?.coordinates || []) as any;
+        const leg = f.properties?.legs?.[0];
+        const steps = (leg?.steps || []).map((s: any) => ({
+          distance: s.distance || 0, duration: s.time || 0, name: s.name || '',
+          maneuver: { type: 'continue', instruction: s.instruction?.text, location: coords[s.from_index ?? 0] || a },
+        }));
+        return comeOsrm(f.properties?.distance || 0, f.properties?.time || 0, coords, steps);
+      },
+    },
+    {
+      nome: 'mapbox', attiva: !!(process.env.MAPBOX_TOKEN || process.env.VITE_MAPBOX_TOKEN),
+      // Mapbox parla nativamente OSRM: passa attraverso. E' l'ultima perche'
+      // e' l'unica che oltre una certa soglia si paga.
+      run: async (a, b, lang) => {
+        const tok = process.env.MAPBOX_TOKEN || process.env.VITE_MAPBOX_TOKEN;
+        const r = await axios.get(`https://api.mapbox.com/directions/v5/mapbox/walking/${a[0]},${a[1]};${b[0]},${b[1]}`,
+          { params: { geometries: 'geojson', steps: true, overview: 'full', language: lang, access_token: tok }, timeout: 8000 });
+        return r.data?.routes?.[0] ? r.data : null;
+      },
+    },
+  ];
+
+  /**
+   * Stessa firma di OSRM: /api/route/foot/{lon},{lat};{lon},{lat}
+   * Il client cambia solo la costante di base.
+   */
+  app.get("/api/route/foot/:coords", rateLimiter, async (req, res) => {
+    try {
+      const parti = String(req.params.coords || '').split(';');
+      if (parti.length !== 2) return res.status(400).json({ code: 'InvalidInput', message: 'servono due coordinate' });
+      const [a, b] = parti.map(p => p.split(',').map(Number));
+      if (![...a, ...b].every(Number.isFinite)) return res.status(400).json({ code: 'InvalidInput', message: 'coordinate non valide' });
+      const lang = String(req.query.language || 'it').slice(0, 2).toLowerCase();
+
+      // Cache a ~11 m di risoluzione: due richieste dallo stesso marciapiede
+      // riusano lo stesso percorso invece di uscire di nuovo.
+      const chiave = `${a[0].toFixed(4)},${a[1].toFixed(4)};${b[0].toFixed(4)},${b[1].toFixed(4)};${lang}`;
+      // La cache si salta quando si stanno provando le riserve, altrimenti
+      // risponderebbe col percorso della fonte che si voleva escludere.
+      const c = req.query.senza ? null : routeCache.get(chiave);
+      if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
+
+      // Diagnostica: `?senza=fossgis-osrm,fossgis-valhalla` salta quelle fonti.
+      // Serve a PROVARE la catena di riserva: una riserva mai provata non e' una
+      // riserva, e ce ne accorgeremmo solo il giorno in cui la prima cade.
+      const saltate = new Set(String(req.query.senza || '').split(',').filter(Boolean));
+
+      const errori: string[] = [];
+      for (const f of FONTI_ROUTE) {
+        if (saltate.has(f.nome)) { errori.push(`${f.nome}: saltata su richiesta`); continue; }
+        if (!f.attiva) { errori.push(`${f.nome}: non configurato`); continue; }
+        try {
+          const out = await f.run(a, b, lang);
+          if (out?.routes?.[0]?.legs?.[0]?.steps?.length) {
+            const dati = { ...out, wip_fonte: f.nome };
+            routeCache.set(chiave, { ts: Date.now(), data: dati });
+            if (routeCache.size > 4000) routeCache.delete(routeCache.keys().next().value);
+            return res.json(dati);
+          }
+          errori.push(`${f.nome}: nessun percorso`);
+        } catch (e: any) {
+          errori.push(`${f.nome}: ${e?.response?.status || e?.code || e?.message}`);
+        }
+      }
+      // Tutte cadute: si dice quali e perche', invece di un 500 muto.
+      console.error('[route/foot] nessuna fonte disponibile:', errori.join(' · '));
+      res.status(503).json({ code: 'NoRoute', message: 'nessun servizio di routing disponibile', tentativi: errori });
+    } catch (e: any) {
+      console.error('[route/foot] errore:', e?.message);
+      res.status(500).json({ code: 'Error', message: e?.message });
+    }
+  });
 
   const CAR_HW = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street', 'service', 'road', 'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link']);
   const NO_FOOT = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link']); // pedoni ovunque tranne autostrade

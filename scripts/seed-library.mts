@@ -241,10 +241,20 @@ async function lavora(d: any): Promise<void> {
       rimandati++;
       console.log(`${ts()} ~ ${d.slug} rimandato (in corso o budget esaurito, ${sec}s)`);
     } else if (res.status === 422) {
+      const motivo = String(res.body?.reason || res.body?.error || '');
+      // "Tutti i motori AI sono saturi" non è un difetto dell'itinerario:
+      // metterlo in castigo per 24 ore significherebbe perdere il
+      // descrittore per colpa di un tetto giornaliero altrui (10 casi su 87
+      // scarti il 19/08). Si rimanda e basta.
+      if (/motori AI sono saturi|revisore AI non disponibile|rimandat/i.test(motivo)) {
+        rimandati++;
+        console.log(`${ts()} ~ ${d.slug} rimandato (${sec}s): motori non disponibili`);
+        return;
+      }
       scartati++;
       state.failed[d.slug] = { n: (state.failed[d.slug]?.n || 0) + 1, at: Date.now() };
       saveState(state);
-      console.log(`${ts()} - ${d.slug} scartato (${sec}s): ${String(res.body?.reason || res.body?.error || '').slice(0, 160)}`);
+      console.log(`${ts()} - ${d.slug} scartato (${sec}s): ${motivo.slice(0, 160)}`);
     } else if (res.status === 429) {
       console.log(`${ts()} 429 rate limit su ${d.slug}: attesa 60s e ritento`);
       await sleep(60000);
