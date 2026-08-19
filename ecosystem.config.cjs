@@ -51,14 +51,19 @@ module.exports = {
       // il file; il frontend NON serve (qui gira solo l'API).
       name: 'wip-api',
       script: 'node',
-      args: '--max-old-space-size=256 dist/server.cjs',
+      // Tetti alzati il 19/08/2026: con 256 MB di heap e il riavvio pm2 a 330
+      // MB il processo veniva ucciso 7 volte a notte, e OGNI riavvio uccideva
+      // la generazione in corso (4-6 minuti di lavoro buttati). Il droplet ha
+      // 1 GB di swap, quindi il picco si attraversa invece di morire; con la
+      // semina in parallelo il picco è più alto e questi tetti servono.
+      args: '--max-old-space-size=320 dist/server.cjs',
       interpreter: 'none',
       cwd: __dirname,
       autorestart: true,
       restart_delay: 5000,
       min_uptime: 30000,
       max_restarts: 20,
-      max_memory_restart: '330M',
+      max_memory_restart: '420M',
       time: true,
     },
     {

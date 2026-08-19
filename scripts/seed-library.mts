@@ -29,6 +29,7 @@
 // Variabili (.env accanto al progetto, oppure ambiente):
 //   VITE_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY   obbligatorie
 //   LIB_API        default https://wip.guide
+//   LIB_CONCURRENCY item lavorati in parallelo (default 3, max 6)
 //   LIB_PAUSE_MS   pausa tra un item e il successivo (default 5000)
 //   LIB_STATE      file di stato (default /root/seed-library-state.json)
 // ─────────────────────────────────────────────────────────────────────────
@@ -57,6 +58,9 @@ const STATE_FILE = K('LIB_STATE') || '/root/seed-library-state.json';
 // Tetto di item per giro: serve per le prove (LIB_MAX=1) e per fermare il
 // processo a comando; di default nessun limite.
 const MAX = Number(K('LIB_MAX')) || Infinity;
+// Quanti item lavorare insieme. Sono attese di rete: il limite è la memoria
+// del processo API sul droplet, non la CPU (che resta allo 0%).
+const CONCURRENZA = Math.min(6, Math.max(1, Number(K('LIB_CONCURRENCY')) || 3));
 // Un item scartato dalle verifiche non si ritenta per 24 ore: è quasi
 // sempre un descrittore difficile (paesino senza ristoranti verificabili),
 // non un guasto passeggero.
@@ -172,75 +176,105 @@ const state = loadState();
 let seeded = await attendiDatabase();
 console.log(`${ts()} avvio su ${API} — catalogo ${all.length} descrittori, ${seeded.size} già in biblioteca, ${all.length - seeded.size} da fare.`);
 
-let salvati = 0, scartati = 0, rimandati = 0, daUltimoRefresh = 0, erroriDiFila = 0;
+let salvati = 0, scartati = 0, rimandati = 0, retiKO = 0, daUltimoRefresh = 0;
+let cursore = 0;
+let refreshInCorso = false;
 
-for (const d of all) {
-  if (stop) break;
-  if (seeded.has(d.slug)) continue;
-  const f = state.failed[d.slug];
-  if (f && Date.now() - f.at < RETRY_AFTER_MS) continue;
-
-  const t0 = Date.now();
-  let res: { status: number; body: any };
-  try {
-    res = await generate(d);
-  } catch (e: any) {
-    erroriDiFila++;
-    console.error(`${ts()} ${d.slug}: rete KO (${e.message}) [${erroriDiFila} di fila]`);
-    if (erroriDiFila >= 10) { console.error('Dieci errori di rete di fila: esco, pm2 riavvierà.'); process.exit(1); }
-    await sleep(60000);
-    continue;
+/** Prossimo descrittore da lavorare, saltando fatti e falliti di recente.
+ *  Unico punto che avanza il cursore: i worker non si pestano. */
+function prossimo(): any | null {
+  while (cursore < all.length) {
+    const d = all[cursore++];
+    if (seeded.has(d.slug)) continue;
+    const f = state.failed[d.slug];
+    if (f && Date.now() - f.at < RETRY_AFTER_MS) continue;
+    return d;
   }
-  const sec = Math.round((Date.now() - t0) / 1000);
-
-  if (res.status === 200 && res.body?.itinerary) {
-    erroriDiFila = 0;
-    seeded.add(d.slug);
-    delete state.failed[d.slug];
-    if (res.body.cached) {
-      console.log(`${ts()} = ${d.slug} già presente`);
-    } else {
-      salvati++;
-      const g = Array.isArray(res.body.itinerary.giorni) ? res.body.itinerary.giorni.length : '?';
-      console.log(`${ts()} + ${d.slug} salvato (score ${res.body.meta?.score ?? '?'}, ${g} giorni, ${sec}s) — totale ${salvati}`);
-      saveState(state);
-    }
-  } else if (res.status === 202) {
-    rimandati++;
-    console.log(`${ts()} ~ ${d.slug} rimandato (in corso o budget esaurito, ${sec}s)`);
-  } else if (res.status === 422) {
-    scartati++;
-    erroriDiFila = 0;
-    state.failed[d.slug] = { n: (state.failed[d.slug]?.n || 0) + 1, at: Date.now() };
-    saveState(state);
-    console.log(`${ts()} - ${d.slug} scartato (${sec}s): ${String(res.body?.reason || res.body?.error || '').slice(0, 160)}`);
-  } else if (res.status === 429) {
-    console.log(`${ts()} 429 rate limit: attesa 60s`);
-    await sleep(60000);
-    continue;
-  } else {
-    erroriDiFila++;
-    console.error(`${ts()} ! ${d.slug}: HTTP ${res.status} (${sec}s) ${JSON.stringify(res.body).slice(0, 160)} [${erroriDiFila} di fila]`);
-    if (erroriDiFila >= 10) { console.error('Dieci errori di fila dal server: esco, pm2 riavvierà.'); process.exit(1); }
-    await sleep(30000);
-    continue;
-  }
-
-  if (salvati + scartati >= MAX) { console.log(`${ts()} raggiunto LIB_MAX=${MAX}: mi fermo.`); break; }
-
-  if (++daUltimoRefresh >= REFRESH_EVERY) {
-    daUltimoRefresh = 0;
-    try { seeded = await loadSeeded(); } catch (e: any) {
-      // Se il database si è appena piantato, meglio fermarsi qui che
-      // continuare a generare item che non riusciremmo a salvare.
-      console.warn(`${ts()} refresh lista fallito (${String(e.message).slice(0, 120)}): aspetto che il database torni.`);
-      seeded = await attendiDatabase();
-    }
-  }
-  await sleep(PAUSE);
+  return null;
 }
 
-console.log(`${ts()} fine giro: ${salvati} salvati, ${scartati} scartati, ${rimandati} rimandati. In biblioteca: ${seeded.size}/${all.length}.`);
+async function refreshSeeded(): Promise<void> {
+  if (refreshInCorso) return;
+  refreshInCorso = true;
+  try {
+    seeded = await loadSeeded();
+  } catch (e: any) {
+    // Se il database si è appena piantato, meglio aspettare che continuare a
+    // generare item che non riusciremmo a salvare.
+    console.warn(`${ts()} refresh lista fallito (${String(e.message).slice(0, 120)}): aspetto che il database torni.`);
+    seeded = await attendiDatabase();
+  } finally {
+    refreshInCorso = false;
+  }
+}
+
+async function lavora(d: any): Promise<void> {
+  // Un errore di rete NON è un difetto dell'item: si riprova lo stesso
+  // descrittore (una volta) invece di saltarlo. Prima si passava al
+  // successivo lasciando il server a finire il lavoro precedente: due
+  // generazioni sovrapposte e memoria esaurita.
+  for (let tentativoRete = 1; tentativoRete <= 2 && !stop; tentativoRete++) {
+    const t0 = Date.now();
+    let res: { status: number; body: any };
+    try {
+      res = await generate(d);
+    } catch (e: any) {
+      retiKO++;
+      console.error(`${ts()} ${d.slug}: rete KO (${String(e.message).slice(0, 80)})${tentativoRete < 2 ? ' — riprovo tra 30s' : ' — lo lascio ai prossimi giri'}`);
+      if (tentativoRete < 2) await sleep(30000);
+      continue;
+    }
+    const sec = Math.round((Date.now() - t0) / 1000);
+
+    if (res.status === 200 && res.body?.itinerary) {
+      seeded.add(d.slug);
+      delete state.failed[d.slug];
+      if (res.body.cached) {
+        console.log(`${ts()} = ${d.slug} già presente`);
+      } else {
+        salvati++;
+        const g = Array.isArray(res.body.itinerary.giorni) ? res.body.itinerary.giorni.length : '?';
+        console.log(`${ts()} + ${d.slug} salvato (score ${res.body.meta?.score ?? '?'}, ${g} giorni, ${sec}s) — totale ${salvati}`);
+        saveState(state);
+      }
+    } else if (res.status === 202) {
+      rimandati++;
+      console.log(`${ts()} ~ ${d.slug} rimandato (in corso o budget esaurito, ${sec}s)`);
+    } else if (res.status === 422) {
+      scartati++;
+      state.failed[d.slug] = { n: (state.failed[d.slug]?.n || 0) + 1, at: Date.now() };
+      saveState(state);
+      console.log(`${ts()} - ${d.slug} scartato (${sec}s): ${String(res.body?.reason || res.body?.error || '').slice(0, 160)}`);
+    } else if (res.status === 429) {
+      console.log(`${ts()} 429 rate limit su ${d.slug}: attesa 60s e ritento`);
+      await sleep(60000);
+      continue;
+    } else {
+      console.error(`${ts()} ! ${d.slug}: HTTP ${res.status} (${sec}s) ${JSON.stringify(res.body).slice(0, 140)}`);
+      await sleep(15000);
+    }
+    return;
+  }
+}
+
+async function worker(n: number): Promise<void> {
+  while (!stop && salvati + scartati < MAX) {
+    const d = prossimo();
+    if (!d) return;
+    await lavora(d);
+    if (++daUltimoRefresh >= REFRESH_EVERY) { daUltimoRefresh = 0; await refreshSeeded(); }
+    await sleep(PAUSE);
+  }
+}
+
+// Gli item sono quasi tutta attesa di rete (i motori AI impiegano minuti), la
+// CPU del droplet resta ferma: lavorarne più di uno alla volta moltiplica la
+// resa senza costare nulla. Il tetto è la memoria del processo API, non il
+// processore — da qui il default prudente di 3.
+console.log(`${ts()} ${CONCURRENZA} item in parallelo.`);
+await Promise.all(Array.from({ length: CONCURRENZA }, (_, i) => worker(i + 1)));
+
+console.log(`${ts()} fine giro: ${salvati} salvati, ${scartati} scartati, ${rimandati} rimandati, ${retiKO} errori di rete. In biblioteca: ${seeded.size}/${all.length}.`);
 
 // Giro a vuoto (catalogo finito o tutto in attesa dei ritentativi): pm2
 // riavvierebbe subito il processo, che rifarebbe il giro in un lampo e

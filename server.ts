@@ -246,15 +246,22 @@ async function callUniversalAi(
   //
   // Chi restava senza rete adesso cade su Gemini (il fallback d'emergenza più
   // sotto), che è gratuito.
+  // I gratuiti, in ordine di velocità: groq risponde in secondi, agnes in
+  // minuti. Together e Mistral erano fuori dalle code e ci si finiva solo
+  // chiedendoli: ora fanno da rete quando groq esaurisce il tetto giornaliero
+  // (200k token) — prima in quel caso restava solo agnes e ogni chiamata
+  // costava 2-4 minuti.
+  const FREE_ENGINES = ["groq", "agnes", "together", "mistral"];
   const baseQueue = options.strictEngine
     ? [primaryEngine]
-    : primaryEngine === "agnes"
-      ? ["agnes", "groq"]
-      : primaryEngine === "deepseek"
-        // Richiesto esplicitamente: parte da DeepSeek, ma se cade ripiega sui
-        // gratuiti invece di insistere a pagamento.
-        ? ["deepseek", "agnes", "groq"]
-        : ["groq", "agnes"];
+    : primaryEngine === "deepseek"
+      // Richiesto esplicitamente: parte da DeepSeek, ma se cade ripiega sui
+      // gratuiti invece di insistere a pagamento.
+      ? ["deepseek", ...FREE_ENGINES]
+      // Il motore richiesto per PRIMO (prima "mistral" o "together" come
+      // primari venivano ignorati e si partiva comunque da groq), poi gli
+      // altri gratuiti. DeepSeek non entra mai qui.
+      : [primaryEngine, ...FREE_ENGINES.filter((e) => e !== primaryEngine)];
 
   // options.excludeEngines = motori vietati per QUESTA chiamata, fallback
   // compreso. Resta utile per vietare un motore specifico (es. escludere dal
@@ -8052,18 +8059,11 @@ ${description}
   app.get("/api/admin/beni-culturali", rateLimiter, requireAdmin, async (req, res) => {
     try {
       const { q, comune, country, tier, source, promoted, limit, offset } = req.query as any;
-      // Gli indici trigram sono in produzione dal 18/08: la ricerca per nome
-      // sull'intero atlante sta sotto il secondo. Resta una sola eccezione —
-      // "solo già POI" è un `or=(... not.is.null)` che nessun indice copre e
-      // che su 1,8 M di righe costa 5 secondi: lo si accetta solo con un
-      // filtro per fonte, che passa dall'indice (source, name).
-      if (promoted === 'si' && !source) {
-        return res.status(400).json({
-          error: 'Per elencare i beni già collegati a un POI scegli prima una fonte: '
-            + "sull'intero atlante quella query non ha un indice e costa troppo.",
-          serve: 'source',
-        });
-      }
+      // Nessuna guardia: dal 19/08 tutti e sei gli indici sono in produzione
+      // (trigram su name e comune, source+name, country+tier, e i due
+      // parziali sui beni promossi e non). Misurato dopo l'applicazione:
+      // ricerca per nome 806ms, per comune 492ms, paese+fascia 95ms,
+      // "solo già POI" 274ms anche senza filtro per fonte.
       const filtri: string[] = [];
       if (country) filtri.push(`country=eq.${encodeURIComponent(String(country))}`);
       if (tier) filtri.push(`tier=eq.${encodeURIComponent(String(tier))}`);
@@ -9245,6 +9245,11 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // tempo a finire e il lavoro delle prime due viene buttato — misurato il
   // 18/08/2026, 3 item su 7 persi così. Si alza con LIB_SYNC_BUDGET_MS.
   const LIB_REQUEST_SYNC_BUDGET_MS = Math.min(1800000, Math.max(60000, Number(process.env.LIB_SYNC_BUDGET_MS) || 270000));
+  // Motori della semina, in ordine di rotazione: tutti gratuiti, i rapidi
+  // per primi (groq ~30s per item, mistral e together in mezzo, agnes 2-4
+  // minuti). Si alternano per non bruciare il tetto giornaliero di uno solo.
+  const LIB_BG_ENGINES = ['groq', 'mistral', 'together', 'agnes'];
+  let libBgEngineCounter = 0;
   // Semina: pausa tra un item e il successivo (memoria di progetto: i batch
   // senza throttle hanno saturato il Disk IO di Supabase) e tetto indice.
   const LIB_SEED_PAUSE_MS = 1500;
@@ -9812,9 +9817,22 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // Se il problema è la scadenza di rientro, dire "correggi" non basta: il
     // modello riscrive lo stesso programma con altri nomi. Gli si dice cosa
     // fare materialmente, cioè togliere tappe.
-    const sforaScadenza = (feedback || []).some((p) => /oltre la scadenza/i.test(String(p)));
-    const fb = feedback && feedback.length
-      ? `\n\nPROBLEMI RILEVATI DALLA REVISIONE PRECEDENTE — questa è la rigenerazione correttiva, correggili TUTTI:\n- ${feedback.slice(0, 12).join('\n- ')}${sforaScadenza ? '\n\nCOME SI CORREGGE LA SCADENZA: elimina una o due tappe (le meno importanti, non il rientro) e accorcia le durate finché l\'ultima tappa si conclude PRIMA dell\'orario indicato. Un itinerario con tre tappe che rispetta l\'orario è corretto; uno con sei tappe che sfora è da buttare.' : ''}`
+    const problemi = (feedback || []).map((p) => String(p));
+    const ricette: string[] = [];
+    if (problemi.some((p) => /oltre la scadenza/i.test(p))) {
+      ricette.push('COME SI CORREGGE LA SCADENZA: elimina una o due tappe (le meno importanti, non il rientro) e accorcia le durate finché l\'ultima tappa si conclude PRIMA dell\'orario indicato. Un itinerario con tre tappe che rispetta l\'orario è corretto; uno con sei tappe che sfora è da buttare.');
+    }
+    // Le due bocciature più ripetute della semina, viste decine di volte con
+    // lo stesso testo: il modello riscrive la stessa cosa se gli si dice solo
+    // "correggi". Qui gli si dice l'operazione da fare.
+    if (problemi.some((p) => /variante GRATIS/i.test(p))) {
+      ricette.push('COME SI CORREGGE LA VARIANTE GRATIS: la tappa segnalata va SOSTITUITA, non riscritta. Scegli un luogo davvero a ingresso libero (piazza, chiesa senza biglietto, belvedere, parco, mercato, lungomare, street art) e togli dal testo qualsiasi cifra in €, "biglietto", "ingresso a pagamento", "contributo", "offerta": nella tabella_budget la voce attrazioni deve valere 0 in OGNI giorno. Se il monumento simbolo si paga, raccontalo dall\'esterno dal miglior punto di vista gratuito.');
+    }
+    if (problemi.some((p) => /esperienza prenotabile|variante ESPERIENZE/i.test(p))) {
+      ricette.push('COME SI CORREGGE IL LINK PRENOTABILE: prendi gli URL dall\'elenco "MATERIALE REALE" qui sotto e incollali IDENTICI (nessun carattere in più o in meno, nessun accorciamento) nel campo "link_info" delle tappe corrispondenti. Non serve inventare nulla: il titolo della tappa deve corrispondere all\'esperienza dell\'elenco. Se nessuna tappa si presta, aggiungi in info_viaggio.suggerimenti una voce "🎟 Esperienza consigliata: <nome> — <URL>" con l\'URL copiato dall\'elenco.');
+    }
+    const fb = problemi.length
+      ? `\n\nPROBLEMI RILEVATI DALLA REVISIONE PRECEDENTE — questa è la rigenerazione correttiva, correggili TUTTI:\n- ${problemi.slice(0, 12).join('\n- ')}${ricette.length ? `\n\n${ricette.join('\n\n')}` : ''}`
       : '';
     const baseUser = libraryUserPrompt(d, ctxBlock);
     if (d.days <= LIB_SINGLE_CALL_MAX_DAYS) {
@@ -10170,7 +10188,16 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     for (let attempt = 1; attempt <= 3; attempt++) {
       let gen: any;
       try {
-        gen = await libraryGenerateItinerary(d, ctxBlock, feedback, genEngine);
+        // Nella semina (motore non richiesto esplicitamente) si alterna il
+        // generatore fra i gratuiti a ogni tentativo, partendo dai rapidi:
+        // groq chiude un item in ~30s, agnes in 2-4 minuti. Alternando si
+        // spalma il consumo sui tetti giornalieri di ciascuno invece di
+        // esaurire groq e restare a trascinarsi su agnes per il resto del
+        // giorno (misurato il 19/08: 240-300s per tentativo, 2-3 item l'ora).
+        const engineForAttempt = genEngine === 'agnes'
+          ? LIB_BG_ENGINES[(libBgEngineCounter++) % LIB_BG_ENGINES.length]
+          : genEngine;
+        gen = await libraryGenerateItinerary(d, ctxBlock, feedback, engineForAttempt);
       } catch (e: any) {
         lastReason = `generazione fallita: ${String(e?.message || e).slice(0, 200)}`;
         continue;
