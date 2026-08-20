@@ -295,6 +295,27 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     setEntries(prev => prev.filter(x => x.poiId !== poiId));
   };
 
+  /**
+   * "Portami li'" dal banner di avvicinamento.
+   * Prima il banner diceva solo QUANTO sei lontano e in che direzione (la
+   * freccia e' in linea d'aria): per sapere CHE STRADA fare bisognava chiudere
+   * il banner, trovare il POI sulla mappa e avviare la navigazione da li'.
+   * Qui si apre direttamente il modale del percorso — stesso evento che usa
+   * una tappa dell'itinerario, quindi nessuna logica nuova.
+   * Il banner NON si chiude: l'utente potrebbe voler comunque ascoltare, e il
+   * pagamento resta legato al trigger di arrivo, non alla navigazione.
+   */
+  const handleNavigate = (entry: ApproachEntry) => {
+    if (typeof entry.lat !== 'number' || typeof entry.lon !== 'number') return;
+    window.dispatchEvent(new CustomEvent('wip-smart-navigate', {
+      detail: {
+        startCoords: userLocation ? { lat: userLocation.lat, lon: userLocation.lon } : null,
+        endCoords: { lat: entry.lat, lon: entry.lon },
+        destinationName: entry.name,
+      },
+    }));
+  };
+
   const handlePlayNow = (entry: ApproachEntry) => {
     // Al clic su "Ascolta", apriamo la scheda completa tramite l'evento
     // centralizzato con autoPlay=true. Si passa anche poiId: se l'oggetto poi
@@ -367,25 +388,41 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
                 <h4 className="text-sm font-bold text-stone-900 truncate">{entry.name}</h4>
 
                 {isLead && (
-                  <button
-                    onClick={() => handlePlayNow(entry)}
-                    className={`w-full mt-2 py-1.5 rounded-lg ${isGem ? 'bg-amber-500 hover:bg-amber-600' : 'bg-primary hover:bg-primary-hover'} text-white text-[10px] font-black shadow transition-all flex items-center justify-center gap-1.5`}
-                  >
-                    {entry.alreadyPaid ? (
-                      <>
-                        <span>🔊</span>
-                        {getTranslation('poi_play', language)}
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-1">
-                          <span>🪙 15</span>
-                          <span className="opacity-60">|</span>
-                          <span>{getTranslation('poi_play', language)}</span>
-                        </div>
-                      </>
+                  <div className="mt-2 flex items-stretch gap-1.5">
+                    <button
+                      onClick={() => handlePlayNow(entry)}
+                      className={`flex-1 py-1.5 rounded-lg ${isGem ? 'bg-amber-500 hover:bg-amber-600' : 'bg-primary hover:bg-primary-hover'} text-white text-[10px] font-black shadow transition-all flex items-center justify-center gap-1.5`}
+                    >
+                      {entry.alreadyPaid ? (
+                        <>
+                          <span>🔊</span>
+                          {getTranslation('poi_play', language)}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-1">
+                            <span>🪙 15</span>
+                            <span className="opacity-60">|</span>
+                            <span>{getTranslation('poi_play', language)}</span>
+                          </div>
+                        </>
+                      )}
+                    </button>
+
+                    {/* "Portami li'": compare solo se sappiamo dov'e' il POI.
+                        Stretto di proposito — l'azione principale resta
+                        ascoltare, questa e' il modo per arrivarci. */}
+                    {typeof entry.lat === 'number' && typeof entry.lon === 'number' && (
+                      <button
+                        onClick={() => handleNavigate(entry)}
+                        aria-label={getTranslation('navigate', language)}
+                        title={getTranslation('navigate', language)}
+                        className="px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-700 text-white text-[11px] font-black shadow transition-all flex items-center justify-center"
+                      >
+                        ➤
+                      </button>
                     )}
-                  </button>
+                  </div>
                 )}
               </div>
             </motion.div>

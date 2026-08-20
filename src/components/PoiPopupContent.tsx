@@ -63,6 +63,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [shared, setShared] = useState(false);
+  const [showNavChoice, setShowNavChoice] = useState(false);
   const [displayedDesc, setDisplayedDesc] = useState("");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -213,6 +214,9 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 technicalData: dbData.technical_data || null,
                 tags: dbData.technical_data?.tags || ["cultura", "storia"],
                 rating: dbData.rating || null,
+                // L'indirizzo sta in shared_pois ma NON arriva dalla RPC della
+                // mappa (colonne fisse): il popup lo puo' mostrare solo da qui.
+                address: dbData.address || (poi as any).address || null,
                 subtext: "",
                 wikiUrl: dbData.technical_data?.wikipedia_url || null,
                 website: dbData.practical_info?.match(/Web: ([^\s|]+)/)?.[1] || null,
@@ -470,18 +474,81 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     } catch {}
   };
 
-  // ── Navigazione Nativa o Web ──────────────────────────────────────
+  // ── Navigazione: due modi, due strumenti diversi ───────────────────
+  // A PIEDI resta dentro l'app (WIP Nav): e' l'unico modo per continuare a far
+  // scattare le audioguide lungo la strada. Mandare il pedone su Google Maps
+  // spegne il prodotto proprio nel momento in cui serve.
+  // IN AUTO va al navigatore di sistema: nessuno guida guardando la nostra
+  // mappa, e Google Maps o Mappe hanno il traffico.
   const handleNavigate = (e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (ItaintaBackgroundPoiPlugin) {
-      ItaintaBackgroundPoiPlugin.openSystemNavigator({ lat: poi.lat, lon: poi.lon, name: poi.name }).catch(() => {
-        window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}`, '_blank');
-      });
-    } else {
-      window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}`, '_blank');
-    }
+    setShowNavChoice(v => !v);
   };
+
+  const navigaAPiedi = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowNavChoice(false);
+    window.dispatchEvent(new CustomEvent('wip-smart-navigate', {
+      detail: { lat: poi.lat, lon: poi.lon, name: poi.name, id: poi.id, mode: 'foot' },
+    }));
+  };
+
+  const navigaInAuto = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setShowNavChoice(false);
+    const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}&travelmode=driving`, '_blank');
+    if (ItaintaBackgroundPoiPlugin) {
+      ItaintaBackgroundPoiPlugin.openSystemNavigator({ lat: poi.lat, lon: poi.lon, name: poi.name }).catch(web);
+    } else web();
+  };
+
+  // La scelta compare come foglio in basso invece che dentro la card: le tre
+  // schede (atlante, utility, completa) hanno strutture diverse e una ha i
+  // bottoni in griglia — un pannello inline la romperebbe.
+  const sceltaNav = !showNavChoice ? null : (
+    <div
+      className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
+      onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
+    >
+      <div
+        className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
+          {poi.name}
+        </p>
+        <button
+          onClick={navigaAPiedi}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+        >
+          <span className="text-xl">🚶</span>
+          <span className="flex-1">
+            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_a_piedi", language)}</span>
+            <span className="block text-[11px] text-gray-500">{getTranslation("nav_a_piedi_sub", language)}</span>
+          </span>
+        </button>
+        <button
+          onClick={navigaInAuto}
+          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+        >
+          <span className="text-xl">🚗</span>
+          <span className="flex-1">
+            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto", language)}</span>
+            <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_sub", language)}</span>
+          </span>
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
+          className="w-full py-3 text-sm font-bold text-gray-500 border-t border-gray-100 hover:bg-gray-50 transition-colors"
+        >
+          {getTranslation("cancel", language)}
+        </button>
+      </div>
+    </div>
+  );
 
   // ── Deriva categorie per styling ──────────────────────────────────
   const effectiveCat = poi.baseCategory || poi.subCategory || poi.category;
@@ -537,6 +604,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           >
             <Navigation className="w-4 h-4" /> Naviga
           </button>
+          {sceltaNav}
         </div>
       </div>
     );
@@ -574,6 +642,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           >
             <Navigation className="w-4 h-4" /> Naviga
           </button>
+          {sceltaNav}
         </div>
       </div>
     );
@@ -694,6 +763,21 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 <MapPin className="w-2.5 h-2.5 flex-shrink-0" />
                 {data.subtext}
               </p>
+            )}
+            {/* Indirizzo: dice DOVE si entra, non solo in che zona si e'.
+                Tap = indicazioni stradali. */}
+            {(data?.address || (poi as any).address) && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const q = encodeURIComponent(`${poi.lat},${poi.lon}`);
+                  window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
+                }}
+                className="text-[10px] text-gray-500 mt-0.5 flex items-start gap-1 text-left hover:text-gray-700 transition-colors"
+              >
+                <span className="flex-shrink-0">📍</span>
+                <span className="leading-snug">{data?.address || (poi as any).address}</span>
+              </button>
             )}
             {/* Doppia appartenenza: questo POI turistico è anche un bene
                 vincolato di un registro nazionale. Il badge lo dichiara —
@@ -857,6 +941,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             <Navigation className="w-3.5 h-3.5" />
             {getTranslation("navigate", language)}
           </button>
+          {sceltaNav}
 
           {/* Audio */}
           <button

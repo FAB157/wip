@@ -146,6 +146,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // Lunghezze cumulate del tracciato (dal vertice i alla fine), per la
   // distanza residua lungo il percorso reale.
   const remainingFromVertexRef = useRef<number[]>([]);
+  // Metri residui alla meta nel punto di ogni manovra (lungo il tracciato).
+  const stepRemainingRef = useRef<number[]>([]);
   const pendingPoisRef = useRef<RoutePoi[]>([]);
   const offRouteCountRef = useRef(0);
   const lastRecalcRef = useRef(0);
@@ -181,6 +183,21 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       remaining[i] = remaining[i + 1] + haversineMeters(g[i][0], g[i][1], g[i + 1][0], g[i + 1][1]);
     }
     remainingFromVertexRef.current = remaining;
+
+    // Metri residui alla meta nel punto di OGNI manovra, misurati LUNGO il
+    // tracciato. Servono a dire "fra 120 m gira a destra" contando la strada
+    // e non la linea d'aria: dietro una curva le due misure divergono, e il
+    // navigatore annunciava meno metri di quanti se ne camminano davvero.
+    // Si calcola una volta sola qui, non a ogni fix GPS.
+    stepRemainingRef.current = route.steps.map((s) => {
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < g.length; i++) {
+        const d = haversineMeters(s.location.lat, s.location.lon, g[i][0], g[i][1]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      return remaining[best] ?? 0;
+    });
+
     setRouteGeometry(g);
   };
 
@@ -432,7 +449,19 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             // non l'ultima annunciata. Prima il banner diceva "gira a destra"
             // (svolta già fatta) accanto ai metri della svolta SUCCESSIVA:
             // testo e distanza si riferivano a due manovre diverse.
-            setDistanceToNext(Math.round(dStep));
+            //
+            // I metri sono quelli SULLA STRADA, non in linea d'aria: si
+            // sottrae il residuo alla meta nel punto di manovra dal residuo
+            // nella posizione attuale. Dietro una curva la linea d'aria
+            // annunciava meno metri di quanti se ne camminano davvero — un
+            // navigatore che dice "fra 40 m" quando ne mancano 70 fa sbagliare
+            // la svolta. Si ricade sulla linea d'aria solo se il residuo di
+            // quella manovra non è disponibile.
+            const remAllaManovra = stepRemainingRef.current[idx];
+            const dLungoStrada = remAllaManovra != null
+              ? Math.max(0, remaining - remAllaManovra)
+              : dStep;
+            setDistanceToNext(Math.round(dLungoStrada));
             setCurrentInstruction(step.instruction);
             setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
             break;

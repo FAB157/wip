@@ -607,6 +607,35 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Навигация",
     ZH: "导航导览"
   , DE: "Navigieren"},
+  // Le due scelte del tasto Naviga. A piedi resta dentro l'app perche' e'
+  // l'unico modo di far scattare le audioguide lungo la strada; in auto va al
+  // navigatore di sistema, che ha il traffico.
+  nav_a_piedi: {
+    IT: "A piedi", EN: "On foot", FR: "À pied", ES: "A pie",
+    DE: "Zu Fuß", RU: "Пешком", ZH: "步行"
+  },
+  nav_a_piedi_sub: {
+    IT: "Con WIP Nav: audioguide lungo il percorso",
+    EN: "With WIP Nav: audio guides along the way",
+    FR: "Avec WIP Nav : audioguides en chemin",
+    ES: "Con WIP Nav: audioguías por el camino",
+    DE: "Mit WIP Nav: Audioguides unterwegs",
+    RU: "С WIP Nav: аудиогиды по пути",
+    ZH: "使用 WIP Nav：沿途语音导览"
+  },
+  nav_in_auto: {
+    IT: "In auto", EN: "By car", FR: "En voiture", ES: "En coche",
+    DE: "Mit dem Auto", RU: "На машине", ZH: "驾车"
+  },
+  nav_in_auto_sub: {
+    IT: "Apre Google Maps o Mappe",
+    EN: "Opens Google Maps or Maps",
+    FR: "Ouvre Google Maps ou Plans",
+    ES: "Abre Google Maps o Mapas",
+    DE: "Öffnet Google Maps oder Karten",
+    RU: "Откроет Google Карты или Карты",
+    ZH: "打开谷歌地图或地图"
+  },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",

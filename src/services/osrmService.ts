@@ -4,6 +4,7 @@
 // =====================================================================
 
 import type { LatLon } from '../lib/geo';
+import { getApiUrl } from '../lib/api';
 
 // Base OSRM per il routing PEDONALE, condivisa da TUTTI i consumatori
 // (osrmService, routeEngine, NavigatorEngine, PlanScreen): un'unica costante.
@@ -13,9 +14,19 @@ import type { LatLon } from '../lib/geo';
 // pedonali, scorciatoie). Override con VITE_OSRM_FOOT_BASE.
 // PRODUZIONE: un OSRM self-hosted o Mapbox "walking" sono le opzioni robuste
 // (Mapbox NON è il default per non alzare i costi).
+// DAL 19/08 si passa dalla NOSTRA rotta, non piu' dal servizio esterno diretto.
+// Dietro /api/route/foot c'e' una catena di cinque fonti — FOSSGIS OSRM,
+// FOSSGIS Valhalla, OpenRouteService, Geoapify, Mapbox — provate in
+// quest'ordine. Motivo: routing.openstreetmap.de e' ottimo (misurato: 10
+// percorsi su 10, mediana 122 ms) ma e' di un'associazione senza scopo di
+// lucro, senza garanzia di continuita'; se ci limitano, l'app resta muta.
+// La rotta risponde nel DIALETTO OSRM, quindi qui cambia solo l'indirizzo e
+// nessuna logica di navigazione.
+// Con VITE_OSRM_FOOT_BASE si puo' ancora puntare altrove (utile per provare un
+// OSRM self-hosted senza toccare il codice).
 export const OSRM_FOOT_BASE: string =
   (import.meta.env as any)?.VITE_OSRM_FOOT_BASE ||
-  'https://routing.openstreetmap.de/routed-foot/route/v1/foot/';
+  `${getApiUrl('/api/route/foot/')}`;
 
 export interface RouteStep {
   /** Testo gia' tradotto, pronto da leggere. */
