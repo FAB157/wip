@@ -85,6 +85,14 @@ const KIND_CHIPS: Array<{ id: string; label: string; kind?: string; theme?: stri
   { id: 'sport', label: '🏟 Sport', kind: 'theme', theme: 'sport', match: ['sport'] },
   { id: 'moda', label: '👗 Moda', kind: 'theme', theme: 'moda', match: ['moda', 'fashion'] },
   { id: 'zone', label: '📍 Zone', kind: 'zone', match: ['zone', 'zona', 'quartiere', 'district'] },
+  // ── Enogastronomia: le tre famiglie del gusto ────────────────────────
+  // Sono tre prodotti diversi e vanno filtrati separatamente: la STRADA ha
+  // un tracciato che esiste già (Chiantigiana, Route des Grands Crus), la
+  // ZONA è un territorio denso di produttori senza percorso ufficiale, la
+  // FIERA vale solo nella settimana in cui si tiene.
+  { id: 'strade-del-gusto', label: '🍇 Strade del gusto', kind: 'theme', theme: 'strade-del-gusto', match: ['strade-del-gusto', 'strada del vino', 'wine route'] },
+  { id: 'zone-del-gusto', label: '🍽 Zone del gusto', kind: 'theme', theme: 'zone-del-gusto', match: ['zone-del-gusto', 'zona del gusto', 'enogastronomia'] },
+  { id: 'fiere-del-gusto', label: '🎪 Sagre e fiere', kind: 'theme', theme: 'fiere-del-gusto', match: ['fiere-del-gusto', 'fiera', 'sagra', 'festival'] },
 ];
 
 /** Medium "luoghi di" con ricerca on-demand (POST /api/library/<medium>):
@@ -141,14 +149,25 @@ const CHIP_GROUPS: Array<{ id: string; label: string; emoji: string; allLabel: s
     chipIds: ['zone'],
   },
   {
+    // L'enogastronomia era sparsa fra "esperienze a tema" (vino, fabbriche
+    // del gusto, agriturismi) e non aveva casa: qui diventa una macro-
+    // categoria sua, che è anche il modo in cui la cerca chi parte per
+    // mangiare bene.
+    id: 'gusto', emoji: '🍷', label: 'Mangiare e bere', allLabel: 'Tutto il gusto',
+    chipIds: ['strade-del-gusto', 'zone-del-gusto', 'fiere-del-gusto', 'vino', 'fabbriche-del-gusto', 'agriturismi'],
+  },
+  {
     id: 'cultura', emoji: '🎭', label: 'Ispirazioni culturali', allLabel: 'Tutte le ispirazioni culturali',
     chipIds: ['cinema', 'libri', 'musica', 'arte', 'storia', 'scienza', 'sport', 'moda'],
   },
   {
     id: 'esperienze', emoji: '🌿', label: 'Esperienze a tema', allLabel: 'Tutte le esperienze a tema',
     chipIds: [
-      'fioriture', 'fauna', 'neve', 'botteghe', 'vino', 'wellness', 'agriturismi',
-      'fabbriche-del-gusto', 'scoperta-urbana', 'musei-impresa', 'aperture-straordinarie',
+      // vino, fabbriche-del-gusto e agriturismi sono passati al gruppo
+      // "Mangiare e bere": un chip sta in un gruppo solo, altrimenti la
+      // riga 2 lo mostra due volte.
+      'fioriture', 'fauna', 'neve', 'botteghe', 'wellness',
+      'scoperta-urbana', 'musei-impresa', 'aperture-straordinarie',
       'memoria', 'souvenir',
     ],
   },

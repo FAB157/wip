@@ -36,6 +36,9 @@ import {
   type StopOption,
 } from './transitCatalog';
 import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld';
+import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
+import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
+import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog';
 
 // ─────────────────────────────────────────────────────────────────────
 // Tipi (contratto concordato con gli altri moduli della Biblioteca)
@@ -52,8 +55,15 @@ export interface LibraryContextHints {
   osmCraft?: boolean;
   /** Cerca su iNaturalist le osservazioni faunistiche recenti. */
   inaturalist?: boolean;
-  /** Cerca su OSM cantine e vigneti (craft=winery, landuse=vineyard). */
+  /** Cantine, enoteche e vigneti reali dal nostro database (import OSM). */
   osmWinery?: boolean;
+  /**
+   * Produttori del gusto reali dal nostro database: caseifici, frantoi,
+   * birrifici, distillerie, apicolture, torrefazioni. Separato da osmWinery
+   * perché i temi sono due — "si beve" e "si visita dove nasce" — e mescolarli
+   * riempirebbe il prompt del vino di caseifici.
+   */
+  osmGusto?: boolean;
   /** Cerca su OSM i murales/graffiti reali (tourism=artwork) per il tema
    *  'scoperta-urbana': niente street art inventata. */
   osmArtwork?: boolean;
@@ -263,8 +273,11 @@ export function portDescriptors(): LibraryDescriptor[] {
           angle: a.id,
           brief: `${a.brief}\n${portOptionContext(p, o)}`,
           constraints: { returnBufferHours: 1 },
-          // 'esperienze': il server deve raccogliere i prodotti prenotabili
+          // 'esperienze': il server deve raccogliere i prodotti prenotabili.
+          // 'gastronomica': i produttori veri della zona (caseifici, frantoi,
+          // birrifici, cantine) invece di piatti raccontati a memoria.
           ...(a.id === BOOKABLE_ANGLE.id ? { contextHints: { bookable: true } } : {}),
+          ...(a.id === 'gastronomica' ? { contextHints: { osmGusto: true, osmWinery: true } } : {}),
         });
       }
     }
@@ -598,7 +611,7 @@ export const THEMES: ThemeDef[] = [
     emoji: '🍷',
     label: 'Vino',
     days: 2,
-    hints: { osmWinery: true },
+    hints: { osmWinery: true, osmGusto: true },
     brief:
       'Tema VINO: il territorio letto attraverso le sue vigne. Alterna 2-3 cantine al giorno (MAI di più: le degustazioni si sommano) a borghi, enoteche e paesaggi vitati; per ogni zona spiega denominazioni, vitigni e cosa distingue un produttore artigiano da uno industriale. Regola ferrea: chi degusta non guida — costruisci l\'itinerario attorno a navette, taxi, tour organizzati o tappe a piedi, e dillo esplicitamente. Consiglia di prenotare le visite in cantina (raramente si entra senza appuntamento) e includi l\'abbinamento con la cucina locale. Vietato lo snobismo: spiega senza gergo, e segnala anche la bottiglia onesta da 15 euro.',
     places: [
@@ -743,7 +756,7 @@ export const THEMES: ThemeDef[] = [
     emoji: '🍴',
     label: 'Fabbriche del gusto',
     days: 1,
-    hints: { osmCraft: true },
+    hints: { osmCraft: true, osmGusto: true },
     brief:
       'Tema FABBRICHE-DEL-GUSTO: si visita DOVE il prodotto simbolo nasce — caseifici, acetaie, frantoi, distillerie, tostature, salumifici — non dove lo si vende. Ogni tappa è un produttore o consorzio REALMENTE visitabile: spiega il processo con parole semplici (perché il tempo, la temperatura o la pietra fanno la differenza), imponi la PRENOTAZIONE dove serve (i caseifici lavorano all\'alba: dillo) e chiudi con l\'assaggio e lo spaccio a prezzo giusto. Distingui sempre il prodotto DOP/IGP dall\'imitazione da scaffale e insegna a leggere l\'etichetta. Se un\'azienda celebre NON fa visite, dillo e proponi il museo o consorzio che le fa. Tono goloso ma tecnico, da apprendista casaro per un giorno.',
     places: [
@@ -877,6 +890,7 @@ export const THEMES: ThemeDef[] = [
     emoji: '🌾',
     label: 'Weekend rurale',
     days: 2,
+    hints: { osmGusto: true },
     brief:
       'Tema AGRITURISMI: due giorni di campagna VERA, pensati anche per famiglie con bambini. La base è un agriturismo/fattoria autentica (animali veri, orto, colazione coi prodotti propri — indica la tipologia e la zona giusta, senza inventare nomi di strutture: rimanda ai consorzi e ai circuiti ufficiali del territorio); attorno, tappe lente: mercati contadini, caseifici e cantine aperte, borghi minori, passeggiate facili tra i campi, la raccolta stagionale dove si può (dillo con la stagione onesta). Regole pratiche: prenotare la mezza pensione, scarpe da sporcare, rispetto per gli animali e i campi coltivati. Tono caldo e concreto: il lusso qui è il ritmo.',
     places: [
@@ -1802,6 +1816,8 @@ export function zoneDescriptors(): LibraryDescriptor[] {
           angle: a.id,
           brief,
           ...(a.id === BOOKABLE_ANGLE.id ? { contextHints: { bookable: true } } : {}),
+          // Taglio gastronomico: produttori e cantine reali dal nostro DB.
+          ...(a.id === 'gastronomica' ? { contextHints: { osmGusto: true, osmWinery: true } } : {}),
         });
       }
     }
@@ -1866,6 +1882,8 @@ export function worldZoneDescriptors(): LibraryDescriptor[] {
           angle: a.id,
           brief,
           ...(a.id === BOOKABLE_ANGLE.id ? { contextHints: { bookable: true } } : {}),
+          // Taglio gastronomico: produttori e cantine reali dal nostro DB.
+          ...(a.id === 'gastronomica' ? { contextHints: { osmGusto: true, osmWinery: true } } : {}),
         });
       }
     }
@@ -2855,6 +2873,234 @@ export function cycleDescriptors(): LibraryDescriptor[] {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// STRADE DEL VINO E DEL GUSTO — TASTE_ROUTES × 3 angoli
+//
+// Le stesse regole dei cammini: il percorso è dato, le tappe sono reali e
+// il generatore non le tocca. Cambia il mezzo (auto, bici, treno) e cambia
+// l'avvertenza: chi degusta non guida.
+//
+// Perché non un tema come "vino": i temi partono da una CITTÀ e chiedono
+// al modello di costruire la giornata. Qui invece il percorso esiste già,
+// con le sue tappe in ordine, ed è quello il valore — esattamente come per
+// la Via Francigena. Un tema non può rispettare un tracciato.
+// ─────────────────────────────────────────────────────────────────────
+
+const TASTE_ANGLES: AngleDef[] = [
+  {
+    id: 'strada-classica',
+    label: 'La strada completa',
+    brief:
+      'Variante COMPLETA: si percorre la strada tappa per tappa, nell\'ordine indicato, senza saltarne nessuna e senza aggiungerne. Per ogni tappa racconta cosa si assaggia lì e PERCHÉ proprio lì — il vitigno, il suolo, il gesto di lavorazione che cambia il prodotto — e alterna sempre un assaggio a una camminata o a una visita, perché nessuno arrivi a fine giornata saturo. Indica il tipo di produttore da cercare (cantina familiare, cooperativa, caseificio d\'alpeggio) e la zona, MAI nomi di aziende che non siano nel materiale reale fornito. Tono di chi conosce il mestiere e non fa lo snob: spiega senza gergo, e segnala sempre l\'alternativa onesta a poco prezzo.',
+  },
+  {
+    id: 'strada-gratis',
+    label: '🆓 Senza spendere',
+    brief:
+      'Variante SENZA SPENDERE: la strada si percorre lo stesso, ma tutto ciò che si paga esce dall\'itinerario. Privilegia i paesaggi e i punti panoramici sui vigneti, i sentieri fra i filari, i musei e le enoteche a ingresso libero, le cantine cooperative che non fanno pagare l\'assaggio d\'ingresso, i mercati, le sagre e le giornate di cantine aperte (indicane la stagione). Nella tabella_budget la voce "attrazioni" DEVE valere 0 € ogni giorno. Dichiara con onestà cosa resta fuori perché a pagamento, e come si potrebbe fare un\'eccezione sola.',
+  },
+  {
+    id: 'strada-esperienze',
+    label: '🎟 Con degustazioni prenotate',
+    brief:
+      'Variante CON DEGUSTAZIONI PRENOTATE: 2-3 tappe della giornata sono esperienze REALI prenotabili online (visita in cantina con degustazione, tour del caseificio, corso, escursione fra le vigne) scelte ESCLUSIVAMENTE dal materiale reale fornito nel prompt, ciascuna con l\'URL ESATTO copiato intatto nel campo "link_info". Le altre tappe collegano le esperienze in un percorso logico, con orari che tengano conto della durata dichiarata e del tempo per arrivare al punto d\'incontro. VIETATO inventare esperienze o URL.',
+  },
+];
+
+export function tasteRouteDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  for (const r of TASTE_ROUTES) {
+    // La regola di sicurezza vale per tutto ciò che si beve, e va ripetuta
+    // in ogni brief: è l'unica cosa di questo catalogo che, se ignorata,
+    // fa male a qualcuno.
+    const regolaGuida = r.kind === 'vino' || r.kind === 'birra' || r.kind === 'distillati'
+      ? (r.transport === 'auto'
+        ? 'REGOLA NON NEGOZIABILE: chi degusta NON guida. Questo percorso si fa in auto, quindi l\'itinerario DEVE dire esplicitamente come si risolve — autista designato, navetta, taxi, tour organizzato, o sputacchiera in cantina (si può assaggiare senza deglutire, e i produttori se lo aspettano). Se esiste un\'alternativa in treno o in bici, proponila come prima scelta.'
+        : `Questo percorso si fa ${r.transport === 'bici' ? 'in bicicletta' : r.transport === 'treno' ? 'in treno' : r.transport === 'piedi' ? 'a piedi' : 'in barca'}, e questo È il motivo per cui funziona: si degusta senza il problema di guidare. Dillo esplicitamente.`)
+      : '';
+    for (const a of TASTE_ANGLES) {
+      out.push({
+        slug: `gusto-${r.id.replace(/^(wr|fr)-/, '')}-${a.id}`,
+        // 'theme' e non un kind nuovo: la pipeline del server tratta tutti i
+        // kind allo stesso modo, e aggiungerne uno avrebbe richiesto di
+        // toccare anche la validazione lato server senza guadagnarci nulla.
+        kind: 'theme',
+        theme: 'strade-del-gusto',
+        title: `${r.emoji} ${r.name} — ${a.label}`,
+        city: r.stops[0]?.place || r.region,
+        country: r.country,
+        coords: r.coords,
+        days: r.days,
+        angle: a.id,
+        brief: [a.brief, tasteRouteContext(r), regolaGuida].filter(Boolean).join('\n'),
+        contextHints: {
+          osmWinery: r.kind === 'vino',
+          osmGusto: true,
+          ...(a.id === 'strada-esperienze' ? { bookable: true } : {}),
+        },
+      });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// FIERE E FESTIVAL DEL GUSTO — FOOD_FESTIVALS × 2 angoli
+//
+// Una fiera non è una tappa fra le altre: è il motivo per cui si è lì
+// quella settimana, e riscrive la giornata attorno a sé. Ma è anche la cosa
+// più facile da sbagliare, perché le date cambiano ogni anno: per questo
+// ogni brief ripete che si scrive la FINESTRA e si manda a verificare.
+// ─────────────────────────────────────────────────────────────────────
+
+const FESTIVAL_ANGLES: AngleDef[] = [
+  {
+    id: 'fiera-giornata',
+    label: 'La giornata della fiera',
+    brief:
+      'Variante GIORNATA DELLA FIERA: la manifestazione è il centro della giornata e tutto il resto le gira attorno. Dì a che ora conviene arrivare e perché, cosa vedere PRIMA che i banchi si riempiano, come si mangia quando c\'è la coda ovunque, e dove rifugiarsi nelle ore di punta. Spiega come funziona concretamente — biglietti, gettoni, prenotazioni, code — perché è lì che si perde il tempo. Chiudi con la parte di città o di territorio che si visita quando la fiera chiude. Tono di chi ci è già stato e sa dove si sbaglia.',
+  },
+  {
+    id: 'fiera-weekend',
+    label: 'Il weekend attorno alla fiera',
+    brief:
+      'Variante WEEKEND: due giorni in cui la fiera è mezza giornata e il resto è il territorio che quella fiera racconta — i produttori, il paesaggio, i borghi, il museo che spiega da dove viene quel prodotto. Se il prodotto della fiera ha una stagione (raccolta, molitura, vendemmia), portala dentro l\'itinerario: è quello che nessuna guida generica fa. Alterna sempre il pieno della folla al vuoto della campagna. Tono di chi consiglia a un amico come sfruttare il viaggio invece di sprecarlo in coda.',
+  },
+];
+
+export function festivalDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  for (const f of FOOD_FESTIVALS) {
+    // Le voci "tutto l'anno" (la cerimonia del caffè etiope, Jemaa el-Fna)
+    // non sono fiere con una data: restano nel catalogo per la mappa e per
+    // il contesto, ma non generano un itinerario "vai alla fiera".
+    if (f.months.length >= 12) continue;
+    for (const a of FESTIVAL_ANGLES) {
+      out.push({
+        slug: `fiera-${f.id.replace(/^ff-/, '')}-${a.id}`,
+        kind: 'theme',
+        theme: 'fiere-del-gusto',
+        title: `${f.emoji} ${f.name} — ${a.label}`,
+        city: f.city,
+        country: f.country,
+        coords: f.coords,
+        days: a.id === 'fiera-weekend' ? 2 : 1,
+        angle: a.id,
+        brief: [a.brief, festivalContext(f)].join('\n'),
+        contextHints: { osmGusto: true, osmWinery: f.kind === 'vino' || f.kind === 'raccolto' },
+      });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// ZONE DEL GUSTO — TASTE_ZONES × durate × 4 angoli
+//
+// Perché una terza famiglia enogastronomica, oltre alle strade e alle fiere.
+//
+// Le strade del vino (wineRoutesCatalog) sono un catalogo curato: percorsi
+// con un tracciato che esiste già, e il valore sta nel rispettarlo. Le fiere
+// sono un appuntamento: valgono nella settimana giusta. Restano fuori le
+// ZONE — un territorio dove il gusto è denso ma non c'è nessun percorso
+// ufficiale da seguire, e dove si va semplicemente a mangiare e bere bene
+// per due o tre giorni.
+//
+// Sono anche le zone che il catalogo scritto a mano non poteva contenere:
+// 98 delle 130 strade sono di vino e 87 stanno in Europa, perché quelle sono
+// le rotte di cui si scrive. Contando i 199.000 produttori importati da
+// OpenStreetMap emergono invece Taipei, Buenos Aires, Katmandu, Bangalore,
+// Oakland, la Moravia meridionale — dove i produttori ci sono davvero e
+// nessuna guida italiana li racconta.
+//
+// Ogni zona esce in 2 e 3 giorni × 4 angoli, ABBINABILI tra loro; la coppia
+// gratis/prenotabile è obbligatoria come su porti e zone (regola fissa del
+// committente).
+// ─────────────────────────────────────────────────────────────────────
+
+const TASTE_ZONE_ANGLES: AngleDef[] = [
+  {
+    id: 'gusto-territorio',
+    label: 'Il territorio a tavola',
+    brief:
+      'Variante TERRITORIO A TAVOLA: due o tre giorni costruiti sul rapporto fra quello che si mangia e il posto in cui si mangia. Ogni giornata deve rispondere a una domanda concreta — perché proprio QUI nasce questo prodotto: il suolo, l\'altitudine, il clima, il gesto di lavorazione, la storia di chi ci è arrivato prima. Alterna sempre un assaggio a una camminata, a un mercato o a una visita, perché nessuno arrivi a metà pomeriggio saturo. Indica il TIPO di posto da cercare (cooperativa, azienda familiare, bottega storica, mercato coperto) e la zona esatta; i nomi propri usali SOLO se stanno nel materiale reale fornito. Segnala il piatto o il prodotto da non perdere e la trappola per turisti da evitare. Tono di chi conosce il mestiere e non fa lo snob: spiega senza gergo e dà sempre l\'alternativa onesta a poco prezzo.',
+  },
+  {
+    id: 'gusto-produttori',
+    label: 'Si visita dove nasce',
+    brief:
+      'Variante DOVE NASCE: la giornata gira attorno ai luoghi di PRODUZIONE — cantine, caseifici, frantoi, birrifici, distillerie, apicolture, torrefazioni — scelti ESCLUSIVAMENTE fra quelli del materiale reale fornito nel prompt, con nome e coordinate copiati esatti. Per ognuno racconta cosa si vede davvero entrando (la vasca, la caldaia, la sala di stagionatura, l\'alambicco) e A CHE ORA ha senso andarci: il caseificio lavora all\'alba, il frantoio da ottobre, la cantina in vendemmia è nel caos. Ripeti sempre che la visita va PRENOTATA, perché quasi nessuno di questi posti è un museo con orari. Se il materiale non basta a riempire la giornata, NON inventare produttori: racconta il territorio, le denominazioni e i mercati, e dillo apertamente.',
+  },
+  FREE_ANGLE,
+  BOOKABLE_ANGLE,
+];
+
+const TASTE_ZONE_DAYS = [2, 3] as const;
+
+/** Le regole che non si negoziano su un itinerario che si beve. */
+function tasteZoneRules(z: TasteZone): string {
+  const guida = z.a
+    ? 'REGOLA NON NEGOZIABILE: chi degusta NON guida. Questa zona si gira in auto fra i poderi, quindi l\'itinerario DEVE dire esplicitamente come si risolve — autista designato, navetta, taxi, tour organizzato, o sputacchiera in cantina (si assaggia senza deglutire, e i produttori se lo aspettano). Se esiste un\'alternativa in treno o in bici, proponila come prima scelta.'
+    : 'Se nella giornata ci sono degustazioni alcoliche, dì come ci si sposta dopo: mezzi pubblici, a piedi o taxi. Mai dare per scontato che si guidi.';
+  const scala = z.u
+    ? 'Questa è una zona URBANA: le distanze si fanno a piedi o coi mezzi, i produttori sono botteghe e laboratori dentro la città, e il mercato coperto è quasi sempre il punto di partenza giusto della prima mattina.'
+    : 'Questa è una zona di CAMPAGNA: si guida fra paesi e poderi, le distanze contano e i produttori chiudono presto. Costruisci ogni giornata attorno a una base (un paese dove si dorme e si cena) e a un anello che ci ritorna, mai a un percorso che finisce a 80 km dal letto.';
+  return `${scala}\n${guida}`;
+}
+
+export function tasteZoneDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  const taken = new Set<string>();
+  for (const z of TASTE_ZONES) {
+    const key = slugify(z.c);
+    if (!key || taken.has(key)) continue;
+    taken.add(key);
+    // Il tier 3 esce solo da 2 giorni: sono zone vere ma meno dense, e tre
+    // giorni si reggerebbero solo allungando il brodo.
+    const durate = z.t === 3 ? [2] : TASTE_ZONE_DAYS;
+    for (const d of durate) {
+      for (const a of TASTE_ZONE_ANGLES) {
+        const altri = TASTE_ZONE_ANGLES.filter(x => x.id !== a.id).map(x => x.label).join(', ');
+        const brief = [
+          a.brief,
+          `CONTESTO ZONA DEL GUSTO: ${z.c}, ${z.k}. Qui il nostro database conta ${z.n} luoghi del gusto mappati, soprattutto ${z.p}: è questo che rende la zona un itinerario e non una tappa.`,
+          tasteZoneRules(z),
+          `Durata: ${d} giorni. ${
+            d === 2
+              ? 'Due giorni: il primo dà il quadro del territorio e del suo prodotto simbolo, il secondo scende in profondità su una sola valle, un solo quartiere o una sola lavorazione. Niente tappe-riempitivo.'
+              : 'Tre giorni: una sottozona al giorno, e almeno un pasto lento senza programma. Il terzo giorno è quello in cui si torna dove si è mangiato meglio, non quello in cui si aggiunge la decima cantina.'
+          }`,
+          `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
+          'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
+        ].join('\n');
+        out.push({
+          slug: `gustozona-${key}-${d}g-${a.id}`,
+          // 'theme' come le strade del gusto: la pipeline del server tratta
+          // tutti i kind allo stesso modo e aggiungerne uno costringerebbe a
+          // toccare la validazione lato server senza guadagnarci nulla.
+          kind: 'theme',
+          theme: 'zone-del-gusto',
+          title: `${z.u ? '🍽' : '🍇'} ${z.c} del gusto in ${d} giorni — ${a.label}`,
+          city: z.c,
+          country: z.k,
+          coords: { lat: z.lat, lon: z.lon },
+          days: d,
+          angle: a.id,
+          brief,
+          contextHints: {
+            osmGusto: true,
+            // Il vino si chiede solo dove c'è: nelle zone del tè o del
+            // cioccolato riempirebbe il prompt di cantine assenti.
+            osmWinery: /cantine|enoteche|vigneti|strade del vino/.test(z.p),
+            ...(a.id === BOOKABLE_ANGLE.id ? { bookable: true } : {}),
+          },
+        });
+      }
+    }
+  }
+  return out;
+}
+
 let _all: LibraryDescriptor[] | null = null;
 
 /** Tutti i descrittori del catalogo (calcolati una volta, poi cache). */
@@ -2864,6 +3110,9 @@ export function getAllDescriptors(): LibraryDescriptor[] {
       ...portDescriptors(),
       ...airportDescriptors(),
       ...pilgrimDescriptors(),
+      ...tasteRouteDescriptors(),
+      ...tasteZoneDescriptors(),
+      ...festivalDescriptors(),
       ...themeDescriptors(),
       ...filmDescriptors(),
       ...bookDescriptors(),
@@ -2947,6 +3196,10 @@ const MEDIA_PRIORITY_TITLES: Array<{ prefix: string; title: string }> = [
  *   2-bis. Zone mondiali TIER 1 (WORLD_ZONES, le mete più visitate del
  *      pianeta): 2 giorni classica + gratis + esperienze, poi 3 giorni
  *      classica.
+ *   2-quater. ENOGASTRONOMIA, nell'ordine strade → zone → fiere, e dentro
+ *      ognuna prima Italia/Francia/Spagna e poi il resto del mondo. Prima
+ *      che questo blocco esistesse la sezione del gusto stava tutta nel
+ *      punto 5 e in biblioteca c'erano ZERO itinerari del gusto su 1.122.
  *   3. Porti mondiali top (PRIORITY_WORLD_PORTS), sosta più lunga,
  *      angoli "classica" e "gastronomica".
  *   4. Temi nelle città ITALIANE (in ordine di definizione dei temi), ognuno
@@ -3021,6 +3274,54 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
     const key = slugify(z.c);
     for (const combo of [`2g-classica`, `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`, `3g-classica`]) {
       push(`zone-${key}-${combo}`);
+    }
+  }
+
+  // 2-quater) ENOGASTRONOMIA. Prima di questo blocco la sezione del gusto
+  //    non era in NESSUNA posizione prioritaria: strade, fiere e zone
+  //    cadevano tutte nel blocco 5, dietro a ~14.000 descrittori, e il
+  //    risultato misurato il 20/08/2026 era ZERO itinerari del gusto in
+  //    biblioteca su 1.122 (le 130 strade curate incluse). Non era un
+  //    problema di generazione: non ci arrivava mai il turno.
+  //
+  //    L'ordine qui dentro: prima le strade dei tre mercati dell'app, poi
+  //    le zone dense di casa, poi il mondo. Ogni voce porta con sé la
+  //    coppia gratis/prenotabile, come ovunque.
+  const MERCATI_CASA = ['Italia', 'Francia', 'Spagna'];
+  for (const casa of [true, false]) {
+    for (const r of TASTE_ROUTES) {
+      if (MERCATI_CASA.includes(r.country) !== casa) continue;
+      const key = r.id.replace(/^(wr|fr)-/, '');
+      for (const a of ['strada-classica', 'strada-gratis', 'strada-esperienze']) {
+        push(`gusto-${key}-${a}`);
+      }
+    }
+  }
+  // Le fiere prima delle zone, non dopo: sono solo 74 voci ma valgono
+  // esclusivamente nella settimana in cui si tengono, e dietro alle zone
+  // cadevano in posizione 3.470 — cioè settimane di semina, cioè stagioni
+  // perse.
+  for (const f of FOOD_FESTIVALS) {
+    if (f.months.length >= 12) continue;
+    const key = f.id.replace(/^ff-/, '');
+    push(`fiera-${key}-fiera-giornata`);
+    push(`fiera-${key}-fiera-weekend`);
+  }
+  for (const casa of [true, false]) {
+    for (const tier of [1, 2, 3]) {
+      for (const z of TASTE_ZONES) {
+        if (z.t !== tier || MERCATI_CASA.includes(z.k) !== casa) continue;
+        const key = slugify(z.c);
+        // Le zone dense escono subito complete; quelle di terzo livello
+        // portano solo il 2 giorni con la coppia obbligatoria, altrimenti
+        // da sole occuperebbero giorni di semina prima che il resto del
+        // catalogo veda un turno.
+        const combos = z.t === 3
+          ? ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`]
+          : ['2g-gusto-territorio', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`,
+             '2g-gusto-produttori', '3g-gusto-territorio'];
+        for (const combo of combos) push(`gustozona-${key}-${combo}`);
+      }
     }
   }
 

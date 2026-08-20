@@ -224,6 +224,37 @@ async function costruisciRiquadri(): Promise<Array<{ lat: number; lon: number; n
   return riquadri;
 }
 
+// I mirror Overpass non sono intercambiabili nei fatti: misurati dal droplet il
+// 20/08/2026, overpass-api.de dava 504 e kumi/private.coffee non rispondevano
+// affatto, mentre osm.ch tornava in 0,16s. Si prova in quest'ordine e si
+// ricomincia dal primo a ogni riquadro, così se osm.ch cade il giro continua.
+const OVERPASS_MIRRORS = [
+  'https://overpass.osm.ch/api/interpreter',
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
+
+async function overpassQuery(q: string): Promise<any | null> {
+  let occupato = false;
+  for (const url of OVERPASS_MIRRORS) {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 60000);
+    try {
+      const r = await fetch(url, {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `data=${encodeURIComponent(q)}`, signal: ctrl.signal,
+      });
+      if (r.status === 429 || r.status === 504) { occupato = true; continue; }
+      if (!r.ok) continue;
+      return await r.json();
+    } catch { /* mirror giù: si passa al prossimo */ }
+    finally { clearTimeout(to); }
+  }
+  if (occupato) throw new Error('OCCUPATO');
+  return null;
+}
+
 async function passataOsm(): Promise<void> {
   const riquadri = await costruisciRiquadri();
   const zone = riquadri.map((t) => ({ nome: `${t.lat},${t.lon} (${t.n} POI)`, lat: t.lat, lon: t.lon }));
@@ -241,18 +272,18 @@ async function passataOsm(): Promise<void> {
     const q = `[out:json][timeout:25];(nwr(${bbox})["name"]["website"];nwr(${bbox})["name"]["contact:website"];);out tags center 600;`;
     let siti = new Map<string, string>();
     try {
-      const r = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `data=${encodeURIComponent(q)}`,
-      });
-      if (r.status === 429 || r.status === 504) { console.warn(`${ts()} Overpass occupato (${r.status}): attendo 120s`); await sleep(120000); idx--; continue; }
-      const dati = await r.json();
+      const dati = await overpassQuery(q);
+      if (dati === null) { console.warn(`${ts()} Overpass irraggiungibile su ${z.nome}: salto`); await sleep(15000); }
       for (const el of (dati?.elements || [])) {
         const nome = normNome(el?.tags?.name);
         const url = pulisciUrl(el?.tags?.website || el?.tags?.['contact:website']);
         if (nome.length >= 4 && url && !siti.has(nome)) siti.set(nome, url);
       }
     } catch (e: any) {
+      if (String(e?.message) === 'OCCUPATO') {
+        console.warn(`${ts()} Overpass occupato su tutti i mirror: attendo 120s`);
+        await sleep(120000); idx--; continue;
+      }
       console.warn(`${ts()} Overpass KO su ${z.nome}: ${String(e.message).slice(0, 60)}`);
       await sleep(30000);
       continue;
