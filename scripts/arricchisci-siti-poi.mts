@@ -41,8 +41,10 @@ const K = (n: string) => process.env[n] || env[n] || '';
 const SUPA = K('VITE_SUPABASE_URL') || K('SUPABASE_URL');
 const SKEY = K('SUPABASE_SERVICE_ROLE_KEY');
 const H = { apikey: SKEY, Authorization: `Bearer ${SKEY}` };
-const STATE = K('POI_SITI_STATE') || '/root/arricchisci-siti-stato.json';
 const MODO = (process.argv[2] || 'wikidata').toLowerCase();
+// Uno stato per passata: le due usano lo stesso campo cursore e mescolarle
+// farebbe ripartire l'una dal punto dell'altra.
+const STATE = `${K('POI_SITI_STATE') || '/root/arricchisci-siti-stato'}-${MODO}.json`;
 
 if (!SUPA || !SKEY) { console.error('Servono VITE_SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY.'); process.exit(1); }
 
@@ -81,21 +83,57 @@ const pulisciUrl = (u: any): string | null => {
 };
 
 // ── PASSATA WIKIDATA ────────────────────────────────────────────────────
+// L'elenco dei POI da lavorare si costruisce UNA VOLTA e si tiene su file.
+// Motivo: paginare con i filtri (`wikidata not null` + `contact_website is
+// null`) su 2 milioni di righe senza indice diventa una scansione sempre più
+// lunga — dopo 34.000 POI il database rispondeva 500 per statement timeout,
+// e riprovare ogni minuto è esattamente il carico che l'ha già messo in
+// ginocchio una volta. Scorrere la chiave primaria senza filtri, invece, è
+// una lettura indicizzata e costa uguale a qualsiasi profondità.
+const FILE_LAVORO = K('POI_SITI_LISTA') || '/root/arricchisci-siti-lista.json';
+
+async function costruisciListaWikidata(): Promise<Array<{ id: string; q: string }>> {
+  try {
+    const cache = JSON.parse(fs.readFileSync(FILE_LAVORO, 'utf8'));
+    if (Array.isArray(cache) && cache.length) { console.log(`${ts()} elenco già pronto: ${cache.length} POI da arricchire`); return cache; }
+  } catch { /* si costruisce ora */ }
+
+  console.log(`${ts()} costruisco l'elenco scorrendo la chiave primaria (una tantum)…`);
+  const out: Array<{ id: string; q: string }> = [];
+  let ultimo = '', pagine = 0, righe = 0;
+  for (;;) {
+    if (stop) break;
+    const r = await fetch(`${SUPA}/rest/v1/shared_pois?select=id,wikidata,contact_website${ultimo ? `&id=gt.${encodeURIComponent(ultimo)}` : ''}&order=id.asc&limit=1000`, { headers: H });
+    if (!r.ok) { console.warn(`${ts()} elenco: HTTP ${r.status}, attendo 60s`); await sleep(60000); continue; }
+    const rows: any[] = await r.json();
+    if (!rows.length) break;
+    for (const p of rows) {
+      const q = String(p.wikidata || '').trim();
+      if (!p.contact_website && /^Q\d+$/.test(q)) out.push({ id: p.id, q });
+    }
+    ultimo = rows[rows.length - 1].id;
+    righe += rows.length;
+    if (++pagine % 100 === 0) console.log(`${ts()} elenco: ${righe} POI letti, ${out.length} da arricchire`);
+    await sleep(200);
+  }
+  try { fs.writeFileSync(FILE_LAVORO, JSON.stringify(out)); } catch { /* best effort */ }
+  console.log(`${ts()} elenco pronto: ${out.length} POI con id Wikidata e senza sito (su ${righe} letti)`);
+  return out;
+}
+
 async function passataWikidata(): Promise<void> {
+  const lista = await costruisciListaWikidata();
   const stato = leggiStato();
-  let ultimoId = stato.ultimoId || '';
+  let cursore = Number(stato.zonaIdx || 0);
   let scritti = stato.scritti || 0, esaminati = 0, gruppi = 0;
 
-  while (!stop) {
-    const filtro = `wikidata=not.is.null&contact_website=is.null${ultimoId ? `&id=gt.${encodeURIComponent(ultimoId)}` : ''}`;
-    const r = await fetch(`${SUPA}/rest/v1/shared_pois?select=id,name,wikidata&${filtro}&order=id.asc&limit=200`, { headers: H });
-    if (!r.ok) { console.warn(`${ts()} lettura POI fallita (${r.status}): attendo 60s`); await sleep(60000); continue; }
-    const rows: any[] = await r.json();
-    if (!rows.length) { console.log(`${ts()} finiti i POI con id Wikidata.`); break; }
+  while (!stop && cursore < lista.length) {
+    const rows = lista.slice(cursore, cursore + 200).map((x) => ({ id: x.id, wikidata: x.q }));
+    cursore += rows.length;
+    if (!rows.length) break;
 
     const qids = [...new Set(rows.map((p) => String(p.wikidata || '').trim()).filter((q) => /^Q\d+$/.test(q)))];
     esaminati += rows.length;
-    ultimoId = rows[rows.length - 1].id;
 
     if (qids.length) {
       const sparql = `SELECT ?item ?site ?tel WHERE { VALUES ?item { ${qids.map((q) => `wd:${q}`).join(' ')} } OPTIONAL { ?item wdt:P856 ?site } OPTIONAL { ?item wdt:P1329 ?tel } }`;
@@ -134,34 +172,71 @@ async function passataWikidata(): Promise<void> {
     }
 
     gruppi++;
-    salvaStato({ ultimoId, scritti });
-    if (gruppi % 5 === 0) console.log(`${ts()} ${esaminati} POI esaminati, ${scritti} siti scritti (ultimo id ${String(ultimoId).slice(0, 12)})`);
+    salvaStato({ zonaIdx: cursore, scritti });
+    if (gruppi % 5 === 0) console.log(`${ts()} ${cursore}/${lista.length} POI lavorati, ${scritti} siti scritti`);
     await sleep(1500); // cortesia verso Wikidata
   }
-  console.log(`${ts()} passata Wikidata: ${scritti} siti scritti su ${esaminati} POI esaminati.`);
+  console.log(`${ts()} passata Wikidata: ${scritti} siti scritti su ${esaminati} POI lavorati in questo giro.`);
 }
 
 // ── PASSATA OSM SULLE ZONE DELLA BIBLIOTECA ─────────────────────────────
 const normNome = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/[^a-z0-9]+/g, ' ').replace(/\b(il|lo|la|le|gli|i|del|della|di|da|the|of)\b/g, ' ').replace(/\s+/g, ' ').trim();
 
-async function passataOsm(): Promise<void> {
-  const mod: any = await import('../src/lib/libraryDescriptors.js');
-  const zone: any[] = [];
-  const visti = new Set<string>();
-  for (const d of mod.getAllDescriptors()) {
-    const k = `${d.coords.lat.toFixed(2)},${d.coords.lon.toFixed(2)}`;
-    if (visti.has(k)) continue;
-    visti.add(k);
-    zone.push({ nome: d.city, lat: d.coords.lat, lon: d.coords.lon });
+/** I riquadri da coprire non sono le zone della biblioteca ma TUTTI i posti
+ *  dove abbiamo POI senza sito: si ricavano dai dati, arrotondando le
+ *  coordinate a 0,1° (~11 km). La scansione costa una volta sola e si salva
+ *  su file, così i riavvii non la rifanno. Riquadri ordinati per numero di
+ *  POI: prima le città dense, dove il ritorno è massimo. */
+const FILE_RIQUADRI = K('POI_SITI_TILES') || '/root/arricchisci-siti-riquadri.json';
+
+async function costruisciRiquadri(): Promise<Array<{ lat: number; lon: number; n: number }>> {
+  try {
+    const cache = JSON.parse(fs.readFileSync(FILE_RIQUADRI, 'utf8'));
+    if (Array.isArray(cache) && cache.length) { console.log(`${ts()} riquadri già calcolati: ${cache.length}`); return cache; }
+  } catch { /* si costruisce ora */ }
+
+  console.log(`${ts()} scansione delle coordinate dei POI senza sito (una tantum, ~15 minuti)…`);
+  const conteggio = new Map<string, number>();
+  let ultimo = '', pagine = 0, righe = 0;
+  for (;;) {
+    if (stop) break;
+    const r = await fetch(`${SUPA}/rest/v1/shared_pois?select=id,lat,lon&contact_website=is.null${ultimo ? `&id=gt.${encodeURIComponent(ultimo)}` : ''}&order=id.asc&limit=1000`, { headers: H });
+    if (!r.ok) { console.warn(`${ts()} scansione: HTTP ${r.status}, attendo 60s`); await sleep(60000); continue; }
+    const rows: any[] = await r.json();
+    if (!rows.length) break;
+    for (const p of rows) {
+      const la = Number(p.lat), lo = Number(p.lon);
+      if (!Number.isFinite(la) || !Number.isFinite(lo)) continue;
+      const k = `${(Math.round(la * 10) / 10).toFixed(1)}|${(Math.round(lo * 10) / 10).toFixed(1)}`;
+      conteggio.set(k, (conteggio.get(k) || 0) + 1);
+    }
+    ultimo = rows[rows.length - 1].id;
+    righe += rows.length;
+    if (++pagine % 50 === 0) console.log(`${ts()} scansione: ${righe} POI, ${conteggio.size} riquadri`);
+    await sleep(250);
   }
+  const riquadri = [...conteggio.entries()]
+    .map(([k, n]) => { const [la, lo] = k.split('|'); return { lat: Number(la), lon: Number(lo), n }; })
+    .sort((a, b) => b.n - a.n);
+  try { fs.writeFileSync(FILE_RIQUADRI, JSON.stringify(riquadri)); } catch { /* best effort */ }
+  console.log(`${ts()} scansione finita: ${righe} POI senza sito in ${riquadri.length} riquadri`);
+  return riquadri;
+}
+
+async function passataOsm(): Promise<void> {
+  const riquadri = await costruisciRiquadri();
+  const zone = riquadri.map((t) => ({ nome: `${t.lat},${t.lon} (${t.n} POI)`, lat: t.lat, lon: t.lon }));
   const stato = leggiStato();
   let idx = stato.zonaIdx || 0, scritti = stato.scritti || 0;
-  console.log(`${ts()} ${zone.length} zone da coprire, riparto dalla ${idx + 1}`);
+  console.log(`${ts()} ${zone.length} riquadri da coprire, riparto dal ${idx + 1}`);
 
   for (; idx < zone.length && !stop; idx++) {
     const z = zone[idx];
-    const dlat = 0.055, dlon = 0.055 / Math.max(0.2, Math.cos((z.lat * Math.PI) / 180));
+    // Mezzo riquadro: 0,05° di latitudine (~5,5 km) e altrettanti di
+    // longitudine corretti per il parallelo, così i riquadri si toccano
+    // senza lasciare buchi.
+    const dlat = 0.05, dlon = 0.05 / Math.max(0.2, Math.cos((z.lat * Math.PI) / 180));
     const bbox = `${(z.lat - dlat).toFixed(4)},${(z.lon - dlon).toFixed(4)},${(z.lat + dlat).toFixed(4)},${(z.lon + dlon).toFixed(4)}`;
     const q = `[out:json][timeout:25];(nwr(${bbox})["name"]["website"];nwr(${bbox})["name"]["contact:website"];);out tags center 600;`;
     let siti = new Map<string, string>();
@@ -197,7 +272,9 @@ async function passataOsm(): Promise<void> {
       }
     }
     salvaStato({ zonaIdx: idx + 1, scritti });
-    console.log(`${ts()} [${idx + 1}/${zone.length}] ${z.nome}: ${siti.size} siti da OSM — totale scritti ${scritti}`);
+    if (siti.size || (idx + 1) % 25 === 0) {
+      console.log(`${ts()} [${idx + 1}/${zone.length}] ${z.nome}: ${siti.size} siti da OSM — totale scritti ${scritti}`);
+    }
     await sleep(4000); // cortesia verso Overpass
   }
   console.log(`${ts()} passata OSM: ${scritti} siti scritti.`);
