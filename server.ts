@@ -14880,12 +14880,31 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     return ordine;
   };
 
-  /** OSRM ha un servizio di ottimizzazione dedicato: e' la prima scelta. */
+  /**
+   * OSRM ha un servizio di ottimizzazione dedicato: e' la prima scelta.
+   *
+   * ATTESA CORTA, DI PROPOSITO. Misurato il 20/08 sull'istanza pubblica
+   * FOSSGIS, cinque tappe romane:
+   *   sola andata (roundtrip=false)  →   363 ms
+   *   anello      (roundtrip=true)   → 9.279 ms   ← sempre, con ogni parametro
+   * E il 2-opt casalingo da':
+   *   anello       5.652 m contro 5.621 → 31 m, lo 0,5%
+   *   sola andata  4.987 m contro 4.805 → 182 m, il 3,8%
+   *
+   * Due casi diversi, quindi due decisioni diverse invece di un timeout unico:
+   *   ANELLO      → si usa direttamente la riserva locale. Nove secondi per lo
+   *                 0,5% non si fanno pagare a chi e' fermo in strada.
+   *   SOLA ANDATA → si aspetta OSRM fino a quattro secondi: il 3,8% vale
+   *                 l'attesa, e di norma risponde in poco piu' di trecento ms.
+   * Un timeout unico avrebbe sbagliato uno dei due: a 2,5 s si perdeva il 3,8%
+   * della sola andata, a 9 s si regalavano nove secondi all'anello.
+   */
   const ordineDaOsrmTrip = async (punti: number[][], anello: boolean): Promise<number[] | null> => {
+    if (anello) return null;   // vedi sopra: la riserva locale e' la scelta giusta
     const coords = punti.map(p => `${p[0]},${p[1]}`).join(';');
     const r = await axios.get(
       `https://routing.openstreetmap.de/routed-foot/trip/v1/foot/${coords}`,
-      { params: { source: 'first', roundtrip: anello, ...(anello ? {} : { destination: 'last' }), overview: 'false' }, timeout: 9000 });
+      { params: { source: 'first', destination: 'last', roundtrip: false, overview: 'false' }, timeout: 4000 });
     const w = r.data?.waypoints;
     if (!Array.isArray(w) || w.length !== punti.length) return null;
     // waypoint_index dice la posizione nel giro; l'indice 0 e' la partenza.
@@ -14919,41 +14938,52 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
 
       // ── 1. l'ordine ────────────────────────────────────────────────────
+      // `senza=` deve valere ANCHE per l'ordinamento, non solo per le tratte:
+      // altrimenti una prova che dice "senza OSRM" continua a usare OSRM per
+      // decidere il giro, e sembra aver provato la riserva quando non l'ha
+      // provata. Una diagnostica che mente e' peggio di nessuna diagnostica.
+      const saltate = new Set(String(req.query.senza || '').split(',').filter(Boolean));
+
       let ordine: number[] = tappe.map((_, i) => i);
       let fonteOrdine = 'richiesto';
       if (vuoleOrdine && tappe.length > 1) {
-        try {
-          const o = await ordineDaOsrmTrip(punti, anello);
-          if (o) { ordine = o; fonteOrdine = 'osrm-trip'; }
-        } catch { /* si scende alla riserva locale */ }
+        if (!saltate.has('fossgis-osrm')) {
+          try {
+            const o = await ordineDaOsrmTrip(punti, anello);
+            if (o) { ordine = o; fonteOrdine = 'osrm-trip'; }
+          } catch { /* si scende alla riserva locale */ }
+        }
         if (fonteOrdine === 'richiesto') { ordine = ordinaTappe(partenza, tappe, anello); fonteOrdine = 'locale-2opt'; }
       }
 
       // ── 2. le tratte, una per volta, con la catena a cinque ────────────
       // Tratta per tratta e non in un colpo solo: cosi' una tratta che fallisce
       // non porta giu' tutto il giro, e ogni tratta ha le sue cinque riserve.
-      const saltate = new Set(String(req.query.senza || '').split(',').filter(Boolean));
       const sequenza = [partenza, ...ordine.map(i => tappe[i]), ...(anello ? [partenza] : [])];
-      const tratte: any[] = [];
       const problemi: string[] = [];
 
-      for (let i = 0; i < sequenza.length - 1; i++) {
-        const a = sequenza[i], b = sequenza[i + 1];
-        let fatta: any = null;
-        for (const f of FONTI_ROUTE) {
-          if (saltate.has(f.nome) || !f.attiva) continue;
-          try {
-            const out = await f.run(a, b, lang);
-            if (out?.routes?.[0]?.legs?.[0]?.steps?.length) { fatta = { ...out.routes[0], wip_fonte: f.nome }; break; }
-          } catch { /* fonte successiva */ }
-        }
-        if (!fatta) {
+      // IN PARALLELO, non in fila. Le tratte sono indipendenti: calcolarle una
+      // dopo l'altra sommava le latenze e il giro ad anello ci metteva 5,4
+      // secondi per sei tratte da ~900 ms. In parallelo costa quanto la piu'
+      // lenta. Dentro OGNI tratta le fonti restano in ordine di preferenza: il
+      // parallelismo e' fra tratte, non fra fornitori della stessa tratta.
+      const tratte = await Promise.all(
+        sequenza.slice(0, -1).map(async (a, i) => {
+          const b = sequenza[i + 1];
+          for (const f of FONTI_ROUTE) {
+            if (saltate.has(f.nome) || !f.attiva) continue;
+            try {
+              const out = await f.run(a, b, lang);
+              if (out?.routes?.[0]?.legs?.[0]?.steps?.length) return { ...out.routes[0], wip_fonte: f.nome };
+            } catch { /* fonte successiva */ }
+          }
           // Una tratta irraggiungibile non deve far fallire il giro: si dichiara
           // e si tira dritto. Un errore silenzioso qui sembra un'app rotta.
           problemi.push(`tratta ${i + 1}: nessun percorso pedonale`);
-          tratte.push({ distance: distanzaMetri(a, b), duration: distanzaMetri(a, b) / 1.35, geometry: { type: 'LineString', coordinates: [a, b] }, legs: [{ steps: [] }], wip_fonte: 'linea-retta', irraggiungibile: true });
-        } else tratte.push(fatta);
-      }
+          const d = distanzaMetri(a, b);
+          return { distance: d, duration: d / 1.35, geometry: { type: 'LineString', coordinates: [a, b] }, legs: [{ steps: [] }], wip_fonte: 'linea-retta', irraggiungibile: true };
+        })
+      );
 
       // ── 3. il giro, nel dialetto che il client gia' parla ──────────────
       const coordinate: number[][] = [];
