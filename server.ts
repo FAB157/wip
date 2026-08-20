@@ -10164,6 +10164,56 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
     return lines.length ? `\nFAUNA OSSERVABILE IN QUESTA STAGIONE (iNaturalist, osservazioni verificate entro 25 km, mese corrente): cita SOLO queste specie nelle tappe naturalistiche, senza promettere avvistamenti garantiti:\n${lines.join('\n')}` : '';
   }
 
+  // ── I NOSTRI POI COME TAPPE ─────────────────────────────────────────────
+  // Regola del committente (20/08/2026): dove il nostro database copre bene
+  // una città, le tappe si prendono da lì invece che dalla memoria dell'AI —
+  // nomi e coordinate diventano verificati per costruzione, e cadono le
+  // bocciature per "luogo non verificabile". Restano liberi ristoranti, bar
+  // e locali (che nel nostro database non ci sono: quelli arrivano dalle
+  // ancore dining) e le categorie di servizio.
+  const LIB_POI_CATEGORIE_ESCLUSE = new Set([
+    // locali e cibo: li sceglie il generatore dalle fonti autorevoli
+    'ristoranti', 'restaurant', 'ristorante', 'bar', 'cafe', 'caffe', 'pub', 'fast_food',
+    'gelateria', 'pasticceria', 'bakery', 'food', 'locali', 'mercati',
+    // servizi e utilità: non sono tappe di un itinerario
+    'utilita', 'utility', 'parking', 'toilets', 'pharmacy', 'hospital', 'bank', 'atm',
+    'fuel', 'supermarket', 'shop', 'negozi', 'train_station', 'bus_station', 'community',
+  ]);
+  const LIB_POI_MIN = 8;   // sotto questa soglia il nostro elenco non basta
+  const LIB_POI_MAX = 45;  // tetto per non gonfiare il prompt
+
+  async function libFetchOurPois(d: any): Promise<string> {
+    const dlat = 0.055, dlon = 0.055 / Math.max(0.2, Math.cos((d.coords.lat * Math.PI) / 180));
+    const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois`, {
+      params: {
+        select: 'name,category,lat,lon,contact_website,description_long,is_gem,status,is_hidden',
+        lat: `gte.${(d.coords.lat - dlat).toFixed(4)}`,
+        lon: `gte.${(d.coords.lon - dlon).toFixed(4)}`,
+        limit: 600,
+      },
+      headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
+      timeout: LIB_CONTEXT_TIMEOUT_MS,
+    });
+    const rows = (Array.isArray(r.data) ? r.data : []).filter((p: any) => {
+      if (!p?.name || !Number.isFinite(Number(p.lat))) return false;
+      if (Number(p.lat) > d.coords.lat + dlat || Number(p.lon) > d.coords.lon + dlon) return false;
+      if (p.status === 'draft' || p.status === 'hidden' || p.is_hidden === true) return false;
+      return !LIB_POI_CATEGORIE_ESCLUSE.has(String(p.category || '').toLowerCase());
+    });
+    if (rows.length < LIB_POI_MIN) return '';
+    // Prima quelli raccontabili (hanno già un testo nostro) e le gemme, poi
+    // i più vicini al centro della zona.
+    const dist = (p: any) => Math.hypot(Number(p.lat) - d.coords.lat, (Number(p.lon) - d.coords.lon) * 0.75);
+    rows.sort((a: any, b: any) => {
+      const qa = (a.description_long ? 2 : 0) + (a.is_gem ? 1 : 0);
+      const qb = (b.description_long ? 2 : 0) + (b.is_gem ? 1 : 0);
+      return qb - qa || dist(a) - dist(b);
+    });
+    const lines = rows.slice(0, LIB_POI_MAX).map((p: any) =>
+      `- ${String(p.name).slice(0, 80)}${p.category ? ` (${p.category})` : ''} — coordinate ${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)}${p.contact_website ? ` — sito: ${p.contact_website}` : ''}`);
+    return `\nI NOSTRI POI VERIFICATI IN ZONA (database WIP, ${rows.length} luoghi disponibili): le tappe di visita — monumenti, musei, chiese, piazze, panorami, siti archeologici — vanno scelte DA QUESTO ELENCO, copiando il nome e le coordinate ESATTE indicate qui. Non aggiungere luoghi di visita fuori elenco se qui c'è di che comporre la giornata. Ristoranti, bar e locali NON sono in elenco: quelli li scegli tu dalle fonti autorevoli, come sempre. Dove è indicato il sito, copialo nel campo "link_info" della tappa:\n${lines.join('\n')}`;
+  }
+
   // Raccolta ancore: dining sempre; il resto secondo contextHints. Fail-open.
   async function libraryFetchContext(d: any): Promise<string> {
     const withTimeout = (p: Promise<string>) => Promise.race([
@@ -10175,7 +10225,8 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
     // Street art REALE (tema 'scoperta-urbana'): tourism=artwork, murales e
     // graffiti censiti su OSM entro 6km, tetto 40 elementi come da mandato.
     const artworkQ = `[out:json][timeout:5];nwr(around:6000,${d.coords.lat},${d.coords.lon})["tourism"="artwork"]["artwork_type"~"^(mural|graffiti)$"];out center 40;`;
-    const [dining, film, craft, wine, fauna, artwork] = await Promise.all([
+    const [nostriPoi, dining, film, craft, wine, fauna, artwork] = await Promise.all([
+      withTimeout(libFetchOurPois(d)),
       withTimeout(fetchRealDiningContext(d.coords.lat, d.coords.lon)),
       h.wikidataFilm ? withTimeout(libFetchWikidataFilms(d)) : Promise.resolve(''),
       h.osmCraft ? withTimeout(libFetchOverpassBlock(d, craftQ, 'BOTTEGHE ARTIGIANE REALI (OpenStreetMap, craft=*): per le tappe artigianato usa SOLO queste, con le coordinate indicate:')) : Promise.resolve(''),
@@ -10183,9 +10234,112 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
       h.inaturalist ? withTimeout(libFetchInaturalist(d)) : Promise.resolve(''),
       h.osmArtwork ? withTimeout(libFetchOverpassBlock(d, artworkQ, 'MURALES E STREET ART REALI (OpenStreetMap, tourism=artwork mural/graffiti): per le tappe street art usa SOLO queste opere, con le coordinate indicate; se conosci l\'artista con certezza citalo, altrimenti descrivi l\'opera senza attribuirla:')) : Promise.resolve(''),
     ]);
-    const blocks = [dining, film, craft, wine, fauna, artwork].filter(Boolean);
+    const blocks = [nostriPoi, dining, film, craft, wine, fauna, artwork].filter(Boolean);
     if (!blocks.length) return '';
     return `\n\n━━━ MATERIALE REALE RACCOLTO (ancore verificate: attingi da qui per i nomi propri del tema e per i pasti; NON inventare alternative quando l'elenco copre il bisogno) ━━━${blocks.join('\n')}`;
+  }
+
+  // ── SITI DELLE TAPPE: PESCATI E SEMPRE VERIFICATI ───────────────────────
+  // Regola del committente: i link non si inventano né si lasciano vuoti —
+  // si pescano dalle fonti reali (i nostri POI, OpenStreetMap, Wikidata) e
+  // si VERIFICANO sempre, uno per uno, prima di salvare. Misurato il
+  // 20/08/2026: solo il 28% delle tappe della biblioteca aveva un sito,
+  // contro il 79% degli itinerari generati in diretta.
+  function libNormNome(s: any): string {
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ').replace(/\b(il|lo|la|le|gli|i|del|della|di|da|the|of)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+  }
+
+  /** Siti ufficiali reali della zona: OSM (website / contact:website) e
+   *  Wikidata (P856), indicizzati per nome normalizzato. Fail-open. */
+  async function libFetchSitiZona(d: any): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const aggiungi = (nome: any, url: any) => {
+      const k = libNormNome(nome);
+      const u = String(url || '').trim();
+      if (k.length >= 4 && /^https?:\/\//i.test(u) && !out.has(k)) out.set(k, u);
+    };
+    const q = `[out:json][timeout:8];nwr(around:7000,${d.coords.lat},${d.coords.lon})["name"]["website"];out center 200;`;
+    const q2 = `[out:json][timeout:8];nwr(around:7000,${d.coords.lat},${d.coords.lon})["name"]["contact:website"];out center 200;`;
+    const sparql = `SELECT ?label ?site WHERE {
+  SERVICE wikibase:around { ?p wdt:P625 ?coord . bd:serviceParam wikibase:center "Point(${d.coords.lon} ${d.coords.lat})"^^geo:wktLiteral . bd:serviceParam wikibase:radius "7" . }
+  ?p wdt:P856 ?site . ?p rdfs:label ?label . FILTER(LANG(?label) IN ("it","en"))
+} LIMIT 200`;
+    const chiamate = [
+      ...[q, q2].map((query) => axios.post('https://overpass-api.de/api/interpreter', `data=${encodeURIComponent(query)}`, {
+        timeout: 9000, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }).then((r) => {
+        for (const el of (r.data?.elements || [])) aggiungi(el?.tags?.name, el?.tags?.website || el?.tags?.['contact:website']);
+      })),
+      axios.get('https://query.wikidata.org/sparql', {
+        params: { query: sparql, format: 'json' },
+        headers: { Accept: 'application/sparql-results+json', 'User-Agent': 'WIP-Library/1.0 (https://wip.guide)' },
+        timeout: 9000,
+      }).then((r) => {
+        for (const b of (r.data?.results?.bindings || [])) aggiungi(b?.label?.value, b?.site?.value);
+      }),
+    ];
+    await Promise.allSettled(chiamate);
+    return out;
+  }
+
+  /** Riempie i link mancanti dalle fonti e poi VERIFICA tutti i link presenti,
+   *  togliendo quelli morti. Muta l'itinerario. Ritorna il conteggio. */
+  async function libSitiTappe(itin: any, d: any): Promise<{ riempiti: number; rimossi: number; totali: number; conLink: number }> {
+    const tappe: any[] = [];
+    for (const g of (Array.isArray(itin?.giorni) ? itin.giorni : [])) {
+      for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) if (t && typeof t === 'object') tappe.push(t);
+    }
+    let riempiti = 0, rimossi = 0;
+
+    // 1) riempimento dei vuoti dalle fonti reali
+    const vuote = tappe.filter((t) => !/^https?:\/\//i.test(String(t.link_info || '')));
+    if (vuote.length) {
+      const siti = await libFetchSitiZona(d).catch(() => new Map<string, string>());
+      if (siti.size) {
+        for (const t of vuote) {
+          const k = libNormNome(t.titolo_tappa);
+          if (!k) continue;
+          let url = siti.get(k);
+          if (!url) {
+            // corrispondenza per contenimento: "Basilica di San Petronio"
+            // sul nostro elenco compare spesso come "San Petronio".
+            for (const [nome, u] of siti) {
+              if (nome.length >= 6 && (k.includes(nome) || nome.includes(k))) { url = u; break; }
+            }
+          }
+          if (url) { t.link_info = url; t.fonte_link = 'OpenStreetMap/Wikidata'; riempiti++; }
+        }
+      }
+    }
+
+    // 2) verifica di TUTTI i link (anche quelli scritti dal generatore e
+    //    quelli presi dal nostro database: possono essere vecchi). 401/403/405
+    //    = dominio vivo che blocca i bot, si tengono.
+    const okStatus = (st: number) => st < 500 && st !== 404 && st !== 410;
+    const daVerificare = tappe.filter((t) => /^https?:\/\//i.test(String(t.link_info || '')));
+    for (let i = 0; i < daVerificare.length; i += 6) {
+      await Promise.all(daVerificare.slice(i, i + 6).map(async (t) => {
+        const url = String(t.link_info);
+        // I link affiliati non si toccano: sono verificati alla fonte e
+        // rispondono spesso 403 ai bot.
+        if (libIsBookableHost(url)) return;
+        try {
+          await axios.head(url, { timeout: 5000, maxRedirects: 3, validateStatus: okStatus });
+        } catch {
+          try {
+            const r = await axios.get(url, { timeout: 5000, maxRedirects: 3, responseType: 'stream', validateStatus: okStatus });
+            try { (r.data as any)?.destroy?.(); } catch { /* stream già chiuso */ }
+          } catch {
+            t.link_info = '';
+            rimossi++;
+          }
+        }
+      }));
+    }
+    const conLink = tappe.filter((t) => /^https?:\/\//i.test(String(t.link_info || ''))).length;
+    return { riempiti, rimossi, totali: tappe.length, conLink };
   }
 
   // ── ESPERIENZE PRENOTABILI (Tiqets + Viator + GetYourGuide) ─────────────
@@ -10886,8 +11040,15 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       // approvo"). La rubrica del prompt lega il punteggio a difetti
       // concreti, quindi è il dato più affidabile dei due.
       if (rev.score >= LIB_SCORE_MIN) {
+        // Siti delle tappe: si pescano dalle fonti reali dove mancano e si
+        // verificano TUTTI prima di salvare (regola del committente). Si fa
+        // qui, sull'itinerario ormai approvato, per non pagare la verifica
+        // sui tentativi scartati. Fail-open: se le fonti non rispondono
+        // l'item si salva com'è, senza link inventati.
+        const siti = await libSitiTappe(gen.itin, d).catch(() => null);
         const meta: any = {
           slug: d.slug, kind: d.kind, title: d.title, city: d.city, country: d.country,
+          ...(siti ? { links: { con_sito: siti.conLink, su: siti.totali, riempiti: siti.riempiti, rimossi: siti.rimossi } } : {}),
           ...(d.theme ? { theme: d.theme } : {}),
           angle: d.angle,
           ...(d.hours != null ? { hours: d.hours } : {}),
@@ -10907,7 +11068,7 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         const item = { itinerary: gen.itin, meta };
         await saveToCache(`lib_item_${d.slug}`, 'library_itinerary', item);
         await libraryUpdateIndex(meta);
-        console.log(`[library] "${d.slug}" salvato: score ${rev.score}, ${meta.verifiedBy.join(' → ')}, ${Math.round((Date.now() - t0) / 1000)}s`);
+        console.log(`[library] "${d.slug}" salvato: score ${rev.score}, ${meta.verifiedBy.join(' → ')}${siti ? `, siti ${siti.conLink}/${siti.totali} (+${siti.riempiti} pescati, -${siti.rimossi} morti)` : ''}, ${Math.round((Date.now() - t0) / 1000)}s`);
         libClearFailure(d.slug).catch(() => {});
         return { ok: true, item };
       }
