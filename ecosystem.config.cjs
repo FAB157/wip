@@ -40,6 +40,27 @@ module.exports = {
       time: true,
     },
     {
+      // Siti ufficiali sui POI: passata Wikidata (a gruppi di 200 QID) e poi
+      // passata OSM sulle zone della biblioteca. Serve agli itinerari, che
+      // senza `contact_website` lasciano vuoto il link della tappa. Riprende
+      // dal file di stato /root/arricchisci-siti-stato.json, quindi
+      // l'autorestart e' utile; ritmo di scrittura adattivo, rallenta da solo
+      // se il database va in affanno.
+      // La passata OSM si lancia a mano quando la Wikidata e' finita:
+      //   pm2 stop poi-siti && npx tsx scripts/arricchisci-siti-poi.mts osm
+      name: 'poi-siti',
+      script: 'npx',
+      args: 'tsx scripts/arricchisci-siti-poi.mts wikidata',
+      interpreter: 'none',
+      cwd: __dirname,
+      autorestart: true,
+      restart_delay: 30000,
+      min_uptime: 60000,
+      max_restarts: 30,
+      max_memory_restart: '150M',
+      time: true,
+    },
+    {
       // Copia locale dell'API (dist/server.cjs, buildata a parte e copiata
       // qui): serve SOLO alla semina della biblioteca. Su Vercel la function
       // muore a 300s e la terza rigenerazione correttiva non fa in tempo a
