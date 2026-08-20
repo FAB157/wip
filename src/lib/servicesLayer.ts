@@ -5,6 +5,8 @@
 // per il toggle 🚰: logica pura, nessuna dipendenza da Leaflet/React.
 // =====================================================================
 
+import { getApiUrl } from "./api";
+
 export type ServiceType = "drinking_water" | "toilets" | "bench";
 
 export interface ServicePoint {
@@ -60,6 +62,55 @@ export async function fetchServicesAround(lat: number, lon: number): Promise<Ser
       }
     }
   } catch { /* cache corrotta: si rifà la query */ }
+
+  // ── Prima il nostro database ──
+  // 390.815 fontanelle e 17.858 bagni sono già importati in `utility_pois`
+  // da OSM (via QLever) e coprono tutto il mondo. Leggerli da lì è la
+  // differenza fra un layer che funziona sempre e uno che dipende da
+  // Overpass — che il 19/08/2026 era irraggiungibile da cinque mirror su
+  // cinque, e dal server Vercel non risponde mai.
+  try {
+    const { supabase } = await import('./supabase');
+    const g = RADIUS_M / 111000; // gradi corrispondenti al raggio
+    const { data } = await supabase
+      .from('utility_pois')
+      .select('id,name,lat,lon,sub_category')
+      .in('sub_category', ['fontanella', 'bagni_pubblici'])
+      .gte('lat', lat - g).lte('lat', lat + g)
+      .gte('lon', lon - g).lte('lon', lon + g)
+      .limit(MAX_PER_TYPE * 3);
+    if (data && data.length) {
+      const tipoDa: Record<string, ServiceType> = { fontanella: 'drinking_water', bagni_pubblici: 'toilets' };
+      const punti: ServicePoint[] = data
+        .map((p: any) => ({
+          id: `svc-${p.id}`,
+          type: tipoDa[String(p.sub_category)] as ServiceType,
+          lat: Number(p.lat), lon: Number(p.lon),
+          name: p.name || undefined,
+        }))
+        .filter((p) => p.type && isFinite(p.lat) && isFinite(p.lon));
+      if (punti.length) {
+        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti })); } catch {}
+        return punti;
+      }
+    }
+  } catch { /* database non raggiungibile: si tenta il server, poi Overpass */ }
+
+  // ── Poi il nostro server (che a sua volta ha una cache di Overpass) ──
+  try {
+    const r = await fetch(getApiUrl(`/api/services/nearby?lat=${lat}&lon=${lon}&radius=${RADIUS_M}`),
+      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (r.ok) {
+      const j = await r.json();
+      if (Array.isArray(j?.punti)) {
+        const punti: ServicePoint[] = j.punti
+          .filter((p: any) => p && ['drinking_water', 'toilets', 'bench'].includes(p.type))
+          .map((p: any) => ({ id: `svc-${p.id}`, type: p.type, lat: p.lat, lon: p.lon, name: p.name }));
+        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti })); } catch {}
+        return punti;
+      }
+    }
+  } catch { /* il server non risponde: si tenta Overpass direttamente */ }
 
   const query = `[out:json][timeout:20];
 (

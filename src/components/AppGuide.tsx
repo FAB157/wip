@@ -8,10 +8,10 @@ import {
   Globe, CreditCard, Star, Compass, MapPin,
   Play, Pause, RefreshCw, Plus, CheckCircle,
   History, Bookmark, User, ShoppingCart, Trash2,
-  ChevronDown, Ticket, WifiOff, KeyRound
+  ChevronDown, Ticket, WifiOff, KeyRound, Users
 } from 'lucide-react';
 import { Language } from '../lib/i18n';
-import { PRICING_LIST, DAY_PASS_GUIDE_CAP } from '../lib/pricing';
+import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS } from '../lib/pricing';
 
 interface AppGuideProps {
   language: Language;
@@ -229,7 +229,7 @@ export default function AppGuide({ language }: AppGuideProps) {
         <>
           <P><strong>WIP — World in Pocket</strong> è la tua audioguida intelligente: mentre cammini o guidi, l'app riconosce i luoghi intorno a te e te li racconta a voce, anche con il telefono in tasca e lo schermo spento.</P>
           <H>Come funzionano i crediti</H>
-          <P>Alla registrazione ricevi <strong>100 crediti in omaggio</strong>. Molte funzioni sono gratuite; quelle premium consumano crediti, ricaricabili dallo Shop. Il saldo è sempre visibile in alto nel Profilo.</P>
+          <P>Alla registrazione ricevi <strong>100 crediti in omaggio</strong>, accreditati appena <strong>confermi l'email</strong> (il link che ti arriva dopo l'iscrizione). Molte funzioni sono gratuite; quelle premium consumano crediti, ricaricabili dallo Shop. Il saldo è sempre visibile in alto nel Profilo.</P>
           <ul className="mb-2">
             <Li>Esplorare la mappa, gli avvisi di vicinanza e i <strong>teaser vocali</strong>: <FreeBadge /></Li>
             <Li>Audioguida completa di un luogo: <CostBadge cost={`${PRICING_LIST.audio_guide} crediti`} /> (una volta acquistata resta tua per sempre)</Li>
@@ -238,6 +238,9 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>Itinerario AI: <CostBadge cost={`${PRICING_LIST.itinerary_daily} crediti/giorno`} /> — include <strong>10 messaggi di chat gratis</strong> con WIP</Li>
             <Li>Chat WIP oltre i messaggi inclusi: <CostBadge cost={`${PRICING_LIST.chat_session} crediti / 10 messaggi`} /></Li>
             <Li>Riconoscimento foto (Vision): <CostBadge cost={`${PRICING_LIST.photo_search} crediti`} /></Li>
+            <Li><strong>Pass Museo</strong> — riconoscimenti Vision illimitati per {MUSEUM_PASS_HOURS} ore: <CostBadge cost={`${PRICING_LIST.museum_pass} crediti`} /></Li>
+            <Li>Libreria itinerari già pronti e verificati: <FreeBadge /></Li>
+            <Li>Proporre un luogo alla <strong>WIP Community</strong>: <FreeBadge /> — e se approvato <strong>ti fa guadagnare crediti</strong></Li>
             <Li>Guida PDF Premium: <CostBadge cost={`${PRICING_LIST.premium_guide_daily} crediti/giorno`} /> · Podcast: <CostBadge cost={`${PRICING_LIST.podcast_daily} crediti/giorno`} /></Li>
             <Li>Mappe/pacchetti offline: <FreeBadge /></Li>
           </ul>
@@ -275,9 +278,9 @@ export default function AppGuide({ language }: AppGuideProps) {
         <ul className="mb-2">
           <Li><strong><Map className="w-4 h-4 inline" /> Mappa</strong> — la schermata principale: luoghi intorno a te, filtri per categoria, radar e audioguida.</Li>
           <Li><strong><Compass className="w-4 h-4 inline" /> Pianifica</strong> — WIP l'Esperto crea itinerari su misura giorno per giorno.</Li>
-          <Li><strong><Camera className="w-4 h-4 inline" /> Vision</strong> — fotografa un monumento e scopri cos'è.</Li>
+          <Li><strong><Camera className="w-4 h-4 inline" /> Vision</strong> — fotografa un monumento e scopri cos'è; da qui attivi il <strong>Pass Museo</strong> e proponi luoghi nuovi alla <strong>Community</strong>.</Li>
           <Li><strong><Star className="w-4 h-4 inline" /> Eventi</strong> — concerti, mostre ed esperienze nella zona.</Li>
-          <Li><strong><User className="w-4 h-4 inline" /> Profilo</strong> — crediti, missioni, diario, mappe offline, impostazioni, assistenza.</Li>
+          <Li><strong><User className="w-4 h-4 inline" /> Profilo</strong> — crediti, missioni, passaporto e diario, <strong>Le mie Vision</strong>, mappe offline, impostazioni, assistenza e questo manuale.</Li>
         </ul>
       ),
     },
@@ -293,6 +296,13 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li><strong>Tocca un pin</strong>: si apre la scheda del luogo con descrizione, foto e tasto Ascolta.</Li>
             <Li><strong>Tasto cuffie</strong> <Headphones className="w-4 h-4 inline" /> (in basso a sinistra): accende l'audioguida automatica e la vista radar. Con il Day Pass attivo accanto compare il badge 🎫 con le guide rimaste.</Li>
             <Li><strong>Vista radar</strong>: tu al centro, i luoghi intorno ordinati per distanza — è anche la vista usata offline, dove la mappa di sfondo non è disponibile.</Li>
+          </ul>
+          <H>La chip 🏺 Beni Culturali</H>
+          <P>Oltre ai luoghi turistici, WIP contiene l'<strong>atlante dei beni vincolati</strong> e i <strong>musei di tutto il mondo</strong> raccolti dai registri ufficiali dei ministeri e da Wikidata. Sono centinaia di migliaia di voci: chiese minori, ville, torri, aree archeologiche, palazzi storici che non compaiono in nessuna guida.</P>
+          <ul className="mb-2">
+            <Li>Si accendono con la chip <strong>🏺 Beni Culturali</strong> e compaiono da uno <strong>zoom ravvicinato</strong> in poi: a mappa larga sarebbero migliaia di pin sovrapposti.</Li>
+            <Li>Hanno una scheda più essenziale (nome, tipo, vincolo, posizione): sono un livello informativo, non tutti hanno una storia da raccontare.</Li>
+            <Li>Quelli più importanti sono anche normali luoghi WIP, con audioguida e foto.</Li>
           </ul>
         </>
       ),
@@ -375,6 +385,105 @@ export default function AppGuide({ language }: AppGuideProps) {
       ),
     },
     {
+      id: 'library',
+      title: isItalian ? "Libreria Itinerari (già pronti, gratis)" : "Itinerary Library (ready-made, free)",
+      icon: Bookmark,
+      content: (
+        <>
+          <P>Prima di far generare un itinerario da zero, guarda in <strong>📚 Libreria</strong>: contiene itinerari <strong>già costruiti e verificati</strong>, pronti da usare senza spendere crediti. <FreeBadge /></P>
+          <ul className="mb-2">
+            <Li>Si cerca per <strong>città, porto o tema</strong>, e si filtra per durata: poche ore per una sosta, oppure giorni interi.</Li>
+            <Li>Gli itinerari già in libreria portano il bollino <strong>"✓ Verificato"</strong>: sono stati controllati, non generati al momento.</Li>
+            <Li>Tocca una scheda per vedere l'anteprima completa (tappe, orari, budget) e poi <strong>"Usa questo itinerario"</strong>: entra nei tuoi piani come se l'avessi creato tu, e da lì lo modifichi.</Li>
+            <Li>Se un tema c'è ma l'itinerario non è ancora stato generato, la scheda te lo dice e puoi farlo generare al momento (al costo normale).</Li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      id: 'wipnav',
+      title: isItalian ? "WIP Nav (navigatore a piedi)" : "WIP Nav (walking navigator)",
+      icon: Navigation,
+      content: (
+        <>
+          <P>Da una scheda o da una tappa dell'itinerario puoi farti <strong>accompagnare a piedi</strong>: WIP Nav disegna il percorso e ti guida con la voce, come un navigatore d'auto ma pensato per chi cammina. <FreeBadge /></P>
+          <ul className="mb-2">
+            <Li>Freccia della manovra, distanza alla svolta, tempo e <strong>orario di arrivo previsto</strong>.</Li>
+            <Li>Le indicazioni vocali usano la <strong>stessa voce dell'audioguida</strong>: non devi guardare lo schermo.</Li>
+            <Li>Mentre cammini le audioguide <strong>continuano a funzionare</strong>: se passi davanti a qualcosa di interessante lungo la strada, te lo racconta.</Li>
+            <Li>Le tappe del tuo itinerario non costano nulla in più; un luogo trovato per strada segue le regole normali dell'audioguida.</Li>
+          </ul>
+          <P>In auto WIP non fa da navigatore: apre Google Maps o Apple Mappe, che lo fanno meglio.</P>
+        </>
+      ),
+    },
+    {
+      id: 'trails',
+      title: isItalian ? "Cammini e Fughe da Porto/Aeroporto" : "Trails and Port/Airport Escapes",
+      icon: Compass,
+      content: (
+        <>
+          <H>🥾 Cammini storici</H>
+          <P>Vie di pellegrinaggio e cammini di tutto il mondo, divisi in <strong>tappe reali</strong>, con i luoghi da vedere lungo il percorso e dove dormire a fine giornata. Utile sia per farli davvero, sia per prendersene un pezzo in giornata.</P>
+          <H>⚓ Fughe da porto e aeroporto</H>
+          <P>Hai uno scalo o una sosta da crociera e poche ore? Scegli il porto o l'aeroporto e la durata — <strong>4, 6 o 8 ore</strong> — e WIP costruisce un giro che ti riporta indietro in tempo, contando davvero gli spostamenti.</P>
+          <ul className="mb-2">
+            <Li>Ogni giro ha sempre una <strong>versione a costo zero</strong> accanto a quella con biglietti.</Li>
+            <Li>I tempi di rientro sono calcolati con margine: il rischio di perdere la nave o il volo è il motivo per cui questa funzione esiste.</Li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      id: 'events',
+      title: isItalian ? "Eventi, Biglietti ed Esperienze" : "Events, Tickets and Experiences",
+      icon: Star,
+      content: (
+        <>
+          <P>La scheda <strong>Eventi</strong> mostra cosa succede dove ti trovi nei giorni in cui ci sei: concerti, mostre, sagre, spettacoli. <FreeBadge /></P>
+          <ul className="mb-2">
+            <Li><strong>Biglietti e visite guidate</strong> prenotabili direttamente, spesso con salta-fila.</Li>
+            <Li>Accanto a ogni proposta a pagamento trovi sempre, quando esiste, <strong>l'alternativa gratuita</strong>: WIP non nasconde che a una chiesa si entra gratis.</Li>
+            <Li>Sui percorsi stagionali (fioriture, foliage, presepi, mercatini) c'è un catalogo dedicato che cambia col periodo dell'anno.</Li>
+          </ul>
+          <p className="text-[11px] text-gray-500 leading-relaxed mb-3">Se prenoti da WIP, l'app riceve una commissione dal fornitore: il prezzo per te è lo stesso.</p>
+        </>
+      ),
+    },
+    {
+      id: 'rain',
+      title: isItalian ? "Garanzia Pioggia" : "Rain Guarantee",
+      icon: ShieldCheck,
+      content: (
+        <>
+          <P>Se il giorno che avevi pianificato è stato rovinato dalla pioggia, <strong>ti restituiamo i crediti di quel giorno</strong>.</P>
+          <ul className="mb-2">
+            <Li>Vale quando ha piovuto <strong>almeno 6 ore</strong> oppure sono caduti <strong>almeno 20 mm</strong>: non una pioggia passeggera, una giornata persa.</Li>
+            <Li>Si richiede entro <strong>7 giorni</strong> dal giorno in questione, dal link sotto l'itinerario nel Profilo.</Li>
+            <Li>Il controllo lo fa il server sul <strong>meteo realmente registrato</strong> in quel punto e in quel giorno: non serve allegare niente.</Li>
+            <Li>Anche quando la richiesta viene respinta ti mostriamo <strong>quanti mm e quante ore</strong> sono stati misurati, così sai perché.</Li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      id: 'dashboard',
+      title: isItalian ? "Passaporto, CO₂ e Calendario" : "Passport, CO₂ and Calendar",
+      icon: Target,
+      content: (
+        <>
+          <H>Passaporto WIP</H>
+          <P>Ogni destinazione visitata lascia un <strong>timbro</strong> nel tuo passaporto, con la data della prima visita. Si costruisce da solo: non c'è niente da attivare.</P>
+          <H>Salute del viaggio</H>
+          <P>Se lo autorizzi, il Profilo mostra <strong>passi, chilometri e piani saliti</strong> della giornata, letti dal contapassi del telefono. È un dato che resta sul dispositivo.</P>
+          <H>Impronta di CO₂</H>
+          <P>Ogni itinerario stima le <strong>emissioni degli spostamenti</strong> e confronta le alternative: spesso a piedi o in treno si arriva quasi come in auto, e si vede subito.</P>
+          <H>Esporta nel calendario</H>
+          <P>Un itinerario può essere <strong>esportato nel calendario del telefono</strong>: ogni tappa diventa un appuntamento con orario e luogo, utile anche per condividerlo con chi viaggia con te.</P>
+        </>
+      ),
+    },
+    {
       id: 'chat',
       title: isItalian ? "Chat con WIP (l'Esperto di Viaggi)" : "Chat with WIP (Travel Expert)",
       icon: MessageSquare,
@@ -397,6 +506,39 @@ export default function AppGuide({ language }: AppGuideProps) {
         <>
           <P>Inquadra un monumento, una statua o un dettaglio architettonico: WIP lo riconosce e ti racconta cosa stai guardando. <CostBadge cost={`${PRICING_LIST.photo_search} crediti`} /></P>
           <P>Dal risultato puoi aprire la scheda completa del luogo, ascoltare l'audioguida o chiedere approfondimenti in chat.</P>
+          <H>Dentro un museo: il Pass Museo</H>
+          <P>Nei musei il GPS non arriva e le opere sono decine: pagare ogni singolo riconoscimento non avrebbe senso. Il <strong>Pass Museo</strong> apre <strong>{MUSEUM_PASS_HOURS} ore di riconoscimenti illimitati</strong>. <CostBadge cost={`${PRICING_LIST.museum_pass} crediti`} /></P>
+          <ul className="mb-2">
+            <Li>Si attiva <strong>dalla schermata Vision</strong>: quando è attivo vedi in alto il tempo che resta.</Li>
+            <Li>Mentre è attivo la posizione non viene usata per il riconoscimento: conta solo quello che inquadri, quindi funziona anche al chiuso.</Li>
+            <Li>Conviene dal {Math.floor(PRICING_LIST.museum_pass / PRICING_LIST.photo_search) + 1}° scatto in poi: sotto quella soglia costa meno pagare i singoli riconoscimenti.</Li>
+            <Li>Inquadra il <strong>cartellino</strong> dell'opera insieme al quadro: il testo aiuta il riconoscimento più di qualunque altra cosa.</Li>
+          </ul>
+        </>
+      ),
+    },
+    {
+      id: 'community',
+      title: isItalian ? "WIP Community (proponi un luogo)" : "WIP Community (suggest a place)",
+      icon: Users,
+      content: (
+        <>
+          <P>Nessuna mappa è completa. Se trovi una cappella di campagna, un murale, un lavatoio, una fontana storica che su WIP non c'è, <strong>puoi aggiungerlo tu</strong>: fotografalo dalla schermata Vision e proponilo. <FreeBadge /></P>
+          <H>Come funziona, passo per passo</H>
+          <ul className="mb-2">
+            <Li><strong>1. Scatta e proponi</strong>: la foto parte con la posizione del punto in cui ti trovi. Puoi aggiungere un nome e due righe di descrizione, ma non è obbligatorio.</Li>
+            <Li><strong>2. Un controllo automatico</strong> scarta subito le foto che non c'entrano (persone, schermi, cibo) e i luoghi già presenti a pochi metri.</Li>
+            <Li><strong>3. Una persona approva</strong>: nessuna foto diventa un luogo pubblico senza revisione umana.</Li>
+            <Li><strong>4. Diventa un luogo WIP</strong> visibile a tutti, con la tua foto e la tua attribuzione, e <strong>a te tornano crediti</strong>.</Li>
+          </ul>
+          <H>Le tue proposte</H>
+          <P>Le ritrovi in <strong>Profilo → Le mie Vision</strong>, con lo stato di ciascuna (in attesa, approvata, non accettata) e il motivo di un eventuale rifiuto. Le foto restano tue: le usiamo solo dentro WIP per mostrare il luogo che hai proposto, e puoi chiederne la rimozione in qualsiasi momento.</P>
+          <H>Cosa conviene fotografare</H>
+          <ul className="mb-2">
+            <Li>Sì: edicole votive, murales, fontane, lavatoi, ponti, torri, cippi, chiese minori, punti panoramici.</Li>
+            <Li>No: interni privati, persone riconoscibili, opere ancora sotto copyright fotografate come soggetto principale, cartelli e insegne commerciali.</Li>
+            <Li>Fotografa <strong>di giorno e da lontano abbastanza</strong> da far capire il contesto: è la foto che gli altri vedranno per primi.</Li>
+          </ul>
         </>
       ),
     },

@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { Map, Headphones, Compass, ArrowRight, Check } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  Headphones, Camera, LayoutGrid, ArrowRight, ArrowLeft, Check,
+} from 'lucide-react';
 import { useSwipeable } from 'react-swipeable';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Language } from '../lib/i18n';
 
 interface OnboardingProps {
@@ -9,190 +11,382 @@ interface OnboardingProps {
   language?: Language;
 }
 
+/**
+ * La presentazione che si vede una volta sola, al primo avvio, prima del login.
+ *
+ * Le schermate precedenti raccontavano itinerari, audioguida e offline: era
+ * l'app di mesi fa. Mancava tutto quello che nel frattempo la distingue davvero
+ * — la fotocamera che riconosce, la community che aggiunge luoghi, i crediti al
+ * posto dell'abbonamento.
+ *
+ * TRE schermate, non di piu': chi apre l'app per la prima volta vuole entrare,
+ * non leggere. Due raccontano le due cose che nessun'altra app fa (la voce che
+ * parte da sola, la fotocamera che riconosce e la community che aggiunge), la
+ * terza elenca tutto il resto in una griglia che si scorre in dieci secondi.
+ * Il dettaglio vero non sta qui: sta nel manuale, in Profilo → Impostazioni.
+ *
+ * Ogni schermata ha un colore proprio invece dell'oro ovunque: cosi' si capisce
+ * a colpo d'occhio di essere passati oltre, che era il difetto piu' evidente di
+ * prima (tre schermate identiche, dorate, indistinguibili durante lo scorrimento).
+ *
+ * NB: nessun numero inventato. Le "prove" sotto ogni schermata dicono solo cose
+ * verificate nel codice — il Pass Museo costa 100 crediti per quattro ore
+ * (`pricing.ts`), un riconoscimento Vision ne costa 5. Se quei prezzi cambiano,
+ * qui va cambiato il testo.
+ */
+
+type Traduzione = { tag: string; titolo: string; evidenza: string; testo: string; prove: string[] };
+
+const COPIA: Record<'IT' | 'EN', Traduzione[]> = {
+  IT: [
+    {
+      tag: 'Audioguide automatiche',
+      titolo: 'Esplora come un',
+      evidenza: 'Local',
+      testo: 'Cammini, e quando passi davanti a qualcosa che merita la voce parte da sola. Niente da cercare, niente da toccare: il telefono puo’ restare in tasca.',
+      prove: ['Funziona a schermo spento', 'Anche in auto', '7 lingue'],
+    },
+    {
+      tag: 'Fotocamera e community',
+      titolo: 'Inquadra, e se manca',
+      evidenza: 'aggiungilo tu',
+      testo: 'Un palazzo senza targa o un quadro senza didascalia: punta la fotocamera e WIP te lo racconta. E se un luogo sulla mappa non c’e’, fotografalo: una volta approvato diventa un luogo WIP per tutti, e a te tornano crediti.',
+      prove: ['Riconosce opere e monumenti', 'Pass Museo · 4 ore illimitate', 'La tua foto ti premia'],
+    },
+  ],
+  EN: [
+    {
+      tag: 'Automatic audio guides',
+      titolo: 'Explore like a',
+      evidenza: 'Local',
+      testo: 'You walk, and when you pass something worth knowing the voice starts on its own. Nothing to search, nothing to tap: your phone can stay in your pocket.',
+      prove: ['Works with the screen off', 'Also while driving', '7 languages'],
+    },
+    {
+      tag: 'Camera and community',
+      titolo: 'Point it — and if it’s',
+      evidenza: 'missing, add it',
+      testo: 'A building with no plaque or a painting with no label: point your camera and WIP tells you the story. And if a place is not on the map, photograph it: once approved it becomes a WIP place for everyone, and you earn credits.',
+      prove: ['Reads art and monuments', 'Museum Pass · 4 unlimited hours', 'Your photo earns you credits'],
+    },
+  ],
+};
+
+/**
+ * L'ultima schermata: tutto il resto, in una griglia.
+ *
+ * Il resto delle funzioni e' troppo per farne una schermata ciascuna — sarebbe
+ * un carosello di quindici passaggi che nessuno finisce. Ma non nominarle
+ * significa che l'utente non sapra' mai che esistono, perche' vivono dentro
+ * schede che si aprono solo se le cerchi. Una griglia finale le nomina tutte in
+ * dieci secondi di lettura, e chi vuole approfondire le ritrova nell'app.
+ */
+const TUTTO: Record<'IT' | 'EN', { titolo: string; sottotitolo: string; voci: [string, string][] }> = {
+  IT: {
+    titolo: 'E poi c’e’ tutto il resto',
+    sottotitolo: 'Compreso nell’app. I dettagli nel manuale, in Profilo → Impostazioni.',
+    voci: [
+      ['🗺️', 'Itinerari su misura giorno per giorno, con l’alternativa a costo zero'],
+      ['🎫', 'Day Pass: 24 ore a mani libere, fino a 40 audioguide'],
+      ['🏛️', 'Pass Museo: 4 ore di riconoscimenti illimitati, pensato per l’interno'],
+      ['📴', 'Mappe e audioguide offline, scaricate gratis prima di partire'],
+      ['💳', 'Crediti che non scadono: nessun abbonamento, nessun rinnovo'],
+      ['🧭', 'Navigatore a piedi con la voce che racconta lungo la strada'],
+      ['🎧', 'Podcast e guide in PDF da portarti dietro'],
+      ['💬', 'Chat con una guida che sa dove sei'],
+      ['🎟️', 'Biglietti e visite prenotabili, salta-fila'],
+      ['🗓️', 'Eventi e concerti nei giorni in cui ci sei'],
+      ['🏺', 'Atlante dei beni vincolati e musei di tutto il mondo'],
+      ['🥾', 'Cammini storici con tappe e posti dove dormire'],
+      ['⚓', 'Fughe da porto e aeroporto per le soste di 4, 6 o 8 ore'],
+      ['🌧️', 'Garanzia pioggia: crediti indietro se il tempo rovina il giro'],
+      ['👥', 'Piani di gruppo condivisi con un codice'],
+      ['🌱', 'Impronta di CO₂ e passi camminati'],
+      ['📅', 'Itinerario esportabile nel calendario del telefono'],
+    ],
+  },
+  EN: {
+    titolo: 'And then everything else',
+    sottotitolo: 'Included in the app. Details in the manual, under Profile → Settings.',
+    voci: [
+      ['🗺️', 'Tailored day-by-day itineraries, always with a free version'],
+      ['🎫', 'Day Pass: 24 hands-free hours, up to 40 audio guides'],
+      ['🏛️', 'Museum Pass: 4 hours of unlimited recognitions, made for indoors'],
+      ['📴', 'Offline maps and audio guides, downloaded free before you leave'],
+      ['💳', 'Credits that never expire: no subscription, no renewal'],
+      ['🧭', 'Walking navigator with the voice narrating along the way'],
+      ['🎧', 'Podcasts and PDF guides to take with you'],
+      ['💬', 'Chat with a guide that knows where you are'],
+      ['🎟️', 'Bookable skip-the-line tickets and tours'],
+      ['🗓️', 'Events and concerts on the days you are there'],
+      ['🏺', 'Atlas of listed heritage and museums worldwide'],
+      ['🥾', 'Historic trails with stages and places to sleep'],
+      ['⚓', 'Port and airport escapes for 4, 6 or 8 hour stops'],
+      ['🌧️', 'Rain guarantee: credits back if the weather ruins the day'],
+      ['👥', 'Shared group plans with a code'],
+      ['🌱', 'CO₂ footprint and steps walked'],
+      ['📅', 'Itinerary exported to your phone calendar'],
+    ],
+  },
+};
+
+/** Un colore per schermata: e' cosi' che si vede di essere andati avanti. */
+const ACCENTI = [
+  { alone: 'rgba(56, 189, 248, 0.20)', tinta: '#38bdf8' },  // cielo — camminare
+  { alone: 'rgba(167, 139, 250, 0.20)', tinta: '#a78bfa' }, // viola — fotocamera e community
+  { alone: 'rgba(212, 175, 55, 0.20)', tinta: '#d4af37' },  // oro — il riepilogo
+];
+
+const ICONE = [Headphones, Camera, LayoutGrid];
+
 export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, language = 'IT' }) => {
-  const [currentSlide, setCurrentSlide] = useState(0);
+  const [indice, setIndice] = useState(0);
+  const menoMovimento = useReducedMotion();
 
-  const slides = [
-    {
-      tag: language === 'IT' ? "ESPLORAZIONE AI" : "AI EXPLORATION",
-      icon: <Compass className="w-12 h-12 text-[#d4af37]" strokeWidth={1.5} />,
-      title: language === 'IT' ? (
-        <>
-          Esplora come un <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Local</span>
-        </>
-      ) : (
-        <>
-          Explore like a <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Local</span>
-        </>
-      ),
-      description: language === 'IT' 
-        ? "Genera itinerari su misura in pochi secondi grazie all'Intelligenza Artificiale. WIP trova le gemme nascoste e i percorsi ottimali intorno a te."
-        : "Generate tailored itineraries in seconds with Artificial Intelligence. WIP finds hidden gems and optimal routes around you.",
-      glowColor: "rgba(99, 102, 241, 0.18)" // Indigo glow
-    },
-    {
-      tag: language === 'IT' ? "AUDIO GUIDA PREMIUM" : "PREMIUM AUDIO GUIDE",
-      icon: <Headphones className="w-12 h-12 text-[#d4af37]" strokeWidth={1.5} />,
-      title: language === 'IT' ? (
-        <>
-          Il Tuo <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Narratore</span> Personale
-        </>
-      ) : (
-        <>
-          Your Personal <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Storyteller</span>
-        </>
-      ),
-      description: language === 'IT'
-        ? "Non leggere lo schermo del telefono mentre cammini. Lascia che la nostra voce narrante ti guidi passo passo, raccontandoti la storia del luogo."
-        : "Put your phone down as you walk. Let our storytelling voice guide you step-by-step, revealing the deep history of each spot.",
-      glowColor: "rgba(236, 72, 153, 0.18)" // Pink/Rose glow
-    },
-    {
-      tag: language === 'IT' ? "VIAGGIO OFFLINE" : "OFFLINE EXPEDITIONS",
-      icon: <Map className="w-12 h-12 text-[#d4af37]" strokeWidth={1.5} />,
-      title: language === 'IT' ? (
-        <>
-          Viaggia senza <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Limiti</span>
-        </>
-      ) : (
-        <>
-          Travel without <span className="bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_2px_10px_rgba(212,175,55,0.2)]">Limits</span>
-        </>
-      ),
-      description: language === 'IT'
-        ? "Salva i tuoi percorsi in locale per navigare le mappe anche offline. Colleziona le tappe visitate per un'esperienza di viaggio lussuosa e indimenticabile."
-        : "Save your routes locally to navigate maps offline. Collect visited stops for a luxurious, seamless, and unforgettable journey.",
-      glowColor: "rgba(16, 185, 129, 0.18)" // Emerald glow
-    }
-  ];
+  // Le altre lingue ricadono sull'inglese, com'era prima: aggiungerne una qui
+  // significa solo aggiungere una chiave a COPIA.
+  const lingua = language === 'IT' ? 'IT' : 'EN';
+  const slides = COPIA[lingua];
+  const tutto = TUTTO[lingua];
+  // Il riepilogo e' una schermata in piu' in coda, con un impaginato suo.
+  const totale = slides.length + 1;
+  const eRiepilogo = indice === slides.length;
+  const ultima = indice === totale - 1;
+  const s = slides[Math.min(indice, slides.length - 1)];
+  const accento = ACCENTI[indice % ACCENTI.length];
+  const Icona = ICONE[indice % ICONE.length];
 
-  const handleNext = () => {
-    if (currentSlide < slides.length - 1) {
-      setCurrentSlide(prev => prev + 1);
-    } else {
-      onComplete();
-    }
-  };
+  const avanti = useCallback(() => {
+    setIndice((i) => (i < totale - 1 ? i + 1 : (onComplete(), i)));
+  }, [totale, onComplete]);
+  const indietro = useCallback(() => setIndice((i) => Math.max(0, i - 1)), []);
 
-  const handleDotClick = (idx: number) => {
-    setCurrentSlide(idx);
-  };
+  // Sul sito si scorre con la tastiera, non con il dito.
+  useEffect(() => {
+    const tasti = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight' || e.key === 'Enter') avanti();
+      if (e.key === 'ArrowLeft') indietro();
+      if (e.key === 'Escape') onComplete();
+    };
+    window.addEventListener('keydown', tasti);
+    return () => window.removeEventListener('keydown', tasti);
+  }, [avanti, indietro, onComplete]);
 
-  const handlers = useSwipeable({
-    onSwipedLeft: () => handleNext(),
-    onSwipedRight: () => setCurrentSlide(prev => Math.max(0, prev - 1)),
-    trackMouse: true
+  const gesti = useSwipeable({
+    onSwipedLeft: avanti,
+    onSwipedRight: indietro,
+    trackMouse: true,
   });
 
+  const animazione = menoMovimento
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
+    : {
+        initial: { opacity: 0, y: 24, scale: 0.97 },
+        animate: { opacity: 1, y: 0, scale: 1 },
+        exit: { opacity: 0, y: -24, scale: 0.97 },
+      };
+
   return (
-    <div 
-      className="fixed inset-0 z-[100] flex flex-col bg-[#07090e] text-white select-none overflow-hidden transition-all duration-700 ease-in-out" 
-      style={{
-        backgroundImage: `
-          radial-gradient(circle at 80% 20%, ${slides[currentSlide].glowColor} 0%, transparent 60%),
-          radial-gradient(circle at 20% 80%, rgba(212, 175, 55, 0.05) 0%, transparent 60%)
-        `
-      }}
-      {...handlers}
+    <div
+      className="fixed inset-0 z-[100] flex flex-col bg-[#07090e] text-white select-none overflow-hidden"
+      role="dialog"
+      aria-label={language === 'IT' ? 'Presentazione di WIP' : 'WIP introduction'}
+      {...gesti}
     >
-      {/* Subtle fine ambient grid overlay for tech/premium texture */}
-      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none opacity-60" />
+      {/* L'alone cambia colore insieme alla schermata: e' il segnale di
+          avanzamento piu' forte, molto piu' dei puntini in fondo. */}
+      <div
+        className="absolute inset-0 transition-[background-image] duration-700 ease-out"
+        style={{
+          backgroundImage:
+            `radial-gradient(120% 80% at 78% 12%, ${accento.alone} 0%, transparent 62%),` +
+            'radial-gradient(90% 70% at 12% 92%, rgba(212,175,55,0.06) 0%, transparent 60%)',
+        }}
+      />
+      <div className="absolute inset-0 pointer-events-none opacity-50 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:34px_34px]" />
 
-      {/* Header element - Elegant WIP logo placeholder */}
-      <div className="pt-8 px-8 flex justify-center shrink-0">
-        <div className="flex items-center gap-1.5">
-          <span className="text-xl font-serif font-black tracking-[0.2em] text-[#d4af37]">WIP</span>
-          <div className="w-1.5 h-1.5 bg-[#d4af37] rounded-full animate-pulse" />
-          <span className="text-[9px] font-black uppercase tracking-[0.3em] text-white/40 pl-1">Premium</span>
+      {/* Intestazione: marchio a sinistra, "salta" a destra e sempre
+          raggiungibile — prima stava in fondo, dove su schermi piccoli
+          finiva sotto la barra del browser. */}
+      <header className="relative z-10 shrink-0 flex items-center justify-between px-6 pt-6 sm:px-10">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-serif font-black tracking-[0.18em] text-[#d4af37]">WIP</span>
+          <span className="w-1 h-1 rounded-full bg-[#d4af37]/70" />
+          <span className="text-[9px] font-bold uppercase tracking-[0.28em] text-white/45">
+            World in Pocket
+          </span>
         </div>
-      </div>
+        <button
+          onClick={onComplete}
+          className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45 hover:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 rounded-lg px-3 py-2 transition-colors"
+        >
+          {language === 'IT' ? 'Salta' : 'Skip'}
+        </button>
+      </header>
 
-      {/* Main presentation area */}
-      <div className="flex-1 flex flex-col justify-center px-6 sm:px-10 relative z-10">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={currentSlide}
-            initial={{ opacity: 0, y: 30, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -30, scale: 0.95 }}
-            transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="w-full max-w-md mx-auto flex flex-col items-center text-center space-y-8"
-          >
-            {/* Animated gold glowing icon ring */}
-            <div className="relative flex items-center justify-center">
-              {/* Outer pulsing glass border */}
-              <motion.div
-                animate={{ scale: [1, 1.12, 1], opacity: [0.3, 0.6, 0.3] }}
-                transition={{ repeat: Infinity, duration: 4, ease: "easeInOut" }}
-                className="absolute w-36 h-36 rounded-full border border-[#d4af37]/25 blur-sm"
+      {/* Barra di avanzamento a segmenti: dice a che punto si e' e quanto
+          manca, cosa che i puntini non dicevano. */}
+      <div className="relative z-10 shrink-0 px-6 sm:px-10 pt-5">
+        <div className="mx-auto flex max-w-md gap-1.5">
+          {Array.from({ length: totale }, (_, i) => (
+            <button
+              key={i}
+              onClick={() => setIndice(i)}
+              aria-label={`${i + 1} / ${totale}`}
+              aria-current={i === indice}
+              className="group h-6 flex-1 focus-visible:outline-none"
+            >
+              <span
+                className="block h-1 rounded-full transition-all duration-500"
+                style={{
+                  background: i <= indice ? accento.tinta : 'rgba(255,255,255,0.14)',
+                  boxShadow: i === indice ? `0 0 12px ${accento.alone}` : 'none',
+                }}
               />
-              {/* Inner container */}
-              <div className="w-28 h-28 rounded-full bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-[#d4af37]/40 flex items-center justify-center shadow-[0_0_40px_rgba(212,175,55,0.12)] relative">
-                {slides[currentSlide].icon}
-              </div>
-            </div>
-
-            {/* Content Details */}
-            <div className="space-y-4">
-              <span className="inline-block text-[9px] font-black tracking-[0.3em] text-[#d4af37] bg-[#d4af37]/10 px-4 py-1.5 rounded-full border border-[#d4af37]/25 uppercase shadow-inner">
-                {slides[currentSlide].tag}
-              </span>
-
-              <h2 className="text-3xl sm:text-4xl font-serif font-black text-white tracking-tight leading-[1.25] px-2">
-                {slides[currentSlide].title}
-              </h2>
-
-              <p className="text-white/60 text-sm sm:text-base leading-relaxed max-w-sm mx-auto font-medium px-4">
-                {slides[currentSlide].description}
-              </p>
-            </div>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-
-      {/* Footer controls & indicators */}
-      <div className="pb-10 pt-4 flex flex-col items-center px-8 relative z-10 shrink-0">
-        {/* Pagination Dots */}
-        <div className="flex gap-2.5 mb-8">
-          {slides.map((_, idx) => (
-            <button 
-              key={idx} 
-              onClick={() => handleDotClick(idx)}
-              className={`h-1.5 rounded-full transition-all duration-500 ${
-                currentSlide === idx 
-                  ? 'w-7 bg-gradient-to-r from-amber-400 to-[#d4af37] shadow-[0_0_12px_rgba(212,175,55,0.4)]' 
-                  : 'w-1.5 bg-white/20 hover:bg-white/45'
-              }`}
-              aria-label={`Go to slide ${idx + 1}`}
-            />
+            </button>
           ))}
         </div>
-        
-        {/* Navigation buttons */}
-        <div className="w-full max-w-md flex justify-between items-center px-4">
-          <button 
-            onClick={onComplete}
-            className="text-[10px] font-black uppercase tracking-[0.25em] text-white/40 hover:text-white/95 transition-all p-3"
+      </div>
+
+      <main className="relative z-10 flex-1 flex flex-col justify-center px-6 sm:px-10">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={indice}
+            {...animazione}
+            transition={{ duration: menoMovimento ? 0.2 : 0.45, ease: [0.16, 1, 0.3, 1] }}
+            className="mx-auto flex w-full max-w-md flex-col items-center text-center"
           >
-            {language === 'IT' ? 'Salta' : 'Skip'}
-          </button>
-          
-          <button 
-            onClick={handleNext}
-            className="flex items-center gap-2 bg-gradient-to-r from-amber-500 via-[#d4af37] to-amber-600 hover:from-amber-600 hover:to-amber-700 active:from-amber-700 active:to-amber-800 text-slate-950 px-7 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-lg shadow-amber-500/10 hover:shadow-amber-500/20 active:scale-95 transition-all duration-300"
-          >
-            {currentSlide === slides.length - 1 ? (
+            {eRiepilogo ? (
               <>
-                {language === 'IT' ? 'Inizia' : 'Enter'} <Check className="w-4 h-4 text-slate-950" strokeWidth={3} />
+                <h2 className="text-[24px] sm:text-[28px] font-serif font-black leading-[1.2] tracking-tight text-balance">
+                  {tutto.titolo}
+                </h2>
+                <p className="mt-3 max-w-sm text-[13px] leading-relaxed text-white/60">
+                  {tutto.sottotitolo}
+                </p>
+                {/* Una colonna sola: sono frasi, non etichette, e su due
+                    colonne diventerebbero illeggibili sui telefoni stretti.
+                    Scorre, perche' dodici voci non ci stanno in altezza. */}
+                <ul className="mt-6 w-full space-y-2 overflow-y-auto pr-1 text-left"
+                    style={{ maxHeight: 'min(46vh, 380px)' }}>
+                  {tutto.voci.map(([emoji, testo]) => (
+                    <li
+                      key={testo}
+                      className="flex items-start gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-2.5"
+                    >
+                      <span aria-hidden className="text-base leading-none pt-0.5">{emoji}</span>
+                      <span className="text-[12.5px] leading-snug text-white/75">{testo}</span>
+                    </li>
+                  ))}
+                </ul>
               </>
             ) : (
               <>
-                {language === 'IT' ? 'Avanti' : 'Next'} <ArrowRight className="w-4 h-4 text-slate-950" strokeWidth={3} />
+            {/* Medaglione: cerchio pieno del colore della schermata, con un
+                alone morbido. Un solo elemento invece di tre anelli
+                sovrapposti — si legge meglio e non ruba la scena al testo. */}
+            <div className="relative mb-8 flex items-center justify-center">
+              {!menoMovimento && (
+                <motion.span
+                  aria-hidden
+                  animate={{ scale: [1, 1.14, 1], opacity: [0.35, 0.6, 0.35] }}
+                  transition={{ repeat: Infinity, duration: 4.5, ease: 'easeInOut' }}
+                  className="absolute h-32 w-32 rounded-full blur-xl"
+                  style={{ background: accento.alone }}
+                />
+              )}
+              <div
+                className="relative flex h-24 w-24 items-center justify-center rounded-[28px] border transition-colors duration-700"
+                style={{
+                  borderColor: `${accento.tinta}59`,
+                  background: 'linear-gradient(160deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01))',
+                  boxShadow: `0 18px 50px -20px ${accento.tinta}80`,
+                }}
+              >
+                <Icona className="h-10 w-10" strokeWidth={1.6} style={{ color: accento.tinta }} />
+              </div>
+            </div>
+
+            <span
+              className="mb-5 inline-block rounded-full border px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.22em] transition-colors duration-700"
+              style={{
+                color: accento.tinta,
+                borderColor: `${accento.tinta}40`,
+                background: `${accento.tinta}14`,
+              }}
+            >
+              {s.tag}
+            </span>
+
+            <h2 className="text-[26px] sm:text-[32px] font-serif font-black leading-[1.2] tracking-tight text-balance">
+              {s.titolo}{' '}
+              <span style={{ color: accento.tinta }}>{s.evidenza}</span>
+            </h2>
+
+            {/* Testo piu' chiaro di prima (era bianco al 60%, quasi illeggibile
+                al sole) e leggermente piu' grande. */}
+            <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-white/75">
+              {s.testo}
+            </p>
+
+            {/* Le tre prove concrete: e' la parte che risponde alla domanda
+                "si', ma in pratica?" — prima non c'era nulla del genere. */}
+            <ul className="mt-7 flex flex-wrap justify-center gap-2">
+              {s.prove.map((p) => (
+                <li
+                  key={p}
+                  className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-white/70"
+                >
+                  <Check className="h-3 w-3 shrink-0" strokeWidth={3} style={{ color: accento.tinta }} />
+                  {p}
+                </li>
+              ))}
+            </ul>
+              </>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      <footer className="relative z-10 shrink-0 px-6 pb-10 pt-6 sm:px-10">
+        <div className="mx-auto flex w-full max-w-md items-center gap-3">
+          {/* "Indietro" compare solo quando ha senso, e occupa spazio fisso
+              cosi' il pulsante principale non salta da una schermata all'altra. */}
+          <button
+            onClick={indietro}
+            disabled={indice === 0}
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-white/70 transition-all hover:bg-white/5 hover:text-white disabled:pointer-events-none disabled:opacity-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            aria-label={language === 'IT' ? 'Schermata precedente' : 'Previous'}
+          >
+            <ArrowLeft className="h-4 w-4" strokeWidth={2.5} />
+          </button>
+
+          <button
+            onClick={avanti}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl text-[12px] font-black uppercase tracking-[0.18em] text-slate-950 transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            style={{
+              background: `linear-gradient(100deg, ${accento.tinta}, #d4af37)`,
+              boxShadow: `0 14px 40px -18px ${accento.tinta}`,
+            }}
+          >
+            {ultima ? (
+              <>
+                {language === 'IT' ? 'Inizia a esplorare' : 'Start exploring'}
+                <Check className="h-4 w-4" strokeWidth={3} />
+              </>
+            ) : (
+              <>
+                {language === 'IT' ? 'Avanti' : 'Next'}
+                <ArrowRight className="h-4 w-4" strokeWidth={3} />
               </>
             )}
           </button>
         </div>
-      </div>
+
+        <p className="mt-4 text-center text-[10px] uppercase tracking-[0.22em] text-white/25">
+          {indice + 1} / {totale}
+        </p>
+      </footer>
     </div>
   );
 };

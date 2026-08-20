@@ -13438,6 +13438,41 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
    * API forecast con past_days (stesse variabili daily). Ritorna null se
    * nessuna delle due fonti ha dati (il claim resta ritentabile).
    */
+  /**
+   * REGISTRO PIOGGIA PROPRIO — la riserva della garanzia pioggia.
+   *
+   * Perche' esiste. La garanzia guarda indietro fino a 7 giorni, e un archivio
+   * meteo mondiale, recente, gratuito e utilizzabile commercialmente NON
+   * esiste: MET Norway da' previsioni e non storico; NASA POWER (pubblico
+   * dominio) pubblica il dato con sei-sette giorni di ritardo — misurato, a 5
+   * giorni fa risponde ancora "nessun dato" — quindi arriva quando la finestra
+   * si e' gia' chiusa. Se un giorno Open-Meteo non fosse piu' percorribile,
+   * senza questo registro la funzione morirebbe e basta.
+   *
+   * Cosa e', onestamente. NON sono osservazioni: sono previsioni a breve
+   * termine di MET Norway, prese piu' volte al giorno e sommate ora per ora.
+   * A poche ore di distanza una previsione di pioggia e' molto vicina a quello
+   * che poi cade, ma resta una stima — per questo e' l'ultima delle tre fonti
+   * e non la prima.
+   *
+   * Dove sta. In `api_cache`, che esiste gia': nessuna migrazione da far
+   * applicare a mano (e le migrazioni in sospeso, in questo progetto, sono
+   * gia' abbastanza). Una riga per punto e per giorno.
+   */
+  const chiavePioggia = (lat: number, lon: number, giorno: string) =>
+    // Un decimo di grado, ~11 km: la stessa cella del meteo, cosi' due tappe
+    // nella stessa citta' condividono il registro invece di duplicarlo.
+    `rainlog_${lat.toFixed(1)}_${lon.toFixed(1)}_${giorno}`;
+
+  const leggiPioggiaRegistrata = async (lat: number, lon: number, giorno: string) => {
+    try {
+      const riga = await getFromCache(chiavePioggia(lat, lon, giorno));
+      const c = riga?.text_content;
+      if (!c || typeof c.mm !== 'number' || typeof c.ore !== 'number') return null;
+      return { mm: Math.round(c.mm * 10) / 10, ore: Math.round(c.ore * 10) / 10 };
+    } catch { return null; }
+  };
+
   const rainFetchDaily = async (lat: number, lon: number, dayDate: string): Promise<{ mm: number; ore: number } | null> => {
     const pick = (data: any): { mm: number; ore: number } | null => {
       const d = data?.daily;
@@ -13448,20 +13483,39 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       if (mm == null || ore == null) return null;
       return { mm: Math.round(Number(mm) * 10) / 10, ore: Math.round(Number(ore) * 10) / 10 };
     };
+    // Se un giorno si passa al piano commerciale di Open-Meteo, basta
+    // valorizzare OPEN_METEO_API_KEY: cambiano host e query string, non il
+    // codice. Il piano gratuito e' per uso NON commerciale, e WIP vende
+    // crediti — quindi questa chiave e' l'unica cosa che separa la rotta
+    // dall'essere in regola.
+    const chiaveOM = process.env.OPEN_METEO_API_KEY;
+    const hostArchivio = chiaveOM ? 'https://customer-archive-api.open-meteo.com' : 'https://archive-api.open-meteo.com';
+    const hostPrevisioni = chiaveOM ? 'https://customer-api.open-meteo.com' : 'https://api.open-meteo.com';
+    const suffisso = chiaveOM ? `&apikey=${encodeURIComponent(chiaveOM)}` : '';
+
     try {
-      const r = await axios.get(`https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}`
-        + `&start_date=${dayDate}&end_date=${dayDate}&daily=precipitation_sum,precipitation_hours&timezone=auto`,
+      const r = await axios.get(`${hostArchivio}/v1/archive?latitude=${lat}&longitude=${lon}`
+        + `&start_date=${dayDate}&end_date=${dayDate}&daily=precipitation_sum,precipitation_hours&timezone=auto${suffisso}`,
         { timeout: 12000 });
       const v = pick(r.data);
       if (v) return v;
     } catch { /* archivio giù o senza dati → fallback */ }
     try {
-      const r = await axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
-        + `&daily=precipitation_sum,precipitation_hours&timezone=auto&past_days=${RAIN_GUARANTEE_WINDOW_DAYS}&forecast_days=1`,
+      const r = await axios.get(`${hostPrevisioni}/v1/forecast?latitude=${lat}&longitude=${lon}`
+        + `&daily=precipitation_sum,precipitation_hours&timezone=auto&past_days=${RAIN_GUARANTEE_WINDOW_DAYS}&forecast_days=1${suffisso}`,
         { timeout: 12000 });
       const v = pick(r.data);
       if (v) return v;
     } catch { /* nessuna fonte disponibile */ }
+
+    // Ultima riserva: quello che ci siamo registrati da soli con
+    // /api/cron/rain-log, giorno per giorno, dalle previsioni MET Norway.
+    // Copre solo i luoghi degli itinerari attivi e solo da quando il lavoro
+    // gira, ma e' l'unico dato che resta nostro se Open-Meteo diventa
+    // inaccessibile — per guasto o perche' si e' scelto di non usarlo piu'.
+    const registrato = await leggiPioggiaRegistrata(lat, lon, dayDate);
+    if (registrato) return registrato;
+
     return null;
   };
 
@@ -13613,6 +13667,111 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       // MAI un 500 grezzo: esito strutturato, dettagli solo nei log server.
       console.error('[rain-guarantee] Errore:', e?.message);
       res.status(500).json({ refunded: false, reason: 'errore_temporaneo_riprova' });
+    }
+  });
+
+  /**
+   * CRON — riempie il registro pioggia dei luoghi degli itinerari attivi.
+   *
+   * Gira piu' volte al giorno (vercel.json). A ogni passaggio chiede a MET
+   * Norway le prossime ore per ciascun luogo e SOMMA la pioggia prevista alle
+   * ore non ancora registrate di quel giorno. Registrare per ore, e non il
+   * totale, e' quello che rende il conto ripetibile: due esecuzioni ravvicinate
+   * non raddoppiano il dato, perche' ogni ora ha il suo posto.
+   *
+   * Nessuna chiave utente e nessun dato personale: si registrano coordinate
+   * arrotondate a ~11 km e millimetri di pioggia.
+   */
+  app.get("/api/cron/rain-log", async (req, res) => {
+    // Stessa guardia degli altri cron: senza CRON_SECRET la rotta non e'
+    // richiamabile dall'esterno.
+    const atteso = process.env.CRON_SECRET;
+    const dato = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+      || String((req.query as any).secret || '');
+    if (!atteso || dato !== atteso) return res.status(401).json({ error: 'non autorizzato' });
+
+    const iniziato = Date.now();
+    let punti = 0, salvati = 0, errori = 0;
+    try {
+      // Gli itinerari che possono ancora chiedere la garanzia: creati entro la
+      // finestra dei 7 giorni. Oltre, registrare non serve piu' a nessuno.
+      const da = new Date(Date.now() - RAIN_GUARANTEE_WINDOW_DAYS * 86400000).toISOString();
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries`
+        + `?select=dati_itinerario&created_at=gte.${encodeURIComponent(da)}&limit=500`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 20000 });
+
+      // Un solo punto per cella: dieci tappe nella stessa citta' sono una
+      // chiamata sola a MET, non dieci.
+      const celle = new Map<string, { lat: number; lon: number }>();
+      for (const riga of (r.data || [])) {
+        const d = riga?.dati_itinerario;
+        const lat = Number(d?.lat ?? d?.latitude ?? d?.destinazione?.lat);
+        const lon = Number(d?.lon ?? d?.longitude ?? d?.destinazione?.lon);
+        if (!isFinite(lat) || !isFinite(lon)) continue;
+        celle.set(`${lat.toFixed(1)}_${lon.toFixed(1)}`, { lat, lon });
+      }
+      punti = celle.size;
+
+      for (const { lat, lon } of celle.values()) {
+        try {
+          const r2 = await axios.get(`https://api.met.no/weatherapi/locationforecast/2.0/complete`
+            + `?lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}`, {
+            headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' },
+            timeout: 15000,
+          });
+          const serie = r2.data?.properties?.timeseries || [];
+
+          // Raggruppa per giorno le ore previste, tenendo l'ora come chiave:
+          // e' quello che rende l'accumulo ripetibile.
+          const perGiorno = new Map<string, Map<string, number>>();
+          for (const t of serie) {
+            const quando = String(t?.time || '');
+            const giorno = quando.slice(0, 10);
+            const ora = quando.slice(11, 13);
+            const mm = Number(t?.data?.next_1_hours?.details?.precipitation_amount);
+            if (!giorno || !isFinite(mm)) continue;
+            if (!perGiorno.has(giorno)) perGiorno.set(giorno, new Map());
+            perGiorno.get(giorno)!.set(ora, mm);
+          }
+
+          for (const [giorno, ore] of perGiorno) {
+            const chiave = chiavePioggia(lat, lon, giorno);
+            const esistente = (await getFromCache(chiave))?.text_content || {};
+            const oreNote: Record<string, number> = esistente.per_ora || {};
+            for (const [ora, mm] of ore) {
+              // Quale valore tenere, quando la stessa ora ricompare in due
+              // passaggi. Un'ora ANCORA FUTURA si aggiorna sempre: la
+              // previsione piu' recente e' fatta piu' vicino al momento e vale
+              // di piu' (il primo passaggio della notte prevede le 23 con
+              // ventitre' ore di anticipo). Un'ora GIA' PASSATA si congela:
+              // l'ultima previsione che avevamo prima che accadesse e' la
+              // migliore stima possibile, e nessun passaggio successivo puo'
+              // saperne di piu', perche' MET guarda solo avanti.
+              const istante = Date.parse(`${giorno}T${ora}:00:00Z`);
+              const passata = isFinite(istante) && istante < Date.now();
+              if (!passata || oreNote[ora] == null) oreNote[ora] = mm;
+            }
+            const valori = Object.values(oreNote);
+            const mmTot = valori.reduce((s, v) => s + v, 0);
+            // "Ore di pioggia" con la stessa soglia di Open-Meteo: sotto un
+            // decimo di millimetro non e' pioggia, e' umidita'.
+            const oreTot = valori.filter((v) => v >= 0.1).length;
+            await saveToCache(chiave, 'rain_log', {
+              mm: Math.round(mmTot * 10) / 10,
+              ore: oreTot,
+              per_ora: oreNote,
+              fonte: 'met_norway_previsione_ravvicinata',
+              aggiornato: new Date().toISOString(),
+            });
+            salvati++;
+          }
+        } catch { errori++; }
+      }
+
+      res.json({ ok: true, punti, giorni_salvati: salvati, errori, ms: Date.now() - iniziato });
+    } catch (e: any) {
+      console.error('[rain-log] Errore:', e?.message);
+      res.status(500).json({ ok: false, error: 'errore_temporaneo' });
     }
   });
 
@@ -14647,6 +14806,196 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       res.status(503).json({ code: 'NoRoute', message: 'nessun servizio di routing disponibile', tentativi: errori });
     } catch (e: any) {
       console.error('[route/foot] errore:', e?.message);
+      res.status(500).json({ code: 'Error', message: e?.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // GIRO A TAPPE — il motore di "Dieci Tappe".
+  //
+  // Stessa catena di riserve della rotta a due punti, ma con un problema in
+  // piu': l'ORDINE. Le tappe arrivano nell'ordine in cui l'utente le ha
+  // toccate sul radar, che non ha niente a che vedere con l'ordine che fa
+  // camminare meno — su cinque tappe romane la differenza misurata e' 5,1 km
+  // contro 3,4.
+  //
+  // Il tetto di DIECI tappe non e' tecnico, e' di prodotto: un giro che si
+  // finisce vale piu' di uno lungo abbandonato a meta'. Ma aiuta anche qui,
+  // perche' sotto le dodici il commesso viaggiatore si risolve bene.
+  // ════════════════════════════════════════════════════════════════════════
+  const TOUR_MAX_TAPPE = 10;
+
+  const distanzaMetri = (a: number[], b: number[]) => {
+    const R = 6371000, rad = Math.PI / 180;
+    const dLat = (b[1] - a[1]) * rad, dLon = (b[0] - a[0]) * rad;
+    const lat = ((a[1] + b[1]) / 2) * rad;
+    const x = dLon * Math.cos(lat);
+    return Math.sqrt(x * x + dLat * dLat) * R;
+  };
+
+  /**
+   * Ordine del giro senza servizi esterni: vicino piu' prossimo, poi 2-opt.
+   *
+   * Serve come RISERVA quando i servizi di ottimizzazione non rispondono, ed
+   * e' importante che ci sia: senza, il giro cadrebbe tutto insieme al primo
+   * fornitore, mentre le singole tratte avrebbero ancora cinque riserve.
+   * Su dieci punti il 2-opt converge in millisecondi e arriva praticamente
+   * sempre all'ottimo — la distanza in linea d'aria non e' quella stradale, ma
+   * per DECIDERE L'ORDINE (non per misurare) sbaglia pochissimo.
+   */
+  const ordinaTappe = (partenza: number[], tappe: number[][], anello: boolean): number[] => {
+    const n = tappe.length;
+    if (n <= 2) return tappe.map((_, i) => i);
+
+    // Vicino piu' prossimo: un ordine di partenza decente in O(n²).
+    const rimaste = new Set(tappe.map((_, i) => i));
+    const ordine: number[] = [];
+    let corrente = partenza;
+    while (rimaste.size) {
+      let best = -1, bestD = Infinity;
+      for (const i of rimaste) {
+        const d = distanzaMetri(corrente, tappe[i]);
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      ordine.push(best); rimaste.delete(best); corrente = tappe[best];
+    }
+
+    // 2-opt: si prova a scambiare ogni coppia di archi e si tiene se accorcia.
+    const lunghezza = (o: number[]) => {
+      let tot = distanzaMetri(partenza, tappe[o[0]]);
+      for (let i = 0; i < o.length - 1; i++) tot += distanzaMetri(tappe[o[i]], tappe[o[i + 1]]);
+      if (anello) tot += distanzaMetri(tappe[o[o.length - 1]], partenza);
+      return tot;
+    };
+    let migliorato = true, giri = 0;
+    while (migliorato && giri++ < 40) {
+      migliorato = false;
+      for (let i = 0; i < ordine.length - 1; i++) {
+        for (let j = i + 1; j < ordine.length; j++) {
+          const prova = ordine.slice(0, i).concat(ordine.slice(i, j + 1).reverse(), ordine.slice(j + 1));
+          if (lunghezza(prova) < lunghezza(ordine) - 1) { ordine.splice(0, ordine.length, ...prova); migliorato = true; }
+        }
+      }
+    }
+    return ordine;
+  };
+
+  /** OSRM ha un servizio di ottimizzazione dedicato: e' la prima scelta. */
+  const ordineDaOsrmTrip = async (punti: number[][], anello: boolean): Promise<number[] | null> => {
+    const coords = punti.map(p => `${p[0]},${p[1]}`).join(';');
+    const r = await axios.get(
+      `https://routing.openstreetmap.de/routed-foot/trip/v1/foot/${coords}`,
+      { params: { source: 'first', roundtrip: anello, ...(anello ? {} : { destination: 'last' }), overview: 'false' }, timeout: 9000 });
+    const w = r.data?.waypoints;
+    if (!Array.isArray(w) || w.length !== punti.length) return null;
+    // waypoint_index dice la posizione nel giro; l'indice 0 e' la partenza.
+    const ordine = w.map((x: any, i: number) => ({ i, pos: x.waypoint_index }))
+      .filter((x: any) => x.i > 0)
+      .sort((a: any, b: any) => a.pos - b.pos)
+      .map((x: any) => x.i - 1);
+    return ordine.length === punti.length - 1 ? ordine : null;
+  };
+
+  const tourCache = new Map<string, { ts: number; data: any }>();
+
+  app.get("/api/tour/foot/:coords", rateLimiter, async (req, res) => {
+    try {
+      const punti = String(req.params.coords || '').split(';')
+        .map(p => p.split(',').map(Number))
+        .filter(p => p.length === 2 && p.every(Number.isFinite));
+      if (punti.length < 2) return res.status(400).json({ code: 'InvalidInput', message: 'servono almeno partenza e una tappa' });
+      if (punti.length > TOUR_MAX_TAPPE + 1) {
+        return res.status(400).json({ code: 'TroppeTappe', message: `il giro accetta al massimo ${TOUR_MAX_TAPPE} tappe`, max: TOUR_MAX_TAPPE });
+      }
+
+      const lang = String(req.query.language || 'it').slice(0, 2).toLowerCase();
+      const anello = String(req.query.anello || 'false') === 'true';
+      const vuoleOrdine = String(req.query.ordina || 'true') !== 'false';
+      const partenza = punti[0];
+      const tappe = punti.slice(1);
+
+      const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine}`;
+      const c = req.query.senza ? null : tourCache.get(chiave);
+      if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
+
+      // ── 1. l'ordine ────────────────────────────────────────────────────
+      let ordine: number[] = tappe.map((_, i) => i);
+      let fonteOrdine = 'richiesto';
+      if (vuoleOrdine && tappe.length > 1) {
+        try {
+          const o = await ordineDaOsrmTrip(punti, anello);
+          if (o) { ordine = o; fonteOrdine = 'osrm-trip'; }
+        } catch { /* si scende alla riserva locale */ }
+        if (fonteOrdine === 'richiesto') { ordine = ordinaTappe(partenza, tappe, anello); fonteOrdine = 'locale-2opt'; }
+      }
+
+      // ── 2. le tratte, una per volta, con la catena a cinque ────────────
+      // Tratta per tratta e non in un colpo solo: cosi' una tratta che fallisce
+      // non porta giu' tutto il giro, e ogni tratta ha le sue cinque riserve.
+      const saltate = new Set(String(req.query.senza || '').split(',').filter(Boolean));
+      const sequenza = [partenza, ...ordine.map(i => tappe[i]), ...(anello ? [partenza] : [])];
+      const tratte: any[] = [];
+      const problemi: string[] = [];
+
+      for (let i = 0; i < sequenza.length - 1; i++) {
+        const a = sequenza[i], b = sequenza[i + 1];
+        let fatta: any = null;
+        for (const f of FONTI_ROUTE) {
+          if (saltate.has(f.nome) || !f.attiva) continue;
+          try {
+            const out = await f.run(a, b, lang);
+            if (out?.routes?.[0]?.legs?.[0]?.steps?.length) { fatta = { ...out.routes[0], wip_fonte: f.nome }; break; }
+          } catch { /* fonte successiva */ }
+        }
+        if (!fatta) {
+          // Una tratta irraggiungibile non deve far fallire il giro: si dichiara
+          // e si tira dritto. Un errore silenzioso qui sembra un'app rotta.
+          problemi.push(`tratta ${i + 1}: nessun percorso pedonale`);
+          tratte.push({ distance: distanzaMetri(a, b), duration: distanzaMetri(a, b) / 1.35, geometry: { type: 'LineString', coordinates: [a, b] }, legs: [{ steps: [] }], wip_fonte: 'linea-retta', irraggiungibile: true });
+        } else tratte.push(fatta);
+      }
+
+      // ── 3. il giro, nel dialetto che il client gia' parla ──────────────
+      const coordinate: number[][] = [];
+      for (const t of tratte) for (const p of (t.geometry?.coordinates || [])) coordinate.push(p);
+      const metri = tratte.reduce((s, t) => s + (t.distance || 0), 0);
+      const secondi = tratte.reduce((s, t) => s + (t.duration || 0), 0);
+
+      const dati = {
+        code: 'Ok',
+        // Forma OSRM: una route con una leg per tratta. Il client che sa gia'
+        // leggere una rotta legge anche questa senza cambiare niente.
+        routes: [{
+          distance: metri, duration: secondi,
+          geometry: { type: 'LineString', coordinates: coordinate },
+          legs: tratte.map((t: any, i: number) => ({
+            distance: t.distance || 0,
+            duration: t.duration || 0,
+            steps: t.legs?.[0]?.steps || [],
+            wip_tappa: i,
+            wip_fonte: t.wip_fonte,
+            ...(t.irraggiungibile ? { wip_irraggiungibile: true } : {}),
+          })),
+        }],
+        waypoints: [],
+        // La parte specifica del giro, in campi con prefisso: non disturba
+        // nessun client che si aspetta una rotta normale.
+        wip_giro: {
+          ordine,                       // indici delle tappe come sono state passate
+          anello,
+          fonte_ordine: fonteOrdine,
+          tappe: ordine.length,
+          metri_totali: Math.round(metri),
+          minuti_cammino: Math.round(secondi / 60),
+          problemi,
+        },
+      };
+
+      tourCache.set(chiave, { ts: Date.now(), data: dati });
+      if (tourCache.size > 800) tourCache.delete(tourCache.keys().next().value);
+      res.json(dati);
+    } catch (e: any) {
+      console.error('[tour/foot] errore:', e?.message);
       res.status(500).json({ code: 'Error', message: e?.message });
     }
   });
