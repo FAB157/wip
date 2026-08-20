@@ -14917,8 +14917,58 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
 
   const tourCache = new Map<string, { ts: number; data: any }>();
 
+  /**
+   * IL PASS SI VERIFICA QUI, NON NEL CLIENT.
+   *
+   * Il giro a tappe e` una funzione premium legata al Day Pass. Un controllo
+   * nel client e` una cortesia, non un cancello: l'audit di agosto aveva
+   * trovato una ventina di rotte a pagamento raggiungibili con un `curl`.
+   *
+   * Si accetta il token dell'utente nell'header Authorization e si chiede a
+   * Supabase chi e`, poi si guarda `user_passes`. Senza token o senza pass
+   * valido si risponde 402: il client sa gia` che cosa vuol dire.
+   */
+  const passValido = async (req: any): Promise<{ ok: boolean; motivo?: string; scade?: number }> => {
+    const auth = String(req.headers?.authorization || '');
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    if (!token) return { ok: false, motivo: 'nessun token' };
+    try {
+      const u = await axios.get(`${supabaseUrl}/auth/v1/user`, {
+        headers: { apikey: process.env.VITE_SUPABASE_ANON_KEY || supabaseServiceKey, Authorization: `Bearer ${token}` },
+        timeout: 8000,
+      });
+      const userId = u.data?.id;
+      if (!userId) return { ok: false, motivo: 'utente non riconosciuto' };
+      const p = await axios.get(
+        `${supabaseUrl}/rest/v1/user_passes?user_id=eq.${userId}&expires_at=gt.${new Date().toISOString()}&select=expires_at,guides_used,guides_cap&order=expires_at.desc&limit=1`,
+        { headers, timeout: 8000 });
+      const row = p.data?.[0];
+      if (!row) return { ok: false, motivo: 'nessun pass attivo' };
+      if (Number(row.guides_used) >= Number(row.guides_cap)) return { ok: false, motivo: 'audioguide del pass esaurite' };
+      return { ok: true, scade: new Date(row.expires_at).getTime() };
+    } catch (e: any) {
+      // Se il controllo non si puo' fare, si NEGA. In dubbio si chiude, non si
+      // apre: e' l'unica scelta difendibile su un cancello.
+      return { ok: false, motivo: 'verifica del pass non riuscita' };
+    }
+  };
+
   app.get("/api/tour/foot/:coords", rateLimiter, async (req, res) => {
     try {
+      // Il calcolo di UN percorso resta libero (e` la stessa cosa che fa gia'
+      // /api/route/foot); e` il GIRO A PIU' TAPPE a essere premium. La soglia
+      // e` due tappe: sotto, e' una navigazione normale.
+      const numeroTappe = String(req.params.coords || '').split(';').length - 1;
+      if (numeroTappe > 1) {
+        const pass = await passValido(req);
+        if (!pass.ok) {
+          return res.status(402).json({
+            code: 'PassRichiesto',
+            message: 'il giro a piu` tappe richiede il Day Pass attivo',
+            motivo: pass.motivo,
+          });
+        }
+      }
       const punti = String(req.params.coords || '').split(';')
         .map(p => p.split(',').map(Number))
         .filter(p => p.length === 2 && p.every(Number.isFinite));

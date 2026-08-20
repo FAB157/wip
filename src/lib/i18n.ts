@@ -636,6 +636,17 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Откроет Google Карты или Карты",
     ZH: "打开谷歌地图或地图"
   },
+  // Dieci Tappe: il banner di controllo del giro.
+  tour_tappa: { IT: "Tappa", EN: "Stop", FR: "Étape", ES: "Parada", DE: "Station", RU: "Точка", ZH: "站点" },
+  tour_mancanti: { IT: "mancanti", EN: "left", FR: "restants", ES: "restantes", DE: "verbleibend", RU: "осталось", ZH: "剩余" },
+  tour_totali: { IT: "in tutto", EN: "total", FR: "au total", ES: "en total", DE: "insgesamt", RU: "всего", ZH: "总计" },
+  tour_in_pausa: { IT: "Giro in pausa", EN: "Tour paused", FR: "Parcours en pause", ES: "Recorrido en pausa", DE: "Tour pausiert", RU: "Маршрут на паузе", ZH: "行程已暂停" },
+  tour_pausa: { IT: "Metti in pausa", EN: "Pause", FR: "Mettre en pause", ES: "Pausar", DE: "Pausieren", RU: "Пауза", ZH: "暂停" },
+  tour_riprendi: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续" },
+  tour_riascolta: { IT: "Riascolta", EN: "Play again", FR: "Réécouter", ES: "Volver a escuchar", DE: "Nochmal hören", RU: "Прослушать снова", ZH: "重听" },
+  tour_salta: { IT: "Salta questa tappa", EN: "Skip this stop", FR: "Passer cette étape", ES: "Saltar esta parada", DE: "Station überspringen", RU: "Пропустить точку", ZH: "跳过此站" },
+  tour_termina: { IT: "Termina il giro", EN: "End tour", FR: "Terminer le parcours", ES: "Terminar el recorrido", DE: "Tour beenden", RU: "Завершить маршрут", ZH: "结束行程" },
+  tour_problemi: { IT: "tappe senza percorso pedonale", EN: "stops with no walking route", FR: "étapes sans itinéraire piéton", ES: "paradas sin ruta peatonal", DE: "Stationen ohne Fußweg", RU: "точек без пешего маршрута", ZH: "个站点没有步行路线" },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",

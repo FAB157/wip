@@ -580,6 +580,7 @@ function escapeHtml(s: string): string {
 }
 
 import PoiPopupContent from "./PoiPopupContent";
+import TourRouteLayer from "./TourRouteLayer";
 import PoiRadarPanel from "./PoiRadarPanel";
 
 function MapArea({
@@ -3579,6 +3580,11 @@ function MapArea({
               simultanei nel DOM. disableClusteringAtZoom alto: quando l'utente
               è già zoomato su un singolo isolato i pin restano individuali,
               come prima del clustering. */}
+          {/* Dieci Tappe: quando un giro e' in corso la mappa porta addosso il
+              percorso e le tappe numerate. Si disegna da solo leggendo
+              tourService, quindi non serve passargli niente da qui. */}
+          <TourRouteLayer />
+
           <MarkerClusterGroup
             chunkedLoading
             maxClusterRadius={60}
