@@ -3,6 +3,22 @@ import { motion, AnimatePresence } from "motion/react";
 import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language } from "../lib/i18n";
+import { tourService } from "../services/tourService";
+
+/** Il tetto delle tappe: decisione di prodotto, non tecnica. */
+const MAX_TAPPE = 10;
+
+/** La posizione adesso, o null. Serve come partenza del giro. */
+function posizioneAttuale(): Promise<{ lat: number; lon: number } | null> {
+  return new Promise((res) => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      (p) => res({ lat: p.coords.latitude, lon: p.coords.longitude }),
+      () => res(null),
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 30000 },
+    );
+  });
+}
 
 interface PoiRadarPanelProps {
   pois: any[];
@@ -15,6 +31,53 @@ interface PoiRadarPanelProps {
 export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, language }: PoiRadarPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [focusedId, setFocusedId] = useState<string | null>(null);
+
+  // DIECI TAPPE. Il radar era una lista da guardare; con la selezione diventa
+  // un giro da camminare. Il tetto e` dieci: un giro che si finisce vale piu`
+  // di uno lungo abbandonato a meta`.
+  const [scelte, setScelte] = useState<string[]>([]);
+  const [creando, setCreando] = useState(false);
+  const [errore, setErrore] = useState<string | null>(null);
+
+  const scegli = (id: string) => {
+    setErrore(null);
+    setScelte(prev => prev.includes(id)
+      ? prev.filter(x => x !== id)
+      : prev.length >= MAX_TAPPE ? prev : [...prev, id]);
+  };
+
+  const creaGiro = async (poisScelti: any[]) => {
+    setCreando(true); setErrore(null);
+    try {
+      const partenza = await posizioneAttuale();
+      if (!partenza) throw new Error('Non riesco a sapere dove sei: serve la posizione per costruire il giro.');
+      await tourService.crea(
+        poisScelti.map(p => ({
+          id: p.id,
+          nome: p.name || p.nome || 'Tappa',
+          lat: Number(p.lat), lon: Number(p.lon),
+          // Se il POI porta gia` un ingresso, e` li` che si arriva: la
+          // differenza fra "sei arrivato" davanti a un muro e davanti a una
+          // porta.
+          ingresso: (p.entrance_lat && p.entrance_lon)
+            ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: 'dichiarato' as const }
+            : null,
+        })),
+        { partenza, anello: true },
+      );
+      // Il pre-scaricamento parte subito e non blocca: si cammina verso la
+      // prima tappa mentre il resto arriva.
+      tourService.prescarica().catch(() => {});
+      setScelte([]);
+      window.dispatchEvent(new CustomEvent('wip-giro-avviato'));
+      onClose();
+    } catch (e: any) {
+      const m = String(e?.message || '');
+      setErrore(m.startsWith('PASS_RICHIESTO')
+        ? 'Il giro a piu` tappe e` incluso nel Day Pass. Attivalo dal profilo per usarlo.'
+        : m || 'Giro non riuscito.');
+    } finally { setCreando(false); }
+  };
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
   const uniquePois = useMemo(() => {
@@ -89,6 +152,39 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         </button>
       </div>
 
+      {/* La barra del giro: compare solo quando c'e` qualcosa da fare.
+          Sta in ALTO e non in fondo alla lista, perche' con dieci tappe la
+          lista scorre e il tasto sparirebbe proprio quando serve. */}
+      {!isCollapsed && scelte.length > 0 && (
+        <div className="px-4 py-3 border-b border-black/5 bg-blue-50/70 flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-black text-[#1e3a8a] leading-tight">
+              {scelte.length} {scelte.length === 1 ? 'tappa scelta' : 'tappe scelte'}
+              {scelte.length >= MAX_TAPPE && <span className="font-bold text-[#1e3a8a]/50"> · massimo</span>}
+            </p>
+            <p className="text-[10px] text-[#1e3a8a]/60 leading-snug">
+              {errore || 'WIP Nav mette le tappe nell’ordine che fa camminare meno'}
+            </p>
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); setScelte([]); setErrore(null); }}
+            className="px-3 py-2 rounded-xl text-[11px] font-bold text-[#1e3a8a]/60 hover:bg-black/5 transition-colors shrink-0"
+          >
+            Annulla
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              creaGiro(uniquePois.filter(p => scelte.includes(String(p.id))));
+            }}
+            disabled={creando}
+            className="px-4 py-2.5 rounded-xl bg-[#1e3a8a] text-white text-[12px] font-black shadow-md hover:bg-blue-800 transition-colors active:scale-95 disabled:opacity-60 shrink-0"
+          >
+            {creando ? 'Calcolo…' : 'Crea il giro'}
+          </button>
+        </div>
+      )}
+
       {/* Lista POI */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[250px] custom-scrollbar">
         <AnimatePresence initial={false}>
@@ -126,6 +222,23 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
+                    {/* La spunta del giro. Il numero dice la posizione nella
+                        selezione, non nel giro: l'ordine vero lo decide il
+                        motore, e dirlo qui sarebbe una promessa sbagliata. */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); scegli(String(poi.id)); }}
+                      disabled={!scelte.includes(String(poi.id)) && scelte.length >= MAX_TAPPE}
+                      title={scelte.includes(String(poi.id)) ? 'Togli dal giro' : 'Aggiungi al giro'}
+                      className={`w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black transition-all ${
+                        scelte.includes(String(poi.id))
+                          ? 'bg-blue-600 text-white'
+                          : scelte.length >= MAX_TAPPE
+                            ? 'bg-black/5 text-black/20'
+                            : 'bg-blue-600/10 text-blue-600 hover:bg-blue-600 hover:text-white'
+                      }`}
+                    >
+                      {scelte.includes(String(poi.id)) ? scelte.indexOf(String(poi.id)) + 1 : '+'}
+                    </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); handleNavigate(poi); }}
                       className={`p-2 rounded-xl transition-all ${isFocused ? 'bg-blue-600 text-white' : 'bg-blue-600/10 text-blue-600 hover:bg-blue-600 hover:text-white'}`}

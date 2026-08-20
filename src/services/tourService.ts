@@ -11,6 +11,7 @@
  */
 import { getApiUrl } from '../lib/api';
 import { supabase } from '../lib/supabase';
+import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine,
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
@@ -120,26 +121,60 @@ class TourService {
    * Best-effort e in parallelo: una tappa che non si scarica non ferma il giro,
    * si prendera` al momento se la rete c'e`.
    */
-  async prescarica(onProgresso?: (fatte: number, totali: number) => void): Promise<{ fatte: number; totali: number }> {
-    if (!this.giro) return { fatte: 0, totali: 0 };
+  async prescarica(
+    onProgresso?: (fatte: number, totali: number) => void,
+    lingua = 'it',
+  ): Promise<{ testi: number; audio: number; totali: number }> {
+    if (!this.giro) return { testi: 0, audio: 0, totali: 0 };
     const tappe = this.giro.tappe;
-    let fatte = 0;
+    let fatte = 0, testi = 0, audio = 0;
+
     await Promise.all(tappe.map(async (t) => {
+      // 1. Il testo. Senza, non c'e` niente da dire alla tappa.
       try {
         if (!t.testo) {
-          const r = await fetch(getApiUrl(`/api/poi/audioguide?poi_id=${encodeURIComponent(String(t.id))}&language=it`));
+          const r = await fetch(getApiUrl(`/api/poi/audioguide?poi_id=${encodeURIComponent(String(t.id))}&language=${lingua}`));
           if (r.ok) {
             const j = await r.json();
-            t.testo = j?.text || j?.testo || null;
+            t.testo = j?.text || j?.testo || j?.audio_script || null;
             t.durata_ascolto_s = durataAscolto(t.testo);
           }
         }
+        if (t.testo) testi++;
       } catch { /* si prendera` al momento */ }
+
+      // 2. L'AUDIO. Il testo da solo non basta: senza rete la sintesi vocale
+      //    del server non risponde, e il giro premium diventa muto proprio nel
+      //    centro storico dove il segnale manca. Si scarica l'MP3 e si mette in
+      //    IndexedDB con la stessa chiave che usa gia` la scheda POI, cosi` chi
+      //    riproduce lo trova senza sapere che viene da un giro.
+      try {
+        const chiave = `giro_${this.giro!.id}_${t.id}_${lingua}`;
+        const gia = await getOfflineAudioUrl(chiave);
+        if (gia) { t.audio = gia; audio++; }
+        else if (t.testo) {
+          const r = await fetch(getApiUrl('/api/tts'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: t.testo, lang: lingua, poi_id: t.id }),
+          });
+          if (r.ok) {
+            const j = await r.json().catch(() => null);
+            const url = j?.audioUrl || j?.url || null;
+            if (url && await saveOfflineAudio(url, chiave)) {
+              t.audio = await getOfflineAudioUrl(chiave);
+              audio++;
+            }
+          }
+        }
+      } catch { /* l'audio si generera` al momento se la rete c'e` */ }
+
       fatte++;
       onProgresso?.(fatte, tappe.length);
     }));
+
     this.salva();
-    return { fatte, totali: tappe.length };
+    return { testi, audio, totali: tappe.length };
   }
 
   /** Un campione di posizione: fa avanzare la macchina a stati. */

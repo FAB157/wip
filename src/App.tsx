@@ -40,6 +40,8 @@ const CameraScreen = lazy(() => import("./components/CameraScreen"));
 import VisionCardSheet from "./components/VisionCardSheet";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
+import TourBanner from "./components/TourBanner";
+import { tourService } from "./services/tourService";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
@@ -132,6 +134,15 @@ export default function App() {
     setMountedTabs(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
   }
   const [isRadarMode, setIsRadarMode] = useState(false);
+  // Dieci Tappe: un giro in corso. Si riprende all'avvio, perche' l'app chiusa
+  // a meta` percorso non deve far perdere il giro (e l'audio gia` scaricato).
+  const [giroInCorso, setGiroInCorso] = useState(false);
+  useEffect(() => {
+    setGiroInCorso(!!tourService.riprendi() || tourService.inCorso());
+    const avviato = () => setGiroInCorso(true);
+    window.addEventListener('wip-giro-avviato', avviato);
+    return () => window.removeEventListener('wip-giro-avviato', avviato);
+  }, []);
   // Scheda Vision (riconoscimento fotocamera): NON è un POI, ha una vista dedicata
   const [visionCard, setVisionCard] = useState<any | null>(null);
 
@@ -901,6 +912,13 @@ export default function App() {
               <PoiRadarPanel pois={radarPois} onClose={() => setIsRadarMode(false)} onFocus={(poi) => window.dispatchEvent(new CustomEvent('focus-poi', { detail: poi }))} onRemove={handleRemoveRadarPoi} language={language} />
             )}
           </AnimatePresence>
+
+          {/* Dieci Tappe: il cruscotto del giro. Compare solo con un giro in
+              corso e solo sulla mappa — altrove coprirebbe contenuto senza
+              servire a niente, perche' il giro si cammina guardando la mappa. */}
+          {giroInCorso && activeTab === "map" && (
+            <TourBanner language={language} onChiudi={() => setGiroInCorso(false)} />
+          )}
 
           <CategoryChips selectedIds={selectedCategories} onToggle={(id) => setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])} onEventClick={() => setActiveTab("events")} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} />
 
