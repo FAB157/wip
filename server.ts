@@ -8398,10 +8398,42 @@ out center tags 120;`;
       const celle = (r.data?.table?.rows || [])
         .filter((x: any[]) => x[3] !== null && x[3] !== undefined)
         .map((x: any[]) => ({ lat: Number(x[1]), lon: Number(x[2]), t: Number(x[3]) }));
+
+      // ONDE — modello WaveWatch III di NOAA/NCEP, sempre via ERDDAP.
+      // Due cose imparate provando: usa longitudini 0-360 (non -180..180) e
+      // le colonne sono [time, depth, latitude, longitude, Thgt], quindi il
+      // valore è l'ULTIMO. E soprattutto: **nel Mediterraneo non ha dati** —
+      // 0 celle valide su 24 nel Ligure e 0 su 81 in Adriatico, mentre in
+      // Atlantico ne dà 231 su 231 e nel Mare del Nord 117 su 117. È un
+      // modello oceanico da 0,5°, i mari chiusi sono mascherati. Quindi le
+      // onde compaiono sulle coste oceaniche e mancano in Mediterraneo:
+      // meglio nessun dato che un numero inventato sul mare mosso.
+      let onde: Array<{ lat: number; lon: number; h: number }> = [];
+      try {
+        const a360 = (x: number) => (x < 0 ? x + 360 : x);
+        const urlOnde = 'https://coastwatch.pfeg.noaa.gov/erddap/griddap/NWW3_Global_Best.json'
+          + `?Thgt%5Blast%5D%5B0%5D%5B(${s}):1:(${nord})%5D%5B(${a360(o)}):1:(${a360(est)})%5D`;
+        const w = await axios.get(urlOnde, {
+          headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' },
+          timeout: 20000,
+        });
+        onde = (w.data?.table?.rows || [])
+          .filter((x: any[]) => x[4] !== null && x[4] !== undefined)
+          .map((x: any[]) => ({
+            lat: Number(x[2]),
+            // Si riportano a -180..180 per confrontarle con le spiagge.
+            lon: Number(x[3]) > 180 ? Number(x[3]) - 360 : Number(x[3]),
+            h: Number(x[4]),
+          }));
+      } catch { /* niente onde: la temperatura da sola vale comunque */ }
+
       const payload = {
         celle,
+        onde,
         giorno,
-        attribuzione: 'Temperatura del mare: NASA JPL MUR via NOAA CoastWatch ERDDAP (dominio pubblico)',
+        attribuzione: onde.length
+          ? 'Mare: NASA JPL MUR e WaveWatch III via NOAA CoastWatch ERDDAP (dominio pubblico)'
+          : 'Temperatura del mare: NASA JPL MUR via NOAA CoastWatch ERDDAP (dominio pubblico)',
       };
       await saveToCache(chiave, 'mare_sst', payload);
       res.json({ ok: true, fonte: 'erddap', ...payload });
@@ -8558,6 +8590,26 @@ out center tags 120;`;
     if (inCache?.text_content && eta < CACHE_MS) {
       return res.json({ ok: true, fonte: 'cache', punti: inCache.text_content });
     }
+
+    // PRIMA IL NOSTRO DATABASE: 390.815 fontanelle e 17.858 bagni sono già
+    // in utility_pois, importati da OSM via QLever e mondiali. Prima questa
+    // rotta partiva da Overpass e restituiva 503 dopo 26 secondi anche dove
+    // i dati li avevamo — perché da Vercel Overpass non risponde mai.
+    try {
+      const g = raggio / 111000;
+      const url = `${supabaseUrl}/rest/v1/utility_pois?select=id,name,lat,lon,sub_category`
+        + `&sub_category=in.(fontanella,bagni_pubblici)`
+        + `&lat=gte.${lat - g}&lat=lte.${lat + g}&lon=gte.${lon - g}&lon=lte.${lon + g}&limit=200`;
+      const db = await axios.get(url, { headers: BC_HEADERS(), timeout: 15000 });
+      const tipoDa: any = { fontanella: 'drinking_water', bagni_pubblici: 'toilets' };
+      const punti = (db.data || []).map((p: any) => ({
+        id: p.id, type: tipoDa[p.sub_category], lat: Number(p.lat), lon: Number(p.lon), name: p.name || undefined,
+      })).filter((p: any) => p.type && isFinite(p.lat) && isFinite(p.lon));
+      if (punti.length) {
+        await saveToCache(chiave, 'servizi_osm', punti);
+        return res.json({ ok: true, fonte: 'database', punti });
+      }
+    } catch { /* database non raggiungibile: si prova Overpass */ }
 
     const query = `[out:json][timeout:20];
 (
@@ -9737,7 +9789,9 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   //   no_experiences_available (solo gli "esperienze" vengono scartati).
   //
   // Chiavi api_cache: lib_item_<slug> (content_type 'library_itinerary',
-  // {itinerary, meta}), lib_index_<kind> (shard array di LibraryItemMeta),
+  // {itinerary, meta}), lib_meta_<slug> (content_type 'library_meta': una
+  // riga per itinerario, è l'indice di ricerca), lib_index_<kind> (i vecchi
+  // shard, ancora letti come fonte storica ma non più aggiornati),
   // lib_lock_<slug> (anti-stampede, TTL 3 min).
   // Tipi condivisi: src/lib/libraryTypes.ts. Descrittori curati:
   // src/lib/libraryDescriptors.ts (getPriorityDescriptors, caricato
@@ -9805,6 +9859,8 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // Semina: pausa tra un item e il successivo (memoria di progetto: i batch
   // senza throttle hanno saturato il Disk IO di Supabase) e tetto indice.
   const LIB_SEED_PAUSE_MS = 1500;
+  // Tetto dei vecchi shard: resta solo perché li leggiamo ancora come fonte
+  // storica; l'indice nuovo (una riga per itinerario) non ha limiti.
   const LIB_MAX_INDEX_ENTRIES = 800;
 
   // ── Memoria dei falliti (bug produzione: seed-cron riprovava ogni ora gli
@@ -10694,16 +10750,56 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     return { approved: false, score: 0, problemi: ['revisore AI non disponibile'], engine: null };
   }
 
-  // ── Indice shard per kind: read-modify-write con dedupe per slug ────────
+  // ── Indice: UNA RIGA PER ITINERARIO ─────────────────────────────────────
+  // Prima era uno shard per kind: ogni salvataggio rileggeva l'intero blob
+  // (centinaia di voci, ~100 KB), ci infilava la nuova voce e lo riscriveva.
+  // Con 5 semine in parallelo significava cinque read-modify-write al minuto
+  // sulle STESSE quattro righe: carico inutile sul database (il 20/08/2026
+  // Supabase ha ricominciato a rispondere PGRST002 durante la semina notturna)
+  // e, peggio, voci che sparivano — due worker che leggono lo stesso blob e
+  // lo riscrivono a vicenda perdono uno dei due inserimenti.
+  // Adesso ogni itinerario scrive la SUA riga `lib_meta_<slug>`: nessuna
+  // lettura, nessuna contesa, scritture da poche centinaia di byte.
   async function libraryUpdateIndex(meta: any): Promise<void> {
-    const key = `lib_index_${meta.kind}`;
-    const row = await getFromCache(key);
-    let arr = libParseCachedJson(row?.text_content);
-    if (!Array.isArray(arr)) arr = [];
-    arr = arr.filter((m: any) => m?.slug && m.slug !== meta.slug);
-    arr.push(meta);
-    arr.sort((a: any, b: any) => (b?.score || 0) - (a?.score || 0));
-    await saveToCache(key, 'library_index', arr.slice(0, LIB_MAX_INDEX_ENTRIES));
+    await saveToCache(`lib_meta_${meta.slug}`, 'library_meta', meta);
+  }
+
+  // Lettura dell'indice: una sola query indicizzata su content_type, più i
+  // vecchi shard come fonte storica (gli item seminati prima di questa
+  // modifica vivono solo lì). Dedupe per slug, la riga singola vince.
+  // Cache in processo: la ricerca è la rotta più chiamata della libreria e
+  // non ha senso rileggere 900 righe a ogni tasto premuto.
+  let libMetaCache: { at: number; metas: any[] } | null = null;
+  const LIB_META_CACHE_MS = 120000;
+
+  async function libraryLoadMetas(): Promise<any[]> {
+    if (libMetaCache && Date.now() - libMetaCache.at < LIB_META_CACHE_MS) return libMetaCache.metas;
+    const bySlug = new Map<string, any>();
+    // 1) shard storici (fino a 800 voci per kind)
+    try {
+      const shards = await Promise.all(LIBRARY_KINDS.map((k: string) => getFromCache(`lib_index_${k}`)));
+      for (const row of shards) {
+        const arr = libParseCachedJson(row?.text_content);
+        if (Array.isArray(arr)) for (const m of arr) if (m?.slug) bySlug.set(m.slug, m);
+      }
+    } catch { /* fonte storica: se manca, pazienza */ }
+    // 2) righe singole, che vincono sui vecchi shard
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache`, {
+        params: { select: 'text_content', content_type: 'eq.library_meta', limit: 50000 },
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
+        timeout: 20000,
+      });
+      for (const row of (Array.isArray(r.data) ? r.data : [])) {
+        const m = libParseCachedJson(row?.text_content);
+        if (m?.slug) bySlug.set(m.slug, m);
+      }
+    } catch (e: any) {
+      console.warn('[library] indice per riga non leggibile:', e?.message);
+    }
+    const metas = [...bySlug.values()];
+    libMetaCache = { at: Date.now(), metas };
+    return metas;
   }
 
   // ── CONTROLLO FINALE: UNA sola chiamata, solo su ciò che il primo revisore
@@ -11238,7 +11334,8 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
 
   // ── ROTTE ───────────────────────────────────────────────────────────────
   // GET /api/library/search?q=&kind=&theme=&city=&country=&maxHours=&days=
-  // Legge gli shard lib_index_* e filtra server-side. Max 100 meta per score.
+  // Legge l'indice (righe lib_meta_* + vecchi shard) e filtra server-side.
+  // Max 100 meta per score.
   app.get('/api/library/search', rateLimiter, async (req, res) => {
     try {
       const q = String(req.query.q || '').trim().toLowerCase().slice(0, 60);
@@ -11249,12 +11346,7 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       const maxHours = parseInt(String(req.query.maxHours || ''), 10);
       const daysQ = parseInt(String(req.query.days || ''), 10);
       const kinds = LIBRARY_KINDS.includes(kindQ) ? [kindQ] : LIBRARY_KINDS;
-      const shards = await Promise.all(kinds.map((k: string) => getFromCache(`lib_index_${k}`)));
-      const metas: any[] = [];
-      for (const row of shards) {
-        const arr = libParseCachedJson(row?.text_content);
-        if (Array.isArray(arr)) metas.push(...arr.filter((m: any) => m && m.slug));
-      }
+      const metas = (await libraryLoadMetas()).filter((m: any) => kinds.includes(String(m.kind)));
       const norm = (s: any) => String(s || '').toLowerCase();
       let out = metas;
       if (q) out = out.filter((m: any) => [m.title, m.city, m.theme, m.angle, m.country].some((v: any) => norm(v).includes(q)));
@@ -11380,9 +11472,9 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       const normT = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
       const wanted = normT(title);
       try {
-        const shard = libParseCachedJson((await getFromCache('lib_index_theme'))?.text_content);
-        const hit = Array.isArray(shard) && wanted.length >= 3
-          ? shard.find((m: any) => m?.theme === media.theme && normT(m?.title).includes(wanted)) : null;
+        const metas = await libraryLoadMetas();
+        const hit = wanted.length >= 3
+          ? metas.find((m: any) => m?.theme === media.theme && normT(m?.title).includes(wanted)) : null;
         if (hit?.slug) {
           const ex = libParseCachedJson((await getFromCache(`lib_item_${hit.slug}`))?.text_content);
           if (ex?.itinerary) { res.json({ slug: hit.slug, itinerary: ex.itinerary, meta: ex.meta || null, cached: true }); return; }

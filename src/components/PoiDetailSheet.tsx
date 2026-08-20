@@ -61,6 +61,7 @@ import {
   setCachedCityName,
 } from "../lib/poiCache";
 import { Language, getTranslation } from "../lib/i18n";
+import { datiBeneCulturale } from "../lib/poiTaxonomy";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -2592,6 +2593,21 @@ export default function PoiDetailSheet({
                 <h1 className="text-2xl font-black text-white leading-tight drop-shadow-lg">
                   {poi.name}
                 </h1>
+                {/* Doppia appartenenza: POI turistico E bene vincolato di un
+                    registro nazionale. Tiene la sua scheda e la sua audioguida,
+                    ma compare anche sotto la chip Beni Culturali. */}
+                {(() => {
+                  const bene = datiBeneCulturale(poi);
+                  if (!bene) return null;
+                  return (
+                    <span
+                      title={[bene.registro, bene.tutela].filter(Boolean).join(" · ")}
+                      className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/20 text-white backdrop-blur-sm"
+                    >
+                      🏺 {getTranslation("beni_culturali_tutelato", language)}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           </div>

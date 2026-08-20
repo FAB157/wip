@@ -15,6 +15,7 @@ import { Language, getTranslation } from "../lib/i18n";
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getApiUrl } from '../lib/api';
 import { getGuideCharacter } from '../lib/guideSettings';
+import { datiBeneCulturale } from '../lib/poiTaxonomy';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
@@ -694,6 +695,22 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 {data.subtext}
               </p>
             )}
+            {/* Doppia appartenenza: questo POI turistico è anche un bene
+                vincolato di un registro nazionale. Il badge lo dichiara —
+                resta un POI pieno, con la sua audioguida, ma compare anche
+                accendendo la chip "Beni Culturali". */}
+            {(() => {
+              const bene = datiBeneCulturale(poi);
+              if (!bene) return null;
+              return (
+                <span
+                  title={[bene.registro, bene.tutela].filter(Boolean).join(" · ")}
+                  className="inline-flex items-center gap-1 mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-600"
+                >
+                  🏺 {getTranslation("beni_culturali_tutelato", language)}
+                </span>
+              );
+            })()}
           </div>
         </div>
 

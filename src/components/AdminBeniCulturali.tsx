@@ -60,6 +60,8 @@ export default function AdminBeniCulturali() {
 
   const [ricerca, setRicerca] = useState('');
   const [ricercaDebounce, setRicercaDebounce] = useState('');
+  const [comune, setComune] = useState('');
+  const [comuneDebounce, setComuneDebounce] = useState('');
   const [paese, setPaese] = useState('');
   const [fascia, setFascia] = useState('');
   const [fonte, setFonte] = useState('');
@@ -79,6 +81,12 @@ export default function AdminBeniCulturali() {
     return () => clearTimeout(t);
   }, [ricerca]);
 
+  useEffect(() => {
+    const t = setTimeout(() => { setComuneDebounce(comune); setOffset(0); }, 400);
+    return () => clearTimeout(t);
+  }, [comune]);
+
+
   const token = async () => {
     const { data } = await supabase.auth.getSession();
     const t = data?.session?.access_token;
@@ -91,6 +99,7 @@ export default function AdminBeniCulturali() {
     try {
       const p = new URLSearchParams();
       if (ricercaDebounce) p.set('q', ricercaDebounce);
+      if (comuneDebounce) p.set('comune', comuneDebounce);
       if (paese) p.set('country', paese);
       if (fascia) p.set('tier', fascia);
       if (fonte) p.set('source', fonte);
@@ -109,7 +118,7 @@ export default function AdminBeniCulturali() {
     } finally {
       setCaricamento(false);
     }
-  }, [ricercaDebounce, paese, fascia, fonte, promossi, offset]);
+  }, [ricercaDebounce, comuneDebounce, paese, fascia, fonte, promossi, offset]);
 
   useEffect(() => { carica(); }, [carica]);
 
@@ -249,15 +258,24 @@ export default function AdminBeniCulturali() {
 
       {/* Filtri */}
       <div className="flex flex-wrap gap-2 items-center">
-        <div className="relative flex-1 min-w-[200px]">
+        {/* Nome e comune sono due caselle separate, non una ricerca unica:
+            l'OR fra i due indici trigram costa 4,7s, le due ricerche
+            separate meno di un secondo ciascuna. */}
+        <div className="relative flex-1 min-w-[180px]">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             value={ricerca}
             onChange={e => setRicerca(e.target.value)}
-            placeholder="Cerca per nome o comune…"
+            placeholder="Cerca per nome…"
             className="w-full pl-9 pr-3 py-2 rounded-xl border border-gray-200 text-sm"
           />
         </div>
+        <input
+          value={comune}
+          onChange={e => setComune(e.target.value)}
+          placeholder="Comune…"
+          className="w-32 px-3 py-2 rounded-xl border border-gray-200 text-sm"
+        />
         <select value={fonte} onChange={e => { setFonte(e.target.value); setOffset(0); }} className="px-3 py-2 rounded-xl border border-gray-200 text-sm">
           <option value="">Tutte le fonti</option>
           <option value="fai_beni">FAI</option>

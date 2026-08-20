@@ -12,6 +12,21 @@ package com.itaintasca.app.geofence
  *
  * Tenere allineata a isCategoryAllowed (src/hooks/useGeofencing.ts) e a
  * PoiCategories.map (iOS, PoiModels.swift).
+ *
+ * NON AGGIUNGERE `beni_culturali` a nessuna lista, per quanto possa sembrare
+ * naturale metterlo sotto "monumenti".
+ * Sono i beni dei registri nazionali del patrimonio promossi a POI (circa
+ * 430.000, decisione del 19/08/2026): hanno scheda e foto, MAI audioguida.
+ * Dentro ci sono chiese di campagna e mulini, ma anche case private vincolate
+ * e magazzini storici — un turista che passa davanti a casa di qualcuno non
+ * deve sentirsi partire un racconto, e su quei numeri l'audioguida
+ * diventerebbe rumore continuo invece che un momento.
+ * Chi merita l'audioguida ce l'ha lo stesso: se il bene combacia con un POI
+ * che abbiamo gia' (una chiesa importata da Wikidata) quello conserva la SUA
+ * categoria ed e' gia' in queste liste. Restano muti solo i beni che esistono
+ * unicamente come `beni_culturali`.
+ * Il cancello lato web e' in guideSettings.isCategoryAllowed, che li esclude
+ * esplicitamente; qui l'esclusione e' per omissione, quindi va protetta.
  */
 object CategoryMap {
     val MAP: Map<String, List<String>> = mapOf(

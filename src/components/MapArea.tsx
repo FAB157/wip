@@ -44,7 +44,11 @@ import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servic
 import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
 import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
 import type { ZtlAlertEvent } from "../lib/ztlAlert";
-import { fetchBathingSites, BATHING_QUALITY_LABEL, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
+import { fetchDatiSole, livelloUv, consiglioSole } from "../lib/sunIndex";
+import type { DatiSole } from "../lib/sunIndex";
+import { orariSole, oraBreve, mancaAllOraOro } from "../lib/sunTimes";
+import type { OrariSole } from "../lib/sunTimes";
+import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_LABEL, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -497,7 +501,13 @@ export const getDistanceFromLatLonInM = (
 };
 
 
-// ── Meteo sulla mappa (Open-Meteo, solo client) ──────────────────────
+// ── Meteo sulla mappa (MET Norway, via /api/meteo/punto) ─────────────
+// La fonte è passata da Open-Meteo a MET Norway il 19/08/2026: il piano
+// gratuito di Open-Meteo è esplicitamente non-commerciale e cita le app
+// con abbonamenti, mentre MET è gratuita anche per uso commerciale.
+// La chiamata NON può partire dal browser perché MET pretende uno
+// User-Agent identificabile e `fetch()` non può impostarlo: passa dal
+// nostro server, che aggiunge anche una cache condivisa fra utenti.
 // Cache 30 min in localStorage per cella di ~11 km (1 decimale): il chip
 // non deve costare una richiesta a ogni pan.
 interface MeteoData {
@@ -533,36 +543,20 @@ async function fetchMeteoCached(lat: number, lon: number): Promise<MeteoData | n
   } catch { /* cache corrotta: rifetch */ }
 
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}&current=temperature_2m,weather_code&hourly=precipitation_probability&forecast_days=1&timezone=auto`,
-      { signal: ctrl.signal }
-    );
-    clearTimeout(timer);
+    // Il server fa da tramite verso MET Norway (che pretende uno User-Agent
+    // che il browser non può mandare) e traduce i simboli MET nei codici WMO
+    // che questa interfaccia già usa.
+    const res = await fetch(getApiUrl(`/api/meteo/punto?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`),
+      { signal: AbortSignal.timeout(12000) });
     if (!res.ok) return null;
     const j = await res.json();
-    const temp = j?.current?.temperature_2m;
-    const code = j?.current?.weather_code;
-    if (typeof temp !== "number") return null;
+    if (typeof j?.temp !== "number") return null;
 
-    // Probabilità di pioggia massima nelle prossime 3 ore. Gli orari di
-    // Open-Meteo sono locali alla zona richiesta (timezone=auto): il parse
-    // nel fuso del browser è un'approssimazione accettabile (best-effort).
-    let rainProb = 0;
-    const times: string[] = Array.isArray(j?.hourly?.time) ? j.hourly.time : [];
-    const probs: number[] = Array.isArray(j?.hourly?.precipitation_probability) ? j.hourly.precipitation_probability : [];
-    const now = Date.now();
-    let idx = times.findIndex((t) => {
-      const ts = new Date(t).getTime();
-      return Number.isFinite(ts) && ts >= now;
-    });
-    if (idx < 0) idx = Math.max(0, times.length - 3);
-    for (let i = idx; i < Math.min(idx + 3, probs.length); i++) {
-      if (typeof probs[i] === "number" && probs[i] > rainProb) rainProb = probs[i];
-    }
-
-    const data: MeteoData = { temp, code: typeof code === "number" ? code : 0, rainProb };
+    const data: MeteoData = {
+      temp: j.temp,
+      code: typeof j.code === "number" ? j.code : 0,
+      rainProb: typeof j.rainProb === "number" ? j.rainProb : 0,
+    };
     try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch { /* quota piena */ }
     return data;
   } catch {
@@ -1082,6 +1076,257 @@ function MapArea({
     };
   }, [fogActive, fogTick, renderFog]);
 
+  // Pannello dei servizi mappa: chiuso di default, si apre dal tasto ⓘ.
+  // Non persiste: è un menù, non una preferenza — gli stati dei singoli
+  // layer invece restano salvati come prima.
+  const [serviziAperti, setServiziAperti] = useState(false);
+
+  // ── Sentieri e cammini ────────────────────────────────────────────────
+  // 30.068 percorsi internazionali, nazionali e regionali importati da OSM.
+  // Stanno nel pannello ⓘ e non fra le chip: una chip in più affollava la
+  // barra, e questi sono un layer che si accende quando servono — come le
+  // fontanelle. Il punto è quello di PARTENZA del percorso, non il tracciato.
+  const [sentieriActive, setSentieriActive] = useState(() => {
+    try { return localStorage.getItem('wip_sentieri_enabled') === '1'; } catch { return false; }
+  });
+  const [sentieriLoading, setSentieriLoading] = useState(false);
+  const sentieriLayerRef = useRef<L.LayerGroup | null>(null);
+  // Zoom 7 come le spiagge e gli altri POI naturali: un cammino lungo
+  // centinaia di chilometri va visto da lontano, altrimenti lo si scopre
+  // solo quando ci si è già sopra. Sotto zoom 10 però si mostrano soltanto
+  // i percorsi di rilevanza internazionale e nazionale e le tappe CAI:
+  // a scala regionale i sentieri locali sarebbero centinaia di pin
+  // indistinguibili.
+  const SENTIERI_MIN_ZOOM = 7;
+  const SENTIERI_ZOOM_TUTTI = 10;
+
+  const toggleSentieri = useCallback(() => {
+    setSentieriActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_sentieri_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
+  const caricaSentieri = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setSentieriLoading(true);
+    try {
+      // Filtro per riquadro sull'indice lat/lon, poi per fonte: è la stessa
+      // strada dell'atlante, e non tocca colonne senza indice.
+      // TUTTE le fonti di percorsi, non solo OSM: prima restavano fuori le
+      // 535 tappe del Sentiero Italia e i 17.702 percorsi francesi.
+      // A zoom lontano solo i cammini importanti, riconosciuti dalla FONTE.
+      // Distinguerli dalla descrizione («…di rilevanza nazionale») voleva
+      // dire un ilike su colonna non indicizzata: misurato 6,4 s in Toscana
+      // e statement timeout in Provenza. I percorsi internazionali e
+      // nazionali sono stati marcati `osm_sentieri_top` apposta.
+      const lontano = map.getZoom() < SENTIERI_ZOOM_TUTTI;
+      const fonti = lontano
+        ? ['osm_sentieri_top', 'cai_sentiero_italia']
+        : ['osm_sentieri_top', 'osm_sentieri', 'cai_sentiero_italia', 'pdipr_fr'];
+      const { data } = await supabase
+        .from('shared_pois')
+        .select('id,name,lat,lon,description_short,image_url')
+        .in('source', fonti)
+        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+        .limit(lontano ? 120 : 200);
+      if (!sentieriLayerRef.current) sentieriLayerRef.current = L.layerGroup();
+      const group = sentieriLayerRef.current;
+      group.clearLayers();
+      for (const s of data || []) {
+        const icon = L.divIcon({
+          html: '<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🥾</div>',
+          className: 'wip-sentiero-marker',
+          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+        });
+        L.marker([Number(s.lat), Number(s.lon)], { icon })
+          .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">🥾 ${escapeHtml(s.name || '')}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
+              ? 'Punto di partenza · © contributori OpenStreetMap'
+              : 'Starting point · © OpenStreetMap contributors'}</div>
+          </div>`)
+          .addTo(group);
+      }
+      if (!map.hasLayer(group) && map.getZoom() >= SENTIERI_MIN_ZOOM) group.addTo(map);
+    } catch (e) {
+      console.warn('[Sentieri] fetch fallito:', e);
+    } finally {
+      setSentieriLoading(false);
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!sentieriActive) {
+      if (map && sentieriLayerRef.current && map.hasLayer(sentieriLayerRef.current)) {
+        map.removeLayer(sentieriLayerRef.current);
+      }
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < SENTIERI_MIN_ZOOM) {
+        if (sentieriLayerRef.current && map.hasLayer(sentieriLayerRef.current)) map.removeLayer(sentieriLayerRef.current);
+        return;
+      }
+      void caricaSentieri(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [sentieriActive, caricaSentieri]);
+
+  // ── Neve: località sciistiche e rifugi ────────────────────────────────
+  // 32.789 località importate da OSM in tutto il mondo: 3.620 comprensori,
+  // 17.346 stazioni di impianti, 11.823 rifugi alpini. Il pin mostra il
+  // luogo; le condizioni (temperatura, neve prevista) si chiedono a MET
+  // Norway solo quando si apre la scheda — sono dati orari, non si importano.
+  const [neveActive, setNeveActive] = useState(() => {
+    try { return localStorage.getItem('wip_neve_enabled') === '1'; } catch { return false; }
+  });
+  const [neveLoading, setNeveLoading] = useState(false);
+  const neveLayerRef = useRef<L.LayerGroup | null>(null);
+  const NEVE_MIN_ZOOM = 8;
+
+  const toggleNeve = useCallback(() => {
+    setNeveActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_neve_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
+  const caricaNeve = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setNeveLoading(true);
+    try {
+      const { data } = await supabase
+        .from('utility_pois')
+        .select('id,name,lat,lon,sub_category')
+        .eq('category', 'neve')
+        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+        .limit(150);
+      if (!neveLayerRef.current) neveLayerRef.current = L.layerGroup();
+      const group = neveLayerRef.current;
+      group.clearLayers();
+      const emoji: Record<string, string> = {
+        comprensorio_sci: '⛷', impianto_risalita: '🚡', rifugio_alpino: '🏔',
+      };
+      const etichetta: Record<string, string> = {
+        comprensorio_sci: language === 'IT' ? 'Comprensorio sciistico' : 'Ski area',
+        impianto_risalita: language === 'IT' ? 'Impianto di risalita' : 'Ski lift',
+        rifugio_alpino: language === 'IT' ? 'Rifugio alpino' : 'Mountain hut',
+      };
+      for (const l of data || []) {
+        const sub = String(l.sub_category || '');
+        const icon = L.divIcon({
+          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emoji[sub] || '❄️'}</div>`,
+          className: 'wip-neve-marker',
+          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+        });
+        const marker = L.marker([Number(l.lat), Number(l.lon)], { icon });
+        marker.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:230px;">
+          <div style="font-size:12px;font-weight:700;color:#111827;">${emoji[sub] || '❄️'} ${escapeHtml(l.name || '')}</div>
+          <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(etichetta[sub] || '')}</div>
+          <div id="neve-${escapeHtml(String(l.id))}" style="font-size:11px;color:#0369a1;margin-top:5px;font-weight:700;">…</div>
+          <div style="font-size:9px;color:#6b7280;margin-top:4px;">© contributori OpenStreetMap · MET Norway</div>
+        </div>`);
+        // Le condizioni si chiedono solo all'apertura: 150 pin non devono
+        // valere 150 chiamate.
+        marker.on('popupopen', async () => {
+          const box = document.getElementById(`neve-${l.id}`);
+          if (!box) return;
+          const d = await fetchDatiSole(Number(l.lat), Number(l.lon));
+          if (!box.isConnected) return;
+          box.textContent = d
+            ? `${Math.round(d.temperatura)}°C${d.percepita ? ` · percepiti ${Math.round(d.percepita)}°` : ''}`
+            : (language === 'IT' ? 'condizioni non disponibili' : 'conditions unavailable');
+        });
+        group.addLayer(marker);
+      }
+      if (!map.hasLayer(group) && map.getZoom() >= NEVE_MIN_ZOOM) group.addTo(map);
+    } catch (e) {
+      console.warn('[Neve] fetch fallito:', e);
+    } finally {
+      setNeveLoading(false);
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!neveActive) {
+      if (map && neveLayerRef.current && map.hasLayer(neveLayerRef.current)) map.removeLayer(neveLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < NEVE_MIN_ZOOM) {
+        if (neveLayerRef.current && map.hasLayer(neveLayerRef.current)) map.removeLayer(neveLayerRef.current);
+        return;
+      }
+      void caricaNeve(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [neveActive, caricaNeve]);
+
+  // ── Sole: UV e caldo percepito (src/lib/sunIndex.ts) ──────────────────
+  // Sostituisce l'avviso ZTL, tolto il 19/08/2026: scattava solo sopra i
+  // 20 km/h, quindi chi visita a piedi — cioè chiunque usi un'audioguida —
+  // non lo vedeva mai, e per farlo bene servirebbero varchi e orari che
+  // un'app che non è un navigatore non ha. Il codice resta in ztlAlert.ts.
+  const [soleActive, setSoleActive] = useState(() => {
+    try { return localStorage.getItem('wip_sole_enabled') === '1'; } catch { return false; }
+  });
+  const [soleLoading, setSoleLoading] = useState(false);
+  const [datiSole, setDatiSole] = useState<DatiSole | null>(null);
+  // Orari di alba/tramonto/ora d'oro: calcolo locale, nessuna chiamata.
+  const [oreLuce, setOreLuce] = useState<OrariSole | null>(null);
+
+  const toggleSole = useCallback(() => {
+    setSoleActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_sole_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      if (!next) setDatiSole(null);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!soleActive) return;
+    let vivo = true;
+    const carica = async () => {
+      const map = mapRef.current;
+      if (!map) return;
+      const c = map.getCenter();
+      // Gli orari del Sole non passano dalla rete: si calcolano subito, così
+      // la scheda ha già qualcosa da mostrare mentre arriva l'UV.
+      setOreLuce(orariSole(c.lat, c.lng));
+      setSoleLoading(true);
+      const d = await fetchDatiSole(c.lat, c.lng);
+      if (vivo) { setDatiSole(d); setSoleLoading(false); }
+    };
+    carica();
+    // Si aggiorna quando ci si sposta parecchio e comunque ogni mezz'ora.
+    const map = mapRef.current;
+    const onMoveEnd = () => { void carica(); };
+    map?.on('moveend', onMoveEnd);
+    const timer = setInterval(carica, 30 * 60 * 1000);
+    return () => {
+      vivo = false;
+      map?.off('moveend', onMoveEnd);
+      clearInterval(timer);
+    };
+  }, [soleActive]);
+
   // ── Allarme ZTL (src/lib/ztlAlert.ts) ─────────────────────────────────
   // Toggle 🚫 nei controlli mappa: in auto (>20 km/h) avvisa quando la
   // posizione (o la proiezione 150 m avanti) entra in una zona a traffico
@@ -1230,10 +1475,15 @@ function MapArea({
     if (!map) return;
     setBathingLoading(true);
     try {
-      const sites = await fetchBathingSites({
+      const grezzi = await fetchBathingSites({
         south: bounds.getSouth(), west: bounds.getWest(),
         north: bounds.getNorth(), east: bounds.getEast(),
       });
+      // La classificazione EEA dice se l'acqua è pulita, ma è annuale: la
+      // domanda che uno si fa in spiaggia è "è calda? c'è mare mosso?".
+      // Le misure dal vivo arrivano con UNA sola chiamata per tutte le
+      // spiagge in vista, quindi costano quanto niente.
+      const sites = await aggiungiMisure(grezzi);
       if (!bathingLayerRef.current) bathingLayerRef.current = L.layerGroup();
       const group = bathingLayerRef.current;
       group.clearLayers();
@@ -1257,6 +1507,13 @@ function MapArea({
               <span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:${color};flex:none;"></span>
               ${language === 'IT' ? 'Qualità' : 'Quality'} ${site.year}: <b>${label}</b>
             </div>
+            ${site.temperatura !== undefined || site.onde !== undefined ? `
+            <div style="font-size:12px;color:#0369a1;margin-top:5px;font-weight:700;display:flex;gap:10px;align-items:center;">
+              ${site.temperatura !== undefined ? `<span>🌡 ${site.temperatura.toFixed(1)}°C</span>` : ''}
+              ${site.onde !== undefined ? `<span>🌊 ${site.onde.toFixed(1)} m</span>` : ''}
+            </div>
+            <div style="font-size:9px;color:#6b7280;margin-top:2px;">${language === 'IT'
+              ? 'Acqua e onde ora (Open-Meteo)' : 'Water and waves now (Open-Meteo)'}</div>` : ''}
             <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${language === 'IT'
               ? 'Classificazione ufficiale UE (EEA) — verifica i divieti temporanei in loco'
               : 'Official EU classification (EEA) — check temporary bans on site'}</div>
@@ -1571,6 +1828,50 @@ function MapArea({
     }
   };
 
+  /**
+   * DOPPIA APPARTENENZA: quali POI in vista sono ANCHE beni vincolati.
+   *
+   * Sono i beni con `matched_poi_id`: il POI c'era già (una chiesa importata da
+   * Wikidata) e l'atlante ci ha detto che è tutelato. Restano POI pieni — scheda
+   * e audioguida — ma vanno mostrati anche accendendo la chip Beni Culturali e
+   * portano il badge sulla scheda.
+   *
+   * Perché una query a parte e non la colonna sul POI: la RPC `nearby_pois`
+   * espone un elenco fisso di colonne (id, nome, lat, lon, category, source,
+   * sub_category, status, is_gem, image_url, description_*, *_radius,
+   * entrance_*) e non porta `technical_data`. Un marcatore scritto sul POI non
+   * arriverebbe mai al client dalla strada primaria: sarebbe muto come
+   * `api_cache`. Questa invece è una select per bbox sui soli beni agganciati —
+   * poche righe, stesso indice lat/lon della chip atlante.
+   *
+   * Non è gated sulla chip: il badge dice cos'è il POI, e non deve dipendere da
+   * quali chip sono accese.
+   */
+  const fetchAgganciBeniInBounds = async (
+    south: number, west: number, north: number, east: number
+  ): Promise<Map<string, { registro?: string; tutela?: string }>> => {
+    const agganci = new Map<string, { registro?: string; tutela?: string }>();
+    try {
+      const { data } = await supabase
+        .from('beni_culturali')
+        .select('matched_poi_id, source, tier, typology')
+        .not('matched_poi_id', 'is', null)
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(500);
+      for (const b of (data || []) as any[]) {
+        if (!b.matched_poi_id) continue;
+        agganci.set(String(b.matched_poi_id), {
+          registro: b.source || undefined,
+          tutela: b.typology || (b.tier ? `fascia ${b.tier}` : undefined),
+        });
+      }
+    } catch {
+      // Silenzio: senza agganci si perde il badge, non la mappa.
+    }
+    return agganci;
+  };
+
   const performFetchPois = async (bounds: L.LatLngBounds) => {
     // Nuova generazione di fetch: quelle precedenti diventano stale
     const fetchSeq = ++fetchSeqRef.current;
@@ -1798,7 +2099,18 @@ function MapArea({
         try {
           const { data: utilData, error: utilErr } = utilRes;
           if (utilData && !utilErr) {
-            const mapped = (utilData as any[]).map((item: any) => ({
+            // FONTANELLE E BAGNI FUORI DAI RISULTATI GENERICI.
+            // Sono 390.815 fontanelle importate da OSM: a Firenze occupavano
+            // 189 dei 400 posti restituiti dalla RPC, spingendo fuori
+            // farmacie, ospedali e stazioni — cioè quello che si cerca
+            // quando si ha davvero un problema. Ora compaiono solo se
+            // richieste: dal sub-chip «fontanelle» o dal layer 🚰 del
+            // pannello ⓘ, che le ha tutte e non ruba posti a nessuno.
+            const vuoleFontanelle = Array.isArray(subFilter) && subFilter.includes('fontanelle');
+            const daNascondere = new Set(['fontanella', 'drinking_water', 'bagni_pubblici', 'toilets', 'panchina', 'bench']);
+            const utili = (utilData as any[]).filter((item: any) =>
+              vuoleFontanelle || !daNascondere.has(String(item.sub_category || '').toLowerCase()));
+            const mapped = utili.map((item: any) => ({
               id: item.id,
               lat: Number(item.lat),
               lon: Number(item.lon),
@@ -1843,6 +2155,22 @@ function MapArea({
           const nuovi = beniExtra.filter(p => !giaInMappa.has(String(p.id)));
           dbPois = dbPois.concat(nuovi);
           console.log(`[MapArea] +${nuovi.length} beni culturali (${beniExtra.length - nuovi.length} già in mappa come POI)`);
+        }
+      }
+
+      // Marcatura dei POI che sono ANCHE beni vincolati: badge sulla scheda e
+      // presenza sotto entrambe le chip. Vale a chip atlante spenta o accesa.
+      if (zoom >= BENI_CULTURALI_MIN_ZOOM && dbPois.length > 0) {
+        const agganci = await fetchAgganciBeniInBounds(south, west, north, east);
+        if (agganci.size > 0) {
+          let marcati = 0;
+          dbPois = dbPois.map((p: any) => {
+            const bene = agganci.get(String(p.id));
+            if (!bene) return p;
+            marcati++;
+            return { ...p, beneCulturale: bene };
+          });
+          console.log(`[MapArea] ${marcati} POI sono anche beni vincolati`);
         }
       }
     } catch (err: any) {
@@ -3473,74 +3801,180 @@ function MapArea({
           </button>
         )}
 
-        {/* Toggle layer servizi pratici (fontanelle, bagni, panchine) */}
-        <button
-          onClick={toggleServices}
-          title={language === 'IT' ? 'Servizi: fontanelle, bagni, panchine' : 'Services: fountains, toilets, benches'}
-          aria-pressed={servicesActive}
-          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
-            servicesActive
-              ? 'bg-sky-600 text-white border-sky-400 ring-2 ring-sky-500/40'
-              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
-          }`}
-        >
-          {servicesLoading
-            ? <Loader2 className={`w-4 h-4 animate-spin ${servicesActive ? 'text-white' : 'text-[#1e3a8a]'}`} />
-            : <span className="text-[16px] leading-none">🚰</span>}
-        </button>
+        {/*
+          UN SOLO TASTO ⓘ CHE SI APRE.
+          Prima qui c'erano quattro pulsanti sempre visibili in colonna: le
+          chip delle categorie stanno al centro con z-index più alto e
+          partono a 2rem dal bordo, quindi coprivano i pulsanti (che stanno a
+          0,75rem). Raccoglierli dietro un solo tasto risolve la
+          sovrapposizione e smette di occupare mezzo schermo.
+          Il toggle "zone esplorate" è stato tolto su richiesta: era un
+          diario, non un servizio, e non c'entrava con gli altri tre.
+        */}
+        <div className="pointer-events-auto flex flex-col items-start gap-2">
+          <button
+            onClick={() => setServiziAperti((v) => !v)}
+            title={language === 'IT' ? 'Servizi sulla mappa' : 'Map services'}
+            aria-expanded={serviziAperti}
+            className={`w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
+              serviziAperti || servicesActive || soleActive || bathingActive || sentieriActive || neveActive
+                ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
+                : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
+            }`}
+          >
+            {serviziAperti
+              ? <X className="w-4 h-4" />
+              : <Info className="w-[18px] h-[18px]" />}
+            {/* Pallino: qualche layer è acceso ma il pannello è chiuso */}
+            {!serviziAperti && (servicesActive || soleActive || bathingActive || sentieriActive || neveActive) && (
+              <span className="absolute translate-x-3 -translate-y-3 w-2.5 h-2.5 bg-emerald-400 rounded-full border border-white" />
+            )}
+          </button>
 
-        {/* Toggle fog of war: diario delle zone già esplorate a piedi */}
-        <button
-          onClick={toggleFog}
-          title={language === 'IT' ? 'Zone esplorate' : 'Explored areas'}
-          aria-pressed={fogActive}
-          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
-            fogActive
-              ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
-              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
-          }`}
-        >
-          <span className="text-[16px] leading-none">{fogActive ? '👣' : '🗺️'}</span>
-        </button>
+          <AnimatePresence>
+            {serviziAperti && (
+              <motion.div
+                key="servizi-mappa"
+                initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                transition={{ duration: 0.16 }}
+                className="bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-1.5 flex flex-col gap-1 min-w-[196px]"
+              >
+                {[
+                  {
+                    id: 'servizi', on: servicesActive, loading: servicesLoading, emoji: '🚰',
+                    tinta: 'bg-sky-600 border-sky-400',
+                    label: language === 'IT' ? 'Fontanelle, bagni, panchine' : 'Water, toilets, benches',
+                    onClick: toggleServices,
+                  },
+                  {
+                    id: 'sentieri', on: sentieriActive, loading: sentieriLoading, emoji: '🥾',
+                    tinta: 'bg-emerald-600 border-emerald-400',
+                    label: language === 'IT' ? 'Sentieri e cammini' : 'Trails and pilgrim ways',
+                    onClick: toggleSentieri,
+                  },
+                  {
+                    id: 'neve', on: neveActive, loading: neveLoading, emoji: '❄️',
+                    tinta: 'bg-indigo-500 border-indigo-300',
+                    label: language === 'IT' ? 'Neve: comprensori e rifugi' : 'Snow: ski areas and huts',
+                    onClick: toggleNeve,
+                  },
+                  {
+                    id: 'sole', on: soleActive, loading: soleLoading, emoji: '☀️',
+                    tinta: 'bg-amber-500 border-amber-300',
+                    label: language === 'IT' ? 'Sole: UV e caldo percepito' : 'Sun: UV and feels-like',
+                    onClick: toggleSole,
+                  },
+                  {
+                    id: 'balneazione', on: bathingActive, loading: bathingLoading, emoji: '🏖',
+                    tinta: 'bg-cyan-600 border-cyan-400',
+                    label: language === 'IT' ? 'Qualità acqua del mare' : 'Bathing water quality',
+                    onClick: toggleBathing,
+                  },
+                ].map((v) => (
+                  <button
+                    key={v.id}
+                    onClick={v.onClick}
+                    aria-pressed={v.on}
+                    className={`w-full px-2.5 py-2 rounded-xl flex items-center gap-2.5 text-left transition-all active:scale-[0.97] ${
+                      v.on ? `${v.tinta} text-white border` : 'hover:bg-black/5 dark:hover:bg-white/10 text-[#1e3a8a] dark:text-white border border-transparent'
+                    }`}
+                  >
+                    {v.loading
+                      ? <Loader2 className={`w-4 h-4 animate-spin shrink-0 ${v.on ? 'text-white' : 'text-[#1e3a8a]'}`} />
+                      : <span className="text-[15px] leading-none shrink-0">{v.emoji}</span>}
+                    <span className="text-[11px] font-bold leading-tight">{v.label}</span>
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {/* Toggle allarme ZTL: avviso in auto prima di entrare in zona a traffico limitato */}
-        <button
-          onClick={toggleZtl}
-          title={language === 'IT' ? 'Avviso ZTL (zone a traffico limitato)' : 'ZTL alert (limited traffic zones)'}
-          aria-pressed={ztlActive}
-          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
-            ztlActive
-              ? 'bg-red-600 text-white border-red-400 ring-2 ring-red-500/40'
-              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
-          }`}
-        >
-          <span className="text-[16px] leading-none">🚫</span>
-        </button>
+          {/* Scheda sole: valore di adesso, fascia da evitare, consiglio.
+              Non è una mappa di pallini come il mare perché dentro una città
+              l'UV è lo stesso ovunque: quello che cambia è l'ora. */}
+          <AnimatePresence>
+            {soleActive && (datiSole || oreLuce) && (
+              <motion.div
+                key="scheda-sole"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 px-3 py-2.5 max-w-[240px]"
+              >
+                {datiSole && (
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="w-9 h-9 rounded-xl flex items-center justify-center text-white text-[13px] font-black shrink-0"
+                    style={{ background: livelloUv(datiSole.uv).colore }}
+                  >
+                    {Math.round(datiSole.uv)}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-black text-[#1e3a8a] dark:text-white leading-tight">
+                      UV {language === 'IT' ? livelloUv(datiSole.uv).it : livelloUv(datiSole.uv).en}
+                    </p>
+                    <p className="text-[10px] text-primary/60 dark:text-white/60 leading-tight">
+                      {language === 'IT' ? 'percepiti' : 'feels like'} {Math.round(datiSole.percepita)}°
+                      {datiSole.temperatura ? ` · ${Math.round(datiSole.temperatura)}° ${language === 'IT' ? 'reali' : 'actual'}` : ''}
+                    </p>
+                  </div>
+                </div>
+                )}
 
-        {/* Toggle qualità acque di balneazione (dati EEA, solo Europa) */}
-        <button
-          onClick={toggleBathing}
-          title={language === 'IT' ? 'Qualità acque di balneazione (dati UE/EEA)' : 'Bathing water quality (EU/EEA data)'}
-          aria-pressed={bathingActive}
-          className={`pointer-events-auto w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
-            bathingActive
-              ? 'bg-cyan-600 text-white border-cyan-400 ring-2 ring-cyan-500/40'
-              : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10'
-          }`}
-        >
-          {bathingLoading
-            ? <Loader2 className={`w-4 h-4 animate-spin ${bathingActive ? 'text-white' : 'text-[#1e3a8a]'}`} />
-            : <span className="text-[16px] leading-none">🏖</span>}
-        </button>
+                {datiSole && datiSole.oreCritiche.length > 0 && (
+                  <p className="text-[10px] text-orange-600 dark:text-orange-400 font-bold mt-2 leading-snug">
+                    {language === 'IT' ? 'Sole forte' : 'Strong sun'} {datiSole.oreCritiche[0]}–{datiSole.oreCritiche[datiSole.oreCritiche.length - 1]}
+                  </p>
+                )}
 
-        {/* Badge di copertura: quanto di quest'area è già stato calpestato */}
-        {fogActive && fogCoverage !== null && (
-          <div className="pointer-events-none bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 text-[10px] font-black text-[#1e3a8a] dark:text-white select-none whitespace-nowrap">
-            👣 {language === 'IT'
-              ? `Hai esplorato ~${Math.round(fogCoverage)}% di quest'area`
-              : `You've explored ~${Math.round(fogCoverage)}% of this area`}
-          </div>
-        )}
+                {datiSole && (
+                  <p className="text-[10px] text-primary/70 dark:text-white/70 mt-1.5 leading-snug">
+                    {consiglioSole(datiSole, language)}
+                  </p>
+                )}
+
+                {datiSole && datiSole.prossimeOre.length > 1 && (
+                  <div className="flex gap-1 mt-2">
+                    {datiSole.prossimeOre.slice(0, 6).map((o) => (
+                      <div key={o.ora} className="flex-1 flex flex-col items-center gap-0.5">
+                        <span className="w-full h-1.5 rounded-full" style={{ background: livelloUv(o.uv).colore }} />
+                        <span className="text-[8px] text-primary/50 dark:text-white/50 leading-none">{o.ora.slice(0, 2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Alba, tramonto e ora d'oro: calcolati in locale, senza
+                    rete. Restano leggibili anche col telefono offline. */}
+                {oreLuce && !oreLuce.sempreNotte && (
+                  <div className="mt-2.5 pt-2 border-t border-black/5 dark:border-white/10 space-y-1">
+                    {oreLuce.sempreGiorno ? (
+                      <p className="text-[10px] text-primary/70 dark:text-white/70">
+                        {language === 'IT' ? 'Sole sempre sopra l’orizzonte' : 'Sun never sets'}
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between text-[10px] text-primary/70 dark:text-white/70">
+                          <span>🌅 {oraBreve(oreLuce.alba)}</span>
+                          <span>🌇 {oraBreve(oreLuce.tramonto)}</span>
+                          <span className="text-primary/45 dark:text-white/45">{oreLuce.durataLuce}</span>
+                        </div>
+                        {oreLuce.oraOroSeraInizio && (
+                          <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 leading-snug">
+                            ✨ {language === 'IT' ? 'Ora d’oro dalle' : 'Golden hour from'} {oraBreve(oreLuce.oraOroSeraInizio)}
+                            {mancaAllOraOro(oreLuce) ? ` · ${mancaAllOraOro(oreLuce)}` : ''}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       <AnimatePresence>

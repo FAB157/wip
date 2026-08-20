@@ -151,6 +151,20 @@ export function isCategoryAllowed(
   activeSubcats: Record<string, boolean>,
 ): boolean {
   const cat = (poi.category || '').toLowerCase();
+
+  // BENI CULTURALI: scheda e foto, MAI audioguida.
+  // Sono i beni dei registri nazionali del patrimonio promossi a POI (circa
+  // 430.000): chiese di campagna, mulini, ma anche case private vincolate e
+  // magazzini storici. Vanno visti sulla mappa e aperti se interessano, ma non
+  // devono far partire un racconto — un turista che passa davanti a casa di
+  // qualcuno non deve sentirsi parlare nell'orecchio, e su quei numeri
+  // l'audioguida diventerebbe rumore continuo invece che un momento.
+  // Chi merita l'audioguida ce l'ha lo stesso: se il bene combacia con un POI
+  // che abbiamo gia' (una chiesa importata da Wikidata), quello conserva la
+  // SUA categoria e passa da uno dei rami sotto. Solo i beni che esistono
+  // unicamente come `beni_culturali` restano muti.
+  if (cat === 'beni_culturali') return false;
+
   if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
   // Monumenti: include il patrimonio costruito importato in fase 2 (piazze,
   // ponti, fontane, teatri, palazzi, torri, grattacieli, cimiteri monumentali,

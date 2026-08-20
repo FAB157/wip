@@ -70,7 +70,20 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
 
 const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
 const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gallery"];
-const PANORAMI_TYPES = ["viewpoint", "panorami", "panorama", "park", "parchi", "garden", "nature_reserve"];
+// "natura" e i tipi naturali specifici mancavano: un POI con category
+// 'natura' (o 'beach', 'waterfall'…) usciva da resolvePoiTaxonomy con
+// macro null, e il filtro della mappa scarta tutto ciò che non ha una
+// macro — quindi restava INVISIBILE sotto ogni chip. È emerso importando
+// 30.068 sentieri, ma riguardava già spiagge, cascate e riserve.
+// I sentieri e i cammini stanno qui: chi cerca panorami cerca anche dove
+// camminare, ed è l'unica famiglia che non richiede una chip in più.
+const PANORAMI_TYPES = [
+  "viewpoint", "panorami", "panorama", "park", "parchi", "garden", "nature_reserve",
+  "natura", "sentiero", "sentieri", "hiking", "trail", "cammino",
+  "beach", "spiaggia", "bay", "baia", "lake", "lago", "island", "isola",
+  "waterfall", "cascata", "spring", "cave", "grotta", "peak", "vetta",
+  "cliff", "falesia", "glacier", "volcano", "forest", "foresta",
+];
 const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
 const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
 const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
@@ -177,8 +190,50 @@ export function matchesSubByHeuristics(p: any, macro: string, activeSubs: string
  * Vero se il POI supera la regola ferrea per la selezione corrente di chip.
  * `subFilter` è la lista piatta dei sub-chip attivi di TUTTE le macro.
  */
+/**
+ * Il POI e' anche un bene vincolato di un registro nazionale?
+ * Sono due cose diverse e vanno tenute distinte:
+ *  - `category === 'beni_culturali'`: il bene esiste SOLO nell'atlante, non
+ *    era gia' un nostro POI. Scheda e foto, nessuna audioguida.
+ *  - il marcatore in `technical_data`: il POI c'era gia' (una chiesa importata
+ *    da Wikidata) e l'atlante ci ha detto che e' anche tutelato. Conserva la
+ *    sua categoria, la sua audioguida, e in piu' porta il riconoscimento.
+ * Il secondo caso e' quello che merita il badge.
+ */
+export function isBeneCulturale(p: any): boolean {
+  if (String(p?.category || '').toLowerCase() === 'beni_culturali') return true;
+  return !!datiBeneCulturale(p);
+}
+
+/**
+ * I dati del vincolo da mostrare nel badge, se ci sono.
+ * Due provenienze, perche' due strade portano qui:
+ *  - `beneCulturale`: lo stampa MapArea leggendo l'atlante per bbox. E' la
+ *    strada della mappa, dove la RPC `nearby_pois` non porta technical_data.
+ *  - `technical_data.bene_culturale`: lo scrive l'aggancio lato server, e
+ *    arriva quando si legge la riga piena (scheda, pacchetti offline, nativo).
+ */
+export function datiBeneCulturale(p: any): { registro?: string; tutela?: string } | null {
+  const diretto = p?.beneCulturale;
+  if (diretto && typeof diretto === 'object') {
+    return { registro: diretto.registro || undefined, tutela: diretto.tutela || undefined };
+  }
+  const t = p?.technical_data;
+  if (!t || typeof t !== 'object' || !t.bene_culturale) return null;
+  const b = t.bene_culturale;
+  return { registro: b.registro || undefined, tutela: b.tutela || undefined };
+}
+
 export function passesCategoryRule(p: any, selectedCategories: string[], subFilter?: string[] | null): boolean {
   const { macro, subId } = resolvePoiTaxonomy(p);
+
+  // DOPPIA APPARTENENZA. Un POI che e' anche bene vincolato compare sotto
+  // ENTRAMBI i chip: la sua categoria turistica (una chiesa resta fra le
+  // chiese, con la sua audioguida) e l'atlante. Senza questa riga il POI
+  // sparirebbe accendendo il chip "beni culturali", perche' `resolvePoiTaxonomy`
+  // assegna una macro sola e la sua e' quella turistica.
+  if (selectedCategories.includes('beni_culturali') && isBeneCulturale(p)) return true;
+
   if (!macro) return false;
   if (!selectedCategories.includes(macro)) return false;
 
