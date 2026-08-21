@@ -1,10 +1,19 @@
-import { X, Navigation, Trash2, MapPin, ChevronDown, ChevronUp } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { X, Navigation, Trash2, MapPin, ChevronDown, ChevronUp, GripVertical } from "lucide-react";
+import { motion, AnimatePresence, Reorder } from "motion/react";
 import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language } from "../lib/i18n";
 import { tourService, MAX_TAPPE } from "../services/tourService";
 import { useBozzaGiro } from "../lib/tour/useGiro";
+
+/** "Ho un'ora": i tagli di tempo fra cui scegliere. `null` = tutto il giro. */
+const TEMPI: { min: number | null; label: string }[] = [
+  { min: 30, label: '30′' },
+  { min: 60, label: '1 h' },
+  { min: 90, label: '1 h 30' },
+  { min: 120, label: '2 h' },
+  { min: null, label: 'Tutto' },
+];
 import { puntoArrivo } from "../lib/puntoArrivo";
 
 interface PoiRadarPanelProps {
@@ -27,6 +36,8 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   // togliere una tappa dalla mappa non la toglieva dalla lista.
   const bozza = useBozzaGiro();
   const scelte = bozza.tappe;
+  /** Le tappe nell'ordine in cui si cammineranno: e` l'ordine della lista trascinabile. */
+  const sequenza = tourService.bozzaSequenza();
   const [creando, setCreando] = useState(false);
   const [errore, setErrore] = useState<string | null>(null);
 
@@ -167,8 +178,92 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             disabled={creando}
             className="px-4 py-2.5 rounded-xl bg-[#1e3a8a] text-white text-[12px] font-black shadow-md hover:bg-blue-800 transition-colors active:scale-95 disabled:opacity-60 shrink-0"
           >
-            {creando ? 'Calcolo…' : 'Crea il giro'}
+            {creando
+              ? 'Calcolo…'
+              : (bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length)
+                ? `Crea il giro (${bozza.tappeNelTempo})`
+                : 'Crea il giro'}
           </button>
+        </div>
+      )}
+
+      {/* Il tempo che hai e l'ordine delle tappe. Il tempo rovescia la
+          domanda — non "quali dieci?" ma "quanto hai?" — e il giro si taglia
+          alle tappe che ci stanno, cammino PIU` ascolto. L'ordine si trascina:
+          WIP Nav fa camminare meno, ma "il museo chiude alle 18" lo sa solo
+          chi cammina. */}
+      {!isCollapsed && scelte.length > 0 && (
+        <div className="px-4 py-2.5 border-b border-black/5 bg-white/70 space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">Tempo che hai</span>
+            {TEMPI.map(({ min, label }) => (
+              <button
+                key={label}
+                onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaTempo(min); }}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+                  bozza.minutiDisponibili === min
+                    ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
+                    : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length && (
+            <p className="text-[10px] text-amber-700 leading-snug">
+              Nel tempo che hai ci {bozza.tappeNelTempo === 1 ? 'sta 1 tappa' : `stanno ${bozza.tappeNelTempo} tappe`} su {scelte.length}: le altre restano fuori dal giro.
+            </p>
+          )}
+
+          {scelte.length >= 2 && (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50">
+                  Ordine del giro · trascina per cambiarlo
+                </span>
+                {bozza.ordineManuale && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); tourService.bozzaOrdineAutomatico(); }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline"
+                  >
+                    Riordina per me
+                  </button>
+                )}
+              </div>
+              <Reorder.Group
+                axis="y"
+                values={sequenza.map(t => String(t.id))}
+                onReorder={(ids: string[]) => tourService.bozzaRiordina(ids)}
+                className="space-y-1 list-none m-0 p-0"
+              >
+                {sequenza.map((t, i) => {
+                  const fuori = bozza.tappeNelTempo != null && i >= bozza.tappeNelTempo;
+                  return (
+                    <Reorder.Item
+                      key={String(t.id)}
+                      value={String(t.id)}
+                      className={`flex items-center gap-2 px-2 py-1.5 rounded-xl bg-white border border-black/5 shadow-sm select-none ${fuori ? 'opacity-50' : ''}`}
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-black/30 cursor-grab shrink-0" />
+                      <span className={`w-5 h-5 rounded-full text-[10px] font-black flex items-center justify-center shrink-0 tabular-nums ${
+                        fuori ? 'border border-dashed border-slate-400 text-slate-400' : 'bg-[#1e3a8a] text-white'
+                      }`}>{i + 1}</span>
+                      <span className="flex-1 min-w-0 text-[12px] font-bold text-[#1e3a8a] truncate">{t.nome}</span>
+                      {fuori && <span className="text-[9px] font-bold uppercase text-slate-400 shrink-0">fuori tempo</span>}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); tourService.bozzaTogli(t.id); }}
+                        title="Togli dal giro"
+                        className="w-6 h-6 rounded-full bg-red-50 text-red-500 hover:bg-red-500 hover:text-white flex items-center justify-center shrink-0 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </Reorder.Item>
+                  );
+                })}
+              </Reorder.Group>
+            </>
+          )}
         </div>
       )}
 

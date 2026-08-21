@@ -25,7 +25,7 @@ const BLU = '#1e3a8a';
 const FATTA = '#94a3b8';
 const ROSSO = '#dc2626';
 
-type StatoPin = 'fatta' | 'corrente' | 'da_fare';
+type StatoPin = 'fatta' | 'corrente' | 'da_fare' | 'fuori_tempo';
 
 /**
  * Pin numerato: fatto (grigio, spuntato), corrente (blu pieno), da fare (bianco).
@@ -35,9 +35,13 @@ type StatoPin = 'fatta' | 'corrente' | 'da_fare';
  * deve coprire la testa, non la punta, altrimenti si legge male.
  */
 function iconaTappa(numero: number, stato: StatoPin, opz: { conX: boolean; sopraIlPin: boolean; titoloX: string }): L.DivIcon {
-  const sfondo = stato === 'corrente' ? BLU : stato === 'fatta' ? FATTA : '#ffffff';
-  const testo = stato === 'da_fare' ? BLU : '#ffffff';
-  const bordo = stato === 'da_fare' ? BLU : sfondo;
+  // "Fuori tempo": scelta ma non ci sta nel tempo che l'utente ha detto di
+  // avere. Resta sulla mappa, spenta e tratteggiata: si vede cosa si perde.
+  const fuori = stato === 'fuori_tempo';
+  const sfondo = stato === 'corrente' ? BLU : stato === 'fatta' ? FATTA : fuori ? '#f1f5f9' : '#ffffff';
+  const testo = stato === 'da_fare' ? BLU : fuori ? FATTA : '#ffffff';
+  const bordo = stato === 'da_fare' ? BLU : fuori ? FATTA : sfondo;
+  const stileBordo = fuori ? 'dashed' : 'solid';
   const contenuto = stato === 'fatta' ? '✓' : String(numero);
   // La tappa corrente e` piu` grande: a colpo d'occhio si vede dove si sta
   // andando senza dover leggere i numeri.
@@ -57,7 +61,7 @@ function iconaTappa(numero: number, stato: StatoPin, opz: { conX: boolean; sopra
     html: `<div style="position:relative;width:${lato}px;height:${lato}px;">
       <div style="
         width:${lato}px;height:${lato}px;border-radius:50%;
-        background:${sfondo};border:2.5px solid ${bordo};color:${testo};
+        background:${sfondo};border:2.5px ${stileBordo} ${bordo};color:${testo};
         display:flex;align-items:center;justify-content:center;
         font-weight:800;font-size:${stato === 'corrente' ? 15 : 12}px;
         font-family:system-ui,-apple-system,sans-serif;
@@ -185,11 +189,12 @@ export default function TourRouteLayer() {
 
       {sequenza.map((t, posizione) => {
         const p = puntoDi(t);
+        const fuoriTempo = b.tappeNelTempo != null && posizione >= b.tappeNelTempo;
         return (
           <Marker
             key={`bozza-${t.id}`}
             position={[p.lat, p.lon]}
-            icon={iconaTappa(posizione + 1, 'da_fare', { conX: true, sopraIlPin: true, titoloX: 'Togli dal giro' })}
+            icon={iconaTappa(posizione + 1, fuoriTempo ? 'fuori_tempo' : 'da_fare', { conX: true, sopraIlPin: true, titoloX: 'Togli dal giro' })}
             zIndexOffset={800}
             eventHandlers={{
               click: (e: any) => {

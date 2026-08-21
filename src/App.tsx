@@ -42,6 +42,7 @@ import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
 import { tourService } from "./services/tourService";
+import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
@@ -139,6 +140,9 @@ export default function App() {
   const [giroInCorso, setGiroInCorso] = useState(false);
   useEffect(() => {
     setGiroInCorso(!!tourService.riprendi() || tourService.inCorso());
+    // Il driver che da` il GPS al giro: senza, il giro si disegna ma non
+    // sente dove sei. Idempotente, resta in ascolto per tutta la sessione.
+    avviaGiroDriver();
     const avviato = () => setGiroInCorso(true);
     window.addEventListener('wip-giro-avviato', avviato);
     return () => window.removeEventListener('wip-giro-avviato', avviato);
@@ -170,6 +174,9 @@ export default function App() {
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [itinerary, setItinerary] = useState<any[]>([]);
   const [activePlan, setActivePlan] = useState<any | null>(null);
+  // Dieci Tappe: i POI del radar sono i candidati per la sostituta di una
+  // tappa tolta e per gli incontri lungo la strada.
+  useEffect(() => { tourService.impostaCandidati(radarPois); }, [radarPois]);
 
   // Località predefinita del profilo. Prima era una costante con un setter
   // vuoto: "Usa posizione attuale" e la ricerca città confermavano ma non
@@ -442,6 +449,16 @@ export default function App() {
     if (groupPin && /^\d{6}$/.test(groupPin)) {
       try { localStorage.setItem('wip_group_plan_join', groupPin); } catch { /* ok */ }
       setActiveTab('plan');
+    }
+    // Dieci Tappe condiviso: ?giro=ID apre il giro salvato come piano nel tab
+    // Piani. Chi lo apre ne ha una copia sua (id nuovo), vedi apriGiroCondiviso.
+    const giroCondiviso = params.get('giro');
+    if (giroCondiviso) {
+      tourService.apriGiroCondiviso(giroCondiviso).then((piano) => {
+        if (!piano) return;
+        setActivePlan(piano);
+        setActiveTab('plan');
+      }).catch(() => { /* link rotto: niente da aprire */ });
     }
 
     return () => subscription?.unsubscribe();

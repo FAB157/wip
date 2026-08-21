@@ -651,6 +651,18 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   tour_aggiungi: { IT: "Aggiungi al giro", EN: "Add to tour", FR: "Ajouter au parcours", ES: "Añadir al recorrido", DE: "Zur Tour hinzufügen", RU: "Добавить в маршрут", ZH: "加入行程" },
   tour_togli: { IT: "Togli dal giro", EN: "Remove from tour", FR: "Retirer du parcours", ES: "Quitar del recorrido", DE: "Aus Tour entfernen", RU: "Убрать из маршрута", ZH: "从行程移除" },
   tour_pieno: { IT: "Giro pieno: dieci tappe", EN: "Tour is full: ten stops", FR: "Parcours complet : dix étapes", ES: "Recorrido completo: diez paradas", DE: "Tour voll: zehn Stationen", RU: "Маршрут полон: десять точек", ZH: "行程已满：十站" },
+  // Dieci Tappe: incontri lungo la strada, sostituta, fine giro.
+  tour_incontro: { IT: "Sulla tua strada", EN: "On your way", FR: "Sur ton chemin", ES: "En tu camino", DE: "Auf deinem Weg", RU: "По пути", ZH: "沿途" },
+  tour_al_posto_di: { IT: "al posto di", EN: "instead of", FR: "à la place de", ES: "en lugar de", DE: "anstelle von", RU: "вместо", ZH: "代替" },
+  tour_sostituisci: { IT: "Lo metto al suo posto?", EN: "Put it in its place?", FR: "Je le mets à sa place ?", ES: "¿Lo pongo en su lugar?", DE: "An seine Stelle setzen?", RU: "Поставить вместо неё?", ZH: "替换它吗？" },
+  tour_si: { IT: "Sì", EN: "Yes", FR: "Oui", ES: "Sí", DE: "Ja", RU: "Да", ZH: "是" },
+  tour_no: { IT: "No", EN: "No", FR: "Non", ES: "No", DE: "Nein", RU: "Нет", ZH: "否" },
+  tour_finito: { IT: "Giro finito", EN: "Tour complete", FR: "Parcours terminé", ES: "Recorrido terminado", DE: "Tour beendet", RU: "Маршрут завершён", ZH: "行程结束" },
+  tour_salva: { IT: "Salva nei miei itinerari", EN: "Save to my itineraries", FR: "Enregistrer dans mes itinéraires", ES: "Guardar en mis itinerarios", DE: "In meinen Reiseplänen speichern", RU: "Сохранить в мои маршруты", ZH: "保存到我的行程" },
+  tour_condividi: { IT: "Condividi", EN: "Share", FR: "Partager", ES: "Compartir", DE: "Teilen", RU: "Поделиться", ZH: "分享" },
+  tour_salvato: { IT: "Salvato", EN: "Saved", FR: "Enregistré", ES: "Guardado", DE: "Gespeichert", RU: "Сохранено", ZH: "已保存" },
+  tour_link_copiato: { IT: "Link copiato", EN: "Link copied", FR: "Lien copié", ES: "Enlace copiado", DE: "Link kopiert", RU: "Ссылка скопирована", ZH: "链接已复制" },
+  tour_chiudi: { IT: "Chiudi", EN: "Close", FR: "Fermer", ES: "Cerrar", DE: "Schließen", RU: "Закрыть", ZH: "关闭" },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",

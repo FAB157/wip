@@ -9,9 +9,15 @@
  * I comandi sono tre: pausa, riascolta, salta. Non di piu`: chi cammina con il
  * telefono in mano guarda lo schermo per un secondo, e in un secondo si
  * riconoscono tre bottoni, non sei.
+ *
+ * Due momenti in piu`, che compaiono solo quando servono:
+ *  - la PROPOSTA dopo una X ("a 120 m c'e` X, lo metto al suo posto?"):
+ *    togliere e basta lascia un giro piu` povero, non un giro migliore;
+ *  - il GIRO FINITO: salvare nei propri itinerari e condividere il link.
+ *    Un giro camminato una volta diventa contenuto che resta.
  */
 import { useEffect, useState } from 'react';
-import { Pause, Play, RotateCcw, SkipForward, X, Navigation2 } from 'lucide-react';
+import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag } from 'lucide-react';
 import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
 
@@ -24,11 +30,29 @@ interface Props {
   onChiudi?: () => void;
 }
 
+/** La posizione per il ricalcolo: GPS se risponde in fretta, altrimenti l'ultima nota. */
+function conPosizione(fn: (p?: { lat: number; lon: number }) => void) {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) return fn();
+  navigator.geolocation.getCurrentPosition(
+    (p) => fn({ lat: p.coords.latitude, lon: p.coords.longitude }),
+    () => fn(),
+    { timeout: 4000, maximumAge: 15000 },
+  );
+}
+
 export default function TourBanner({ language, istruzione, metriAllaSvolta, onRiascolta, onChiudi }: Props) {
   const [v, setV] = useState<VistaGiro | null>(tourService.vista());
   const [pausaManuale, setPausaManuale] = useState(false);
+  const [salvato, setSalvato] = useState<{ id: string; link: string } | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  const [avviso, setAvviso] = useState<string | null>(null);
 
   useEffect(() => tourService.ascolta(setV), []);
+  useEffect(() => {
+    if (!avviso) return;
+    const t = setTimeout(() => setAvviso(null), 2500);
+    return () => clearTimeout(t);
+  }, [avviso]);
 
   if (!v) return null;
 
@@ -37,6 +61,39 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
     : 0;
 
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+  const t = (k: string) => getTranslation(k, language);
+
+  const salva = async () => {
+    if (salvando) return;
+    setSalvando(true);
+    try {
+      const r = await tourService.salvaComeItinerario();
+      setSalvato({ id: r.id, link: r.link });
+      setAvviso(t('tour_salvato'));
+    } catch (e: any) {
+      setAvviso(String(e?.message || 'Salvataggio non riuscito'));
+    } finally { setSalvando(false); }
+  };
+
+  const condividi = async () => {
+    // Condividere vuol dire prima salvare: il link apre la cache condivisa.
+    let link = salvato?.link;
+    if (!link) {
+      try { const r = await tourService.salvaComeItinerario(); setSalvato({ id: r.id, link: r.link }); link = r.link; }
+      catch (e: any) { setAvviso(String(e?.message || 'Condivisione non riuscita')); return; }
+    }
+    const titolo = tourService.comeItinerario()?.titolo || 'WIP';
+    try {
+      if (typeof navigator !== 'undefined' && (navigator as any).share) {
+        await (navigator as any).share({ title: titolo, text: titolo, url: link });
+        return;
+      }
+    } catch { /* annullato dall'utente o non supportato: si copia */ }
+    try { await navigator.clipboard.writeText(link); setAvviso(t('tour_link_copiato')); }
+    catch { setAvviso(link); }
+  };
+
+  const finito = v.stato === 'FINITO';
 
   return (
     <div className="fixed left-0 right-0 bottom-0 z-[9000] px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pointer-events-none">
@@ -44,11 +101,11 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
 
         {/* Avanzamento: una riga sola, ma dice tutto a colpo d'occhio */}
         <div className="h-1 bg-gray-100">
-          <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${percentuale}%` }} />
+          <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${finito ? 100 : percentuale}%` }} />
         </div>
 
         {/* L'istruzione corrente. In pausa non si mostra: sarebbe un sollecito */}
-        {istruzione && !v.inPausa && (
+        {istruzione && !v.inPausa && !finito && (
           <div className="flex items-center gap-2.5 px-4 pt-3">
             <Navigation2 className="w-4 h-4 text-blue-600 flex-shrink-0" />
             <p className="text-[13px] font-bold text-gray-900 leading-snug flex-1">{istruzione}</p>
@@ -58,64 +115,127 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
           </div>
         )}
 
-        <div className="px-4 py-3 flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
-              {getTranslation('tour_tappa', language)} {v.tappeFatte + 1} / {v.tappeTotali}
-            </p>
-            <p className="text-[14px] font-bold text-gray-900 truncate">
-              {v.inPausa ? getTranslation('tour_in_pausa', language) : (v.nomeTappa || '—')}
-            </p>
-            <p className="text-[11px] text-gray-500 tabular-nums">
-              {distanza(v.metriRimanenti)} {getTranslation('tour_mancanti', language)}
-              <span className="text-gray-300"> · </span>
-              {distanza(v.metriTotali)} {getTranslation('tour_totali', language)}
-            </p>
+        {/* La proposta dopo una X: una riga, due risposte. Scade da sola. */}
+        {v.proposta && !finito && (
+          <div className="mx-3 mt-3 px-3 py-2.5 rounded-xl bg-blue-50 border border-blue-100 flex items-center gap-2.5">
+            <div className="flex-1 min-w-0">
+              <p className="text-[12px] font-bold text-gray-900 leading-snug truncate">
+                {v.proposta.sostituta.nome} <span className="text-blue-600 tabular-nums">· {v.proposta.metri} m</span>
+              </p>
+              <p className="text-[10px] text-gray-500 leading-snug truncate">
+                {t('tour_al_posto_di')} {v.proposta.tolta.nome} — {t('tour_sostituisci')}
+              </p>
+            </div>
+            <button
+              onClick={() => conPosizione((p) => { tourService.accettaSostituta(p); })}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-black active:scale-95 flex items-center gap-1"
+            >
+              <Check className="w-3.5 h-3.5" /> {t('tour_si')}
+            </button>
+            <button
+              onClick={() => tourService.rifiutaSostituta()}
+              className="px-3 py-1.5 rounded-lg bg-white text-gray-600 text-[11px] font-bold border border-gray-200 active:scale-95"
+            >
+              {t('tour_no')}
+            </button>
           </div>
+        )}
 
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <button
-              onClick={() => { const p = !pausaManuale; setPausaManuale(p); }}
-              title={pausaManuale ? getTranslation('tour_riprendi', language) : getTranslation('tour_pausa', language)}
-              className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
-            >
-              {pausaManuale ? <Play className="w-4 h-4 text-gray-700" /> : <Pause className="w-4 h-4 text-gray-700" />}
-            </button>
-            <button
-              onClick={onRiascolta}
-              title={getTranslation('tour_riascolta', language)}
-              className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
-            >
-              <RotateCcw className="w-4 h-4 text-gray-700" />
-            </button>
-            <button
-              onClick={() => {
-                navigator.geolocation?.getCurrentPosition(
-                  (p) => tourService.salta({ lat: p.coords.latitude, lon: p.coords.longitude }),
-                  () => tourService.salta(),
-                  { timeout: 4000 },
-                );
-              }}
-              title={getTranslation('tour_salta', language)}
-              className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
-            >
-              <SkipForward className="w-4 h-4 text-gray-700" />
-            </button>
-            <button
-              onClick={() => { tourService.termina(); onChiudi?.(); }}
-              title={getTranslation('tour_termina', language)}
-              className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
-            >
-              <X className="w-4 h-4 text-red-600" />
-            </button>
+        {finito ? (
+          /* GIRO FINITO: il cruscotto diventa la cassa. Salva, condividi, chiudi. */
+          <div className="px-4 py-3 flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-600 flex items-center gap-1">
+                <Flag className="w-3 h-3" /> {t('tour_finito')}
+              </p>
+              <p className="text-[14px] font-bold text-gray-900 truncate">
+                {v.tappeFatte} {t('tour_tappa').toLowerCase()} · {distanza(v.metriTotali)}
+              </p>
+              <p className="text-[11px] text-gray-500 truncate">{avviso || (salvato ? salvato.link.replace(/^https?:\/\//, '') : '')}</p>
+            </div>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <button
+                onClick={salva}
+                disabled={salvando || !!salvato}
+                title={t('tour_salva')}
+                className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors active:scale-95 ${salvato ? 'bg-emerald-50' : 'bg-gray-100 hover:bg-gray-200'} disabled:opacity-70`}
+              >
+                {salvato ? <Check className="w-4 h-4 text-emerald-600" /> : <BookmarkPlus className="w-4 h-4 text-gray-700" />}
+              </button>
+              <button
+                onClick={condividi}
+                title={t('tour_condividi')}
+                className="w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 flex items-center justify-center transition-colors active:scale-95"
+              >
+                <Share2 className="w-4 h-4 text-white" />
+              </button>
+              <button
+                onClick={() => { tourService.termina(); onChiudi?.(); }}
+                title={t('tour_chiudi')}
+                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+              >
+                <X className="w-4 h-4 text-gray-700" />
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="px-4 py-3 flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-gray-400">
+                {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)} / {v.tappeTotali}
+              </p>
+              <p className="text-[14px] font-bold text-gray-900 truncate">
+                {v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
+              </p>
+              <p className="text-[11px] text-gray-500 tabular-nums">
+                {avviso ? avviso : (
+                  <>
+                    {distanza(v.metriRimanenti)} {t('tour_mancanti')}
+                    <span className="text-gray-300"> · </span>
+                    {distanza(v.metriTotali)} {t('tour_totali')}
+                  </>
+                )}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <button
+                onClick={() => { const p = !pausaManuale; setPausaManuale(p); tourService.impostaPausa(p); }}
+                title={pausaManuale ? t('tour_riprendi') : t('tour_pausa')}
+                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+              >
+                {pausaManuale ? <Play className="w-4 h-4 text-gray-700" /> : <Pause className="w-4 h-4 text-gray-700" />}
+              </button>
+              <button
+                onClick={onRiascolta}
+                title={t('tour_riascolta')}
+                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+              >
+                <RotateCcw className="w-4 h-4 text-gray-700" />
+              </button>
+              <button
+                onClick={() => conPosizione((p) => { tourService.salta(p); })}
+                title={t('tour_salta')}
+                className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors active:scale-95"
+              >
+                <SkipForward className="w-4 h-4 text-gray-700" />
+              </button>
+              <button
+                onClick={() => { tourService.termina(); onChiudi?.(); }}
+                title={t('tour_termina')}
+                className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
+              >
+                <X className="w-4 h-4 text-red-600" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Le tappe irraggiungibili si DICONO. Un errore silenzioso qui fa
             sembrare l'app rotta invece che onesta. */}
-        {tourService.datiGiro()?.problemi?.length ? (
+        {!finito && tourService.datiGiro()?.problemi?.length ? (
           <p className="px-4 pb-2.5 text-[10px] text-amber-700 bg-amber-50 py-1.5">
-            {tourService.datiGiro()!.problemi.length} {getTranslation('tour_problemi', language)}
+            {tourService.datiGiro()!.problemi.length} {t('tour_problemi')}
           </p>
         ) : null}
       </div>

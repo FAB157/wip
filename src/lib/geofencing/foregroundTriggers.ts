@@ -41,6 +41,7 @@ import { Capacitor } from '@capacitor/core';
 import { isFeatureEnabled } from '../featureFlags';
 import { reportTrigger } from './telemetry';
 import { locationService } from '../../services/locationService';
+import { tourService } from '../../services/tourService';
 
 // ── Costanti (SPECULARI al canary server) ─────────────────────────
 const ACCURACY_MAX_M = 50;          // fix con accuracy peggiore → scartato
@@ -192,6 +193,10 @@ function onLocationUpdate(e: Event): void {
     // GeofenceAudioGuide sincronizza in locationService via syncSettings).
     if (!isFeatureEnabled('web_foreground_triggers')) return;
     if (!locationService.getIsTourActive()) return;
+    // Dieci Tappe: durante un giro l'audio lo governa lib/tour/giroDriver
+    // (guida piena alle tappe, teaser agli incontri). Se questo modulo
+    // continuasse a scattare, la stessa tappa parlerebbe due volte.
+    if (tourService.inCorso()) return;
 
     void maybeRefreshCandidates(lat, lon);
 

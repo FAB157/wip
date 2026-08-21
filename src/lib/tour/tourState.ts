@@ -46,6 +46,10 @@ export interface TappaGiro {
   nome: string;
   lat: number;
   lon: number;
+  /** Categoria del POI (musei, chiese…): serve a proporre una sostituta dello stesso tipo. */
+  categoria?: string | null;
+  /** Citta`, se il POI la porta: da` il titolo al giro quando lo si salva. */
+  citta?: string | null;
   /** Punto d'ingresso, se lo conosciamo: e` li` che si arriva davvero. */
   ingresso?: { lat: number; lon: number; livello: LivelloIngresso } | null;
   /** Testo dell'audioguida, pre-scaricato all'avvio del giro. */
