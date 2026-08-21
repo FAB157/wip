@@ -38,7 +38,9 @@ import {
 import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld';
 import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
 import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
+import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog';
 import { FOOD_FESTIVALS, festivalContext } from './foodFestivalsCatalog';
+import { THEMATIC_PLACES, type ThematicKey, type ThematicPlaceSummary } from './thematicDescriptors';
 
 // ─────────────────────────────────────────────────────────────────────
 // Tipi (contratto concordato con gli altri moduli della Biblioteca)
@@ -70,6 +72,14 @@ export interface LibraryContextHints {
   /** Cerca esperienze prenotabili reali (Tiqets/Viator/GetYourGuide) con
    *  link affiliato: obbligatorio per l'angolo 'esperienze'. */
   bookable?: boolean;
+  /**
+   * Luoghi di un VERTICALE TEMATICO nostro (terme, cinema, cieli, street art,
+   * mercati, fioriture, memoria, viaggio lento), letti da shared_pois per
+   * categoria. È l'equivalente di osmWinery/osmGusto per i cataloghi curati
+   * della ricerca redazionale: senza questa ancora il generatore si
+   * inventerebbe le sorgenti termali e i set cinematografici.
+   */
+  wipTheme?: { category: string; types?: string[] };
 }
 
 export interface LibraryConstraints {
@@ -1309,7 +1319,9 @@ export const THEMES: ThemeDef[] = [
       { city: 'Snowdonia', country: 'Regno Unito', lat: 53.07, lon: -4.08, note: 'la vetta più alta del Galles, sentieri di diverso impegno fino in cima' },
       { city: 'Tromsø', country: 'Norvegia', lat: 69.65, lon: 18.96, note: 'fiordi e vette a picco sul mare, sole di mezzanotte d\'estate' },
       { city: 'Bohinj (Triglav)', country: 'Slovenia', lat: 46.28, lon: 13.88, note: 'il parco del Triglav, il lago di Bohinj e i sentieri verso Bled' },
-      { city: 'Fuente Dé (Picos de Europa)', country: 'Spagna', lat: 43.19, lon: -4.82, note: 'funivia fino ai 1800m, poi sentieri verso il lago Enol' },
+      // Coordinate corrette il 21/08/2026 (erano 43.19/-4.82, ~5 km a nord-est,
+      // in mezzo alla valle): questa è la stazione a valle della funivia.
+      { city: 'Fuente Dé (Picos de Europa)', country: 'Spagna', lat: 43.147, lon: -4.814, note: 'funivia fino ai 1800m, poi sentieri verso il lago Enol' },
       { city: 'Zakopane', country: 'Polonia', lat: 49.3, lon: 19.95, note: 'd\'estate: Morskie Oko e i sentieri degli Alti Tatra senza neve' },
       { city: 'Puerto Natales (Torres del Paine)', country: 'Cile', lat: -50.94, lon: -73.03, note: 'il celebre trek W: permesso e prenotazione dei rifugi obbligatori con largo anticipo' },
       { city: 'El Chaltén', country: 'Argentina', lat: -49.33, lon: -72.89, note: 'capitale nazionale del trekking, accesso gratuito ai sentieri per il Fitz Roy e il Cerro Torre' },
@@ -2945,6 +2957,82 @@ export function tasteRouteDescriptors(): LibraryDescriptor[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// LUOGHI SACRI — PERCORSI_SACRI × 4 angoli
+//
+// Perché una famiglia a sé e non un tema "religione" fra gli altri.
+// Un pellegrinaggio ha tre cose che nessun altro itinerario ha:
+//   • un ORDINE che non si può cambiare (i quattro luoghi del Buddha si
+//     visitano nella sequenza della sua vita, non per comodità stradale);
+//   • REGOLE DI ACCESSO che decidono se si entra o no, e che in alcuni casi
+//     sono legge dello Stato (la Mecca) o consuetudine millenaria (Athos);
+//   • un PUBBLICO DOPPIO: chi ci va per fede e chi ci va per l'arte, e ai
+//     due va parlato in modo diverso senza che nessuno dei due si senta
+//     ospite di riguardo o intruso.
+//
+// Gli angoli qui sotto nascono da quella doppiezza: "il pellegrinaggio" e
+// "arte e storia" raccontano gli stessi luoghi a due persone diverse. La
+// coppia gratis/prenotabile resta obbligatoria come ovunque — e nel caso
+// religioso è quasi sempre facile, perché la stragrande maggioranza dei
+// luoghi di culto non fa pagare l'ingresso.
+// ─────────────────────────────────────────────────────────────────────
+
+const SACRED_ANGLES: AngleDef[] = [
+  {
+    id: 'sacro-pellegrinaggio',
+    label: '🙏 Il pellegrinaggio',
+    brief:
+      'Variante PELLEGRINAGGIO: il percorso si fa nel suo ordine e per il suo significato. Per ogni tappa spiega COSA È SUCCESSO lì secondo la tradizione, cosa fanno concretamente i fedeli quando arrivano (il gesto, la preghiera, il giro attorno, l\'offerta) e come ci si comporta stando accanto a loro senza disturbare. Metti gli orari delle celebrazioni quando li conosci con certezza, e i momenti della giornata in cui il luogo è raccolto invece che pieno — l\'alba e la sera tardi quasi sempre. Tono rispettoso ma non devoto: si racconta una fede, non la si predica, e chi legge può crederci o no. VIETATO il tono da brochure spirituale e le frasi sull\'"energia del luogo".',
+  },
+  {
+    id: 'sacro-arte',
+    label: '🎨 Arte e storia',
+    brief:
+      'Variante ARTE E STORIA: gli stessi luoghi letti da chi non condivide la fede ma vuole capire. Racconta chi ha costruito e con quali soldi, quale stile e perché proprio quello, cosa guardare con gli occhi (un mosaico, una cupola, un capitello, una scritta sul muro) e cosa quel dettaglio significava per chi lo commissionò. Spiega le stratificazioni quando ci sono — una moschea che era chiesa, una chiesa che era tempio — senza farne una polemica: sono i fatti dell\'edificio. Tono colto e concreto, con la sincerità di dire cosa è originale e cosa è ricostruito.',
+  },
+  FREE_ANGLE,
+  BOOKABLE_ANGLE,
+];
+
+/**
+ * La regola che vale su OGNI itinerario religioso e che nessun angolo può
+ * annullare. Sta qui e non nel catalogo perché il catalogo dice le regole del
+ * SINGOLO luogo, questa dice come ci si comporta ovunque.
+ */
+const REGOLA_LUOGHI_DI_CULTO =
+  'RISPETTO (non negoziabile, vale per ogni tappa): sono luoghi di culto VIVI, non attrazioni. ' +
+  'L\'itinerario DEVE dire, per ogni luogo dove serve: come ci si veste (spalle e ginocchia coperte è la regola più diffusa e quella che ferma più gente all\'ingresso), se si tolgono le scarpe, se il capo va coperto e per chi, se si può fotografare e dove no. ' +
+  'Se un luogo È VIETATO a chi non professa quella fede, o a un genere, o richiede un permesso da ottenere in anticipo, DEVI dirlo come prima cosa della tappa e non in una nota a fondo pagina: mandare qualcuno dove non può entrare è il modo peggiore di sbagliare un itinerario. ' +
+  'Durante le funzioni la visita turistica si sospende: indica gli orari da evitare. Non si fotografa chi prega. ' +
+  'VIETATO trattare i fedeli come parte del panorama.';
+
+export function sacredRouteDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  for (const r of PERCORSI_SACRI) {
+    for (const a of SACRED_ANGLES) {
+      out.push({
+        slug: `sacro-${r.id.replace(/^sr-/, '')}-${a.id}`,
+        // 'theme' come le strade del gusto: la pipeline del server tratta
+        // tutti i kind allo stesso modo e aggiungerne uno costringerebbe a
+        // toccare la validazione lato server senza guadagnarci nulla.
+        kind: 'theme',
+        theme: 'luoghi-sacri',
+        title: `${r.emoji} ${r.name} — ${a.label}`,
+        city: r.stops[0]?.place || r.region,
+        country: r.country,
+        coords: r.coords,
+        days: r.days,
+        angle: a.id,
+        brief: [a.brief, percorsoSacroContext(r), REGOLA_LUOGHI_DI_CULTO].join('\n'),
+        contextHints: {
+          ...(a.id === BOOKABLE_ANGLE.id ? { bookable: true } : {}),
+        },
+      });
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // FIERE E FESTIVAL DEL GUSTO — FOOD_FESTIVALS × 2 angoli
 //
 // Una fiera non è una tappa fra le altre: è il motivo per cui si è lì
@@ -3072,6 +3160,12 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
           }`,
           `COMBINABILITÀ (vincolante): di ${z.c} esistono in biblioteca anche i tagli ${altri}, da 2 e da 3 giorni. Questo itinerario deve reggersi da solo MA essere sommabile agli altri senza doppioni: chi lo abbina non deve rivedere gli stessi produttori né rimangiare gli stessi piatti.`,
           'ONESTÀ SUI PREZZI: dì sempre quanto costa davvero una degustazione in questa zona e cosa comprende, perché è la voce che fa saltare il budget di chi non se lo aspetta.',
+          // Senza questa riga i due tagli nuovi riempivano la giornata di
+          // produttori e ignoravano l'elenco prenotabile: la prima prova
+          // (Verona, 20/08/2026) e' stata bocciata tre volte di fila dalla
+          // verifica "manca il link a un'esperienza prenotabile", che vale
+          // per OGNI itinerario della biblioteca.
+          'ESPERIENZA PRENOTABILE (obbligatoria): se nel materiale c\'è un elenco di esperienze prenotabili, DEVI usarne almeno una. Se una tappa della giornata le corrisponde, metti l\'URL ESATTO e INTATTO nel suo "link_info"; altrimenti aggiungi in info_viaggio.suggerimenti la voce "🎟 Esperienza consigliata: <nome> — <URL>". L\'URL contiene il codice partner: copiarlo, mai modificarlo, mai inventarne altri.',
         ].join('\n');
         out.push({
           slug: `gustozona-${key}-${d}g-${a.id}`,
@@ -3101,6 +3195,136 @@ export function tasteZoneDescriptors(): LibraryDescriptor[] {
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// VERTICALI TEMATICI — THEMATIC_PLACES × 3 angoli (21/08/2026)
+// I cataloghi (src/data/tematici/*.json) nascono da una ricerca redazionale
+// mondiale sulle fonti specializzate di ogni paese; qui diventano itinerari.
+// Come per il gusto: kind 'theme' (nessun kind nuovo da validare sul server)
+// e theme 'tematici-<key>', così la Biblioteca può filtrarli in blocco.
+// ─────────────────────────────────────────────────────────────────────
+
+/** Il "carattere" di ogni verticale: come si racconta e cosa NON si fa. */
+const TEMA_DEF: Record<ThematicKey, {
+  emoji: string; label: string; giorni: number;
+  /** Istruzione specifica del tema, comune a tutti gli angoli. */
+  brief: string;
+  /** Tipi da chiedere al database (vuoto = tutti quelli della categoria). */
+  types?: string[];
+}> = {
+  terme: {
+    emoji: '🛁', label: 'Terme e sorgenti', giorni: 2,
+    brief: 'Tema TERME E ACQUE: costruisci la giornata attorno al bagno, non attorno ai monumenti — il bagno è l\'evento, il resto lo prepara o lo prolunga. Indica SEMPRE, per ogni acqua, se è libera o a pagamento, la temperatura reale se la conosci, cosa serve portare (ciabatte, accappatoio, telo, scarpe da scoglio) e come ci si arriva davvero (sterrato, sentiero, parcheggio lontano). Alterna acqua calda e cammino: dopo un bagno lungo nessuno visita un museo. REGOLE DI SICUREZZA NON NEGOZIABILI, da scrivere esplicitamente: mai da soli in pozze isolate al buio; niente alcol prima del bagno caldo; massimo 15-20 minuti consecutivi in acqua sopra i 38 °C; sconsigliato in gravidanza e con problemi cardiaci senza parere medico; nelle sorgenti libere l\'acqua non è controllata e non si beve; mai tuffi dove il fondale non si vede. Nelle sorgenti naturali ricorda di non lasciare rifiuti e di non usare sapone o shampoo.',
+  },
+  cinema: {
+    emoji: '🎬', label: 'Location di film e serie', giorni: 1,
+    brief: 'Tema CINEMA: ogni tappa è un luogo REALE dove è stata girata una scena, e va raccontata come tale — che film o serie, che anno, che scena, che inquadratura si riconosce stando in quel punto preciso. Dì dove mettersi per ritrovare l\'inquadratura del film e cosa è cambiato dal set a oggi. VIETATO inventare titoli, anni o scene: usa SOLO le opere elencate nel materiale reale fornito. Se un luogo è privato o visibile solo da fuori, dillo prima che qualcuno ci vada. Alterna le location a ciò che quel quartiere offre davvero (un caffè, un mercato, una piazza), altrimenti diventa una caccia al tesoro senza respiro.',
+  },
+  cieli: {
+    emoji: '🌌', label: 'Cieli bui e stelle', giorni: 1,
+    brief: 'Tema CIELO NOTTURNO: l\'itinerario è costruito sull\'ORARIO — il giorno serve ad arrivare, riposare e scegliere il punto, la notte è l\'evento. Indica l\'ora del tramonto e quella in cui il cielo diventa davvero buio (circa 1 ora e mezza dopo), e organizza la sera attorno a quella finestra. Per ogni punto di osservazione: come ci si arriva al buio, se la strada è asfaltata, dove si parcheggia, se c\'è un riparo dal vento. Ricorda SEMPRE cosa portare: strato caldo in più (di notte la temperatura crolla anche d\'estate), torcia a luce ROSSA per non bruciare l\'adattamento al buio, coperta o sdraio, batterie cariche. Spiega che la LUNA PIENA cancella le stelle deboli: la settimana della luna nuova è quella giusta. Racconta cosa si vede in quel periodo dell\'anno (costellazioni stagionali, Via Lattea da giugno a settembre nell\'emisfero nord, eventuali sciami meteorici). Se il posto è isolato: mai da soli, avvisa qualcuno, copertura telefonica incerta.',
+  },
+  street_art: {
+    emoji: '🎨', label: 'Street art', giorni: 1,
+    brief: 'Tema ARTE URBANA: è un itinerario a piedi, di quartiere, e va costruito come una passeggiata continua — muro dopo muro, con le distanze reali fra un\'opera e l\'altra. Per ogni opera: chi l\'ha dipinta, quando, e cosa racconta di quel quartiere (una lotta, una fabbrica chiusa, un santo di casa, un festival). Usa SOLO gli artisti e le opere del materiale reale fornito: mai attribuzioni inventate. Avverti che i muri cambiano: qualche pezzo potrebbe essere già stato coperto, ed è parte del gioco. Intreccia sempre l\'arte con la vita del quartiere — il bar dove si fa colazione, il mercato, il negozio storico — perché la street art senza il suo quartiere è una galleria all\'aperto senza sale. Rispetto: non si entra in proprietà private per una foto e non si disturbano i residenti.',
+  },
+  mercati: {
+    emoji: '🛍️', label: 'Mercati e mercatini', giorni: 1,
+    brief: 'Tema MERCATI: l\'itinerario vive di ORARI e di GIORNI — un mercato sbagliato di giorno è una piazza vuota. Indica SEMPRE il giorno della settimana e le ore in cui il mercato è vivo, e costruisci la giornata attorno a quella finestra (i mercati dell\'usato la mattina presto, i mercatini di Natale al tramonto quando accendono le luci). Racconta cosa si compra DAVVERO lì e a che prezzo indicativo, come si contratta se è d\'uso, e cosa non vale la pena. Ricorda il contante, le borse riutilizzabili e l\'attenzione ai borseggi nella calca. Alterna il mercato a una sosta seduta: girare fra i banchi stanca più di un museo.',
+  },
+  fioriture: {
+    emoji: '🌸', label: 'Fioriture', giorni: 1,
+    brief: 'Tema FIORITURE: è l\'itinerario più fragile di tutti, perché dipende dalla stagione e dal meteo dell\'annata. Dichiara SUBITO la finestra giusta (settimane, non mesi) e avverti che può spostarsi di 10-15 giorni secondo l\'inverno appena passato: suggerisci di verificare lo stato della fioritura prima di partire (sito del parco, social del comune, webcam). Costruisci la giornata sulla LUCE: prima mattina e ultima ora sono le uniche in cui i campi si vedono bene e non c\'è folla. Per ogni luogo: dove ci si mette per vedere l\'insieme, dove si parcheggia, se si cammina su sterrato. REGOLA DI RISPETTO da scrivere sempre: non si entra nei campi coltivati (la lavanda, il grano e i girasoli sono un raccolto, non uno sfondo), non si colgono fiori, si resta sui sentieri e sui bordi. Aggiungi cosa fare nella stessa zona se la fioritura fosse già finita.',
+  },
+  memoria: {
+    emoji: '🕯️', label: 'Memoria e case-museo', giorni: 1,
+    brief: 'Tema MEMORIA: si visitano luoghi dove qualcuno ha vissuto, lavorato o è sepolto, e il tono deve essere all\'altezza — mai macabro, mai lacrimoso, mai "instagrammabile". Racconta la PERSONA, non la tomba: cosa ha fatto, perché la ricordiamo, cosa di lei si capisce stando in quel luogo. Per i cimiteri monumentali indica gli orari (chiudono presto), il percorso fra le sepolture che vale davvero e le regole di comportamento: voce bassa, niente foto ai funerali in corso, si resta sui vialetti. Per le case-museo: cosa è originale e cosa è ricostruito, e l\'oggetto che merita il viaggio. Per i luoghi di memoria delle stragi e delle guerre: rispetto assoluto, nessun dettaglio compiaciuto sulla violenza, e spazio a chi ha resistito. Alterna sempre un luogo di memoria a un momento di vita normale nella stessa zona.',
+  },
+  lento: {
+    emoji: '🚂', label: 'Viaggio lento', giorni: 2,
+    brief: 'Tema VIAGGIO LENTO: il mezzo È la destinazione — un treno panoramico, una funicolare, un traghetto, una ciclovia. Dai le informazioni pratiche VERE: dove si prende, quanto dura, se il biglietto va prenotato con anticipo (su molte linee panoramiche i posti finiscono settimane prima), quale lato del vagone o della barca ha la vista migliore, se ci sono fermate dove si può scendere e riprendere il mezzo dopo. Costruisci la giornata attorno all\'orario di partenza, con il tempo per arrivare in stazione o al molo. Racconta cosa scorre dal finestrino nell\'ordine in cui appare, così chi viaggia sa quando alzare gli occhi. Indica sempre l\'alternativa se il servizio è stagionale o sospeso, e cosa si vede alle due estremità del percorso.',
+  },
+};
+
+/** ISO2 → nome del paese in italiano (il resto del catalogo usa i nomi). */
+const ISO2_NOMI: Record<string, string> = {
+  IT: 'Italia', FR: 'Francia', ES: 'Spagna', PT: 'Portogallo', DE: 'Germania', AT: 'Austria', CH: 'Svizzera',
+  BE: 'Belgio', NL: 'Paesi Bassi', LU: 'Lussemburgo', GB: 'Regno Unito', IE: 'Irlanda', IS: 'Islanda',
+  NO: 'Norvegia', SE: 'Svezia', FI: 'Finlandia', DK: 'Danimarca', EE: 'Estonia', LV: 'Lettonia', LT: 'Lituania',
+  PL: 'Polonia', CZ: 'Repubblica Ceca', SK: 'Slovacchia', HU: 'Ungheria', SI: 'Slovenia', HR: 'Croazia',
+  BA: 'Bosnia ed Erzegovina', RS: 'Serbia', ME: 'Montenegro', MK: 'Macedonia del Nord', AL: 'Albania',
+  GR: 'Grecia', RO: 'Romania', BG: 'Bulgaria', UA: 'Ucraina', MD: 'Moldavia', TR: 'Turchia', CY: 'Cipro',
+  MT: 'Malta', RU: 'Russia', GE: 'Georgia', AM: 'Armenia', AZ: 'Azerbaigian', IR: 'Iran', IL: 'Israele',
+  JO: 'Giordania', SA: 'Arabia Saudita', AE: 'Emirati Arabi Uniti', OM: 'Oman', LB: 'Libano', PS: 'Palestina',
+  MA: 'Marocco', TN: 'Tunisia', DZ: 'Algeria', EG: 'Egitto', SN: 'Senegal', KE: 'Kenya', ET: 'Etiopia',
+  TZ: 'Tanzania', UG: 'Uganda', RW: 'Ruanda', ZA: 'Sudafrica', NA: 'Namibia', ZM: 'Zambia', MG: 'Madagascar',
+  CV: 'Capo Verde', JP: 'Giappone', KR: 'Corea del Sud', CN: 'Cina', TW: 'Taiwan', HK: 'Hong Kong',
+  MN: 'Mongolia', IN: 'India', NP: 'Nepal', BT: 'Bhutan', LK: 'Sri Lanka', TH: 'Thailandia', MY: 'Malesia',
+  SG: 'Singapore', ID: 'Indonesia', PH: 'Filippine', VN: 'Vietnam', LA: 'Laos', KH: 'Cambogia', MM: 'Myanmar',
+  NZ: 'Nuova Zelanda', AU: 'Australia', FJ: 'Figi', PG: 'Papua Nuova Guinea', NU: 'Niue',
+  US: 'Stati Uniti', CA: 'Canada', MX: 'Messico', CU: 'Cuba', PR: 'Porto Rico', DO: 'Repubblica Dominicana',
+  GT: 'Guatemala', CR: 'Costa Rica', PA: 'Panama', HN: 'Honduras', NI: 'Nicaragua', SV: 'El Salvador',
+  DM: 'Dominica', GP: 'Guadalupa', BS: 'Bahamas', VC: 'Saint Vincent e Grenadine',
+  AR: 'Argentina', BR: 'Brasile', CL: 'Cile', PE: 'Perù', BO: 'Bolivia', EC: 'Ecuador', CO: 'Colombia',
+  VE: 'Venezuela', UY: 'Uruguay', PY: 'Paraguay',
+};
+
+/** Nomi dei mesi per i temi stagionali (fioriture, mercatini). */
+const MESI_IT = ['', 'gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+  'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+
+/** Il contesto del luogo: cosa c'è davvero lì, quanti luoghi, e quando. */
+function thematicContext(p: ThematicPlaceSummary): string {
+  const def = TEMA_DEF[p.key];
+  const righe = [
+    `LUOGO: ${p.city} (${ISO2_NOMI[p.country] || p.country}).`,
+    `Nel nostro database ci sono ${p.n} luoghi di questo tema in zona${p.top.length ? `, fra cui: ${p.top.join(', ')}` : ''}.`,
+    'Il MATERIALE REALE fornito più avanti nel prompt contiene i luoghi con le loro coordinate: usa SOLO quelli, con i loro nomi esatti, e non aggiungerne di inventati.',
+  ];
+  if (p.months.length && p.months.length < 12) {
+    const elenco = p.months.map((m) => MESI_IT[m]).filter(Boolean).join(', ');
+    righe.push(`STAGIONE: questo tema qui vale nei mesi di ${elenco}. Scrivilo all'inizio dell'itinerario: fuori stagione il viaggio non ha senso, e va detto onestamente.`);
+  }
+  righe.push(def.brief);
+  return righe.join('\n');
+}
+
+/** Un descrittore per (luogo × angolo): il taglio del tema + la coppia
+ *  gratis/prenotabile obbligatoria per ogni destinazione. */
+export function thematicDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  for (const p of THEMATIC_PLACES) {
+    const def = TEMA_DEF[p.key];
+    if (!def) continue;
+    const contesto = thematicContext(p);
+    const angoli: AngleDef[] = [
+      { id: 'tema', label: def.label, brief: `Variante IMMERSIVA: la giornata ruota attorno al tema, senza diluirlo in un giro turistico generico. Almeno metà delle tappe sono luoghi del tema; le altre servono a mangiare, riposare e collegare.` },
+      FREE_ANGLE,
+      BOOKABLE_ANGLE,
+    ];
+    for (const a of angoli) {
+      out.push({
+        slug: `tema-${p.key}-${slugify(p.country)}-${slugify(p.city)}-${a.id}`,
+        kind: 'theme',
+        theme: `tematici-${p.key}`,
+        title: `${def.emoji} ${def.label} a ${p.city} — ${a.label}`,
+        city: p.city,
+        country: ISO2_NOMI[p.country] || p.country,
+        coords: { lat: p.lat, lon: p.lon },
+        days: def.giorni,
+        angle: a.id,
+        brief: [a.brief, contesto].join('\n'),
+        contextHints: {
+          wipTheme: { category: p.key, ...(def.types ? { types: def.types } : {}) },
+          ...(p.key === 'cinema' ? { wikidataFilm: true } : {}),
+          ...(p.key === 'street_art' ? { osmArtwork: true } : {}),
+          ...(a.id === BOOKABLE_ANGLE.id ? { bookable: true } : {}),
+        },
+      });
+    }
+  }
+  return out;
+}
+
 let _all: LibraryDescriptor[] | null = null;
 
 /** Tutti i descrittori del catalogo (calcolati una volta, poi cache). */
@@ -3112,7 +3336,9 @@ export function getAllDescriptors(): LibraryDescriptor[] {
       ...pilgrimDescriptors(),
       ...tasteRouteDescriptors(),
       ...tasteZoneDescriptors(),
+      ...sacredRouteDescriptors(),
       ...festivalDescriptors(),
+      ...thematicDescriptors(),
       ...themeDescriptors(),
       ...filmDescriptors(),
       ...bookDescriptors(),
@@ -3297,6 +3523,22 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
       }
     }
   }
+  // 2-quinquies) LUOGHI SACRI. Stessa lezione del gusto, applicata prima di
+  //    sbagliare invece che dopo: senza un blocco prioritario finirebbero nel
+  //    punto 5 e non verrebbero seminati mai.
+  //    L'ordine dentro: prima le famiglie con più percorsi a catalogo, e
+  //    dentro ognuna prima il taglio "pellegrinaggio" (il motivo per cui la
+  //    sezione esiste) e la coppia gratis/prenotabile, poi "arte e storia".
+  //    La coppia commerciale qui è quasi sempre facile: i luoghi di culto
+  //    raramente fanno pagare l'ingresso, quindi la variante gratis è vera
+  //    senza forzature.
+  for (const r of PERCORSI_SACRI) {
+    const key = r.id.replace(/^sr-/, '');
+    for (const a of ['sacro-pellegrinaggio', FREE_ANGLE.id, BOOKABLE_ANGLE.id, 'sacro-arte']) {
+      push(`sacro-${key}-${a}`);
+    }
+  }
+
   // Le fiere prima delle zone, non dopo: sono solo 74 voci ma valgono
   // esclusivamente nella settimana in cui si tengono, e dietro alle zone
   // cadevano in posizione 3.470 — cioè settimane di semina, cioè stagioni
@@ -3323,6 +3565,25 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
         for (const combo of combos) push(`gustozona-${key}-${combo}`);
       }
     }
+  }
+
+  // 2-quinquies) VERTICALI TEMATICI (21/08/2026). Stessa lezione delle
+  //    strade del gusto: senza una posizione prioritaria non arriverebbe mai
+  //    il loro turno. Ordine: prima i luoghi famosi (fame 5 e 4) di ogni
+  //    tema, poi i temi STAGIONALI del mese corrente — un mercatino di
+  //    Natale seminato a febbraio è una stagione persa — poi il resto.
+  const meseCorrente = new Date().getMonth() + 1;
+  const temiOrdinati: ThematicPlaceSummary[] = [...THEMATIC_PLACES].sort((a, b) => {
+    const stagA = a.months.length && a.months.length < 12 ? (a.months.includes(meseCorrente) ? 0 : 2) : 1;
+    const stagB = b.months.length && b.months.length < 12 ? (b.months.includes(meseCorrente) ? 0 : 2) : 1;
+    if (stagA !== stagB) return stagA - stagB;
+    if (b.fame !== a.fame) return b.fame - a.fame;
+    return b.n - a.n;
+  });
+  for (const p of temiOrdinati) {
+    if (p.fame < 4) continue; // il resto cade nel blocco generale
+    const base = `tema-${p.key}-${slugify(p.country)}-${slugify(p.city)}`;
+    for (const a of ['tema', FREE_ANGLE.id, BOOKABLE_ANGLE.id]) push(`${base}-${a}`);
   }
 
   // 3) Porti mondiali top, sosta più lunga, classica + gastronomica
