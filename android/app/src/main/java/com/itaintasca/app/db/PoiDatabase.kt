@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 7
+    version = 8
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -124,6 +124,18 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 7→8: perimetro dell'edificio sul radar cache. Migration REALE, stesso
+        // motivo di tutte le altre: un bump distruttivo si porterebbe via i
+        // pacchetti offline scaricati. Colonna nullable senza default → le
+        // righe già in cache restano NULL, cioè continuano a lavorare a raggi
+        // finché il prossimo fetch non porta il poligono.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v7.
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `footprint` TEXT")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         private val rtreeCallback = object : Callback() {
@@ -139,7 +151,7 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
                     // domani una migration mancante (es. 6→7 dimenticata) o un
                     // downgrade NON deve azzerare offline_packages/pois/ledger.

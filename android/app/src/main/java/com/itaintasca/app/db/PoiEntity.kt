@@ -22,5 +22,12 @@ data class PoiEntity(
     // processati col footprint restano identici (usano i raggi di modalità).
     // Parità con src/lib/guideSettings.ts::radiiForTransport (gated su hasEntrance).
     val alertRadius: Int? = null,
-    val geofenceRadius: Int? = null
+    val geofenceRadius: Int? = null,
+    // PERIMETRO dell'edificio (poi_footprints, poligono OSM), come lista
+    // compatta "lon,lat lon,lat ..." e non GeoJSON: nel database del servizio
+    // ci stanno migliaia di POI e le parentesi del GeoJSON sarebbero il 40%
+    // del peso senza aggiungere niente. Nullable: 402.889 POI su 2,3 milioni
+    // ce l'hanno, gli altri restano ai raggi come sempre.
+    // Parità con src/lib/geofencing/footprints.ts e PoiFootprints.swift.
+    val footprint: String? = null
 )

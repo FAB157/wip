@@ -62,12 +62,97 @@ class SupabaseClient {
                 }
                 
                 val body = response.body?.string() ?: "[]"
-                return@withContext parsePoiList(body, uiCategories, lang)
+                val pois = parsePoiList(body, uiCategories, lang)
+                // I perimetri arrivano da una richiesta a parte: nearby_pois è
+                // una funzione SQL con le colonne fissate, e una colonna nuova
+                // non ci passerebbe comunque senza riscriverla.
+                val perimetri = fetchFootprints(pois.map { it.id })
+                return@withContext if (perimetri.isEmpty()) pois
+                    else pois.map { p -> perimetri[p.id]?.let { p.copy(footprint = it) } ?: p }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Network error: ${e.message}")
             throw e
         }
+    }
+
+    /**
+     * I perimetri degli edifici (poi_footprints) per i POI indicati.
+     *
+     * Converte il GeoJSON del database nel formato compatto
+     * "lon,lat lon,lat;..." che il servizio tiene in Room: sul telefono ci
+     * stanno migliaia di POI e le parentesi del GeoJSON sarebbero il 40% del
+     * peso senza dire niente di più.
+     *
+     * FAIL-OPEN: qualunque problema (rete, tabella assente, JSON strano)
+     * restituisce una mappa vuota e il geofencing continua a lavorare a raggi
+     * esattamente come prima. Un perimetro che manca degrada la precisione;
+     * un'eccezione qui fermerebbe l'intero aggiornamento del radar.
+     */
+    private suspend fun fetchFootprints(poiIds: List<String>): Map<String, String> = withContext(Dispatchers.IO) {
+        if (poiIds.isEmpty()) return@withContext emptyMap()
+        val fuori = HashMap<String, String>()
+        // A lotti: l'URL di PostgREST ha un limite di lunghezza e 120 id
+        // lunghi lo supererebbero.
+        for (lotto in poiIds.chunked(60)) {
+            try {
+                val lista = lotto.joinToString(",") { "\"$it\"" }
+                val url = "${BuildConfig.SUPABASE_URL}/rest/v1/poi_footprints" +
+                    "?poi_id=in.($lista)&select=poi_id,geojson"
+                val req = Request.Builder()
+                    .url(url)
+                    .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                    .addHeader("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                    .addHeader("User-Agent", "Itainta-Android-Native")
+                    .build()
+                client.newCall(req).execute().use { r ->
+                    if (!r.isSuccessful) return@use
+                    val arr = JSONArray(r.body?.string() ?: "[]")
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val id = o.optString("poi_id", "")
+                        val compatto = geojsonCompatto(o.optString("geojson", ""))
+                        if (id.isNotBlank() && compatto != null) fuori[id] = compatto
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Footprints non disponibili: ${e.message}")
+            }
+        }
+        return@withContext fuori
+    }
+
+    /** Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...". */
+    private fun geojsonCompatto(geojson: String): String? {
+        if (geojson.isBlank()) return null
+        return try {
+            val g = JSONObject(geojson)
+            val tipo = g.optString("type", "")
+            val coord = g.optJSONArray("coordinates") ?: return null
+            // Polygon: [anello, buco, ...]. MultiPolygon: [[anello, ...], ...],
+            // che si appiattisce — per il test dentro/fuori la parità degli
+            // attraversamenti gestisce tutti gli anelli insieme.
+            val anelli = ArrayList<JSONArray>()
+            when (tipo) {
+                "Polygon" -> for (i in 0 until coord.length()) coord.optJSONArray(i)?.let { anelli.add(it) }
+                "MultiPolygon" -> for (i in 0 until coord.length()) {
+                    val poly = coord.optJSONArray(i) ?: continue
+                    for (j in 0 until poly.length()) poly.optJSONArray(j)?.let { anelli.add(it) }
+                }
+                else -> return null
+            }
+            if (anelli.isEmpty()) return null
+            val sb = StringBuilder()
+            for ((n, anello) in anelli.withIndex()) {
+                if (n > 0) sb.append(';')
+                for (k in 0 until anello.length()) {
+                    val p = anello.optJSONArray(k) ?: continue
+                    if (k > 0) sb.append(' ')
+                    sb.append(p.optDouble(0)).append(',').append(p.optDouble(1))
+                }
+            }
+            sb.toString().ifBlank { null }
+        } catch (e: Exception) { null }
     }
 
     suspend fun fetchPoiById(poiId: String, lang: String = "it"): PoiEntity? = withContext(Dispatchers.IO) {

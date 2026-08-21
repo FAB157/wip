@@ -605,12 +605,29 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let record = store.getTriggerState(c.poi.id)
             let state = record?.state ?? .pending
 
+            // DENTRO IL PERIMETRO dell'edificio (poi_footprints, poligono OSM).
+            // Quando è vero, la distanza dal centroide smette di essere la
+            // domanda giusta: attraversando una basilica di 120 metri ci si
+            // allontana dal centro per metà del percorso, e tutta la logica
+            // radiale qui sotto lo leggerebbe come "se ne sta andando" —
+            // marcando PASSED, poi EXITED, e zittendo la guida proprio mentre
+            // l'utente è davanti all'altare.
+            // Costa quattro confronti sul riquadro quando il POI non ha un
+            // perimetro, che sono i 4 POI su 5 del database.
+            let dentroPerimetro = PoiFootprints.dentroPerimetro(
+                poiId: c.poi.id, footprint: c.poi.footprint,
+                lat: location.coordinate.latitude, lon: location.coordinate.longitude
+            )
+
             // ── Superamento (PASSED) ──
             // Il CPA è alle spalle e la distanza cresce: la voce che racconta
             // questo monumento non ha più senso. Prima questo caso non
             // esisteva — l'uscita a 1.5× resettava lo stato in silenzio, ma
             // l'audio continuava fino a fine teaser.
-            if state == .approachFired || state == .arrivedFired,
+            // `!dentroPerimetro`: dentro l'edificio non si è mai "superato"
+            // il POI, per quanto ci si allontani dal suo centroide.
+            if !dentroPerimetro,
+               state == .approachFired || state == .arrivedFired,
                let prev = lastDistances[c.poi.id], c.dist > prev, c.dist > arrivalRad {
                 // Allineato ad Android: il predittore usa l'INGRESSO (coordinate
                 // = entranceLat/Lon ?? lat/lon), non il centroide grezzo. Se non
@@ -653,7 +670,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // ancora .pending, altrimenti la finestra predittiva allargata a
             // 3× più sotto sarebbe codice morto (ogni candidato oltre 1.5×
             // verrebbe scartato qui prima di essere valutato).
-            if c.dist > exitRad {
+            // Stessa ragione del blocco PASSED: dentro il perimetro non si
+            // esce dall'isteresi, qualunque cosa dica la distanza.
+            if !dentroPerimetro, c.dist > exitRad {
                 if state == .approachFired {
                     // Niente cancellazione secca: EXITED col suo timestamp fa
                     // da cooldown — cancellare permetteva un nuovo annuncio al
@@ -681,7 +700,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             }
 
             // Sicurezza distanza (come Android: raggio × 2.5 + accuratezza)
-            if c.dist <= arrivalRad {
+            // Dentro il perimetro l'arrivo è un fatto, non una stima: si è
+            // dentro l'edificio, e il raggio d'arrivo — 30 metri a piedi — in
+            // un museo di 200 non si raggiunge mai se l'ingresso è su un lato.
+            if dentroPerimetro || c.dist <= arrivalRad {
                 // Il TTL 24h ora copre anche PASSED (prima lo bypassava e un
                 // POI superato ri-arrivava al primo rientro); EXITED recente
                 // blocca il rientro-da-rumore-GPS con un cooldown più corto.

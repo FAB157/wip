@@ -40,6 +40,7 @@
 import { Capacitor } from '@capacitor/core';
 import { isFeatureEnabled } from '../featureFlags';
 import { reportTrigger } from './telemetry';
+import { caricaPerimetri, dentroPerimetro } from './footprints';
 import { locationService } from '../../services/locationService';
 import { tourService } from '../../services/tourService';
 
@@ -211,6 +212,15 @@ function onLocationUpdate(e: Event): void {
     const eligible: Eligible[] = [];
     const seenNear = new Set<string>();
 
+    // Perimetri: si chiedono per i POI vicini, una volta sola (il modulo
+    // ricorda anche chi NON ce l'ha). Non si aspetta la risposta — al fix
+    // successivo saranno pronti, e nel frattempo si lavora a raggi.
+    const vicini = candidates
+      .filter((p: any) => p?.id && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon))
+        && haversineMeters(lat, lon, Number(p.lat), Number(p.lon)) < 600)
+      .map((p: any) => String(p.id));
+    if (vicini.length) void caricaPerimetri(vicini);
+
     for (const poi of candidates) {
       const pLat = Number(poi?.lat);
       const pLon = Number(poi?.lon);
@@ -220,8 +230,15 @@ function onLocationUpdate(e: Event): void {
       const dist = haversineMeters(lat, lon, pLat, pLon);
       const radius = triggerRadiusFor(poi);
 
+      // DENTRO IL PERIMETRO: calcolato prima della potatura, perche' un
+      // perimetro grande (un parco, una cinta muraria) puo' estendersi ben
+      // oltre radius*4+200 dal centroide. Senza questo controllo qui, lo
+      // stato del POI verrebbe buttato proprio mentre ci si cammina dentro.
+      // Costa quattro confronti quando il perimetro non c'e' o e' lontano.
+      const inside = dentroPerimetro(id, lat, lon);
+
       // Stati solo per i POI in zona (mappa piccola, pruning sotto)
-      if (dist > radius * 4 + 200) { approachStates.delete(id); continue; }
+      if (!inside && dist > radius * 4 + 200) { approachStates.delete(id); continue; }
       seenNear.add(id);
 
       const st = approachStates.get(id);
@@ -238,7 +255,16 @@ function onLocationUpdate(e: Event): void {
       if (dist > st.minDist + HAS_PASSED_M) st.passed = true;
       if (dist < st.minDist) st.minDist = dist;
 
-      if (dist <= radius && approaching && !st.passed) {
+      // DENTRO IL PERIMETRO batte tutto il resto.
+      //
+      // Le due condizioni che valgono fuori — "ti stai avvicinando" e "non
+      // l'hai gia' superato" — dentro un edificio sono sbagliate: attraversando
+      // una basilica di 120 metri ci si allontana dal centroide per meta' del
+      // percorso, e il codice a raggi lo leggerebbe come "sta andando via" e
+      // marcherebbe il POI come superato. Se sei dentro le mura, ci sei: il
+      // cooldown di 6 ore basta a evitare che parli due volte.
+      if (inside || (dist <= radius && approaching && !st.passed)) {
+        if (inside) st.passed = false;
         eligible.push({ poi, id, dist });
       }
       st.prevDist = dist;

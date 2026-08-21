@@ -1,0 +1,124 @@
+import Foundation
+
+/// PERIMETRI DEGLI EDIFICI — "sono DENTRO?" invece di "quanto dista?"
+///
+/// PERCHÉ. Il geofence è sempre stato un cerchio attorno al centroide. Per un
+/// edificio compatto va bene; per un palazzo a L, un chiostro, una cinta
+/// muraria o un parco il cerchio sbaglia in entrambi i versi: o è piccolo e
+/// non scatta quando sei dentro l'ala lunga, o è grande e scatta dall'altra
+/// parte della strada.
+///
+/// Dal 21/08/2026 il database ha i perimetri veri: 402.889 POI, dai poligoni
+/// degli edifici di OpenStreetMap (area mediana 915 m², 15 vertici).
+///
+/// PORT ESATTO di `Footprints.kt` (Android) e `footprints.ts` (web): stesso
+/// ray casting, stesso riquadro di scarto rapido, stessa gestione dei cortili.
+/// Le tre implementazioni devono dare la STESSA risposta sullo stesso punto —
+/// se una diverge, l'audioguida parte in tre momenti diversi a seconda del
+/// dispositivo, ed è il tipo di disallineamento che nessuno nota finché un
+/// utente non se ne lamenta.
+enum PoiFootprints {
+
+    /// Riquadro che contiene il poligono: quattro confronti prima del test vero.
+    private struct Riquadro {
+        let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+    }
+
+    private struct Perimetro {
+        /// Anelli come array piatti [lon0, lat0, lon1, lat1, ...]: niente
+        /// struct per punto, che su 15 vertici × 400 POI sarebbero migliaia di
+        /// allocazioni a ogni fix GPS.
+        let anelli: [[Double]]
+        let riquadro: Riquadro
+    }
+
+    /// I perimetri già analizzati. Il parsing della stringa è la parte cara:
+    /// rifarlo a ogni fix per ogni POI vicino brucerebbe batteria, che in
+    /// background è la risorsa che conta.
+    private static var cache: [String: Perimetro?] = [:]
+    private static let maxCache = 400
+    private static let lock = NSLock()
+
+    /// Da "lon,lat lon,lat;lon,lat ..." agli anelli.
+    private static func analizza(_ testo: String) -> Perimetro? {
+        var anelli: [[Double]] = []
+        var minLat = 90.0, maxLat = -90.0, minLon = 180.0, maxLon = -180.0
+        for pezzo in testo.split(separator: ";") {
+            let coppie = pezzo.split(separator: " ")
+            if coppie.count < 4 { continue }
+            var punti: [Double] = []
+            punti.reserveCapacity(coppie.count * 2)
+            for c in coppie {
+                let v = c.split(separator: ",")
+                guard v.count == 2,
+                      let lon = Double(v[0]),
+                      let lat = Double(v[1]) else { return nil }
+                punti.append(lon); punti.append(lat)
+                if lat < minLat { minLat = lat }
+                if lat > maxLat { maxLat = lat }
+                if lon < minLon { minLon = lon }
+                if lon > maxLon { maxLon = lon }
+            }
+            anelli.append(punti)
+        }
+        guard !anelli.isEmpty else { return nil }
+        return Perimetro(
+            anelli: anelli,
+            riquadro: Riquadro(minLat: minLat, maxLat: maxLat, minLon: minLon, maxLon: maxLon)
+        )
+    }
+
+    private static func perimetro(_ poiId: String, _ testo: String?) -> Perimetro? {
+        lock.lock(); defer { lock.unlock() }
+        if let g = cache[poiId] { return g }
+        let p: Perimetro? = (testo?.isEmpty == false) ? analizza(testo!) : nil
+        // Cache di comodo: quando è piena si azzera invece di ordinare per
+        // ultimo uso. Ricostruirla costa qualche millisecondo e il codice
+        // resta corto — un LRU qui sarebbe complessità senza guadagno.
+        if cache.count >= maxCache { cache.removeAll(keepingCapacity: true) }
+        cache[poiId] = p
+        return p
+    }
+
+    /// Ray casting: si tira una semiretta orizzontale dal punto e si contano
+    /// gli attraversamenti dei lati. Dispari = dentro.
+    ///
+    /// I cortili interni non hanno bisogno di codice apposta: chi sta nel
+    /// chiostro attraversa due volte (anello esterno + anello interno) e
+    /// risulta fuori — che è la risposta giusta, nel cortile di un palazzo non
+    /// sei dentro il palazzo.
+    private static func dentro(_ anelli: [[Double]], _ lat: Double, _ lon: Double) -> Bool {
+        var attraversamenti = 0
+        for p in anelli {
+            let n = p.count / 2
+            var j = n - 1
+            for i in 0..<n {
+                let xi = p[i * 2], yi = p[i * 2 + 1]
+                let xj = p[j * 2], yj = p[j * 2 + 1]
+                // Il lato deve stare a cavallo della latitudine del punto.
+                if (yi > lat) != (yj > lat) {
+                    let taglio = xi + ((lat - yi) / (yj - yi)) * (xj - xi)
+                    if lon < taglio { attraversamenti += 1 }
+                }
+                j = i
+            }
+        }
+        return attraversamenti % 2 == 1
+    }
+
+    /// true se il punto sta dentro il perimetro del POI.
+    /// false quando il perimetro manca o è illeggibile: chi chiama continua a
+    /// ragionare a raggi, esattamente come prima.
+    static func dentroPerimetro(poiId: String, footprint: String?, lat: Double, lon: Double) -> Bool {
+        guard let p = perimetro(poiId, footprint) else { return false }
+        let r = p.riquadro
+        if lat < r.minLat || lat > r.maxLat || lon < r.minLon || lon > r.maxLon { return false }
+        return dentro(p.anelli, lat, lon)
+    }
+
+    /// Svuota la cache: serve quando il radar cambia zona.
+    static func svuota() {
+        lock.lock(); defer { lock.unlock() }
+        cache.removeAll()
+    }
+}

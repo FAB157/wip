@@ -692,9 +692,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // ✅ [SICUREZZA DISTANZA] - Trigger accettato solo se la distanza
             // reale è compatibile col raggio configurato (+ margine per
             // l'incertezza del fix). Evita i falsi allarmi da GPS jitter.
+            // DENTRO IL PERIMETRO: se l'utente sta dentro il poligono
+            // dell'edificio, la distanza dal centroide non conta piu'. In una
+            // basilica di 120 metri o dentro una cinta muraria si e' spesso
+            // oltre il distLimit pur essendo esattamente dove si deve essere,
+            // e il controllo qui sotto scarterebbe un trigger giusto.
+            val dentroPerimetro = Footprints.dentroPerimetro(
+                info.poiId, poi.footprint,
+                currentLoc.latitude, currentLoc.longitude
+            )
+
             val targetRadius = if (info.type == "arrival") arrivalRad else alertRad
             val distLimit = targetRadius * 2.5f + currentLoc.accuracy
-            if (info.realDist > distLimit) {
+            if (!dentroPerimetro && info.realDist > distLimit) {
                 Log.w(TAG, "Geofence fake trigger for ${poi.nome}: real dist ${info.realDist}m > limit ${distLimit}m")
                 continue
             }
@@ -725,7 +735,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     phase = "approach", result = pred, location = currentLoc,
                     isDriving = isDrivingMode, radiusM = alertRad
                 )
-                if (pred.decision == PredictiveTrigger.Decision.FIRE) {
+                // Dentro il perimetro il predittore CPA non ha senso: valuta
+                // se sei IN ROTTA verso un punto, ma se sei gia' dentro
+                // l'edificio non c'e' piu' nessuna rotta da valutare — e
+                // attraversandolo ti stai allontanando dal centroide, che il
+                // predittore legge come "sta andando via".
+                if (dentroPerimetro || pred.decision == PredictiveTrigger.Decision.FIRE) {
                     handleApproach(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, db, speak = !approachSpokenInBatch, distanceM = info.realDist)
                     approachSpokenInBatch = true
                 } else {

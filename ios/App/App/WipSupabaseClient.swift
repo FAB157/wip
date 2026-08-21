@@ -59,8 +59,88 @@ final class WipSupabaseClient {
                 return
             }
             let pois = Self.parsePoiList(data: data, uiCategories: uiCategories, lang: lang)
-            completion(.success(pois))
+            // I perimetri arrivano da una richiesta a parte: nearby_pois è una
+            // funzione SQL con le colonne fissate, e una colonna nuova non ci
+            // passerebbe senza riscriverla.
+            self.fetchFootprints(poiIds: pois.map { $0.id }) { perimetri in
+                guard !perimetri.isEmpty else { completion(.success(pois)); return }
+                let arricchiti = pois.map { p -> Poi in
+                    guard let fp = perimetri[p.id] else { return p }
+                    var copia = p
+                    copia.footprint = fp
+                    return copia
+                }
+                completion(.success(arricchiti))
+            }
         }.resume()
+    }
+
+    /// I perimetri degli edifici (tabella poi_footprints) per i POI indicati,
+    /// convertiti nel formato compatto "lon,lat lon,lat;..." che PoiFootprints
+    /// sa leggere.
+    ///
+    /// FAIL-OPEN: qualunque problema restituisce una mappa vuota e il
+    /// geofencing continua a lavorare a raggi come prima. Un perimetro che
+    /// manca degrada la precisione; un errore propagato fermerebbe
+    /// l'aggiornamento dell'intero radar.
+    func fetchFootprints(poiIds: [String], completion: @escaping ([String: String]) -> Void) {
+        guard !poiIds.isEmpty else { completion([:]); return }
+        // A lotti: l'URL di PostgREST ha un limite di lunghezza e 120 id
+        // lunghi lo supererebbero.
+        let lotti = stride(from: 0, to: poiIds.count, by: 60).map {
+            Array(poiIds[$0..<min($0 + 60, poiIds.count)])
+        }
+        var risultato: [String: String] = [:]
+        let gruppo = DispatchGroup()
+        let lock = NSLock()
+
+        for lotto in lotti {
+            let lista = lotto.map { "\"\($0)\"" }.joined(separator: ",")
+            let percorso = "/rest/v1/poi_footprints?poi_id=in.(\(lista))&select=poi_id,geojson"
+            guard let codificato = percorso.addingPercentEncoding(
+                    withAllowedCharacters: .urlQueryAllowed.union(CharacterSet(charactersIn: "?&=()"))),
+                  let req = request(path: codificato, method: "GET") else { continue }
+            gruppo.enter()
+            session.dataTask(with: req) { data, response, _ in
+                defer { gruppo.leave() }
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                      let data = data,
+                      let righe = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+                else { return }
+                lock.lock(); defer { lock.unlock() }
+                for r in righe {
+                    guard let id = r["poi_id"] as? String,
+                          let gj = r["geojson"] as? String,
+                          let compatto = Self.geojsonCompatto(gj) else { continue }
+                    risultato[id] = compatto
+                }
+            }.resume()
+        }
+        gruppo.notify(queue: .global()) { completion(risultato) }
+    }
+
+    /// Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...".
+    private static func geojsonCompatto(_ geojson: String) -> String? {
+        guard let data = geojson.data(using: .utf8),
+              let g = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let tipo = g["type"] as? String else { return nil }
+        var anelli: [[[Double]]] = []
+        // Polygon: [anello, buco, ...]. MultiPolygon: [[anello, ...], ...],
+        // che si appiattisce — per il test dentro/fuori la parità degli
+        // attraversamenti gestisce tutti gli anelli insieme.
+        if tipo == "Polygon", let c = g["coordinates"] as? [[[Double]]] {
+            anelli = c
+        } else if tipo == "MultiPolygon", let c = g["coordinates"] as? [[[[Double]]]] {
+            anelli = c.flatMap { $0 }
+        } else { return nil }
+        guard !anelli.isEmpty else { return nil }
+        let pezzi = anelli.map { anello in
+            anello.compactMap { p -> String? in
+                guard p.count >= 2 else { return nil }
+                return "\(p[0]),\(p[1])"
+            }.joined(separator: " ")
+        }.filter { !$0.isEmpty }
+        return pezzi.isEmpty ? nil : pezzi.joined(separator: ";")
     }
 
     func fetchPoiById(_ poiId: String, lang: String, completion: @escaping (Poi?) -> Void) {
