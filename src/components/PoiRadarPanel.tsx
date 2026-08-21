@@ -12,6 +12,8 @@ const TEMPI: { min: number | null; label: string }[] = [
   { min: 60, label: '1 h' },
   { min: 90, label: '1 h 30' },
   { min: 120, label: '2 h' },
+  { min: 180, label: '3 h' },
+  { min: 240, label: '4 h' },
   { min: null, label: 'Tutto' },
 ];
 import { puntoArrivo } from "../lib/puntoArrivo";
