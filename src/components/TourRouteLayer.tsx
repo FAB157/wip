@@ -72,6 +72,29 @@ function iconaTappa(numero: number, stato: StatoPin, opz: { conX: boolean; sopra
   });
 }
 
+/**
+ * Il puntino "+" dei posti lungo la strada (bozza): piccolo, verde, non
+ * compete con le tappe numerate. Un tocco lo aggiunge al giro.
+ */
+let iconaLungoStradaCache: L.DivIcon | null = null;
+function iconaLungoStrada(): L.DivIcon {
+  if (iconaLungoStradaCache) return iconaLungoStradaCache;
+  iconaLungoStradaCache = L.divIcon({
+    className: 'wip-lungo-strada',
+    html: `<div title="Aggiungi al giro" style="
+      width:20px;height:20px;border-radius:50%;
+      background:#ffffff;border:2px solid #059669;color:#059669;
+      display:flex;align-items:center;justify-content:center;
+      font-weight:800;font-size:14px;line-height:1;
+      font-family:system-ui,-apple-system,sans-serif;
+      box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;
+    ">+</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+  return iconaLungoStradaCache;
+}
+
 /** Il tocco e` sulla X o sul numero? Leaflet da` un solo evento per tutto il marker. */
 function toccoSullaX(e: any): boolean {
   const el = e?.originalEvent?.target as HTMLElement | null | undefined;
@@ -186,6 +209,20 @@ export default function TourRouteLayer() {
       ) : dritta.length > 1 ? (
         <Polyline positions={dritta} pathOptions={{ color: '#64748b', weight: 3, opacity: 0.7, dashArray: '6 8', lineCap: 'round' }} />
       ) : null}
+
+      {/* I posti lungo la strada: oltre la finestra del radar non hanno un
+          pin sotto, quindi il puntino e` l'unico modo di vederli e toccarli. */}
+      {b.lungoLaStrada
+        .filter((p) => !b.tappe.some((t) => String(t.id) === String(p.id)))
+        .map((p) => (
+          <Marker
+            key={`lungo-${p.id}`}
+            position={[p.lat, p.lon]}
+            icon={iconaLungoStrada()}
+            zIndexOffset={300}
+            eventHandlers={{ click: () => { tourService.bozzaAggiungi(p); } }}
+          />
+        ))}
 
       {sequenza.map((t, posizione) => {
         const p = puntoDi(t);

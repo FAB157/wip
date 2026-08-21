@@ -40,6 +40,8 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   const scelte = bozza.tappe;
   /** Le tappe nell'ordine in cui si cammineranno: e` l'ordine della lista trascinabile. */
   const sequenza = tourService.bozzaSequenza();
+  /** Lungo il corridoio, meno quelle gia` scelte nel frattempo. */
+  const lungoLaStrada = bozza.lungoLaStrada.filter(p => !tourService.bozzaHa(p.id));
   const [creando, setCreando] = useState(false);
   const [errore, setErrore] = useState<string | null>(null);
 
@@ -265,6 +267,48 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                 })}
               </Reorder.Group>
             </>
+          )}
+        </div>
+      )}
+
+      {/* LUNGO LA STRADA. Il giro conosce il suo tracciato prima di partire:
+          questi sono i posti che sfiorerebbe senza fermarsi, letti lungo il
+          corridoio del percorso — anche a 4 km da qui, oltre la finestra del
+          radar. E` adesso, con l'ordine ancora aperto, che ha senso
+          aggiungerli; in cammino li si sentirebbe solo passando. */}
+      {!isCollapsed && scelte.length > 0 && (bozza.cercandoLungoStrada || lungoLaStrada.length > 0) && (
+        <div className="px-4 py-2.5 border-b border-black/5 bg-emerald-50/60">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-800/70">
+              Lungo la strada · {lungoLaStrada.length} {lungoLaStrada.length === 1 ? 'posto' : 'posti'} che il giro sfiora
+            </span>
+            {bozza.cercandoLungoStrada && <span className="text-[10px] text-emerald-800/50">cerco…</span>}
+          </div>
+          <div className="space-y-1 max-h-44 overflow-y-auto custom-scrollbar">
+            {lungoLaStrada.slice(0, 12).map((p) => (
+              <div key={`lungo-${p.id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-xl bg-white border border-black/5 shadow-sm">
+                <span className="text-base leading-none shrink-0">{(CATEGORY_EMOJIS as any)[p.category || ''] || '📍'}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[12px] font-bold text-[#1e3a8a] truncate">{p.name}</p>
+                  <p className="text-[9px] text-[#1e3a8a]/50 tabular-nums">
+                    a {p.distanza_dal_percorso} m dal percorso · km {(p.metri_lungo / 1000).toFixed(1)}
+                  </p>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); scegli(p); }}
+                  disabled={scelte.length >= MAX_TAPPE}
+                  title="Aggiungi al giro"
+                  className="w-7 h-7 rounded-lg bg-emerald-600 text-white text-[15px] font-black flex items-center justify-center shrink-0 hover:bg-emerald-700 active:scale-95 disabled:bg-black/10 disabled:text-black/20"
+                >
+                  +
+                </button>
+              </div>
+            ))}
+          </div>
+          {lungoLaStrada.length > 12 && (
+            <p className="text-[9px] text-[#1e3a8a]/50 mt-1">
+              e altri {lungoLaStrada.length - 12}: li sentirai passando, se sono a meno di 40 m.
+            </p>
           )}
         </div>
       )}

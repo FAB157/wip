@@ -27,6 +27,7 @@ import {
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
+import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
 
 /** Il tetto delle tappe: decisione di prodotto, non tecnica. */
 export const MAX_TAPPE = 10;
@@ -109,6 +110,9 @@ export interface BozzaGiro {
   minutiDisponibili: number | null;
   /** Quante tappe, in ordine di cammino, stanno nel tempo. null = nessun limite. */
   tappeNelTempo: number | null;
+  /** I POI che il giro sfiorerebbe, letti lungo il corridoio del tracciato: candidati ad aggiungersi. */
+  lungoLaStrada: PoiLungoStrada[];
+  cercandoLungoStrada: boolean;
 }
 
 const CHIAVE_RIPRESA = 'wip_giro_in_corso';
@@ -116,6 +120,7 @@ const BOZZA_VUOTA: BozzaGiro = {
   tappe: [], ordine: null, geometria: [], metri: 0, minutiCammino: 0, tratteSecondi: [],
   problemi: [], partenza: null, calcolando: false, errore: null,
   ordineManuale: false, minutiDisponibili: null, tappeNelTempo: null,
+  lungoLaStrada: [], cercandoLungoStrada: false,
 };
 
 /**
@@ -175,6 +180,12 @@ class TourService {
    * incontri lungo la strada.
    */
   private candidati: any[] = [];
+  /**
+   * I POI letti lungo il corridoio del giro in corso (lib/tour/corridoio):
+   * cio` che il radar non vede ancora perche' sta oltre la sua finestra. Si
+   * sommano ai candidati per incontri e sostitute.
+   */
+  private corridoio: PoiLungoStrada[] = [];
   /** Cache dei candidati vicini al percorso: si rifa` quando cambia percorso o lista. */
   private lungoIlPercorsoCache: { chiave: string; lista: { poi: any; id: string }[] } | null = null;
 
@@ -344,6 +355,9 @@ class TourService {
         calcolando: false,
         errore: null,
       };
+      // Col tracciato in mano si guarda cosa c'e` lungo la strada. In
+      // parallelo: l'anteprima non aspetta il database.
+      void this.cercaLungoLaStradaBozza(mia);
     } catch (e: any) {
       if (mia !== this.bozzaVersione) return;
       const m = String(e?.message || '');
@@ -355,6 +369,40 @@ class TourService {
     }
     this.bozzaStato.tappeNelTempo = this.contaTappeNelTempo(this.bozzaStato);
     this.avvisaBozza();
+  }
+
+  /**
+   * I POI lungo il corridoio dell'anteprima: quelli che il giro sfiorerebbe
+   * senza fermarsi. Si mostrano nel radar con un "+", perche' e` ADESSO —
+   * prima di partire, con l'ordine ancora aperto — che ha senso aggiungerli.
+   * 80 m e non 40: qui si propone, in cammino si annuncia.
+   */
+  private async cercaLungoLaStradaBozza(mia: number) {
+    const b = this.bozzaStato;
+    if (b.geometria.length < 2) return;
+    this.bozzaStato = { ...this.bozzaStato, cercandoLungoStrada: true };
+    this.avvisaBozza();
+    let trovati: PoiLungoStrada[] = [];
+    try {
+      trovati = await poiLungoIlCorridoio(b.geometria, { entro: 80, escludi: new Set(b.tappe.map(t => String(t.id))) });
+    } catch { /* senza rete si resta con quello che il radar vede */ }
+    if (mia !== this.bozzaVersione) return;
+    this.bozzaStato = { ...this.bozzaStato, lungoLaStrada: trovati, cercandoLungoStrada: false };
+    this.avvisaBozza();
+  }
+
+  /** Lo stesso per il giro in corso: alimenta incontri e sostitute da subito. */
+  private async cercaLungoLaStradaGiro() {
+    const giro = this.giro;
+    if (!giro || giro.geometria.length < 2) return;
+    const id = giro.id, metri = giro.metri;
+    try {
+      const trovati = await poiLungoIlCorridoio(giro.geometria, { entro: 60, escludi: new Set(giro.tappe.map(t => String(t.id))) });
+      // Nel frattempo il giro puo` essere finito o ricalcolato: si scarta.
+      if (this.giro?.id !== id || this.giro.metri !== metri) return;
+      this.corridoio = trovati;
+      this.lungoIlPercorsoCache = null;
+    } catch { /* il radar continua a fornire i suoi */ }
   }
 
   /**
@@ -408,10 +456,12 @@ class TourService {
     this.giro = giro;
     this.proposta = null;
     this.pausaManuale = false;
+    this.corridoio = [];
     this.lungoIlPercorsoCache = null;
     this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
     this.salva();
     this.avvisa();
+    void this.cercaLungoLaStradaGiro();
     return giro;
   }
 
@@ -625,7 +675,7 @@ class TourService {
     const nelGiro = new Set(this.giro.tappe.map(t => String(t.id)));
     const da = tolta.ingresso ?? { lat: tolta.lat, lon: tolta.lon };
     let migliore: { poi: any; d: number; punteggio: number } | null = null;
-    for (const c of this.candidati) {
+    for (const c of this.tuttiICandidati()) {
       const id = c?.id ?? c?.poiId;
       if (id == null || nelGiro.has(String(id))) continue;
       const lat = Number(c.lat), lon = Number(c.lon);
@@ -692,6 +742,7 @@ class TourService {
         giro.problemi = g.problemi || [];
         this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
         this.salva(); this.avvisa();
+        void this.cercaLungoLaStradaGiro();
         return;
       } catch { /* si continua nell'ordine che c'era, senza la tappa tolta */ }
     }
@@ -709,6 +760,7 @@ class TourService {
     this.giro = null;
     this.proposta = null;
     this.pausaManuale = false;
+    this.corridoio = [];
     this.lungoIlPercorsoCache = null;
     this.coda.svuota();
     this.stato = { stato: 'FINITO', tappaCorrente: 0, da: Date.now() };
@@ -726,6 +778,7 @@ class TourService {
       if (!giro || Date.now() - giro.creatoIl > 12 * 60 * 60 * 1000) { localStorage.removeItem(CHIAVE_RIPRESA); return null; }
       this.giro = giro; this.stato = stato;
       this.avvisa();
+      void this.cercaLungoLaStradaGiro();
       return giro;
     } catch { return null; }
   }
@@ -769,6 +822,13 @@ class TourService {
     this.lungoIlPercorsoCache = null;
   }
 
+  /** Radar (la finestra attorno a te) piu` corridoio (tutto il tracciato), senza doppioni. */
+  private tuttiICandidati(): any[] {
+    if (this.corridoio.length === 0) return this.candidati;
+    const visti = new Set(this.candidati.map(c => String(c?.id ?? c?.poiId)));
+    return [...this.candidati, ...this.corridoio.filter(c => !visti.has(String(c.id)))];
+  }
+
   /**
    * I POI che stanno a meno di `entro` metri dal percorso e non sono tappe.
    * Sono gli "incontri lungo la strada": fra la tappa 3 e la 4 ci sono
@@ -779,11 +839,11 @@ class TourService {
   candidatiLungoIlPercorso(entro = 40): { poi: any; id: string }[] {
     const giro = this.giro;
     if (!giro || !giro.geometria?.length) return [];
-    const chiave = `${giro.geometria.length}|${giro.metri}|${this.candidati.length}|${giro.tappe.length}`;
+    const chiave = `${giro.geometria.length}|${giro.metri}|${this.candidati.length}|${this.corridoio.length}|${giro.tappe.length}`;
     if (this.lungoIlPercorsoCache?.chiave === chiave) return this.lungoIlPercorsoCache.lista;
     const tappe = new Set(giro.tappe.map(t => String(t.id)));
     const lista: { poi: any; id: string }[] = [];
-    for (const c of this.candidati) {
+    for (const c of this.tuttiICandidati()) {
       const id = c?.id ?? c?.poiId;
       if (id == null || tappe.has(String(id))) continue;
       const lat = Number(c.lat), lon = Number(c.lon);
@@ -989,4 +1049,4 @@ export function metri(a: { lat: number; lon: number }, b: { lat: number; lon: nu
 export { primaFrase };
 export const tourService = new TourService();
 export { raggruppaTappeVicine };
-export type { TappaGiro, LivelloIngresso };
+export type { TappaGiro, LivelloIngresso, PoiLungoStrada };
