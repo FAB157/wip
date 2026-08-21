@@ -56,6 +56,12 @@ export interface TappaGiro {
   durata_ascolto_s?: number;
   fatta?: boolean;
   saltata?: boolean;
+  /**
+   * Tolta dall'utente con la X sulla mappa. Diversa da `saltata`: una tappa
+   * saltata e` stata raggiunta e lasciata perdere (conta come fatta), una
+   * esclusa non doveva proprio esserci — sparisce dal conteggio e dalla mappa.
+   */
+  esclusa?: boolean;
 }
 
 /**

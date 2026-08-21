@@ -3,22 +3,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language } from "../lib/i18n";
-import { tourService } from "../services/tourService";
-
-/** Il tetto delle tappe: decisione di prodotto, non tecnica. */
-const MAX_TAPPE = 10;
-
-/** La posizione adesso, o null. Serve come partenza del giro. */
-function posizioneAttuale(): Promise<{ lat: number; lon: number } | null> {
-  return new Promise((res) => {
-    if (!navigator.geolocation) return res(null);
-    navigator.geolocation.getCurrentPosition(
-      (p) => res({ lat: p.coords.latitude, lon: p.coords.longitude }),
-      () => res(null),
-      { enableHighAccuracy: true, timeout: 6000, maximumAge: 30000 },
-    );
-  });
-}
+import { tourService, MAX_TAPPE } from "../services/tourService";
+import { useBozzaGiro } from "../lib/tour/useGiro";
+import { puntoArrivo } from "../lib/puntoArrivo";
 
 interface PoiRadarPanelProps {
   pois: any[];
@@ -35,40 +22,26 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   // DIECI TAPPE. Il radar era una lista da guardare; con la selezione diventa
   // un giro da camminare. Il tetto e` dieci: un giro che si finisce vale piu`
   // di uno lungo abbandonato a meta`.
-  const [scelte, setScelte] = useState<string[]>([]);
+  // La selezione NON vive qui: sta nella bozza di tourService, che la mappa
+  // legge e modifica con la X sui pin. Tenerla in questo stato voleva dire che
+  // togliere una tappa dalla mappa non la toglieva dalla lista.
+  const bozza = useBozzaGiro();
+  const scelte = bozza.tappe;
   const [creando, setCreando] = useState(false);
   const [errore, setErrore] = useState<string | null>(null);
 
-  const scegli = (id: string) => {
+  const scegli = (poi: any) => {
     setErrore(null);
-    setScelte(prev => prev.includes(id)
-      ? prev.filter(x => x !== id)
-      : prev.length >= MAX_TAPPE ? prev : [...prev, id]);
+    if (!tourService.bozzaAlterna(poi)) setErrore('Giro pieno: dieci tappe al massimo.');
   };
 
-  const creaGiro = async (poisScelti: any[]) => {
+  const creaGiro = async () => {
     setCreando(true); setErrore(null);
     try {
-      const partenza = await posizioneAttuale();
-      if (!partenza) throw new Error('Non riesco a sapere dove sei: serve la posizione per costruire il giro.');
-      await tourService.crea(
-        poisScelti.map(p => ({
-          id: p.id,
-          nome: p.name || p.nome || 'Tappa',
-          lat: Number(p.lat), lon: Number(p.lon),
-          // Se il POI porta gia` un ingresso, e` li` che si arriva: la
-          // differenza fra "sei arrivato" davanti a un muro e davanti a una
-          // porta.
-          ingresso: (p.entrance_lat && p.entrance_lon)
-            ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: 'dichiarato' as const }
-            : null,
-        })),
-        { partenza, anello: true },
-      );
+      await tourService.avviaDaBozza();
       // Il pre-scaricamento parte subito e non blocca: si cammina verso la
       // prima tappa mentre il resto arriva.
       tourService.prescarica().catch(() => {});
-      setScelte([]);
       window.dispatchEvent(new CustomEvent('wip-giro-avviato'));
       onClose();
     } catch (e: any) {
@@ -78,6 +51,21 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         : m || 'Giro non riuscito.');
     } finally { setCreando(false); }
   };
+
+  // La riga sotto il conteggio: prima diceva sempre la stessa frase; ora dice
+  // il giro che ne esce — km e minuti — appena il server ha risposto.
+  const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+  const rigaAnteprima = errore
+    ? errore
+    : bozza.calcolando
+      ? 'Calcolo il percorso…'
+      : bozza.errore === 'PASS_RICHIESTO'
+        ? 'Anteprima del percorso col Day Pass: le tappe restano scelte.'
+        : bozza.errore === 'POSIZIONE'
+          ? 'Serve la posizione per disegnare il percorso da dove sei.'
+          : bozza.metri > 0
+            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} min a piedi · ad anello da dove sei`
+            : 'WIP Nav mette le tappe nell’ordine che fa camminare meno';
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
   const uniquePois = useMemo(() => {
@@ -104,11 +92,13 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
 
   const handleNavigate = async (poi: any) => {
     const { registerPlugin, Capacitor } = await import('@capacitor/core');
+    // Verso la PORTA, non verso il centro dell'edificio: vedi puntoArrivo.
+    const a = puntoArrivo(poi);
     if (Capacitor.isNativePlatform()) {
       const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
-      await plugin.openSystemNavigator({ lat: poi.lat, lon: poi.lon, name: poi.nome || poi.name });
+      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.nome || poi.name });
     } else {
-      window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}`, '_blank');
+      window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}`, '_blank');
     }
   };
 
@@ -163,20 +153,17 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
               {scelte.length >= MAX_TAPPE && <span className="font-bold text-[#1e3a8a]/50"> · massimo</span>}
             </p>
             <p className="text-[10px] text-[#1e3a8a]/60 leading-snug">
-              {errore || 'WIP Nav mette le tappe nell’ordine che fa camminare meno'}
+              {rigaAnteprima}
             </p>
           </div>
           <button
-            onClick={(e) => { e.stopPropagation(); setScelte([]); setErrore(null); }}
+            onClick={(e) => { e.stopPropagation(); tourService.bozzaSvuota(); setErrore(null); }}
             className="px-3 py-2 rounded-xl text-[11px] font-bold text-[#1e3a8a]/60 hover:bg-black/5 transition-colors shrink-0"
           >
             Annulla
           </button>
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              creaGiro(uniquePois.filter(p => scelte.includes(String(p.id))));
-            }}
+            onClick={(e) => { e.stopPropagation(); creaGiro(); }}
             disabled={creando}
             className="px-4 py-2.5 rounded-xl bg-[#1e3a8a] text-white text-[12px] font-black shadow-md hover:bg-blue-800 transition-colors active:scale-95 disabled:opacity-60 shrink-0"
           >
@@ -222,23 +209,29 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                   </div>
 
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {/* La spunta del giro. Il numero dice la posizione nella
-                        selezione, non nel giro: l'ordine vero lo decide il
-                        motore, e dirlo qui sarebbe una promessa sbagliata. */}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); scegli(String(poi.id)); }}
-                      disabled={!scelte.includes(String(poi.id)) && scelte.length >= MAX_TAPPE}
-                      title={scelte.includes(String(poi.id)) ? 'Togli dal giro' : 'Aggiungi al giro'}
-                      className={`w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black transition-all ${
-                        scelte.includes(String(poi.id))
-                          ? 'bg-blue-600 text-white'
-                          : scelte.length >= MAX_TAPPE
-                            ? 'bg-black/5 text-black/20'
-                            : 'bg-blue-600/10 text-blue-600 hover:bg-blue-600 hover:text-white'
-                      }`}
-                    >
-                      {scelte.includes(String(poi.id)) ? scelte.indexOf(String(poi.id)) + 1 : '+'}
-                    </button>
+                    {/* La spunta del giro. Il numero e` lo STESSO che sta sul
+                        pin della mappa: l'ordine di cammino deciso dal motore
+                        appena risponde, quello di scelta nel frattempo. */}
+                    {(() => {
+                      const dentro = tourService.bozzaHa(poi.id);
+                      const pieno = !dentro && scelte.length >= MAX_TAPPE;
+                      return (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); scegli(poi); }}
+                          disabled={pieno}
+                          title={dentro ? 'Togli dal giro' : 'Aggiungi al giro'}
+                          className={`w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black transition-all ${
+                            dentro
+                              ? 'bg-blue-600 text-white'
+                              : pieno
+                                ? 'bg-black/5 text-black/20'
+                                : 'bg-blue-600/10 text-blue-600 hover:bg-blue-600 hover:text-white'
+                          }`}
+                        >
+                          {dentro ? tourService.bozzaNumero(poi.id) : '+'}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleNavigate(poi); }}
                       className={`p-2 rounded-xl transition-all ${isFocused ? 'bg-blue-600 text-white' : 'bg-blue-600/10 text-blue-600 hover:bg-blue-600 hover:text-white'}`}
@@ -246,7 +239,12 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                       <Navigation className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); onRemove(poi.id); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Un POI tolto dal radar non puo` restare nel giro.
+                        tourService.bozzaTogli(poi.id);
+                        onRemove(poi.id);
+                      }}
                       className="p-2 bg-red-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all"
                     >
                       <Trash2 className="w-3.5 h-3.5" />

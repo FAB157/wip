@@ -647,6 +647,10 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   tour_salta: { IT: "Salta questa tappa", EN: "Skip this stop", FR: "Passer cette étape", ES: "Saltar esta parada", DE: "Station überspringen", RU: "Пропустить точку", ZH: "跳过此站" },
   tour_termina: { IT: "Termina il giro", EN: "End tour", FR: "Terminer le parcours", ES: "Terminar el recorrido", DE: "Tour beenden", RU: "Завершить маршрут", ZH: "结束行程" },
   tour_problemi: { IT: "tappe senza percorso pedonale", EN: "stops with no walking route", FR: "étapes sans itinéraire piéton", ES: "paradas sin ruta peatonal", DE: "Stationen ohne Fußweg", RU: "точек без пешего маршрута", ZH: "个站点没有步行路线" },
+  // Dieci Tappe: la scelta delle tappe dalla scheda POI sulla mappa.
+  tour_aggiungi: { IT: "Aggiungi al giro", EN: "Add to tour", FR: "Ajouter au parcours", ES: "Añadir al recorrido", DE: "Zur Tour hinzufügen", RU: "Добавить в маршрут", ZH: "加入行程" },
+  tour_togli: { IT: "Togli dal giro", EN: "Remove from tour", FR: "Retirer du parcours", ES: "Quitar del recorrido", DE: "Aus Tour entfernen", RU: "Убрать из маршрута", ZH: "从行程移除" },
+  tour_pieno: { IT: "Giro pieno: dieci tappe", EN: "Tour is full: ten stops", FR: "Parcours complet : dix étapes", ES: "Recorrido completo: diez paradas", DE: "Tour voll: zehn Stationen", RU: "Маршрут полон: десять точек", ZH: "行程已满：十站" },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",

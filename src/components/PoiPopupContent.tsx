@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Star, Compass, Play, Pause, ChevronDown, ChevronUp,
   MapPin, Clock, Globe, Phone, Camera, Sparkles, X, ExternalLink,
-  Share2, Heart, Loader2, Volume2, Navigation
+  Share2, Heart, Loader2, Volume2, Navigation, Footprints
 } from "lucide-react";
 import {
   CATEGORY_HEX,
@@ -20,6 +20,9 @@ import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
 import { getTranslatedPoiName } from '../lib/poiNameI18n';
+import { puntoArrivo } from '../lib/puntoArrivo';
+import { tourService, MAX_TAPPE } from '../services/tourService';
+import { useBozzaGiro } from '../lib/tour/useGiro';
 
 const ItaintaBackgroundPoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
   ? registerPlugin<any>('ItaintaBackgroundPoiPlugin') 
@@ -30,6 +33,61 @@ interface PoiPopupContentProps {
   onGuideClick: () => void;
   language: Language;
   setMarkers?: any;
+  /** Dieci Tappe: col radar acceso la scheda offre "Aggiungi al giro". */
+  modalitaGiro?: boolean;
+}
+
+/**
+ * DIECI TAPPE — il tasto nella scheda. Le tappe si scelgono dalla lista del
+ * radar o toccando i pin sulla mappa: questo e` il secondo modo. Legge e
+ * scrive la stessa bozza della lista, quindi i due posti non possono mai
+ * essere in disaccordo. Il numero e` la posizione nel giro come lo
+ * camminerai (ordine del server), non l'ordine in cui hai toccato.
+ */
+function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
+  const bozza = useBozzaGiro();
+  const id = poi?.id ?? poi?.poiId;
+  const dentro = id != null && tourService.bozzaHa(id);
+  const numero = dentro ? tourService.bozzaNumero(id) : null;
+  const pieno = !dentro && bozza.tappe.length >= MAX_TAPPE;
+
+  const tocca = (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (pieno) return;
+    tourService.bozzaAlterna(poi);
+  };
+
+  return (
+    <button
+      onClick={tocca}
+      onTouchEnd={tocca}
+      disabled={pieno}
+      className={`mb-2.5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[12px] font-black transition-all active:scale-95 border ${
+        dentro
+          ? "bg-blue-50 text-[#1e3a8a] border-blue-200"
+          : pieno
+            ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+            : "bg-[#1e3a8a] text-white border-[#1e3a8a] shadow-md hover:bg-blue-800"
+      }`}
+    >
+      {dentro ? (
+        <>
+          <span className="w-5 h-5 rounded-full bg-[#1e3a8a] text-white text-[11px] flex items-center justify-center tabular-nums">{numero}</span>
+          {getTranslation("tour_togli", language)}
+          <X className="w-3.5 h-3.5 opacity-70" />
+        </>
+      ) : pieno ? (
+        <>{getTranslation("tour_pieno", language)}</>
+      ) : (
+        <>
+          <Footprints className="w-4 h-4" />
+          {getTranslation("tour_aggiungi", language)}
+          <span className="text-[10px] font-bold opacity-70 tabular-nums">{bozza.tappe.length}/{MAX_TAPPE}</span>
+        </>
+      )}
+    </button>
+  );
 }
 
 /** Verifica accessibilità (duplicate for safety) */
@@ -55,7 +113,7 @@ function isHeritageAtlasPoi(poi: any): boolean {
   return poi?.isHeritageAtlas === true;
 }
 
-export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers }: PoiPopupContentProps) {
+export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro }: PoiPopupContentProps) {
   const [data, setData] = useState<any>(getCachedPoiDetails(poi.id));
   const [loading, setLoading] = useState(!getCachedPoiDetails(poi.id));
   const [expanded, setExpanded] = useState(false);
@@ -490,8 +548,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     e.preventDefault();
     e.stopPropagation();
     setShowNavChoice(false);
+    // Verso la PORTA, non verso il centro dell'edificio: vedi puntoArrivo.
+    const a = puntoArrivo(poi);
     window.dispatchEvent(new CustomEvent('wip-smart-navigate', {
-      detail: { lat: poi.lat, lon: poi.lon, name: poi.name, id: poi.id, mode: 'foot' },
+      detail: { lat: a.lat, lon: a.lon, name: poi.name, id: poi.id, mode: 'foot' },
     }));
   };
 
@@ -499,9 +559,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     e.preventDefault();
     e.stopPropagation();
     setShowNavChoice(false);
-    const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}&travelmode=driving`, '_blank');
+    const a = puntoArrivo(poi);
+    const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, '_blank');
     if (ItaintaBackgroundPoiPlugin) {
-      ItaintaBackgroundPoiPlugin.openSystemNavigator({ lat: poi.lat, lon: poi.lon, name: poi.name }).catch(web);
+      ItaintaBackgroundPoiPlugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name }).catch(web);
     } else web();
   };
 
@@ -635,7 +696,8 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           <p className="text-[12px] text-gray-600 line-clamp-3 mb-4">
             {data?.description || poi.description || `${getTranslation(poi.category, language)}`}
           </p>
-          <button 
+          {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
+          <button
             onClick={handleNavigate}
             className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
             style={{ background: `linear-gradient(135deg, ${catHex}, #000)` }}
@@ -740,6 +802,11 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
       {/* ── CORPO SCHEDA ── */}
       <div className="p-3.5 overflow-y-auto flex-1 custom-scrollbar">
+
+        {/* Dieci Tappe: in cima, prima del titolo. Col radar acceso la
+            scheda si apre per DECIDERE se questo posto entra nel giro, e la
+            decisione non deve stare sotto tre scroll di descrizione. */}
+        {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
 
         {/* Titolo + categoria */}
         <div className="flex items-start gap-2 mb-1">

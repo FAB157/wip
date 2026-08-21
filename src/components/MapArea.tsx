@@ -3632,6 +3632,9 @@ function MapArea({
                 poi={activePoi}
                 onGuideClick={() => selectPoi(activePoi)}
                 language={language}
+                // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
+                // giro", cosi` le tappe si scelgono anche toccando i pin.
+                modalitaGiro={!!isRadarMode}
               />
             </Popup>
           )}
