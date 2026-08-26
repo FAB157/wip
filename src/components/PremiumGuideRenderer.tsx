@@ -570,7 +570,26 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
               <div>
                 <strong style={{ color: C.dark }}>{t('contacts')}</strong><br />
                 {poi.info_utili?.telefono && <span>{poi.info_utili.telefono} </span>}
-                {poi.info_utili?.sito_web && <span style={{ color: C.blue }}>{poi.info_utili.sito_web}</span>}
+                {/* Prima era un <span> di solo testo: nel PDF da "stampa del
+                    browser" i confini fra blocchi (qui e il paragrafo
+                    successivo) non lasciano un carattere di spazio nel testo
+                    incorporato, solo uno scarto di posizione — un lettore PDF
+                    che rileva i link automaticamente unisce il sito al primo
+                    termine del paragrafo dopo, ottenendo un link sbagliato
+                    (es. "louvre.frIl" invece di "louvre.fr"). Un <a href> vero
+                    porta il proprio URL preciso: Chrome lo incorpora come
+                    annotazione di link nel PDF, immune all'ambiguità del
+                    testo adiacente. */}
+                {poi.info_utili?.sito_web && (
+                  <a
+                    href={poi.info_utili.sito_web.startsWith('http') ? poi.info_utili.sito_web : `https://${poi.info_utili.sito_web}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: C.blue }}
+                  >
+                    {poi.info_utili.sito_web}
+                  </a>
+                )}
               </div>
             </div>
           )}

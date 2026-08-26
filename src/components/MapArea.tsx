@@ -18,7 +18,6 @@ import {
 } from "../lib/mapConstants";
 import {
   MapContainer,
-  TileLayer,
   Marker,
   useMap,
   ZoomControl,
@@ -30,6 +29,7 @@ import {
   Tooltip,
 } from "react-leaflet";
 import L from "leaflet";
+import { createCachedTileLayer } from "../lib/offlineTiles";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import { Search, Crosshair, Loader2, Info, Layers, X, MapPin, Headphones, WifiOff } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
@@ -57,7 +57,7 @@ import { fetchDatiSole, livelloUv, consiglioSole } from "../lib/sunIndex";
 import type { DatiSole } from "../lib/sunIndex";
 import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTimes";
 import type { OrariSole } from "../lib/sunTimes";
-import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_LABEL, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
+import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -271,6 +271,13 @@ import {
   isTematico,
   chiaveTematica,
   NATURA_DB_CATEGORIES,
+  CHIESE_TYPES,
+  MUSEI_TYPES,
+  PANORAMI_TYPES,
+  MONUMENTI_TYPES,
+  LOCALI_TYPES,
+  FAMIGLIE_TYPES,
+  UTILITA_TYPES,
 } from "../lib/poiTaxonomy";
 
 // Ri-esportata: altri componenti la importano storicamente da qui.
@@ -342,6 +349,27 @@ export function isAccessible(poi: Poi): boolean {
   const nameLower = poi.name.toLowerCase();
   if (nameLower.includes("accessib") || nameLower.includes("disabil") || nameLower.includes("wheelchair") || nameLower.includes("scivolo") || nameLower.includes("rampa") || nameLower.includes("carrozzin")) return true;
   return false;
+}
+
+/**
+ * Sfondo mappa. Sostituisce il <TileLayer> di react-leaflet con il layer di
+ * `offlineTiles`, che legge le tile dalla Cache API senza passare dal service
+ * worker: su iOS (WebView su `capacitor://localhost`) il SW non si registra
+ * nemmeno, quindi le tile scaricate per l'offline non si vedevano MAI.
+ * L'URL richiesto resta identico a prima (stesso template, stessi subdomain
+ * 'abc', stesso '@2x'), altrimenti non colpirebbe la cache già scaricata.
+ */
+function CachedTiles({ url, attribution }: { url: string; attribution: string }) {
+  const map = useMap();
+  useEffect(() => {
+    const { layer, dispose } = createCachedTileLayer(url, { attribution });
+    layer.addTo(map);
+    return () => {
+      map.removeLayer(layer);
+      dispose();
+    };
+  }, [map, url, attribution]);
+  return null;
 }
 
 function MapController({
@@ -601,6 +629,7 @@ function escapeHtml(s: string): string {
 
 import PoiPopupContent from "./PoiPopupContent";
 import TourRouteLayer from "./TourRouteLayer";
+import NavRouteLayer from "./NavRouteLayer";
 import PoiRadarPanel from "./PoiRadarPanel";
 
 /** L'atlante dei beni vincolati carica solo da questo zoom (quartiere). */
@@ -727,7 +756,12 @@ function MapArea({
   const [searchNoResults, setSearchNoResults] = useState(false);
   // La tendina si apre verso l'ALTO (bottom-full): invertiamo così il
   // risultato migliore resta adiacente alla casella di ricerca.
-  const displayedSuggestions = useMemo(() => [...suggestions].reverse(), [suggestions]);
+  // I NOSTRI risultati (/api/search/poi, 23/08/2026): categorie, POI per nome
+  // e percorsi. Arrivano in parallelo a Mapbox e si AGGIUNGONO sotto i
+  // luoghi: la gerarchia e' luoghi → categorie → POI → percorsi, e Mapbox non
+  // aspetta mai nessuno (la ricerca deve restare immediata).
+  const [nostri, setNostri] = useState<any[]>([]);
+  const displayedSuggestions = useMemo(() => [...suggestions, ...nostri].reverse(), [suggestions, nostri]);
   useEffect(() => { setActiveSuggestionIdx(-1); }, [suggestions]);
   const [pois, setPois] = useState<Poi[]>([]);
   // --- LOCAL STORAGE CATEGORIES ---
@@ -783,9 +817,7 @@ function MapArea({
     const handleRadarDegraded = () => {
       setFetchErrors((prev) => ({
         ...prev,
-        db: language === 'IT'
-          ? "Impossibile aggiornare i luoghi vicini. Riprova più tardi."
-          : "Unable to refresh nearby places. Please try again later.",
+        db: getTranslation('mp_luoghi_vicini_errore', language),
       }));
     };
     window.addEventListener('wip-radar-degraded', handleRadarDegraded);
@@ -835,10 +867,6 @@ function MapArea({
     };
   }, []);
 
-  // Stato reattivo del tour: fa partire/fermare l'interval di prossimità
-  // invece di lasciarlo tickare a vuoto quando il tour è spento
-  const [isTourRunning, setIsTourRunning] = useState<boolean>(() => locationService.getIsTourActive());
-
   // Al PRIMO fix GPS la mappa vola sulla posizione dell'utente — una volta
   // sola, e solo se la preferenza è «la mia posizione» e l'utente non ha
   // già trascinato la mappa. Prima il fix aggiornava il marker e basta: un
@@ -858,18 +886,8 @@ function MapArea({
       if (loc.heading !== null) {
         setUserHeading(loc.heading);
       }
-      // Aggiorna lo stato del tour senza timer dedicati (stesso valore = nessun re-render)
-      setIsTourRunning(locationService.getIsTourActive());
     });
     return unsub;
-  }, []);
-
-  // L'attivazione del tour emette 'audioguide-status' (locationService.syncSettings):
-  // lo usiamo per far ripartire subito l'interval di prossimità senza polling a vuoto
-  useEffect(() => {
-    const handleGuideStatus = () => setIsTourRunning(locationService.getIsTourActive());
-    window.addEventListener('audioguide-status', handleGuideStatus);
-    return () => window.removeEventListener('audioguide-status', handleGuideStatus);
   }, []);
 
   // Handle follow mode panning reactively when userLocation changes
@@ -955,9 +973,7 @@ function MapArea({
       console.warn("[Servizi] fetch fallito:", e);
       setFetchErrors((prev) => ({
         ...prev,
-        servizi: language === 'IT'
-          ? "Servizi (fontanelle, bagni, panchine) non disponibili al momento. Riprova più tardi."
-          : "Services (fountains, toilets, benches) unavailable right now. Try again later.",
+        servizi: getTranslation('mp_servizi_errore', language),
       }));
       return false;
     } finally {
@@ -1153,7 +1169,15 @@ function MapArea({
   // i percorsi di rilevanza internazionale e nazionale e le tappe CAI:
   // a scala regionale i sentieri locali sarebbero centinaia di pin
   // indistinguibili.
-  const SENTIERI_MIN_ZOOM = 7;
+  // BUGFIX 26/08/2026: era 7 e spegneva ANCHE i punti di partenza già
+  // clusterizzati (creaGruppoPercorsi, come i marker POI) — non solo le
+  // linee, che restano correttamente gestite a parte da livelloDaZoom
+  // (routeLines.ts, che sotto zoom 8 già non le richiede). Risultato: sotto
+  // zoom 7 il livello spariva del tutto invece di mostrare solo i cluster,
+  // esattamente come le categorie POI (aggregati con numero a zoom basso,
+  // singoli marker a zoom alto). Soglia bassa: i punti restano sempre
+  // visibili, l'aggregazione fa il resto.
+  const SENTIERI_MIN_ZOOM = 2;
   const SENTIERI_ZOOM_TUTTI = 10;
   // Lo zoom in cui il gruppo si apre: sotto, una pallina col numero di
   // percorsi; da qui in su i pin singoli E il tracciato disegnato. Un
@@ -1239,9 +1263,7 @@ function MapArea({
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
-            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
-              ? 'Punto di partenza · © contributori OpenStreetMap'
-              : 'Starting point · © OpenStreetMap contributors'}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
       }
@@ -1264,8 +1286,8 @@ function MapArea({
           L.marker([Number(r.lat), Number(r.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">🏔 ${escapeHtml(r.name || '')}</div>
-              <div style="font-size:11px;color:#374151;margin-top:2px;">${language === 'IT' ? 'Rifugio alpino' : 'Mountain hut'}</div>
-              <div style="font-size:9px;color:#6b7280;margin-top:4px;">© contributori OpenStreetMap</div>
+              <div style="font-size:11px;color:#374151;margin-top:2px;">${getTranslation('mp_rifugio_alpino', language)}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_osm_contributori', language)}</div>
             </div>`)
             .addTo(group);
         }
@@ -1368,7 +1390,8 @@ function MapArea({
   const [ciclabiliLoading, setCiclabiliLoading] = useState(false);
   const ciclabiliLayerRef = useRef<L.LayerGroup | null>(null);
   const ciclabiliLineeRef = useRef<L.LayerGroup | null>(null);
-  const CICLABILI_MIN_ZOOM = 7;
+  // BUGFIX 26/08/2026: stessa correzione di SENTIERI_MIN_ZOOM sopra.
+  const CICLABILI_MIN_ZOOM = 2;
   const CICLABILI_ZOOM_LOCALI = 12;
 
   const toggleCiclabili = useCallback(() => {
@@ -1417,9 +1440,7 @@ function MapArea({
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(c.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(c.description_short || '')}</div>
-            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
-              ? 'Punto di partenza · © contributori OpenStreetMap'
-              : 'Starting point · © OpenStreetMap contributors'}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_osm', language)}</div>
           </div>`)
           .addTo(group);
       }
@@ -1496,7 +1517,8 @@ function MapArea({
   const [stradeGustoLoading, setStradeGustoLoading] = useState(false);
   const stradeGustoLayerRef = useRef<L.LayerGroup | null>(null);
   const stradeGustoLineeRef = useRef<L.LayerGroup | null>(null);
-  const STRADE_GUSTO_MIN_ZOOM = 5;
+  // BUGFIX 26/08/2026: stessa correzione di SENTIERI_MIN_ZOOM sopra.
+  const STRADE_GUSTO_MIN_ZOOM = 2;
   const GUSTO_PRODUTTORI_ZOOM = 11;
   const GUSTO_BOTTEGHE_ZOOM = 14;
   // Come per i sentieri: sotto questo zoom una pallina bordeaux col numero
@@ -1574,10 +1596,8 @@ function MapArea({
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">🍇 ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
-            ${s.contact_website ? `<a href="${escapeHtml(s.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">sito ufficiale ↗</a>` : ''}
-            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
-              ? 'Punto di partenza del percorso'
-              : 'Route starting point'}</div>
+            ${s.contact_website ? `<a href="${escapeHtml(s.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito_ufficiale', language)} ↗</a>` : ''}
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_punto_partenza_percorso', language)}</div>
           </div>`)
           .addTo(group);
       }
@@ -1654,11 +1674,9 @@ function MapArea({
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
               <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
               <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
-              ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">sito ↗</a>` : ''}
+              ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
               ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
-              <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
-                ? 'Verifica sempre orari e prenotazione · © contributori OpenStreetMap'
-                : 'Always check hours and booking · © OpenStreetMap contributors'}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_verifica_orari_osm', language)}</div>
             </div>`)
             .addTo(group);
         }
@@ -1710,7 +1728,30 @@ function MapArea({
   const neveLayerRef = useRef<L.LayerGroup | null>(null);
   // Le piste sono linee, non pin: gruppo a parte come per gli altri layer.
   const neveLineeRef = useRef<L.LayerGroup | null>(null);
-  const NEVE_MIN_ZOOM = 8;
+  // BUGFIX 26/08/2026: stessa correzione di SENTIERI_MIN_ZOOM sopra.
+  const NEVE_MIN_ZOOM = 2;
+
+  // ── Copertura neve reale (NASA GIBS MODIS/Terra NDSI Snow Cover, 26/08/2026) ──
+  // L'utente ha chiesto: i pin di comprensori/impianti/rifugi dicono DOVE si
+  // scia, non SE nevica lì adesso. Prima non c'era nessuna fonte di
+  // innevamento: MET Norway (già usata per le condizioni al pin) non ha
+  // affatto un campo neve, restituisce solo temperatura. Questo overlay
+  // satellitare è gratis, senza chiave, licenza pubblica NASA — ma resta un
+  // "sì c'è neve / no non c'è" a 500 m di risoluzione, aggiornato una volta
+  // al giorno, non i centimetri in tempo reale (quello richiederebbe una
+  // fonte a pagamento o una pipeline di rianalisi, valutato e rimandato).
+  const neveModisRef = useRef<L.TileLayer | null>(null);
+  // GoogleMapsCompatible_Level8: il tile set nativo del layer (da GetCapabilities
+  // GIBS), oltre non ha più dettaglio da dare, solo lo stesso tile ingrandito.
+  const NEVE_MODIS_MAX_NATIVE_ZOOM = 8;
+  /** T-2: il giorno più recente quasi sempre già processato ed elaborato
+   * (T-0/T-1 spesso restituiscono un tile vuoto perché la pipeline NASA non
+   * ha ancora finito). */
+  function dataModisNeve(): string {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 2);
+    return d.toISOString().slice(0, 10);
+  }
 
   const toggleNeve = useCallback(() => {
     setNeveActive((prev) => {
@@ -1740,10 +1781,10 @@ function MapArea({
         pista_sci: '🎿',
       };
       const etichetta: Record<string, string> = {
-        comprensorio_sci: language === 'IT' ? 'Comprensorio sciistico' : 'Ski area',
-        impianto_risalita: language === 'IT' ? 'Impianto di risalita' : 'Ski lift',
-        rifugio_alpino: language === 'IT' ? 'Rifugio alpino' : 'Mountain hut',
-        pista_sci: language === 'IT' ? 'Pista da sci' : 'Ski piste',
+        comprensorio_sci: getTranslation('mp_comprensorio_sci', language),
+        impianto_risalita: getTranslation('mp_impianto_risalita', language),
+        rifugio_alpino: getTranslation('mp_rifugio_alpino', language),
+        pista_sci: getTranslation('mp_pista_sci', language),
       };
       for (const l of data || []) {
         const sub = String(l.sub_category || '');
@@ -1757,7 +1798,7 @@ function MapArea({
           <div style="font-size:12px;font-weight:700;color:#111827;">${emoji[sub] || '❄️'} ${escapeHtml(l.name || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(etichetta[sub] || '')}</div>
           <div id="neve-${escapeHtml(String(l.id))}" style="font-size:11px;color:#0369a1;margin-top:5px;font-weight:700;">…</div>
-          <div style="font-size:9px;color:#6b7280;margin-top:4px;">© contributori OpenStreetMap · MET Norway</div>
+          <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_osm_contributori', language)} · MET Norway</div>
         </div>`);
         // Le condizioni si chiedono solo all'apertura: 150 pin non devono
         // valere 150 chiamate.
@@ -1767,8 +1808,8 @@ function MapArea({
           const d = await fetchDatiSole(Number(l.lat), Number(l.lon));
           if (!box.isConnected) return;
           box.textContent = d
-            ? `${Math.round(d.temperatura)}°C${d.percepita ? ` · percepiti ${Math.round(d.percepita)}°` : ''}`
-            : (language === 'IT' ? 'condizioni non disponibili' : 'conditions unavailable');
+            ? `${Math.round(d.temperatura)}°C${d.percepita ? ` · ${getTranslation('mp_percepiti', language)} ${Math.round(d.percepita)}°` : ''}`
+            : getTranslation('mp_condizioni_non_disponibili', language);
         });
         group.addLayer(marker);
       }
@@ -1806,12 +1847,27 @@ function MapArea({
   useEffect(() => {
     const map = mapRef.current;
     const spegniNeve = () => {
-      for (const r of [neveLayerRef, neveLineeRef]) {
+      for (const r of [neveLayerRef, neveLineeRef, neveModisRef]) {
         if (map && r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
       }
     };
     if (!neveActive) { spegniNeve(); return; }
     if (!map) return;
+    // La copertura satellitare è un vero TileLayer Leaflet: si crea una
+    // volta sola e poi carica le tessere da sé man mano che la mappa si
+    // sposta, come il fondo mappa — a differenza dei pin/piste sopra non
+    // serve un fetch legato a moveend.
+    if (!neveModisRef.current) {
+      neveModisRef.current = L.tileLayer(
+        `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_NDSI_Snow_Cover/default/${dataModisNeve()}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`,
+        {
+          maxNativeZoom: NEVE_MODIS_MAX_NATIVE_ZOOM,
+          opacity: 0.55,
+          attribution: 'NASA GIBS · MODIS Terra NDSI Snow Cover',
+        },
+      );
+    }
+    if (!map.hasLayer(neveModisRef.current)) neveModisRef.current.addTo(map);
     const aggiorna = () => {
       setZoomCorrente(map.getZoom());
       if (map.getZoom() < NEVE_MIN_ZOOM) { spegniNeve(); return; }
@@ -1908,9 +1964,15 @@ function MapArea({
       if (!audio.isPlaying && !audio.isActive &&
           'speechSynthesis' in window && !window.speechSynthesis.speaking) {
         const u = new SpeechSynthesisUtterance(
-          language === 'IT' ? 'Attenzione, zona a traffico limitato' : 'Warning, limited traffic zone'
+          getTranslation('mp_ztl_vocale', language)
         );
-        u.lang = language === 'IT' ? 'it-IT' : 'en-US';
+        // BCP-47 della lingua UI: la voce di sintesi deve parlare la lingua
+        // della frase, non sempre italiano/inglese.
+        const bcp47: Record<Language, string> = {
+          IT: 'it-IT', EN: 'en-US', FR: 'fr-FR', ES: 'es-ES',
+          DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
+        };
+        u.lang = bcp47[language] || 'en-US';
         u.rate = 1;
         window.speechSynthesis.speak(u);
       }
@@ -2044,26 +2106,23 @@ function MapArea({
           popupAnchor: [0, -8],
         });
         const marker = L.marker([site.lat, site.lon], { icon });
-        const label = language === 'IT'
-          ? BATHING_QUALITY_LABEL[site.quality].it
-          : BATHING_QUALITY_LABEL[site.quality].en;
+        // Le etichette bilingue di bathingWater.ts coprono solo it/en: le
+        // 7 lingue stanno nel dizionario mp_acqua_* (una chiave per classe).
+        const label = getTranslation(`mp_acqua_${site.quality}`, language);
         marker.bindPopup(
           `<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:210px;">
             <div style="font-size:12px;font-weight:700;color:#111827;">🏖 ${escapeHtml(site.name)}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;display:flex;align-items:center;gap:5px;">
               <span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:${color};flex:none;"></span>
-              ${language === 'IT' ? 'Qualità' : 'Quality'} ${site.year}: <b>${label}</b>
+              ${getTranslation('mp_qualita', language)} ${site.year}: <b>${label}</b>
             </div>
             ${site.temperatura !== undefined || site.onde !== undefined ? `
             <div style="font-size:12px;color:#0369a1;margin-top:5px;font-weight:700;display:flex;gap:10px;align-items:center;">
               ${site.temperatura !== undefined ? `<span>🌡 ${site.temperatura.toFixed(1)}°C</span>` : ''}
               ${site.onde !== undefined ? `<span>🌊 ${site.onde.toFixed(1)} m</span>` : ''}
             </div>
-            <div style="font-size:9px;color:#6b7280;margin-top:2px;">${language === 'IT'
-              ? 'Acqua e onde ora (Open-Meteo)' : 'Water and waves now (Open-Meteo)'}</div>` : ''}
-            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${language === 'IT'
-              ? 'Classificazione ufficiale UE (EEA) — verifica i divieti temporanei in loco'
-              : 'Official EU classification (EEA) — check temporary bans on site'}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:2px;">${getTranslation('mp_acqua_onde_ora', language)}</div>` : ''}
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${getTranslation('mp_classificazione_eea', language)}</div>
           </div>`
         );
         group.addLayer(marker);
@@ -2194,6 +2253,7 @@ function MapArea({
   useEffect(() => {
     if (searchQuery.length < 3) {
       setSuggestions([]);
+      setNostri([]);
       setSearchNoResults(false);
       return;
     }
@@ -2203,6 +2263,25 @@ function MapArea({
     const abortCtrl = new AbortController();
     const timer = setTimeout(async () => {
       setIsSearching(true);
+      // In parallelo, senza await sulla strada di Mapbox: i nostri dati.
+      (async () => {
+        try {
+          const c = mapRef.current?.getCenter();
+          const r = await fetch(getApiUrl(
+            `/api/search/poi?q=${encodeURIComponent(searchQuery)}&lang=${language.toLowerCase()}`
+            + (c ? `&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}` : '')
+          ), { signal: abortCtrl.signal });
+          if (!r.ok || abortCtrl.signal.aborted) return;
+          const d = await r.json();
+          if (abortCtrl.signal.aborted) return;
+          const voci: any[] = [];
+          for (const k of (d.categorie || [])) voci.push({ kind: 'categoria', id: `cat-${k.macro}-${k.sub || ''}`, ...k });
+          for (const p of (d.poi || [])) voci.push({ kind: 'poi', ...p });
+          for (const p of (d.percorsi || [])) voci.push({ kind: 'percorso', ...p });
+          setNostri(voci);
+          if (voci.length) setSearchNoResults(false);
+        } catch { /* vuoto: Mapbox basta */ }
+      })();
       try {
         // Proxy server-side (/api/geocode): il token Mapbox non è più esposto
         // nel bundle client. `types` larghi: qui si cercano anche i luoghi.
@@ -2330,7 +2409,13 @@ function MapArea({
       const { data } = await supabase
         .from('shared_pois')
         .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
-        .in('category', NATURA_DB_CATEGORIES)
+        // Il DB tiene la maggioranza dei POI naturali sotto il bucket
+        // GENERICO category='natura' (255.000 righe), famiglia vera in
+        // poi_type — non nei valori specifici (beach, peak…) che questa
+        // lista elenca. Prima si chiedevano SOLO quei valori specifici e la
+        // query non trovava quasi nulla (24/08/2026). Si chiedono entrambi:
+        // il bucket generico E gli eventuali valori specifici già in category.
+        .in('category', ['natura', ...NATURA_DB_CATEGORIES])
         .gte('lat', south).lte('lat', north)
         .gte('lon', west).lte('lon', east)
         .limit(500);
@@ -2352,6 +2437,190 @@ function MapArea({
           is_gem: i.is_gem === true,
           isFromDb: true,
           status: i.status || 'verified'
+        } as unknown as Poi));
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * GEMME per bbox, per le viste piu' larghe del raggio della RPC.
+   *
+   * La RPC `nearby_pois` copre al massimo 25 km attorno al centro. Con la
+   * chip Gemme accesa e la mappa allontanata (una regione a schermo) i pin
+   * comparivano solo in un cerchio al centro, e spostandosi verso Siena da
+   * Grosseto la zona nuova restava vuota (segnalato 23/08/2026). Le gemme
+   * sono poche e sono i luoghi che a quella scala si cercano: si chiedono
+   * per riquadro, come natura e tematici. La mappatura e' la stessa della
+   * RPC (categoria UI + is_gem), cosi' il marker e la tassonomia non cambiano
+   * fra un POI arrivato da qui e lo stesso POI arrivato dalla RPC.
+   */
+  const fetchGemmePoisInBounds = async (
+    south: number, west: number, north: number, east: number,
+  ): Promise<Poi[]> => {
+    try {
+      const { data } = await supabase
+        .from('shared_pois')
+        // 'sub_category' non esiste sulla tabella (colonna vera: poi_type —
+        // la RPC nearby_pois la alias 'sub_category', qui e' una select
+        // diretta): con la colonna sbagliata la query falliva SEMPRE, in
+        // silenzio (24/08/2026, trovato mentre si indagava "gemme" vuote a
+        // vista larga). Bug preesistente, non introdotto oggi.
+        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
+        .eq('is_gem', true)
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(600);
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      const osmToUi: Record<string, string> = {
+        church: 'chiese', museum: 'musei', viewpoint: 'panorami',
+        monument: 'monumenti', castle: 'monumenti', ruins: 'monumenti',
+        archaeological_site: 'monumenti', artwork: 'monumenti',
+      };
+      return (data || [])
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name)
+        .map((i: any) => {
+          const cat = i.category === 'gemme' ? 'gemme' : (osmToUi[i.category] || i.category || 'monumenti');
+          return {
+            id: i.id,
+            lat: Number(i.lat),
+            lon: Number(i.lon),
+            name: i.name,
+            category: cat,
+            baseCategory: cat,
+            subCategory: i.poi_type || i.category,
+            description: i.description_ai || i.description_short,
+            image_url: i.image_url,
+            city: i.city,
+            country: i.country,
+            is_gem: true,
+            isFromDb: true,
+            status: i.status || 'verified',
+          } as unknown as Poi;
+        });
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * MONUMENTI/CHIESE/MUSEI/PANORAMI, LOCALI, UTILITA', FAMIGLIE per bbox
+   * (24/08/2026) — stessa ragione di natura/gemme/community/tematici: la RPC
+   * `nearby_pois` copre al massimo un cerchio di 25 km attorno al centro, e
+   * sotto zoom 8 il fetch principale si ferma del tutto. "Tutte le categorie
+   * devono mostrare i POI a qualsiasi livello di mappa, anche dell'Europa
+   * intera" (richiesta utente) — qui si chiede al DB per riquadro, con un
+   * tetto per chip: a scala di continente non ha senso scaricare l'intera
+   * Europa, il cluster accorpa quello che arriva e mostra i numeri, ma la
+   * lista deve restare un CAMPIONE, non il totale.
+   * Una sola funzione, parametrizzata sui valori `category` della famiglia
+   * (le liste *_TYPES di poiTaxonomy.ts) e sulla macro UI da scrivere in
+   * `baseCategory` — cosi` resolvePoiTaxonomy classifica questi POI esattamente
+   * come quelli arrivati dalla RPC.
+   */
+  const fetchTassonomiaPoisInBounds = async (
+    south: number, west: number, north: number, east: number,
+    tipiDb: string[], macro: string, limite = 500,
+  ): Promise<Poi[]> => {
+    try {
+      const { data } = await supabase
+        .from('shared_pois')
+        // 'sub_category' non esiste sulla tabella: vedi il commento in
+        // fetchGemmePoisInBounds qui sopra, stesso bug corretto.
+        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
+        .in('category', tipiDb)
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(limite);
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      return (data || [])
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name)
+        .map((i: any) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          category: i.category,
+          baseCategory: macro,
+          subCategory: i.poi_type || i.category,
+          description: i.description_ai || i.description_short,
+          image_url: i.image_url,
+          city: i.city,
+          country: i.country,
+          is_gem: i.is_gem === true,
+          isFromDb: true,
+          status: i.status || 'verified',
+        } as unknown as Poi));
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * LOCALITÀ TURISTICHE per bbox (24/08/2026): borghi e villaggi che sono
+   * meta di per sé — Riomaggiore, Volterra, Colonnata — non un monumento
+   * dentro una città. Popolati da scratch/importa-localita-mondo.mjs
+   * (categoria 'localita' in shared_pois, foto+descrizione da Wikidata).
+   * Stessa strada di gemme/natura/tematici: la RPC nearby_pois li perderebbe
+   * a scala larga (clamp 25 km), e un borgo è esattamente il tipo di posto
+   * che si cerca guardando una regione intera, non stando già dentro.
+   */
+  const fetchLocalitaPoisInBounds = async (
+    south: number, west: number, north: number, east: number,
+    limite = 500,
+    // Celle (26/08/2026, RITIRATO): un tentativo di griglia qui — lanciare
+    // 9-16 query per riquadro geograficamente distribuito, per rompere il
+    // bias "Europa sempre prima" — ha peggiorato le cose invece di
+    // risolverle: il carico concorrente extra sul DB ha fatto scattare il
+    // circuit breaker condiviso (src/lib/circuitBreaker.ts, soglia 3
+    // fallimenti) anche sul fetch POI principale ("Luoghi Vicini" andava in
+    // pausa di sicurezza). Anche un semplice `.order('id')` sull'intero
+    // mondo, provato come alternativa a costo-zero, si è rivelato ANCH'ESSO
+    // lento abbastanza da andare in timeout (8+s, verificato) — la tabella
+    // non ha un indice che copra questa combinazione di filtro+ordinamento.
+    // Il parametro resta per compatibilità di firma ma NON viene più usato:
+    // query semplice, esattamente come prima di tutti questi tentativi. Il
+    // bias geografico (mondo = solo Europa) RESTA un problema aperto: la
+    // soluzione vera è lato DB (un indice dedicato o un aggregato
+    // server-side), non un trucco lato client — rischia troppo su questa
+    // tabella per essere improvvisata senza poter testare con calma.
+    _celle = 1,
+  ): Promise<Poi[]> => {
+    const eseguiQuery = () => supabase
+      .from('shared_pois')
+      .select('id, name, lat, lon, description_short, description_ai, image_url, status, is_hidden, country, city')
+      .eq('category', 'localita')
+      .gte('lat', south).lte('lat', north)
+      .gte('lon', west).lte('lon', east)
+      .limit(limite);
+    try {
+      let { data, error } = await eseguiQuery();
+      // Un timeout del server (query lenta sotto carico concorrente) non è
+      // "questa zona non ha località": è un fallimento transitorio. Un
+      // singolo retry basta quasi sempre (verificato: le stesse query,
+      // ripetute da sole, rispondono in 0.1-0.4s).
+      if (error) {
+        ({ data, error } = await eseguiQuery());
+        if (error) throw error;
+      }
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      return (data || [])
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name)
+        .map((i: any) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          category: 'localita',
+          baseCategory: 'localita',
+          subCategory: 'localita',
+          description: i.description_ai || i.description_short,
+          image_url: i.image_url,
+          city: i.city,
+          country: i.country,
+          is_gem: false,
+          isFromDb: true,
+          status: i.status || 'verified',
         } as unknown as Poi));
     } catch {
       return [];
@@ -2441,11 +2710,55 @@ function MapArea({
     // beni devono apparire anche con la Toscana intera»), in citta' tutte.
     fasce: string[] | null = null,
     limite = 400,
+    // Celle per lato (23/08/2026): a scala di paese UNA query sul riquadro
+    // intero con `limit 300` si riempiva tutta nella parte piu' densa o
+    // semplicemente con le prime righe che il DB trovava — con l'Olanda a
+    // schermo tornavano 300 beni olandesi, e spostandosi verso la Francia i
+    // francesi non arrivavano mai perche' il tetto era gia' pieno. Con la
+    // griglia ogni cella della vista ha la sua quota: la mappa si riempie
+    // dappertutto, non solo dove il DB e' piu' fitto.
+    celle = 1,
   ): Promise<Poi[]> => {
+    if (celle > 1) {
+      const dLat = (north - south) / celle;
+      const dLon = (east - west) / celle;
+      const quota = Math.max(20, Math.ceil(limite / (celle * celle)));
+      const pezzi: Promise<Poi[]>[] = [];
+      for (let r = 0; r < celle; r++) {
+        for (let c = 0; c < celle; c++) {
+          pezzi.push(fetchBeniCulturaliInBounds(
+            south + dLat * r, west + dLon * c,
+            south + dLat * (r + 1), west + dLon * (c + 1),
+            fasce, quota, 1,
+          ));
+        }
+      }
+      const visti = new Set<string>();
+      const out: Poi[] = [];
+      for (const blocco of await Promise.all(pezzi)) {
+        for (const p of blocco) {
+          const k = String(p.id);
+          if (visti.has(k)) continue;
+          visti.add(k);
+          out.push(p);
+        }
+      }
+      return out;
+    }
     try {
       let q = supabase
         .from('beni_culturali')
-        .select('id, name, lat, lon, tier, category_wip, typology, comune, address, description, promoted_poi_id, matched_poi_id, wikidata_id')
+        // `geocode_source` dice DA DOVE viene il punto: dall'edificio, dal
+        // civico, dalla via o — per i beni del catalogo ministeriale che non
+        // hanno indirizzo — dal centro del comune. Serve al popup per
+        // dichiarare quando la posizione e' approssimata invece di lasciar
+        // credere che il pin sia sulla porta.
+        // `image_url`/`image_attribution`: la foto libera (Commons) quando
+        // c'e'. `catalog_url`: la scheda del catalogo nazionale, che e' cio'
+        // che resta quando la foto non si puo' mostrare — i beni italiani
+        // l'hanno ma con licenza non commerciale (vedi la migration
+        // 20260824110000_beni_culturali_foto.sql).
+        .select('id, name, lat, lon, tier, category_wip, typology, comune, address, description, promoted_poi_id, matched_poi_id, wikidata_id, geocode_source, image_url, image_attribution, catalog_url')
         .gte('lat', south).lte('lat', north)
         .gte('lon', west).lte('lon', east);
       if (fasce && fasce.length > 0) q = q.in('tier', fasce);
@@ -2484,6 +2797,22 @@ function MapArea({
           // beni di solo atlante, cioè quelli senza un POI corrispondente.
           isHeritageAtlas: !poiCollegato,
           heritageTier: i.tier,
+          // Serve al popup per la foto (fotoDaWikidata, P18): l'unica fonte
+          // legittima per un bene di solo atlante, che non ha colonna
+          // immagine propria (24/08/2026).
+          wikidata: i.wikidata_id || undefined,
+          // Vero quando il punto e' il centro del comune e non il bene: il
+          // popup lo dice a chiare lettere. Un pin che sembra preciso e non
+          // lo e' manda la gente dalla parte sbagliata del paese.
+          posizioneApprossimata: /comune/i.test(String(i.geocode_source || '')),
+          // La foto libera gia' in casa (Wikimedia Commons) e il suo credito:
+          // CC BY-SA obbliga a nominare l'autore, quindi viaggiano insieme.
+          image_url: i.image_url || undefined,
+          imageAttribution: i.image_attribution || undefined,
+          // La scheda del catalogo nazionale: si apre in una scheda dentro
+          // l'app (vedi src/lib/apriScheda.ts). E' la porta che resta ai beni
+          // italiani, le cui foto di catalogo non sono riusabili.
+          catalogUrl: i.catalog_url || undefined,
         } as unknown as Poi);
         });
     } catch {
@@ -2578,11 +2907,88 @@ function MapArea({
           });
         }
       }
+      // Gemme anche a scala di paese (23/08/2026): sono poche, sono i
+      // luoghi che a quella scala si cercano, e il cluster le raggruppa.
+      // Prima sotto zoom 8 la chip Gemme non caricava niente.
+      if (activeCategories.includes('gemme') && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        const gemmeFar = await fetchGemmePoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+        if (gemmeFar.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            gemmeFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
+            return Array.from(m.values());
+          });
+        }
+      }
+      // Località anche a scala di paese/continente: stesso motivo di Gemme,
+      // e il caso d'uso principale — "cosa c'è di bello in Toscana" — è
+      // proprio guardare la regione da lontano.
+      if (activeCategories.includes('localita') && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        // zoom < 8 qui dentro: vista di continente/mondo, griglia 4×4 così
+        // ogni zona ha la sua quota (vedi nota sopra fetchLocalitaPoisInBounds).
+        const localitaFar = await fetchLocalitaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), 500);
+        if (localitaFar.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            localitaFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
+            return Array.from(m.values());
+          });
+        }
+      }
+      // NATURA anche a scala di paese/continente (24/08/2026): mancava del
+      // tutto sotto zoom 8, mentre community/tematici/gemme avevano gia'
+      // l'eccezione. Con l'Italia o l'Europa intera a schermo la chip
+      // Natura restava vuota anche dopo il fix del bucket generico.
+      if (activeCategories.includes('natura') && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        const naturaFar = await fetchNaturaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+        if (naturaFar.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            naturaFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
+            return Array.from(m.values());
+          });
+        }
+      }
+      // MONUMENTI/CHIESE/MUSEI/PANORAMI, LOCALI, UTILITA, FAMIGLIE anche a
+      // scala di paese/continente (24/08/2026, richiesta esplicita: "tutte
+      // le categorie devono mostrare i POI a qualsiasi livello di mappa").
+      // Prima queste sette chip non caricavano NIENTE sotto zoom 8: solo
+      // community/tematici/gemme/beni_culturali/natura avevano un'eccezione.
+      // Il cluster (MarkerClusterGroup) accorpa e mette i numeri: il tetto
+      // per chip resta contenuto (vedi fetchTassonomiaPoisInBounds) apposta,
+      // perche' a scala di continente non ha senso scaricare l'intera Europa
+      // — serve un campione rappresentativo, non tutto.
+      const macroFarMap: Array<{ macro: string; tipi: string[]; limite: number }> = [
+        { macro: 'monumenti', tipi: [...CHIESE_TYPES, ...MUSEI_TYPES, ...PANORAMI_TYPES, ...MONUMENTI_TYPES], limite: 600 },
+        { macro: 'locali', tipi: LOCALI_TYPES, limite: 400 },
+        { macro: 'utilita', tipi: UTILITA_TYPES, limite: 400 },
+        { macro: 'famiglie', tipi: FAMIGLIE_TYPES, limite: 300 },
+      ];
+      const macroFarAttivi = macroFarMap.filter(m => activeCategories.includes(m.macro));
+      if (macroFarAttivi.length > 0 && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        for (const { macro, tipi, limite } of macroFarAttivi) {
+          const extra = await fetchTassonomiaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), tipi, macro, limite);
+          if (extra.length > 0 && fetchSeq === fetchSeqRef.current) {
+            setPois(prev => {
+              const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+              extra.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
+              return Array.from(m.values());
+            });
+          }
+        }
+      }
       // Beni vincolati di fascia A anche a scala di paese: sono pochi e
       // sono i grandi monumenti, quelli che a quella scala si cercano.
       if (activeCategories.includes('beni_culturali') && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), ['A'], 300);
+        // Griglia 3×3 (23/08/2026): con un paese intero a schermo una sola
+        // query da 300 tornava solo i beni della zona piu' fitta — l'Olanda
+        // mostrava i suoi, la Francia accanto restava vuota.
+        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), ['A'], 300, 3);
         if (beniA.length > 0 && fetchSeq === fetchSeqRef.current) {
           setPois(prev => {
             const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
@@ -2644,9 +3050,33 @@ function MapArea({
       
       // Expand bounds by 20% for fetching to create a cache margin (smaller = faster Overpass for dense cities)
       const expandedBounds = bounds.pad(0.2);
-      
+
+      // AREA DAVVERO COPERTA dal fetch, non il riquadro chiesto (23/08/2026).
+      // La RPC `nearby_pois` carica un cerchio di al massimo 25 km attorno al
+      // centro; quando la vista e' piu' larga (da zoom ~10 in giu') il
+      // riquadro allargato NON e' coperto, ma la cache lo ricordava per
+      // intero: spostandosi da Grosseto verso Siena la vista nuova stava
+      // ancora dentro il vecchio riquadro, la cache rispondeva "gia'
+      // caricato" e nessun fetch partiva — la zona nuova restava vuota. Qui
+      // si ricorda il quadrato INSCRITTO nel cerchio dei 25 km (lato
+      // 25/√2 km dal centro): tutto cio' che sta li' dentro e' davvero gia'
+      // in mappa, il resto no, e il prossimo pan fuori da quel quadrato
+      // rifa' il fetch attorno al centro nuovo.
+      const centroVista = bounds.getCenter();
+      const raggioVistaM = haversineMeters(centroVista.lat, centroVista.lng, bounds.getNorthEast().lat, bounds.getNorthEast().lng);
+      let copertura: L.LatLngBounds = expandedBounds;
+      if (raggioVistaM > 25000) {
+        const mezzoLatoM = 25000 / Math.SQRT2;
+        const dLat = mezzoLatoM / 111320;
+        const dLon = mezzoLatoM / (111320 * Math.max(0.2, Math.cos(centroVista.lat * Math.PI / 180)));
+        copertura = L.latLngBounds(
+          [Math.max(expandedBounds.getSouth(), centroVista.lat - dLat), Math.max(expandedBounds.getWest(), centroVista.lng - dLon)],
+          [Math.min(expandedBounds.getNorth(), centroVista.lat + dLat), Math.min(expandedBounds.getEast(), centroVista.lng + dLon)],
+        );
+      }
+
       pendingCacheState = {
-        bounds: expandedBounds,
+        bounds: copertura,
         categoriesKey,
         subFilter,
         beniLivello: !activeCategories.includes('beni_culturali') ? 0 : zoom >= BENI_CULTURALI_MIN_ZOOM ? 3 : zoom >= 10 ? 2 : 1,
@@ -2714,9 +3144,7 @@ function MapArea({
             // stessa causa di fondo (RPC dati luoghi non raggiungibile).
             setFetchErrors((prev) => ({
               ...prev,
-              db: language === 'IT'
-                ? "Troppi errori di rete recenti: pausa di sicurezza sul caricamento dei luoghi dal database."
-                : "Too many recent network errors: pausing place loading from the database as a safety measure.",
+              db: getTranslation('mp_db_pausa', language),
             }));
           } else {
             console.warn(`[MapArea] ${label} fallita:`, e?.message || e);
@@ -2857,6 +3285,52 @@ function MapArea({
         }
       }
 
+      // GEMME a scala larga: oltre i 25 km della RPC il cerchio non copre la
+      // vista, e le gemme sono proprio i pin che a quella scala si cercano.
+      // Vedi fetchGemmePoisInBounds. Sotto i 25 km la RPC basta e avanza.
+      if (activeCategories.includes('gemme') && radius > 25000) {
+        const gemmeExtra = await fetchGemmePoisInBounds(south, west, north, east);
+        if (gemmeExtra.length > 0) {
+          const visti = new Set(gemmeExtra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(gemmeExtra);
+          console.log(`[MapArea] +${gemmeExtra.length} gemme (fetch bbox dedicato, vista > 25 km)`);
+        }
+      }
+
+      // MONUMENTI/CHIESE/MUSEI/PANORAMI, LOCALI, UTILITA, FAMIGLIE a scala
+      // larga (24/08/2026): stessa ragione delle gemme sopra — oltre i 25 km
+      // della RPC il cerchio non copre piu' la vista. Sotto i 25 km la RPC
+      // (con l'osmToUiCategory di sopra) basta e avanza.
+      if (radius > 25000) {
+        const macroLargaMap: Array<{ macro: string; tipi: string[]; limite: number }> = [
+          { macro: 'monumenti', tipi: [...CHIESE_TYPES, ...MUSEI_TYPES, ...PANORAMI_TYPES, ...MONUMENTI_TYPES], limite: 600 },
+          { macro: 'locali', tipi: LOCALI_TYPES, limite: 400 },
+          { macro: 'utilita', tipi: UTILITA_TYPES, limite: 400 },
+          { macro: 'famiglie', tipi: FAMIGLIE_TYPES, limite: 300 },
+        ];
+        for (const { macro, tipi, limite } of macroLargaMap) {
+          if (!activeCategories.includes(macro)) continue;
+          const extra = await fetchTassonomiaPoisInBounds(south, west, north, east, tipi, macro, limite);
+          if (extra.length > 0) {
+            const visti = new Set(extra.map(p => String(p.id)));
+            dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(extra);
+            console.log(`[MapArea] +${extra.length} ${macro} (fetch bbox dedicato, vista > 25 km)`);
+          }
+        }
+      }
+
+      // LOCALITÀ TURISTICHE: sempre per bbox, come gemme oltre i 25 km — i
+      // borghi sono radi (poche migliaia nel mondo, non milioni) e sono
+      // esattamente ciò che si cerca a scala larga.
+      if (activeCategories.includes('localita')) {
+        const localitaExtra = await fetchLocalitaPoisInBounds(south, west, north, east, 500);
+        if (localitaExtra.length > 0) {
+          const visti = new Set(localitaExtra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(localitaExtra);
+          console.log(`[MapArea] +${localitaExtra.length} località (fetch bbox dedicato)`);
+        }
+      }
+
       // VERTICALI TEMATICI: stessa ragione dei community — la RPC non li
       // porterebbe mai tutti (clamp 25 km, tetto 1000) e sono cataloghi
       // curati, non riempitivo. Una sola query per tutti i verticali accesi.
@@ -2876,7 +3350,13 @@ function MapArea({
       // (zoom < 10) solo fascia A; citta' (10-12) A e B; quartiere (13+) tutto.
       if (activeCategories.includes('beni_culturali')) {
         const fasce = zoom >= BENI_CULTURALI_MIN_ZOOM ? null : zoom >= 10 ? ['A', 'B'] : ['A'];
-        const beniExtra = await fetchBeniCulturaliInBounds(south, west, north, east, fasce, zoom >= BENI_CULTURALI_MIN_ZOOM ? 400 : 300);
+        // Sotto zoom 10 la vista e' una regione o un paese: griglia 3×3, cosi'
+        // il tetto si divide fra le celle e ogni zona porta i suoi beni.
+        const beniExtra = await fetchBeniCulturaliInBounds(
+          south, west, north, east, fasce,
+          zoom >= BENI_CULTURALI_MIN_ZOOM ? 400 : 300,
+          zoom < 10 ? 3 : 1,
+        );
         if (beniExtra.length > 0) {
           // I beni già presenti come POI (stesso id) restano quelli veri, con
           // scheda e audioguida: si aggiungono solo quelli che mancano.
@@ -3047,9 +3527,7 @@ function MapArea({
               if (fetchSeq === fetchSeqRef.current) {
                 setFetchErrors((prev) => ({
                   ...prev,
-                  overpass: language === 'IT'
-                    ? "Servizio mappe OpenStreetMap non raggiungibile. Alcuni luoghi potrebbero mancare."
-                    : "OpenStreetMap map service unreachable. Some places may be missing.",
+                  overpass: getTranslation('mp_overpass_errore', language),
                 }));
               }
               throw new Error("Overpass API error on all mirrors: " + (lastError?.message || ""));
@@ -3561,6 +4039,21 @@ function MapArea({
         
         // 2. Aggiunge i nuovi POI uniti (sovrascrive se ID coincide)
         finalPois.forEach(p => {
+          // Sfarfallio del pin appena aperto (26/08/2026): i marker sono
+          // raggruppati per categoria in MarkerClusterGroup separate — se
+          // durante l'arricchimento la classificazione del POI cambia (dato
+          // grezzo → dato Overpass/beneCulturale), React deve smontarlo da un
+          // gruppo Leaflet e rimontarlo in un altro: un remove/add completo,
+          // molto visibile proprio sul pin appena centrato/aperto (il pan di
+          // centerMapOnPoi allarga i bounds e fa ripartire questo stesso
+          // fetch). Mentre la scheda è aperta si tiene ferma la categoria già
+          // mostrata: tutto il resto (foto, descrizione...) si aggiorna lo
+          // stesso, l'utente non perde l'arricchimento.
+          const attuale = poiMap.get(String(p.id));
+          if (attuale && String(p.id) === String(activePoi?.id) && p.category !== attuale.category) {
+            poiMap.set(String(p.id), { ...p, category: attuale.category, baseCategory: attuale.baseCategory });
+            return;
+          }
           poiMap.set(String(p.id), p);
         });
 
@@ -3763,49 +4256,14 @@ function MapArea({
     }
   }, [fetchPois, selectedCategories, subFilter]);
 
-  // Radar Proximity Check (VELOCE: 3s)
-  // L'interval esiste solo quando il tour è attivo e ci sono posizione utente e POI:
-  // niente tick a vuoto con il tour spento
-  useEffect(() => {
-    if (!isTourRunning || !userLocation || visiblePois.length === 0) return;
-
-    const interval = setInterval(() => {
-      // Doppio controllo di sicurezza: se il tour è stato spento nel frattempo,
-      // allinea lo stato e l'effect smonta l'interval
-      if (!locationService.getIsTourActive()) {
-        setIsTourRunning(false);
-        return;
-      }
-      for (const poi of visiblePois) {
-        const dist = getDistanceFromLatLonInM(
-          userLocation[0],
-          userLocation[1],
-          poi.lat,
-          poi.lon,
-        );
-        if (dist <= 120) {
-          // Found a POI within 120m, trigger it!
-          console.log("Proximity radar triggered at 120m:", poi.name);
-
-          const nearbyPoisForThis = visiblePois.filter((p) => {
-            if (p.id === poi.id) return false;
-            const d = getDistanceFromLatLonInM(
-              poi.lat,
-              poi.lon,
-              p.lat,
-              p.lon,
-            );
-            return d <= 1000;
-          });
-
-          onSelectPoi(poi, nearbyPoisForThis);
-          break; // Only open one
-        }
-      }
-    }, 3000); // Ridotto da 15s a 3s per reattività
-
-    return () => clearInterval(interval);
-  }, [isTourRunning, userLocation, visiblePois, onSelectPoi]);
+  // (23/08/2026) Qui c'era il vecchio "Radar Proximity Check": ogni 3 s, con
+  // l'audioguida accesa, apriva la scheda del PRIMO POI della lista entro
+  // 120 m chiamando onSelectPoi direttamente — senza accuracy, senza
+  // avvicinamento, senza cooldown e senza passare da 'wip-poi-trigger'.
+  // Chiudevi la scheda e tre secondi dopo era di nuovo li' (Stadio dei Marmi
+  // in loop, da casa, con un fix WiFi). Il geofencing web in foreground lo fa
+  // lib/geofencing/foregroundTriggers.ts con tutte le guardie: quel blocco
+  // era un doppione senza regole ed e' stato tolto, non rattoppato.
 
   const selectLocation = (latStr: string, lonStr: string) => {
     const latNum = parseFloat(latStr);
@@ -3843,7 +4301,37 @@ function MapArea({
   const handleSuggestionClick = async (suggestion: any) => {
     // Immediate feedback: clear suggestions
     setSuggestions([]);
-    
+    setNostri([]);
+
+    // I nostri risultati (23/08/2026).
+    if (suggestion.kind === 'categoria') {
+      // Accende la chip (App.tsx ascolta) e, se la frase portava un luogo
+      // ("spiagge toscana"), centra li' a scala di regione: i pin arrivano
+      // dalla fetch per bbox di quella categoria.
+      window.dispatchEvent(new CustomEvent('wip-set-category', { detail: { macro: suggestion.macro, sub: suggestion.sub || null } }));
+      setSearchQuery(suggestion.luogo ? `${suggestion.label} · ${suggestion.luogo.name}` : suggestion.label);
+      if (suggestion.luogo && mapRef.current) {
+        lastFetchedStateRef.current = null;
+        mapRef.current.flyTo([suggestion.luogo.lat, suggestion.luogo.lon], 9, { duration: 1.2 });
+        onCenterChange?.([suggestion.luogo.lat, suggestion.luogo.lon]);
+      }
+      return;
+    }
+    if (suggestion.kind === 'poi' || suggestion.kind === 'percorso') {
+      const p: any = {
+        id: suggestion.id, name: suggestion.name, lat: suggestion.lat, lon: suggestion.lon,
+        category: suggestion.category, subCategory: suggestion.poi_type || suggestion.category,
+        city: suggestion.city || undefined, country: suggestion.country || undefined,
+        image_url: suggestion.image_url || undefined, is_gem: !!suggestion.is_gem,
+        isFromDb: true, status: 'verified',
+      };
+      setSearchQuery(suggestion.name);
+      // Il pin deve esistere per avere il popup: se non e' gia' in mappa si aggiunge.
+      setPois(prev => (prev.some(x => String(x.id) === String(p.id)) ? prev : [...prev, p as Poi]));
+      focusPoiOnMap(p as Poi);
+      return;
+    }
+
     const text = suggestion.isMapbox
       ? suggestion.description.split(",")[0]
       : (suggestion.isNominatim ? suggestion.description.split(",")[0] : suggestion.description);
@@ -4096,11 +4584,16 @@ function MapArea({
     const subRightBadge = isGem ? "💎" : (isCommunity ? "📸" : (isCultural ? "" : subIcon));
     const subLeftBadge = accessible ? "♿" : "";
 
+    // POSIZIONE APPROSSIMATA (beni del catalogo ministeriale collocati al
+    // centro del comune, 23/08/2026): il pin si vede ma non finge. Contorno
+    // tratteggiato e leggera trasparenza — chi guarda la mappa capisce prima
+    // di aprire la scheda che quel punto indica il paese, non la porta.
+    const approssimato = (poi as any).posizioneApprossimata === true;
     const html = `
-      <div style="position:relative;width:34px;height:42px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.3));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;">
+      <div style="position:relative;width:34px;height:42px;filter:drop-shadow(0 3px 5px rgba(0,0,0,.3));transform: rotate(calc(-1 * var(--map-rotation, 0deg)));transition: transform 0.15s ease-out;${approssimato ? 'opacity:.75;' : ''}">
         <svg viewBox="0 0 34 42" width="34" height="42" xmlns="http://www.w3.org/2000/svg">
           <path d="M17 0C7.6 0 0 7.6 0 17c0 12.7 17 25 17 25S34 29.7 34 17C34 7.6 26.4 0 17 0z"
-            fill="${bgHex}" stroke="${isGem ? '#fbbf24' : '#ffffff'}" stroke-width="${isGem ? '2.5' : '1.5'}"/>
+            fill="${bgHex}" stroke="${approssimato ? '#ffffff' : (isGem ? '#fbbf24' : '#ffffff')}" stroke-width="${isGem ? '2.5' : '1.5'}"${approssimato ? ' stroke-dasharray="3 2"' : ''}/>
           <circle cx="17" cy="16" r="11" fill="white" opacity="0.95"/>
             <text x="17" y="21" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
         </svg>
@@ -4123,7 +4616,10 @@ function MapArea({
     // `poi.category` fa parte della chiave: nei verticali tematici la
     // baseCategory è 'tematiche' per tutti e otto, ed è la categoria vera
     // (terme, cinema…) a decidere colore ed emoji del pin.
-    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}`;
+    // `posizioneApprossimata` fa parte della chiave: senza, il primo pin
+    // disegnato deciderebbe l'aspetto di tutti i beni della stessa categoria
+    // e i punti al centro del comune sembrerebbero precisi.
+    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi);
@@ -4341,49 +4837,47 @@ function MapArea({
     {
       id: 'sentieri', gruppo: 'reti', on: sentieriActive, loading: sentieriLoading, emoji: '🥾',
       tinta: 'bg-emerald-600 border-emerald-400', zoomMin: SENTIERI_MIN_ZOOM,
-      nome: language === 'IT' ? 'Sentieri e cammini' : 'Trails and pilgrim ways',
-      dettaglio: language === 'IT'
-        ? 'con ippovie, rifugi, corsa, canoa e itinerari storici'
-        : 'with bridleways, huts, running, canoe and historic routes',
+      nome: getTranslation('mp_layer_sentieri_nome', language),
+      dettaglio: getTranslation('mp_layer_sentieri_det', language),
       onClick: toggleSentieri,
     },
     {
       id: 'ciclabili', gruppo: 'reti', on: ciclabiliActive, loading: ciclabiliLoading, emoji: '🚲',
       tinta: 'bg-orange-600 border-orange-400', zoomMin: CICLABILI_MIN_ZOOM,
-      nome: language === 'IT' ? 'Ciclovie e mountain bike' : 'Cycle routes and MTB',
-      dettaglio: language === 'IT' ? 'EuroVelo e reti nazionali' : 'EuroVelo and national networks',
+      nome: getTranslation('mp_layer_ciclabili_nome', language),
+      dettaglio: getTranslation('mp_layer_ciclabili_det', language),
       onClick: toggleCiclabili,
     },
     {
       id: 'strade-gusto', gruppo: 'reti', on: stradeGustoActive, loading: stradeGustoLoading, emoji: '🍷',
       tinta: 'bg-[#7f1d1d] border-red-400', zoomMin: STRADE_GUSTO_MIN_ZOOM,
-      nome: language === 'IT' ? 'Vino e gusto' : 'Wine & food',
-      dettaglio: language === 'IT' ? 'cantine, strade e botteghe' : 'cellars, routes and shops',
+      nome: getTranslation('mp_layer_gusto_nome', language),
+      dettaglio: getTranslation('mp_layer_gusto_det', language),
       onClick: toggleStradeGusto,
     },
     {
       id: 'servizi', gruppo: 'reti', on: servicesActive, loading: servicesLoading, emoji: '🚰',
       tinta: 'bg-sky-600 border-sky-400', zoomMin: 0,
-      nome: language === 'IT' ? 'Fontanelle, bagni, panchine' : 'Water, toilets, benches',
+      nome: getTranslation('mp_layer_servizi_nome', language),
       dettaglio: '', onClick: toggleServices,
     },
     {
       id: 'neve', gruppo: 'condizioni', on: neveActive, loading: neveLoading, emoji: '❄️',
       tinta: 'bg-indigo-500 border-indigo-300', zoomMin: 0,
-      nome: language === 'IT' ? 'Neve: piste, impianti e rifugi' : 'Snow: pistes, lifts and huts',
-      dettaglio: language === 'IT' ? '9.569 piste disegnate' : '9,569 pistes drawn',
+      nome: getTranslation('mp_layer_neve_nome', language),
+      dettaglio: getTranslation('mp_layer_neve_det', language),
       onClick: toggleNeve,
     },
     {
       id: 'sole', gruppo: 'condizioni', on: soleActive, loading: soleLoading, emoji: '☀️',
       tinta: 'bg-amber-500 border-amber-300', zoomMin: 0,
-      nome: language === 'IT' ? 'Sole: UV e caldo percepito' : 'Sun: UV and feels-like',
+      nome: getTranslation('mp_layer_sole_nome', language),
       dettaglio: '', onClick: toggleSole,
     },
     {
       id: 'balneazione', gruppo: 'condizioni', on: bathingActive, loading: bathingLoading, emoji: '🏖',
       tinta: 'bg-cyan-600 border-cyan-400', zoomMin: 0,
-      nome: language === 'IT' ? 'Qualità acqua del mare' : 'Bathing water quality',
+      nome: getTranslation('mp_layer_balneazione_nome', language),
       dettaglio: '', onClick: toggleBathing,
     },
   ], [
@@ -4477,7 +4971,7 @@ function MapArea({
           zoomControl={false}
           ref={mapRef}
         >
-          <TileLayer
+          <CachedTiles
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
             url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
           />
@@ -4500,6 +4994,10 @@ function MapArea({
               percorso e le tappe numerate. Si disegna da solo leggendo
               tourService, quindi non serve passargli niente da qui. */}
           <TourRouteLayer />
+          {/* WIP Nav: il tracciato del navigatore pedonale (evento
+              'wip-nav-route' da useWalkingNavigation). Prima stava solo in
+              PlanMap, e dal radar non si vedeva nessuna linea. */}
+          <NavRouteLayer />
 
           {gruppiPerCategoria.map(([categoria, marker]) => (
             <MarkerClusterGroup
@@ -4560,6 +5058,12 @@ function MapArea({
               className="custom-popup"
               minWidth={290}
               maxWidth={290}
+              // La X nativa di Leaflet si sommava a quella disegnata da
+              // PoiPopupContent: due X visibili nello stesso angolo
+              // (24/08/2026, segnalato sui beni culturali). Ora ne resta
+              // una sola, quella della card, più grande e coerente su ogni
+              // variante — chiude comunque nello stesso modo (onClose sotto).
+              closeButton={false}
               position={[activePoi.lat, activePoi.lon]}
               offset={[0, -42]}
               // L'autoPan di Leaflet combatteva col flyTo di centerMapOnPoi
@@ -4591,6 +5095,14 @@ function MapArea({
                 // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
                 // giro", cosi` le tappe si scelgono anche toccando i pin.
                 modalitaGiro={!!isRadarMode}
+                // La X della card chiude davvero: si chiude il popup di
+                // Leaflet e si azzera lo stato, altrimenti il popup resta
+                // "aperto" per React e non si riapre sullo stesso POI.
+                onClose={() => {
+                  try { mapRef.current?.closePopup(); } catch { /* mappa gia' smontata */ }
+                  setActivePopupId(null);
+                  setActivePoi(null);
+                }}
               />
             </Popup>
           )}
@@ -4612,7 +5124,7 @@ function MapArea({
           >
             <div className="bg-slate-800/80 dark:bg-slate-900/80 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2">
               <WifiOff className="w-3 h-3" />
-              {language === 'IT' ? 'Sei offline' : "You're offline"}
+              {getTranslation('mp_sei_offline', language)}
             </div>
           </motion.div>
         )}
@@ -4625,8 +5137,8 @@ function MapArea({
         {selectedCategories.includes('beni_culturali') && zoomCorrente < BENI_CULTURALI_MIN_ZOOM && (
           <div className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-xl rounded-full shadow px-3 py-1.5 text-[11px] font-bold text-[#1e3a8a] dark:text-white">
             🏛️ {zoomCorrente >= 10
-              ? (language === 'IT' ? 'Beni culturali: solo i principali (fascia A e B) — avvicinati per tutti' : 'Heritage: main sites only (tier A–B) — zoom in for all')
-              : (language === 'IT' ? 'Beni culturali: solo i grandi monumenti (fascia A) — avvicinati per gli altri' : 'Heritage: major monuments only (tier A) — zoom in for more')}
+              ? getTranslation('mp_beni_fascia_ab', language)
+              : getTranslation('mp_beni_fascia_a', language)}
           </div>
         )}
         <AnimatePresence>
@@ -4641,17 +5153,12 @@ function MapArea({
               <div className="bg-red-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(220,38,38,0.5)] border border-red-300/60 px-4 py-3 flex items-start gap-2.5">
                 <span className="text-[20px] leading-none mt-0.5">🚫</span>
                 <p className="text-[13px] font-black leading-snug flex-1">
-                  {language === 'IT'
-                    ? (ztlBanner.pre
-                        ? `Stai per entrare nella ZTL${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — rischio multa`
-                        : `Sei nella ZTL${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — rischio multa`)
-                    : (ztlBanner.pre
-                        ? `Entering limited traffic zone${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — fine risk`
-                        : `Inside limited traffic zone${ztlBanner.name ? ` ${ztlBanner.name}` : ''} — fine risk`)}
+                  {getTranslation(ztlBanner.pre ? 'mp_ztl_entrando' : 'mp_ztl_dentro', language)
+                    .replace('{name}', ztlBanner.name ? ` ${ztlBanner.name}` : '')}
                 </p>
                 <button
                   onClick={() => setZtlBanner(null)}
-                  aria-label={language === 'IT' ? 'Chiudi avviso ZTL' : 'Dismiss ZTL alert'}
+                  aria-label={getTranslation('mp_chiudi_avviso_ztl', language)}
                   className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
                 >
                   <X className="w-4 h-4" />
@@ -4673,13 +5180,11 @@ function MapArea({
               <div className="bg-amber-500/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-amber-300/60 px-4 py-2.5 flex items-start gap-2">
                 <span className="text-[15px] leading-none mt-0.5">⚠️</span>
                 <p className="text-[11px] font-bold leading-snug flex-1">
-                  {language === 'IT'
-                    ? 'Copertura basata su OpenStreetMap: non tutte le ZTL sono mappate, verifica sempre la segnaletica.'
-                    : 'Coverage based on OpenStreetMap: not all restricted zones are mapped, always check road signs.'}
+                  {getTranslation('mp_ztl_copertura', language)}
                 </p>
                 <button
                   onClick={() => setZtlDisclaimer(false)}
-                  aria-label={language === 'IT' ? 'Chiudi' : 'Close'}
+                  aria-label={getTranslation('mp_chiudi', language)}
                   className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -4702,13 +5207,11 @@ function MapArea({
               <div className="bg-cyan-600/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-cyan-300/60 px-4 py-2.5 flex items-start gap-2">
                 <span className="text-[15px] leading-none mt-0.5">🏖</span>
                 <p className="text-[11px] font-bold leading-snug flex-1">
-                  {language === 'IT'
-                    ? 'Qualità delle acque di balneazione: classificazione annuale ufficiale UE (EEA). Copertura solo europea; avvicina la mappa per vedere i siti.'
-                    : 'Bathing water quality: official annual EU classification (EEA). Europe-only coverage; zoom in to see the sites.'}
+                  {getTranslation('mp_balneazione_disclaimer', language)}
                 </p>
                 <button
                   onClick={() => setBathingDisclaimer(false)}
-                  aria-label={language === 'IT' ? 'Chiudi' : 'Close'}
+                  aria-label={getTranslation('mp_chiudi', language)}
                   className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -4748,22 +5251,20 @@ function MapArea({
               className="pointer-events-auto max-w-[240px] bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-3"
             >
               <p className="text-[11px] font-bold text-[#1e3a8a] dark:text-white leading-snug">
-                🌧 {language === 'IT'
-                  ? 'Pioggia in arrivo — vuoi vedere i luoghi al coperto?'
-                  : 'Rain coming — want to see indoor places?'}
+                🌧 {getTranslation('mp_pioggia_domanda', language)}
               </p>
               <div className="flex gap-1.5 mt-2">
                 <button
                   onClick={() => { setIndoorMode(true); setRainBannerDismissed(true); }}
                   className="px-2.5 py-1 bg-[#1e3a8a] text-white rounded-lg text-[10px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all"
                 >
-                  {language === 'IT' ? 'Al coperto' : 'Indoor'}
+                  {getTranslation('mp_al_coperto', language)}
                 </button>
                 <button
                   onClick={() => setRainBannerDismissed(true)}
                   className="px-2.5 py-1 bg-black/5 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-lg text-[10px] font-bold hover:bg-black/10 active:scale-95 transition-all"
                 >
-                  {language === 'IT' ? 'No grazie' : 'No thanks'}
+                  {getTranslation('mp_no_grazie', language)}
                 </button>
               </div>
             </motion.div>
@@ -4776,7 +5277,7 @@ function MapArea({
             onClick={() => setIndoorMode(false)}
             className="pointer-events-auto bg-[#1e3a8a]/90 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-1.5 active:scale-95 transition-all"
           >
-            🏛 {language === 'IT' ? 'Al coperto attivo' : 'Indoor mode on'}
+            🏛 {getTranslation('mp_al_coperto_attivo', language)}
             <X className="w-3 h-3" />
           </button>
         )}
@@ -4799,9 +5300,9 @@ function MapArea({
             // cercava i sentieri non aveva motivo di toccarla. L'icona a
             // strati è quella che usano tutte le mappe, e il nome per il
             // lettore di schermo dice anche quanti ne sono accesi.
-            title={language === 'IT' ? 'Livelli della mappa' : 'Map layers'}
-            aria-label={`${language === 'IT' ? 'Livelli della mappa' : 'Map layers'}${
-              layerAccesi.length ? ` · ${layerAccesi.length} ${language === 'IT' ? 'attivi' : 'active'}` : ''}`}
+            title={getTranslation('mp_livelli_mappa', language)}
+            aria-label={`${getTranslation('mp_livelli_mappa', language)}${
+              layerAccesi.length ? ` · ${layerAccesi.length} ${getTranslation('mp_attivi', language)}` : ''}`}
             aria-expanded={serviziAperti}
             // 44 px: la soglia sotto la quale il pollice sbaglia bersaglio.
             className={`relative w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
@@ -4833,7 +5334,7 @@ function MapArea({
           {!serviziAperti && layerAccesi.length > 0 && (
             <button
               onClick={() => setServiziAperti(true)}
-              aria-label={`${language === 'IT' ? 'Livelli attivi' : 'Active layers'}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
+              aria-label={`${getTranslation('mp_livelli_attivi', language)}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
               className="pointer-events-auto flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
             >
               {layerAccesi.map((l) => (
@@ -4851,7 +5352,7 @@ function MapArea({
                 exit={menoMovimento ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.95 }}
                 transition={{ duration: menoMovimento ? 0.08 : 0.16 }}
                 role="group"
-                aria-label={language === 'IT' ? 'Livelli della mappa' : 'Map layers'}
+                aria-label={getTranslation('mp_livelli_mappa', language)}
                 className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[70vh] overflow-y-auto"
               >
                 {(['reti', 'condizioni'] as const).map((gruppo) => (
@@ -4860,8 +5361,8 @@ function MapArea({
                         va e com'è adesso. */}
                     <div className="px-2 pt-1.5 pb-1 text-[10px] font-black uppercase tracking-wider text-[#1e3a8a]/55 dark:text-white/50">
                       {gruppo === 'reti'
-                        ? (language === 'IT' ? 'Dove andare' : 'Where to go')
-                        : (language === 'IT' ? 'Com’è adesso' : 'Conditions now')}
+                        ? getTranslation('mp_dove_andare', language)
+                        : getTranslation('mp_come_adesso', language)}
                     </div>
                     {LIVELLI.filter((v) => v.gruppo === gruppo).map((v) => (
                       <button
@@ -4888,7 +5389,7 @@ function MapArea({
                               l'utente ha appena toccato. */}
                           {v.on && v.zoomMin > 0 && zoomCorrente < v.zoomMin && (
                             <span className="text-[10.5px] font-semibold opacity-95 mt-0.5">
-                              ↗ {language === 'IT' ? 'avvicinati per vederli' : 'zoom in to see them'}
+                              ↗ {getTranslation('mp_avvicinati', language)}
                             </span>
                           )}
                         </span>
@@ -4905,7 +5406,7 @@ function MapArea({
                     onClick={spegniTuttiILivelli}
                     className="mt-1 w-full min-h-11 px-2.5 rounded-xl text-[11.5px] font-bold text-[#1e3a8a] dark:text-white hover:bg-black/5 dark:hover:bg-white/10 active:scale-[0.97] transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
                   >
-                    {language === 'IT' ? `Spegni tutti (${layerAccesi.length})` : `Turn all off (${layerAccesi.length})`}
+                    {getTranslation('mp_spegni_tutti', language).replace('{n}', String(layerAccesi.length))}
                   </button>
                 )}
               </motion.div>
@@ -4934,11 +5435,11 @@ function MapArea({
                   </span>
                   <div className="min-w-0">
                     <p className="text-[11px] font-black text-[#1e3a8a] dark:text-white leading-tight">
-                      UV {language === 'IT' ? livelloUv(datiSole.uv).it : livelloUv(datiSole.uv).en}
+                      UV {getTranslation(`mp_uv_${livelloUv(datiSole.uv).chiave}`, language)}
                     </p>
                     <p className="text-[10px] text-primary/60 dark:text-white/60 leading-tight">
-                      {language === 'IT' ? 'percepiti' : 'feels like'} {Math.round(datiSole.percepita)}°
-                      {datiSole.temperatura ? ` · ${Math.round(datiSole.temperatura)}° ${language === 'IT' ? 'reali' : 'actual'}` : ''}
+                      {getTranslation('mp_percepiti', language)} {Math.round(datiSole.percepita)}°
+                      {datiSole.temperatura ? ` · ${Math.round(datiSole.temperatura)}° ${getTranslation('mp_reali', language)}` : ''}
                     </p>
                   </div>
                 </div>
@@ -4946,7 +5447,7 @@ function MapArea({
 
                 {datiSole && datiSole.oreCritiche.length > 0 && (
                   <p className="text-[10px] text-orange-600 dark:text-orange-400 font-bold mt-2 leading-snug">
-                    {language === 'IT' ? 'Sole forte' : 'Strong sun'} {datiSole.oreCritiche[0]}–{datiSole.oreCritiche[datiSole.oreCritiche.length - 1]}
+                    {getTranslation('mp_sole_forte', language)} {datiSole.oreCritiche[0]}–{datiSole.oreCritiche[datiSole.oreCritiche.length - 1]}
                   </p>
                 )}
 
@@ -4973,7 +5474,7 @@ function MapArea({
                   <div className="mt-2.5 pt-2 border-t border-black/5 dark:border-white/10 space-y-1">
                     {oreLuce.sempreGiorno ? (
                       <p className="text-[10px] text-primary/70 dark:text-white/70">
-                        {language === 'IT' ? 'Sole sempre sopra l’orizzonte' : 'Sun never sets'}
+                        {getTranslation('mp_sole_sempre_alto', language)}
                       </p>
                     ) : (
                       <>
@@ -4986,12 +5487,12 @@ function MapArea({
                             legge «19:30» dall'Italia non sa di che ora si parla. */}
                         {fusoSole && fusoSole !== Intl.DateTimeFormat().resolvedOptions().timeZone && (
                           <p className="text-[9px] text-primary/50 dark:text-white/50 leading-snug">
-                            🕒 {language === 'IT' ? 'ora locale di' : 'local time,'} {fusoSole.split('/').pop()?.replace(/_/g, ' ')}
+                            🕒 {getTranslation('mp_ora_locale_di', language)} {fusoSole.split('/').pop()?.replace(/_/g, ' ')}
                           </p>
                         )}
                         {oreLuce.oraOroSeraInizio && (
                           <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 leading-snug">
-                            ✨ {language === 'IT' ? 'Ora d’oro dalle' : 'Golden hour from'} {oraBreve(oreLuce.oraOroSeraInizio, fusoSole)}
+                            ✨ {getTranslation('mp_ora_oro', language)} {oraBreve(oreLuce.oraOroSeraInizio, fusoSole)}
                             {mancaAllOraOro(oreLuce) ? ` · ${mancaAllOraOro(oreLuce)}` : ''}
                           </p>
                         )}
@@ -5057,7 +5558,7 @@ function MapArea({
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[11px] font-black text-amber-900 leading-tight uppercase tracking-tight">
-                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : (key === "db" ? (language === 'IT' ? "Luoghi Vicini" : "Nearby Places") : (key === "servizi" ? (language === 'IT' ? "Servizi" : "Services") : key)))}
+                  {key === "overpass" ? getTranslation("error_map_places", language) : (key === "location" ? getTranslation("error_position", language) : (key === "db" ? getTranslation('mp_err_db_titolo', language) : (key === "servizi" ? getTranslation('mp_err_servizi_titolo', language) : key)))}
                 </p>
                 <p className="text-[10px] text-amber-800/90 leading-tight mt-1 font-medium">
                   {String(error)}
@@ -5138,7 +5639,7 @@ function MapArea({
                     <MapPin className="w-12 h-12 mb-4 text-[#1e3a8a]/50" />
                     <p className="font-bold text-sm px-10 text-[#1e3a8a]">
                       {!userLocation 
-                        ? (language === 'IT' ? "Attiva la posizione GPS per vedere i luoghi attorno a te." : "Enable GPS location to see places around you.")
+                        ? getTranslation('mp_gps_attiva', language)
                         : getTranslation("no_pois_found_within_1000m", language)
                       }
                     </p>
@@ -5262,7 +5763,7 @@ function MapArea({
               aria-controls="map-search-results"
               aria-autocomplete="list"
               aria-activedescendant={activeSuggestionIdx >= 0 ? `map-sr-${activeSuggestionIdx}` : undefined}
-              onBlur={() => setTimeout(() => { setSuggestions([]); setSearchNoResults(false); }, 200)}
+              onBlur={() => setTimeout(() => { setSuggestions([]); setNostri([]); setSearchNoResults(false); }, 200)}
               onKeyDown={(e) => {
                 // Navigazione da tastiera: ↑↓ evidenziano, Invio seleziona,
                 // Esc chiude. Senza selezione attiva Invio lancia la ricerca
@@ -5362,8 +5863,8 @@ function MapArea({
                 {displayedSuggestions.length === 0 ? (
                   <div className="px-5 py-4 text-[15px] font-bold text-[#1e3a8a]/70 flex items-center gap-3" aria-live="polite">
                     {isSearching
-                      ? (<><Loader2 className="w-4 h-4 animate-spin shrink-0" /> {language === 'IT' ? 'Ricerca in corso…' : 'Searching…'}</>)
-                      : (language === 'IT' ? `Nessun risultato per "${searchQuery}"` : `No results for "${searchQuery}"`)}
+                      ? (<><Loader2 className="w-4 h-4 animate-spin shrink-0" /> {getTranslation('mp_ricerca_in_corso', language)}</>)
+                      : getTranslation('mp_nessun_risultato', language).replace('{q}', searchQuery)}
                   </div>
                 ) : displayedSuggestions.map((res, idx) => (
                   <button
@@ -5379,20 +5880,31 @@ function MapArea({
                     className={`w-full px-5 py-4 min-h-[56px] text-left hover:bg-primary/5 flex items-start gap-4 transition-all border-t border-amber-100/40 first:border-t-0 group cursor-pointer ${idx === activeSuggestionIdx ? 'bg-primary/10' : ''}`}
                   >
                     <div className="mt-0.5 p-1.5 bg-[#fcfaf8]-container rounded-lg group-hover:bg-primary/10 transition-colors shrink-0">
-                      <MapPin className="w-4 h-4 text-primary" />
+                      {res.kind === 'categoria' ? <span className="text-base leading-none">{res.emoji}</span>
+                        : res.kind === 'percorso' ? <span className="text-base leading-none">🥾</span>
+                        : res.kind === 'poi' ? <span className="text-base leading-none">{res.is_gem ? '💎' : (CATEGORY_EMOJIS as any)[res.category] || '📍'}</span>
+                        : <MapPin className="w-4 h-4 text-primary" />}
                     </div>
                     <div className="flex flex-col flex-1 min-w-0">
                       <span className="font-bold text-[#1e3a8a] text-[15px] leading-tight whitespace-normal break-words">
-                        {res.isNominatim || res.isMapbox
-                          ? res.description.split(",")[0]
-                          : res.structured_formatting?.main_text ||
-                            res.description}
+                        {res.kind === 'categoria'
+                          ? (res.luogo ? `${res.label} · ${res.luogo.name}` : res.label)
+                          : res.kind
+                            ? res.name
+                            : res.isNominatim || res.isMapbox
+                              ? res.description.split(",")[0]
+                              : res.structured_formatting?.main_text || res.description}
                       </span>
                       <span className="text-xs text-[#1e3a8a]/80 leading-snug mt-0.5 whitespace-normal break-words">
-                        {res.isNominatim || res.isMapbox
-                          ? res.description.split(",").slice(1).join(",").trim() || res.description
-                          : res.structured_formatting?.secondary_text ||
-                            res.description}
+                        {res.kind === 'categoria'
+                          ? getTranslation('mp_accendi_categoria', language)
+                          : res.kind === 'percorso'
+                            ? `${getTranslation('mp_percorso', language)}${res.city ? ` · ${res.city}` : ''}`
+                            : res.kind === 'poi'
+                              ? [res.city, res.country, res.distanza_km != null ? `${res.distanza_km} km` : null].filter(Boolean).join(' · ')
+                              : res.isNominatim || res.isMapbox
+                                ? res.description.split(",").slice(1).join(",").trim() || res.description
+                                : res.structured_formatting?.secondary_text || res.description}
                       </span>
                     </div>
                   </button>
