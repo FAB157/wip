@@ -12,21 +12,16 @@ import {
 import { getCachedPoiDetails, setCachedPoiDetails } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
 import { Language, getTranslation } from "../lib/i18n";
-import { Capacitor, registerPlugin } from '@capacitor/core';
 import { getApiUrl } from '../lib/api';
 import { getGuideCharacter } from '../lib/guideSettings';
-import { datiBeneCulturale } from '../lib/poiTaxonomy';
+import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from '../lib/poiTaxonomy';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
 import { getTranslatedPoiName } from '../lib/poiNameI18n';
-import { puntoArrivo } from '../lib/puntoArrivo';
+import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
 import { tourService, MAX_TAPPE } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
-
-const ItaintaBackgroundPoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
-  ? registerPlugin<any>('ItaintaBackgroundPoiPlugin') 
-  : null;
 
 interface PoiPopupContentProps {
   poi: any;
@@ -57,6 +52,40 @@ function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
     if (pieno) return;
     tourService.bozzaAlterna(poi);
   };
+
+  // GIRO GIA` IN CORSO (22/08/2026): la bozza non serve, la tappa entra
+  // direttamente nel giro e il percorso si rifa` da dove si e`. Vale anche a
+  // giro finito: e` il modo di "proseguire".
+  const [alVolo, setAlVolo] = useState<'idle' | 'busy' | 'fatto' | 'no'>('idle');
+  if (tourService.inCorso()) {
+    const giaNelGiro = id != null && tourService.giroHa(id);
+    const aggiungi = async (e: React.SyntheticEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      if (giaNelGiro || alVolo === 'busy') return;
+      setAlVolo('busy');
+      const ok = await tourService.aggiungiTappaAlVolo(poi).catch(() => false);
+      setAlVolo(ok ? 'fatto' : 'no');
+    };
+    return (
+      <button
+        onClick={aggiungi}
+        onTouchEnd={aggiungi}
+        disabled={giaNelGiro || alVolo === 'busy'}
+        className={`mb-2.5 w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-[12px] font-black transition-all active:scale-95 border ${
+          giaNelGiro || alVolo === 'fatto'
+            ? "bg-blue-50 text-[#1e3a8a] border-blue-200"
+            : "bg-[#1e3a8a] text-white border-[#1e3a8a] shadow-md hover:bg-blue-800"
+        }`}
+      >
+        <Footprints className="w-4 h-4" />
+        {giaNelGiro || alVolo === 'fatto'
+          ? 'Nel giro'
+          : alVolo === 'busy' ? 'Rifaccio il percorso…'
+          : alVolo === 'no' ? 'Giro pieno (dieci tappe)'
+          : 'Aggiungi al giro in corso'}
+      </button>
+    );
+  }
 
   return (
     <button
@@ -313,25 +342,13 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           
           if (isMounted) setData(groqData);
 
-          // ── STEP 3.1: Ricerca immagine Wikipedia in background (non-bloccante) ──
-          let wikiImagePromise = fetch(`https://it.wikipedia.org/w/api.php?action=query&prop=pageimages&format=json&piprop=original&titles=${encodeURIComponent(poi.name)}&origin=*`)
-            .then(res => res.json())
-            .then(data => {
-              const pages = data.query?.pages;
-              if (pages) {
-                const pageId = Object.keys(pages)[0];
-                if (pageId !== "-1" && pages[pageId].original?.source) {
-                  const img = pages[pageId].original.source;
-                  groqData.imageUrl = img;
-                  if (isMounted) setData({...groqData});
-                  return img;
-                }
-              }
-              return null;
-            }).catch(err => {
-              console.warn("PoiPopupContent: Wikipedia image fetch failed", err);
-              return null;
-            });
+          // ── STEP 3.1 (RIMOSSO 22/08/2026): qui si chiedeva a Wikipedia
+          // `pageimages&titles=<nome>`: «Duomo» → la voce generica Duomo,
+          // «Museo Civico» → un museo civico qualsiasi — e quella foto vinceva
+          // sulla foto del server e veniva persistita. Era la prima causa delle
+          // foto «non di quel POI». La foto la sceglie SOLO il server, per
+          // coordinate e nome (fotoDelLuogo in enrich-stream).
+          const wikiImagePromise: Promise<string | null> = Promise.resolve(null);
 
           // Watchdog anti-stallo: se lo stream resta muto per 25s abortiamo
           // e scatta il fallback elegante (mai UI bloccata).
@@ -548,22 +565,18 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     e.preventDefault();
     e.stopPropagation();
     setShowNavChoice(false);
-    // Verso la PORTA, non verso il centro dell'edificio: vedi puntoArrivo.
-    const a = puntoArrivo(poi);
-    window.dispatchEvent(new CustomEvent('wip-smart-navigate', {
-      detail: { lat: a.lat, lon: a.lon, name: poi.name, id: poi.id, mode: 'foot' },
-    }));
+    // Verso la PORTA; senza porta, il civico dell'indirizzo (la via
+    // principale); altrimenti il centroide. Un solo imbuto (NavChoiceSheet)
+    // per popup, card, scheda e radar: la forma dell'evento e la scelta del
+    // punto d'arrivo restano una.
+    void navigaAPiediVerso(poi as any);
   };
 
   const navigaInAuto = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setShowNavChoice(false);
-    const a = puntoArrivo(poi);
-    const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, '_blank');
-    if (ItaintaBackgroundPoiPlugin) {
-      ItaintaBackgroundPoiPlugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name }).catch(web);
-    } else web();
+    void navigaInAutoVerso(poi as any);
   };
 
   // La scelta compare come foglio in basso invece che dentro la card: le tre
@@ -859,6 +872,24 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                   className="inline-flex items-center gap-1 mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-stone-100 text-stone-600"
                 >
                   🏺 {getTranslation("beni_culturali_tutelato", language)}
+                </span>
+              );
+            })()}
+            {/* VERTICALI TEMATICI: sotto la stessa chip 🧭 convivono una
+                sorgente termale e un murale, quindi il badge dice a quale
+                verticale appartiene il POI e che cosa è davvero — il poi_type
+                tradotto in italiano (hot_spring → "Sorgente termale"). */}
+            {(() => {
+              const chiave = chiaveTematica(poi);
+              if (!chiave) return null;
+              const colore = CATEGORY_HEX[chiave] || "#4f46e5";
+              const tipo = etichettaTipoTematico((poi as any).poi_type || (poi as any).subCategory);
+              return (
+                <span
+                  className="inline-flex items-center gap-1 mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full"
+                  style={{ backgroundColor: `${colore}1a`, color: colore }}
+                >
+                  {CATEGORY_EMOJIS[chiave] || "🧭"} {getTranslation(chiave, language)}{tipo ? ` · ${tipo}` : ""}
                 </span>
               );
             })()}

@@ -13,6 +13,7 @@ import { getApiUrl } from "../lib/api";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
+  CATEGORY_HEX,
   SUB_CATEGORY_EMOJIS,
 } from "../lib/mapConstants";
 import {
@@ -25,17 +26,20 @@ import {
   Popup,
   LayerGroup,
   Polyline,
+  CircleMarker,
+  Tooltip,
 } from "react-leaflet";
 import L from "leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
-import { Search, Crosshair, Loader2, Info, X, MapPin, Headphones, WifiOff } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { Search, Crosshair, Loader2, Info, Layers, X, MapPin, Headphones, WifiOff } from "lucide-react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 
 import { setCachedPoiDetails, getCachedPoiDetails, getCachedCityName } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
 import { gygSearchUrl, viatorSearchUrl, tiqetsHomeUrl, trackAffiliateClick } from "../lib/affiliates";
 import { supabase } from "../lib/supabase";
 import { Language, getTranslation } from "../lib/i18n";
+import { puntoArrivo } from "../lib/puntoArrivo";
 import { logApiCall } from "../lib/apiLogger";
 import { locationService } from "../services/locationService";
 import { haversineMeters } from "../lib/geo";
@@ -43,10 +47,15 @@ import { supabaseCircuitBreaker } from "../lib/circuitBreaker";
 import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servicesLayer";
 import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
 import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
+import { tasteRoutesInBounds, TASTE_KIND_LABELS } from "../lib/wineRoutesCatalog";
+import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS } from "../lib/poiTaxonomy";
+import { fetchRouteLines, drawRouteLines, drawRouteStops, creaGruppoPercorsi, livelloDaZoom, setRouteAttribution, ATTRIB_SENTIERI, ATTRIB_GUSTO } from "../lib/routeLines";
+import { TASTE_ROUTE_LINES } from "../lib/tasteRouteLines";
+import { decodeSegments } from "../lib/polyline";
 import type { ZtlAlertEvent } from "../lib/ztlAlert";
 import { fetchDatiSole, livelloUv, consiglioSole } from "../lib/sunIndex";
 import type { DatiSole } from "../lib/sunIndex";
-import { orariSole, oraBreve, mancaAllOraOro } from "../lib/sunTimes";
+import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTimes";
 import type { OrariSole } from "../lib/sunTimes";
 import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_LABEL, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
 
@@ -62,7 +71,12 @@ import "leaflet/dist/leaflet.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 
-const INITIAL_CENTER: [number, number] = [44.0792, 10.1];
+import { getInitialMapCenter, saveLastMapCenter, shouldFlyToGpsOnFirstFix } from "../lib/mapStart";
+
+// Non più Carrara per tutti (22/08/2026): la città scelta dall'utente,
+// altrimenti l'ultimo centro visto, altrimenti il fallback. Letto una volta
+// al caricamento del modulo: la mappa si monta con quel centro.
+const INITIAL_CENTER: [number, number] = getInitialMapCenter();
 
 const CATEGORY_BORDER_COLORS: Record<string, string> = {
   gemme: "border-t-[#0f766e]",
@@ -254,6 +268,9 @@ import {
   resolvePoiTaxonomy,
   matchesSubByHeuristics,
   passesCategoryRule,
+  isTematico,
+  chiaveTematica,
+  NATURA_DB_CATEGORIES,
 } from "../lib/poiTaxonomy";
 
 // Ri-esportata: altri componenti la importano storicamente da qui.
@@ -425,6 +442,9 @@ function MapEventsHandler({
           if (onCenterChangeRef.current) {
             onCenterChangeRef.current([center.lat, center.lng]);
           }
+          // «Dove ero l'ultima volta»: l'ultimo centro visto riapre la mappa
+          // al prossimo avvio (lib/mapStart.ts).
+          saveLastMapCenter(center.lat, center.lng);
 
           // Ancoraggio geografico delle ricerche esterne (Viator, GetYourGuide,
           // Virgilio, Ticketmaster): il riferimento è ciò che l'utente sta
@@ -583,6 +603,9 @@ import PoiPopupContent from "./PoiPopupContent";
 import TourRouteLayer from "./TourRouteLayer";
 import PoiRadarPanel from "./PoiRadarPanel";
 
+/** L'atlante dei beni vincolati carica solo da questo zoom (quartiere). */
+const BENI_CULTURALI_MIN_ZOOM = 13;
+
 function MapArea({
   selectedCategories,
   onSelectPoi,
@@ -626,7 +649,8 @@ function MapArea({
         const lang = (language || 'IT').toLowerCase();
         url = tiqetsHomeUrl(lang);
         try {
-          const res = await fetch('/api/tiqets', {
+          // getApiUrl: su Capacitor un path relativo punta agli asset locali.
+          const res = await fetch(getApiUrl('/api/tiqets'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ lat: c.lat, lon: c.lng, radius: 30, cityName: city, lang })
@@ -782,6 +806,9 @@ function MapArea({
 
   // Stop follow mode & compass when user manually pans the map
   const stopFollowMode = useCallback(() => {
+    // L'utente ha messo mano alla mappa: il volo automatico al primo fix
+    // non deve più rubargli la vista.
+    userDraggedRef.current = true;
     if (followMode) {
       setFollowMode(false);
       // Stop compass
@@ -812,10 +839,22 @@ function MapArea({
   // invece di lasciarlo tickare a vuoto quando il tour è spento
   const [isTourRunning, setIsTourRunning] = useState<boolean>(() => locationService.getIsTourActive());
 
+  // Al PRIMO fix GPS la mappa vola sulla posizione dell'utente — una volta
+  // sola, e solo se la preferenza è «la mia posizione» e l'utente non ha
+  // già trascinato la mappa. Prima il fix aggiornava il marker e basta: un
+  // utente a Roma restava su Carrara.
+  const flewToGpsRef = useRef(false);
+  const userDraggedRef = useRef(false);
+
   // Sincronizza la posizione dell'utente con il locationService centrale
   useEffect(() => {
     const unsub = locationService.subscribe((loc) => {
       setUserLocation([loc.latitude, loc.longitude]);
+      if (!flewToGpsRef.current && !userDraggedRef.current && shouldFlyToGpsOnFirstFix()
+          && Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude)) {
+        flewToGpsRef.current = true;
+        try { mapRef.current?.flyTo([loc.latitude, loc.longitude], Math.max(mapRef.current.getZoom(), 14), { duration: 1.2 }); } catch { /* mappa non pronta */ }
+      }
       if (loc.heading !== null) {
         setUserHeading(loc.heading);
       }
@@ -846,7 +885,7 @@ function MapArea({
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   // Contatore di generazione dei fetch: le risposte di un fetch superato vengono scartate
   const fetchSeqRef = useRef(0);
-  const lastFetchedStateRef = useRef<{ bounds: L.LatLngBounds; categoriesKey: string; subFilter: string[] | undefined } | null>(null);
+  const lastFetchedStateRef = useRef<{ bounds: L.LatLngBounds; categoriesKey: string; subFilter: string[] | undefined; beniLivello?: number } | null>(null);
   // Ancora dell'ultimo fetch (centro + zoom): serve alla soglia di movimento
   // che evita di rifare il fetch per i pan programmatici (follow-me, flyTo).
   const lastFetchAnchorRef = useRef<{ lat: number; lon: number; zoom: number } | null>(null);
@@ -1081,6 +1120,19 @@ function MapArea({
   // Non persiste: è un menù, non una preferenza — gli stati dei singoli
   // layer invece restano salvati come prima.
   const [serviziAperti, setServiziAperti] = useState(false);
+  // Lo zoom di adesso, per dire nel pannello «avvicinati»: un layer acceso
+  // che non mostra niente perché si sta guardando mezza Europa sembra
+  // rotto, e la spiegazione deve stare dove si è appena toccato.
+  const [zoomCorrente, setZoomCorrente] = useState(13);
+  // Chi ha chiesto al telefono di ridurre le animazioni ha spesso un
+  // motivo serio (vertigini, emicrania vestibolare, nausea da movimento).
+  // Il pannello compare lo stesso, senza scivolare né rimpicciolirsi.
+  const menoMovimento = useReducedMotion();
+  // Dichiarato qui, prima dei sentieri, perché anche quel layer deve
+  // sapere se la neve è accesa: i rifugi li disegna uno solo dei due.
+  const [neveActive, setNeveActive] = useState(() => {
+    try { return localStorage.getItem('wip_neve_enabled') === '1'; } catch { return false; }
+  });
 
   // ── Sentieri e cammini ────────────────────────────────────────────────
   // 30.068 percorsi internazionali, nazionali e regionali importati da OSM.
@@ -1092,6 +1144,9 @@ function MapArea({
   });
   const [sentieriLoading, setSentieriLoading] = useState(false);
   const sentieriLayerRef = useRef<L.LayerGroup | null>(null);
+  // I tracciati stanno in un gruppo a parte: le palline raggruppano i PIN,
+  // e una linea in mezzo ai marcatori raggruppati non ha senso.
+  const sentieriLineeRef = useRef<L.LayerGroup | null>(null);
   // Zoom 7 come le spiagge e gli altri POI naturali: un cammino lungo
   // centinaia di chilometri va visto da lontano, altrimenti lo si scopre
   // solo quando ci si è già sopra. Sotto zoom 10 però si mostrano soltanto
@@ -1100,6 +1155,11 @@ function MapArea({
   // indistinguibili.
   const SENTIERI_MIN_ZOOM = 7;
   const SENTIERI_ZOOM_TUTTI = 10;
+  // Lo zoom in cui il gruppo si apre: sotto, una pallina col numero di
+  // percorsi; da qui in su i pin singoli E il tracciato disegnato. Un
+  // numero solo per le due cose, così quello che si vede e quello che si
+  // tocca cambiano insieme.
+  const SENTIERI_ZOOM_APERTURA = 12;
 
   const toggleSentieri = useCallback(() => {
     setSentieriActive((prev) => {
@@ -1123,29 +1183,61 @@ function MapArea({
       // dire un ilike su colonna non indicizzata: misurato 6,4 s in Toscana
       // e statement timeout in Provenza. I percorsi internazionali e
       // nazionali sono stati marcati `osm_sentieri_top` apposta.
-      const lontano = map.getZoom() < SENTIERI_ZOOM_TUTTI;
+      // TRE soglie, non due. Dopo l'import del 21/08/2026 le reti LOCALI
+      // sono 138.000 anelli comunali: bellissimi quando sei lì, rumore
+      // puro quando guardi una regione. Compaiono solo da zoom 12, che è
+      // anche lo zoom in cui il gruppo si apre e appaiono i tracciati.
+      const zoomFonti = map.getZoom();
+      const lontano = zoomFonti < SENTIERI_ZOOM_TUTTI;
+      // I RIFUGI stanno nel layer della neve insieme a comprensori e
+      // impianti, ed è un abbinamento sbagliato: chi cammina in agosto
+      // cerca un rifugio, non uno skilift, e non gli verrebbe mai in mente
+      // di accendere ❄️. Quindi compaiono anche qui — ma solo se il layer
+      // della neve è spento, altrimenti si disegnerebbero due volte.
+      const rifugiQui = !neveActive && zoomFonti >= SENTIERI_ZOOM_APERTURA;
       const fonti = lontano
-        ? ['osm_sentieri_top', 'cai_sentiero_italia']
-        : ['osm_sentieri_top', 'osm_sentieri', 'cai_sentiero_italia', 'pdipr_fr'];
+        ? ['osm_sentieri_top', 'cai_sentiero_italia', 'osm_storici']
+        : zoomFonti < SENTIERI_ZOOM_APERTURA
+          ? ['osm_sentieri_top', 'osm_sentieri', 'cai_sentiero_italia', 'pdipr_fr', 'osm_storici']
+          : ['osm_sentieri_top', 'osm_sentieri', 'cai_sentiero_italia', 'pdipr_fr',
+            'osm_sentieri_locali', 'osm_ippovie', 'osm_storici', 'osm_corsa', 'osm_canoa'];
       const { data } = await supabase
         .from('shared_pois')
-        .select('id,name,lat,lon,description_short,image_url')
+        .select('id,name,lat,lon,description_short,source')
         .in('source', fonti)
+        // I pin nascosti restano fuori. Servono davvero: ricucendo la rete
+        // francese, 2.727 pezzi della stessa traccia sono stati messi da
+        // parte (la Via Garona da sola ne aveva 378) e senza questo filtro
+        // tornerebbero tutti sulla mappa.
+        .or('is_hidden.is.null,is_hidden.eq.false')
         .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
         .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
         .limit(lontano ? 120 : 200);
-      if (!sentieriLayerRef.current) sentieriLayerRef.current = L.layerGroup();
+      if (!sentieriLayerRef.current) sentieriLayerRef.current = creaGruppoPercorsi('#059669', SENTIERI_ZOOM_APERTURA);
+      if (!sentieriLineeRef.current) sentieriLineeRef.current = L.layerGroup();
       const group = sentieriLayerRef.current;
+      const linee = sentieriLineeRef.current;
       group.clearLayers();
+      linee.clearLayers();
       for (const s of data || []) {
+        // Un'icona per famiglia, come per i luoghi del gusto: a cavallo non
+        // si va con gli scarponi, e il Sentiero Italia non è un anello
+        // comunale. Chi guarda la mappa lo capisce senza aprire niente.
+        const emojiFonte = s.source === 'osm_ippovie' ? '🐴'
+          : s.source === 'cai_sentiero_italia' ? '🏔'
+          : s.source === 'osm_sentieri_top' ? '🎒'
+          : s.source === 'osm_corsa' ? '🏃'
+          : s.source === 'osm_canoa' ? '🛶'
+          : s.source === 'osm_storici' ? '🏛'
+          : '🥾';
         const icon = L.divIcon({
-          html: '<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🥾</div>',
+          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emojiFonte}</div>`,
           className: 'wip-sentiero-marker',
           iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
         });
         L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
-            <div style="font-size:12px;font-weight:700;color:#111827;">🥾 ${escapeHtml(s.name || '')}</div>
+            <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(s.name || '')}</div>
             <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
             <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
               ? 'Punto di partenza · © contributori OpenStreetMap'
@@ -1153,26 +1245,103 @@ function MapArea({
           </div>`)
           .addTo(group);
       }
-      if (!map.hasLayer(group) && map.getZoom() >= SENTIERI_MIN_ZOOM) group.addTo(map);
+      // I rifugi lungo il cammino, dalla tabella dei servizi.
+      if (rifugiQui) {
+        const { data: rifugi } = await supabase
+          .from('utility_pois')
+          .select('id,name,lat,lon')
+          .eq('category', 'neve')
+          .eq('sub_category', 'rifugio_alpino')
+          .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+          .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+          .limit(60);
+        for (const r of rifugi || []) {
+          const icon = L.divIcon({
+            html: '<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🏔</div>',
+            className: 'wip-rifugio-marker',
+            iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+          });
+          L.marker([Number(r.lat), Number(r.lon)], { icon })
+            .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;">
+              <div style="font-size:12px;font-weight:700;color:#111827;">🏔 ${escapeHtml(r.name || '')}</div>
+              <div style="font-size:11px;color:#374151;margin-top:2px;">${language === 'IT' ? 'Rifugio alpino' : 'Mountain hut'}</div>
+              <div style="font-size:9px;color:#6b7280;margin-top:4px;">© contributori OpenStreetMap</div>
+            </div>`)
+            .addTo(group);
+        }
+      }
+
+      // IL TRACCIATO, non solo la partenza. Dal 21/08/2026 le geometrie
+      // stanno in route_geometries: si prendono quelle che ATTRAVERSANO il
+      // riquadro (un cammino di 200 km passa sullo schermo senza che né
+      // partenza né arrivo ci stiano dentro) e si disegnano a puntini,
+      // come il giro a più tappe.
+      const nomiSentieri = new Map<string, string>(
+        (data || []).map((s: any) => [String(s.id), String(s.name || '')]),
+      );
+      // I TRACCIATI, per livelli di dettaglio. Da zoom 8 — cioè
+      // inquadrando una regione — si vedono già i grandi cammini che la
+      // attraversano, nella versione grossolana che pesa ~36 KB invece di
+      // 850. Avvicinandosi arriva la linea intera, e poi le tappe.
+      const zoomOra = map.getZoom();
+      const livello = livelloDaZoom(zoomOra);
+      if (livello) {
+        const lineeSentieri = await fetchRouteLines(
+          bounds,
+          ['cai', 'osm', 'pdipr', 'cavallo'],
+          livello === 'regionale' ? 60 : livello === 'medio' ? 120 : 150,
+          livello === 'medio' ? 2 : 1,
+          livello,
+        );
+        drawRouteLines(linee, lineeSentieri, '#059669', nomiSentieri);
+        // I percorsi in CANOA in blu: una linea verde sull'acqua non si
+        // legge, e soprattutto non si capisce che è un percorso d'acqua.
+        const lineeCanoa = await fetchRouteLines(
+          bounds, ['acqua'],
+          livello === 'regionale' ? 30 : 60,
+          livello === 'medio' ? 2 : 1,
+          livello,
+        );
+        drawRouteLines(linee, lineeCanoa, '#0284c7', nomiSentieri);
+        // Le tappe numerate solo da zoom 13: prima i numeri si
+        // accavallerebbero e si leggerebbe una macchia.
+        if (livello === 'pieno') {
+          for (const l of lineeSentieri) {
+            if (l.stops?.length) drawRouteStops(linee, l.stops, '#059669', nomiSentieri.get(l.poiId));
+          }
+        }
+      }
+      if (map.getZoom() >= SENTIERI_MIN_ZOOM) {
+        if (!map.hasLayer(group)) group.addTo(map);
+        if (!map.hasLayer(linee)) linee.addTo(map);
+      }
     } catch (e) {
-      console.warn('[Sentieri] fetch fallito:', e);
+      console.warn('[Sentieri] fetch fallito:', e); // rifugi compresi
     } finally {
       setSentieriLoading(false);
     }
-  }, [language]);
+    // neveActive serve: se accendi la neve i rifugi li disegna quel layer,
+    // e questo deve smettere di farlo per non raddoppiarli.
+  }, [language, neveActive]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!sentieriActive) {
-      if (map && sentieriLayerRef.current && map.hasLayer(sentieriLayerRef.current)) {
-        map.removeLayer(sentieriLayerRef.current);
+    const spegni = () => {
+      for (const r of [sentieriLayerRef, sentieriLineeRef]) {
+        if (map && r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
       }
+    };
+    if (!sentieriActive) {
+      spegni();
+      setRouteAttribution(map, ATTRIB_SENTIERI, false);
       return;
     }
     if (!map) return;
+    setRouteAttribution(map, ATTRIB_SENTIERI, true);
     const aggiorna = () => {
+      setZoomCorrente(map.getZoom());
       if (map.getZoom() < SENTIERI_MIN_ZOOM) {
-        if (sentieriLayerRef.current && map.hasLayer(sentieriLayerRef.current)) map.removeLayer(sentieriLayerRef.current);
+        spegni();
         return;
       }
       void caricaSentieri(map.getBounds());
@@ -1182,16 +1351,365 @@ function MapArea({
     return () => { map.off('moveend', aggiorna); };
   }, [sentieriActive, caricaSentieri]);
 
+  // ── BICI ──────────────────────────────────────────────────────────────
+  //
+  // Layer nuovo del 21/08/2026. Il censimento di OSM ha mostrato un buco
+  // intero: 20.580 ciclovie di rete internazionale, nazionale o regionale
+  // (EuroVelo, ciclabili nazionali), 33.375 percorsi ciclabili locali e
+  // 3.152 tracciati mountain bike, e noi non ne avevamo NESSUNO — l'import
+  // dei sentieri chiedeva solo route=hiking|foot|pilgrimage.
+  //
+  // Layer separato e non dentro 🥾: chi pedala e chi cammina non cercano la
+  // stessa cosa, e una ciclovia di 1.200 km in mezzo ai sentieri di valle
+  // confonde e basta. Arancione, che non e' usato da nessun altro layer.
+  const [ciclabiliActive, setCiclabiliActive] = useState(() => {
+    try { return localStorage.getItem('wip_ciclabili_enabled') === '1'; } catch { return false; }
+  });
+  const [ciclabiliLoading, setCiclabiliLoading] = useState(false);
+  const ciclabiliLayerRef = useRef<L.LayerGroup | null>(null);
+  const ciclabiliLineeRef = useRef<L.LayerGroup | null>(null);
+  const CICLABILI_MIN_ZOOM = 7;
+  const CICLABILI_ZOOM_LOCALI = 12;
+
+  const toggleCiclabili = useCallback(() => {
+    setCiclabiliActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_ciclabili_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
+  const caricaCiclabili = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setCiclabiliLoading(true);
+    try {
+      const zoom = map.getZoom();
+      // Fino a zoom 11 solo le ciclovie vere (EuroVelo e reti nazionali);
+      // le ciclabili di quartiere e i tracciati mtb da 12 in su.
+      const fonti = zoom < CICLABILI_ZOOM_LOCALI
+        ? ['osm_ciclabili']
+        : ['osm_ciclabili', 'osm_ciclabili_locali', 'osm_mtb'];
+      const { data } = await supabase
+        .from('shared_pois')
+        .select('id,name,lat,lon,description_short,source')
+        .in('source', fonti)
+        .or('is_hidden.is.null,is_hidden.eq.false')
+        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+        .limit(zoom < CICLABILI_ZOOM_LOCALI ? 120 : 200);
+
+      if (!ciclabiliLayerRef.current) ciclabiliLayerRef.current = creaGruppoPercorsi('#ea580c', CICLABILI_ZOOM_LOCALI);
+      if (!ciclabiliLineeRef.current) ciclabiliLineeRef.current = L.layerGroup();
+      const group = ciclabiliLayerRef.current;
+      const linee = ciclabiliLineeRef.current;
+      group.clearLayers();
+      linee.clearLayers();
+
+      for (const c of data || []) {
+        const emojiFonte = c.source === 'osm_mtb' ? '🚵' : '🚲';
+        const icon = L.divIcon({
+          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emojiFonte}</div>`,
+          className: 'wip-ciclabile-marker',
+          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+        });
+        L.marker([Number(c.lat), Number(c.lon)], { icon })
+          .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">${emojiFonte} ${escapeHtml(c.name || '')}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(c.description_short || '')}</div>
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
+              ? 'Punto di partenza · © contributori OpenStreetMap'
+              : 'Starting point · © OpenStreetMap contributors'}</div>
+          </div>`)
+          .addTo(group);
+      }
+
+      const nomi = new Map<string, string>((data || []).map((c: any) => [String(c.id), String(c.name || '')]));
+      const livelloBici = livelloDaZoom(zoom);
+      if (livelloBici) {
+        const lineeBici = await fetchRouteLines(
+          bounds, ['bici'],
+          livelloBici === 'regionale' ? 60 : livelloBici === 'medio' ? 120 : 150,
+          livelloBici === 'medio' ? 2 : 1,
+          livelloBici,
+        );
+        drawRouteLines(linee, lineeBici, '#ea580c', nomi);
+        if (livelloBici === 'pieno') {
+          for (const l of lineeBici) {
+            if (l.stops?.length) drawRouteStops(linee, l.stops, '#ea580c', nomi.get(l.poiId));
+          }
+        }
+      }
+      if (zoom >= CICLABILI_MIN_ZOOM) {
+        if (!map.hasLayer(group)) group.addTo(map);
+        if (!map.hasLayer(linee)) linee.addTo(map);
+      }
+    } catch (e) {
+      console.warn('[Ciclabili] fetch fallito:', e);
+    } finally {
+      setCiclabiliLoading(false);
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const spegniBici = () => {
+      for (const r of [ciclabiliLayerRef, ciclabiliLineeRef]) {
+        if (map && r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
+      }
+    };
+    if (!ciclabiliActive) {
+      spegniBici();
+      setRouteAttribution(map, ATTRIB_SENTIERI, false);
+      return;
+    }
+    if (!map) return;
+    setRouteAttribution(map, ATTRIB_SENTIERI, true);
+    const aggiorna = () => {
+      setZoomCorrente(map.getZoom());
+      if (map.getZoom() < CICLABILI_MIN_ZOOM) { spegniBici(); return; }
+      void caricaCiclabili(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [ciclabiliActive, caricaCiclabili]);
+
+  // ── VINO E GUSTO ──────────────────────────────────────────────────────
+  //
+  // 199.280 luoghi del gusto e ~390 percorsi. Sta accanto ai sentieri nel
+  // pannello ⓘ, e NON è una chip: non è patrimonio culturale, è un
+  // verticale a sé che si accende quando serve. Una cantina non deve
+  // comparire fra i monumenti solo perché è nel raggio del radar.
+  //
+  // Tre livelli, per zoom crescente — stessa logica dei sentieri, dove da
+  // lontano si vedono solo le reti internazionali:
+  //  · zoom ≥5  le STRADE: catalogo curato (nel codice, quindi anche
+  //             offline) + le 156 relazioni OSM + le 96 dalle directory.
+  //  · zoom ≥11 i PRODUTTORI: cantine, caseifici, frantoi, birrifici,
+  //             distillerie, vigneti — dove il prodotto nasce.
+  //  · zoom ≥14 le BOTTEGHE: enoteche, gastronomie, pasticcerie,
+  //             torrefazioni. Sono 130.000: hanno senso a piedi, non prima.
+  const [stradeGustoActive, setStradeGustoActive] = useState(() => {
+    try { return localStorage.getItem('wip_strade_gusto_enabled') === '1'; } catch { return false; }
+  });
+  const [stradeGustoLoading, setStradeGustoLoading] = useState(false);
+  const stradeGustoLayerRef = useRef<L.LayerGroup | null>(null);
+  const stradeGustoLineeRef = useRef<L.LayerGroup | null>(null);
+  const STRADE_GUSTO_MIN_ZOOM = 5;
+  const GUSTO_PRODUTTORI_ZOOM = 11;
+  const GUSTO_BOTTEGHE_ZOOM = 14;
+  // Come per i sentieri: sotto questo zoom una pallina bordeaux col numero
+  // di strade e cantine, sopra i pin singoli e i tracciati.
+  const GUSTO_ZOOM_APERTURA = 12;
+
+  const toggleStradeGusto = useCallback(() => {
+    setStradeGustoActive((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('wip_strade_gusto_enabled', next ? '1' : '0');
+        // Il verticale è uno solo: acceso il layer, l'audioguida può
+        // raccontare la cantina davanti a cui si passa; spento, tace.
+        // La chiave è quella che leggono anche il servizio Android e iOS.
+        const obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {};
+        obj.enogastronomia = next;
+        localStorage.setItem('wip_active_subcategories', JSON.stringify(obj));
+        window.dispatchEvent(new CustomEvent('wip-settings-updated'));
+      } catch { /* storage pieno */ }
+      return next;
+    });
+  }, []);
+
+  const caricaStradeGusto = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setStradeGustoLoading(true);
+    try {
+      if (!stradeGustoLayerRef.current) stradeGustoLayerRef.current = creaGruppoPercorsi('#7f1d1d', GUSTO_ZOOM_APERTURA);
+      if (!stradeGustoLineeRef.current) stradeGustoLineeRef.current = L.layerGroup();
+      const group = stradeGustoLayerRef.current;
+      const linee = stradeGustoLineeRef.current;
+      group.clearLayers();
+      linee.clearLayers();
+
+      // 1) Catalogo curato: nessuna rete, sempre disponibile.
+      const curate = tasteRoutesInBounds(bounds.getSouth(), bounds.getWest(), bounds.getNorth(), bounds.getEast());
+      for (const r of curate) {
+        const icon = L.divIcon({
+          html: `<div style="font-size:17px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))">${r.emoji}</div>`,
+          className: 'wip-strada-gusto-marker',
+          iconSize: [20, 20], iconAnchor: [10, 10], popupAnchor: [0, -12],
+        });
+        const tappe = r.stops
+          .map((s) => `<li style="margin:1px 0;">${escapeHtml(s.place)} — ${escapeHtml(s.what)}</li>`)
+          .join('');
+        const mezzo = { auto: 'in auto', bici: 'in bici', treno: 'in treno', piedi: 'a piedi', navetta: 'in navetta', barca: 'in barca' }[r.transport];
+        L.marker([r.coords.lat, r.coords.lon], { icon })
+          .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:210px;max-width:280px;">
+            <div style="font-size:12.5px;font-weight:800;color:#7f1d1d;">${r.emoji} ${escapeHtml(r.name)}</div>
+            <div style="font-size:10.5px;color:#6b7280;margin-top:2px;">${escapeHtml(r.region)}, ${escapeHtml(r.country)} · ${r.days} ${r.days === 1 ? 'giorno' : 'giorni'} ${mezzo} · ${TASTE_KIND_LABELS[r.kind].label}</div>
+            <div style="font-size:11px;color:#111827;margin-top:5px;"><b>${escapeHtml(r.products)}</b></div>
+            <ol style="font-size:10.5px;color:#374151;margin:5px 0 0 14px;padding:0;">${tappe}</ol>
+            <div style="font-size:10px;color:#6b7280;margin-top:5px;">${escapeHtml(r.season)}</div>
+          </div>`, { maxHeight: 260 })
+          .addTo(group);
+      }
+
+      // 2) I percorsi importati (relazioni OSM + directory ufficiali).
+      const { data: percorsi } = await supabase
+        .from('shared_pois')
+        .select('id,name,lat,lon,description_short,contact_website,is_hidden,status')
+        .eq('poi_type', 'strada_del_vino')
+        .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+        .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+        .limit(150);
+      for (const s of percorsi || []) {
+        if (s.is_hidden === true || s.status === 'needs_revision') continue;
+        const icon = L.divIcon({
+          html: '<div style="font-size:14px;line-height:1;opacity:.85;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🍇</div>',
+          className: 'wip-strada-osm-marker',
+          iconSize: [17, 17], iconAnchor: [8, 8], popupAnchor: [0, -10],
+        });
+        L.marker([Number(s.lat), Number(s.lon)], { icon })
+          .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">🍇 ${escapeHtml(s.name || '')}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(s.description_short || '')}</div>
+            ${s.contact_website ? `<a href="${escapeHtml(s.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">sito ufficiale ↗</a>` : ''}
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
+              ? 'Punto di partenza del percorso'
+              : 'Route starting point'}</div>
+          </div>`)
+          .addTo(group);
+      }
+
+      // 2-bis) I TRACCIATI. Le strade del gusto non esistono su OSM come
+      // percorso: la linea è calcolata col routing FRA LE TAPPE, sul grafo
+      // giusto (auto, bici, piedi), quindi segue strade vere e non taglia
+      // per i campi. Dove il mezzo è il treno o la barca il routing
+      // mentirebbe: quelle righe hanno profile='dritta' e drawRouteLines le
+      // disegna grigie e tratteggiate, senza spacciarle per un percorso.
+      const nomiGusto = new Map<string, string>([
+        ...curate.map((r) => [r.id, r.name] as [string, string]),
+        ...(percorsi || []).map((s: any) => [String(s.id), String(s.name || '')] as [string, string]),
+      ]);
+      // I tracciati arrivano quando il gruppo si apre, come per i sentieri.
+      // Le 154 curate stanno nel CODICE (158 KB): una strada del vino si
+      // percorre in campagna, dove il campo manca, e vedere i pin senza la
+      // linea proprio lì sarebbe il difetto peggiore.
+      const zoomGusto = map.getZoom();
+      const livelloGusto = livelloDaZoom(zoomGusto);
+      if (livelloGusto) {
+        // Le 154 curate stanno nel codice: si disegnano sempre per intero,
+        // sono poche e non costano rete.
+        drawRouteLines(linee, curate.flatMap((r) => {
+          const t = TASTE_ROUTE_LINES[r.id];
+          if (!t) return [];
+          return [{ poiId: r.id, kind: 'gusto', profile: t.p, segments: decodeSegments(t.l), km: t.km }];
+        }), '#7f1d1d', nomiGusto);
+        // Le TAPPE delle strade curate: sono nel catalogo, con giorno e
+        // motivo della sosta. Da zoom 13, come per i sentieri.
+        if (livelloGusto === 'pieno') {
+          for (const r of curate) {
+            if (!r.stops?.length) continue;
+            drawRouteStops(linee, r.stops.map((s, i) => ({
+              n: i + 1, luogo: s.place, lat: s.lat, lon: s.lon,
+              note: `Giorno ${s.day} · ${s.what}`,
+            })), '#7f1d1d', r.name);
+          }
+        }
+        // Dal DB solo le relazioni OSM: le curate le abbiamo già disegnate.
+        const lineeGusto = await fetchRouteLines(bounds, ['gusto_osm'], 120, 1, livelloGusto);
+        drawRouteLines(linee, lineeGusto, '#7f1d1d', nomiGusto);
+      }
+
+      // 3) I luoghi del gusto. Due livelli per zoom: prima i produttori
+      // (dove nasce), poi anche le botteghe (dove si compra).
+      const zoom = map.getZoom();
+      if (zoom >= GUSTO_PRODUTTORI_ZOOM) {
+        const tipi = zoom >= GUSTO_BOTTEGHE_ZOOM
+          ? [...ENO_PRODUTTORI, ...ENO_BOTTEGHE]
+          : ENO_PRODUTTORI;
+        const { data: luoghi } = await supabase
+          .from('shared_pois')
+          .select('id,name,lat,lon,poi_type,description_short,contact_website,contact_phone,is_hidden,status')
+          .eq('category', 'enogastronomia')
+          .in('poi_type', tipi)
+          .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+          .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+          .limit(zoom >= GUSTO_BOTTEGHE_ZOOM ? 350 : 200);
+        for (const p of luoghi || []) {
+          if (p.is_hidden === true || p.status === 'needs_revision') continue;
+          const emoji = SUB_CATEGORY_EMOJIS[String(p.poi_type)] || '🍷';
+          const produttore = ENO_PRODUTTORI.includes(String(p.poi_type));
+          const icon = L.divIcon({
+            // I produttori sono più grandi e pieni, le botteghe più discrete:
+            // a colpo d'occhio si distingue dove si visita da dove si compra.
+            html: `<div style="font-size:${produttore ? 15 : 12}px;line-height:1;opacity:${produttore ? 1 : 0.75};filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emoji}</div>`,
+            className: 'wip-gusto-marker',
+            iconSize: produttore ? [18, 18] : [15, 15],
+            iconAnchor: produttore ? [9, 9] : [7, 7],
+            popupAnchor: [0, -10],
+          });
+          L.marker([Number(p.lat), Number(p.lon)], { icon })
+            .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
+              <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
+              <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
+              ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">sito ↗</a>` : ''}
+              ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
+              <div style="font-size:9px;color:#6b7280;margin-top:4px;">${language === 'IT'
+                ? 'Verifica sempre orari e prenotazione · © contributori OpenStreetMap'
+                : 'Always check hours and booking · © OpenStreetMap contributors'}</div>
+            </div>`)
+            .addTo(group);
+        }
+      }
+
+      if (map.getZoom() >= STRADE_GUSTO_MIN_ZOOM) {
+        if (!map.hasLayer(group)) group.addTo(map);
+        if (!map.hasLayer(linee)) linee.addTo(map);
+      }
+    } catch (e) {
+      console.warn('[StradeGusto] fetch fallito:', e);
+    } finally {
+      setStradeGustoLoading(false);
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const spegniGusto = () => {
+      for (const r of [stradeGustoLayerRef, stradeGustoLineeRef]) {
+        if (map && r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
+      }
+    };
+    if (!stradeGustoActive) {
+      spegniGusto();
+      setRouteAttribution(map, ATTRIB_GUSTO, false);
+      return;
+    }
+    if (!map) return;
+    setRouteAttribution(map, ATTRIB_GUSTO, true);
+    const aggiorna = () => {
+      if (map.getZoom() < STRADE_GUSTO_MIN_ZOOM) {
+        spegniGusto();
+        return;
+      }
+      void caricaStradeGusto(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [stradeGustoActive, caricaStradeGusto]);
+
   // ── Neve: località sciistiche e rifugi ────────────────────────────────
   // 32.789 località importate da OSM in tutto il mondo: 3.620 comprensori,
   // 17.346 stazioni di impianti, 11.823 rifugi alpini. Il pin mostra il
   // luogo; le condizioni (temperatura, neve prevista) si chiedono a MET
   // Norway solo quando si apre la scheda — sono dati orari, non si importano.
-  const [neveActive, setNeveActive] = useState(() => {
-    try { return localStorage.getItem('wip_neve_enabled') === '1'; } catch { return false; }
-  });
   const [neveLoading, setNeveLoading] = useState(false);
   const neveLayerRef = useRef<L.LayerGroup | null>(null);
+  // Le piste sono linee, non pin: gruppo a parte come per gli altri layer.
+  const neveLineeRef = useRef<L.LayerGroup | null>(null);
   const NEVE_MIN_ZOOM = 8;
 
   const toggleNeve = useCallback(() => {
@@ -1219,11 +1737,13 @@ function MapArea({
       group.clearLayers();
       const emoji: Record<string, string> = {
         comprensorio_sci: '⛷', impianto_risalita: '🚡', rifugio_alpino: '🏔',
+        pista_sci: '🎿',
       };
       const etichetta: Record<string, string> = {
         comprensorio_sci: language === 'IT' ? 'Comprensorio sciistico' : 'Ski area',
         impianto_risalita: language === 'IT' ? 'Impianto di risalita' : 'Ski lift',
         rifugio_alpino: language === 'IT' ? 'Rifugio alpino' : 'Mountain hut',
+        pista_sci: language === 'IT' ? 'Pista da sci' : 'Ski piste',
       };
       for (const l of data || []) {
         const sub = String(l.sub_category || '');
@@ -1252,6 +1772,29 @@ function MapArea({
         });
         group.addLayer(marker);
       }
+
+      // LE PISTE, disegnate. Un comprensorio è un punto; la pista è una
+      // linea, ed è quella che dice davvero com'è messa la montagna — dove
+      // scende, quanto è lunga, se ti porta dove vuoi tornare. Azzurro
+      // ghiaccio, che sulla neve del fondo mappa si vede e non si confonde
+      // né col verde dei sentieri né con l'arancione delle ciclabili.
+      const livelloNeve = livelloDaZoom(map.getZoom());
+      if (livelloNeve) {
+        if (!neveLineeRef.current) neveLineeRef.current = L.layerGroup();
+        const lineeNeve = neveLineeRef.current;
+        lineeNeve.clearLayers();
+        const nomiNeve = new Map<string, string>(
+          (data || []).map((l: any) => [String(l.id), String(l.name || '')]),
+        );
+        const tracce = await fetchRouteLines(
+          bounds, ['neve'],
+          livelloNeve === 'regionale' ? 40 : 120,
+          livelloNeve === 'medio' ? 2 : 1,
+          livelloNeve,
+        );
+        drawRouteLines(lineeNeve, tracce, '#38bdf8', nomiNeve);
+        if (!map.hasLayer(lineeNeve) && map.getZoom() >= NEVE_MIN_ZOOM) lineeNeve.addTo(map);
+      }
       if (!map.hasLayer(group) && map.getZoom() >= NEVE_MIN_ZOOM) group.addTo(map);
     } catch (e) {
       console.warn('[Neve] fetch fallito:', e);
@@ -1262,16 +1805,16 @@ function MapArea({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!neveActive) {
-      if (map && neveLayerRef.current && map.hasLayer(neveLayerRef.current)) map.removeLayer(neveLayerRef.current);
-      return;
-    }
+    const spegniNeve = () => {
+      for (const r of [neveLayerRef, neveLineeRef]) {
+        if (map && r.current && map.hasLayer(r.current)) map.removeLayer(r.current);
+      }
+    };
+    if (!neveActive) { spegniNeve(); return; }
     if (!map) return;
     const aggiorna = () => {
-      if (map.getZoom() < NEVE_MIN_ZOOM) {
-        if (neveLayerRef.current && map.hasLayer(neveLayerRef.current)) map.removeLayer(neveLayerRef.current);
-        return;
-      }
+      setZoomCorrente(map.getZoom());
+      if (map.getZoom() < NEVE_MIN_ZOOM) { spegniNeve(); return; }
       void caricaNeve(map.getBounds());
     };
     aggiorna();
@@ -1291,6 +1834,9 @@ function MapArea({
   const [datiSole, setDatiSole] = useState<DatiSole | null>(null);
   // Orari di alba/tramonto/ora d'oro: calcolo locale, nessuna chiamata.
   const [oreLuce, setOreLuce] = useState<OrariSole | null>(null);
+  // Il fuso del punto guardato: gli orari si mostrano nell'ora locale del
+  // luogo, non in quella del telefono (Miami dall'Italia diceva 01:00).
+  const [fusoSole, setFusoSole] = useState<string | null>(null);
 
   const toggleSole = useCallback(() => {
     setSoleActive((prev) => {
@@ -1311,6 +1857,7 @@ function MapArea({
       // Gli orari del Sole non passano dalla rete: si calcolano subito, così
       // la scheda ha già qualcosa da mostrare mentre arriva l'UV.
       setOreLuce(orariSole(c.lat, c.lng));
+      setFusoSole(fusoDelPunto(c.lat, c.lng));
       setSoleLoading(true);
       const d = await fetchDatiSole(c.lat, c.lng);
       if (vivo) { setDatiSole(d); setSoleLoading(false); }
@@ -1458,7 +2005,6 @@ function MapArea({
   // Atlante beni vincolati: 1,78 M di punti nel mondo. Sotto lo zoom 13
   // (scala di quartiere) sarebbero migliaia di pin sovrapposti su una query
   // inutilmente larga, quindi il layer semplicemente non si carica.
-  const BENI_CULTURALI_MIN_ZOOM = 13;
   const [bathingActive, setBathingActive] = useState(() => {
     try { return localStorage.getItem('wip_bathing_enabled') === '1'; } catch { return false; }
   });
@@ -1766,6 +2312,116 @@ function MapArea({
   };
 
   /**
+   * NATURA (spiagge, vette, acque, grotte, parchi) per bbox.
+   *
+   * Stessa strada dei tematici, per lo stesso motivo: la RPC `nearby_pois`
+   * restituisce i 1.000 POI piu' vicini di QUALUNQUE categoria, e in una
+   * citta' monumenti e chiese occupano tutti i posti. Le 10.000 spiagge del
+   * DB c'erano, ma non arrivavano mai sulla mappa (segnalato 22/08/2026:
+   * «ho selezionato spiagge e isole, non e' apparso nulla»). Qui si chiede
+   * al DB ESATTAMENTE la natura, e solo quando la chip e' accesa.
+   * `category` resta quella vera (beach, peak…), che da' famiglia e icona;
+   * `baseCategory` porta la macro.
+   */
+  const fetchNaturaPoisInBounds = async (
+    south: number, west: number, north: number, east: number,
+  ): Promise<Poi[]> => {
+    try {
+      const { data } = await supabase
+        .from('shared_pois')
+        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
+        .in('category', NATURA_DB_CATEGORIES)
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(500);
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      return (data || [])
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name)
+        .map((i: any) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          category: i.category,
+          baseCategory: 'natura',
+          subCategory: i.poi_type || i.category,
+          description: i.description_ai || i.description_short,
+          image_url: i.image_url,
+          city: i.city,
+          country: i.country,
+          is_gem: i.is_gem === true,
+          isFromDb: true,
+          status: i.status || 'verified'
+        } as unknown as Poi));
+    } catch {
+      return [];
+    }
+  };
+
+  /**
+   * Quali verticali tematici sono accesi. Le otto chiavi stanno in
+   * selectedCategories come le macro (vedi CategoryChips): se è accesa solo la
+   * macro 🧭 — succede quando la selezione arriva da GeoControl — valgono
+   * tutte, altrimenti solo quelle scelte.
+   */
+  const categorieTematicheAttive = (attive: string[]): string[] => {
+    const scelte = (TEMATICI_KEYS as readonly string[]).filter(k => attive.includes(k));
+    if (scelte.length > 0) return scelte;
+    return attive.includes('tematiche') ? [...TEMATICI_KEYS] : [];
+  };
+
+  /**
+   * VERTICALI TEMATICI (terme, cinema, cieli, street art, mercati, fioriture,
+   * memoria, viaggio lento) per bbox.
+   *
+   * Stessa strada dei POI community, e per lo stesso motivo: la RPC
+   * `nearby_pois` ha colonne fisse, clamp a 25 km e tetto 1000 righe, quindi
+   * un catalogo curato e sparso nel mondo ci passerebbe attraverso. Qui è una
+   * SELECT pubblica diretta filtrata sulle categorie ACCESE (`.in`), così una
+   * sola query serve tutti i verticali attivi.
+   */
+  const fetchTematiciPoisInBounds = async (
+    south: number, west: number, north: number, east: number,
+    categorieAttive: string[]
+  ): Promise<Poi[]> => {
+    if (!categorieAttive || categorieAttive.length === 0) return [];
+    try {
+      const { data } = await supabase
+        .from('shared_pois')
+        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, contact_website')
+        .in('category', categorieAttive)
+        .gte('lat', south).lte('lat', north)
+        .gte('lon', west).lte('lon', east)
+        .limit(400);
+      const { isVisiblePoiStatus } = await import('../services/poiRepository');
+      return (data || [])
+        .filter((i: any) => isVisiblePoiStatus(i) && i.name)
+        .map((i: any) => ({
+          id: i.id,
+          lat: Number(i.lat),
+          lon: Number(i.lon),
+          name: i.name,
+          // `category` resta il verticale vero (terme, cinema…): è quella che
+          // dà colore ed emoji al pin e che il filtro delle chip confronta.
+          // `baseCategory` porta la macro, per la scheda e i gradienti.
+          category: i.category,
+          baseCategory: 'tematiche',
+          subCategory: i.poi_type,
+          description: i.description_ai || i.description_short,
+          image_url: i.image_url,
+          city: i.city,
+          country: i.country,
+          contact_website: i.contact_website,
+          is_gem: false,
+          isFromDb: true,
+          status: i.status || 'verified'
+        } as unknown as Poi));
+    } catch {
+      return [];
+    }
+  };
+
+  /**
    * ATLANTE DEI BENI VINCOLATI (tabella `beni_culturali`, ~1,78 M nel mondo).
    *
    * È un layer informativo, non una categoria turistica: dentro c'è tutto il
@@ -1780,20 +2436,26 @@ function MapArea({
    * Zoom minimo alto: a scala regionale sarebbero decine di migliaia di pin.
    */
   const fetchBeniCulturaliInBounds = async (
-    south: number, west: number, north: number, east: number
+    south: number, west: number, north: number, east: number,
+    // Le fasce da chiedere: a scala di regione solo la A (22/08/2026: «i
+    // beni devono apparire anche con la Toscana intera»), in citta' tutte.
+    fasce: string[] | null = null,
+    limite = 400,
   ): Promise<Poi[]> => {
     try {
-      const { data } = await supabase
+      let q = supabase
         .from('beni_culturali')
         .select('id, name, lat, lon, tier, category_wip, typology, comune, address, description, promoted_poi_id, matched_poi_id, wikidata_id')
         .gte('lat', south).lte('lat', north)
-        .gte('lon', west).lte('lon', east)
+        .gte('lon', west).lte('lon', east);
+      if (fasce && fasce.length > 0) q = q.in('tier', fasce);
+      const { data } = await q
         // Ordine per fascia (A < B < C in ordine alfabetico) perche' il limite
         // di 400 si riempie sempre nelle citta' storiche: senza ordine, a
         // Londra tornavano 357 case a schiera vincolate e nessun monumento.
         // Cosi' i beni turistici vincono il taglio e il resto riempie.
         .order('tier', { ascending: true })
-        .limit(400);
+        .limit(limite);
       return (data || [])
         .filter((i: any) => i.name && i.lat != null && i.lon != null)
         .map((i: any) => {
@@ -1900,6 +2562,35 @@ function MapArea({
           });
         }
       }
+      // Stessa eccezione per i verticali tematici: sono cataloghi curati e
+      // radi (una città termale, un set, un parco del cielo stellato ogni
+      // tanto), e chi accende 🧭 a scala di regione vuole proprio vedere dove
+      // sono, non una mappa vuota.
+      const farTematici = categorieTematicheAttive(activeCategories);
+      if (farTematici.length > 0 && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        const temPois = await fetchTematiciPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), farTematici);
+        if (temPois.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            temPois.forEach(p => m.set(String(p.id), p));
+            return Array.from(m.values());
+          });
+        }
+      }
+      // Beni vincolati di fascia A anche a scala di paese: sono pochi e
+      // sono i grandi monumenti, quelli che a quella scala si cercano.
+      if (activeCategories.includes('beni_culturali') && bounds && typeof bounds.getSouth === 'function') {
+        const b = bounds.pad(0.2);
+        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), ['A'], 300);
+        if (beniA.length > 0 && fetchSeq === fetchSeqRef.current) {
+          setPois(prev => {
+            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+            beniA.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
+            return Array.from(m.values());
+          });
+        }
+      }
       setIsLoadingPois(false);
       return;
     }
@@ -1930,7 +2621,17 @@ function MapArea({
         const lastSubStr = lastSub ? lastSub.slice().sort().join(',') : "";
         const currentSubStr = subFilter ? subFilter.slice().sort().join(',') : "";
 
-        if (isSubset && currentSubStr === lastSubStr) {
+        // BENI CULTURALI (22/08/2026): la fetch dell'atlante parte solo da
+        // zoom 13. Se l'ultima fetch e' stata fatta piu' lontano, con la chip
+        // gia' accesa, i suoi bounds contengono la vista di adesso e la cache
+        // diceva "gia' caricato": i beni non comparivano MAI finche' non si
+        // usciva dall'area. La cache deve ricordare se i beni li ha presi.
+        // Livello di dettaglio dei beni: 0 nessuno, 1 fascia A, 2 A+B, 3 tutte.
+        // Se adesso serve piu' dettaglio di quello in cache, si rifa' la fetch.
+        const beniLivelloOra = !activeCategories.includes('beni_culturali') ? 0 : zoom >= BENI_CULTURALI_MIN_ZOOM ? 3 : zoom >= 10 ? 2 : 1;
+        const beniMancanoInCache = beniLivelloOra > (lastFetchedStateRef.current.beniLivello || 0);
+
+        if (isSubset && currentSubStr === lastSubStr && !beniMancanoInCache) {
            if (lastBounds.contains(bounds)) {
              // We have already fetched a larger area that contains the current view.
              // We update the cache key if needed and skip fetching!
@@ -1947,7 +2648,8 @@ function MapArea({
       pendingCacheState = {
         bounds: expandedBounds,
         categoriesKey,
-        subFilter
+        subFilter,
+        beniLivello: !activeCategories.includes('beni_culturali') ? 0 : zoom >= BENI_CULTURALI_MIN_ZOOM ? 3 : zoom >= 10 ? 2 : 1,
       };
       
       south = expandedBounds.getSouth();
@@ -2144,11 +2846,37 @@ function MapArea({
         }
       }
 
+      // NATURA: fetch dedicata, vedi fetchNaturaPoisInBounds. La versione
+      // bbox vince sui doppioni della RPC (porta poi_type e baseCategory).
+      if (activeCategories.includes('natura')) {
+        const naturaExtra = await fetchNaturaPoisInBounds(south, west, north, east);
+        if (naturaExtra.length > 0) {
+          const visti = new Set(naturaExtra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(naturaExtra);
+          console.log(`[MapArea] +${naturaExtra.length} POI natura (fetch bbox dedicato)`);
+        }
+      }
+
+      // VERTICALI TEMATICI: stessa ragione dei community — la RPC non li
+      // porterebbe mai tutti (clamp 25 km, tetto 1000) e sono cataloghi
+      // curati, non riempitivo. Una sola query per tutti i verticali accesi.
+      const temAttivi = categorieTematicheAttive(activeCategories);
+      if (temAttivi.length > 0) {
+        const tematiciExtra = await fetchTematiciPoisInBounds(south, west, north, east, temAttivi);
+        if (tematiciExtra.length > 0) {
+          const visti = new Set(tematiciExtra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(tematiciExtra);
+          console.log(`[MapArea] +${tematiciExtra.length} POI tematici (${temAttivi.join(', ')})`);
+        }
+      }
+
       // Atlante dei beni vincolati: tabella a parte, quindi fetch a parte.
-      // Solo da zoom 13 in su (quartiere): sotto sarebbero migliaia di pin
-      // sovrapposti e una query inutilmente larga.
-      if (activeCategories.includes('beni_culturali') && zoom >= BENI_CULTURALI_MIN_ZOOM) {
-        const beniExtra = await fetchBeniCulturaliInBounds(south, west, north, east);
+      // A ogni scala la sua fascia (22/08/2026): prima partiva solo da zoom 13
+      // e con la Toscana intera la chip non mostrava niente. Ora: regione
+      // (zoom < 10) solo fascia A; citta' (10-12) A e B; quartiere (13+) tutto.
+      if (activeCategories.includes('beni_culturali')) {
+        const fasce = zoom >= BENI_CULTURALI_MIN_ZOOM ? null : zoom >= 10 ? ['A', 'B'] : ['A'];
+        const beniExtra = await fetchBeniCulturaliInBounds(south, west, north, east, fasce, zoom >= BENI_CULTURALI_MIN_ZOOM ? 400 : 300);
         if (beniExtra.length > 0) {
           // I beni già presenti come POI (stesso id) restano quelli veri, con
           // scheda e audioguida: si aggiungono solo quelli che mancano.
@@ -2662,7 +3390,21 @@ function MapArea({
           const cachedByCoord = dbMap.get(coordKey);
           // Se troviamo un POI alle stesse coordinate, uniamo SOLO se la categoria è la stessa
           // Questo evita che un "Bar" prenda la descrizione di un "Museo" (Teatro) adiacente
-          if (cachedByCoord && (cachedByCoord.category === poi.category || cachedByCoord.baseCategory === poi.category)) {
+          // …e SOLO se anche il nome combacia (22/08/2026): a 4 decimali
+          // (~11 m) chiesa e campanile, o due chiese adiacenti, stanno sulla
+          // stessa chiave e si scambiavano foto e descrizione.
+          const norm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+          const tok = (s: any) => norm(s).split(' ').filter(t => t.length >= 4);
+          const stessoNome = (a: any, b: any) => {
+            const na = norm(a), nb = norm(b);
+            if (!na || !nb) return false;
+            if (na === nb || na.includes(nb) || nb.includes(na)) return true;
+            const tb = tok(b);
+            return tok(a).some(t => tb.includes(t));
+          };
+          if (cachedByCoord
+              && (cachedByCoord.category === poi.category || cachedByCoord.baseCategory === poi.category)
+              && stessoNome(cachedByCoord.name, poi.name)) {
             cached = cachedByCoord;
           }
         }
@@ -2963,7 +3705,11 @@ function MapArea({
       const isUtilityWord = nameL.includes('farmacia') || nameL.includes('farmacie') || nameL.includes('stazion') || nameL.includes('station') || nameL.includes('ospedal') || nameL.includes('hospital') || nameL.includes('fontanella') || nameL.includes('polizia') || nameL.includes('police') || nameL.includes('taxi') || nameL.includes('ufficio postale') || nameL.includes('post office') || nameL.includes('parcheggio') || nameL.includes('parking') || nameL.includes('fermata') || nameL.includes('bus stop') || nameL.includes('terminal') || /\basl\b/.test(nameL) || /\bserd\b/.test(nameL) || nameL.includes('consultorio') || nameL.includes('clinica') || nameL.includes('ambulatorio') || nameL.includes('pronto soccorso') || nameL.includes('veterinar') || nameL.includes('medico') || nameL.includes('centro salute');
       const isUtilityTag = am === 'pharmacy' || am === 'hospital' || am === 'clinic' || am === 'doctors' || am === 'dentist' || am === 'social_facility' || am === 'veterinary' || am === 'police' || am === 'taxi' || am === 'drinking_water' || am === 'post_office' || am === 'parking' || railwayVal === 'station' || hasPublicTransport;
       
-      if (isUtilityWord || isUtilityTag) {
+      // I verticali tematici sono esclusi da questa correzione: un treno
+      // storico, una funicolare o un traghetto panoramico si chiamano quasi
+      // sempre "Stazione …" e l'euristica li ribattezzerebbe utilità,
+      // facendoli sparire dalla chip 🧭 che l'utente ha appena acceso.
+      if ((isUtilityWord || isUtilityTag) && !isTematico(p)) {
         p.category = 'utilita';
         // Non sovrascrivere una subCategory reale (es. 'farmacia' dal DB):
         // serve al match dei sub-filtri
@@ -2994,10 +3740,15 @@ function MapArea({
   }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
 
 
-  // Initial fetch when map is ready
+  // Initial fetch when map is ready — e a ogni cambio di categorie/sotto-filtro.
   useEffect(() => {
     if (mapRef.current) {
       try {
+        // Le chip sono cambiate: l'ancora anti-sfarfallio (120/400 m) vale
+        // solo per i MOVIMENTI della mappa, non per un filtro nuovo. Senza
+        // questo reset, toccare «Locali» a mappa ferma non caricava nulla
+        // finché non si trascinava.
+        lastFetchAnchorRef.current = null;
         const bounds = mapRef.current.getBounds();
         if (
           bounds &&
@@ -3309,12 +4060,21 @@ function MapArea({
     // proposito. Sono beni vincolati senza audioguida, non devono competere
     // visivamente con i POI turistici che stanno accanto.
     const isAtlante = effectiveCat === "beni_culturali";
+    // VERTICALI TEMATICI: il pin prende colore ed emoji del VERTICALE
+    // (terme azzurro 🛁, street art magenta 🎨, cieli indaco 🌌…), non della
+    // sotto-categoria: sotto la stessa macro 🧭 convivono una sorgente termale
+    // e un murale, e il pin deve dire subito quale dei due è. La chiave sta in
+    // `poi.category`, perché `baseCategory` qui vale 'tematiche' per tutti.
+    const catTematica = chiaveTematica(poi);
+    const isTematicoPin = catTematica !== "";
 
     let bgHex: string;
     if (isCommunity) {
       bgHex = CAT_HEX.community;
     } else if (isAtlante) {
       bgHex = CAT_HEX.beni_culturali;
+    } else if (isTematicoPin) {
+      bgHex = CATEGORY_HEX[catTematica] || "#4f46e5";
     } else if (isGem) {
       bgHex = (CAT_HEX as any)[osmSubCat] || (CAT_HEX as any)[effectiveCat] || "#0f766e";
     } else {
@@ -3325,7 +4085,9 @@ function MapArea({
     // un pin identico a quello turistico: qui vince sempre l'anfora.
     const emoji = isAtlante
       ? "🏺"
-      : (CATEGORY_EMOJIS as any)[osmSubCat] || (CATEGORY_EMOJIS as any)[effectiveCat] || "📍";
+      : isTematicoPin
+        ? ((CATEGORY_EMOJIS as any)[catTematica] || "🧭")
+        : (CATEGORY_EMOJIS as any)[osmSubCat] || (CATEGORY_EMOJIS as any)[effectiveCat] || "📍";
 
     const accessible = isAccessible(poi);
     const subIcon = getSubCategoryEmoji(poi.subCategory);
@@ -3358,7 +4120,10 @@ function MapArea({
 
   // Restituisce l'icona dalla cache (identità stabile tra i render) o la crea una sola volta
   const getPoiIcon = (poi: Poi) => {
-    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.subCategory || ""}|${isAccessible(poi)}`;
+    // `poi.category` fa parte della chiave: nei verticali tematici la
+    // baseCategory è 'tematiche' per tutti e otto, ed è la categoria vera
+    // (terme, cinema…) a decidere colore ed emoji del pin.
+    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi);
@@ -3430,9 +4195,21 @@ function MapArea({
   // Pre-calcola posizione e icona una sola volta per lista POI: identità stabili,
   // così react-leaflet riusa i marker esistenti (per key) senza richiamare
   // setLatLng/setIcon a ogni re-render (es. aggiornamenti GPS o bussola)
+  // LA CAUSA DELLO SFARFALLIO (22/08/2026). `position: [poi.lat, poi.lon]`
+  // era un array NUOVO a ogni ricalcolo: react-leaflet confronta l'identità
+  // (`props.position !== prevProps.position`) e chiama `marker.setLatLng()`,
+  // che in Leaflet emette SEMPRE l'evento `move`, anche a coordinate
+  // identiche. leaflet.markercluster ascolta `move` e toglie/rimette il
+  // marker nel cluster (`_moveChild`), con animazione: ogni pin lampeggiava a
+  // ogni cambio di visiblePois (chip, radar, fetch lontani). Qui la tupla
+  // posizione vive in una cache per (id, lat, lon): stessa identità finché
+  // il POI non si sposta davvero, quindi setLatLng non viene mai chiamata.
+  const positionCacheRef = useRef<Map<string, [number, number]>>(new Map());
   const markerData = useMemo(
-    () =>
-      visiblePois
+    () => {
+      const cache = positionCacheRef.current;
+      const alive = new Set<string>();
+      const data = visiblePois
         .filter(
           (p) =>
             p &&
@@ -3441,11 +4218,19 @@ function MapArea({
             typeof p.lon === "number" &&
             Number.isFinite(p.lon),
         )
-        .map((poi) => ({
-          poi,
-          position: [poi.lat, poi.lon] as [number, number],
-          icon: getPoiIcon(poi),
-        })),
+        .map((poi) => {
+          const k = `${poi.id}|${poi.lat}|${poi.lon}`;
+          alive.add(k);
+          let position = cache.get(k);
+          if (!position) { position = [poi.lat, poi.lon]; cache.set(k, position); }
+          return { poi, position, icon: getPoiIcon(poi) };
+        });
+      // Niente accumulo infinito: via le tuple dei POI non più in vista.
+      if (cache.size > data.length * 2 + 200) {
+        for (const k of cache.keys()) if (!alive.has(k)) cache.delete(k);
+      }
+      return data;
+    },
     [visiblePois],
   );
 
@@ -3454,6 +4239,48 @@ function MapArea({
   // aprire/chiudere una scheda per ricostruire tutti i ~500 <Marker> (era la
   // causa principale della lentezza di apertura). Ora c'è un unico <Popup>
   // condiviso renderizzato a livello mappa (vedi activePoi più sotto).
+  // Il colore della categoria, in esadecimale: CATEGORY_COLORS lo tiene
+  // dentro una classe Tailwind («bg-[#0f766e]») perché serve così ai pin,
+  // ma il cerchio del raggruppamento è HTML disegnato a mano.
+  const coloreCategoria = useCallback((cat: string): string => {
+    const cls = CATEGORY_COLORS[cat] || '';
+    const m = /#([0-9a-fA-F]{6})/.exec(cls);
+    return m ? `#${m[1]}` : '#1e3a8a';
+  }, []);
+
+  /**
+   * Il cerchio col numero, nel colore della categoria.
+   *
+   * Un cerchio grigio uguale per tutti dice solo «qui ce ne sono dodici»;
+   * col colore dice anche DI COSA, e su una mappa dove convivono musei,
+   * gemme, spiagge e beni vincolati è la differenza fra un numero e
+   * un'informazione. Stessa forma dei cerchi dei percorsi, così la
+   * grammatica della mappa resta una sola.
+   */
+  const iconaCluster = useCallback((colore: string, emoji: string, nomeCat: string) => (cluster: any) => {
+    const n = cluster.getChildCount();
+    // Più grande di prima: 34 px era sotto la soglia comoda per il pollice
+    // (44 px è il minimo che Apple e Google raccomandano da anni).
+    const lato = n < 10 ? 44 : n < 100 ? 48 : 54;
+    const testo = n < 1000 ? String(n) : `${Math.floor(n / 1000)}k`;
+    // Il COLORE NON BASTA. Un uomo su dodici non distingue rosso e verde:
+    // dodici cerchi colorati diversi, per lui, sono dodici cerchi uguali.
+    // L'icona della categoria dentro il cerchio dice di cosa si tratta
+    // senza dipendere dalla vista dei colori, e `title` lo dice a parole a
+    // chi usa un lettore di schermo.
+    return L.divIcon({
+      html: `<div title="${nomeCat}: ${n}" style="width:${lato}px;height:${lato}px;border-radius:50%;background:${colore};
+        border:2.5px solid rgba(255,255,255,.95);box-shadow:0 2px 10px rgba(0,0,0,.35);
+        color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1;
+        font-family:system-ui,-apple-system,sans-serif;">
+        <span style="font-size:${n < 100 ? 13 : 12}px;">${emoji}</span>
+        <span style="font-weight:800;font-size:${n < 100 ? 12 : 11}px;margin-top:1px;">${testo}</span>
+      </div>`,
+      className: 'wip-cluster-categoria',
+      iconSize: L.point(lato, lato, true),
+    });
+  }, []);
+
   const poiMarkers = useMemo(
     () =>
       markerData.map(({ poi, position, icon }) => (
@@ -3482,6 +4309,95 @@ function MapArea({
       )),
     [markerData, indoorMode],
   );
+
+  // I marker divisi per categoria: un gruppo per categoria vuol dire un
+  // cerchio per categoria, col suo colore. Dove due categorie si
+  // sovrappongono compaiono due cerchi affiancati invece di uno solo che
+  // non dice di cosa è fatto.
+  const gruppiPerCategoria = useMemo(() => {
+    const per = new Map<string, typeof poiMarkers>();
+    markerData.forEach(({ poi }, i) => {
+      const cat = String((poi as any).category || 'altro');
+      if (!per.has(cat)) per.set(cat, []);
+      per.get(cat)!.push(poiMarkers[i]);
+    });
+    return [...per.entries()];
+  }, [markerData, poiMarkers]);
+
+  /**
+   * I LIVELLI DELLA MAPPA, in un posto solo.
+   *
+   * Erano scritti dentro il JSX del pannello, quindi per sapere «quali sono
+   * accesi» bisognava ripetere sette condizioni in tre punti diversi — ed è
+   * esattamente il genere di elenco che si dimentica di aggiornare quando se
+   * ne aggiunge uno (è già successo col layer della bici).
+   *
+   * Il `gruppo` divide le due nature che convivono nel pannello: le RETI che
+   * attraversano il territorio (dove si cammina, si pedala, si beve) e le
+   * CONDIZIONI di adesso (sole, mare, neve). Sono cose diverse e vanno
+   * separate anche a vedersi, non solo a capirsi.
+   */
+  const LIVELLI = useMemo(() => [
+    {
+      id: 'sentieri', gruppo: 'reti', on: sentieriActive, loading: sentieriLoading, emoji: '🥾',
+      tinta: 'bg-emerald-600 border-emerald-400', zoomMin: SENTIERI_MIN_ZOOM,
+      nome: language === 'IT' ? 'Sentieri e cammini' : 'Trails and pilgrim ways',
+      dettaglio: language === 'IT'
+        ? 'con ippovie, rifugi, corsa, canoa e itinerari storici'
+        : 'with bridleways, huts, running, canoe and historic routes',
+      onClick: toggleSentieri,
+    },
+    {
+      id: 'ciclabili', gruppo: 'reti', on: ciclabiliActive, loading: ciclabiliLoading, emoji: '🚲',
+      tinta: 'bg-orange-600 border-orange-400', zoomMin: CICLABILI_MIN_ZOOM,
+      nome: language === 'IT' ? 'Ciclovie e mountain bike' : 'Cycle routes and MTB',
+      dettaglio: language === 'IT' ? 'EuroVelo e reti nazionali' : 'EuroVelo and national networks',
+      onClick: toggleCiclabili,
+    },
+    {
+      id: 'strade-gusto', gruppo: 'reti', on: stradeGustoActive, loading: stradeGustoLoading, emoji: '🍷',
+      tinta: 'bg-[#7f1d1d] border-red-400', zoomMin: STRADE_GUSTO_MIN_ZOOM,
+      nome: language === 'IT' ? 'Vino e gusto' : 'Wine & food',
+      dettaglio: language === 'IT' ? 'cantine, strade e botteghe' : 'cellars, routes and shops',
+      onClick: toggleStradeGusto,
+    },
+    {
+      id: 'servizi', gruppo: 'reti', on: servicesActive, loading: servicesLoading, emoji: '🚰',
+      tinta: 'bg-sky-600 border-sky-400', zoomMin: 0,
+      nome: language === 'IT' ? 'Fontanelle, bagni, panchine' : 'Water, toilets, benches',
+      dettaglio: '', onClick: toggleServices,
+    },
+    {
+      id: 'neve', gruppo: 'condizioni', on: neveActive, loading: neveLoading, emoji: '❄️',
+      tinta: 'bg-indigo-500 border-indigo-300', zoomMin: 0,
+      nome: language === 'IT' ? 'Neve: piste, impianti e rifugi' : 'Snow: pistes, lifts and huts',
+      dettaglio: language === 'IT' ? '9.569 piste disegnate' : '9,569 pistes drawn',
+      onClick: toggleNeve,
+    },
+    {
+      id: 'sole', gruppo: 'condizioni', on: soleActive, loading: soleLoading, emoji: '☀️',
+      tinta: 'bg-amber-500 border-amber-300', zoomMin: 0,
+      nome: language === 'IT' ? 'Sole: UV e caldo percepito' : 'Sun: UV and feels-like',
+      dettaglio: '', onClick: toggleSole,
+    },
+    {
+      id: 'balneazione', gruppo: 'condizioni', on: bathingActive, loading: bathingLoading, emoji: '🏖',
+      tinta: 'bg-cyan-600 border-cyan-400', zoomMin: 0,
+      nome: language === 'IT' ? 'Qualità acqua del mare' : 'Bathing water quality',
+      dettaglio: '', onClick: toggleBathing,
+    },
+  ], [
+    language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
+    stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
+    neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
+    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing,
+  ]);
+
+  const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
+
+  const spegniTuttiILivelli = useCallback(() => {
+    for (const l of layerAccesi) l.onClick();
+  }, [layerAccesi]);
 
   const focusPoiOnMap = (poi: Poi) => {
     setShowNearbyList(false);
@@ -3585,16 +4501,56 @@ function MapArea({
               tourService, quindi non serve passargli niente da qui. */}
           <TourRouteLayer />
 
-          <MarkerClusterGroup
-            chunkedLoading
-            maxClusterRadius={60}
-            disableClusteringAtZoom={19}
-            spiderfyOnMaxZoom
-            showCoverageOnHover={false}
-            zoomToBoundsOnClick
-          >
-            {poiMarkers}
-          </MarkerClusterGroup>
+          {gruppiPerCategoria.map(([categoria, marker]) => (
+            <MarkerClusterGroup
+              key={`cluster-${categoria}`}
+              chunkedLoading
+              maxClusterRadius={60}
+              disableClusteringAtZoom={19}
+              spiderfyOnMaxZoom
+              showCoverageOnHover={false}
+              zoomToBoundsOnClick
+              iconCreateFunction={iconaCluster(
+                coloreCategoria(categoria),
+                CATEGORY_EMOJIS[categoria] || '📍',
+                categoria,
+              )}
+            >
+              {marker}
+            </MarkerClusterGroup>
+          ))}
+
+          {/* LA PORTA. L'ingresso (entrance_lat/lon, 277.363 POI) si usava da
+              sempre per navigare e per i geofence, ma sulla mappa non si
+              vedeva: il pin resta sul centroide e l'utente non capiva perche'
+              il percorso lo portasse "dall'altra parte". Un punto verde sulla
+              porta e un filo fino al pin, solo sul POI aperto e solo se la
+              porta non coincide col centro (sotto 8 m sarebbe un pallino sopra
+              il pin). */}
+          {activePoi && (() => {
+            const a = puntoArrivo(activePoi);
+            const cLat = Number(activePoi.lat), cLon = Number(activePoi.lon);
+            if (!Number.isFinite(a.lat) || (a.lat === cLat && a.lon === cLon)) return null;
+            const distM = Math.hypot((a.lat - cLat) * 111_320, (a.lon - cLon) * 111_320 * Math.cos(cLat * Math.PI / 180));
+            if (distM < 8) return null;
+            return (
+              <LayerGroup key={`ingresso-${activePoi.id}`}>
+                <Polyline
+                  positions={[[cLat, cLon], [a.lat, a.lon]]}
+                  pathOptions={{ color: '#16a34a', weight: 2, dashArray: '4 4', opacity: 0.85, interactive: false }}
+                />
+                <CircleMarker
+                  center={[a.lat, a.lon]}
+                  radius={7}
+                  pathOptions={{ color: '#ffffff', weight: 2, fillColor: '#16a34a', fillOpacity: 1 }}
+                >
+                  <Tooltip direction="top" offset={[0, -8]} opacity={0.95}>
+                    {getTranslation('entrance_label', language)}{(activePoi as any).address ? ` · ${(activePoi as any).address}` : ''}
+                  </Tooltip>
+                </CircleMarker>
+              </LayerGroup>
+            );
+          })()}
 
           {/* Popup condiviso: uno solo per tutta la mappa. key per poi.id così
               cambiando POI la scheda rimonta pulita (stati e fetch propri). */}
@@ -3664,6 +4620,15 @@ function MapArea({
 
       {/* ── Allarme ZTL: banner rosso ben visibile + disclaimer copertura ── */}
       <div className="absolute top-[calc(2.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[1200] w-[calc(100%-4rem)] max-w-[420px] flex flex-col items-center gap-2 pointer-events-none">
+        {/* Beni culturali accesi ma troppo lontani: l'atlante carica da zoom 13.
+            Senza questa riga la chip sembrava rotta (segnalato 22/08/2026). */}
+        {selectedCategories.includes('beni_culturali') && zoomCorrente < BENI_CULTURALI_MIN_ZOOM && (
+          <div className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-xl rounded-full shadow px-3 py-1.5 text-[11px] font-bold text-[#1e3a8a] dark:text-white">
+            🏛️ {zoomCorrente >= 10
+              ? (language === 'IT' ? 'Beni culturali: solo i principali (fascia A e B) — avvicinati per tutti' : 'Heritage: main sites only (tier A–B) — zoom in for all')
+              : (language === 'IT' ? 'Beni culturali: solo i grandi monumenti (fascia A) — avvicinati per gli altri' : 'Heritage: major monuments only (tier A) — zoom in for more')}
+          </div>
+        )}
         <AnimatePresence>
           {ztlBanner && (
             <motion.div
@@ -3757,7 +4722,13 @@ function MapArea({
       {/* ── Colonna controlli in alto a sinistra: meteo + servizi pratici ──
           Angolo non invasivo: il banner offline sta al centro, gli errori a
           destra, la ricerca in basso. */}
-      <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-3 z-[1000] flex flex-col items-start gap-2 pointer-events-none">
+      {/* IN BASSO A SINISTRA, sopra la barra di ricerca (22/08/2026). Stava
+          in alto a 0,75 rem, ma le chip partono a 0,25 rem con z-index 2000
+          e le loro righe di sotto-chip crescono verso il basso: la chip
+          Gemme copriva il tasto dei livelli, e la riga dei sotto-chip anche
+          il meteo. In basso nessuna riga cresce, e il pannello dei livelli
+          si apre verso l'alto (flex-col-reverse). */}
+      <div className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 z-[1000] flex flex-col-reverse items-start gap-2 pointer-events-none">
         {/* Chip meteo (Open-Meteo, cache 30 min) */}
         {meteo && (
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
@@ -3820,82 +4791,123 @@ function MapArea({
           Il toggle "zone esplorate" è stato tolto su richiesta: era un
           diario, non un servizio, e non c'entrava con gli altri tre.
         */}
-        <div className="pointer-events-auto flex flex-col items-start gap-2">
+        {/* col-reverse: il tasto sta in basso e il pannello si apre sopra */}
+        <div className="pointer-events-auto flex flex-col-reverse items-start gap-2">
           <button
             onClick={() => setServiziAperti((v) => !v)}
-            title={language === 'IT' ? 'Servizi sulla mappa' : 'Map services'}
+            // Era una ⓘ, che vuol dire «informazioni» e non «livelli»: chi
+            // cercava i sentieri non aveva motivo di toccarla. L'icona a
+            // strati è quella che usano tutte le mappe, e il nome per il
+            // lettore di schermo dice anche quanti ne sono accesi.
+            title={language === 'IT' ? 'Livelli della mappa' : 'Map layers'}
+            aria-label={`${language === 'IT' ? 'Livelli della mappa' : 'Map layers'}${
+              layerAccesi.length ? ` · ${layerAccesi.length} ${language === 'IT' ? 'attivi' : 'active'}` : ''}`}
             aria-expanded={serviziAperti}
-            className={`w-10 h-10 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 ${
-              serviziAperti || servicesActive || soleActive || bathingActive || sentieriActive || neveActive
+            // 44 px: la soglia sotto la quale il pollice sbaglia bersaglio.
+            className={`relative w-11 h-11 rounded-full backdrop-blur-2xl shadow-[0_4px_16px_rgba(0,0,0,0.15)] border flex items-center justify-center transition-all active:scale-90 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
+              serviziAperti || layerAccesi.length
                 ? 'bg-[#1e3a8a] text-white border-blue-400 ring-2 ring-blue-500/40'
                 : 'bg-white/70 dark:bg-[#1C1C1E]/70 border-white/60 dark:border-white/10 text-[#1e3a8a] dark:text-white'
             }`}
           >
             {serviziAperti
-              ? <X className="w-4 h-4" />
-              : <Info className="w-[18px] h-[18px]" />}
-            {/* Pallino: qualche layer è acceso ma il pannello è chiuso */}
-            {!serviziAperti && (servicesActive || soleActive || bathingActive || sentieriActive || neveActive) && (
-              <span className="absolute translate-x-3 -translate-y-3 w-2.5 h-2.5 bg-emerald-400 rounded-full border border-white" />
+              ? <X className="w-5 h-5" />
+              : <Layers className="w-5 h-5" />}
+            {/* Pallino col NUMERO: dice anche quanti, non solo che ce n'è
+                qualcuno. Nascosto ai lettori di schermo perché il conto è
+                già nell'aria-label del pulsante. */}
+            {!serviziAperti && layerAccesi.length > 0 && (
+              <span
+                aria-hidden="true"
+                className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-emerald-500 text-white text-[10px] font-black rounded-full border-2 border-white dark:border-[#1C1C1E] flex items-center justify-center"
+              >
+                {layerAccesi.length}
+              </span>
             )}
           </button>
+
+          {/* I layer accesi, quando il pannello è chiuso. Si sommano —
+              sentieri, bici e gusto insieme sono tre linee di colore
+              diverso sulla stessa valle — e senza questa fila non si vede
+              quali si stanno tenendo aperti. Toccarla riapre il pannello. */}
+          {!serviziAperti && layerAccesi.length > 0 && (
+            <button
+              onClick={() => setServiziAperti(true)}
+              aria-label={`${language === 'IT' ? 'Livelli attivi' : 'Active layers'}: ${layerAccesi.map((l) => l.nome).join(', ')}`}
+              className="pointer-events-auto flex items-center gap-1.5 h-11 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 px-3 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
+            >
+              {layerAccesi.map((l) => (
+                <span key={l.id} aria-hidden="true" className="text-[15px] leading-none">{l.emoji}</span>
+              ))}
+            </button>
+          )}
 
           <AnimatePresence>
             {serviziAperti && (
               <motion.div
                 key="servizi-mappa"
-                initial={{ opacity: 0, y: -8, scale: 0.95 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.95 }}
-                transition={{ duration: 0.16 }}
-                className="bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-1.5 flex flex-col gap-1 min-w-[196px]"
+                initial={menoMovimento ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.95 }}
+                animate={menoMovimento ? { opacity: 1 } : { opacity: 1, y: 0, scale: 1 }}
+                exit={menoMovimento ? { opacity: 0 } : { opacity: 0, y: 8, scale: 0.95 }}
+                transition={{ duration: menoMovimento ? 0.08 : 0.16 }}
+                role="group"
+                aria-label={language === 'IT' ? 'Livelli della mappa' : 'Map layers'}
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[70vh] overflow-y-auto"
               >
-                {[
-                  {
-                    id: 'servizi', on: servicesActive, loading: servicesLoading, emoji: '🚰',
-                    tinta: 'bg-sky-600 border-sky-400',
-                    label: language === 'IT' ? 'Fontanelle, bagni, panchine' : 'Water, toilets, benches',
-                    onClick: toggleServices,
-                  },
-                  {
-                    id: 'sentieri', on: sentieriActive, loading: sentieriLoading, emoji: '🥾',
-                    tinta: 'bg-emerald-600 border-emerald-400',
-                    label: language === 'IT' ? 'Sentieri e cammini' : 'Trails and pilgrim ways',
-                    onClick: toggleSentieri,
-                  },
-                  {
-                    id: 'neve', on: neveActive, loading: neveLoading, emoji: '❄️',
-                    tinta: 'bg-indigo-500 border-indigo-300',
-                    label: language === 'IT' ? 'Neve: comprensori e rifugi' : 'Snow: ski areas and huts',
-                    onClick: toggleNeve,
-                  },
-                  {
-                    id: 'sole', on: soleActive, loading: soleLoading, emoji: '☀️',
-                    tinta: 'bg-amber-500 border-amber-300',
-                    label: language === 'IT' ? 'Sole: UV e caldo percepito' : 'Sun: UV and feels-like',
-                    onClick: toggleSole,
-                  },
-                  {
-                    id: 'balneazione', on: bathingActive, loading: bathingLoading, emoji: '🏖',
-                    tinta: 'bg-cyan-600 border-cyan-400',
-                    label: language === 'IT' ? 'Qualità acqua del mare' : 'Bathing water quality',
-                    onClick: toggleBathing,
-                  },
-                ].map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={v.onClick}
-                    aria-pressed={v.on}
-                    className={`w-full px-2.5 py-2 rounded-xl flex items-center gap-2.5 text-left transition-all active:scale-[0.97] ${
-                      v.on ? `${v.tinta} text-white border` : 'hover:bg-black/5 dark:hover:bg-white/10 text-[#1e3a8a] dark:text-white border border-transparent'
-                    }`}
-                  >
-                    {v.loading
-                      ? <Loader2 className={`w-4 h-4 animate-spin shrink-0 ${v.on ? 'text-white' : 'text-[#1e3a8a]'}`} />
-                      : <span className="text-[15px] leading-none shrink-0">{v.emoji}</span>}
-                    <span className="text-[11px] font-bold leading-tight">{v.label}</span>
-                  </button>
+                {(['reti', 'condizioni'] as const).map((gruppo) => (
+                  <Fragment key={gruppo}>
+                    {/* Due nature diverse, separate anche a vedersi: dove si
+                        va e com'è adesso. */}
+                    <div className="px-2 pt-1.5 pb-1 text-[10px] font-black uppercase tracking-wider text-[#1e3a8a]/55 dark:text-white/50">
+                      {gruppo === 'reti'
+                        ? (language === 'IT' ? 'Dove andare' : 'Where to go')
+                        : (language === 'IT' ? 'Com’è adesso' : 'Conditions now')}
+                    </div>
+                    {LIVELLI.filter((v) => v.gruppo === gruppo).map((v) => (
+                      <button
+                        key={v.id}
+                        onClick={v.onClick}
+                        aria-pressed={v.on}
+                        // min-h-11 = 44 px, la soglia sotto la quale il dito
+                        // sbaglia bersaglio. L'anello di focus serve a chi
+                        // naviga da tastiera: senza, il fuoco è invisibile.
+                        className={`w-full min-h-11 px-2.5 py-2 rounded-xl flex items-center gap-3 text-left transition-all active:scale-[0.97] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60 ${
+                          v.on ? `${v.tinta} text-white border` : 'hover:bg-black/5 dark:hover:bg-white/10 text-[#1e3a8a] dark:text-white border border-transparent'
+                        }`}
+                      >
+                        {v.loading
+                          ? <Loader2 className={`w-5 h-5 animate-spin shrink-0 ${v.on ? 'text-white' : 'text-[#1e3a8a]'}`} />
+                          : <span aria-hidden="true" className="text-[17px] leading-none shrink-0 w-5 text-center">{v.emoji}</span>}
+                        <span className="flex flex-col leading-tight flex-1">
+                          <span className="text-[12.5px] font-bold leading-tight">{v.nome}</span>
+                          {v.dettaglio && !v.on && (
+                            <span className="text-[10.5px] opacity-65 mt-0.5">{v.dettaglio}</span>
+                          )}
+                          {/* Acceso ma troppo lontano: il layer non mostrerebbe
+                              niente e sembrerebbe rotto. Lo si dice qui, dove
+                              l'utente ha appena toccato. */}
+                          {v.on && v.zoomMin > 0 && zoomCorrente < v.zoomMin && (
+                            <span className="text-[10.5px] font-semibold opacity-95 mt-0.5">
+                              ↗ {language === 'IT' ? 'avvicinati per vederli' : 'zoom in to see them'}
+                            </span>
+                          )}
+                        </span>
+                        {/* Lo stato acceso non è solo colore: c'è anche il
+                            segno di spunta, che si vede anche in bianco e nero. */}
+                        {v.on && <span aria-hidden="true" className="text-[13px] font-black shrink-0">✓</span>}
+                      </button>
+                    ))}
+                  </Fragment>
                 ))}
+
+                {layerAccesi.length > 1 && (
+                  <button
+                    onClick={spegniTuttiILivelli}
+                    className="mt-1 w-full min-h-11 px-2.5 rounded-xl text-[11.5px] font-bold text-[#1e3a8a] dark:text-white hover:bg-black/5 dark:hover:bg-white/10 active:scale-[0.97] transition-all focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/60"
+                  >
+                    {language === 'IT' ? `Spegni tutti (${layerAccesi.length})` : `Turn all off (${layerAccesi.length})`}
+                  </button>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -3966,13 +4978,20 @@ function MapArea({
                     ) : (
                       <>
                         <div className="flex items-center justify-between text-[10px] text-primary/70 dark:text-white/70">
-                          <span>🌅 {oraBreve(oreLuce.alba)}</span>
-                          <span>🌇 {oraBreve(oreLuce.tramonto)}</span>
+                          <span>🌅 {oraBreve(oreLuce.alba, fusoSole)}</span>
+                          <span>🌇 {oraBreve(oreLuce.tramonto, fusoSole)}</span>
                           <span className="text-primary/45 dark:text-white/45">{oreLuce.durataLuce}</span>
                         </div>
+                        {/* Fuso diverso dal telefono: lo si dice, altrimenti chi
+                            legge «19:30» dall'Italia non sa di che ora si parla. */}
+                        {fusoSole && fusoSole !== Intl.DateTimeFormat().resolvedOptions().timeZone && (
+                          <p className="text-[9px] text-primary/50 dark:text-white/50 leading-snug">
+                            🕒 {language === 'IT' ? 'ora locale di' : 'local time,'} {fusoSole.split('/').pop()?.replace(/_/g, ' ')}
+                          </p>
+                        )}
                         {oreLuce.oraOroSeraInizio && (
                           <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 leading-snug">
-                            ✨ {language === 'IT' ? 'Ora d’oro dalle' : 'Golden hour from'} {oraBreve(oreLuce.oraOroSeraInizio)}
+                            ✨ {language === 'IT' ? 'Ora d’oro dalle' : 'Golden hour from'} {oraBreve(oreLuce.oraOroSeraInizio, fusoSole)}
                             {mancaAllOraOro(oreLuce) ? ` · ${mancaAllOraOro(oreLuce)}` : ''}
                           </p>
                         )}

@@ -33,21 +33,39 @@ const renderStars = (rating: number) => {
   );
 };
 
+// ─── Misure di pagina ────────────────────────────────────────────────────────
+// A4 = 297 mm; html2pdf stampa con margini 10+15 mm → ~272 mm utili. Le
+// pagine «intere» (copertina) si misurano in mm, MAI in px: i 780px fissi
+// di prima sfondavano la pagina e producevano un foglio finale quasi vuoto.
+const PAGE_H = '250mm';
+const HERO_H = '95mm';
+
+/** Etichetta della guida nella lingua UI (chiavi `pg_*` in i18n.ts). */
+const mkT = (language: Language) => (key: string) => getTranslation(`pg_${key}`, language);
+type T = (key: string) => string;
+
 // ─── Cover Page ──────────────────────────────────────────────────────────────
+// IL TITOLO APRE LA PAGINA: prima c'era una banda logo + pill di stile sopra,
+// e la riga più preziosa del documento era occupata dal marchio. Logo, stile
+// e «wip.guide» stanno nel piede della copertina.
 const CoverPage = ({
   content,
   coverImg,
   styleLabel,
   styleMeta,
+  language,
+  t,
 }: {
   content: any;
   coverImg?: string;
   styleLabel: string;
   styleMeta: any;
+  language: Language;
+  t: T;
 }) => (
   <div style={{
     background: C.navy,
-    minHeight: '780px',
+    minHeight: PAGE_H,
     position: 'relative',
     display: 'flex',
     flexDirection: 'column',
@@ -64,47 +82,26 @@ const CoverPage = ({
         opacity: 0.28,
       }} />
     )}
-    {/* Top bar */}
-    <div style={{
-      position: 'relative', zIndex: 2,
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      padding: '28px 48px',
-      borderBottom: `3px solid ${C.gold}`,
-    }}>
-      {/* WIP Logo text */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-        <img
-          src="/logo.jpg"
-          alt="WIP Logo"
-          style={{ width: '56px', height: '56px', borderRadius: '12px', objectFit: 'cover' }}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-        />
-        <div>
-          <div style={{ color: C.gold, fontWeight: 900, fontSize: '22px', letterSpacing: '2px', lineHeight: 1 }}>
-            WIP
-          </div>
-          <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '10px', letterSpacing: '3px', textTransform: 'uppercase' }}>
-            World in Pocket
-          </div>
-        </div>
-      </div>
-      <div style={{
-        background: styleMeta.color + '22',
-        border: `1px solid ${styleMeta.color}`,
-        color: C.gold,
-        padding: '6px 18px',
-        borderRadius: '30px',
-        fontSize: '12px',
-        fontWeight: 700,
-        letterSpacing: '1px',
-        textTransform: 'uppercase',
-      }}>
-        {styleMeta.emoji} {styleLabel}
-      </div>
-    </div>
 
-    {/* Main cover content */}
-    <div style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', padding: '0 48px 56px' }}>
+    {/* Main cover content: il titolo è la prima riga del foglio */}
+    <div style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', padding: '10mm 12mm 12mm' }}>
+      {/* IL TITOLO, RIDIMENSIONATO.
+          Era 62px fissi: un titolo lungo come «La Spezia e le Cinque Terre:
+          tra mare e borghi» occupava mezza copertina e schiacciava tutto il
+          resto in fondo. Ora la misura segue la lunghezza — i titoli corti
+          restano grandi, quelli lunghi rientrano — e il tetto è 44px. */}
+      <h1 style={{
+        color: C.white,
+        fontSize: (content.guida_titolo || '').length > 44 ? '32px'
+          : (content.guida_titolo || '').length > 26 ? '38px' : '44px',
+        fontWeight: 900,
+        lineHeight: 1.08,
+        letterSpacing: '-0.5px',
+        margin: '0 0 12px',
+        maxWidth: '680px',
+      }}>
+        {content.guida_titolo || t('premium_guide')}
+      </h1>
       <div style={{
         display: 'inline-block',
         background: C.gold,
@@ -115,29 +112,19 @@ const CoverPage = ({
         textTransform: 'uppercase',
         padding: '5px 16px',
         borderRadius: '4px',
-        marginBottom: '24px',
+        margin: '0 0 24px',
         width: 'fit-content',
       }}>
-        Smart Guide Premium
+        {styleMeta.emoji} {styleLabel}
       </div>
-      <h1 style={{
-        color: C.white,
-        fontSize: '62px',
-        fontWeight: 900,
-        lineHeight: 1.05,
-        letterSpacing: '-1px',
-        marginBottom: '16px',
-        maxWidth: '700px',
-      }}>
-        {content.guida_titolo || 'Guida Premium'}
-      </h1>
       {content.sottotitolo && (
         <div style={{
           color: C.gold,
-          fontSize: '20px',
+          fontSize: '16px',
           fontWeight: 400,
           fontStyle: 'italic',
-          marginBottom: '40px',
+          marginBottom: '28px',
+          maxWidth: '620px',
         }}>
           {content.sottotitolo}
         </div>
@@ -154,7 +141,7 @@ const CoverPage = ({
           textAlign: 'center',
         }}>
           <div style={{ color: C.gold, fontSize: '11px', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '8px' }}>
-            🎁 Dedica
+            🎁 {t('dedication')}
           </div>
           <p style={{
             color: 'rgba(255,255,255,0.95)',
@@ -188,30 +175,44 @@ const CoverPage = ({
       </div>
     </div>
 
-    {/* Footer bar */}
+    {/* Piede della copertina: marchio, provenienza (wip.guide) e data */}
     <div style={{
       position: 'relative', zIndex: 2,
-      borderTop: `1px solid rgba(255,255,255,0.15)`,
-      padding: '14px 48px',
+      borderTop: `3px solid ${C.gold}`,
+      padding: '6mm 12mm',
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
     }}>
-      <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px', letterSpacing: '1px' }}>
-        wip.guide
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <img
+          src="/logo.jpg"
+          alt="WIP"
+          style={{ width: '40px', height: '40px', borderRadius: '10px', objectFit: 'cover' }}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+        />
+        <div>
+          <div style={{ color: C.gold, fontWeight: 900, fontSize: '18px', letterSpacing: '2px', lineHeight: 1 }}>WIP</div>
+          <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: '9px', letterSpacing: '3px', textTransform: 'uppercase' }}>World in Pocket</div>
+        </div>
       </div>
-      <div style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>
-        {new Date().toLocaleDateString('it-IT', { year: 'numeric', month: 'long' })}
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ color: C.gold, fontSize: '12px', letterSpacing: '1px', fontWeight: 700 }}>wip.guide</div>
+        <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '10px' }}>
+          {new Date().toLocaleDateString(LOCALE[language] || 'it-IT', { year: 'numeric', month: 'long' })}
+        </div>
       </div>
     </div>
   </div>
 );
 
+const LOCALE: Record<string, string> = { IT: 'it-IT', EN: 'en-GB', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN' };
+
 // ─── Sommario cliccabile ─────────────────────────────────────────────────────
 // Indice per giorno e per POI con anchor interni: nel visualizzatore i link
 // scorrono alla sezione; nei viewer PDF/HTML che supportano i link interni
 // restano navigabili. Zero costi AI: è solo impaginazione.
-const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string }) => {
+const TocPage = ({ giorni, anchorPrefix, t }: { giorni: any[]; anchorPrefix: string; t: T }) => {
   const goTo = (e: React.MouseEvent, id: string) => {
     // Nel viewer (SPA senza router) l'href "#id" non deve toccare la history
     e.preventDefault();
@@ -226,8 +227,8 @@ const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string
       pageBreakAfter: 'always',
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', borderBottom: `3px solid ${C.gold}`, paddingBottom: '14px', marginBottom: '28px' }}>
-        <h2 style={{ color: C.navy, fontSize: '34px', fontWeight: 900, margin: 0 }}>Sommario</h2>
-        <span style={{ color: C.light, fontSize: '12px', letterSpacing: '2px', textTransform: 'uppercase' }}>Indice della guida</span>
+        <h2 style={{ color: C.navy, fontSize: '34px', fontWeight: 900, margin: 0 }}>{t('toc')}</h2>
+        <span style={{ color: C.light, fontSize: '12px', letterSpacing: '2px', textTransform: 'uppercase' }}>{t('toc_sub')}</span>
       </div>
       {giorni.map((giorno: any, gIdx: number) => {
         const dayId = `${anchorPrefix}-day-${gIdx}`;
@@ -242,10 +243,10 @@ const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string
                 background: C.navy, color: C.gold, fontWeight: 900, fontSize: '11px',
                 letterSpacing: '1.5px', textTransform: 'uppercase', padding: '4px 12px', borderRadius: '4px', flexShrink: 0,
               }}>
-                Giorno {giorno.giorno ?? gIdx + 1}
+                {t('day')} {giorno.giorno ?? gIdx + 1}
               </span>
               <span style={{ color: C.navy, fontWeight: 900, fontSize: '17px' }}>
-                {giorno.titolo_giorno || `Giorno ${giorno.giorno ?? gIdx + 1}`}
+                {giorno.titolo_giorno || `${t('day')} ${giorno.giorno ?? gIdx + 1}`}
               </span>
             </a>
             <ul style={{ listStyle: 'none', margin: 0, padding: '0 0 0 14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -262,7 +263,7 @@ const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string
                         {(giorno.giorno ?? gIdx + 1)}.{pIdx + 1}
                       </span>
                       <span style={{ color: C.mid, fontSize: '14px', borderBottom: `1px dotted ${C.border}`, flex: 1 }}>
-                        {poi.titolo || 'Punto di interesse'}
+                        {poi.titolo || t('poi')}
                       </span>
                       {poi.categoria_pdf && (
                         <span style={{ color: C.light, fontSize: '10px', letterSpacing: '1px', textTransform: 'uppercase', flexShrink: 0 }}>
@@ -285,9 +286,11 @@ const TocPage = ({ giorni, anchorPrefix }: { giorni: any[]; anchorPrefix: string
 const CityIntroPage = ({
   citta_intro,
   mediaManifest,
+  t,
 }: {
   citta_intro: any;
   mediaManifest: Record<string, string>;
+  t: T;
 }) => {
   if (!citta_intro) return null;
   const img1 = mediaManifest['citta_intro_1'];
@@ -302,12 +305,12 @@ const CityIntroPage = ({
       pageBreakAfter: 'always',
     }}>
       <h2 style={{ color: C.navy, fontSize: '38px', fontWeight: 900, marginBottom: '24px', lineHeight: 1.1 }}>
-        {citta_intro.titolo || 'Scopri la Destinazione'}
+        {citta_intro.titolo || t('discover_destination')}
       </h2>
 
       {/* Hero Image */}
       {img1 && (
-        <div style={{ marginBottom: '32px', height: '280px', borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ marginBottom: '32px', height: '70mm', borderRadius: '12px', overflow: 'hidden' }}>
           <img src={img1} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="City panorama" />
         </div>
       )}
@@ -318,7 +321,7 @@ const CityIntroPage = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
             <span style={{ fontSize: '20px' }}>🏛️</span>
             <h3 style={{ color: C.gold, fontSize: '14px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
-              Storia & Identità
+              {t('history')}
             </h3>
           </div>
           <p style={{ color: C.mid, fontSize: '14px', lineHeight: 1.8, margin: 0 }}>
@@ -329,7 +332,7 @@ const CityIntroPage = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
             <span style={{ fontSize: '20px' }}>🎨</span>
             <h3 style={{ color: C.gold, fontSize: '14px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
-              Cultura & Tradizioni
+              {t('culture')}
             </h3>
           </div>
           <p style={{ color: C.mid, fontSize: '14px', lineHeight: 1.8, margin: 0 }}>
@@ -361,7 +364,7 @@ const CityIntroPage = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
             <span style={{ fontSize: '20px' }}>📌</span>
             <h3 style={{ color: C.blue, fontSize: '14px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
-              Consigli Pratici
+              {t('practical_tips')}
             </h3>
           </div>
           <p style={{ color: C.dark, fontSize: '13.5px', lineHeight: 1.75, margin: 0 }}>
@@ -374,7 +377,7 @@ const CityIntroPage = ({
 };
 
 // ─── Day Divider ─────────────────────────────────────────────────────────────
-const DayDivider = ({ giorno, tema }: { giorno: any; tema?: string }) => (
+const DayDivider = ({ giorno, tema, t }: { giorno: any; tema?: string; t: T }) => (
   <div style={{
     background: C.navy,
     padding: '40px 48px 32px',
@@ -399,7 +402,7 @@ const DayDivider = ({ giorno, tema }: { giorno: any; tema?: string }) => (
         borderRadius: '4px',
         flexShrink: 0,
       }}>
-        Giorno {giorno.giorno}
+        {t('day')} {giorno.giorno}
       </div>
       <h2 style={{ color: C.white, fontSize: '32px', fontWeight: 900, margin: 0, lineHeight: 1.1 }}>
         {giorno.titolo_giorno}
@@ -420,7 +423,7 @@ const DayDivider = ({ giorno, tema }: { giorno: any; tema?: string }) => (
 );
 
 // ─── POI Block ───────────────────────────────────────────────────────────────
-const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
+const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, t }) => {
   const curiosita: string[] = Array.isArray(poi.curiosita) ? poi.curiosita : [];
   const piatti: string[] = Array.isArray(poi.migliori_piatti) ? poi.migliori_piatti : [];
 
@@ -432,7 +435,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
     }}>
       {/* Hero image full-width */}
       {imgUrl && (
-        <div style={{ position: 'relative', height: '380px', overflow: 'hidden', background: C.border }}>
+        <div style={{ position: 'relative', height: HERO_H, overflow: 'hidden', background: C.border }}>
           <img
             src={imgUrl}
             alt={poi.titolo}
@@ -460,7 +463,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
             padding: '6px 14px',
             borderRadius: '4px',
           }}>
-            {poi.categoria_pdf || 'PUNTO DI INTERESSE'}
+            {poi.categoria_pdf || t('poi')}
           </div>
         </div>
       )}
@@ -482,7 +485,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
             borderRadius: '4px',
             marginBottom: '14px',
           }}>
-            {poi.categoria_pdf || 'PUNTO DI INTERESSE'}
+            {poi.categoria_pdf || t('poi')}
           </div>
         )}
 
@@ -534,38 +537,38 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
           {poi.indirizzo && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>📍</span>
-              <div><strong style={{ color: C.dark }}>Indirizzo</strong><br />{poi.indirizzo}</div>
+              <div><strong style={{ color: C.dark }}>{t('address')}</strong><br />{poi.indirizzo}</div>
             </div>
           )}
           {poi.trasporti && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🚌</span>
-              <div><strong style={{ color: C.dark }}>Come arrivare</strong><br />{poi.trasporti}</div>
+              <div><strong style={{ color: C.dark }}>{t('how_to_get')}</strong><br />{poi.trasporti}</div>
             </div>
           )}
           {poi.info_utili?.orari && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🕐</span>
-              <div><strong style={{ color: C.dark }}>Orari</strong><br />{poi.info_utili.orari}</div>
+              <div><strong style={{ color: C.dark }}>{t('hours')}</strong><br />{poi.info_utili.orari}</div>
             </div>
           )}
           {poi.info_utili?.prezzo && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🎫</span>
-              <div><strong style={{ color: C.dark }}>Ingresso</strong><br />{poi.info_utili.prezzo}</div>
+              <div><strong style={{ color: C.dark }}>{t('admission')}</strong><br />{poi.info_utili.prezzo}</div>
             </div>
           )}
           {poi.info_utili?.best_time && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>⭐</span>
-              <div><strong style={{ color: C.dark }}>Momento ideale</strong><br />{poi.info_utili.best_time}</div>
+              <div><strong style={{ color: C.dark }}>{t('best_time')}</strong><br />{poi.info_utili.best_time}</div>
             </div>
           )}
           {(poi.info_utili?.telefono || poi.info_utili?.sito_web) && (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>📞</span>
               <div>
-                <strong style={{ color: C.dark }}>Contatti</strong><br />
+                <strong style={{ color: C.dark }}>{t('contacts')}</strong><br />
                 {poi.info_utili?.telefono && <span>{poi.info_utili.telefono} </span>}
                 {poi.info_utili?.sito_web && <span style={{ color: C.blue }}>{poi.info_utili.sito_web}</span>}
               </div>
@@ -602,7 +605,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
             }}>
               <span style={{ fontSize: '22px' }}>💡</span>
               <h4 style={{ color: C.orange, fontWeight: 900, fontSize: '14px', letterSpacing: '1.5px', textTransform: 'uppercase', margin: 0 }}>
-                Lo sapevi? Curiosità & Segreti
+                {t('curiosities')}
               </h4>
             </div>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -662,7 +665,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
                 }}>
                   <span style={{ fontSize: '18px' }}>🏛️</span>
                   <h4 style={{ color: C.navy, fontWeight: 900, fontSize: '12px', letterSpacing: '1.5px', textTransform: 'uppercase', margin: 0 }}>
-                    Dettaglio Storico & Architettonico
+                    {t('historical_detail')}
                   </h4>
                 </div>
                 <p style={{ fontSize: '13.5px', color: C.mid, lineHeight: 1.75, margin: 0 }}>
@@ -686,7 +689,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
                 }}>
                   <span style={{ fontSize: '18px' }}>🗝️</span>
                   <h4 style={{ color: '#166534', fontWeight: 900, fontSize: '12px', letterSpacing: '1.5px', textTransform: 'uppercase', margin: 0 }}>
-                    Consiglio Insider
+                    {t('insider_tip')}
                   </h4>
                 </div>
                 <p style={{ fontSize: '13.5px', color: C.mid, lineHeight: 1.75, margin: 0 }}>
@@ -709,7 +712,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
               <span style={{ fontSize: '20px' }}>🍽️</span>
               <h4 style={{ color: C.orange, fontWeight: 900, fontSize: '13px', letterSpacing: '1.5px', textTransform: 'uppercase', margin: 0 }}>
-                Da Ordinare Assolutamente
+                {t('must_order')}
               </h4>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -743,7 +746,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string }> = ({ poi, imgUrl }) => {
         fontSize: '10px',
         color: C.light,
       }}>
-        <span>WIP Premium Smart Guide • wip.guide</span>
+        <span>WIP {t('premium_guide')} • wip.guide</span>
         <span>{poi.titolo}</span>
       </div>
     </div>
@@ -759,6 +762,7 @@ export default function PremiumGuideRenderer({
 }: PremiumGuideRendererProps) {
   const styleMeta = GUIDE_STYLE_META[content.stile] || GUIDE_STYLE_META.essential;
   const styleLabel = getTranslation(`premium_guide_style_${content.stile}`, language) || content.stile;
+  const t = mkT(language);
 
   // Use the first image available as cover photo
   const coverImg = Object.values(mediaManifest)[0] || undefined;
@@ -778,27 +782,27 @@ export default function PremiumGuideRenderer({
       }}
     >
       {/* ── COVER ── */}
-      <CoverPage content={content} coverImg={coverImg} styleLabel={styleLabel} styleMeta={styleMeta} />
+      <CoverPage content={content} coverImg={coverImg} styleLabel={styleLabel} styleMeta={styleMeta} language={language} t={t} />
 
       {/* ── SOMMARIO CLICCABILE ── */}
-      <TocPage giorni={content.giorni || []} anchorPrefix={containerId} />
+      <TocPage giorni={content.giorni || []} anchorPrefix={containerId} t={t} />
 
       {/* ── CITY INTRO ── */}
-      <CityIntroPage citta_intro={content.citta_intro} mediaManifest={mediaManifest} />
+      <CityIntroPage citta_intro={content.citta_intro} mediaManifest={mediaManifest} t={t} />
 
       {/* ── DAYS ── */}
       {(content.giorni || []).map((giorno, gIdx) => (
         <React.Fragment key={gIdx}>
           {/* Anchor del giorno per i link del sommario */}
           <div id={`${containerId}-day-${gIdx}`}>
-            <DayDivider giorno={giorno} tema={(giorno as any).tema_giorno} />
+            <DayDivider giorno={giorno} tema={(giorno as any).tema_giorno} t={t} />
           </div>
 
           {(giorno.pois || []).map((poi, pIdx) => {
             const imgUrl = mediaManifest[poi.poi_id] || (poi as any).image_url;
             return (
               <div key={poi.poi_id || pIdx} id={`${containerId}-poi-${gIdx}-${pIdx}`}>
-                <PoiBlock poi={poi} imgUrl={imgUrl} />
+                <PoiBlock poi={poi} imgUrl={imgUrl} t={t} />
               </div>
             );
           })}
@@ -828,8 +832,8 @@ export default function PremiumGuideRenderer({
         </div>
         <div style={{ width: '60px', height: '3px', background: C.gold, margin: '10px 0' }} />
         <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '14px', maxWidth: '400px', lineHeight: 1.8 }}>
-          La tua guida di viaggio intelligente.<br />
-          Generata con Wikipedia, Wikivoyage, Foursquare e TripAdvisor.
+          {t('back_cover_tagline')}<br />
+          {t('back_cover_sources')}
         </div>
         <div style={{ color: 'rgba(255,255,255,0.35)', fontSize: '11px', marginTop: '20px' }}>
           wip.guide • {new Date().getFullYear()}

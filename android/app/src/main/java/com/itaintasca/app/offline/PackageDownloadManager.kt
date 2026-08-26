@@ -8,6 +8,7 @@ import com.itaintasca.app.db.OfflinePackagePoiRef
 import com.itaintasca.app.db.OfflinePoiEntity
 import com.itaintasca.app.db.OfflineRtree
 import com.itaintasca.app.db.PoiDatabase
+import com.itaintasca.app.geofence.Footprints
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -245,7 +246,17 @@ class PackageDownloadManager(private val context: Context) {
                             teaserText = p.strOrNull("teaser_text"),
                             descriptionShort = p.strOrNull("description_short"),
                             audioText = p.strOrNull("audio_text"),
-                            updatedAt = p.strOrNull("updated_at")
+                            updatedAt = p.strOrNull("updated_at"),
+                            // Porta, perimetro e indirizzo (area_bundle_pois dal
+                            // 22/08/2026). Pagine di server vecchi non li hanno:
+                            // restano null e il POI lavora al centroide come prima.
+                            entranceLat = p.optDouble("entrance_lat").takeIf { !it.isNaN() },
+                            entranceLon = p.optDouble("entrance_lon").takeIf { !it.isNaN() },
+                            footprint = Footprints.geojsonCompatto(
+                                // Il bundle porta il GeoJSON come oggetto o come testo.
+                                p.optJSONObject("footprint")?.toString() ?: p.strOrNull("footprint")
+                            ),
+                            address = p.strOrNull("address")
                         )
                     )
                 }

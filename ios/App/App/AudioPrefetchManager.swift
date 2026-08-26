@@ -32,8 +32,20 @@ enum AudioPrefetchManager {
         return base
     }
 
-    private static func fileFor(poiId: String, lang: String) -> URL {
-        let raw = "\(poiId)_\(lang)"
+    /// Personaggio normalizzato per la chiave cache: nicky/dante, altrimenti
+    /// nicky (stessa regola di azureVoice: tutto ciò che non è "nicky" è la
+    /// voce maschile, ma il nome file deve restare uno solo per voce).
+    private static func normChar(_ character: String?) -> String {
+        let c = (character ?? "nicky").lowercased()
+        return c == "nicky" ? "nicky" : "dante"
+    }
+
+    /// (22/08/2026) Il file è {poi}_{lang}_{character}.mp3, come
+    /// AudioPrefetchManager.kt: prima era {poi}_{lang} e cambiando
+    /// personaggio nel profilo si riproduceva l'MP3 prefetchato con l'ALTRA
+    /// voce finché non scadeva (24 h).
+    private static func fileFor(poiId: String, lang: String, character: String?) -> URL {
+        let raw = "\(poiId)_\(lang)_\(normChar(character))"
         let safe = String(raw.map { c -> Character in
             (c.isLetter || c.isNumber || c == "-" || c == "_") ? c : "_"
         })
@@ -42,8 +54,8 @@ enum AudioPrefetchManager {
 
     /// MP3 in cache pronto da riprodurre, oppure nil. I file scaduti (>24h)
     /// o troppo piccoli vengono eliminati al volo.
-    static func cachedFile(poiId: String, lang: String) -> URL? {
-        let url = fileFor(poiId: poiId, lang: lang)
+    static func cachedFile(poiId: String, lang: String, character: String? = nil) -> URL? {
+        let url = fileFor(poiId: poiId, lang: lang, character: character)
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
         let size = (attrs[.size] as? NSNumber)?.intValue ?? 0
         let modified = (attrs[.modificationDate] as? Date) ?? Date(timeIntervalSince1970: 0)
@@ -87,11 +99,11 @@ enum AudioPrefetchManager {
         timeout: TimeInterval = 90,
         completion: @escaping (URL?) -> Void
     ) {
-        if let cached = cachedFile(poiId: poiId, lang: lang) {
+        if let cached = cachedFile(poiId: poiId, lang: lang, character: character) {
             completion(cached)
             return
         }
-        let key = "\(poiId)_\(lang)"
+        let key = "\(poiId)_\(lang)_\(normChar(character))"
         lock.lock()
         if inFlight.contains(key) {
             lock.unlock()
@@ -127,7 +139,7 @@ enum AudioPrefetchManager {
                 finish(nil)
                 return
             }
-            let dest = fileFor(poiId: poiId, lang: lang)
+            let dest = fileFor(poiId: poiId, lang: lang, character: character)
             do {
                 try data.write(to: dest, options: .atomic)
                 finish(dest)

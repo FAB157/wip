@@ -27,6 +27,20 @@ function clearFallback() {
   if (fallbackWatchdog) { clearTimeout(fallbackWatchdog); fallbackWatchdog = null; }
   fallbackUtterance = null;
 }
+/**
+ * L'utterance Web Speech di una frase breve (speakInstruction) in corso.
+ * Prima non si teneva traccia: isSpeechActive() diceva "muto" mentre il
+ * navigatore parlava, e il direttore audio del giro poteva far partire un
+ * incontro sopra l'istruzione (22/08/2026).
+ */
+let activeUtterance: SpeechSynthesisUtterance | null = null;
+let activeUtteranceWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+/** Fine di una frase breve: chi ha voci in coda (giroDriver) le dice adesso. */
+function emitSpeechEnded(text: string) {
+  if (typeof window === 'undefined') return;
+  try { window.dispatchEvent(new CustomEvent('wip-speech-ended', { detail: { text } })); } catch { /* ignore */ }
+}
 
 // BCP-47 corretti: `${prefix}-${prefix.toUpperCase()}` generava en-EN/zh-ZH NON
 // validi (nessuna voce → muto su alcuni motori). Mappa allineata a
@@ -82,6 +96,7 @@ if (typeof window !== 'undefined') {
     nativePlaybackActive = false;
     pendingOnEnd = null;
     clearFallback();
+    activeUtterance = null;
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     emitAudioState(false, false);
   });
@@ -160,10 +175,23 @@ export function speakInstruction(text: string, lang = 'it', character: GuideChar
     u.lang = bcp47(lang); // BCP-47 valido (niente più en-EN/zh-ZH)
     const v = pickVoice(lang, character);
     if (v) u.voice = v;
+    const finish = () => {
+      if (activeUtterance !== u) return;
+      activeUtterance = null;
+      if (activeUtteranceWatchdog) { clearTimeout(activeUtteranceWatchdog); activeUtteranceWatchdog = null; }
+      emitSpeechEnded(text);
+    };
+    u.onend = finish;
+    u.onerror = finish;
     window.speechSynthesis.cancel(); // interrompe l'istruzione precedente
+    activeUtterance = u;
     window.speechSynthesis.speak(u);
+    // Alcuni motori non emettono 'end' (schermo spento, tab in background):
+    // senza watchdog la frase resterebbe "attiva" per sempre.
+    if (activeUtteranceWatchdog) clearTimeout(activeUtteranceWatchdog);
+    activeUtteranceWatchdog = setTimeout(finish, Math.max(3000, (text.length / 15) * 1000) + 2000);
   } catch {
-    /* ignore */
+    activeUtterance = null;
   }
 }
 
@@ -223,13 +251,31 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
   //    e chiede il fuoco audio come un navigatore (USAGE_ASSISTANCE_
   //    NAVIGATION_GUIDANCE / .voicePrompt+.duckOthers): abbassa l'audioguida
   //    e ci parla sopra invece di restare muta come faceva prima.
-  if (await speakViaNativeQueue(text)) return;
+  if (await speakViaNativeQueue(text)) {
+    // La coda nativa non ha un callback di fine per questa chiamata: la
+    // fine si stima, cosi' chi aspetta il silenzio (giroDriver) non resta
+    // appeso.
+    setTimeout(() => emitSpeechEnded(text), Math.max(2500, (text.length / 15) * 1000) + 1000);
+    return;
+  }
 
   try {
     // Ripiego Azure. Qui vale ancora la vecchia cautela: se un'audioguida sta
     // suonando sul player nativo non la interrompiamo (romperemmo il tracking
     // di fine traccia → onEnd anticipato).
     if (nativePlaybackActive) return;
+    // Stessa cautela per l'audioguida di locationService: WipBackgroundAudio
+    // ha UN player, e play() qui SOSTITUIREBBE la narrazione in corso con
+    // una frase di tre secondi. Si salta: la frase e' gia' a schermo
+    // (wip-nav-instruction) e il direttore audio del giro la riaccoda.
+    // Prima (22/08/2026) la svolta tagliava l'audioguida a meta'.
+    try {
+      if (locationService.getAudioState()?.isActive) {
+        console.debug('[ttsService] audioguida in corso: istruzione non sovrapposta', text.slice(0, 40));
+        emitSpeechEnded(text);
+        return;
+      }
+    } catch { /* ok */ }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     const { ok, blob } = await postForAudioBlob(
       getApiUrl('/api/tts/smart'),
@@ -245,6 +291,7 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
       title: text.length > 40 ? text.slice(0, 40) + '…' : text,
       subtitle: 'Navigazione',
     });
+    setTimeout(() => emitSpeechEnded(text), Math.max(2500, (text.length / 15) * 1000) + 1000);
   } catch {
     /* best-effort: senza rete niente voce, come prima */
   }
@@ -259,6 +306,7 @@ export function stopSpeech(): void {
     nativePlaybackActive = false;
     pendingOnEnd = null;
     clearFallback();
+    activeUtterance = null;
     if (activeAudio) {
       activeAudio.pause();
       activeAudio = null;
@@ -303,9 +351,12 @@ export function resumeSpeech(): void {
   }
 }
 
-/** true se ttsService ha una narrazione caricata (nativa o web). */
+/**
+ * true se ttsService sta parlando: narrazione (nativa o web), fallback Web
+ * Speech dell'audioguida, o una frase breve del navigatore ancora in corso.
+ */
 export function isSpeechActive(): boolean {
-  return nativePlaybackActive || activeAudio !== null;
+  return nativePlaybackActive || activeAudio !== null || fallbackUtterance !== null || activeUtterance !== null;
 }
 
 /**

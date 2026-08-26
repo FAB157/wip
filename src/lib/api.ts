@@ -10,9 +10,14 @@ export function getApiUrl(path: string): string {
 
   const isNative = Capacitor.isNativePlatform();
 
-  // URL di produzione: dominio custom wip.guide (stesso progetto Vercel di
+  // URL di produzione: dominio custom (stesso progetto Vercel di
   // itainta.vercel.app, che resta attivo per le build vecchie).
-  const PROD_URL = 'https://wip.guide';
+  // `www.` e NON l'apex: l'apex `wip.guide` risponde 308 verso www (verificato
+  // il 22/08/2026), e su un redirect cross-origin il client butta via
+  // l'header Authorization — le rotte che vogliono il token (viaggi di gruppo,
+  // giro a piu' tappe, crediti) tornavano 401 sull'app nativa, e le fetch
+  // CORS si fermavano al 308 senza Access-Control-Allow-Origin.
+  const PROD_URL = 'https://www.wip.guide';
 
   if (isNative) {
     // Se siamo su Android/iOS, dobbiamo usare l'URL assoluto

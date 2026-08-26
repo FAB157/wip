@@ -49,12 +49,120 @@ export function subCategoryToFilterId(subCat?: string | null): string {
  * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
  * anche da deselezionati.
  */
-export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community", "beni_culturali"] as const;
+export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community", "beni_culturali", "tematiche"] as const;
+
+/**
+ * VERTICALI TEMATICI (21/08/2026) — le otto chiavi della macro 🧭 "Tematici".
+ *
+ * Sono insieme categoria in `shared_pois` (`category = 'terme'`, …), id del
+ * sotto-chip e chiave i18n: una chiave sola per tutta la catena, come per
+ * `community`. La macro `tematiche` NON è una chiave di filtro (non finisce
+ * in `wip_active_subcategories`): lo sono queste otto, perché ognuna si
+ * accende e si spegne da sola, in mappa come in GeoControl.
+ */
+export const TEMATICI_KEYS = [
+  "terme", "cinema", "cieli", "street_art", "mercati", "fioriture", "memoria", "lento",
+] as const;
+
+export type TematicoKey = typeof TEMATICI_KEYS[number];
+
+/**
+ * Vero se il POI appartiene a uno degli otto verticali tematici.
+ * Guarda sia `category` (la colonna del DB: 'terme', 'cinema'…) sia
+ * `baseCategory`, che la fetch per bbox della mappa mette a 'tematiche'.
+ */
+export function isTematico(p: any): boolean {
+  const cat = String(p?.category || "").toLowerCase();
+  if ((TEMATICI_KEYS as readonly string[]).includes(cat)) return true;
+  const base = String(p?.baseCategory || "").toLowerCase();
+  return base === "tematiche" || (TEMATICI_KEYS as readonly string[]).includes(base);
+}
+
+/** La chiave del verticale ('terme', 'cinema'…) o "" se il POI non è tematico. */
+export function chiaveTematica(p: any): string {
+  const cat = String(p?.category || "").toLowerCase();
+  if ((TEMATICI_KEYS as readonly string[]).includes(cat)) return cat;
+  const base = String(p?.baseCategory || "").toLowerCase();
+  return (TEMATICI_KEYS as readonly string[]).includes(base) ? base : "";
+}
+
+/**
+ * Etichette italiane dei `poi_type` dei verticali tematici.
+ *
+ * Il `poi_type` arriva dal catalogo in inglese ("hot_spring", "film_location"):
+ * senza questa mappa la scheda mostrerebbe la chiave grezza. Sono TUTTI i tipi
+ * previsti dai cataloghi curati — se l'harvest ne aggiunge uno, va aggiunto qui,
+ * altrimenti la scheda ricade sul nome della categoria.
+ *
+ * NB: le stesse etichette, parola per parola, stanno in `lib/tematici.ts`
+ * (TEMATICI_TYPE_LABELS), che le usa nella sheet dei temi. Sono tenute
+ * separate perché quel modulo carica i cataloghi JSON con `import.meta.glob`
+ * e questa tassonomia deve restare logica pura, senza dipendenze da Vite: se
+ * si tocca un'etichetta, va cambiata in tutti e due i posti.
+ */
+export const TEMATICI_TYPE_LABELS: Record<string, string> = {
+  // terme
+  hot_spring: "Sorgente termale", thermal_town: "Città termale",
+  historic_bath: "Bagno storico", spa_resort: "Centro termale",
+  thermal_park: "Parco termale", onsen: "Onsen", hammam: "Hammam",
+  sauna: "Sauna", mud_spa: "Fanghi termali", thermal_lake: "Lago termale",
+  // cinema
+  film_location: "Set cinematografico", series_location: "Set di una serie",
+  studio_tour: "Studios visitabili", cinema_museum: "Museo del cinema",
+  festival_venue: "Sede di un festival",
+  // cieli
+  dark_sky_park: "Parco del cielo buio", dark_sky_reserve: "Riserva del cielo buio",
+  dark_sky_community: "Comunità del cielo buio", stargazing_spot: "Punto per osservare le stelle",
+  observatory: "Osservatorio astronomico", planetarium: "Planetario",
+  aurora_spot: "Punto per l'aurora", astro_village: "Borgo astronomico",
+  // street_art
+  mural: "Murale", street_art_district: "Quartiere di street art",
+  open_air_museum: "Museo a cielo aperto", graffiti_hall_of_fame: "Muro libero dei graffiti",
+  sculpture_trail: "Percorso di sculture", festival_site: "Sede del festival",
+  street_art_museum: "Museo di street art",
+  // mercati
+  christmas_market: "Mercatino di Natale", flea_market: "Mercato delle pulci",
+  antiques_market: "Mercato dell'antiquariato", food_market: "Mercato alimentare",
+  craft_market: "Mercato dell'artigianato", night_market: "Mercato notturno",
+  floating_market: "Mercato galleggiante", historic_market_hall: "Mercato coperto storico",
+  // fioriture
+  cherry_blossom: "Fioritura dei ciliegi", lavender: "Fioritura della lavanda",
+  tulips: "Fioritura dei tulipani", wisteria: "Fioritura del glicine",
+  sunflowers: "Campi di girasoli", foliage: "Foliage d'autunno",
+  almond_blossom: "Fioritura dei mandorli", rhododendron: "Fioritura dei rododendri",
+  wildflowers: "Fiori spontanei", botanical_garden: "Giardino botanico",
+  // memoria
+  monumental_cemetery: "Cimitero monumentale", war_memorial: "Memoriale di guerra",
+  house_museum: "Casa-museo", birthplace: "Casa natale",
+  grave_of_notable: "Tomba di un personaggio", memorial_site: "Luogo della memoria",
+  mausoleum: "Mausoleo",
+  // lento
+  scenic_railway: "Treno panoramico", heritage_railway: "Ferrovia storica",
+  cable_car: "Funivia", funicular: "Funicolare", scenic_ferry: "Traghetto panoramico",
+  cycle_route: "Ciclovia", canal_boat: "Battello sul canale",
+  scenic_road: "Strada panoramica",
+};
+
+/** Etichetta IT leggibile di un `poi_type` tematico ("" se sconosciuto). */
+export function etichettaTipoTematico(poiType?: string | null): string {
+  if (!poiType) return "";
+  return TEMATICI_TYPE_LABELS[String(poiType).toLowerCase()] || "";
+}
 
 /** Sub-chip disponibili per ogni macro (ids esatti di CategoryChips). */
 export const SUBS_BY_MACRO: Record<string, string[]> = {
+  // Gemme e Monumenti hanno SOLO le quattro famiglie con l'audioguida
+  // (decisione utente 22/08/2026). Le gemme naturali (spiagge, vette...)
+  // si chiedono dalla macro Natura, che e' selezionabile a parte.
   gemme: ["monumenti_sub", "chiese", "musei", "panorami"],
   monumenti: ["monumenti_sub", "chiese", "musei", "panorami"],
+  // NATURA: macro a se' (committente, 22/08/2026: «spiagge fino a parchi e
+  // riserve devono avere una categoria a se' stante, non con i monumenti»).
+  // Cinque famiglie, stesse chiavi di wip_active_subcategories, di
+  // CategoryMap.kt e di PoiCategories.swift.
+  // (Elenco letterale e non NATURA_FAMIGLIE: quella e' dichiarata piu' sotto
+  // e un `const` letto prima della sua riga fa esplodere il modulo.)
+  natura: ["spiagge", "vette", "acque", "grotte", "parchi"],
   locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
   utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia"],
   famiglie: ["parco_giochi", "parco_divertimenti", "acquario", "zoo"],
@@ -66,6 +174,9 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   // cattedrale al muro di cinta, e i sub-chip culturali riguardano la mappa
   // turistica.
   beni_culturali: [],
+  // Verticali tematici: qui i sotto-chip sono le categorie stesse (terme,
+  // cinema, cieli…), non etichette derivate da poi_type. Vedi TEMATICI_KEYS.
+  tematiche: [...TEMATICI_KEYS],
 };
 
 const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
@@ -77,17 +188,105 @@ const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gal
 // 30.068 sentieri, ma riguardava già spiagge, cascate e riserve.
 // I sentieri e i cammini stanno qui: chi cerca panorami cerca anche dove
 // camminare, ed è l'unica famiglia che non richiede una chip in più.
+// NATURA — sei famiglie, non un mucchio solo.
+//
+// Fino al 21/08/2026 spiagge, vette, cascate, grotte e parchi finivano
+// tutti dentro il sotto-filtro «panorami»: o li prendevi tutti o niente, e
+// chi cercava una spiaggia si portava dietro anche i ghiacciai. Ora ogni
+// famiglia ha il suo, con la sua icona.
+//
+// `panorami` resta, ma solo per quello che e' davvero un punto di vista —
+// piu' il generico «natura» e i sentieri, che una famiglia precisa non ce
+// l'hanno. Da tenere allineato a CategoryMap.kt (Android),
+// PoiCategories.map (iOS) e guideSettings.isCategoryAllowed.
+export const SPIAGGE_TYPES = ["beach", "spiaggia", "spiagge", "bay", "baia", "island", "isola", "cliff", "falesia", "coast", "costa", "dune"];
+export const VETTE_TYPES = ["peak", "vetta", "vette", "volcano", "vulcano", "glacier", "ghiacciaio", "mountain_pass", "valico", "ridge", "arete", "saddle"];
+export const ACQUE_TYPES = ["waterfall", "cascata", "cascate", "spring", "sorgente", "hot_spring", "lake", "lago", "laghi", "river", "fiume", "gorge", "gola", "canyon"];
+export const GROTTE_TYPES = ["cave", "grotta", "grotte", "cave_entrance", "sinkhole", "abisso"];
+export const PARCHI_TYPES = ["park", "parchi", "parco", "garden", "giardino", "botanical_garden", "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco", "desert", "deserto", "tree", "albero", "national_park"];
+/** Le cinque famiglie della macro Natura, nell'ordine dei sotto-chip. */
+export const NATURA_FAMIGLIE = ["spiagge", "vette", "acque", "grotte", "parchi"] as const;
+/**
+ * Tutti i valori di `shared_pois.category` che la macro Natura chiede al DB
+ * con una fetch dedicata per bbox (MapArea.fetchNaturaPoisInBounds). Serve
+ * perche' la RPC nearby_pois restituisce i 1.000 POI piu' vicini di
+ * QUALUNQUE categoria: in una citta' i monumenti riempiono tutti i posti e
+ * le 10.000 spiagge del DB non arrivavano mai sulla mappa (22/08/2026).
+ */
+export const NATURA_DB_CATEGORIES: string[] = [...SPIAGGE_TYPES, ...VETTE_TYPES, ...ACQUE_TYPES, ...GROTTE_TYPES, ...PARCHI_TYPES];
+/** Famiglia naturale di un valore grezzo di category/poi_type, o null. */
+export function famigliaNatura(value: string): (typeof NATURA_FAMIGLIE)[number] | null {
+  if (SPIAGGE_TYPES.includes(value)) return "spiagge";
+  if (VETTE_TYPES.includes(value)) return "vette";
+  if (ACQUE_TYPES.includes(value)) return "acque";
+  if (GROTTE_TYPES.includes(value)) return "grotte";
+  if (PARCHI_TYPES.includes(value)) return "parchi";
+  return null;
+}
 const PANORAMI_TYPES = [
-  "viewpoint", "panorami", "panorama", "park", "parchi", "garden", "nature_reserve",
-  "natura", "sentiero", "sentieri", "hiking", "trail", "cammino",
-  "beach", "spiaggia", "bay", "baia", "lake", "lago", "island", "isola",
-  "waterfall", "cascata", "spring", "cave", "grotta", "peak", "vetta",
-  "cliff", "falesia", "glacier", "volcano", "forest", "foresta",
+  "viewpoint", "panorami", "panorama", "lighthouse", "faro", "scenic_road", "aerialway",
+  // Generici e percorsi: non hanno una famiglia precisa e restano qui.
+  "natura", "sentiero", "sentieri", "hiking", "trail", "cammino", "via_ferrata",
 ];
 const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
 const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
 const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
 const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
+
+/**
+ * ENOGASTRONOMIA — dal `poi_type` importato da OSM al sub-chip.
+ *
+ * I nomi a sinistra sono esattamente i poi_type scritti da
+ * `scratch/importa-enogastronomia.mjs`; a destra gli id dei sub-chip. Se un
+ * giorno si aggiunge una famiglia all'harvest, va aggiunta anche qui,
+ * altrimenti quei POI restano senza sotto-categoria e spariscono appena
+ * l'utente accende un sub-chip (è già successo con i sentieri).
+ */
+export const ENO_SUB_BY_TYPE: Record<string, string> = {
+  cantina: "cantine", enoteca: "cantine", wine_cellar: "cantine", winery: "cantine",
+  vigneto: "vigneti", vineyard: "vigneti", uliveto: "frantoi",
+  birrificio: "birrifici", brewery: "birrifici", distilleria: "birrifici", distillery: "birrifici",
+  caseificio: "caseifici", formaggi: "caseifici", cheese: "caseifici", dairy: "caseifici",
+  frantoio: "frantoi", oil_mill: "frantoi",
+  risaia: "frantoi", salina: "botteghe_gusto", frutteto: "vigneti",
+  piantagione: "botteghe_gusto", mulino: "botteghe_gusto", pastificio: "botteghe_gusto",
+  frutta_secca: "botteghe_gusto", mercato: "botteghe_gusto",
+  gastronomia: "botteghe_gusto", fattoria: "botteghe_gusto", pasticceria: "botteghe_gusto",
+  cioccolato: "botteghe_gusto", caffe: "botteghe_gusto", te: "botteghe_gusto",
+  miele: "botteghe_gusto", spezie: "botteghe_gusto", museo_gusto: "botteghe_gusto",
+  panificio: "botteghe_gusto", macelleria: "botteghe_gusto", pescheria: "botteghe_gusto",
+  ortofrutta: "botteghe_gusto", dolciumi: "botteghe_gusto",
+  strada_del_vino: "strade_vino",
+};
+
+/**
+ * I DUE LIVELLI DEL LAYER "VINO E GUSTO".
+ *
+ * Stessa scelta fatta con i sentieri, dove a zoom lontano si mostrano solo
+ * le reti internazionali e nazionali: i 199.280 luoghi del gusto non possono
+ * comparire tutti insieme, o una città diventa una macchia.
+ *
+ * PRODUTTORI: dove il prodotto NASCE. Sono ~65.000 e sono il motivo per cui
+ * si accende il layer — una cantina, un caseificio, un frantoio si visitano.
+ * BOTTEGHE: dove il prodotto si COMPRA. Sono ~130.000, valgono quando si è
+ * già in centro a piedi, non mentre si guarda una valle dall'alto.
+ */
+export const ENO_PRODUTTORI = [
+  "cantina", "vigneto", "caseificio", "frantoio", "uliveto",
+  "birrificio", "distilleria", "museo_gusto",
+  // Secondo giro (20/08/2026): i PAESAGGI del cibo tipico, che il primo
+  // harvest non cercava. Una risaia terrazzata o una salina coi mulini
+  // sono tappe quanto una cantina.
+  "risaia", "salina", "frutteto", "piantagione", "mulino", "pastificio",
+];
+export const ENO_BOTTEGHE = [
+  "enoteca", "formaggi", "gastronomia", "fattoria", "pasticceria",
+  "cioccolato", "caffe", "te", "miele", "spezie", "frutta_secca",
+  // Il mercato è il posto dove si capisce cosa si mangia in una città:
+  // sta fra le botteghe perché ha senso quando si è già in centro.
+  "mercato",
+  "panificio", "macelleria", "pescheria", "ortofrutta", "dolciumi",
+];
 
 /**
  * Macro + sotto-categoria canoniche di un POI. `subId` usa gli id dei sub-chip
@@ -108,6 +307,38 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // sotto "monumenti", comparendo anche a chip atlante spenta.
   if (raw === "beni_culturali") return { macro: "beni_culturali", subId: "" };
 
+  // VERTICALI TEMATICI. Vanno risolti PRIMA della logica culturale per lo
+  // stesso motivo dei beni vincolati: una casa museo, un cimitero monumentale
+  // o un osservatorio finirebbero sotto "monumenti"/"musei" e comparirebbero
+  // sulla mappa a chip tematica spenta. La sotto-categoria è la categoria
+  // stessa, perché è quella che l'utente accende.
+  // Due strade portano qui e vanno gestite entrambe:
+  //  - `raw` è già la chiave del verticale ('terme'): il POI arriva dalla RPC
+  //    o dalla cache, dove `category` è la colonna del DB;
+  //  - `raw` è 'tematiche': lo scrive la fetch per bbox della mappa in
+  //    `baseCategory`, e la chiave vera resta in `category`.
+  if ((TEMATICI_KEYS as readonly string[]).includes(raw)) {
+    return { macro: "tematiche", subId: raw };
+  }
+  if (raw === "tematiche") {
+    const chiave = String(p.category || "").toLowerCase();
+    return { macro: "tematiche", subId: (TEMATICI_KEYS as readonly string[]).includes(chiave) ? chiave : "" };
+  }
+
+  // VINO E GUSTO — nessuna macro, e non è una dimenticanza.
+  //
+  // I 199.280 luoghi del gusto NON sono POI culturali: sono un verticale a
+  // sé, come i sentieri, e vivono in un layer del pannello ⓘ che disegna i
+  // propri pin. Restituire `macro: null` è esattamente ciò che li tiene
+  // FUORI dalla mappa turistica: il filtro delle chip scarta chi non ha una
+  // macro, e una cantina non deve comparire fra i monumenti solo perché si
+  // trova nel raggio della RPC.
+  // La sotto-categoria si risolve lo stesso, perché il layer e la scheda la
+  // usano per scegliere l'icona.
+  if (raw === "enogastronomia") {
+    return { macro: null, subId: ENO_SUB_BY_TYPE[sub] || ENO_SUB_BY_TYPE[subCanonical] || "" };
+  }
+
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
   // ma conservano la sotto-categoria culturale per i sub-chip.
   const isGem = p.is_gem === true || raw === "gemme";
@@ -115,13 +346,28 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   const culturalSub = (value: string): string | null => {
     if (CHIESE_TYPES.includes(value)) return "chiese";
     if (MUSEI_TYPES.includes(value)) return "musei";
+    // Le famiglie naturali vanno provate PRIMA di panorami, che ormai e' il
+    // contenitore di quello che non ha una famiglia sua.
+    const fam = famigliaNatura(value);
+    if (fam) return fam;
     if (PANORAMI_TYPES.includes(value)) return "panorami";
     if (MONUMENTI_TYPES.includes(value)) return "monumenti_sub";
     return null;
   };
 
-  const cultural = culturalSub(raw) || culturalSub(sub);
+  // `raw` puo' essere 'natura' scritto da MapArea.fetchNaturaPoisInBounds in
+  // baseCategory: la famiglia vera sta in `category` (beach, peak…).
+  const rawNatura = raw === "natura" ? String(p.category || "").toLowerCase() : "";
+  const cultural = culturalSub(raw) || (rawNatura ? culturalSub(rawNatura) : null) || culturalSub(sub);
+  // Una gemma naturale (spiaggia, vetta, cascata...) sta in Natura, non in
+  // Gemme: Gemme e Monumenti hanno solo le quattro famiglie con l'audioguida
+  // (decisione utente 22/08/2026).
+  if (isGem && cultural && (NATURA_FAMIGLIE as readonly string[]).includes(cultural)) return { macro: "natura", subId: cultural };
   if (isGem) return { macro: "gemme", subId: cultural || "" };
+  // NATURA e' una macro a se': spiagge, vette, acque, grotte e parchi non
+  // stanno piu' sotto Monumenti (22/08/2026). 'natura' generico e i sentieri
+  // restano "panorami" dentro Monumenti: non hanno una famiglia precisa.
+  if (cultural && (NATURA_FAMIGLIE as readonly string[]).includes(cultural)) return { macro: "natura", subId: cultural };
   if (cultural) return { macro: "monumenti", subId: cultural };
 
   if (LOCALI_TYPES.includes(raw)) return { macro: "locali", subId: subCanonical };
@@ -233,6 +479,16 @@ export function passesCategoryRule(p: any, selectedCategories: string[], subFilt
   // sparirebbe accendendo il chip "beni culturali", perche' `resolvePoiTaxonomy`
   // assegna una macro sola e la sua e' quella turistica.
   if (selectedCategories.includes('beni_culturali') && isBeneCulturale(p)) return true;
+
+  // VERTICALI TEMATICI. Le otto sotto-categorie sono anche chiavi di filtro
+  // (stanno in selectedCategories, non in subFilter): il POI passa se la SUA
+  // categoria è accesa. La macro 🧭 accesa da sola — succede quando arriva da
+  // GeoControl, che salva solo le otto chiavi — vale come "tutte".
+  if (macro === "tematiche") {
+    if (subId && selectedCategories.includes(subId)) return true;
+    const nessunaSub = !(TEMATICI_KEYS as readonly string[]).some(k => selectedCategories.includes(k));
+    return selectedCategories.includes("tematiche") && nessunaSub;
+  }
 
   if (!macro) return false;
   if (!selectedCategories.includes(macro)) return false;

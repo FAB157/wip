@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import {
-  Flag, CheckCircle2, AlertTriangle, Search, Clock, Check, XCircle,
-  RefreshCw, Trash2, Eye, EyeOff, MapPin, User, Filter, Download, Bell
+  Flag, CheckCircle2, Search, Clock, Check, XCircle,
+  RefreshCw, Eye, EyeOff, MapPin, Download, Bell,
+  ChevronLeft, ChevronRight, ExternalLink, Copy, RotateCcw, X, Info
 } from 'lucide-react';
 
 export interface PoiReport {
@@ -31,24 +32,123 @@ function getErrorTypeInfo(type: string) {
   return ERROR_TYPE_LABELS[type] || { label: type || 'Sconosciuto', color: 'bg-slate-100 text-slate-700 border-slate-200' };
 }
 
+// Paginazione server-side: con un semplice select('*') PostgREST tronca in
+// silenzio a 1000 righe e le segnalazioni più vecchie sparivano dal pannello
+// senza che nessuno se ne accorgesse.
+const PAGE_SIZE = 50;
+
+// Il testo cercato finisce dentro un .or() di PostgREST, dove virgole,
+// parentesi e asterischi sono SINTASSI: se restano nel termine la query fallisce.
+function sanitizeTerm(raw: string) {
+  return raw.replace(/[,()*']/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** Coordinate e visibilità del POI segnalato: non stanno in poi_reports. */
+interface PoiInfo {
+  lat: number | null;
+  lon: number | null;
+  is_hidden: boolean;
+}
+
 export default function AdminReports() {
   const [reports, setReports] = useState<PoiReport[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [filter, setFilter] = useState<'pending' | 'resolved' | 'rejected' | 'all'>('pending');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedReport, setSelectedReport] = useState<PoiReport | null>(null);
+  const [page, setPage] = useState(0);
+  // Conteggi presi dal server: con la paginazione non si possono più contare le
+  // righe caricate, sarebbero solo quelle della pagina corrente.
+  const [counts, setCounts] = useState({ pending: 0, resolved: 0, rejected: 0 });
+  // poi_reports NON ha lat/lon: le leggiamo da shared_pois con UNA sola query
+  // .in(...) sugli id della pagina, mai una query per riga.
+  const [poiInfo, setPoiInfo] = useState<Record<string, PoiInfo>>({});
+  // Conferma inline a due click (niente window.confirm, che blocca il thread e
+  // non si può stilare): la chiave è "azione:idSegnalazione".
+  const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  const totalCount = counts.pending + counts.resolved + counts.rejected;
+  const filteredCount = filter === 'all' ? totalCount : counts[filter];
+  const totalPages = Math.max(1, Math.ceil(filteredCount / PAGE_SIZE));
+
+  // Debounce: ora la ricerca è server-side, senza attesa partirebbe una query
+  // per ogni tasto premuto.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(0);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     fetchReports();
-  }, []);
+  }, [filter, debouncedSearch, page]);
+
+  const changeFilter = (next: 'pending' | 'resolved' | 'rejected' | 'all') => {
+    setFilter(next);
+    // Cambiando filtro il numero di pagine cambia: restare a pagina 7 mostrerebbe
+    // una tabella vuota.
+    setPage(0);
+  };
+
+  // Traduce il testo cercato nei filtri PostgREST. L'email di chi segnala non
+  // sta in poi_reports (viene da user_profiles), quindi la convertiamo prima in
+  // una lista di user_id, altrimenti la ricerca per email smetterebbe di funzionare.
+  const buildSearchFilter = async (): Promise<(q: any) => any> => {
+    const term = sanitizeTerm(debouncedSearch);
+    if (term.length === 0) return (q: any) => q;
+
+    let matchedUserIds: string[] = [];
+    const { data: byEmail } = await supabase
+      .from('user_profiles')
+      .select('id')
+      .ilike('email', `%${term}%`)
+      .limit(20);
+    matchedUserIds = (byEmail || []).map((p: any) => p.id).filter(Boolean);
+
+    const ors = [
+      `poi_name.ilike.%${term}%`,
+      `details.ilike.%${term}%`,
+      `error_type.ilike.%${term}%`,
+      `poi_id.ilike.%${term}%`
+    ];
+    if (matchedUserIds.length > 0) ors.push(`user_id.in.(${matchedUserIds.join(',')})`);
+    return (q: any) => q.or(ors.join(','));
+  };
 
   const fetchReports = async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('poi_reports')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const applySearch = await buildSearchFilter();
+
+      // head:true non trasferisce nessuna riga, solo il Content-Range col totale.
+      // 'exact' è sostenibile QUI perché poi_reports è una tabella piccola:
+      // non va mai fatto su shared_pois, che ha milioni di righe.
+      const statuses = ['pending', 'resolved', 'rejected'] as const;
+      const countResults = await Promise.all(statuses.map(s =>
+        applySearch(
+          supabase.from('poi_reports').select('id', { count: 'exact', head: true }).eq('status', s)
+        )
+      ));
+      setCounts({
+        pending: countResults[0]?.count || 0,
+        resolved: countResults[1]?.count || 0,
+        rejected: countResults[2]?.count || 0
+      });
+
+      // I filtri vanno applicati PRIMA di order/range: dopo, supabase-js
+      // restituisce un transform builder che non espone più .eq()/.or().
+      let query: any = supabase.from('poi_reports').select('*');
+      if (filter !== 'all') query = query.eq('status', filter);
+      query = applySearch(query);
+
+      const from = page * PAGE_SIZE;
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
 
       if (error) throw error;
 
@@ -65,21 +165,56 @@ export default function AdminReports() {
         (profiles || []).forEach((p: any) => { emailMap[p.id] = p.email || p.id; });
       }
 
-      const enriched = rawReports.map((r: any) => ({
+      const enriched: PoiReport[] = rawReports.map((r: any) => ({
         ...r,
         user_email: r.user_id ? (emailMap[r.user_id] || r.user_id) : 'Anonimo',
       }));
 
       setReports(enriched);
+
+      // Coordinate + is_hidden dei POI di QUESTA pagina, in una query sola.
+      const poiIds = [...new Set(enriched.map(r => r.poi_id).filter(Boolean))];
+      if (poiIds.length > 0) {
+        const { data: poiRows } = await supabase
+          .from('shared_pois')
+          .select('id, lat, lon, is_hidden')
+          .in('id', poiIds);
+        const map: Record<string, PoiInfo> = {};
+        (poiRows || []).forEach((p: any) => {
+          map[p.id] = {
+            lat: typeof p.lat === 'number' ? p.lat : null,
+            lon: typeof p.lon === 'number' ? p.lon : null,
+            is_hidden: !!p.is_hidden
+          };
+        });
+        setPoiInfo(map);
+      } else {
+        setPoiInfo({});
+      }
     } catch (e) {
       console.error('Error fetching reports:', e);
+      setFeedback({ type: 'error', text: 'Errore nel caricamento delle segnalazioni dal database.' });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const resolveReport = async (id: string, status: 'resolved' | 'rejected') => {
+  // Primo click: arma la conferma. Secondo click sulla STESSA riga: esegue.
+  const guarded = (key: string, run: () => void) => {
+    if (confirmKey !== key) {
+      setConfirmKey(key);
+      return;
+    }
+    setConfirmKey(null);
+    run();
+  };
+  const isArmed = (key: string) => confirmKey === key;
+
+  // 'pending' è ammesso perché una segnalazione chiusa per sbaglio deve poter
+  // tornare in coda: senza questo non esisteva nessun modo di riaprirla.
+  const resolveReport = async (id: string, status: 'pending' | 'resolved' | 'rejected') => {
     try {
+      const previous = reports.find(r => r.id === id)?.status;
       const { error } = await supabase
         .from('poi_reports')
         .update({ status })
@@ -87,51 +222,180 @@ export default function AdminReports() {
       if (error) throw error;
       setReports(prev => prev.map(r => r.id === id ? { ...r, status } : r));
       if (selectedReport?.id === id) setSelectedReport(prev => prev ? { ...prev, status } : null);
+      // Sposto il conteggio a mano invece di rifare la query: la riga resta dov'è
+      // (così si può riaprirla subito) ma le card KPI restano coerenti.
+      if (previous && previous !== status) {
+        setCounts(prev => {
+          const next = { ...prev };
+          next[previous] = Math.max(0, next[previous] - 1);
+          next[status] = next[status] + 1;
+          return next;
+        });
+      }
       // Aggiorna il badge "Segnalazioni" sul tab del pannello admin
       window.dispatchEvent(new CustomEvent('wip-reports-updated'));
     } catch (e) {
       console.error('Error resolving report:', e);
-      alert('Errore aggiornamento stato');
+      setFeedback({ type: 'error', text: 'Errore nell\'aggiornamento dello stato della segnalazione.' });
     }
   };
 
-  const hidePoi = async (poi_id: string, report_id: string) => {
-    if (!window.confirm(`Vuoi davvero nascondere il POI "${poi_id}" dalla mappa per tutti gli utenti?`)) return;
+  // Nascondere/mostrare un POI tocca la mappa di TUTTI gli utenti: le due azioni
+  // sono speculari, così un "Nascondi" sbagliato non è più definitivo.
+  const setPoiHidden = async (report: PoiReport, hidden: boolean) => {
     try {
       const { error: poiErr } = await supabase
         .from('shared_pois')
-        .update({ is_hidden: true })
-        .eq('id', poi_id);
+        .update({ is_hidden: hidden })
+        .eq('id', report.poi_id);
       if (poiErr) throw poiErr;
-      await resolveReport(report_id, 'resolved');
-      alert('POI nascosto con successo.');
+
+      setPoiInfo(prev => ({
+        ...prev,
+        [report.poi_id]: { lat: prev[report.poi_id]?.lat ?? null, lon: prev[report.poi_id]?.lon ?? null, is_hidden: hidden }
+      }));
+
+      const label = report.poi_name || report.poi_id;
+      if (hidden) {
+        // Nascondere risolve la segnalazione: il problema è stato gestito.
+        await resolveReport(report.id, 'resolved');
+        setFeedback({ type: 'success', text: `POI "${label}" nascosto dalla mappa. Puoi rimetterlo visibile con "Mostra di nuovo".` });
+      } else {
+        // Rimettere visibile NON riapre la segnalazione: è una scelta separata
+        // dell'admin, che può riaprirla a mano se serve.
+        setFeedback({ type: 'success', text: `POI "${label}" di nuovo visibile in mappa.` });
+      }
     } catch (e) {
-      console.error('Error hiding POI:', e);
-      alert('Errore nel nascondere il POI');
+      console.error('Error updating POI visibility:', e);
+      setFeedback({ type: 'error', text: hidden ? 'Errore nel nascondere il POI.' : 'Errore nel rendere visibile il POI.' });
     }
   };
 
-  const pendingCount = reports.filter(r => r.status === 'pending').length;
-  const resolvedCount = reports.filter(r => r.status === 'resolved').length;
-  const rejectedCount = reports.filter(r => r.status === 'rejected').length;
+  // Il nome del POI apre la posizione su Google Maps. Le coordinate arrivano da
+  // shared_pois (poi_reports non le ha); se il POI non esiste più o è senza
+  // coordinate copiamo l'id, l'unica cosa con cui l'admin può ritrovarlo.
+  const openPoiOnMap = async (report: PoiReport) => {
+    const info = poiInfo[report.poi_id];
+    if (info && typeof info.lat === 'number' && typeof info.lon === 'number') {
+      window.open(`https://www.google.com/maps?q=${info.lat},${info.lon}`, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(report.poi_id);
+      setFeedback({ type: 'info', text: `Coordinate non disponibili: id "${report.poi_id}" copiato negli appunti, cercalo in Editor POI.` });
+    } catch {
+      setFeedback({ type: 'info', text: `Coordinate non disponibili. Id del POI: ${report.poi_id} — cercalo in Editor POI.` });
+    }
+  };
 
-  const filteredReports = reports.filter(r => {
-    const matchStatus = filter === 'all' || r.status === filter;
-    const q = search.toLowerCase();
-    const matchSearch = !search || (r.poi_name || '').toLowerCase().includes(q) || (r.details || '').toLowerCase().includes(q) || (r.user_email || '').toLowerCase().includes(q) || (r.error_type || '').toLowerCase().includes(q);
-    return matchStatus && matchSearch;
-  });
+  // L'export deve contenere TUTTE le segnalazioni del filtro attivo, non solo
+  // la pagina a schermo: rifà la query senza paginazione, con un tetto di
+  // sicurezza a 5000 righe.
+  async function exportCSV() {
+    setFeedback({ type: 'info', text: 'Preparo il CSV...' });
+    try {
+      const applySearch = await buildSearchFilter();
+      let query: any = supabase.from('poi_reports').select('*');
+      if (filter !== 'all') query = query.eq('status', filter);
+      query = applySearch(query);
 
-  function exportCSV() {
-    const header = 'Data,Utente,POI,Tipo Errore,Stato,Dettagli';
-    const rows = filteredReports.map(r => {
-      const d = new Date(r.created_at);
-      return `"${d.toLocaleString('it-IT')}","${r.user_email}","${r.poi_name}","${r.error_type}","${r.status}","${(r.details || '').replace(/"/g, "''")}"`
-    });
-    const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'segnalazioni.csv'; a.click();
+      const { data, error } = await query
+        .order('created_at', { ascending: false })
+        .range(0, 4999);
+      if (error) throw error;
+
+      const allRows = data || [];
+      const userIds = [...new Set(allRows.map((r: any) => r.user_id).filter(Boolean))];
+      const emailMap: Record<string, string> = {};
+      if (userIds.length > 0) {
+        const { data: profiles } = await supabase
+          .from('user_profiles')
+          .select('id, email')
+          .in('id', userIds);
+        (profiles || []).forEach((p: any) => { emailMap[p.id] = p.email || p.id; });
+      }
+
+      const header = 'Data,Utente,POI,Tipo Errore,Stato,Dettagli';
+      const rows = allRows.map((r: any) => {
+        const d = new Date(r.created_at);
+        const email = r.user_id ? (emailMap[r.user_id] || r.user_id) : 'Anonimo';
+        return `"${d.toLocaleString('it-IT')}","${email}","${r.poi_name}","${r.error_type}","${r.status}","${(r.details || '').replace(/"/g, "''")}"`
+      });
+      const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'segnalazioni.csv'; a.click();
+      URL.revokeObjectURL(url);
+      setFeedback({ type: 'success', text: `Esportate ${rows.length} segnalazioni.` });
+    } catch (e) {
+      console.error('Error exporting reports:', e);
+      setFeedback({ type: 'error', text: 'Errore durante l\'export CSV.' });
+    }
   }
+
+  // Azioni della riga: identiche in tabella e nel modale, così non possono
+  // divergere. Non è un componente separato per non far rimontare i bottoni
+  // (e perdere la conferma armata) a ogni render.
+  const renderActions = (report: PoiReport, wrap: boolean) => {
+    const info = poiInfo[report.poi_id];
+    const btn = 'px-2.5 py-1.5 rounded-lg text-[11px] font-black border transition-colors flex items-center gap-1';
+    const reopenKey = `reopen:${report.id}`;
+    const hideKey = `hide:${report.id}`;
+    const showKey = `show:${report.id}`;
+    return (
+      <div className={`flex items-center gap-1.5 ${wrap ? 'flex-wrap' : ''}`}>
+        {report.status === 'pending' ? (
+          <>
+            <button
+              onClick={() => resolveReport(report.id, 'resolved')}
+              className={`${btn} bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100`}
+            >
+              <Check className="w-3 h-3" /> Risolvi
+            </button>
+            <button
+              onClick={() => resolveReport(report.id, 'rejected')}
+              className={`${btn} bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100`}
+            >
+              <XCircle className="w-3 h-3" /> Rigetta
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => guarded(reopenKey, () => resolveReport(report.id, 'pending'))}
+            title="Rimette la segnalazione in coda come 'In attesa'"
+            className={`${btn} ${isArmed(reopenKey)
+              ? 'bg-amber-500 text-white border-amber-500'
+              : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'}`}
+          >
+            <RotateCcw className="w-3 h-3" /> {isArmed(reopenKey) ? 'Sicuro?' : 'Riapri'}
+          </button>
+        )}
+
+        {/* I bottoni di visibilità compaiono solo se il POI esiste ancora in
+            shared_pois: su una riga fantasma non farebbero nulla. */}
+        {info && (info.is_hidden ? (
+          <button
+            onClick={() => guarded(showKey, () => setPoiHidden(report, false))}
+            title="Rimette il POI visibile in mappa per tutti gli utenti"
+            className={`${btn} ${isArmed(showKey)
+              ? 'bg-sky-600 text-white border-sky-600'
+              : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'}`}
+          >
+            <Eye className="w-3 h-3" /> {isArmed(showKey) ? 'Sicuro?' : 'Mostra di nuovo'}
+          </button>
+        ) : (
+          <button
+            onClick={() => guarded(hideKey, () => setPoiHidden(report, true))}
+            title="Nasconde il POI dalla mappa per tutti gli utenti (reversibile)"
+            className={`${btn} ${isArmed(hideKey)
+              ? 'bg-red-600 text-white border-red-600'
+              : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'}`}
+          >
+            <EyeOff className="w-3 h-3" /> {isArmed(hideKey) ? 'Sicuro?' : 'Nascondi'}
+          </button>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-5">
@@ -158,42 +422,44 @@ export default function AdminReports() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div
           className={`rounded-2xl p-4 text-center cursor-pointer transition-all border-2 ${filter === 'pending' ? 'border-orange-400 bg-orange-50' : 'border-transparent bg-orange-50/50 hover:border-orange-200'}`}
-          onClick={() => setFilter('pending')}
+          onClick={() => changeFilter('pending')}
         >
-          <div className="text-3xl font-black text-orange-700">{pendingCount}</div>
+          <div className="text-3xl font-black text-orange-700">{counts.pending}</div>
           <div className="text-[11px] font-black uppercase tracking-widest text-orange-500 mt-1 flex items-center justify-center gap-1">
-            {pendingCount > 0 && <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />}
+            {counts.pending > 0 && <span className="w-2 h-2 bg-orange-500 rounded-full animate-pulse" />}
             In attesa
           </div>
         </div>
         <div
           className={`rounded-2xl p-4 text-center cursor-pointer transition-all border-2 ${filter === 'resolved' ? 'border-emerald-400 bg-emerald-50' : 'border-transparent bg-emerald-50/50 hover:border-emerald-200'}`}
-          onClick={() => setFilter('resolved')}
+          onClick={() => changeFilter('resolved')}
         >
-          <div className="text-3xl font-black text-emerald-700">{resolvedCount}</div>
+          <div className="text-3xl font-black text-emerald-700">{counts.resolved}</div>
           <div className="text-[11px] font-black uppercase tracking-widest text-emerald-500 mt-1">Risolte</div>
         </div>
         <div
           className={`rounded-2xl p-4 text-center cursor-pointer transition-all border-2 ${filter === 'rejected' ? 'border-red-400 bg-red-50' : 'border-transparent bg-red-50/40 hover:border-red-200'}`}
-          onClick={() => setFilter('rejected')}
+          onClick={() => changeFilter('rejected')}
         >
-          <div className="text-3xl font-black text-red-700">{rejectedCount}</div>
+          <div className="text-3xl font-black text-red-700">{counts.rejected}</div>
           <div className="text-[11px] font-black uppercase tracking-widest text-red-500 mt-1">Rigettate</div>
         </div>
         <div
           className={`rounded-2xl p-4 text-center cursor-pointer transition-all border-2 ${filter === 'all' ? 'border-primary bg-blue-50' : 'border-transparent bg-slate-50/50 hover:border-slate-200'}`}
-          onClick={() => setFilter('all')}
+          onClick={() => changeFilter('all')}
         >
-          <div className="text-3xl font-black text-slate-700">{reports.length}</div>
+          {/* Il totale vero, non le righe della pagina: con la paginazione
+              server-side `reports` contiene solo le 50 correnti. */}
+          <div className="text-3xl font-black text-slate-700">{totalCount}</div>
           <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 mt-1">Totali</div>
         </div>
       </div>
 
       {/* Alert per segnalazioni pendenti */}
-      {pendingCount > 0 && (
+      {counts.pending > 0 && (
         <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl flex items-center gap-3 text-sm font-medium text-orange-800">
           <Bell className="w-5 h-5 text-orange-500 shrink-0 animate-pulse" />
-          <span>Hai <strong>{pendingCount}</strong> segnalazione/i in attesa di revisione. Agisci al più presto per mantenere la qualità dei dati!</span>
+          <span>Hai <strong>{counts.pending}</strong> segnalazione/i in attesa di revisione. Agisci al più presto per mantenere la qualità dei dati!</span>
         </div>
       )}
 
@@ -223,14 +489,14 @@ export default function AdminReports() {
             <tbody className="divide-y divide-gray-50">
               {isLoading ? (
                 <tr><td colSpan={7} className="p-8 text-center text-sm text-gray-500">Caricamento...</td></tr>
-              ) : filteredReports.length === 0 ? (
+              ) : reports.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="p-12 text-center">
                     <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
                     <div className="text-sm font-bold text-gray-500">Nessuna segnalazione trovata.</div>
                   </td>
                 </tr>
-              ) : filteredReports.map(report => {
+              ) : reports.map(report => {
                 const d = new Date(report.created_at);
                 const errInfo = getErrorTypeInfo(report.error_type);
                 const isPending = report.status === 'pending';
@@ -283,32 +549,11 @@ export default function AdminReports() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      {isPending ? (
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => resolveReport(report.id, 'resolved')}
-                            className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[11px] font-black hover:bg-emerald-100 transition-colors flex items-center gap-1"
-                          >
-                            <Check className="w-3 h-3" /> Risolvi
-                          </button>
-                          <button
-                            onClick={() => hidePoi(report.poi_id, report.id)}
-                            className="px-2.5 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-lg text-[11px] font-black hover:bg-red-100 transition-colors flex items-center gap-1"
-                          >
-                            <EyeOff className="w-3 h-3" /> Nascondi
-                          </button>
-                          <button
-                            onClick={() => resolveReport(report.id, 'rejected')}
-                            className="px-2.5 py-1.5 bg-gray-50 text-gray-600 border border-gray-200 rounded-lg text-[11px] font-black hover:bg-gray-100 transition-colors flex items-center gap-1"
-                          >
-                            <XCircle className="w-3 h-3" /> Rigetta
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-gray-500 italic">Gestita</span>
-                      )}
-                    </td>
+                    {/* Azioni tutte da renderActions: risolvi/rigetta quando e'
+                        in attesa, riapri quando e' gia' gestita, piu'
+                        nascondi/mostra il POI. Prima una segnalazione chiusa
+                        diceva solo "Gestita" e non si poteva piu' toccare. */}
+                    <td className="px-4 py-3">{renderActions(report, true)}</td>
                   </tr>
                 );
               })}

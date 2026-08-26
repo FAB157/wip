@@ -69,13 +69,31 @@ export function dayTotal(legs: Array<{ mode: TransportMode; km: number }>): numb
  */
 export function extractKmFromText(text: string | null | undefined): number | null {
   if (!text) return null;
-  const matches = String(text).match(/\d{1,4}(?:[.,]\d)?\s*km\b/gi);
+  // Numero con eventuale separatore delle migliaia ("1.200 km", "1,200 km",
+  // "1 200 km") o decimale ("12,5 km", "12.5 km"); prima "1.200 km" veniva
+  // letto come 1,2 km.
+  const matches = String(text).match(/\d{1,3}(?:[.,\s ]\d{3})+(?:[.,]\d{1,2})?\s*km\b|\d{1,4}(?:[.,]\d{1,2})?\s*km\b/gi);
   if (!matches) return null;
   let best: number | null = null;
   for (const m of matches) {
-    const km = parseFloat(m.replace(',', '.'));
+    const km = parseKmNumber(m);
     // 1–2000 km: sotto è rumore ("0,3 km dal parcheggio"), sopra è un errore
-    if (Number.isFinite(km) && km >= 1 && km <= 2000 && (best === null || km > best)) best = km;
+    if (km !== null && km >= 1 && km <= 2000 && (best === null || km > best)) best = km;
   }
   return best;
+}
+
+/** "1.200", "1,200", "1 200", "12,5", "12.5" → numero; null se illeggibile. */
+function parseKmNumber(raw: string): number | null {
+  let s = raw.replace(/km/i, '').trim();
+  // Gruppi di tre cifre dopo un separatore = migliaia ("1.200", "1,200", "1 200")
+  if (/^\d{1,3}(?:[.,\s ]\d{3})+(?:[.,]\d{1,2})?$/.test(s)) {
+    const dec = s.match(/[.,](\d{1,2})$/);
+    const intPart = (dec ? s.slice(0, s.length - dec[0].length) : s).replace(/[.,\s ]/g, '');
+    s = dec ? `${intPart}.${dec[1]}` : intPart;
+  } else {
+    s = s.replace(',', '.');
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
 }

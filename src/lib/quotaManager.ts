@@ -193,24 +193,31 @@ export const getUserTier = async (userId: string): Promise<'free' | 'premium'> =
     const profile = await getUserProfile(userId);
     if (!profile) return 'free';
 
+    // UPDATE dei SOLI campi abbonamento, mai upsert dell'intero profilo:
+    // l'upsert di `{ ...profile }` riscriveva anche purchased_credits /
+    // earned_credits / xp con i valori letti un attimo prima, sovrascrivendo
+    // un addebito o un top-up arrivato nel frattempo (e faceva scattare le
+    // protezioni RLS sulle colonne crediti).
     if (isUserPremium(profile)) {
-      if (profile.subscription_tier !== 'premium') {
-         await supabase.from('user_profiles').upsert({ ...profile, subscription_tier: 'premium' });
+      if (profile.subscription_tier !== 'premium' && userId !== 'mock-user-id') {
+        try {
+          await supabase.from('user_profiles').update({ subscription_tier: 'premium' }).eq('id', userId);
+        } catch (updateErr) {
+          console.error('Failed to auto-promote in DB:', updateErr);
+        }
       }
       return 'premium';
     } else {
       if (profile.subscription_status === 'active' || profile.premium_until || profile.subscription_tier === 'premium') {
-        // Demote
-        const demoted: UserProfile = {
-          ...profile,
-          subscription_tier: 'free',
-          subscription_status: 'canceled',
-          premium_until: null,
-        };
-        try {
-          await supabase.from('user_profiles').upsert(demoted);
-        } catch (updateErr) {
-          console.error("Failed to auto-demote in DB:", updateErr);
+        // Demote: solo i tre campi dell'abbonamento
+        if (userId !== 'mock-user-id') {
+          try {
+            await supabase.from('user_profiles')
+              .update({ subscription_tier: 'free', subscription_status: 'canceled', premium_until: null })
+              .eq('id', userId);
+          } catch (updateErr) {
+            console.error("Failed to auto-demote in DB:", updateErr);
+          }
         }
       }
       return 'free';
@@ -308,113 +315,84 @@ export const checkQuota = async (
 
     return used < limit;
   } catch (err) {
-    console.error('Error checking quota:', err);
-    return true; // Allow gracefully on error
+    // FAIL-CLOSED: prima su errore si rispondeva `true` ("allow gracefully"),
+    // cioè con il DB irraggiungibile la quota non esisteva. Ora si nega e si
+    // lascia il motivo in lastQuotaCheckError per chi vuole mostrarlo.
+    lastQuotaCheckError = err instanceof Error ? err.message : String(err || 'quota check failed');
+    console.error('Error checking quota (fail-closed):', err);
+    return false;
   }
 };
 
+/** Motivo dell'ultimo rifiuto tecnico di checkQuota (null se l'ultimo controllo è andato a buon fine). */
+let lastQuotaCheckError: string | null = null;
+export const getLastQuotaCheckError = (): string | null => lastQuotaCheckError;
+
+export interface QuotaStatus {
+  /** true se la quota giornaliera è disponibile (o l'utente è admin). */
+  ok: boolean;
+  /** Bonus senza scadenza disponibili per questa feature (0 se nessuno). */
+  bonusCount: number;
+  /** Errore tecnico del controllo (fail-closed), se c'è stato. */
+  error: string | null;
+}
+
 /**
- * Checks user quota automatically by fetching the user tier first.
- * If daily quota is exhausted but the user has bonuses, prompts to use a bonus.
+ * Stato della quota per una feature: quota giornaliera + bonus disponibili.
+ * NON chiede nulla all'utente (il vecchio window.confirm è stato tolto):
+ * chi chiama decide se proporre il bonus e poi chiama consumeBonus.
  */
-export const checkUserQuota = async (
-  userId: string = "mock-user-id", 
+export const getQuotaStatus = async (
+  userId: string = "mock-user-id",
   featureType: FeatureType
-): Promise<boolean> => {
+): Promise<QuotaStatus> => {
+  lastQuotaCheckError = null;
   const profile = await getUserProfile(userId);
-  if (profile.is_admin) return true; // Bypass admin
+  if (profile.is_admin) return { ok: true, bonusCount: 0, error: null }; // Bypass admin
 
   const tier = await getUserTier(userId);
   const hasQuota = await checkQuota(userId, tier, featureType, profile);
-  
-  if (hasQuota) return true;
+  if (hasQuota) return { ok: true, bonusCount: 0, error: null };
 
-  // Check bonus
   let bonusCount = 0;
-  let bonusType = '';
-  if (featureType === 'audio_guide') { bonusCount = profile.bonus_audio || 0; bonusType = 'audioguide'; }
-  else if (featureType === 'itinerary') { bonusCount = profile.bonus_itinerari || 0; bonusType = 'itinerari'; }
-  else if (featureType === 'photo_search') { bonusCount = profile.bonus_vision || 0; bonusType = 'vision'; }
+  if (featureType === 'audio_guide') bonusCount = profile.bonus_audio || 0;
+  else if (featureType === 'itinerary') bonusCount = profile.bonus_itinerari || 0;
+  else if (featureType === 'photo_search') bonusCount = profile.bonus_vision || 0;
 
-  if (bonusCount > 0) {
-    const useBonus = window.confirm(`Hai esaurito il limite giornaliero. Vuoi usare 1 dei tuoi ${bonusCount} bonus ${bonusType} senza scadenza?`);
-    if (useBonus) {
-      const success = await consumeBonus(userId, featureType);
-      return success;
-    }
+  return { ok: false, bonusCount, error: lastQuotaCheckError };
+};
+
+/**
+ * Controllo di quota a esito booleano. Senza `useBonus` risponde false a
+ * quota esaurita anche se esistono bonus: sta al chiamante (via
+ * getQuotaStatus) proporli e richiamare con `{ useBonus: true }`, che
+ * consuma un bonus e torna true se il consumo è riuscito.
+ */
+export const checkUserQuota = async (
+  userId: string = "mock-user-id",
+  featureType: FeatureType,
+  options: { useBonus?: boolean } = {}
+): Promise<boolean> => {
+  const status = await getQuotaStatus(userId, featureType);
+  if (status.ok) return true;
+  if (options.useBonus && status.bonusCount > 0) {
+    return consumeBonus(userId, featureType);
   }
-
   return false;
 };
 
 /**
- * Increments the user's specific quota for today (upsert +1)
+ * DEPRECATO — NO-OP. I contatori d'uso (*_used) sono scritti solo dal
+ * server (checkAndIncrementQuota, autorità unica). Incrementarli anche dal
+ * client causava DOPPIO CONTEGGIO e, con la protezione DB su *_used
+ * (2026-08-09), lancerebbe un'eccezione RLS. La vecchia logica client è
+ * stata rimossa (era codice morto dopo il `return`).
  */
 export const incrementQuota = async (
-  userId: string = "mock-user-id",
-  featureType: FeatureType
+  _userId: string = "mock-user-id",
+  _featureType: FeatureType
 ): Promise<void> => {
-  // DEPRECATO — NO-OP. I contatori d'uso (*_used) sono ora scritti solo dal
-  // server (checkAndIncrementQuota, autorità unica). Incrementarli anche dal
-  // client causava DOPPIO CONTEGGIO (il tetto reale di 500 audioguide/giorno
-  // si dimezzava) e, con la protezione DB su *_used (2026-08-09), lancerebbe
-  // un'eccezione RLS. La logica storica resta sotto solo per riferimento.
   return;
-  try {
-    const { data: quotas, error } = await supabase
-      .from('user_quotas')
-      .select('*')
-      .eq('user_id', userId);
-
-    let existingRecord = quotas && quotas.length > 0 ? quotas[0] : null;
-
-    if (existingRecord) {
-      const updatePayload: any = { ...existingRecord };
-      
-      if (featureType === 'itinerary') {
-        updatePayload.itinerari_used = (existingRecord.itinerari_used || 0) + 1;
-      } else if (featureType === 'audio_guide') {
-        updatePayload.audioguide_used = (existingRecord.audioguide_used || 0) + 1;
-      } else if (featureType === 'poi_detail') {
-        updatePayload.poi_details_used = (existingRecord.poi_details_used || 0) + 1;
-      } else if (featureType === 'photo_search') {
-        updatePayload.vision_used = (existingRecord.vision_used || 0) + 1;
-      } else if (featureType === 'premium_guide') {
-        updatePayload.premium_guide_used = (existingRecord.premium_guide_used || 0) + 1;
-      }
-      
-      await supabase.from('user_quotas').upsert(updatePayload);
-    } else {
-      // Create new record with 1 used for the specific feature and default tier limits
-      const tier = await getUserTier(userId);
-      const globalQuotas = await getGlobalQuotas();
-      const tierQuota = globalQuotas.find(q => q.tier === tier) || {
-        itineraries_limit: QUOTA_LIMITS[tier].itinerary,
-        audio_guides_limit: QUOTA_LIMITS[tier].audio_guide,
-        poi_details_limit: QUOTA_LIMITS[tier].poi_detail,
-        photo_searches_limit: QUOTA_LIMITS[tier].photo_search,
-        premium_guides_limit: QUOTA_LIMITS[tier].premium_guide,
-      };
-
-      const insertPayload: any = {
-        user_id: userId,
-        itinerari_limit: (tierQuota as any).itineraries_limit || QUOTA_LIMITS[tier].itinerary,
-        audioguide_limit: (tierQuota as any).audio_guides_limit || QUOTA_LIMITS[tier].audio_guide,
-        vision_limit: (tierQuota as any).photo_searches_limit || QUOTA_LIMITS[tier].photo_search,
-        poi_details_limit: (tierQuota as any).poi_details_limit || QUOTA_LIMITS[tier].poi_detail,
-        premium_guide_limit: (tierQuota as any).premium_guides_limit || QUOTA_LIMITS[tier].premium_guide,
-        itinerari_used: featureType === 'itinerary' ? 1 : 0,
-        audioguide_used: featureType === 'audio_guide' ? 1 : 0,
-        poi_details_used: featureType === 'poi_detail' ? 1 : 0,
-        vision_used: featureType === 'photo_search' ? 1 : 0,
-        premium_guide_used: featureType === 'premium_guide' ? 1 : 0,
-      };
-
-      await supabase.from('user_quotas').upsert(insertPayload);
-    }
-  } catch (err) {
-    console.error('Error incrementing quota:', err);
-  }
 };
 
 /**

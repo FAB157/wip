@@ -116,6 +116,56 @@ enum PoiFootprints {
         return dentro(p.anelli, lat, lon)
     }
 
+    /// A quanti metri DAL BORDO del perimetro parte la guida (decisione del
+    /// 22/08/2026: "a 30 metri dal perimetro, non quando si è dentro").
+    /// Stesso valore in foregroundTriggers.ts e Footprints.kt.
+    static let triggerM: Double = 30
+    /// In auto 30 m sono un secondo a 50 km/h: la frase partirebbe a POI superato.
+    static let triggerCarM: Double = 100
+    static func triggerM(isDriving: Bool) -> Double { isDriving ? triggerCarM : triggerM }
+
+    /// DISTANZA DAL BORDO del perimetro, in metri: 0 dentro, .infinity senza
+    /// perimetro. È la misura che governa la guida quando il POI ha il
+    /// poligono: chi cammina lungo la facciata è al POI, da qualunque lato,
+    /// anche se l'ingresso sta dall'altra parte. Minimo punto-segmento su
+    /// tutti i lati, in un frame equirettangolare locale; il riquadro
+    /// allargato di `entro` metri scarta prima i lontani.
+    /// Port esatto di footprints.ts::distanzaDalPerimetro.
+    static func distanzaDalPerimetro(poiId: String, footprint: String?, lat: Double, lon: Double, entro: Double = 100) -> Double {
+        guard let p = perimetro(poiId, footprint) else { return .infinity }
+        let r = p.riquadro
+        let mLat = 111_320.0
+        let mLon = 111_320.0 * cos(lat * .pi / 180)
+        let dLat = entro / mLat
+        let dLon = entro / (mLon == 0 ? 1 : mLon)
+        if lat < r.minLat - dLat || lat > r.maxLat + dLat || lon < r.minLon - dLon || lon > r.maxLon + dLon {
+            return .infinity
+        }
+        if dentro(p.anelli, lat, lon) { return 0 }
+        var best = Double.infinity
+        for a in p.anelli {
+            let n = a.count / 2
+            var j = n - 1
+            for i in 0..<n {
+                let ax = (a[j * 2] - lon) * mLon, ay = (a[j * 2 + 1] - lat) * mLat
+                let bx = (a[i * 2] - lon) * mLon, by = (a[i * 2 + 1] - lat) * mLat
+                let dx = bx - ax, dy = by - ay
+                let len2 = dx * dx + dy * dy
+                let t = len2 == 0 ? 0 : min(1, max(0, -(ax * dx + ay * dy) / len2))
+                let px = ax + t * dx, py = ay + t * dy
+                let d = (px * px + py * py).squareRoot()
+                if d < best { best = d }
+                j = i
+            }
+        }
+        return best
+    }
+
+    /// true se il punto è entro la soglia di modalità dal bordo (o dentro).
+    static func alPerimetro(poiId: String, footprint: String?, lat: Double, lon: Double, isDriving: Bool = false) -> Bool {
+        distanzaDalPerimetro(poiId: poiId, footprint: footprint, lat: lat, lon: lon, entro: triggerCarM) <= triggerM(isDriving: isDriving)
+    }
+
     /// Svuota la cache: serve quando il radar cambia zona.
     static func svuota() {
         lock.lock(); defer { lock.unlock() }

@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 8
+    version = 9
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -136,6 +136,21 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 8→9: ingresso, perimetro e indirizzo nei POI dei pacchetti OFFLINE.
+        // Senza rete il geofence puntava al centroide e lavorava a cerchi anche
+        // per i POI che online hanno la porta e il poligono. Colonne nullable:
+        // i pacchetti già scaricati restano com'erano (centroide + raggi) finché
+        // il prossimo delta sync non porta i campi nuovi dal server.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v8.
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `entranceLat` REAL")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `entranceLon` REAL")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `footprint` TEXT")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `address` TEXT")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         private val rtreeCallback = object : Callback() {
@@ -151,7 +166,7 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                     // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
                     // domani una migration mancante (es. 6→7 dimenticata) o un
                     // downgrade NON deve azzerare offline_packages/pois/ledger.

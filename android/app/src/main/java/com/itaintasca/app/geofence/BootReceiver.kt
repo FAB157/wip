@@ -24,6 +24,11 @@ class BootReceiver : BroadcastReceiver() {
                     } else {
                         context.startService(serviceIntent)
                     }
+                    // (22/08/2026) Gli allarmi non sopravvivono al riavvio: il
+                    // servizio ripartiva ma la catena del watchdog restava morta
+                    // finché l'utente non riapriva l'app, quindi al primo kill
+                    // dell'OS nessuno lo rilanciava.
+                    com.itaintasca.app.service.ServiceWatchdog.schedule(context)
                 } catch (e: Exception) {
                     // Android 12+: avviare un FGS 'location' DA BACKGROUND al boot è
                     // vietato → non forzarlo (niente crash, niente ottica-policy

@@ -1,6 +1,6 @@
 // "Map as MapIcon": il nome nudo oscurava la Map NATIVA di JS in tutto il
 // modulo → "new Map()" (linkByName) esplodeva con "is not a constructor".
-import { Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, Coins, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
+import { Mic, Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
@@ -16,7 +16,7 @@ import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
-import { Language, getTranslation } from '../lib/i18n';
+import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
 import PrintView from './PrintView';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { useWalkingNavigation } from '../hooks/useWalkingNavigation';
@@ -33,7 +33,10 @@ import { templatesForNow, loadTemplateTranslations, SEASONAL_THEMES, type Season
 import SeasonalCatalogSheet from './SeasonalCatalogSheet';
 import TransitEscapesSheet from './TransitEscapesSheet';
 import PilgrimWaysSheet from './PilgrimWaysSheet';
+import TasteRoutesSheet from './TasteRoutesSheet';
+import ThematicSheet from './ThematicSheet';
 import ItineraryLibrarySheet from './ItineraryLibrarySheet';
+import WipAgentPlanner, { type WipAgentParams } from './WipAgentPlanner';
 import type { StopPrefill, RoutePrefill } from '../lib/transitCatalog';
 import GroupPlanPanel, { type MergedGroupPrefs } from './GroupPlanPanel';
 import DayPassCard from './DayPassCard';
@@ -59,10 +62,16 @@ const PREMIUM_DAY_SLOT = 999;
 /** Massimo di carte-evento reali (Ticketmaster) mescolate nel mazzo Swip. */
 const MAX_EVENT_CARDS = 5;
 
+/** Locale BCP-47 per le date, dalla lingua UI (ZH → zh-CN, EN → en-GB). */
+function localeForLanguage(language: string): string {
+  const map: Record<string, string> = { IT: 'it-IT', EN: 'en-GB', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN' };
+  return map[String(language || 'IT').toUpperCase()] || 'it-IT';
+}
+
 /** Data evento leggibile sulla carta (es. "sab 22 agosto"). */
 function formatEventCardDate(isoDate: string, language: string): string {
   try {
-    return new Date(`${isoDate}T12:00:00`).toLocaleDateString((language || 'IT').toLowerCase(), {
+    return new Date(`${isoDate}T12:00:00`).toLocaleDateString(localeForLanguage(language), {
       weekday: 'short', day: 'numeric', month: 'long'
     });
   } catch { return isoDate; }
@@ -85,13 +94,15 @@ const FREE_REPLACEMENTS_PER_DAY = 3;
  * percorso cache (più economico e quasi istantaneo); "Sorprendimi" (tema
  * vuoto) salta sempre la cache e lascia decidere all'AI.
  */
-const EXTEND_DAY_THEMES: { id: string; label: string }[] = [
-  { id: 'classica', label: 'Classica' },
-  { id: 'gastronomica', label: 'Gastronomica' },
-  { id: 'famiglie', label: 'Famiglie' },
-  { id: 'nascosta', label: 'Nascosta' },
-  { id: 'arte-storia', label: 'Arte e storia' },
-  { id: 'relax-panorami', label: 'Relax e panorami' },
+const EXTEND_DAY_THEMES: { id: string; labelKey: string }[] = [
+  // labelKey: etichetta tradotta al render (vr_b_theme_*); l'id resta il
+  // valore italiano/atteso dal server e dalla cache Libreria.
+  { id: 'classica', labelKey: 'vr_b_theme_classica' },
+  { id: 'gastronomica', labelKey: 'vr_b_theme_gastronomica' },
+  { id: 'famiglie', labelKey: 'vr_b_theme_famiglie' },
+  { id: 'nascosta', labelKey: 'vr_b_theme_nascosta' },
+  { id: 'arte-storia', labelKey: 'vr_b_theme_arte_storia' },
+  { id: 'relax-panorami', labelKey: 'vr_b_theme_relax_panorami' },
 ];
 
 /** Oltre questa distanza dal centroide, i preferiti scelti sono troppo
@@ -163,6 +174,59 @@ const MONTH_VALUES = [
   'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'
 ] as const;
 
+/**
+ * Errore di generazione con un CODICE stabile: il chiamante lo traduce con
+ * describePlanError nella lingua dell'utente. Prima processItineraryStream
+ * lanciava frasi italiane fisse e ogni catch mostrava comunque
+ * «err_generation_refunded», anche a quota esaurita o saldo insufficiente.
+ */
+class PlanError extends Error {
+  code: string;
+  detail?: string;
+  constructor(code: string, detail?: string) {
+    super(detail ? `${code}: ${detail}` : code);
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+const PLAN_ERROR_KEYS: Record<string, string> = {
+  QUOTA_EXCEEDED: 'err_quota_exceeded_itinerary',
+  FEATURE_DISABLED: 'err_feature_disabled',
+  INSUFFICIENT_CREDITS: 'err_insufficient_credits',
+  CHARGE_FAILED: 'err_charge_failed',
+  TIMEOUT: 'err_ai_timeout',
+  STREAM_TIMEOUT: 'err_ai_timeout',
+  EMPTY_RESPONSE: 'err_ai_empty',
+  STREAM_UNSUPPORTED: 'err_ai_empty',
+  INVALID_RESPONSE: 'err_ai_invalid_response',
+  UNAUTHORIZED: 'err_login_required',
+};
+
+/** Messaggio utente per un errore di generazione/sostituzione/suggerimento. */
+function describePlanError(err: unknown, language: Language): string {
+  const code = (err as any)?.code || (err instanceof Error ? err.message : String(err || ''));
+  const key = PLAN_ERROR_KEYS[code];
+  if (key) return getTranslation(key, language);
+  if ((err as any)?.name === 'AbortError') return getTranslation('err_ai_timeout', language);
+  const detail = (err as any)?.detail || (err instanceof Error ? err.message : '');
+  return detail
+    ? `${getTranslation('err_generation_failed', language)} (${String(detail).slice(0, 120)})`
+    : getTranslation('err_generation_failed', language);
+}
+
+/** Codice d'errore da una risposta HTTP non-ok (402/429/401 + body JSON). */
+async function planErrorFromResponse(res: Response): Promise<PlanError> {
+  const text = await res.text().catch(() => '');
+  let code = '';
+  try { code = JSON.parse(text)?.error || JSON.parse(text)?.code || ''; } catch { /* testo nudo */ }
+  if (res.status === 402) return new PlanError('INSUFFICIENT_CREDITS');
+  if (res.status === 401) return new PlanError('UNAUTHORIZED');
+  if (res.status === 429 || code === 'QUOTA_EXCEEDED') return new PlanError('QUOTA_EXCEEDED');
+  if (PLAN_ERROR_KEYS[code]) return new PlanError(code);
+  return new PlanError('API_ERROR', `HTTP ${res.status} ${text.slice(0, 120)}`);
+}
+
 async function processItineraryStream(
   url: string,
   body: any,
@@ -191,7 +255,7 @@ async function processItineraryStream(
     });
   } catch (err: any) {
     if (err.name === 'AbortError') {
-      throw new Error("Timeout AI: Il server sta impiegando troppo tempo a rispondere. Riprova tra poco.");
+      throw new PlanError('TIMEOUT');
     }
     throw err;
   } finally {
@@ -199,18 +263,18 @@ async function processItineraryStream(
   }
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API Error: ${text}`);
+    throw await planErrorFromResponse(res);
   }
 
   const reader = res.body?.getReader();
-  if (!reader) throw new Error("Stream non supportato");
+  if (!reader) throw new PlanError('STREAM_UNSUPPORTED');
 
   const decoder = new TextDecoder();
   let fullJson = "";
   let hasError = false;
   let errorMessage = "";
-  
+  let billing: { credits_paid?: number; credits_paid_earned?: number; days?: number; ts?: number } | null = null;
+
   // Timeout di sicurezza sul loop di lettura: se lo stream si blocca (es. DeepSeek idle)
   // non lasciamo la lambda e il browser appesi per sempre.
   // 120s: con 40s gli itinerari lunghi (4-5 giorni, 8+ tappe/giorno) venivano
@@ -230,7 +294,7 @@ async function processItineraryStream(
   while (!streamDone) {
     if (Date.now() - streamStart > streamTimeout) {
       reader.cancel();
-      throw new Error("Timeout stream: L'IA ha impiegato troppo tempo a completare la risposta.");
+      throw new PlanError('STREAM_TIMEOUT');
     }
 
     const { done, value } = await reader.read();
@@ -252,6 +316,11 @@ async function processItineraryStream(
           if (parsed.error) {
             hasError = true;
             errorMessage = parsed.error;
+          } else if (parsed.billing) {
+            // Crediti realmente addebitati (22/08/2026): finiscono nel piano
+            // (dati_itinerario.credits_paid) e la Garanzia pioggia rimborsa
+            // solo quelli, mai un itinerario gratuito.
+            billing = parsed.billing;
           } else if (parsed.text) {
             fullJson += parsed.text;
             const partialObj = parsePartialJSON(fullJson);
@@ -268,19 +337,16 @@ async function processItineraryStream(
   }
 
   if (hasError) {
-    throw new Error(errorMessage === "QUOTA_EXCEEDED"
-      ? "Hai raggiunto il limite di itinerari. Riprova domani."
-      : errorMessage === "FEATURE_DISABLED"
-        ? "La generazione itinerari è temporaneamente in manutenzione. Riprova più tardi."
-        : errorMessage === "INSUFFICIENT_CREDITS"
-          ? "Crediti insufficienti per generare l'itinerario. Ricarica il wallet e riprova."
-          : errorMessage === "CHARGE_FAILED"
-            ? "Problema temporaneo con l'addebito dei crediti. Nessun credito è stato scalato: riprova tra poco."
-            : `Errore dal server AI: ${errorMessage}`);
+    // Codice noto (QUOTA_EXCEEDED, FEATURE_DISABLED, INSUFFICIENT_CREDITS,
+    // CHARGE_FAILED) → chiave i18n; altrimenti il testo del server in coda
+    // al messaggio generico.
+    throw PLAN_ERROR_KEYS[errorMessage]
+      ? new PlanError(errorMessage)
+      : new PlanError('API_ERROR', errorMessage);
   }
 
   if (!fullJson.trim()) {
-    throw new Error("Il server AI non ha restituito dati. Riprova tra qualche secondo.");
+    throw new PlanError('EMPTY_RESPONSE');
   }
 
   // Tentativo 1: JSON valido completo
@@ -308,7 +374,15 @@ async function processItineraryStream(
   }
 
   if (!result) {
-    throw new Error("Risposta AI incompleta o non valida. Riprova — se il problema persiste prova con meno giorni o destinazione più semplice.");
+    throw new PlanError('INVALID_RESPONSE');
+  }
+
+  // I crediti pagati viaggiano col piano: savePlanToSupabase li scrive in
+  // dati_itinerario e la Garanzia pioggia li legge da lì.
+  if (billing && typeof billing.credits_paid === 'number' && result && typeof result === 'object') {
+    result.credits_paid = billing.credits_paid;
+    result.credits_paid_earned = billing.credits_paid_earned ?? 0;
+    result.credits_paid_ts = billing.ts ?? Date.now();
   }
 
   // Verifica anti-allucinazione IN BACKGROUND: il risultato torna SUBITO
@@ -363,9 +437,14 @@ async function verifyItineraryAntiAllucinazioni(data: any, genBody: any): Promis
     if (!data?.giorni?.length || !genBody?.destination) return data;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 30000);
+    // Dal 22/08/2026 la rotta vuole il token (era anonima e usata via curl
+    // per far girare Agnes gratis): senza sessione la verifica non parte.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) return data;
     const res = await fetch('/api/itinerary/verify', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         itinerary: data,
         destination: genBody.destination,
@@ -553,13 +632,13 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
         <div className="flex items-center justify-between mt-2">
           <span className="text-sm font-black" style={{ color }}>{exp.price}</span>
           <span className="flex items-center gap-1 text-[10px] font-bold opacity-60 group-hover/card:opacity-100 transition-colors" style={{ color }}>
-            Vedi Dettagli <ExternalLink className="w-3 h-3" />
+            {getTranslation('vr_b_see_details', linguaCorrente())} <ExternalLink className="w-3 h-3" />
           </span>
         </div>
       </div>
     </a>
     <button onClick={(e) => { e.preventDefault(); onAdd(); }} className="md:w-auto w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-colors shrink-0 md:self-center" style={{ backgroundColor: `${color}15`, color }}>
-      ➕ Aggiungi
+      ➕ {getTranslation('vr_b_add', linguaCorrente())}
     </button>
   </div>
 );
@@ -578,7 +657,13 @@ export default function PlanScreen({
   setExternalPlan
 }: PlanScreenProps & { externalPlan?: any, setExternalPlan?: (p: any) => void }) {
   const isOnline = useNetworkStatus();
-  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan'>(isOnline ? 'selection' : 'offline_list');
+  const [plannerMode, setPlannerMode] = useState<'selection' | 'form_a' | 'form_b' | 'form_c' | 'tinder_form' | 'tinder_swipe' | 'tinder_review' | 'alternatives_view' | 'view' | 'offline_list' | 'my_itineraries' | 'group_plan' | 'wip_agent'>(isOnline ? 'selection' : 'offline_list');
+  // L'agente WIP ha consegnato i parametri: il form è stato riempito con
+  // setState e la generazione deve partire al render SUCCESSIVO, quando gli
+  // stati sono davvero aggiornati (handleGenerateAutomatic legge
+  // destinations/days/… dallo stato, non da argomenti). Chiamarla subito
+  // userebbe il form vecchio.
+  const [wipAgentPending, setWipAgentPending] = useState(false);
   const creditConfirm = useCreditConfirmation();
   const [currentBalance, setCurrentBalance] = useState(0);
   // Shop crediti raggiungibile anche dal tab Plan (prima "Ricarica" era un alert)
@@ -599,9 +684,8 @@ export default function PlanScreen({
   // Il quiz d'attesa è un overlay opaco a tutto schermo: chiudendolo si vede
   // l'itinerario costruirsi in streaming. Si riapre a ogni nuova generazione.
   const [quizDismissed, setQuizDismissed] = useState(false);
-  // Crediti restituiti perché l'itinerario è arrivato dalla libreria condivisa
-  // invece di essere generato: alimenta il banner nella schermata risultato.
-  const [cacheDiscount, setCacheDiscount] = useState<number | null>(null);
+  // Tappa in sostituzione (spinner locale sulla card, niente quiz globale).
+  const [replacingId, setReplacingId] = useState<string | null>(null);
   // Guardie per l'arricchimento POI in background (vedi enrichSequentially)
   const enrichInFlightRef = useRef(false);
   const enrichedPoiIdsRef = useRef<Set<string>>(new Set());
@@ -639,6 +723,11 @@ export default function PlanScreen({
   // cache condivisa quando presente, come per specialRequests: cambia troppo
   // l'itinerario perché sia corretto servire una versione generica in cache.
   const [accommodationAddress, setAccommodationAddress] = useState('');
+  // «Da reel a itinerario» (CameraScreen, modo screenshot): i luoghi estratti
+  // dallo screenshot arrivano via localStorage 'wip_reel_to_plan' e diventano
+  // tappe obbligatorie della prossima generazione (pois/poisDetailed + frase
+  // in specialRequests). Si azzerano con la X del banner o a itinerario fatto.
+  const [reelPlaces, setReelPlaces] = useState<Array<{ name: string; lat: number | null; lon: number | null }>>([]);
   // I default devono coincidere con le option delle select in renderAdvancedSettings
   const [budget, setBudget] = useState<'economico' | 'standard' | 'lusso'>(() => loadPlanPref('budget', 'standard' as const));
   const [viaggiatori, setViaggiatori] = useState<'solo' | 'coppia' | 'famiglia' | 'gruppo'>(() => loadPlanPref('viaggiatori', 'coppia' as const));
@@ -667,16 +756,26 @@ export default function PlanScreen({
   // ── Favorites & UI ──
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<string[]>([]);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
-  // ── Loading animation ──
-  const planLoadingPhrases = [
-    'Analizzo le gemme nascoste della zona...',
-    'Ottimizziamo i percorsi per te...',
-    'Raccogliamo informazioni storiche...',
-    'Preparo il tuo itinerario su misura...',
-    'Quasi pronto! Ultimi ritocchi...',
-  ];
-  const [planLoadingIndex, setPlanLoadingIndex] = useState(0);
   const [generatedPlan, setGeneratedPlanState] = useState<GeneratedItinerary | null>(null);
+  // Selettore giorno sulla mappa dell'itinerario: 'tutti' resta il default
+  // (mappa completa coi colori per giorno come prima), un numero filtra
+  // mappa E stampa a quel solo giorno. Si azzera a ogni nuovo piano
+  // generato, altrimenti un vecchio giorno selezionato (es. "Giorno 5" di
+  // un itinerario di 3) resterebbe silenziosamente vuoto sul piano nuovo.
+  const [mapSelectedDay, setMapSelectedDay] = useState<number | 'all'>('all');
+  // Ricade su 'all' se il giorno selezionato non esiste più nel piano
+  // corrente (piano rigenerato più corto): condiviso da mappa e stampa,
+  // così restano sempre coerenti fra loro.
+  const validMapSelectedDay = useMemo<number | 'all'>(() => {
+    if (mapSelectedDay === 'all' || !generatedPlan) return 'all';
+    return generatedPlan.giorni.some(g => g.giorno === mapSelectedDay) ? mapSelectedDay : 'all';
+  }, [mapSelectedDay, generatedPlan]);
+  // Il piano passato alla stampa: se è selezionato un solo giorno sulla
+  // mappa, la stampa esce con SOLO quel giorno (richiesta utente 26/08/2026).
+  const printPlan = useMemo(() => {
+    if (!generatedPlan || validMapSelectedDay === 'all') return generatedPlan;
+    return { ...generatedPlan, giorni: generatedPlan.giorni.filter(g => g.giorno === validMapSelectedDay) };
+  }, [generatedPlan, validMapSelectedDay]);
 
   // Garantisce id_tappa unici in tutto il piano: evita chiavi React duplicate
   // sulle liste riordinabili (vedi key={tappa.id_tappa} nella vista itinerario)
@@ -776,6 +875,10 @@ export default function PlanScreen({
       return Number.isFinite(lat) && Number.isFinite(lon) && lat !== 0 ? { lat, lon } : null;
     };
     if (!plan?.giorni?.length) { setDayLegs({}); legsSigRef.current = ''; return; }
+    // Durante lo streaming il piano cambia a ogni chunk: una chiamata OSRM
+    // per chunk (e per giorno) era uno sciame di richieste inutili. Si
+    // calcola a generazione finita.
+    if (loading) return;
     const sig = plan.giorni.map((g: any) => (g.tappe || []).map((t: any) => { const c = coordOf(t); return c ? `${c.lat.toFixed(4)},${c.lon.toFixed(4)}` : 'x'; }).join(';')).join('|');
     if (sig === legsSigRef.current) return;
     legsSigRef.current = sig;
@@ -833,7 +936,7 @@ export default function PlanScreen({
       if (!cancelled) setDayLegs(out);
     })();
     return () => { cancelled = true; };
-  }, [generatedPlan]);
+  }, [generatedPlan, loading]);
 
   // ── Piano B pioggia (ondata 6) ─────────────────────────────────────────
   // Previsioni Open-Meteo (gratuite): badge sul giorno con probabilità di
@@ -858,14 +961,14 @@ export default function PlanScreen({
           const p = probs[i];
           if (typeof p === 'number' && p >= 50) {
             const d = dates[i] ? new Date(dates[i]) : null;
-            out[g.giorno] = { prob: p, dateLabel: d ? d.toLocaleDateString('it-IT', { weekday: 'short', day: '2-digit', month: '2-digit' }) : '' };
+            out[g.giorno] = { prob: p, dateLabel: d ? d.toLocaleDateString(localeForLanguage(language), { weekday: 'short', day: '2-digit', month: '2-digit' }) : '' };
           }
         });
         setRainByDay(out);
       } catch { /* meteo irraggiungibile: nessun badge */ }
     })();
     return () => { cancelled = true; };
-  }, [generatedPlan?.id, generatedPlan?.giorni?.length, destCoords?.lat, destCoords?.lon]);
+  }, [generatedPlan?.id, generatedPlan?.giorni?.length, destCoords?.lat, destCoords?.lon, language]);
 
   const handleRainPlan = async (gIdx: number) => {
     const giorno = generatedPlan?.giorni?.[gIdx];
@@ -886,7 +989,7 @@ export default function PlanScreen({
       if (!res.ok || !Array.isArray(data?.tappe) || data.tappe.length === 0) throw new Error(data?.error || 'variante vuota');
       setRainPreview({ gIdx, giornoNum: giorno.giorno, tappe: data.tappe });
     } catch (e: any) {
-      notify(`Piano B non riuscito: ${e?.message || 'riprova'}`);
+      notify(`${getTranslation('rain_plan_failed', language)}: ${e?.message || getTranslation('try_again', language)}`, 'error');
     } finally {
       setRainLoadingDay(null);
     }
@@ -900,6 +1003,13 @@ export default function PlanScreen({
   // Itinerari speciali (porti/scali e cammini): due sheet dedicate.
   const [showTransitSheet, setShowTransitSheet] = useState(false);
   const [showPilgrimSheet, setShowPilgrimSheet] = useState(false);
+  // 🍷 Strade del vino e del gusto: stessa meccanica dei cammini (percorso
+  // dato, tappe reali, prefill roadtrip), catalogo in wineRoutesCatalog.ts.
+  const [showTasteSheet, setShowTasteSheet] = useState(false);
+  // 🧭 Viaggi tematici: gli otto verticali (terme, set di film, cieli bui,
+  // street art, mercatini, fioriture, memoria, viaggio lento). Qui il
+  // percorso NON esiste: esiste il luogo, e il giro lo compone WIP.
+  const [showThematicSheet, setShowThematicSheet] = useState(false);
   // 📚 Libreria itinerari: catalogo di itinerari già generati e verificati
   // (rotte /api/library/*). Il prefill arriva dai link nelle sheet
   // Sosta breve / Cammini ("Vedi gli itinerari pronti per questo porto").
@@ -940,7 +1050,7 @@ export default function PlanScreen({
     setDays(t.days);
     setSelectedInterests(t.interests);
     setSpecialRequests(tr?.specialRequests || t.specialRequests);
-    notify(`Template "${tr?.title || t.title}" applicato: controlla il form e premi Genera.`);
+    notify(`${tr?.title || t.title}: ${getTranslation('prefill_applied_check_form', language)}`);
   };
 
   // ── Itinerari speciali: pre-fill dalle sheet Sosta breve / Cammini ──
@@ -953,10 +1063,15 @@ export default function PlanScreen({
     // fa sì che resolveDestCoords le usi senza richiamare /api/geocode).
     setDestCoords(p.coords ? { lat: p.coords.lat, lon: p.coords.lon, label: p.destination } : null);
     setDays(1);
-    setSelectedInterests(p.interests);
+    // Interessi: quelli del prefill solo se ne porta; altrimenti restano le
+    // preferenze dell'utente (prima ogni porto imponeva fotografia+gastronomia).
+    if (p.interests.length) setSelectedInterests(p.interests);
     setSpecialRequests(p.specialRequests);
+    // Esperienza affiliata + alternativa gratis: regola di prodotto.
+    if (typeof p.includeTours === 'boolean') setIncludeTours(p.includeTours);
+    if (typeof p.soloGratis === 'boolean') setSoloGratis(p.soloGratis);
     setShowTransitSheet(false);
-    notify(`${p.label} applicato: controlla il form e premi Genera.`, 'success');
+    notify(`${p.label}: ${getTranslation('prefill_applied_check_form', language)}`, 'success');
   };
   const applySpecialRoute = (p: RoutePrefill) => {
     // Le tappe del cammino diventano il roadtrip multi-città (legs):
@@ -974,11 +1089,13 @@ export default function PlanScreen({
       ? { lat: first.lat as number, lon: first.lon as number, label: first.city }
       : null);
     setDays(clampDays(p.days));
-    setSelectedInterests(p.interests);
+    if (p.interests.length) setSelectedInterests(p.interests);
     setSpecialRequests(p.specialRequests);
+    if (typeof p.includeTours === 'boolean') setIncludeTours(p.includeTours);
+    if (typeof p.soloGratis === 'boolean') setSoloGratis(p.soloGratis);
     setRitmo('rilassato'); // il ritmo del cammino è lento per definizione
     setShowPilgrimSheet(false);
-    notify(`${p.label}: tappe caricate come roadtrip. Controlla il form e premi Genera.`, 'success');
+    notify(`${p.label}: ${getTranslation('prefill_route_applied', language)}`, 'success');
   };
 
   // ── 📚 Libreria: "Usa questo itinerario (gratis)" ──────────────────────
@@ -1000,15 +1117,14 @@ export default function PlanScreen({
       setLockedStops({});
       setExpandedStops({});
       setPodcastCache(copia.podcast_cache || {});
-      setCacheDiscount(null);
       setGeneratedPlan(copia);
       setPlannerMode('view');
       setShowLibrarySheet(false);
       await savePlanToSupabase(copia);
-      notify('Salvato nei tuoi itinerari ✅ — guida premium, podcast e PDF sono già attivi.', 'success');
+      notify(getTranslation('saved_to_my_itineraries', language), 'success');
     } catch (e) {
       console.error('[Libreria] attivazione fallita:', e);
-      notify('Non sono riuscito a salvare l’itinerario: riprova tra poco.');
+      notify(getTranslation('err_save_itinerary_retry', language), 'error');
     }
   };
 
@@ -1026,7 +1142,7 @@ export default function PlanScreen({
     if (city.length < 2) return;
     const norm = city.toLowerCase();
     if (!bigFiveDailyGate(norm)) {
-      notify('Hai già letto le mini-guide gratuite di 3 città oggi ✨ Torna domani per la prossima, o genera subito l\'itinerario di questa.');
+      notify(getTranslation('mini_guide_daily_limit', language));
       return;
     }
     const hit = bigFiveCacheRef.current[`${norm}_${language}`];
@@ -1066,7 +1182,7 @@ export default function PlanScreen({
     setGeneratedPlan(newPlan);
     savePlanToSupabase(newPlan);
     setRainPreview(null);
-    notify('Giornata sostituita con la variante al coperto. Pranzo e cena sono rimasti al loro posto.');
+    notify(getTranslation('rain_variant_applied', language), 'success');
   };
   const [savedPois, setSavedPois] = useState<any[]>([]);
   // Storico itinerari personali
@@ -1204,20 +1320,44 @@ export default function PlanScreen({
     setSwipeHistory([]);
     setActiveReplacingIdx(null);
     setSwipeDir(null);
-    setCacheDiscount(null);
+    setReelPlaces([]);
   }, [plannerMode]);
-  // Addebito podcast in sospeso: se la generazione non produce testo, i
-  // crediti vanno restituiti (prima non venivano rimborsati in alcun ramo).
-  const podcastChargeRef = useRef<{ userId: string; amount: number } | null>(null);
 
-  const refundPodcastCharge = async () => {
-    const pending = podcastChargeRef.current;
-    if (!pending) return;
-    podcastChargeRef.current = null;
-    await refundCredits(pending.userId, pending.amount)
-      .catch(e => console.warn('[Podcast] Rimborso fallito:', e));
+  // «Da reel a itinerario»: CameraScreen salva città e luoghi estratti dallo
+  // screenshot in 'wip_reel_to_plan' ({ city, places:[{name,lat,lon}], ts })
+  // e naviga qui con 'wip-itinerary-checkin' (poiId 'reel-to-plan'). Si
+  // consuma al mount e a quell'evento, solo entro 15 minuti dal salvataggio;
+  // la chiave si rimuove subito dopo la lettura. Questo effect sta DOPO il
+  // reset su 'selection' qui sopra: al mount i due setState si accodano in
+  // ordine di dichiarazione e la città prefillata deve vincere sul reset.
+  const consumeReelToPlan = () => {
+    try {
+      const raw = localStorage.getItem('wip_reel_to_plan');
+      if (!raw) return;
+      localStorage.removeItem('wip_reel_to_plan');
+      const parsed = JSON.parse(raw);
+      const ts = Number(parsed?.ts);
+      if (!Number.isFinite(ts) || Date.now() - ts > 15 * 60 * 1000) return;
+      const places = (Array.isArray(parsed?.places) ? parsed.places : [])
+        .map((p: any) => ({
+          name: String(p?.name || '').trim(),
+          lat: p?.lat != null && Number.isFinite(Number(p.lat)) ? Number(p.lat) : null,
+          lon: p?.lon != null && Number.isFinite(Number(p.lon)) ? Number(p.lon) : null,
+        }))
+        .filter((p: { name: string }) => p.name.length > 0);
+      if (places.length === 0) return;
+      const city = String(parsed?.city || '').trim();
+      setPlannerMode('form_a');
+      if (city) { setDestinations([city]); setDestCoords(null); }
+      setReelPlaces(places);
+    } catch { /* chiave assente o corrotta: si ignora */ }
   };
-
+  useEffect(() => {
+    consumeReelToPlan();
+    const onReelCheckin = (e: any) => { if (e?.detail?.poiId === 'reel-to-plan') consumeReelToPlan(); };
+    window.addEventListener('wip-itinerary-checkin', onReelCheckin);
+    return () => window.removeEventListener('wip-itinerary-checkin', onReelCheckin);
+  }, []);
   const loadViatorForDay = async (dayIdx: number) => {
     if (viatorByDay[dayIdx]) {
       setViatorExpandedDay(prev => prev === dayIdx ? null : dayIdx);
@@ -1413,7 +1553,7 @@ export default function PlanScreen({
         date: item.dates?.start?.localDate || '',
         time: item.dates?.start?.localTime || '',
         venue: item._embedded?.venues?.[0]?.name || '',
-        price: item.priceRanges?.[0]?.min ? `Da ${item.priceRanges[0].min} ${item.priceRanges[0].currency || 'EUR'}` : 'Vedi prezzo',
+        price: item.priceRanges?.[0]?.min ? `${getTranslation('vr_b_from', language)} ${item.priceRanges[0].min} ${item.priceRanges[0].currency || 'EUR'}` : getTranslation('vr_b_see_price', language),
         imageUrl: item.images?.[0]?.url || '',
         url: item.url,
         source: 'ticketmaster'
@@ -1582,8 +1722,6 @@ export default function PlanScreen({
     }
   };
 
-  const isPrint = false;
-
   // Background bulk-upsert of cultural itinerary stops to Supabase so GPS tracking can find them
   useEffect(() => {
     // Durante lo streaming il piano cambia a ogni chunk: aspettiamo la fine della generazione
@@ -1600,7 +1738,12 @@ export default function PlanScreen({
           // semplicemente passando vicino alla città, leggendo il racconto
           // del viaggio come se fosse l'audioguida di un luogo reale.
           if (lat !== 0 && lon !== 0 && tappa.tipo !== 'ristorante' && tappa.tipo !== 'pausa' && tappa.tipo !== 'spostamento' && tappa.tipo !== 'trasferimento') {
-            const stableId = `iti-${tappa.titolo_tappa.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}`;
+            // L'id porta anche le coordinate (22/08/2026): con il solo slug
+            // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
+            // città con un Duomo, e teneva la foto e il testo della prima.
+            // A 3 decimali (~100 m) due tappe omonime in città diverse non
+            // collidono più; la stessa tappa dello stesso itinerario sì.
+            const stableId = `iti-${tappa.titolo_tappa.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
             allPoisToUpsert.push({
               id: stableId,
               name: tappa.titolo_tappa,
@@ -1826,13 +1969,19 @@ export default function PlanScreen({
   // audioguide automatiche partono da useWalkingNavigation.
   useEffect(() => {
     const handleInternalNavStart = (e: any) => {
-      const { endCoords, destinationName, origin, pois } = e.detail || {};
+      // Ricevuta: App.tsx ridispatcha l'evento finché qualcuno non lo marca.
+      // Senza, chi avviava la navigazione dalla mappa prima di aver mai aperto
+      // questa tab (montata lazy) sparava l'evento nel vuoto.
+      if (e.detail) e.detail.handled = true;
+      const { endCoords, destinationName, origin, pois, poiId } = e.detail || {};
       if (!endCoords?.lat) return;
       startNavigation(
         {
           lat: endCoords.lat,
           lon: endCoords.lon,
-          poiId: `wipnav_${String(destinationName || '').slice(0, 40)}`,
+          // Id vero se c'e' (popup/radar): all'arrivo App.tsx apre la scheda
+          // e avvia l'audioguida. Sintetico solo per gli indirizzi liberi.
+          poiId: poiId ? String(poiId) : `wipnav_${String(destinationName || '').slice(0, 40)}`,
           poiName: destinationName || '',
         },
         origin || undefined,
@@ -1898,12 +2047,8 @@ export default function PlanScreen({
   // Dal 14/08/2026 l'addebito è INTERAMENTE SERVER-SIDE dentro
   // /api/groq/itinerary-stream (pre-addebito sui giorni richiesti + conguaglio
   // a fine stream sui giorni consegnati, rimborso su fallimento): l'addebito
-  // client era bypassabile via curl (itinerari gratis a saldo zero).
-  // Questa funzione resta come punto unico di refresh del saldo in UI dopo la
-  // consegna — NON deve mai più chiamare consumeCredits (doppio addebito).
-  const settleItineraryCost = async (userId: string, _chargedDays: number, _plan: any) => {
-    notifyCreditsChanged({ userId });
-  };
+  // client era bypassabile via curl. Dopo la consegna il client chiama solo
+  // notifyCreditsChanged — MAI consumeCredits (doppio addebito).
 
   const handleRegenerateWithLocks = async () => {
     if (!generatedPlan) return;
@@ -1973,16 +2118,17 @@ export default function PlanScreen({
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
-        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+        notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
       } else {
-        // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        // Nessun itinerario valido: il rimborso è server-side, qui si
+        // riallinea solo il saldo mostrato.
+        notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Regeneration with locks error:", err);
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
     } finally {
       setLoading(false);
     }
@@ -2010,9 +2156,9 @@ export default function PlanScreen({
 
        return;
     }
-    // Addebito ora SERVER-SIDE (/api/groq/suggest scala i crediti via token):
-    // niente consumo client per non addebitare due volte. Gate di saldo per la
-    // stessa UX; il rimborso più sotto copre il fallimento server.
+    // Addebito SERVER-SIDE: /api/groq/suggest verifica il token, scala i
+    // crediti e li restituisce se non consegna una tappa valida. Il gate di
+    // saldo qui sotto è solo UX anticipata (niente round-trip a saldo zero).
     if (bal.total < suggestCost) {
       notify(getTranslation('err_insufficient_credits', language));
       return;
@@ -2021,12 +2167,18 @@ export default function PlanScreen({
     setSuggestLoading(true);
     try {
       const dayStops = generatedPlan.giorni[gIdx].tappe;
-      const res = await fetch('/api/groq/suggest', {
+      const token = sessionData?.session?.access_token;
+      const res = await fetch(getApiUrl('/api/groq/suggest'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ dayStops, gIdx, destination: generatedPlan.titolo, language })
       });
+      if (!res.ok) throw await planErrorFromResponse(res);
       const data = await res.json();
+      if (data?.error && PLAN_ERROR_KEYS[data.error]) throw new PlanError(data.error);
       if (data && data.ora) {
         setNewStop({
           ora: data.ora,
@@ -2038,20 +2190,17 @@ export default function PlanScreen({
           lat: data.coordinate?.lat?.toString() || '',
           lng: data.coordinate?.lng?.toString() || ''
         });
-        // Addebito CLIENT-SIDE alla consegna del suggerimento (si paga solo se
-        // il server ha restituito una tappa valida); il server non scala crediti
-        // su questa rotta, quindi nessun doppio addebito.
-        try { await consumeCredits(currentUserId, suggestCost); } catch { /* saldo già verificato dal gate */ }
+        // L'addebito è già avvenuto sul server: qui si riallinea solo il saldo.
         notifyCreditsChanged({ userId: currentUserId });
       } else {
-        // Nessun suggerimento valido: rimborsiamo i crediti addebitati
-        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        // Nessun suggerimento valido: il server ha già restituito i crediti.
+        notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Suggest Stop Error:", err);
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
     } finally {
       setSuggestLoading(false);
     }
@@ -2300,7 +2449,7 @@ export default function PlanScreen({
   };
 
   const deleteMyItinerary = async (id: string) => {
-    if (!confirm('Eliminare questo itinerario?')) return;
+    if (!confirm(getTranslation('vr_b_confirm_delete_itinerary', language))) return;
     try {
       // Cancella solo gli itinerari dell'utente corrente (mai righe di altri utenti)
       const { data: sessionData } = await supabase.auth.getSession();
@@ -2367,6 +2516,41 @@ export default function PlanScreen({
     return `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destStr}${waypoints ? `&waypoints=${waypoints}` : ''}&travelmode=walking`;
   };
 
+  /**
+   * AGENTE WIP → FORM STANDARD (23/08/2026). L'agente non genera: riempie
+   * il form "Itinerario su misura" con quello che ha capito e lascia che
+   * sia handleGenerateAutomatic a fare tutto — geocodifica della
+   * destinazione, conferma del prezzo, cache condivisa, streaming,
+   * verifica. Un solo motore, una sola regola di addebito, e l'utente vede
+   * il form compilato se vuole ritoccare a mano.
+   */
+  const applyWipAgentParams = (p: WipAgentParams) => {
+    // "Roma e Firenze" → due destinazioni (roadtrip), come nel form.
+    const dests = p.destination.split(/\s+e\s+|\s*,\s*/i).map(s => s.trim()).filter(Boolean);
+    setDestinations(dests.length ? dests : [p.destination]);
+    setDays(clampDays(p.days));
+    setMese(p.month || '');
+    setSelectedInterests(p.interests || []);
+    setBudget(p.budget);
+    setRitmo(p.ritmo);
+    setViaggiatori(p.viaggiatori);
+    setSoloGratis(!!p.soloGratis);
+    setStartTime(p.startTime || '09:00');
+    setEndTime(p.endTime || '20:00');
+    setSpecialRequests(p.specialRequests || '');
+    // Si va sul form: se la generazione si ferma (saldo, destinazione non
+    // trovata, annullo della conferma) l'utente è già davanti ai campi
+    // compilati dall'agente, e handleGenerateAutomatic torna lì in ogni caso.
+    setPlannerMode('form_a');
+    setWipAgentPending(true);
+  };
+  useEffect(() => {
+    if (!wipAgentPending) return;
+    setWipAgentPending(false);
+    void handleGenerateAutomatic();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wipAgentPending]);
+
   const handleGenerateAutomatic = async () => {
     if (loading) return; // anti doppio-click: doppio addebito
     const activeDestinations = destinations.filter(d => d.trim().length > 0);
@@ -2425,7 +2609,6 @@ export default function PlanScreen({
     setLoading(true);
     setLockedStops({});
     setExpandedStops({});
-    setCacheDiscount(null);
 
     // Chiave cache: include tutti i parametri che influenzano il risultato
     // (budget, ritmo, viaggiatori, interessi ordinati), altrimenti utenti con
@@ -2460,7 +2643,9 @@ export default function PlanScreen({
     // Stesso discorso per l'indirizzo dell'alloggio: cambia il punto di
     // partenza del Giorno 1, quindi l'itinerario non è più intercambiabile
     // con quello (generico) in cache.
-    const cacheUsable = specialRequests.trim().length === 0 && accommodationAddress.trim().length === 0;
+    // Idem per le tappe dal reel: sono obbligatorie e personali, un itinerario
+    // generico in cache le ignorerebbe (e quello generato non va in cache).
+    const cacheUsable = specialRequests.trim().length === 0 && accommodationAddress.trim().length === 0 && reelPlaces.length === 0;
 
     // Prova a recuperare l'itinerario dalla cache condivisa Supabase (costo e tempo zero!)
     if (cacheUsable) try {
@@ -2489,6 +2674,8 @@ export default function PlanScreen({
         savePlanToSupabase(plan); // Salva nei personali dell'utente
         setPlannerMode('view');
         setLoading(false);
+        // L'utente aveva confermato un prezzo: gli si dice che non ha pagato.
+        notify(getTranslation('library_cache_hit_free', language), 'success');
         return; // Successo! Usciamo subito
       }
     } catch (e) {
@@ -2503,9 +2690,17 @@ export default function PlanScreen({
     // nella richiesta senza toccare lo state visibile di specialRequests
     // (restano due campi separati in UI, uniti solo qui per il generatore).
     const accommodationTrimmed = accommodationAddress.trim();
-    const specialRequestsForGeneration = accommodationTrimmed
+    // Tappe dal reel: entrano sia come frase nelle richieste sia nei campi
+    // strutturati del server (`pois` = elenco obbligatorio, `poisDetailed`
+    // = coordinate per il piano geografico per giorno, come swipe/preferiti).
+    const reelNames = reelPlaces.map(p => p.name);
+    const reelRequest = reelNames.length
+      ? `Includi obbligatoriamente queste tappe: ${reelNames.join(', ')}.`
+      : '';
+    const specialRequestsForGeneration = (accommodationTrimmed || reelRequest)
       ? [
-          `Punto di partenza del Giorno 1 (e possibilmente base per il rientro serale): ${accommodationTrimmed}.`,
+          accommodationTrimmed ? `Punto di partenza del Giorno 1 (e possibilmente base per il rientro serale): ${accommodationTrimmed}.` : '',
+          reelRequest,
           specialRequests.trim(),
         ].filter(Boolean).join(' ')
       : specialRequests;
@@ -2515,6 +2710,15 @@ export default function PlanScreen({
         destination,
         ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
         ...(roadtripLegs ? { legs: roadtripLegs } : {}),
+        ...(reelNames.length ? {
+          pois: reelNames,
+          poisDetailed: reelPlaces.map(p => ({
+            nome: p.name,
+            tipo: 'attrazione',
+            descrizione: '',
+            ...(p.lat != null && p.lon != null && p.lat !== 0 ? { lat: p.lat, lon: p.lon } : {}),
+          })),
+        } : {}),
         days: numDaysForPricing,
         startTime,
         endTime,
@@ -2538,7 +2742,9 @@ export default function PlanScreen({
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
-        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+        notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
+        // Le tappe dal reel sono state consumate: il prossimo itinerario riparte pulito.
+        if (reelNames.length) setReelPlaces([]);
 
         // Salva in background l'itinerario appena generato nella cache condivisa
         // (senza l'id personale: la cache è condivisa tra utenti)
@@ -2556,15 +2762,16 @@ export default function PlanScreen({
 
         setPlannerMode('view');
       } else {
-        // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        // Nessun itinerario valido: il rimborso è server-side.
+        notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('form_a');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
+      if ((err as any)?.code === 'INSUFFICIENT_CREDITS') setShowShop(true);
       setPlannerMode('form_a');
     } finally {
       setLoading(false);
@@ -2614,7 +2821,9 @@ export default function PlanScreen({
       const data = await processItineraryStream('/api/groq/itinerary-stream', {
         destination: destinationStr,
         ...(coords ? { lat: coords.lat, lon: coords.lon } : {}),
-        days,
+        // Giorni coerenti col prezzo appena confermato (quelli dell'alternativa,
+        // non lo stato del form): altrimenti si confermava N e si chiedeva M.
+        days: numDaysForPricing,
         startTime,
         endTime,
         interests: selectedInterests,
@@ -2637,18 +2846,17 @@ export default function PlanScreen({
       if (data && data.giorni) {
         setGeneratedPlan(data);
         savePlanToSupabase(data);
-        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+        notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
       } else {
-        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('alternatives_view');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      // Prima questo ramo non rimborsava nulla: si tornava alle alternative
-      // con un alert e i crediti persi.
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
+      if ((err as any)?.code === 'INSUFFICIENT_CREDITS') setShowShop(true);
       setPlannerMode('alternatives_view');
     } finally {
       setLoading(false);
@@ -2693,7 +2901,10 @@ export default function PlanScreen({
       // generazione anonima via curl; la funzione resta gratuita per l'utente.
       const { data: raSess } = await supabase.auth.getSession();
       const raToken = raSess?.session?.access_token;
-      const res = await fetch('/api/groq/radius-alternatives', {
+      // getApiUrl: il path relativo su app nativa punta a localhost e la
+      // chiamata fallisce sempre (le 3 alternative non arrivavano mai su
+      // telefono). Tutte le altre fetch del file passano già di qui.
+      const res = await fetch(getApiUrl('/api/groq/radius-alternatives'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2837,10 +3048,11 @@ export default function PlanScreen({
         // (niente slot podcastChargeRef unico e niente crediti persi al
         // refresh); passa solo il token. La modale di conferma sopra resta.
         // Normalizza tappe per diversi formati salvati
+        const tappaFallback = getTranslation('vr_b_stop_fallback', language);
         const tappeNorm = tappe.map(t => ({
-          name: t.titolo_tappa || t.name || t.title || t.nome || 'Tappa',
+          name: t.titolo_tappa || t.name || t.title || t.nome || tappaFallback,
           description: (t.attivita || t.description || t.descrizione || '')?.slice(0, 150)
-        })).filter(t => t.name !== 'Tappa' || t.description);
+        })).filter(t => t.name !== tappaFallback || t.description);
 
         const destination = generatedPlan?.titolo || generatedPlan?.citta || 'la tua destinazione';
         console.log(`[Podcast] Genero per "${destination}" Day ${dayNum} (${tappeNorm.length} tappe)`);
@@ -2932,10 +3144,16 @@ export default function PlanScreen({
         if (n.includes('apple')) s += 75;
         if (v.localService) s += 20;
         const isDante = guideMode === 'dante';
-        const maleK = ['matteo','luca','diego','massimo','giorgio','male','david','james','william','reed','thomas','alex','cosimo','marco'];
-        const femK = ['nicky','alice','anna','sofia','elena','sara','female','woman','lisa','emma','julia','elsa'];
-        if (isDante && maleK.some(k => n.includes(k))) s += 50;
-        if (!isDante && femK.some(k => n.includes(k))) s += 50;
+        // 'male' NON può stare nella lista maschile: è contenuto in "female",
+        // e su Android le voci si chiamano `it-it-x-kda#female_1-local` — così
+        // ogni voce femminile prendeva +50 come maschile e Dante finiva con
+        // voce di donna. Si usano i marcatori espliciti '#male'/'#female'.
+        const maleK = ['matteo','luca','diego','massimo','giorgio','#male','david','james','william','reed','thomas','alex','cosimo','marco'];
+        const femK = ['nicky','alice','anna','sofia','elena','sara','#female','woman','lisa','emma','julia','elsa'];
+        const isFem = n.includes('#female') || femK.some(k => n.includes(k));
+        const isMale = !isFem && maleK.some(k => n.includes(k));
+        if (isDante && isMale) s += 50;
+        if (!isDante && isFem) s += 50;
         return s;
       };
 
@@ -2960,7 +3178,8 @@ export default function PlanScreen({
 
     } catch (e: any) {
       console.error('[Podcast]', e);
-      await refundPodcastCharge();
+      // Addebito e rimborso sono server-side: qui si riallinea solo il saldo.
+      notifyCreditsChanged({});
       setPlayingDay(null);
       setIsGeneratingPodcast(null);
       notify(getTranslation('err_generation_refunded', language));
@@ -3108,7 +3327,10 @@ export default function PlanScreen({
       if (prev) {
         const dist = airKm(prev, c);
         if (dist > 2500) {
-          if (!silent) notify(`"${cityName}" è stata trovata a ${Math.round(dist)} km da "${legs[0].city}": controlla il nome della città (potrebbe esistere un omonimo altrove).`);
+          if (!silent) notify(getTranslation('vr_b_city_far', language)
+            .replace('{city}', cityName)
+            .replace('{km}', String(Math.round(dist)))
+            .replace('{from}', legs[0].city));
           return null;
         }
       }
@@ -3290,7 +3512,9 @@ export default function PlanScreen({
       // Le carte-evento si caricano IN PARALLELO ai candidati: non allungano
       // l'attesa e se falliscono il mazzo resta quello di sempre.
       const eventCardsPromise = fetchSwipeEventCards(coords);
-      const res = await fetch('/api/groq/candidates', {
+      // getApiUrl come sopra: su nativo il path relativo non raggiunge l'API
+      // e il mazzo di carte "tinder" restava vuoto.
+      const res = await fetch(getApiUrl('/api/groq/candidates'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3532,17 +3756,18 @@ export default function PlanScreen({
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
-        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+        notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
       } else {
-        // Nessun itinerario valido: rimborsiamo i crediti addebitati
-        notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        // Nessun itinerario valido: il rimborso è server-side.
+        notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
         setPlannerMode('tinder_review');
       }
     } catch (err) {
       console.error(err);
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
+      if ((err as any)?.code === 'INSUFFICIENT_CREDITS') setShowShop(true);
       setPlannerMode('tinder_review');
     } finally {
       setLoading(false);
@@ -3665,17 +3890,18 @@ export default function PlanScreen({
         setPlannerMode('view');
         // Il prezzo è già allineato a ceil(tappe/3); il conguaglio copre il
         // caso in cui l'AI restituisca meno giorni di quelli richiesti.
-        await settleItineraryCost(currentUserId, numDaysForPricing, data);
+        notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
       } else {
-         // Nessun itinerario valido: rimborsiamo i crediti addebitati
-         notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+         // Nessun itinerario valido: il rimborso è server-side.
+         notifyCreditsChanged({ userId: currentUserId });
          notify(getTranslation('err_generation_refunded', language));
          setPlannerMode('form_b');
       }
     } catch (err: any) {
       console.error("Generation error:", err);
-      notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
+      if ((err as any)?.code === 'INSUFFICIENT_CREDITS') setShowShop(true);
       setPlannerMode('form_b');
     } finally {
       setLoading(false);
@@ -3800,22 +4026,11 @@ export default function PlanScreen({
         updated_at: new Date().toISOString()
       }, { onConflict: 'id' });
 
-      // ✅ Sincronizzazione shared_itinerary_cache (per ricerca per città)
-      const destinationName = (plan as any).destinazione || (plan as any).destination || 
-        plan.titolo?.split(':')?.[0]?.trim() || "";
-      const numDays = plan.giorni?.length || 1;
-      if (destinationName) {
-        supabase.from('shared_itinerary_cache').upsert({
-          id: plan.id,
-          destination: destinationName,
-          days: numDays,
-          dati_itinerario: plan,
-          created_at: new Date().toISOString()
-        }, { onConflict: 'id' }).then(({ error }) => {
-          if (error) console.warn("[PlanScreen] shared_itinerary_cache sync failed:", error);
-          else console.log(`✅ [PlanScreen] Itinerario sincronizzato in shared_itinerary_cache: ${destinationName}`);
-        });
-      }
+      // NIENTE upsert in shared_itinerary_cache da qui: il piano personale
+      // (con id utente, modifiche a mano, richieste speciali, alloggio) non è
+      // un itinerario condivisibile. La scrittura legittima nella cache
+      // condivisa avviene solo in handleGenerate, con la chiave parametrica
+      // e solo quando cacheUsable è vero.
 
       // Sincronizzazione per Agent Optimization
       let finalItineraryId = dbItineraryId;
@@ -3984,9 +4199,9 @@ export default function PlanScreen({
       if (!confirmed) {
          return;
       }
-      // Addebito ora SERVER-SIDE (/api/groq/replace scala i crediti via token):
-      // niente consumo client per non addebitare due volte. Gate di saldo per la
-      // stessa UX; il rimborso più sotto copre il fallimento server.
+      // Addebito SERVER-SIDE: /api/groq/replace verifica il token, scala i
+      // crediti (se la sostituzione non è gratuita) e li restituisce se non
+      // consegna. Il gate di saldo qui sotto è solo UX anticipata.
       if (bal.total < replaceCost) {
         notify(getTranslation('err_insufficient_credits', language));
         setShowShop(true);
@@ -3994,17 +4209,31 @@ export default function PlanScreen({
       }
     }
 
-    setLoading(true);
+    // Spinner LOCALE sulla tappa: setLoading(true) riapriva il quiz a tutto
+    // schermo per una sostituzione di pochi secondi.
+    if (replacingId) return; // anti doppio-click: doppio addebito
+    setReplacingId(tappaId);
     try {
-      const res = await fetch('/api/groq/replace', {
+      const token = sessionData?.session?.access_token;
+      const res = await fetch(getApiUrl('/api/groq/replace'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           currentItinerary: generatedPlan,
-          tappaId
+          tappaId,
+          // Il server decide l'addebito: entro la quota gratuita del giorno
+          // non scala nulla (stesso contatore free_replacements del piano).
+          isFree,
+          giornoNum: Number(dayKey),
+          language
         })
       });
+      if (!res.ok) throw await planErrorFromResponse(res);
       const data = await res.json();
+      if (data?.error && PLAN_ERROR_KEYS[data.error]) throw new PlanError(data.error);
       if (data.giorni) {
         // Il contatore delle gratuite si incrementa SOLO a sostituzione
         // riuscita, e viaggia dentro il piano salvato.
@@ -4023,14 +4252,9 @@ export default function PlanScreen({
         }
         setGeneratedPlan(data);
         savePlanToSupabase(data);
-        // Addebito CLIENT-SIDE alla consegna, SOLO se a pagamento (le
-        // sostituzioni entro la quota gratuita restano gratis): consumeCredits
-        // scala i crediti SERVER-SIDE via token (/api/credits/consume). La rotta
-        // /api/groq/replace non scala da sé → nessun doppio addebito.
-        if (replaceCost > 0) {
-          try { await consumeCredits(currentUserId, replaceCost); } catch { /* saldo già verificato dal gate */ }
-          notifyCreditsChanged({ userId: currentUserId });
-        }
+        // L'addebito (solo a pagamento) è già avvenuto sul server: qui si
+        // riallinea il saldo mostrato.
+        if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId });
         // Anche la tappa sostituita passa dalla verifica anti-allucinazione
         // in background: i badge ✓/⚠ arrivano via 'wip-itinerary-verified'
         verifyItineraryAntiAllucinazioni(data, {
@@ -4045,17 +4269,18 @@ export default function PlanScreen({
           }
         }).catch(() => {});
       } else {
-        // Nessuna sostituzione valida: si rimborsa solo se si era pagato
+        // Nessuna sostituzione valida: il server ha già restituito i crediti
         // (una gratuita fallita non consuma la quota, gestita sopra).
-        if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
+        if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId });
         notify(getTranslation('err_generation_refunded', language));
       }
     } catch (err) {
       console.error("Replace error:", err);
-      if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId }); // rimborso su fallimento ora SERVER-SIDE
-      notify(getTranslation('err_generation_refunded', language));
+      if (replaceCost > 0) notifyCreditsChanged({ userId: currentUserId });
+      notify(describePlanError(err, language), 'error');
+      if ((err as any)?.code === 'INSUFFICIENT_CREDITS') setShowShop(true);
     } finally {
-      setLoading(false);
+      setReplacingId(null);
     }
   };
 
@@ -4150,23 +4375,24 @@ export default function PlanScreen({
   const handleExtendItinerary = async (mode: 'day' | 'nearby') => {
     if (!generatedPlan?.id) return;
     if (mode === 'nearby' && !extendNearbyPicked) {
-      notify('Scegli prima una destinazione dall\'elenco', 'error');
+      notify(getTranslation('choose_destination_first', language), 'error');
       return;
     }
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id;
     if (!currentUserId) {
-      notify('Accedi per continuare', 'error');
+      notify(getTranslation('login_to_continue', language), 'error');
       return;
     }
 
     const bal = await getWalletBalance(currentUserId);
     setCurrentBalance(bal.total);
     const cost = PRICING_LIST.extend_itinerary_day;
+    const themeKey = EXTEND_DAY_THEMES.find(t => t.id === extendTheme)?.labelKey;
     const label = mode === 'day'
-      ? `Aggiungi un giorno${extendTheme ? ` — ${EXTEND_DAY_THEMES.find(t => t.id === extendTheme)?.label || extendTheme}` : ''}`
-      : `Gita fuori porta — ${extendNearbyPicked?.description || extendNearbyQuery}`;
+      ? `${getTranslation('vr_b_add_day_label', language)}${extendTheme ? ` — ${themeKey ? getTranslation(themeKey, language) : extendTheme}` : ''}`
+      : `${getTranslation('vr_b_day_trip_label', language)} — ${extendNearbyPicked?.description || extendNearbyQuery}`;
     const confirmed = await creditConfirm.requestConfirmation(cost, label, bal.total);
     if (!confirmed) return;
     if (bal.total < cost) {
@@ -4207,7 +4433,7 @@ export default function PlanScreen({
         // shared_pois/enrichment e la copia idb offline per le nuove tappe.
         savePlanToSupabase(newPlan);
         notifyCreditsChanged({ userId: currentUserId });
-        notify(data.cached ? 'Giorno aggiunto (dalla Libreria, metà prezzo)!' : 'Giorno aggiunto!', 'success');
+        notify(data.cached ? getTranslation('vr_b_day_added_cached', language) : getTranslation('vr_b_day_added', language), 'success');
         setExtendPanelMode('closed');
         setExtendTheme('');
         setExtendNearbyQuery('');
@@ -4562,8 +4788,18 @@ export default function PlanScreen({
 
       <div className="p-6">
         <AnimatePresence mode="wait">
+          {plannerMode === 'wip_agent' && (
+            <div className="pt-4">
+              <WipAgentPlanner
+                language={language}
+                onClose={() => setPlannerMode('selection')}
+                onReady={applyWipAgentParams}
+              />
+            </div>
+          )}
+
           {plannerMode === 'selection' && (
-            <motion.div 
+            <motion.div
               key="selection"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -4574,6 +4810,24 @@ export default function PlanScreen({
                   (max-w-1200) le card restavano larghe ~560px con testo 10px.
                   `items-stretch` + h-full pareggia le altezze, che prima
                   variavano con la lunghezza della descrizione. */}
+              {/* AGENTE WIP (23/08/2026): l'itinerario si crea parlando. Sta
+                  sopra la griglia perché è la strada più semplice di tutte —
+                  niente campi — e finisce comunque nel flusso standard (vedi
+                  applyWipAgentParams). */}
+              <button
+                onClick={() => setPlannerMode('wip_agent')}
+                className="w-full p-4 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border border-amber-200/70 shadow-sm flex items-center gap-3 group hover:shadow-md hover:border-amber-400/60 focus-visible:ring-2 focus-visible:ring-amber-400/40 outline-none transition-all"
+              >
+                <div className="w-12 h-12 rounded-full bg-black flex items-center justify-center overflow-hidden shrink-0 group-hover:scale-110 transition-transform">
+                  <img src="/avatar.png" alt="WIP" className="w-full h-full object-cover p-0.5" />
+                </div>
+                <div className="text-left flex-1 min-w-0">
+                  <h3 className="text-sm font-black text-gray-900 leading-tight">{getTranslation('wip_agent_mode', language)}</h3>
+                  <p className="text-[11px] text-gray-600 font-bold leading-snug">{getTranslation('wip_agent_mode_desc', language)}</p>
+                </div>
+                <Mic className="w-5 h-5 text-amber-600 shrink-0" />
+              </button>
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-stretch">
                 {/* Form A: Itinerario su Misura */}
                 <button
@@ -4642,8 +4896,8 @@ export default function PlanScreen({
                   <span className="text-lg">👥</span>
                 </div>
                 <div className="text-left flex-1">
-                  <h3 className="text-xs font-black text-gray-900">Viaggio di gruppo</h3>
-                  <p className="text-[10px] text-gray-600 font-bold">Ognuno vota le sue preferenze via PIN, WIP le fonde in un itinerario per tutti.</p>
+                  <h3 className="text-xs font-black text-gray-900">{getTranslation('group_trip_title', language)}</h3>
+                  <p className="text-[10px] text-gray-600 font-bold">{getTranslation('group_trip_desc', language)}</p>
                 </div>
               </button>
 
@@ -4657,8 +4911,8 @@ export default function PlanScreen({
                   <span className="text-lg">📚</span>
                 </div>
                 <div className="text-left flex-1">
-                  <h3 className="text-xs font-black text-gray-900">Libreria itinerari</h3>
-                  <p className="text-[10px] text-gray-600 font-bold">Centinaia di itinerari pronti e verificati: porti, scali, cammini, cinema, fioriture… Gratis.</p>
+                  <h3 className="text-xs font-black text-gray-900">{getTranslation('library_card_title', language)}</h3>
+                  <p className="text-[10px] text-gray-600 font-bold">{getTranslation('library_card_desc', language)}</p>
                 </div>
               </button>
 
@@ -4712,7 +4966,7 @@ export default function PlanScreen({
                 setMese(g.mese);
                 setSpecialRequests(g.specialRequests);
                 setPlannerMode('form_a');
-                notify('Preferenze del gruppo applicate: controlla il form e premi Genera.', 'success');
+                notify(getTranslation('group_prefs_applied', language), 'success');
               }}
             />
           )}
@@ -4730,13 +4984,13 @@ export default function PlanScreen({
                   alla volta e sheet col catalogo completo (curati + AI) */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between pl-1 pr-1">
-                  <label className="text-[11px] font-black text-primary uppercase tracking-widest">✨ Ispirazioni di stagione</label>
+                  <label className="text-[11px] font-black text-primary uppercase tracking-widest">✨ {getTranslation('seasonal_inspirations_label', language)}</label>
                   <button
                     type="button"
                     onClick={() => setShowSeasonalCatalog(true)}
                     className="text-[11px] font-black text-primary/70 hover:text-primary transition"
                   >
-                    Vedi tutte →
+                    {getTranslation('vr_b_see_all', language)} →
                   </button>
                 </div>
                 <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
@@ -4781,11 +5035,11 @@ export default function PlanScreen({
                       className="shrink-0 w-28 flex flex-col items-center justify-center gap-1 bg-primary/5 border border-primary/20 rounded-2xl p-3 text-primary hover:bg-primary/10 transition-all active:scale-95"
                     >
                       <span className="text-lg">✨</span>
-                      <span className="text-[10px] font-black leading-tight text-center">Mostra altre</span>
+                      <span className="text-[10px] font-black leading-tight text-center">{getTranslation('show_more', language)}</span>
                     </button>
                   )}
                   {seasonTemplates.length === 0 && (
-                    <p className="text-[11px] font-bold text-gray-400 px-1 py-3">Nessuna ispirazione per questo filtro nel periodo.</p>
+                    <p className="text-[11px] font-bold text-gray-400 px-1 py-3">{getTranslation('no_inspiration_for_filter', language)}</p>
                   )}
                 </div>
               </div>
@@ -4794,15 +5048,15 @@ export default function PlanScreen({
                   proprie — sosta breve (porti/scali, ore contate) e cammini
                   (ritmo lento). Il tap apre la sheet, la sheet pre-compila. */}
               <div className="space-y-2">
-                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">🧭 Itinerari speciali</label>
-                <div className="grid grid-cols-3 gap-2">
+                <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">🧭 {getTranslation('special_itineraries_label', language)}</label>
+                <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setShowTransitSheet(true)}
                     className="text-left bg-white border border-outline-variant/20 rounded-2xl p-2.5 shadow-sm hover:border-primary/30 hover:shadow-md transition-all active:scale-95"
                   >
                     <div className="text-xl mb-1">🛳✈️</div>
-                    <div className="text-[11px] font-black text-primary leading-tight">Sosta breve</div>
+                    <div className="text-[11px] font-black text-primary leading-tight">{getTranslation('short_stop_label', language)}</div>
                     <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
                       Porti e scali: il meglio nelle ore che hai.
                     </div>
@@ -4816,6 +5070,35 @@ export default function PlanScreen({
                     <div className="text-[11px] font-black text-emerald-700 leading-tight">Cammini</div>
                     <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
                       Tappe e timbri già pensati.
+                    </div>
+                  </button>
+                  {/* 🍷 Strade del vino e del gusto: accanto ai cammini
+                      perché è la stessa idea — un percorso che esiste già,
+                      con le sue tappe in ordine. Cambia solo cosa si cerca
+                      lungo la strada. */}
+                  <button
+                    type="button"
+                    onClick={() => setShowTasteSheet(true)}
+                    className="text-left bg-white border border-red-200/60 rounded-2xl p-2.5 shadow-sm hover:border-red-400 hover:shadow-md transition-all active:scale-95"
+                  >
+                    <div className="text-xl mb-1">🍷</div>
+                    <div className="text-[11px] font-black text-[#7f1d1d] leading-tight">{getTranslation('taste_routes_label', language)}</div>
+                    <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Cantine, caseifici e frantoi lungo il percorso.
+                    </div>
+                  </button>
+                  {/* 🧭 Viaggi tematici: otto cataloghi curati di LUOGHI (non
+                      di percorsi). Si sceglie il tema, poi il luogo, e il
+                      giro intorno lo compone il generatore. */}
+                  <button
+                    type="button"
+                    onClick={() => setShowThematicSheet(true)}
+                    className="text-left bg-white border border-sky-200/60 rounded-2xl p-2.5 shadow-sm hover:border-sky-400 hover:shadow-md transition-all active:scale-95"
+                  >
+                    <div className="text-xl mb-1">🧭</div>
+                    <div className="text-[11px] font-black text-sky-700 leading-tight">{getTranslation('thematic_trips_label', language)}</div>
+                    <div className="text-[9px] font-bold text-gray-500 mt-0.5 leading-snug">
+                      Terme, set di film, stelle, street art, mercatini.
                     </div>
                   </button>
                   {/* 🎭 Ispirazioni & temi: apre la libreria pre-filtrata sulla
@@ -4843,7 +5126,7 @@ export default function PlanScreen({
                 >
                   <div className="text-2xl shrink-0">📚</div>
                   <div>
-                    <div className="text-xs font-black text-amber-800 leading-tight">Libreria itinerari</div>
+                    <div className="text-xs font-black text-amber-800 leading-tight">{getTranslation('library_card_title', language)}</div>
                     <div className="text-[10px] font-bold text-gray-500 mt-0.5 leading-snug">
                       Centinaia di itinerari pronti e verificati, da usare gratis senza generarli.
                     </div>
@@ -4852,9 +5135,37 @@ export default function PlanScreen({
               </div>
 
               <div className="space-y-6">
+                {/* «Da reel a itinerario»: i luoghi estratti dallo screenshot
+                    (CameraScreen) che entreranno come tappe obbligatorie */}
+                {reelPlaces.length > 0 && (
+                  <div className="flex items-start gap-2.5 bg-gradient-to-br from-violet-50 to-fuchsia-50 border border-violet-200/70 rounded-2xl px-3 py-2.5 shadow-sm">
+                    <div className="text-xl shrink-0 leading-none mt-0.5">📱</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-black text-violet-800 leading-tight">
+                        {getTranslation('vis_reel_banner', language).replace('{n}', String(reelPlaces.length))}
+                      </div>
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {reelPlaces.map((p, i) => (
+                          <span key={`${p.name}-${i}`} className="px-2 py-0.5 rounded-full bg-white border border-violet-200/80 text-[10px] font-bold text-violet-900 truncate max-w-[170px]">
+                            {p.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReelPlaces([])}
+                      aria-label={getTranslation('vis_reel_banner_cancel', language)}
+                      title={getTranslation('vis_reel_banner_cancel', language)}
+                      className="shrink-0 w-7 h-7 rounded-full bg-white border border-violet-200/80 text-violet-700 hover:bg-violet-100 flex items-center justify-center transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 <div className="space-y-3">
                   <label className="text-[11px] font-black text-primary uppercase tracking-widest pl-1">{getTranslation("destination", language)}</label>
-                  
+
                   <div className="space-y-3">
                     {destinations.map((dest, idx) => (
                       <div key={idx} className="relative flex items-center gap-2">
@@ -4978,7 +5289,7 @@ export default function PlanScreen({
                   {destinations.filter(d => d.trim()).length >= 2 && (
                     <div className="mt-2 flex items-start gap-2 text-[11px] font-bold text-primary/80 bg-primary/5 border border-primary/10 rounded-2xl px-3 py-2">
                       <span className="text-base leading-none">🚗</span>
-                      <span>Roadtrip multi-città: i giorni verranno ripartiti tra le città e i trasferimenti diventano tappe con km e tempi reali. In auto tieni attiva l'audioguida GPS: i luoghi lungo il percorso si raccontano da soli.</span>
+                      <span>{getTranslation('roadtrip_hint', language)}</span>
                     </div>
                   )}
 
@@ -4995,7 +5306,7 @@ export default function PlanScreen({
                         <span className="block text-[11px] font-black text-amber-900 leading-tight truncate">
                           I 5 imperdibili di {(destCoords?.label || destinations[0]).split(',')[0].trim()}
                         </span>
-                        <span className="block text-[10px] font-bold text-amber-700/70">Mini-guida gratuita, da leggere subito</span>
+                        <span className="block text-[10px] font-bold text-amber-700/70">{getTranslation('mini_guide_free_hint', language)}</span>
                       </span>
                     </button>
                   )}
@@ -5496,7 +5807,7 @@ export default function PlanScreen({
                   onFocus={() => { setShowSuggestions(true); setFocusedDestIdx(0); }}
                   onKeyDown={(e) => handleSuggestKeyDown(e, 0, handleFetchCandidates)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  placeholder="Es: Firenze, Roma..."
+                  placeholder={getTranslation('placeholder_destination_example', language)}
                   // Bordo ambra su una schermata rosa/rosso: allineato alla
                   // palette della modalità.
                   className="w-full px-5 py-4 rounded-3xl border-2 border-rose-100 bg-white/80 text-sm font-bold placeholder-gray-400 focus:outline-none focus:border-rose-300 shadow-sm"
@@ -6361,26 +6672,34 @@ export default function PlanScreen({
                       const year = idx < now.getMonth() ? now.getFullYear() + 1 : now.getFullYear();
                       return new Date(year, idx, 1);
                     })()}
+                    language={language}
+                    destCoords={destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : null}
                   />
-                  <button 
+                  <button
                     onClick={() => {
                       const oldTitle = document.title;
                       const d = new Date();
-                      const mesi = ['gen','feb','mar','apr','mag','giu','lug','ago','set','ott','nov','dic'];
                       const gg = String(d.getDate()).padStart(2, '0');
-                      const mese = mesi[d.getMonth()];
+                      const mm = String(d.getMonth() + 1).padStart(2, '0');
                       const aa = String(d.getFullYear()).slice(-2);
-                      const t = generatedPlan?.titolo || "Itinerario";
-                      document.title = `WIP - ${t.substring(0, 30)} - ${gg}${mese}${aa}.pdf`;
-                      // Il titolo torna quello vecchio SOLO ad anteprima chiusa
-                      // (in Chrome window.print è asincrono: ripristinarlo
-                      // subito rompeva il nome file del PDF). Rimosso anche il
-                      // vecchio setTimeout(3000) senza feedback.
+                      const t = generatedPlan?.titolo || getTranslation('itinerary', language);
+                      document.title = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
+                      // Il titolo torna quello vecchio ad anteprima chiusa
+                      // ('afterprint'); ma l'evento non arriva su tutti i
+                      // browser (annulla su iOS/WebView) e il titolo restava
+                      // «...pdf» per sempre: rete di sicurezza con focus e un
+                      // timeout lungo, idempotenti.
+                      let ripristinato = false;
                       const restoreTitle = () => {
+                        if (ripristinato) return;
+                        ripristinato = true;
                         document.title = oldTitle;
                         window.removeEventListener('afterprint', restoreTitle);
+                        window.removeEventListener('focus', restoreTitle);
                       };
                       window.addEventListener('afterprint', restoreTitle);
+                      window.addEventListener('focus', restoreTitle);
+                      setTimeout(restoreTitle, 60000);
                       printScoped('itinerary');
                     }}
                     className="p-3 bg-white rounded-2xl border border-outline-variant/10 text-primary hover:bg-primary/5 transition-colors shadow-sm"
@@ -6396,25 +6715,6 @@ export default function PlanScreen({
                 </div>
               </div>
 
-              {/* Sconto libreria dichiarato: l'itinerario esisteva già nella
-                  cache condivisa, quindi è arrivato subito e a metà prezzo.
-                  Prima l'incasso pieno su un cache hit era silenzioso. */}
-              {cacheDiscount !== null && (
-                <div className="print:hidden flex items-start gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
-                  <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                    <Coins className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-black text-emerald-900 leading-snug">
-                      {getTranslation('cache_hit_discount', language)}
-                    </p>
-                    <p className="text-[11px] font-bold text-emerald-700 mt-0.5">
-                      {cacheDiscount} {getTranslation('credits_refunded', language)}
-                    </p>
-                  </div>
-                </div>
-              )}
-
               {/* Punto strategico: chi ha appena generato un itinerario è il
                   candidato perfetto per il Day Pass (sostituisce la vecchia
                   offerta bundle al 50%). */}
@@ -6422,7 +6722,7 @@ export default function PlanScreen({
                 <DayPassCard />
               </div>
 
-              {generatedPlan && <PrintView plan={generatedPlan} language={language} />}
+              {printPlan && <PrintView plan={printPlan} language={language} />}
 
               <AnimatePresence>
                 {offlineStatus && (
@@ -6467,7 +6767,7 @@ export default function PlanScreen({
                             onClick={() => handleRainPlan(gIdx)}
                             disabled={rainLoadingDay === giorno.giorno}
                             className="px-1.5 py-0.5 bg-sky-600 text-white rounded-full disabled:opacity-50 hover:bg-sky-700 transition-colors"
-                            title="Variante al coperto: musei, chiese e gallerie al posto delle tappe all'aperto, pranzo e cena invariati"
+                            title={getTranslation('rain_variant_tooltip', language)}
                           >
                             {rainLoadingDay === giorno.giorno ? '…' : 'Piano B'}
                           </button>
@@ -6492,18 +6792,18 @@ export default function PlanScreen({
                           <div className="flex items-center gap-1 bg-amber-50 border border-amber-300 rounded-xl px-2 py-1 print:hidden shadow-sm">
                             <span className="text-[9px] font-black text-amber-600 uppercase tracking-widest mr-0.5">WIP</span>
                             {isPodcastPaused ? (
-                              <button onClick={handleResumePodcast} title="Riprendi" className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center hover:bg-amber-600 transition-colors">
+                              <button onClick={handleResumePodcast} title={getTranslation('resume', language)} className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center hover:bg-amber-600 transition-colors">
                                 <Play className="w-3 h-3" />
                               </button>
                             ) : (
-                              <button onClick={handlePausePodcast} title="Pausa" className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center hover:bg-amber-600 transition-colors">
+                              <button onClick={handlePausePodcast} title={getTranslation('pause', language)} className="w-6 h-6 rounded-lg bg-amber-500 text-white flex items-center justify-center hover:bg-amber-600 transition-colors">
                                 <Pause className="w-3 h-3" />
                               </button>
                             )}
-                            <button onClick={handleStopPodcast} title="Stop" className="w-6 h-6 rounded-lg bg-red-100 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors">
+                            <button onClick={handleStopPodcast} title={getTranslation('stop', language)} className="w-6 h-6 rounded-lg bg-red-100 text-red-500 flex items-center justify-center hover:bg-red-500 hover:text-white transition-colors">
                               <Square className="w-3 h-3" />
                             </button>
-                            <button onClick={handleReplayPodcast} title="Riascolta dall'inizio" className="w-6 h-6 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center hover:bg-amber-200 transition-colors">
+                            <button onClick={handleReplayPodcast} title={getTranslation('replay_from_start', language)} className="w-6 h-6 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center hover:bg-amber-200 transition-colors">
                               <SkipBack className="w-3 h-3" />
                             </button>
                           </div>
@@ -6535,8 +6835,15 @@ export default function PlanScreen({
 
                     <div className="space-y-8 pl-5 relative border-l border-dashed border-primary/20">
                       {giorno.tappe.map((tappa, tIdx) => (
+                        <div key={tappa.id_tappa} className="relative" aria-busy={replacingId === tappa.id_tappa}>
+                        {/* Spinner locale della sostituzione: la card resta
+                            al suo posto, niente overlay a tutto schermo. */}
+                        {replacingId === tappa.id_tappa && (
+                          <div className="absolute inset-0 z-10 rounded-[2rem] bg-white/70 backdrop-blur-[1px] flex items-center justify-center gap-2 text-primary text-xs font-black uppercase tracking-widest">
+                            <Loader2 className="w-4 h-4 animate-spin" /> {getTranslation('replacing_stop', language)}
+                          </div>
+                        )}
                         <ItineraryStop
-                          key={tappa.id_tappa}
                           tappa={tappa}
                           tIdx={tIdx}
                           gIdx={gIdx}
@@ -6554,6 +6861,7 @@ export default function PlanScreen({
                           onSelectPoi={onSelectPoi ? handleSelectItineraryPoi : undefined}
                           legToNext={dayLegs[gIdx]?.[tIdx] || null}
                         />
+                        </div>
                       ))}
 
                       {addingStopDay === giorno.giorno ? (
@@ -6722,7 +7030,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`vi-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddViatorToDay(gIdx, exp)} color="#FF5100" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun tour Viator trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tours_viator', language)}</div>}
                           </motion.div>
                         )}
 
@@ -6734,7 +7042,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`gyg-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddGygToDay(gIdx, exp)} color="#0071eb" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun tour GetYourGuide trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tours_gyg', language)}</div>}
                           </motion.div>
                         )}
 
@@ -6746,7 +7054,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`tm-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddTicketmasterToDay(gIdx, exp)} color="#1e3a8a" />
                                 ))}
                                 </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun evento Ticketmaster trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_events_ticketmaster', language)}</div>}
                           </motion.div>
                         )}
 
@@ -6758,7 +7066,7 @@ export default function PlanScreen({
                                   <ExperienceCard key={`tq-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddTiqetsToDay(gIdx, exp)} color="#7c3aed" />
                                 ))}
                               </div>
-                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">Nessun biglietto Tiqets trovato.</div>}
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tickets_tiqets', language)}</div>}
                           </motion.div>
                         )}
                       </AnimatePresence>
@@ -6819,7 +7127,7 @@ export default function PlanScreen({
                                   type="text"
                                   value={extendNearbyQuery}
                                   onChange={e => setExtendNearbyQuery(e.target.value)}
-                                  placeholder="Cerca una città vicina…"
+                                  placeholder={getTranslation('search_nearby_city', language)}
                                   className="w-full p-3 bg-gray-50 border border-gray-100 rounded-xl text-sm outline-none focus:ring-2 focus:ring-secondary/20"
                                 />
                                 {extendNearbySearching && <Loader2 className="w-4 h-4 animate-spin absolute right-3 top-3.5 text-gray-400" />}
@@ -6843,7 +7151,7 @@ export default function PlanScreen({
                         )}
 
                         <div>
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Tema del giorno</p>
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{getTranslation('day_theme', language)}</p>
                           <div className="flex flex-wrap gap-2">
                             {EXTEND_DAY_THEMES.map(th => (
                               <button
@@ -6852,7 +7160,7 @@ export default function PlanScreen({
                                 onClick={() => setExtendTheme(th.id)}
                                 className={`px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${extendTheme === th.id ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-primary/30'}`}
                               >
-                                {th.label}
+                                {getTranslation(th.labelKey, language)}
                               </button>
                             ))}
                             <button
@@ -6879,12 +7187,43 @@ export default function PlanScreen({
                   </div>
                 )}
 
-                {generatedPlan.giorni.some(g => g.tappe.some(t => t.coordinate && t.coordinate.lat !== 0)) && (
-                  <div className="mt-8 break-inside-avoid print:hidden">
-                    <h3 className="font-black text-primary uppercase tracking-widest text-xs mb-4">{getTranslation("itinerary_map", language)}</h3>
-                    <PlanMap giorni={generatedPlan.giorni} navRouteGeometry={routeGeometry} onSelectPoi={handleSelectItineraryPoi} isAudioGuideActive={isAudioGuideActive} />
-                  </div>
-                )}
+                {generatedPlan.giorni.some(g => g.tappe.some(t => t.coordinate && t.coordinate.lat !== 0)) && (() => {
+                  const validSelectedDay = validMapSelectedDay;
+                  const mapGiorni = validSelectedDay === 'all'
+                    ? generatedPlan.giorni
+                    : generatedPlan.giorni.filter(g => g.giorno === validSelectedDay);
+                  return (
+                    <div className="mt-8 break-inside-avoid print:hidden">
+                      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+                        <h3 className="font-black text-primary uppercase tracking-widest text-xs">{getTranslation("itinerary_map", language)}</h3>
+                        {/* Selettore giorno: pulsanti a pillola, scorrevoli su
+                            mobile. "Tutti" resta il default — la mappa
+                            completa coi colori per giorno non cambia
+                            comportamento finché non si sceglie un giorno. */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1">
+                          <button
+                            type="button"
+                            onClick={() => setMapSelectedDay('all')}
+                            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wide border transition-colors ${validSelectedDay === 'all' ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-primary/30'}`}
+                          >
+                            {getTranslation('map_all_days', language)}
+                          </button>
+                          {generatedPlan.giorni.map(g => (
+                            <button
+                              key={`map-day-sel-${g.giorno}`}
+                              type="button"
+                              onClick={() => setMapSelectedDay(g.giorno)}
+                              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wide border transition-colors ${validSelectedDay === g.giorno ? 'bg-primary text-white border-primary' : 'bg-gray-50 text-gray-600 border-gray-100 hover:border-primary/30'}`}
+                            >
+                              {getTranslation('day', language)} {g.giorno}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <PlanMap giorni={mapGiorni} navRouteGeometry={validSelectedDay === 'all' ? routeGeometry : undefined} onSelectPoi={handleSelectItineraryPoi} isAudioGuideActive={isAudioGuideActive} />
+                    </div>
+                  );
+                })()}
 
                 {generatedPlan.totale_viaggio && (
                   <div className="mt-8 bg-primary p-6 rounded-[2rem] text-white shadow-xl flex flex-col sm:flex-row justify-between items-center print:break-inside-avoid">
@@ -7211,7 +7550,7 @@ export default function PlanScreen({
         <div className="fixed inset-0 z-[1360] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setRainPreview(null)}>
           <div className="w-full max-w-md bg-white rounded-3xl p-5 space-y-3 shadow-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <h3 className="font-black text-primary text-base">🌧 Piano B — Giorno {rainPreview.giornoNum} al coperto</h3>
-            <p className="text-[11px] text-gray-500 font-medium">Pranzo e cena restano invariati; le visite all'aperto sono sostituite da alternative al coperto.</p>
+            <p className="text-[11px] text-gray-500 font-medium">{getTranslation('rain_preview_desc', language)}</p>
             <div className="flex-1 overflow-y-auto space-y-2">
               {rainPreview.tappe.map((t: any, i: number) => (
                 <div key={i} className="flex items-start gap-2.5 bg-[#f8f5f0] rounded-xl px-3 py-2">
@@ -7224,8 +7563,8 @@ export default function PlanScreen({
               ))}
             </div>
             <div className="flex gap-2">
-              <button onClick={() => setRainPreview(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest">Annulla</button>
-              <button onClick={applyRainPlan} className="flex-1 py-2.5 bg-sky-600 text-white rounded-xl font-black text-xs uppercase tracking-widest">Applica variante</button>
+              <button onClick={() => setRainPreview(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest">{getTranslation('cancel', language)}</button>
+              <button onClick={applyRainPlan} className="flex-1 py-2.5 bg-sky-600 text-white rounded-xl font-black text-xs uppercase tracking-widest">{getTranslation('apply_variant', language)}</button>
             </div>
           </div>
         </div>
@@ -7289,6 +7628,24 @@ export default function PlanScreen({
         <PilgrimWaysSheet
           language={language}
           onClose={() => setShowPilgrimSheet(false)}
+          onApply={applySpecialRoute}
+          onOpenLibrary={openLibrary}
+        />
+      )}
+      {showTasteSheet && (
+        <TasteRoutesSheet
+          language={language}
+          onClose={() => setShowTasteSheet(false)}
+          onApply={applySpecialRoute}
+          onOpenLibrary={openLibrary}
+        />
+      )}
+      {/* 🧭 VIAGGI TEMATICI: il luogo diventa un roadtrip di una tappa
+          (applySpecialRoute), con il brief del tema in specialRequests. */}
+      {showThematicSheet && (
+        <ThematicSheet
+          language={language}
+          onClose={() => setShowThematicSheet(false)}
           onApply={applySpecialRoute}
           onOpenLibrary={openLibrary}
         />
@@ -7362,7 +7719,7 @@ export default function PlanScreen({
                     // La Guida d'Autore nasce dall'itinerario: se c'è già un
                     // piano si apre il modale, altrimenti si guida al form.
                     if (generatedPlan && currentUserId) setShowPremiumGuideModal(true);
-                    else notify('Genera prima l\'itinerario: a piano pronto troverai la Guida d\'Autore completa 📖');
+                    else notify(getTranslation('generate_plan_first_guide', language));
                   }}
                   className="w-full py-3 rounded-2xl bg-primary text-white text-sm font-black active:scale-95 transition-transform"
                 >

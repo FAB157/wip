@@ -143,15 +143,21 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         transportPref = prefs.string(forKey: "transportPref") ?? "auto"
         appLanguage = prefs.string(forKey: "language") ?? "it"
         selectedCategories = prefs.stringArray(forKey: "selectedCategories") ?? []
-        alertRadiusWalk = prefs.object(forKey: "alertRadiusWalk") as? Double ?? 150
-        arrivalRadiusWalk = prefs.object(forKey: "arrivalRadiusWalk") as? Double ?? 30
-        alertRadiusCar = prefs.object(forKey: "alertRadiusCar") as? Double ?? 300
-        arrivalRadiusCar = prefs.object(forKey: "arrivalRadiusCar") as? Double ?? 50
+        // Clamp anche al restore (parità con restoreSettingsFromPrefs Android):
+        // un valore sporco in prefs non deve riaprire raggi fuori range.
+        alertRadiusWalk = min(max(prefs.object(forKey: "alertRadiusWalk") as? Double ?? 150, 50), 400)
+        arrivalRadiusWalk = min(max(prefs.object(forKey: "arrivalRadiusWalk") as? Double ?? 30, 15), 100)
+        alertRadiusCar = min(max(prefs.object(forKey: "alertRadiusCar") as? Double ?? 300, 100), 600)
+        arrivalRadiusCar = min(max(prefs.object(forKey: "arrivalRadiusCar") as? Double ?? 50, 20), 150)
         startActiveMonitoring()
     }
 
     func stop() {
         prefs.set(false, forKey: "isServiceActive")
+        // (22/08/2026) radarTeaserNotified cresceva per sempre: senza reset
+        // allo stop un POI notificato una volta non tornava mai nei teaser
+        // radar, nemmeno in un viaggio successivo mesi dopo (come Service.kt).
+        prefs.removeObject(forKey: "radarTeaserNotified")
         MotionActivityGate.shared.stop()
         SpeechQueue.shared.stopSpeaking()
         isRunning = false
@@ -161,7 +167,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             locationManager.stopMonitoring(for: region)
         }
         currentPois = []
+        itineraryPois = []
         lastQueryLocation = nil
+    }
+
+    /// Tappe dell'itinerario manuale, tenute SEPARATE dal radar: prima
+    /// finivano in currentPois e il primo refresh del radar (200 m a piedi)
+    /// le sovrascriveva con i POI della RPC, facendole sparire dalle region
+    /// e dai trigger. Ora vengono sempre unite al radar (mergedPois) e
+    /// svuotate solo quando il JS manda una selezione vuota o allo stop.
+    private var itineraryPois: [Poi] = []
+
+    /// Radar + tappe itinerario, senza duplicati (la tappa vince: porta
+    /// isFromItinerary=true e la priorità che ne consegue).
+    private func mergedPois(_ radar: [Poi]) -> [Poi] {
+        guard !itineraryPois.isEmpty else { return radar }
+        let itineraryIds = Set(itineraryPois.map { $0.id })
+        return itineraryPois + radar.filter { !itineraryIds.contains($0.id) }
     }
 
     /// Itinerario manuale: port di syncManualSelection (tappe con priorità).
@@ -170,7 +192,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
               var pois = try? JSONDecoder().decode([Poi].self, from: data) else { return }
         for i in pois.indices { pois[i].isFromItinerary = true }
         store.insertPois(pois)
-        currentPois = pois
+        // Selezione vuota = clear: le tappe escono e resta il solo radar.
+        let radarOnly = currentPois.filter { !$0.isFromItinerary }
+        itineraryPois = pois
+        currentPois = mergedPois(radarOnly)
         refreshMonitoredRegions(around: locationManager.location)
         updateStatus("Audioguida attiva", "\(pois.count) tappe itinerario caricate")
         // initialTrigger: se l'utente parte già dentro il raggio della prima
@@ -397,7 +422,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     let isFirstRegistration = self.currentPois.isEmpty &&
                         location.horizontalAccuracy > 0 && location.horizontalAccuracy <= 100
                     self.store.insertPois(pois)
-                    self.currentPois = pois
+                    // Le tappe itinerario restano sempre nel set monitorato
+                    self.currentPois = self.mergedPois(pois)
                     self.refreshMonitoredRegions(around: location)
 
                     // Bonifica stati incoerenti dopo falsi trigger (teleport GPS)
@@ -421,7 +447,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         }
                     }
 
-                    self.generateTeasersInBackground(poiIds: pois.map { $0.id })
+                    // Al server solo i 10 POI più vicini ANCORA senza teaser:
+                    // prima partiva tutto il radar (fino a 1.000 id) a ogni
+                    // refresh, quasi tutti già con teaser o mai raggiunti.
+                    let missingTeaser = pois
+                        .filter { $0.teaserText?.isEmpty != false }
+                        .sorted { location.distance(from: $0.coordinate) < location.distance(from: $1.coordinate) }
+                        .prefix(10)
+                        .map { $0.id }
+                    if !missingTeaser.isEmpty {
+                        self.generateTeasersInBackground(poiIds: Array(missingTeaser))
+                    }
                     self.showRadarTeaserNotifications(pois: pois, location: location)
 
                     if isFirstRegistration {
@@ -454,7 +490,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         lastQueryLocation = location
         lastFetchFailedAt = 0
         store.insertPois(pois)
-        currentPois = pois
+        currentPois = mergedPois(pois)
         refreshMonitoredRegions(around: location)
         updateStatus("Audioguida attiva (offline)", "\(pois.count) luoghi dal pacchetto offline")
         sendEvent("poisDownloaded", data1: Self.poisToJsonString(pois))
@@ -584,14 +620,47 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let dist: Double
         }
 
-        let candidates = currentPois
+        // (22/08/2026) Prima il predittore girava su TUTTO il radar a ogni fix
+        // (fino a 1.000 POI, telemetria compresa). Ora: categoria attiva →
+        // distanza ≤ 3× il raggio di avviso (la finestra allargata del
+        // predittore, oltre la quale nessun ramo sotto può scattare) →
+        // i 5 più vicini, come Android. I POI con uno stato già acceso
+        // (APPROACH/ARRIVED/PASSED) restano sempre in lista, anche oltre i 5
+        // o oltre la finestra: devono poter chiudere la loro macchina a stati
+        // (uscita dall'isteresi, superamento).
+        let sortedAll = currentPois
             .filter { PoiCategories.isActive(poi: $0, selected: selectedCategories) }
-            .map { Candidate(poi: $0, dist: location.distance(from: $0.coordinate)) }
+            // La distanza che ordina è la MINORE fra ingresso e bordo del
+            // perimetro: a 30 m dal muro di tre chiese vince quella di cui si
+            // sfiora il muro, non quella col portone più vicino (parità Android).
+            .map { poi -> Candidate in
+                let dIngresso = location.distance(from: poi.coordinate)
+                let dMuro = PoiFootprints.distanzaDalPerimetro(
+                    poiId: poi.id, footprint: poi.footprint,
+                    lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                    entro: PoiFootprints.triggerCarM)
+                return Candidate(poi: poi, dist: min(dIngresso, dMuro))
+            }
             .sorted {
                 if $0.poi.isFromItinerary != $1.poi.isFromItinerary { return $0.poi.isFromItinerary }
                 if $0.poi.isGem != $1.poi.isGem { return $0.poi.isGem }
                 return $0.dist < $1.dist
             }
+        let nearby = sortedAll.filter { c in
+            let (alertRad, _) = effectiveRadii(for: c.poi, isDriving: isDriving)
+            // ...oppure a 30 m dal perimetro: un parco o una cinta muraria
+            // si estendono ben oltre 3× il raggio dall'ingresso (parità Android).
+            return c.dist <= alertRad * 3 || c.dist <= PoiFootprints.triggerM(isDriving: isDriving)
+        }
+        var candidates = Array(nearby.prefix(5))
+        let keptIds = Set(candidates.map { $0.poi.id })
+        let activeStates = store.allTriggerStates() // una lettura sola, non una per POI
+        for c in sortedAll where !keptIds.contains(c.poi.id) {
+            if let st = activeStates[c.poi.id]?.state,
+               st == .approachFired || st == .arrivedFired || st == .passed {
+                candidates.append(c)
+            }
+        }
 
         approachSpokenInBatch = false
 
@@ -605,18 +674,21 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             let record = store.getTriggerState(c.poi.id)
             let state = record?.state ?? .pending
 
-            // DENTRO IL PERIMETRO dell'edificio (poi_footprints, poligono OSM).
-            // Quando è vero, la distanza dal centroide smette di essere la
-            // domanda giusta: attraversando una basilica di 120 metri ci si
-            // allontana dal centro per metà del percorso, e tutta la logica
-            // radiale qui sotto lo leggerebbe come "se ne sta andando" —
-            // marcando PASSED, poi EXITED, e zittendo la guida proprio mentre
-            // l'utente è davanti all'altare.
+            // A 30 METRI DAL PERIMETRO dell'edificio (poi_footprints, poligono
+            // OSM; 0 m = dentro). Decisione del 22/08/2026: la guida parte a
+            // 30 m dal MURO, non quando si è dentro né a 50 m da un ingresso
+            // che può stare dall'altra parte. Quando è vero, la distanza dal
+            // centroide smette di essere la domanda giusta: lungo la facciata
+            // di una basilica di 120 metri ci si allontana dal centro per metà
+            // del percorso, e tutta la logica radiale qui sotto lo leggerebbe
+            // come "se ne sta andando" — marcando PASSED, poi EXITED, e
+            // zittendo la guida proprio mentre l'utente è davanti al portale.
             // Costa quattro confronti sul riquadro quando il POI non ha un
             // perimetro, che sono i 4 POI su 5 del database.
-            let dentroPerimetro = PoiFootprints.dentroPerimetro(
+            let dentroPerimetro = PoiFootprints.alPerimetro(
                 poiId: c.poi.id, footprint: c.poi.footprint,
-                lat: location.coordinate.latitude, lon: location.coordinate.longitude
+                lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                isDriving: isDriving
             )
 
             // ── Superamento (PASSED) ──
@@ -716,8 +788,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 } else {
                     age = Double.infinity
                 }
+                // (22/08/2026, parità con Receiver.kt) PASSED NON blocca più
+                // l'arrivo quando la distanza reale è dentro il raggio di
+                // arrivo: il predittore marca PASSED già 40 m oltre il CPA
+                // dopo un APPROACH, quindi chi cammina svelto, supera di poco
+                // il punto e poi si ferma davanti al POI perdeva l'arrivo per
+                // 24 ore. Il caso "dentro il perimetro ma fuori dal cerchio"
+                // resta bloccato come prima.
                 let blockedArrival =
-                    ((state == .arrivedFired || state == .passed) && age < arrivalRetriggerTtlMs) ||
+                    (state == .arrivedFired && age < arrivalRetriggerTtlMs) ||
+                    (state == .passed && age < arrivalRetriggerTtlMs && c.dist > arrivalRad) ||
                     (state == .exited && age < arrivalAfterExitCooldownMs)
                 if !blockedArrival {
                     handleArrival(poi: c.poi)
@@ -771,6 +851,18 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         var deg = atan2(y, x) * 180 / .pi
         if deg < 0 { deg += 360 }
         return deg
+    }
+
+    /// (22/08/2026) Il personaggio scelto nel profilo (nicky/dante) arrivava al
+    /// plugin ma non veniva mai letto: prefetch MP3, testo del pass e deep link
+    /// `?guide=` usavano sempre il guideDefault del POI, quindi in background
+    /// parlava la voce sbagliata. Il plugin persiste `guideCharacter` (stessa
+    /// chiave di Android); qui si preferisce quello, col default del POI come
+    /// riserva. Port di GeofenceBroadcastReceiver.resolveGuideVoice.
+    private func resolveGuideVoice(fallback: String) -> String {
+        let chosen = prefs.string(forKey: "guideCharacter")
+        if chosen == "nicky" || chosen == "dante" { return chosen ?? fallback }
+        return fallback
     }
 
     private func handleApproach(poi: Poi, speak: Bool) {
@@ -836,25 +928,29 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             ))
         }
         if silent { silentHaptic() } else { vibrate() }
-        let notifTitle = poi.isFromItinerary ? "📍 Tappa Itinerario" : "Esplorazione"
+        let lang = appLanguage
+        let guideVoice = resolveGuideVoice(fallback: poi.guideDefault)
+        let notifTitle = poi.isFromItinerary
+            ? NotificationStrings.itineraryStopTitle(lang)
+            : NotificationStrings.explorationTitle(lang)
         // Distanza REALE, non la stringa fissa "circa 150m": il raggio di
         // alert cambia fra piedi (150 m) e auto (300 m), e l'utente vedeva
         // "150m" anche per un POI a 300 m o già superato.
         let realDist = lastFixLocation.map { Int($0.distance(from: poi.coordinate)) } ?? -1
-        let distText = realDist >= 0 ? "A circa \(realDist) m." : ""
+        let distText = realDist >= 0 ? NotificationStrings.aboutMeters(lang, meters: realDist) : ""
         if silent {
             // In silenzioso il testo fa il lavoro della voce: body esteso col
             // messaggio di avvicinamento (già nella lingua dell'utente).
             showNotification(
                 title: "\(notifTitle): \(poi.nome)",
                 body: "\(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces),
-                poiId: poi.id, guide: poi.guideDefault, isArrival: false
+                poiId: poi.id, guide: guideVoice, isArrival: false
             )
         } else {
             showNotification(
                 title: "\(notifTitle): \(poi.nome)",
-                body: "\(distText) Tocca per ascoltare.".trimmingCharacters(in: .whitespaces),
-                poiId: poi.id, guide: poi.guideDefault, isArrival: false
+                body: "\(distText) \(NotificationStrings.tapToListen(lang))".trimmingCharacters(in: .whitespaces),
+                poiId: poi.id, guide: guideVoice, isArrival: false
             )
         }
     }
@@ -865,19 +961,20 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private func prefetchAudio(for poi: Poi) {
         guard isOnline else { return }
         let lang = appLanguage
-        guard AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang) == nil else { return }
+        let voice = resolveGuideVoice(fallback: poi.guideDefault)
+        guard AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang, character: voice) == nil else { return }
         // Testo offline SOLO se il pacchetto è nella lingua richiesta
         // (mono-lingua): altrimenti si prende il testo tradotto dal cloud.
         if let localText = store.getOfflineAudioText(poi.id, lang: lang) {
-            AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: localText)
+            AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: localText)
         } else {
             // Testo NELLA LINGUA dell'utente (get-or-create per-lingua), non i
             // campi italiani grezzi: così l'MP3 prefetchato è già tradotto.
             // Token utente se disponibile (rollout fase 1, vedi WipSupabaseClient
             // .fetchAudioguideText): mai bloccante se assente.
             let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
-            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault, accessToken: audioguideToken) { text in
-                AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: poi.guideDefault, text: text)
+            supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: voice, accessToken: audioguideToken) { text in
+                AudioPrefetchManager.prefetch(poiId: poi.id, lang: lang, character: voice, text: text)
             }
         }
     }
@@ -888,6 +985,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         sendPoiEvent("poiArrived", poi: poi)
 
         let priority = poi.isFromItinerary ? 0 : 1
+        // Personaggio scelto dall'utente (prefs), default del POI come riserva:
+        // vale per MP3, testo del pass e deep link ?guide= della notifica.
+        let guideVoice = resolveGuideVoice(fallback: poi.guideDefault)
+        let lang = appLanguage
 
         let arrivalMsg: String
         switch appLanguage {
@@ -900,16 +1001,48 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         default: arrivalMsg = "Sei arrivato a \(poi.nome)."
         }
 
-        let fallbackTeaser: String
+        // Frase di ripiego quando il teaser manca: NON sempre la stessa. In un
+        // giro di dieci luoghi senza teaser l'utente sentiva dieci volte
+        // "Apri l'app per scoprire i segreti di questo luogo" (regola utente
+        // 22/08/2026: "il piu' possibile variegati"). La variante si sceglie
+        // dall'id del POI, cosi' lo stesso luogo dice sempre la stessa cosa e
+        // due luoghi vicini dicono cose diverse. Con la RPC nearby_pois che
+        // ora porta i teaser e la generazione AI all'avvicinamento, questo
+        // ramo dovrebbe restare raro.
+        let variantiRipiego: [String]
         switch appLanguage {
-        case "en": fallbackTeaser = "Open the app to discover the secrets of this place."
-        case "fr": fallbackTeaser = "Ouvrez l'application pour découvrir les secrets de ce lieu."
-        case "es": fallbackTeaser = "Abre la aplicación para descubrir los secretos de este lugar."
-        case "de": fallbackTeaser = "Öffnen Sie die App, um die Geheimnisse dieses Ortes zu entdecken."
-        case "ru": fallbackTeaser = "Откройте приложение, чтобы узнать секреты этого места."
-        case "zh": fallbackTeaser = "打开应用，探索这个地方的秘密。"
-        default: fallbackTeaser = "Apri l'app per scoprire i segreti di questo luogo."
+        case "en": variantiRipiego = [
+            "Open the app to discover the secrets of this place.",
+            "The full story is in the app: open it and listen.",
+            "Want to know what happened here? The audio guide is one tap away."]
+        case "fr": variantiRipiego = [
+            "Ouvrez l'application pour découvrir les secrets de ce lieu.",
+            "Toute l'histoire est dans l'application : ouvrez-la et écoutez.",
+            "Envie de savoir ce qui s'est passé ici ? L'audioguide est à un geste."]
+        case "es": variantiRipiego = [
+            "Abre la aplicación para descubrir los secretos de este lugar.",
+            "La historia completa está en la app: ábrela y escucha.",
+            "¿Quieres saber qué pasó aquí? La audioguía está a un toque."]
+        case "de": variantiRipiego = [
+            "Öffnen Sie die App, um die Geheimnisse dieses Ortes zu entdecken.",
+            "Die ganze Geschichte steht in der App: öffnen und zuhören.",
+            "Was ist hier passiert? Der Audioguide ist nur einen Tipp entfernt."]
+        case "ru": variantiRipiego = [
+            "Откройте приложение, чтобы узнать секреты этого места.",
+            "Вся история — в приложении: откройте и слушайте.",
+            "Хотите узнать, что здесь произошло? Аудиогид в одном касании."]
+        case "zh": variantiRipiego = [
+            "打开应用，探索这个地方的秘密。",
+            "完整的故事都在应用里：打开并聆听。",
+            "想知道这里发生过什么？语音导览只需轻点一下。"]
+        default: variantiRipiego = [
+            "Apri l'app per scoprire i segreti di questo luogo.",
+            "La storia completa e' nell'app: aprila e ascolta.",
+            "Vuoi sapere cosa e' successo qui? L'audioguida e' a un tocco."]
         }
+        // Hash deterministico (hashValue in Swift cambia a ogni avvio).
+        let semeRipiego = poi.id.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0x7fffffff }
+        let fallbackTeaser = variantiRipiego[semeRipiego % variantiRipiego.count]
 
         let speakAndNotify: (Poi) -> Void = { [weak self] poi in
             guard let self = self else { return }
@@ -938,9 +1071,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 let teaserBody: String
                 if let t = teaser, !t.isEmpty { teaserBody = t } else { teaserBody = fallbackTeaser }
                 self.showNotification(
-                    title: "Sei arrivato a \(poi.nome)",
-                    body: "\(teaserBody)\n▶ Tieni premuto e scegli Ascolta per la guida audio.",
-                    poiId: poi.id, guide: poi.guideDefault, isArrival: true,
+                    title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                    body: "\(teaserBody)\n\(NotificationStrings.silentArrivalHint(lang))",
+                    poiId: poi.id, guide: guideVoice, isArrival: true,
                     withListenAction: true, muted: true
                 )
                 return
@@ -986,9 +1119,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         // (già postata sotto) mentirebbe — stessa id, la
                         // sostituisce quella col tasto ▶ Ascolta.
                         self.showNotification(
-                            title: "Sei arrivato a \(poi.nome)",
-                            body: "Tieni premuto e scegli ▶ Ascolta: la guida parte senza sbloccare il telefono",
-                            poiId: poi.id, guide: poi.guideDefault, isArrival: true,
+                            title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                            body: NotificationStrings.listenHintNoAutoplay(lang),
+                            poiId: poi.id, guide: guideVoice, isArrival: true,
                             withListenAction: true
                         )
                         return
@@ -1002,8 +1135,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         poiId: poi.id, priority: priority, kind: "arrival",
                         audioFile: mp3Path
                     ))
+                    if mp3Path == nil && hasText {
+                        // Prefetch/redirect MP3 falliti (rete lenta o server
+                        // freddo): l'intera audioguida viene letta dal TTS di
+                        // sistema invece della voce AI. Evento per il JS (stesso
+                        // canale di poiArrived) così può mostrare "voce di
+                        // riserva, rete lenta" invece di degradare in silenzio.
+                        // Stesso caso di Receiver.kt (audioQualityDegraded).
+                        self.sendPoiEvent("audioQualityDegraded", poi: poi)
+                    }
                     if let full = fullText,
-                       let extra = self.store.getOfflineDescriptionShort(poi.id, lang: self.appLanguage),
+                       let extra = self.store.getOfflineDescriptionShort(poi.id, lang: lang),
                        extra != full, !full.contains(extra) {
                         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
                             text: extra, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
@@ -1017,13 +1159,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         poiId: poi.id, poiName: poi.nome, category: poi.poiType
                     )
                 }
-                let lang = self.appLanguage
                 // Testo offline SOLO se il pacchetto è nella lingua dell'utente:
                 // altrimenti nil → più sotto si scarica il testo tradotto dal
                 // cloud (fetchAudioguideText). Evita la voce nella lingua giusta
                 // che legge testo di un'altra lingua (bug mono-lingua).
                 let localText = self.store.getOfflineAudioText(poi.id, lang: lang)
-                if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang) {
+                if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poi.id, lang: lang, character: guideVoice) {
                     playFullText(localText, cachedMp3.path)
                 } else if let localText = localText, !localText.isEmpty {
                     if self.isOnline {
@@ -1031,7 +1172,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         // zero non teniamo l'utente in attesa, TTS del testo.
                         AudioPrefetchManager.download(
                             poiId: poi.id, lang: lang,
-                            character: poi.guideDefault, text: localText, timeout: 25
+                            character: guideVoice, text: localText, timeout: 25
                         ) { file in
                             self.workQueue.async { playFullText(localText, file?.path) }
                         }
@@ -1042,7 +1183,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // Token utente se disponibile (rollout fase 1, vedi
                     // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
                     let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
-                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: poi.guideDefault, accessToken: audioguideToken) { fetched in
+                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: guideVoice, accessToken: audioguideToken) { fetched in
                         self.workQueue.async {
                             guard let fetched = fetched, !fetched.isEmpty else {
                                 playFullText(nil, nil) // → notifica col tasto Ascolta
@@ -1050,7 +1191,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                             }
                             AudioPrefetchManager.download(
                                 poiId: poi.id, lang: lang,
-                                character: poi.guideDefault, text: fetched, timeout: 25
+                                character: guideVoice, text: fetched, timeout: 25
                             ) { file in
                                 self.workQueue.async { playFullText(fetched, file?.path) }
                             }
@@ -1075,17 +1216,18 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // la stessa catena di pagamento del tasto Ascolta in app.
             if willAutoPlay {
                 self.showNotification(
-                    title: "Sei arrivato a \(poi.nome)", body: "Audioguida in riproduzione",
-                    poiId: poi.id, guide: poi.guideDefault, isArrival: true
+                    title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                    body: NotificationStrings.guidePlaying(lang),
+                    poiId: poi.id, guide: guideVoice, isArrival: true
                 )
             } else if Self.isAppInForeground() {
                 // App aperta (tipico a piedi): la scheda e l'autoplay li
                 // gestisce il JS — "tieni premuto" qui sarebbe un'istruzione
                 // per un'altra situazione.
                 self.showNotification(
-                    title: "Sei arrivato a \(poi.nome)",
-                    body: "La scheda del luogo è pronta nell'app",
-                    poiId: poi.id, guide: poi.guideDefault, isArrival: true
+                    title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                    body: NotificationStrings.cardReadyInApp(lang),
+                    poiId: poi.id, guide: guideVoice, isArrival: true
                 )
             } else {
                 // PREZZO DICHIARATO SULLA NOTIFICA: su lock screen non può
@@ -1095,9 +1237,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // (willAutoPlay) — questo ramo è solo per il per-listen.
                 let cost = BillingLogic.defaultGuideCost
                 self.showNotification(
-                    title: "Sei arrivato a \(poi.nome)",
-                    body: "Tieni premuto → ▶ Ascolta: \(cost) crediti e la guida parte senza sbloccare",
-                    poiId: poi.id, guide: poi.guideDefault, isArrival: true,
+                    title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                    body: NotificationStrings.listenWithCost(lang, cost: cost),
+                    poiId: poi.id, guide: guideVoice, isArrival: true,
                     withListenAction: true
                 )
             }
@@ -1196,26 +1338,26 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private func showTeaserNotification(poi: Poi, distanceM: Int) {
         postNotification(
             id: "teaser_\(poi.id)",
-            title: "📍 \(poi.nome) • \(distanceM)m da te",
+            title: NotificationStrings.teaserTitle(appLanguage, name: poi.nome, meters: distanceM),
             body: poi.teaserText ?? "",
-            poiId: poi.id, guide: poi.guideDefault, timeSensitive: false
+            poiId: poi.id, guide: resolveGuideVoice(fallback: poi.guideDefault), timeSensitive: false
         )
     }
 
     private func showDiscoveryNotification(poi: Poi) {
         postNotification(
             id: "gem_\(poi.id)",
-            title: "💎 Nuova Gemma Scoperta!",
-            body: "\(poi.nome) è nelle vicinanze. Scoprila ora.",
-            poiId: poi.id, guide: poi.guideDefault, timeSensitive: false
+            title: NotificationStrings.gemTitle(appLanguage),
+            body: NotificationStrings.gemBody(appLanguage, name: poi.nome),
+            poiId: poi.id, guide: resolveGuideVoice(fallback: poi.guideDefault), timeSensitive: false
         )
     }
 
     private func showCheckInNotification(poiId: String) {
         postNotification(
             id: "checkin",
-            title: "Tappa completata! ✅",
-            body: "Vuoi passare alla prossima destinazione?",
+            title: NotificationStrings.checkInTitle(appLanguage),
+            body: NotificationStrings.checkInBody(appLanguage),
             poiId: poiId, guide: "", timeSensitive: true, isCheckIn: true
         )
     }
@@ -1333,7 +1475,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             ?? store.getPoi(poiId)
             ?? store.getOfflinePoi(poiId)?.toPoi()
         let lang = appLanguage
-        let guideCharacter = poi?.guideDefault ?? "nicky"
+        // Personaggio scelto dall'utente, default del POI come riserva
+        let guideCharacter = resolveGuideVoice(fallback: poi?.guideDefault ?? "nicky")
         let isGem = poi?.isGem ?? false
 
         let alreadyPurchased = ListeningHistoryStore.shared.isAlreadyPurchased(poiId)
@@ -1392,19 +1535,19 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             case "day_pass":
                 let used = self.prefs.integer(forKey: "daypass_used")
                 let cap = self.prefs.integer(forKey: "daypass_cap")
-                receipt = "Audioguida in riproduzione · 🎫 Pass: \(max(0, cap - used))/\(cap) rimaste"
+                receipt = NotificationStrings.receiptDayPass(lang, remaining: max(0, cap - used), cap: cap)
             case "per_listen":
                 let remaining = BillingLogic.remainingOffline(
                     snapshotCredits: self.prefs.integer(forKey: "wallet_snapshot_credits"),
                     pendingSpendCredits: self.store.pendingSpendCredits()
                 )
-                receipt = "Audioguida in riproduzione · \(BillingLogic.defaultGuideCost) crediti usati, saldo \(remaining)"
+                receipt = NotificationStrings.receiptPerListen(lang, cost: BillingLogic.defaultGuideCost, remaining: remaining)
             default:
-                receipt = "Audioguida in riproduzione · già tua, nessun addebito"
+                receipt = NotificationStrings.receiptPurchased(lang)
             }
             self.postNotification(
-                id: "poi_\(poiId)", title: poi?.nome ?? "Audioguida", body: receipt,
-                poiId: poiId, guide: poi?.guideDefault ?? "nicky", timeSensitive: false
+                id: "poi_\(poiId)", title: poi?.nome ?? NotificationStrings.audioguideFallbackTitle(lang), body: receipt,
+                poiId: poiId, guide: guideCharacter, timeSensitive: false
             )
         }
 
@@ -1413,7 +1556,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // testo offline è usato SOLO se il pacchetto è nella lingua dell'utente
         // (mono-lingua): altrimenti nil e si scende alla fetch cloud tradotta.
         let localText = store.getOfflineAudioText(poiId, lang: lang)
-        if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang) {
+        if let cachedMp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang, character: guideCharacter) {
             play(localText, cachedMp3.path)
         } else if let localText = localText, !localText.isEmpty {
             if isOnline {
@@ -1452,21 +1595,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// L'azione è partita da una notifica: anche il suo esito negativo deve
     /// essere una notifica (l'utente non sta guardando nient'altro).
     private func notifyListenFailed(poi: Poi?, poiId: String, reason: String) {
-        let name = poi?.nome ?? "questo luogo"
-        let body: String
-        switch reason {
-        case "insufficient_credits":
-            body = "Crediti esauriti: apri l'app per ricaricare e ascoltare \(name)."
-        case "offline_no_text":
-            body = "Audioguida di \(name) non disponibile offline. Riprova quando torna la rete."
-        case "service_off":
-            body = "Audioguida disattivata: tocca per aprire l'app e riattivarla."
-        default:
-            body = "Audioguida di \(name) non ancora pronta. Tocca per aprirla nell'app."
-        }
+        let lang = appLanguage
+        let name = poi?.nome ?? NotificationStrings.thisPlace(lang)
         postNotification(
-            id: "listen_fail_\(poiId)", title: "Audioguida non avviata", body: body,
-            poiId: poiId, guide: poi?.guideDefault ?? "nicky", timeSensitive: true
+            id: "listen_fail_\(poiId)",
+            title: NotificationStrings.listenFailedTitle(lang),
+            body: NotificationStrings.listenFailedBody(lang, reason: reason, name: name),
+            poiId: poiId, guide: resolveGuideVoice(fallback: poi?.guideDefault ?? "nicky"), timeSensitive: true
         )
     }
 
@@ -1477,8 +1612,21 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Dall'hardening di agosto 2026 la rotta rifiuta le chiamate anonime
+        // (403): senza il token dell'utente questo prefetch non ha mai generato
+        // un teaser, e nessuno se ne accorgeva perche' la risposta non veniva
+        // letta. Stesso token usato per /api/poi/audioguide.
+        if let token = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken), !token.isEmpty {
+            req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["poiIds": poiIds, "lang": appLanguage])
-        URLSession.shared.dataTask(with: req).resume()
+        URLSession.shared.dataTask(with: req) { _, response, error in
+            if let error = error {
+                NSLog("[WIP] batch-teaser: errore di rete \(error.localizedDescription)")
+            } else if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                NSLog("[WIP] batch-teaser: HTTP \(http.statusCode) per \(poiIds.count) POI (403 = manca il token utente)")
+            }
+        }.resume()
     }
 
     // MARK: - Eventi verso il plugin

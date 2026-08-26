@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState } from 'react';
 import LoadingQuiz from './LoadingQuiz';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Download, RefreshCw, AlertTriangle, Star, Loader2 } from 'lucide-react';
@@ -31,16 +31,12 @@ interface PremiumGuideModalProps {
 
 type Phase = 'select_style' | 'generating' | 'preview' | 'error';
 
-const STYLES: GuideStyle[] = ['art', 'family', 'shopping', 'food', 'essential'];
+/** Lingua della sintesi vocale del podcast della guida (era IT/EN soltanto). */
+const UTTERANCE_LANG: Record<string, string> = {
+  IT: 'it-IT', EN: 'en-US', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
+};
 
-const GENERATION_STEPS = [
-  'Analisi fonti certificate...',
-  'Ricerca e validazione locali...',
-  'Elaborazione creativa della Guida...',
-  'Verifica dei contenuti storici...',
-  'Recupero immagini ufficiali...',
-  'Impaginazione PDF editoriale in corso...'
-];
+const STYLES: GuideStyle[] = ['art', 'family', 'shopping', 'food', 'essential'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function PremiumGuideModal({
@@ -60,10 +56,8 @@ export default function PremiumGuideModal({
   const [isEpubLoading, setIsEpubLoading]   = useState(false);
   // Dedica regalo (opzionale): finisce in copertina, costo invariato
   const [dedica, setDedica]                 = useState('');
-  const [stepIndex, setStepIndex]           = useState(0);
   const [isPremiumUser, setIsPremiumUser]   = useState<boolean | null>(null);
   const [creditsLeft, setCreditsLeft]       = useState<number | null>(null);
-  const stepIntervalRef                     = useRef<ReturnType<typeof setInterval> | null>(null);
   const PDF_CONTAINER_ID = 'premium-guide-pdf-container';
   
   const creditConfirm = useCreditConfirmation();
@@ -79,20 +73,8 @@ export default function PremiumGuideModal({
     })();
   }, [userId]);
 
-  // ── Animated step cycling during generation ────────────────────────────────
-  const startStepCycle = useCallback(() => {
-    setStepIndex(0);
-    stepIntervalRef.current = setInterval(() => {
-      setStepIndex(prev => (prev + 1) % GENERATION_STEPS.length);
-    }, 2800);
-  }, []);
-
-  const stopStepCycle = useCallback(() => {
-    if (stepIntervalRef.current) {
-      clearInterval(stepIntervalRef.current);
-      stepIntervalRef.current = null;
-    }
-  }, []);
+  // (Le frasi di attesa italiane fisse e il loro ciclo sono stati tolti:
+  // la fase 'generating' mostra LoadingQuiz, già multilingua.)
 
   // ── Main generation handler ────────────────────────────────────────────────
   const handleGenerate = async () => {
@@ -102,11 +84,10 @@ export default function PremiumGuideModal({
     const numDaysPremium = itinerary?.giorni?.length || 1;
     const premiumCost = PRICING_LIST.premium_guide_daily * numDaysPremium;
     
-    const confirmed = await creditConfirm.requestConfirmation(premiumCost, `Guida Premium PDF (${numDaysPremium} giorni)`);
+    const confirmed = await creditConfirm.requestConfirmation(premiumCost, `${getTranslation('premium_guide_title', language)} (${numDaysPremium} ${getTranslation('giorni', language)})`);
     if (!confirmed) return;
-    
+
     setPhase('generating');
-    startStepCycle();
 
     try {
       setStreamingText('');
@@ -123,7 +104,6 @@ export default function PremiumGuideModal({
         throw new Error('GUIDE_INCOMPLETE');
       }
 
-      stopStepCycle();
       setGuideContent(result.content);
       setMediaManifest(result.media_manifest);
       setGuideHash(result.hash);
@@ -131,12 +111,13 @@ export default function PremiumGuideModal({
       // Il saldo è cambiato lato server: aggiorna le viste che mostrano i crediti.
       notifyCreditsChanged({ userId });
     } catch (err: any) {
-      stopStepCycle();
       const msg = err?.message || '';
       if (msg === 'INSUFFICIENT_CREDITS') {
         setErrorMsg(getTranslation('err_insufficient_credits', language));
       } else if (msg === 'QUOTA_EXCEEDED') {
         setErrorMsg(getTranslation('premium_guide_quota_exceeded', language));
+      } else if (msg === 'UNAUTHORIZED' || msg === 'LOGIN_REQUIRED') {
+        setErrorMsg(getTranslation('err_login_required', language));
       } else {
         setErrorMsg(getTranslation('premium_guide_error', language));
       }
@@ -153,7 +134,7 @@ export default function PremiumGuideModal({
 
   const handleShareGuide = async () => {
     if (!guideContent) return;
-    const shareText = `Guarda la mia fantastica Guida Premium per ${guideContent.guida_titolo} creata con Italia in Tasca! 🌍📖`;
+    const shareText = `${getTranslation('premium_guide_share_text', language)} ${guideContent.guida_titolo} — WIP 🌍📖`;
     const shareUrl = window.location.href; // O il link generato del PDF se salvato
     if (navigator.share) {
       try {
@@ -167,7 +148,7 @@ export default function PremiumGuideModal({
       }
     } else {
       navigator.clipboard.writeText(shareText + " " + shareUrl);
-      notify("Link copiato negli appunti!");
+      notify(getTranslation('link_copied', language));
     }
   };
 
@@ -178,7 +159,7 @@ export default function PremiumGuideModal({
     // prima era gratuito e illimitato solo perché chiamato da qui.
     const confirmed = await creditConfirm.requestConfirmation(
       PRICING_LIST.podcast_daily,
-      language === 'IT' ? 'Podcast della Guida' : 'Guide Podcast'
+      getTranslation('premium_guide_podcast', language)
     );
     if (!confirmed) return;
 
@@ -213,7 +194,7 @@ export default function PremiumGuideModal({
         if ('speechSynthesis' in window) {
           window.speechSynthesis.cancel();
           const utterance = new SpeechSynthesisUtterance(data.text);
-          utterance.lang = language === 'EN' ? 'en-US' : 'it-IT';
+          utterance.lang = UTTERANCE_LANG[String(language).toUpperCase()] || 'it-IT';
           utterance.onend = () => setPlayingPodcast(false);
           utterance.onerror = () => setPlayingPodcast(false);
           window.speechSynthesis.speak(utterance);
@@ -224,9 +205,7 @@ export default function PremiumGuideModal({
     } catch (e) {
       console.error(e);
       setPlayingPodcast(false);
-      notify(language === 'IT'
-        ? "Errore nella generazione del podcast. Nessun credito è stato scalato."
-        : "Podcast generation failed. No credits were charged.");
+      notify(getTranslation('podcast_generation_failed', language), 'error');
     }
   };
 
@@ -236,10 +215,11 @@ export default function PremiumGuideModal({
     setIsEpubLoading(true);
     try {
       const ok = await downloadGuideAsEpub(guideHash, guideContent.guida_titolo, language);
-      if (!ok) notify(language === 'IT' ? 'Export EPUB non riuscito. Riprova.' : 'EPUB export failed. Retry.');
+      if (!ok) notify(getTranslation('epub_export_failed', language), 'error');
+      else notify(getTranslation('file_saved', language), 'success');
     } catch (e) {
       console.error('[PremiumGuide] EPUB export failed:', e);
-      notify(language === 'IT' ? 'Export EPUB non riuscito. Riprova.' : 'EPUB export failed. Retry.');
+      notify(getTranslation('epub_export_failed', language), 'error');
     } finally {
       setIsEpubLoading(false);
     }
@@ -255,6 +235,8 @@ export default function PremiumGuideModal({
         // Upload in background (non-blocking)
         uploadPdfToStorage(guideHash, pdfBlob).catch(console.error);
       }
+      // Toast SOLO a salvataggio reale (null = fallito o stampa del browser)
+      if (pdfBlob) notify(getTranslation('file_saved', language), 'success');
     } finally {
       setIsDownloading(false);
     }
@@ -371,18 +353,18 @@ export default function PremiumGuideModal({
                 {/* Dedica regalo (opzionale): versione stampabile/condivisibile */}
                 <div className="mt-5">
                   <label className="block text-xs font-black text-[#1e3a8a] mb-1.5">
-                    🎁 Dedica (opzionale)
+                    🎁 {getTranslation('dedication_optional', language)}
                   </label>
                   <input
                     type="text"
                     value={dedica}
                     onChange={(e) => setDedica(e.target.value)}
                     maxLength={300}
-                    placeholder='Es. "A Maria, per i tuoi 50 anni — Fabrizio"'
+                    placeholder={getTranslation('dedication_placeholder', language)}
                     className="w-full px-4 py-3 rounded-2xl border-2 border-outline-variant bg-[#f8f5f0] text-sm text-[#1e3a8a] placeholder:text-[#1e3a8a]/40 focus:border-primary focus:outline-none transition-colors"
                   />
                   <p className="text-[10px] text-[#1e3a8a]/50 mt-1">
-                    Appare in copertina con stile elegante: perfetta per la guida-regalo. Costo invariato.
+                    {getTranslation('dedication_hint', language)}
                   </p>
                 </div>
 
@@ -403,7 +385,7 @@ export default function PremiumGuideModal({
             {/* ── PHASE: generating ── */}
             {phase === 'generating' && (
               <LoadingQuiz 
-                destination={itinerary.city || 'questa città'} 
+                destination={itinerary.city || itinerary.destinazione || itinerary.titolo || ''} 
                 quizLength={8} 
                 userId={userId} 
                 language={language} 
@@ -417,14 +399,14 @@ export default function PremiumGuideModal({
                   <AlertTriangle className="w-8 h-8 text-red-500" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-[#1e3a8a] mb-2">Oops!</h3>
+                  <h3 className="text-base font-black text-[#1e3a8a] mb-2">{getTranslation('oops', language)}</h3>
                   <p className="text-sm text-[#1e3a8a] max-w-xs leading-relaxed">{errorMsg}</p>
                 </div>
                 <button
                   onClick={handleRegenerate}
                   className="px-6 py-3 rounded-2xl border-2 border-primary text-primary font-bold text-sm hover:bg-primary/5 transition-colors"
                 >
-                  Torna indietro
+                  {getTranslation('go_back', language)}
                 </button>
               </div>
             )}
@@ -443,7 +425,7 @@ export default function PremiumGuideModal({
                     <button
                       onClick={() => handleShareGuide()}
                       className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
-                      title="Condividi Guida"
+                      title={getTranslation('share_guide', language)}
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
                     </button>
@@ -451,7 +433,7 @@ export default function PremiumGuideModal({
                       onClick={handlePlayGuidePodcast}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary/10 text-primary text-xs font-black shadow-sm hover:bg-primary/20 transition-all"
                     >
-                      {playingPodcast ? "In riproduzione" : "🎧 Podcast"}
+                      {playingPodcast ? getTranslation('playing', language) : '🎧 Podcast'}
                     </button>
                     {/* EPUB gratuito: la guida esiste già, niente nuovo addebito */}
                     {guideHash && (
@@ -459,7 +441,7 @@ export default function PremiumGuideModal({
                         onClick={handleDownloadEpub}
                         disabled={isEpubLoading}
                         className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary/10 text-primary text-xs font-black shadow-sm hover:bg-primary/20 transition-all disabled:opacity-60"
-                        title="Scarica la guida in formato EPUB (gratuito)"
+                        title={getTranslation('epub_download_hint', language)}
                       >
                         {isEpubLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '📖'} EPUB
                       </button>

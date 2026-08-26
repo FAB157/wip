@@ -101,5 +101,17 @@ export function usePredictiveDownload() {
 
   const closeBundle = () => setBundleState(prev => ({ ...prev, isOpen: false }));
 
-  return { bundleState, closeBundle, triggerBundleCheck };
+  /**
+   * Apertura ESPLICITA dell'offerta, fuori dal throttle: la chiede chi ha
+   * appena sbattuto contro il cancello (il giro Dieci Tappe dal radar, 402
+   * PASS_RICHIESTO). Evento `wip-open-daypass` {detail:{city?}} — App.tsx lo
+   * ascolta. Se il pass e' gia' attivo non si apre nulla.
+   */
+  const openOffer = async (city?: string) => {
+    const pass = await getDayPassState().catch(() => null);
+    if (pass?.active) return;
+    setBundleState(prev => ({ ...prev, isOpen: true, city: city || prev.city || 'questa zona' }));
+  };
+
+  return { bundleState, closeBundle, triggerBundleCheck, openOffer };
 }

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { 
-  BarChart3, Calendar, Database, Eye, RefreshCw, Users, FileText, 
-  MapPin, Brain, Headphones, Globe, Activity, TrendingUp, AlertCircle 
+import {
+  BarChart3, Calendar, Database, Eye, RefreshCw, Users, FileText,
+  MapPin, Brain, Headphones, Globe, Activity, TrendingUp, AlertCircle,
+  ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 
 interface ApiLogGroup {
@@ -12,6 +13,12 @@ interface ApiLogGroup {
   tokens_used?: number;
   contexts: Record<string, number>;
 }
+
+// Tetto di righe caricate dalle due liste di dettaglio. shared_pois ha ~2,4
+// milioni di righe: senza limite (e senza paginazione) il browser si piantava
+// appena si sceglieva un periodo ampio.
+const MAX_RIGHE_LISTA = 500;
+const RIGHE_PER_PAGINA = 50;
 
 export default function AdminCounters() {
   const [filterType, setFilterType] = useState<'today' | 'month' | 'custom'>('month');
@@ -26,7 +33,11 @@ export default function AdminCounters() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isTableMissing, setIsTableMissing] = useState(false);
+  // Motivo per cui la telemetria non e' leggibile (tabella assente, RLS, rete).
+  // Prima al posto di questo c'era un flag che faceva scattare una serie di
+  // numeri demo inventati: in un pannello di controllo un dato falso e' molto
+  // peggio di nessun dato, perche' l'admin ci prende decisioni.
+  const [logsError, setLogsError] = useState<string | null>(null);
 
   // Stats States
   const [apiLogs, setApiLogs] = useState<ApiLogGroup[]>([]);
@@ -45,14 +56,40 @@ export default function AdminCounters() {
   });
   const [enrichedSample, setEnrichedSample] = useState<any[]>([]);
   const [seededSample, setSeededSample] = useState<any[]>([]);
+  // Totale STIMATO delle due liste (count 'planned'): serve solo a dichiarare
+  // in chiaro quando quello che si vede e' un troncamento.
+  const [enrichedTotal, setEnrichedTotal] = useState<number | null>(null);
+  const [seededTotal, setSeededTotal] = useState<number | null>(null);
+  const [enrichedPage, setEnrichedPage] = useState(0);
+  const [seededPage, setSeededPage] = useState(0);
+  // Filtro di stato acceso dalle card contatore cliccabili.
+  const [listFilter, setListFilter] = useState<'approvati' | 'draft' | null>(null);
+  const enrichedRef = useRef<HTMLDivElement | null>(null);
+  const seededRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     fetchStats();
   }, [filterType, startDate, endDate]);
 
+  // Cambiando filtro si riparte da pagina 1, altrimenti si resta su una
+  // pagina che nel nuovo insieme filtrato non esiste piu'.
+  useEffect(() => {
+    setEnrichedPage(0);
+    setSeededPage(0);
+  }, [listFilter]);
+
+  /** Porta la lista in vista e ci applica il filtro di stato della card. */
+  const apriLista = (quale: 'enriched' | 'seeded', filtro: 'approvati' | 'draft' | null) => {
+    setListFilter(filtro);
+    const target = quale === 'enriched' ? enrichedRef.current : seededRef.current;
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const fetchStats = async () => {
     setIsLoading(true);
     setErrorMsg(null);
+    setEnrichedPage(0);
+    setSeededPage(0);
 
     // Compute Date Range Boundaries
     let startIso = '';
@@ -95,54 +132,6 @@ export default function AdminCounters() {
     }
   };
 
-  const loadSeedLogs = () => {
-    const seedLogs: ApiLogGroup[] = [
-      {
-        apiName: 'google_places',
-        total: 1420,
-        contexts: { 'mappa_ricerca_locali': 1120, 'dettaglio_enrich_indirizzo': 300 }
-      },
-      {
-        apiName: 'mapbox',
-        total: 1350,
-        contexts: { 'geocoding_ricerca': 800, 'routing_itinerari': 550 }
-      },
-      {
-        apiName: 'overpass',
-        total: 980,
-        contexts: { 'mappa_ricerca_nodi': 980 }
-      },
-      {
-        apiName: 'ticketmaster',
-        total: 350,
-        contexts: { 'ricerca_eventi_api': 350 }
-      },
-      {
-        apiName: 'gemini',
-        total: 215,
-        contexts: { 'scansione_fotocamera': 84, 'fallback_itinerari': 131 }
-      },
-      {
-        apiName: 'groq_llama',
-        total: 125,
-        tokens_used: 1250000,
-        contexts: { 'generazione_itinerari': 75, 'arricchimento_poi': 50 }
-      },
-      {
-        apiName: 'groq_mixtral',
-        total: 325,
-        tokens_used: 325000,
-        contexts: { 'generazione_itinerari': 125, 'guida_premium_intro': 200 }
-      },
-      {
-        apiName: 'azure',
-        total: 210,
-        contexts: { 'sintesi_vocale_tts': 210 }
-      }
-    ];
-    setApiLogs(seedLogs);
-  };
-
   const fetchApiUsageLogs = async (start: string, end: string) => {
     try {
       let allData: any[] = [];
@@ -160,8 +149,9 @@ export default function AdminCounters() {
 
         if (error) {
           console.warn('[Analytics] Telemetry logs table missing or query failed:', error.message);
-          loadSeedLogs();
-          setIsTableMissing(true);
+          // Nessun dato inventato: si azzera la lista e si dichiara il motivo.
+          setApiLogs([]);
+          setLogsError(error.message || 'errore sconosciuto sulla tabella api_usage_logs');
           return;
         }
 
@@ -200,73 +190,100 @@ export default function AdminCounters() {
       })).sort((a, b) => b.total - a.total);
 
       setApiLogs(aggregated);
-      setIsTableMissing(false);
-    } catch (err) {
+      setLogsError(null);
+    } catch (err: any) {
       console.warn('[Analytics] fetchApiUsageLogs catch exception:', err);
-      loadSeedLogs();
-      setIsTableMissing(true);
+      setApiLogs([]);
+      setLogsError(err?.message || 'eccezione durante la lettura della telemetria');
     }
   };
 
   const fetchEnrichedSample = async (start: string, end: string) => {
     try {
-      // Fetch 5 recently enriched POIs
-      const { data, error } = await supabase
+      // Prima qui c'era .limit(999999) e la lista veniva stampata INTERA:
+      // su un periodo ampio significava decine di migliaia di nodi nel DOM.
+      // Ora si caricano al massimo MAX_RIGHE_LISTA righe e si impagina.
+      // count 'planned' e non 'exact': su shared_pois (~2,4 M righe) un count
+      // esatto e' una scansione completa e il 18/08/2026 ha messo in ginocchio
+      // Supabase in produzione. Il numero e' una stima e la UI lo dichiara.
+      const { data, error, count } = await supabase
         .from('shared_pois')
-        .select('name, category, description_ai, description_short, description_long, updated_at, created_at, status')
+        .select('name, category, description_ai, description_short, description_long, updated_at, created_at, status', { count: 'planned' })
         .not('description_ai', 'is', null)
         .neq('description_ai', '')
         .gte('updated_at', start)
         .lte('updated_at', end)
         .order('updated_at', { ascending: false })
         .order('created_at', { ascending: false })
-        .limit(999999);
-        
+        .limit(MAX_RIGHE_LISTA);
+
       if (error) {
         console.warn('[AdminCounters] fetchEnrichedSample error:', error);
         setEnrichedSample([]);
+        setEnrichedTotal(null);
         return;
       }
       setEnrichedSample(data || []);
+      setEnrichedTotal(typeof count === 'number' ? count : null);
     } catch (err) {
       console.warn('[AdminCounters] fetchEnrichedSample catch:', err);
       setEnrichedSample([]);
+      setEnrichedTotal(null);
     }
   };
 
   const fetchSeededSample = async (start: string, end: string) => {
     try {
-      const { data, error } = await supabase
+      // Stesso trattamento della lista arricchiti: qui mancava del tutto un
+      // limite. L'.order('created_at') era anche ripetuto due volte identico.
+      const { data, error, count } = await supabase
         .from('shared_pois')
-        .select('name, category, created_at, status')
+        .select('name, category, created_at, status', { count: 'planned' })
         .or('description_ai.is.null,description_ai.eq.""')
         .gte('created_at', start)
         .lte('created_at', end)
         .order('created_at', { ascending: false })
-        .order('created_at', { ascending: false });
-        
+        .limit(MAX_RIGHE_LISTA);
+
       if (error) {
         console.warn('[AdminCounters] fetchSeededSample error:', error);
         setSeededSample([]);
+        setSeededTotal(null);
         return;
       }
       setSeededSample(data || []);
+      setSeededTotal(typeof count === 'number' ? count : null);
     } catch (err) {
       console.warn('[AdminCounters] fetchSeededSample catch:', err);
       setSeededSample([]);
+      setSeededTotal(null);
     }
   };
 
   const fetchDatabaseCounters = async (start: string, end: string) => {
     // Ritorna null (NON 0) quando la query fallisce: un errore RLS/permessi
     // non deve mascherarsi da "0 utenti". La UI mostra "—" per il null.
-    const fetchCount = async (table: string, builderModifier?: (query: any) => any): Promise<number | null> => {
+    //
+    // modo: 'exact' conta riga per riga, 'planned' chiede la stima al planner.
+    // Su shared_pois (~2,4 MILIONI di righe) l'exact e' VIETATO: obbliga
+    // Postgres a una scansione completa e il 18/08/2026 una diagnostica di
+    // questo tipo ha abbattuto Supabase in produzione, login compreso. Tutti i
+    // conteggi su shared_pois usano quindi 'planned' (numero approssimato, la
+    // card lo segnala con "≈"). Sulle tabelle piccole - user_profiles,
+    // user_quotas, user_itineraries, api_cache - l'exact resta corretto.
+    const fetchCount = async (
+      table: string,
+      builderModifier?: (query: any) => any,
+      modo: 'exact' | 'planned' = 'exact'
+    ): Promise<number | null> => {
       try {
-        let query = supabase.from(table).select('*', { count: 'exact', head: true });
+        let query = supabase.from(table).select('*', { count: modo, head: true });
         if (builderModifier) {
           query = builderModifier(query);
         }
-        const res = await query;
+        // Limite sempre presente: anche in head:true evita che una modifica
+        // futura si porti dietro l'intero risultato.
+        const res = await query.limit(1);
         if (res.error) throw res.error;
         return res.count || 0;
       } catch (err: any) {
@@ -299,12 +316,13 @@ export default function AdminCounters() {
         }
         return c;
       })(),
-      fetchCount('shared_pois'),
-      fetchCount('shared_pois', (q) => q.in('status', ['verified', 'auto'])),
-      fetchCount('shared_pois', (q) => q.eq('is_gem', true)),
-      fetchCount('shared_pois', (q) => q.eq('status', 'draft')),
-      fetchCount('shared_pois', (q) => q.gte('created_at', start).lte('created_at', end)),
-      fetchCount('shared_pois', (q) => q.not('description_ai', 'is', null).gte('updated_at', start).lte('updated_at', end)),
+      // Tutti i conteggi su shared_pois: 'planned' obbligatorio (vedi sopra).
+      fetchCount('shared_pois', undefined, 'planned'),
+      fetchCount('shared_pois', (q) => q.in('status', ['verified', 'auto']), 'planned'),
+      fetchCount('shared_pois', (q) => q.eq('is_gem', true), 'planned'),
+      fetchCount('shared_pois', (q) => q.eq('status', 'draft'), 'planned'),
+      fetchCount('shared_pois', (q) => q.gte('created_at', start).lte('created_at', end), 'planned'),
+      fetchCount('shared_pois', (q) => q.not('description_ai', 'is', null).gte('updated_at', start).lte('updated_at', end), 'planned'),
       (async () => {
         let c = await fetchCount('shared_poi_audio_cache', (q) =>
           q.not('generated_text', 'is', null).gte('created_at', start).lte('created_at', end));
@@ -328,6 +346,21 @@ export default function AdminCounters() {
       gemPoisCount
     });
   };
+
+  // Filtro di stato acceso dalle card cliccabili (POI Approvati / POI Bozza).
+  const passaFiltro = (stato: string | null | undefined) => {
+    if (!listFilter) return true;
+    if (listFilter === 'approvati') return stato === 'verified' || stato === 'auto';
+    return stato === 'draft';
+  };
+  const etichettaFiltro = listFilter === 'approvati'
+    ? 'solo approvati (verified/auto)'
+    : listFilter === 'draft' ? 'solo bozze (draft)' : '';
+
+  const enrichedFiltrati = enrichedSample.filter(p => passaFiltro(p.status));
+  const seededFiltrati = seededSample.filter(p => passaFiltro(p.status));
+  const enrichedPagina = enrichedFiltrati.slice(enrichedPage * RIGHE_PER_PAGINA, (enrichedPage + 1) * RIGHE_PER_PAGINA);
+  const seededPagina = seededFiltrati.slice(seededPage * RIGHE_PER_PAGINA, (seededPage + 1) * RIGHE_PER_PAGINA);
 
   return (
     <div className="space-y-6 bg-surface rounded-3xl p-2 sm:p-4 animate-in fade-in duration-300">
@@ -389,14 +422,25 @@ export default function AdminCounters() {
         )}
       </div>
 
-      {isTableMissing && (
-        <div className="p-4 bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100 flex items-start gap-3 text-xs font-medium transition-all animate-in slide-in-from-top duration-300">
-          <span className="text-lg">💡</span>
-          <div>
-            <p className="font-black mb-1 text-emerald-950">Attivazione Telemetria in Tempo Reale</p>
+      {logsError && (
+        <div className="p-4 bg-red-50 text-red-800 rounded-2xl border border-red-100 flex items-start gap-3 text-xs font-medium transition-all animate-in slide-in-from-top duration-300">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-black mb-1 text-red-950">Telemetria non leggibile</p>
             <p className="opacity-90 leading-relaxed">
-              Per tracciare i consumi reali delle chiamate API esterne, esegui lo script SQL fornito (in fondo al file <code className="bg-emerald-100/50 px-1 rounded font-bold">schema.sql</code>) nel tuo editor SQL di Supabase. Fino ad allora, verranno mostrati dati dimostrativi di esempio.
+              Motivo: <span className="font-bold">{logsError}</span>.
+              Nessun consumo API viene mostrato finche' la tabella{' '}
+              <code className="bg-red-100/60 px-1 rounded font-bold">api_usage_logs</code> non e' leggibile
+              (creala con lo script SQL in fondo a <code className="bg-red-100/60 px-1 rounded font-bold">schema.sql</code> e verifica le policy RLS).
             </p>
+            <button
+              onClick={fetchStats}
+              disabled={isLoading}
+              className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-900 rounded-xl text-[11px] font-black uppercase tracking-wider disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
+              Riprova
+            </button>
           </div>
         </div>
       )}
@@ -419,35 +463,45 @@ export default function AdminCounters() {
           loading={isLoading}
           bg="bg-blue-50/50"
         />
-        <CounterCard 
-          icon={<MapPin className="w-4 h-4 text-indigo-600" />} 
-          label="POI Totali nel Database" 
-          value={dbCounts.poisCount} 
+        <CounterCard
+          icon={<MapPin className="w-4 h-4 text-indigo-600" />}
+          label="POI Totali nel Database"
+          value={dbCounts.poisCount}
           loading={isLoading}
           bg="bg-indigo-50/50"
+          stima
         />
-        <CounterCard 
-          icon={<Eye className="w-4 h-4 text-teal-600" />} 
-          label="Nuovi POI (Periodo)" 
-          value={dbCounts.newPoisCount} 
+        <CounterCard
+          icon={<Eye className="w-4 h-4 text-teal-600" />}
+          label="Nuovi POI (Periodo)"
+          value={dbCounts.newPoisCount}
           loading={isLoading}
           bg="bg-teal-50/50"
+          stima
+          onClick={() => apriLista('seeded', null)}
+          hint="Apre la lista dei POI da seeding del periodo"
         />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-        <CounterCard 
-          icon={<Globe className="w-4 h-4 text-green-600" />} 
-          label="POI Approvati ✅" 
-          value={dbCounts.approvedPoisCount} 
+        <CounterCard
+          icon={<Globe className="w-4 h-4 text-green-600" />}
+          label="POI Approvati ✅"
+          value={dbCounts.approvedPoisCount}
           loading={isLoading}
           bg="bg-green-50/50"
+          stima
+          onClick={() => apriLista('enriched', 'approvati')}
+          hint="Filtra la lista arricchiti sui soli approvati (verified/auto)"
         />
-        <CounterCard 
-          icon={<Database className="w-4 h-4 text-orange-500" />} 
-          label="POI Bozza 🚧" 
-          value={dbCounts.draftPoisCount} 
+        <CounterCard
+          icon={<Database className="w-4 h-4 text-orange-500" />}
+          label="POI Bozza 🚧"
+          value={dbCounts.draftPoisCount}
           loading={isLoading}
           bg="bg-orange-50/50"
+          stima
+          onClick={() => apriLista('seeded', 'draft')}
+          hint="Filtra la lista da seeding sulle sole bozze"
         />
         <CounterCard 
           icon={<Activity className="w-4 h-4 text-rose-500" />} 
@@ -465,21 +519,25 @@ export default function AdminCounters() {
         />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
-        <CounterCard 
-          icon={<AlertCircle className="w-4 h-4 text-amber-500" />} 
-          label="Gemme Totali ⭐" 
-          value={dbCounts.gemPoisCount} 
+        <CounterCard
+          icon={<AlertCircle className="w-4 h-4 text-amber-500" />}
+          label="Gemme Totali ⭐"
+          value={dbCounts.gemPoisCount}
           loading={isLoading}
           bg="bg-yellow-50/50"
+          stima
         />
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <CounterCard 
-          icon={<Brain className="w-4 h-4 text-purple-600" />} 
-          label="POI con Descrizione AI" 
-          value={dbCounts.aiPoisCount} 
+        <CounterCard
+          icon={<Brain className="w-4 h-4 text-purple-600" />}
+          label="POI con Descrizione AI"
+          value={dbCounts.aiPoisCount}
           loading={isLoading}
           bg="bg-purple-50/50"
+          stima
+          onClick={() => apriLista('enriched', null)}
+          hint="Apre la lista dei POI arricchiti nel periodo"
         />
         <CounterCard 
           icon={<Headphones className="w-4 h-4 text-amber-600" />} 
@@ -505,8 +563,18 @@ export default function AdminCounters() {
         {apiLogs.length === 0 ? (
           <div className="py-12 text-center text-on-surface-variant opacity-60">
             <Globe className="w-8 h-8 mx-auto mb-3 opacity-30" />
-            <p className="font-bold text-sm">Nessuna chiamata API registrata</p>
-            <p className="text-xs mt-1">Non sono state rilevate chiamate API esterne nel periodo selezionato.</p>
+            {logsError ? (
+              <>
+                <p className="font-bold text-sm">Telemetria non leggibile</p>
+                <p className="text-xs mt-1">{logsError}</p>
+                <p className="text-xs mt-1">Nessun numero viene mostrato: meglio il vuoto di un dato inventato.</p>
+              </>
+            ) : (
+              <>
+                <p className="font-bold text-sm">Nessuna chiamata API registrata</p>
+                <p className="text-xs mt-1">Non sono state rilevate chiamate API esterne nel periodo selezionato.</p>
+              </>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -554,11 +622,12 @@ export default function AdminCounters() {
                   </div>
                 </div>
 
-                <div className={`mt-4 pt-3 border-t border-outline-variant/40 flex items-center justify-between text-[9px] font-black uppercase tracking-wider ${isTableMissing ? 'text-amber-600/80' : 'text-on-surface-variant/60'}`}>
-                  {/* Sui dati seed (tabella telemetria assente) non spacciare la
-                      card per telemetria reale: etichettala come dimostrativa. */}
-                  <span>{isTableMissing ? 'DATI DIMOSTRATIVI' : 'TELEMETRIA ATTIVA'}</span>
-                  <span>{isTableMissing ? 'DEMO' : 'OK'}</span>
+                {/* Qui arrivano solo righe realmente lette da api_usage_logs:
+                    i dati dimostrativi sono stati eliminati, quando la lettura
+                    fallisce la lista resta vuota e compare l'avviso rosso. */}
+                <div className="mt-4 pt-3 border-t border-outline-variant/40 flex items-center justify-between text-[9px] font-black uppercase tracking-wider text-on-surface-variant/60">
+                  <span>TELEMETRIA ATTIVA</span>
+                  <span>OK</span>
                 </div>
               </div>
             ))}
@@ -567,22 +636,37 @@ export default function AdminCounters() {
       </div>
 
       {/* AI Enriched POIs Sample */}
-      <div className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-outline-variant pb-3">
+      <div ref={enrichedRef} className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-outline-variant pb-3">
           <h4 className="font-black text-sm text-[#8b5cf6] uppercase tracking-wider flex items-center gap-2">
             <Brain className="w-5 h-5" />
             Dettaglio POI Arricchiti di Recente
           </h4>
+          {listFilter && (
+            <button
+              onClick={() => setListFilter(null)}
+              className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-purple-50 text-purple-700 px-2 py-1 rounded-full hover:bg-purple-100"
+              title="Rimuovi il filtro di stato"
+            >
+              Filtro: {etichettaFiltro} <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
 
-        {enrichedSample.length === 0 ? (
+        <TroncamentoNota caricate={enrichedSample.length} totale={enrichedTotal} mostrate={enrichedFiltrati.length} filtrata={!!listFilter} />
+
+        {enrichedFiltrati.length === 0 ? (
           <div className="py-12 text-center text-on-surface-variant opacity-60">
             <p className="font-bold text-sm">Nessun POI arricchito di recente</p>
-            <p className="text-xs mt-1">Non ci sono nuovi arricchimenti AI nel periodo selezionato.</p>
+            <p className="text-xs mt-1">
+              {listFilter
+                ? 'Nessun POI arricchito con questo stato nel periodo selezionato.'
+                : 'Non ci sono nuovi arricchimenti AI nel periodo selezionato.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {enrichedSample.map((poi, idx) => (
+            {enrichedPagina.map((poi, idx) => (
               <div key={idx} className="p-4 bg-surface-variant rounded-2xl border border-outline-variant space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -600,27 +684,47 @@ export default function AdminCounters() {
                 </p>
               </div>
             ))}
+            <Paginatore
+              pagina={enrichedPage}
+              totaleRighe={enrichedFiltrati.length}
+              onCambia={setEnrichedPage}
+            />
           </div>
         )}
       </div>
 
       {/* Seeded POIs Sample */}
-      <div className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-outline-variant pb-3">
+      <div ref={seededRef} className="bg-surface border border-outline-variant rounded-3xl p-5 shadow-sm space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-outline-variant pb-3">
           <h4 className="font-black text-sm text-amber-600 uppercase tracking-wider flex items-center gap-2">
             <Database className="w-5 h-5" />
             Dettaglio POI da Seeding
           </h4>
+          {listFilter && (
+            <button
+              onClick={() => setListFilter(null)}
+              className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 px-2 py-1 rounded-full hover:bg-amber-100"
+              title="Rimuovi il filtro di stato"
+            >
+              Filtro: {etichettaFiltro} <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
 
-        {seededSample.length === 0 ? (
+        <TroncamentoNota caricate={seededSample.length} totale={seededTotal} mostrate={seededFiltrati.length} filtrata={!!listFilter} />
+
+        {seededFiltrati.length === 0 ? (
           <div className="py-12 text-center text-on-surface-variant opacity-60">
             <p className="font-bold text-sm">Nessun POI grezzo inserito di recente</p>
-            <p className="text-xs mt-1">L'area non ha ricevuto seeding nel periodo selezionato.</p>
+            <p className="text-xs mt-1">
+              {listFilter
+                ? 'Nessun POI grezzo con questo stato nel periodo selezionato.'
+                : "L'area non ha ricevuto seeding nel periodo selezionato."}
+            </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {seededSample.map((poi, idx) => (
+            {seededPagina.map((poi, idx) => (
               <div key={idx} className="p-4 bg-surface-variant rounded-2xl border border-outline-variant space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -636,6 +740,11 @@ export default function AdminCounters() {
                 <p className="text-xs text-amber-600 font-medium">In attesa di arricchimento AI</p>
               </div>
             ))}
+            <Paginatore
+              pagina={seededPage}
+              totaleRighe={seededFiltrati.length}
+              onCambia={setSeededPage}
+            />
           </div>
         )}
       </div>
@@ -736,21 +845,100 @@ function ExportContabileSection() {
   );
 }
 
-function CounterCard({ 
-  icon, 
-  label, 
-  value, 
+// ── NOTA DI TRONCAMENTO ─────────────────────────────────────────────
+// Dichiara apertamente quante righe si stanno vedendo rispetto a quante ne
+// esistono: una lista tagliata senza avviso fa credere all'admin che il resto
+// non esista. Il totale e' una STIMA (count 'planned' su shared_pois).
+function TroncamentoNota({
+  caricate,
+  totale,
+  mostrate,
+  filtrata
+}: {
+  caricate: number;
+  totale: number | null;
+  mostrate: number;
+  filtrata: boolean;
+}) {
+  if (caricate === 0) return null;
+  const troncata = caricate >= MAX_RIGHE_LISTA;
+  return (
+    <div className="text-[11px] font-bold text-on-surface-variant/70 bg-surface-variant/60 rounded-xl px-3 py-2">
+      {troncata ? (
+        <>
+          Mostrate le prime {MAX_RIGHE_LISTA.toLocaleString('it-IT')} righe
+          {typeof totale === 'number' && totale > caricate
+            ? <> di circa {totale.toLocaleString('it-IT')} (stima del database)</>
+            : <> del periodo</>}: la lista e' troncata per non bloccare il browser.
+          Restringi il periodo per vedere il resto.
+        </>
+      ) : (
+        <>Caricate {caricate.toLocaleString('it-IT')} righe del periodo (nessun troncamento).</>
+      )}
+      {filtrata && <> Filtro di stato attivo: {mostrate.toLocaleString('it-IT')} righe corrispondenti.</>}
+    </div>
+  );
+}
+
+// ── PAGINATORE CLIENT ───────────────────────────────────────────────
+// 50 righe per pagina: prima le liste venivano stampate per intero.
+function Paginatore({
+  pagina,
+  totaleRighe,
+  onCambia
+}: {
+  pagina: number;
+  totaleRighe: number;
+  onCambia: (p: number) => void;
+}) {
+  const pagine = Math.ceil(totaleRighe / RIGHE_PER_PAGINA);
+  if (pagine <= 1) return null;
+  return (
+    <div className="flex items-center justify-between pt-2">
+      <button
+        onClick={() => onCambia(Math.max(0, pagina - 1))}
+        disabled={pagina === 0}
+        className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-surface-variant text-[11px] font-black uppercase tracking-wider text-primary disabled:opacity-40"
+      >
+        <ChevronLeft className="w-3.5 h-3.5" /> Precedenti
+      </button>
+      <span className="text-[11px] font-bold text-on-surface-variant/70">
+        Pagina {pagina + 1} di {pagine}
+      </span>
+      <button
+        onClick={() => onCambia(Math.min(pagine - 1, pagina + 1))}
+        disabled={pagina >= pagine - 1}
+        className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-surface-variant text-[11px] font-black uppercase tracking-wider text-primary disabled:opacity-40"
+      >
+        Successivi <ChevronRight className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function CounterCard({
+  icon,
+  label,
+  value,
   loading = false,
-  bg = "bg-surface-variant/50" 
-}: { 
-  icon: React.ReactNode; 
-  label: string; 
+  bg = "bg-surface-variant/50",
+  stima = false,
+  onClick,
+  hint
+}: {
+  icon: React.ReactNode;
+  label: string;
   value: number | null;
   loading?: boolean;
   bg?: string;
+  /** true = numero da count 'planned' (stima del planner), si mostra con "≈". */
+  stima?: boolean;
+  /** Se presente la card diventa cliccabile e porta alla lista corrispondente. */
+  onClick?: () => void;
+  hint?: string;
 }) {
-  return (
-    <div className={`p-4 rounded-2xl border border-outline-variant/10 shadow-sm ${bg} flex flex-col justify-between min-h-[100px]`}>
+  const contenuto = (
+    <>
       <div className="flex items-center justify-between">
         <div className="w-7 h-7 rounded-xl bg-surface flex items-center justify-center shadow-sm">
           {icon}
@@ -768,11 +956,29 @@ function CounterCard({
             // Conteggio non disponibile (errore/permessi): "—", non uno 0 finto.
             <span className="text-on-surface-variant/50" title="Conteggio non disponibile (errore o permessi)">—</span>
           ) : (
-            value.toLocaleString('it-IT')
+            <span title={stima ? 'Stima del database: su shared_pois (~2,4 milioni di righe) il conteggio esatto e\' proibito' : undefined}>
+              {stima && <span className="text-on-surface-variant/50">≈ </span>}
+              {value.toLocaleString('it-IT')}
+            </span>
           )}
         </p>
+        {onClick && (
+          <p className="text-[9px] font-black uppercase tracking-wider text-primary/60 mt-1">Vedi lista ↓</p>
+        )}
       </div>
-    </div>
+    </>
   );
+
+  const classi = `p-4 rounded-2xl border border-outline-variant/10 shadow-sm ${bg} flex flex-col justify-between min-h-[100px]`;
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} title={hint} className={`${classi} text-left hover:shadow-md hover:border-primary/30 transition-all cursor-pointer w-full`}>
+        {contenuto}
+      </button>
+    );
+  }
+
+  return <div className={classi}>{contenuto}</div>;
 }
 

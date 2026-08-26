@@ -15,6 +15,7 @@ import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
 import { supabase } from "../lib/supabase";
+import { puntoArrivoSuStrada } from "../lib/puntoArrivo";
 import {
   X,
   Globe,
@@ -53,6 +54,7 @@ import AttractionImage from "./AttractionImage";
 import wipLogo from '../assets/images/wip-icon.png';
 import { SUBCATEGORY_DETAILS } from "../data/subcategoryDetails";
 import ActionButton from "./ui/ActionButton";
+import NavChoiceSheet from "./NavChoiceSheet";
 
 import {
   getCachedPoiDetails,
@@ -61,7 +63,7 @@ import {
   setCachedCityName,
 } from "../lib/poiCache";
 import { Language, getTranslation } from "../lib/i18n";
-import { datiBeneCulturale } from "../lib/poiTaxonomy";
+import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from "../lib/poiTaxonomy";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -82,6 +84,28 @@ export const AFFILIATE_CONFIG = {
 // la stessa Promise e poi legge la cache, invece di uscire lasciando lo
 // spinner acceso per sempre (vecchio bug del "Caricamento dettagli..." infinito).
 const enrichmentPromises = new Map<string, Promise<void>>();
+
+/**
+ * Origine dell'ultimo trigger per POI: `manual: true` = l'utente ha premuto
+ * "Ascolta"/"Riascolta"; altrimenti e' un trigger di prossimita' (geofence,
+ * WIP Nav, giro). La scheda non riceve questa informazione via props: la
+ * legge dallo stesso evento che App.tsx usa per aprirla. Serve alla
+ * modalita' silenziosa, che vale SOLO per i play automatici.
+ */
+const ultimoTrigger: { poiId: string; manual: boolean; ts: number } = { poiId: '', manual: false, ts: 0 };
+if (typeof window !== 'undefined') {
+  window.addEventListener('wip-poi-trigger', (e: any) => {
+    const d = e?.detail || {};
+    const id = d.poiId ?? d.poi?.id;
+    if (id == null) return;
+    ultimoTrigger.poiId = String(id);
+    ultimoTrigger.manual = !!d.manual;
+    ultimoTrigger.ts = Date.now();
+  });
+}
+function triggerManualePer(poiId: string): boolean {
+  return ultimoTrigger.poiId === String(poiId) && ultimoTrigger.manual && Date.now() - ultimoTrigger.ts < 5 * 60_000;
+}
 
 // fetch con timeout: su serverless (cold start) o LLM lenti una fetch senza
 // AbortController può restare appesa per minuti e bloccare la UI.
@@ -175,6 +199,7 @@ export default function PoiDetailSheet({
 }: PoiDetailSheetProps) {
   const [nearbyPois, setNearbyPois] = useState<any[]>(propNearbyPois);
   const [showNearbyList, setShowNearbyList] = useState(false);
+  const [showNavChoice, setShowNavChoice] = useState(false);
 
   // Error Reporting State
   const [showReportModal, setShowReportModal] = useState(false);
@@ -536,6 +561,15 @@ export default function PoiDetailSheet({
     let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // MODALITA' SILENZIOSA, prima di tutto: un autoplay NON manuale (trigger
+    // di prossimita') con la silenziosa attiva non deve nemmeno arrivare al
+    // paywall — prima si apriva il modale crediti per un audio che non
+    // sarebbe mai partito. Vibrazione e basta: il testo e' nella scheda.
+    if (!triggerManualePer(poiIdStr) && locationService.isSilentModeEnabled()) {
+      try { (navigator as any).vibrate?.([200, 100, 200]); } catch { /* niente vibrazione */ }
+      return;
+    }
+
     const startPlayback = () => {
       if (cancelled || started) return;
       started = true;
@@ -560,7 +594,7 @@ export default function PoiDetailSheet({
           // Belt & braces: se la voce nativa stesse ancora parlando, la fermiamo
           // un attimo prima di partire — mai due voci sovrapposte.
           locationService.stopNativeTeaser();
-          ctx.toggleSpeech();
+          ctx.toggleSpeech(false, 'auto');
         } else if (!ctx.isLoading && !ctx.isRegenerating && !textToSpeak) {
           console.warn(`[PoiDetailSheet] AutoPlay: No text to speak found for ${poi?.name}.`);
         } else {
@@ -1271,13 +1305,21 @@ export default function PoiDetailSheet({
     };
   }, [poi, visionText, guideMode, isOnline]);
 
-  const toggleSpeech = async (forceRefresh = false) => {
+  const toggleSpeech = async (forceRefresh = false, origine: 'auto' | 'utente' = 'utente') => {
     // Con un registro diverso da standard (breve/bimbi/duetto) il copione da
     // leggere è quello GENERATO per quel registro: audio_script in DB è la
     // versione standard e con la vecchia precedenza suonava sempre quella.
     let textToSpeak = guideRegister !== 'standard'
       ? (generatedText || poi?.audioScript || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio)
       : (poi?.audioScript || generatedText || wikiData?.extract || poi?.description || (poi as any)?.spiegazione_audio);
+
+    // Silenziosa PRIMA del paywall: un play automatico (trigger) con la
+    // silenziosa attiva non suona e non apre il modale. Il ▶ dell'utente
+    // (origine 'utente') suona sempre.
+    if (origine === 'auto' && autoPlay && !triggerManualePer(String(poi?.id)) && locationService.isSilentModeEnabled()) {
+      try { (navigator as any).vibrate?.([200, 100, 200]); } catch { /* niente vibrazione */ }
+      return;
+    }
 
     if (audioState.isPlaying && audioState.poiId === String(poi?.id)) {
       locationService.pauseGuideAudio();
@@ -1304,12 +1346,12 @@ export default function PoiDetailSheet({
       if (!res?.ok) {
         if (res?.reason === 'insufficient_credits') {
           notify(
-            `Crediti insufficienti per l'ascolto offline` +
-            (typeof res.remaining === 'number' ? ` (disponibili: ${res.remaining})` : '') +
-            `. Ricarica quando torni online, o attiva il Day Pass prima di partire.`
+            getTranslation('offline_crediti_insufficienti', language) +
+            (typeof res.remaining === 'number' ? ' ' + getTranslation('offline_crediti_disponibili', language).replace('{n}', String(res.remaining)) : '') +
+            getTranslation('offline_ricarica_suggerimento', language)
           );
         } else {
-          notify('Audioguida non disponibile offline per questo luogo. Scarica il pacchetto della zona dalla tab Mappe Offline.');
+          notify(getTranslation('offline_guida_non_disponibile', language));
         }
       }
       return;
@@ -1370,20 +1412,30 @@ export default function PoiDetailSheet({
           // Solo qui si prosegue verso l'acquisto: il pass è davvero
           // esaurito/scaduto in corsa.
         } else if (textToSpeak) {
-          const okStart = await locationService.playAudio(textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode);
-          if (okStart) {
-            await consumeDayPassGuide();
-          } else {
+          // Il pass si consuma SOLO al vero avvio: `authorize` viene chiamata
+          // da locationService quando la traccia parte, anche se era stata
+          // accodata dietro un'altra. Una traccia accodata e poi fermata non
+          // consuma niente (prima 'queued' era truthy e si consumava subito).
+          let passEsaurito = false;
+          const esito = await locationService.playAudio(
+            textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode,
+            async () => {
+              let ok = false;
+              try { ok = await consumeDayPassGuide(); } catch { ok = false; }
+              if (!ok) passEsaurito = true;
+              return ok;
+            },
+          );
+          if (esito || !passEsaurito) {
             // Errore tecnico di riproduzione: MAI il modale crediti a chi ha
             // il pass (il contatore non è stato consumato).
-            notify(language === 'IT' ? 'Riproduzione non riuscita. Riprova.' : 'Playback failed. Please try again.');
+            if (!esito) notify(getTranslation('riproduzione_fallita', language));
+            return;
           }
-          return;
+          // Pass esaurito/scaduto in corsa: si prosegue verso l'acquisto.
         } else {
           // Contenuti non ancora pronti: niente paywall a chi ha il pass.
-          notify(language === 'IT'
-            ? 'Contenuti in caricamento, riprova tra un attimo.'
-            : 'Content still loading, try again in a moment.');
+          notify(getTranslation('contenuti_in_caricamento', language));
           return;
         }
       }
@@ -2581,7 +2633,12 @@ export default function PoiDetailSheet({
 
               <div className="absolute top-4 left-4 flex gap-2">
                 <span className="px-3 py-1 bg-primary/80 backdrop-blur-sm text-white text-[10px] font-bold rounded-lg uppercase tracking-wider shadow-md">
-                  {poi.category}
+                  {/* Nei verticali tematici la category è la chiave del
+                      verticale (terme, street_art…): qui va l'etichetta
+                      tradotta con la sua emoji, non la chiave grezza. */}
+                  {chiaveTematica(poi)
+                    ? `${CATEGORY_EMOJIS[chiaveTematica(poi)] || "🧭"} ${getTranslation(chiaveTematica(poi), language)}`
+                    : poi.category}
                 </span>
               </div>
 
@@ -2608,6 +2665,19 @@ export default function PoiDetailSheet({
                     </span>
                   );
                 })()}
+                {/* VERTICALI TEMATICI: il verticale e il tipo reale del luogo
+                    (hot_spring → "Sorgente termale"), perché sotto la stessa
+                    macro 🧭 stanno cose lontanissime fra loro. */}
+                {(() => {
+                  const chiave = chiaveTematica(poi);
+                  if (!chiave) return null;
+                  const tipo = etichettaTipoTematico((poi as any).poi_type || (poi as any).subCategory);
+                  return (
+                    <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-white/20 text-white backdrop-blur-sm">
+                      {CATEGORY_EMOJIS[chiave] || "🧭"} {getTranslation(chiave, language)}{tipo ? ` · ${tipo}` : ""}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -2618,8 +2688,12 @@ export default function PoiDetailSheet({
             {poiAddress && (
               <button
                 onClick={() => {
-                  const q = encodeURIComponent(`${poi.lat},${poi.lon}`);
-                  window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
+                  // Verso la porta; senza porta, il civico dell'indirizzo
+                  // appena mostrato (la via principale). Vedi puntoArrivoSuStrada.
+                  void puntoArrivoSuStrada({ ...(poi as any), address: poiAddress }).then((a) => {
+                    const q = encodeURIComponent(`${a.lat},${a.lon}`);
+                    window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
+                  });
                 }}
                 className="flex items-center gap-2 mb-3 text-left w-full group"
               >
@@ -2890,9 +2964,13 @@ export default function PoiDetailSheet({
                 variant="primary"
                 icon={<Navigation className="w-4 h-4" />}
                 label={getTranslation("navigate", language)}
-                href={`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}`}
+                // Doppia scelta come negli itinerari (22/08/2026): a piedi con
+                // WIP Nav, in auto con Google Maps / Mappe. Prima era un link
+                // diretto a Google Maps.
+                onClick={() => setShowNavChoice(true)}
               />
             </div>
+            <NavChoiceSheet poi={showNavChoice ? (poi as any) : null} language={language} onClose={() => setShowNavChoice(false)} />
 
             {/* SEZIONE BIGLIETTI E AFFILIAZIONI - TEMPORANEAMENTE DISATTIVATA IN ATTESA API GYG
             {poi.category !== 'locali' && poi.category !== 'utilita' && poi.category !== 'parchi' && (
@@ -3164,18 +3242,20 @@ export default function PoiDetailSheet({
         // sé → nessun doppio addebito.
         const { data: sessionData } = await supabase.auth.getSession();
         const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
-        const audioPaid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
-        if (!audioPaid) {
+        const creditiInsufficienti = () => {
           notify(language === 'IT'
             ? "Crediti insufficienti per l'audioguida."
             : "Not enough credits for the audioguide.");
           openCreditShop();
-          return;
-        }
+        };
         // Utente non-IT senza testo già generato: dopo il pagamento la guida
         // va narrata nella SUA lingua — rigenera e riproduce (prima partiva
         // il testo italiano di fallback). Rimborso se la generazione fallisce.
+        // Qui l'addebito resta PRIMA della generazione: e' la generazione la
+        // cosa che costa.
         if (language !== 'IT' && !generatedText) {
+          const audioPaid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
+          if (!audioPaid) { creditiInsufficienti(); return; }
           // regenerateWithGemini ora ritorna l'esito reale (true = generata e
           // riprodotta). Su fallimento rimborsiamo l'addebito appena fatto.
           const regenOk = await regenerateWithGemini(true, localGuideMode);
@@ -3193,11 +3273,28 @@ export default function PoiDetailSheet({
           return;
         }
         if (task.text) {
-          // Attesa + esito: prima la promise era flottante, quindi un TTS
-          // fallito lasciava l'utente senza audio, senza rimborso e senza
-          // voce nello storico — al tentativo dopo ripagava lo stesso POI.
-          const ok = await locationService.playAudio(task.text, poi?.name, poi?.category, String(poi?.id), localGuideMode);
-          if (!ok) {
+          // ADDEBITO AL VERO AVVIO, via `authorize`: locationService la chiama
+          // quando la traccia parte davvero — anche se era in coda dietro
+          // un'altra. Prima si addebitava PRIMA di playAudio, e 'queued'
+          // (truthy) passava per un avvio: una traccia accodata e poi fermata
+          // restava pagata. Se l'addebito riesce ma il TTS fallisce, rimborso.
+          let addebitato = false;
+          let rifiutato = false;
+          const esito = await locationService.playAudio(
+            task.text, poi?.name, poi?.category, String(poi?.id), localGuideMode,
+            async () => {
+              const ok = await consumeCredits(currentUserId, PRICING_LIST.audio_guide).catch(() => false);
+              if (ok) addebitato = true; else rifiutato = true;
+              return ok;
+            },
+          );
+          if (rifiutato) { creditiInsufficienti(); return; }
+          if (esito === 'started' && addebitato) {
+            // Saldo scalato lato server: aggiorna i widget crediti.
+            notifyCreditsChanged({ userId: currentUserId });
+          } else if (esito === 'queued') {
+            // Partira' (e si paghera') a fine traccia corrente: niente da fare ora.
+          } else if (addebitato) {
             const { data: sd } = await supabase.auth.getSession();
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
@@ -3206,8 +3303,7 @@ export default function PoiDetailSheet({
               ? "Non è stato possibile riprodurre l'audioguida. I crediti ti sono stati restituiti."
               : "Could not play the audioguide. Your credits have been refunded.");
           } else {
-            // Saldo scalato lato server: aggiorna i widget crediti.
-            notifyCreditsChanged({ userId: currentUserId });
+            notify(getTranslation('riproduzione_fallita', language));
           }
         }
       }}

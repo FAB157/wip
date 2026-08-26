@@ -107,6 +107,52 @@ Top-ups arrive via the Stripe webhook (`/api/stripe/webhook`, registered **befor
 - `src/lib/i18n.ts` is a single 3200-line translation map (IT/EN/FR/ES/DE/RU/ZH). Voices per language/character are in `ttsService.azureVoiceName`.
 - Much of `src/` uses `any` liberally and several files are `// @ts-nocheck`. `npm run lint` currently passing is the bar; don't take a clean run as proof the types are meaningful.
 
+## Photos and text must be REAL and about the subject
+
+Non-negotiable, set after a Premium Guide of La Spezia shipped with photos of
+places that were not La Spezia (22/08/2026).
+
+- **Photos come from the PLACE, never from a keyword.** The only accepted
+  sources are the ones that tie an image to a location: the city's Wikipedia
+  article, Wikimedia Commons searched by **name of the monument** or by
+  **coordinates** (`generator=geosearch`), and `contact_website`/Wikidata
+  images of the POI itself.
+- **Unsplash is not a photo source for content.** It is a stock-photography
+  archive: a query like `"<city> city landmark"` returns beautiful pictures of
+  somewhere else. It stays only where an illustration is admittedly generic
+  (never a POI, a guide or an itinerary), and it must never be a fallback for
+  a real place.
+- **No photo is better than the wrong photo.** Every renderer must survive a
+  missing image. A place shown with someone else's picture is a printed lie,
+  and it is worse than a blank space.
+- The same rule governs text: a stop that does not exist, or exists in another
+  city, blocks the itinerary — see `verifyItineraryAntiHallucination`, run by
+  both the on-the-fly generator and the library pipeline.
+
+## Print rules (itinerary PDF and Premium Guide)
+
+Learned from the two PDFs of 22/08/2026. Check these before touching
+`PrintView.tsx`, `PremiumGuideRenderer.tsx` or the print CSS.
+
+- **Measure the page in `mm`, never in `px`.** A4 minus margins is ~272 mm of
+  printable height; a container fixed at `850px` overflows and produces a
+  trailing near-empty page. That was the itinerary's empty last page.
+- **The title opens the page.** No eyebrow, no logo band above it: the top of
+  the first sheet is the most valuable line of the document. `@page` top
+  margin stays small (6 mm).
+- **A printed PDF must say where it comes from**: `wip.guide` in the header.
+  It ends up in the hands of people who do not have the app.
+- **Printing means printing THE DOCUMENT, not the page.** `printScoped` hides
+  the *other* printable documents; the rules in `index.css` hide the
+  application itself (`visibility: hidden` on `body`, visible again only on
+  the requested container). Without it the modal, the map behind and the tab
+  bar end up in the PDF.
+- **The file name comes from `document.title` on the browser-print fallback**,
+  not from the `filename` we pass. Set it before printing and restore it
+  after, or every guide is saved with the same name.
+- Cover titles must scale with length: a fixed size eats half the first page
+  when the title is long.
+
 ## Environment
 
 Local config goes in `.env.local` / `.env` (all `.env*` are gitignored). The server reads unprefixed names first and falls back to `VITE_`-prefixed ones for most keys.

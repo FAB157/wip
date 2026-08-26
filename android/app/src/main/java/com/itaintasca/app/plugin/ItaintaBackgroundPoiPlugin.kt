@@ -215,12 +215,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val arrivalRadiusWalk = call.getFloat("arrivalRadiusWalk") ?: 30f
         val alertRadiusCar = call.getFloat("alertRadiusCar") ?: 300f
         val arrivalRadiusCar = call.getFloat("arrivalRadiusCar") ?: 50f
+        // (22/08/2026) Il JS mandava guideCharacter (nicky/dante) ma nessuno lo
+        // leggeva: il receiver in background usava sempre il guideDefault del
+        // POI. Si persiste solo se valido, così un valore strano non sporca la
+        // chiave letta da GeofenceBroadcastReceiver.resolveGuideVoice.
+        val guideCharacter = call.getString("guideCharacter")
+            ?.takeIf { it == "nicky" || it == "dante" }
 
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         prefs.edit().apply {
             putBoolean("isAutomaticMode", isAutomaticMode)
             putBoolean("isServiceActive", true)
             putString("language", language)
+            // (22/08/2026) Stessa chiave che il servizio legge in
+            // restoreSettingsFromPrefs: prima le categorie le persisteva solo
+            // onStartCommand, quindi se il processo moriva prima che l'intent
+            // arrivasse (o con startForegroundService rifiutato) il riavvio
+            // STICKY ripartiva con l'insieme vuoto.
+            putStringSet("selectedCategories", categories.toSet())
+            if (guideCharacter != null) putString("guideCharacter", guideCharacter)
             apply()
         }
         
@@ -277,6 +290,15 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         com.itaintasca.app.service.ServiceWatchdog.cancel(context)
         val intent = Intent(context, ItaintaBackgroundPoiService::class.java)
         context.stopService(intent)
+        // (22/08/2026) Se il processo del servizio non è vivo, stopService non
+        // passa da onDestroy e l'OS tiene registrati fino a 100 geofence: il
+        // receiver continuava a ricevere transizioni (e a parlare) ad
+        // audioguida "spenta". Si rimuovono qui, best-effort.
+        try {
+            com.itaintasca.app.geofence.GeofenceManager(context).removeAllGeofences()
+        } catch (e: Exception) {
+            android.util.Log.w("ItaintaBackgroundPoiPlugin", "removeAllGeofences allo stop fallita: ${e.message}")
+        }
         call.resolve()
     }
 
@@ -300,6 +322,10 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             try {
                 com.itaintasca.app.db.PoiDatabase.getInstance(context).poiDao().clearTriggerStates()
+                // (22/08/2026) "Azzera storico" lasciava intatto il set dei
+                // teaser radar già notificati: quei POI non tornavano mai.
+                context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                    .edit().remove("radarTeaserNotified").apply()
                 call.resolve()
             } catch (e: Exception) {
                 call.reject("resetTriggerHistory failed: ${e.message}")
@@ -358,7 +384,10 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val lat = call.getDouble("lat") ?: return call.reject("Missing lat")
         val lon = call.getDouble("lon") ?: return call.reject("Missing lon")
         val label = call.getString("name") ?: "Destinazione"
-        val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=w")
+        // (22/08/2026) Era sempre mode=w: in auto Google Maps partiva con la
+        // navigazione a piedi. Il JS passa la modalità corrente (default piedi).
+        val navMode = if (call.getString("mode") == "driving") "d" else "w"
+        val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=$navMode")
         val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
             setPackage("com.google.android.apps.maps")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

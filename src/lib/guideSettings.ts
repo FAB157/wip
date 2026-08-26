@@ -165,6 +165,18 @@ export function isCategoryAllowed(
   // unicamente come `beni_culturali` restano muti.
   if (cat === 'beni_culturali') return false;
 
+  // WIP COMMUNITY E VERTICALI TEMATICI: MAI audioguida (committente,
+  // 22/08/2026: "le categorie delle audioguide devono fermarsi a Consigli
+  // gratuiti; da WIP Community in giu' non hanno audioguide"). Restano sulla
+  // mappa, nelle chip, negli itinerari e negli eventi: cambia solo che non
+  // fanno partire la voce. Il controllo sta QUI e non nella lista del setup,
+  // perche' le chip mappa scrivono le stesse chiavi in wip_active_subcategories
+  // (App.tsx) e una chiave gia' salvata a `true` riaccenderebbe tutto.
+  // `return false` esplicito, come per beni_culturali: il default in fondo e'
+  // gia' false, ma un ramo aggiunto domani fra qui e la fine non deve poterle
+  // riprendere per sbaglio.
+  if (SENZA_AUDIOGUIDA.has(cat)) return false;
+
   if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
   // Monumenti: include il patrimonio costruito importato in fase 2 (piazze,
   // ponti, fontane, teatri, palazzi, torri, grattacieli, cimiteri monumentali,
@@ -200,21 +212,75 @@ export function isCategoryAllowed(
   // funivie panoramiche). Confluiscono qui invece di avere una categoria
   // propria perché "panorami" è già cablata ovunque — web, Kotlin, iOS, chip,
   // traduzioni — e soprattutto è già abilitata all'audioguida.
-  if (['viewpoint', 'park', 'panorami',
-       'beach', 'waterfall', 'cave', 'peak', 'spring', 'island', 'cliff', 'bay', 'lake',
-       'glacier', 'volcano', 'nature_reserve', 'lighthouse', 'aerialway', 'natura',
-       // All'aperto (fase 2): sentieri, strade panoramiche, alberi monumentali,
-       // deserti, foreste, giardini storici.
-       'trail', 'scenic_road', 'tree', 'desert', 'forest', 'garden',
-       'botanical_garden', 'geopark', 'via_ferrata', 'ski_resort',
+  // NATURA PER FAMIGLIE (21/08/2026): ognuna risponde al SUO interruttore,
+  // e se quello non è mai stato toccato ricade su `panorami` — cioè sulla
+  // scelta che l'utente aveva già fatto quando erano tutte insieme. Senza
+  // questo doppio passaggio, chi aveva spento «panorami» si ritroverebbe
+  // le spiagge riaccese da sole.
+  // Dal 22/08/2026 c'e' anche la macro «natura» (chip mappa e setup): vale
+  // per tutte e cinque le famiglie quando la famiglia non e' stata toccata.
+  const naturaSub = (famiglia: string): boolean =>
+    (activeSubcats as any)[famiglia] ?? (activeSubcats as any).natura ?? activeSubcats.panorami ?? true;
+  if (['beach', 'spiaggia', 'spiagge', 'bay', 'baia', 'island', 'isola', 'cliff', 'falesia', 'coast', 'costa', 'dune',
+      ].includes(cat)) return naturaSub('spiagge');
+  if (['peak', 'vetta', 'vette', 'volcano', 'vulcano', 'glacier', 'ghiacciaio', 'mountain_pass', 'valico', 'ridge', 'arete', 'saddle',
+      ].includes(cat)) return naturaSub('vette');
+  if (['waterfall', 'cascata', 'cascate', 'spring', 'sorgente', 'hot_spring', 'lake', 'lago', 'laghi', 'river', 'fiume', 'gorge', 'gola', 'canyon',
+      ].includes(cat)) return naturaSub('acque');
+  if (['cave', 'grotta', 'grotte', 'cave_entrance', 'sinkhole', 'abisso',
+      ].includes(cat)) return naturaSub('grotte');
+  if (['park', 'parchi', 'parco', 'garden', 'giardino', 'botanical_garden', 'nature_reserve', 'riserva',
+       'geopark', 'forest', 'foresta', 'wood', 'bosco', 'desert', 'deserto', 'tree', 'albero', 'national_park',
+      ].includes(cat)) return naturaSub('parchi');
+  if (['viewpoint', 'panorami', 'panorama', 'lighthouse', 'faro', 'scenic_road', 'aerialway', 'natura',
+       'trail', 'sentiero', 'cammino', 'hiking', 'via_ferrata', 'ski_resort',
       ].includes(cat)) return activeSubcats.panorami ?? true;
   if (['museum', 'gallery', 'musei', 'art_museum', 'natural_history_museum',
        'art_gallery', 'house_museum'].includes(cat)) return activeSubcats.musei ?? true;
   if (['information', 'tourism_information', 'office', 'consigli'].includes(cat))
     return activeSubcats.consigli ?? false;
-  if (cat === 'community') return activeSubcats.community ?? false;
+  // 'community' e gli otto tematici sono gia' stati rifiutati in cima
+  // (SENZA_AUDIOGUIDA): qui non arrivano.
+  // VINO E GUSTO: default OFF (come community), ma quando l'utente accende la
+  // chip l'audioguida DEVE parlare — è il senso della categoria. Una cantina
+  // o un frantoio hanno una storia da raccontare quanto una chiesa, e chi
+  // accende "Vino e Gusto" ha chiesto esattamente quello.
+  // La categoria in shared_pois è 'enogastronomia'; i poi_type sono elencati
+  // qui perché un domani potrebbero arrivare come `category` grezza dal radar.
+  if (['enogastronomia',
+       'cantina', 'enoteca', 'vigneto', 'uliveto', 'birrificio', 'distilleria',
+       'caseificio', 'formaggi', 'frantoio', 'gastronomia', 'fattoria',
+       'pasticceria', 'cioccolato', 'caffe', 'te', 'miele', 'spezie',
+       'museo_gusto', 'strada_del_vino', 'winery',
+      ].includes(cat)) return activeSubcats.enogastronomia ?? false;
+  // I verticali tematici (terme, cinema, cieli, street_art, mercati,
+  // fioriture, memoria, lento) stavano qui con `activeSubcats[cat] ?? false`
+  // fino al 22/08/2026: ora sono in SENZA_AUDIOGUIDA, vedi in cima.
   return false; // categorie commerciali/utilitarie (locali/utilita/famiglie) → mai audioguida
 }
+
+/**
+ * Le categorie che NON hanno audioguida qualunque cosa dica
+ * wip_active_subcategories: WIP Community e gli otto verticali tematici.
+ * Decisione del committente del 22/08/2026. Usata da isCategoryAllowed e da
+ * locationService, che non passa queste chiavi al servizio nativo.
+ */
+export const SENZA_AUDIOGUIDA: ReadonlySet<string> = new Set([
+  'community',
+  'terme', 'cinema', 'cieli', 'street_art', 'mercati', 'fioriture', 'memoria', 'lento',
+]);
+
+/**
+ * Le chiavi di wip_active_subcategories che il servizio nativo deve vedere:
+ * solo quelle con audioguida. Le chip mappa scrivono nello stesso oggetto
+ * anche community/tematici/enogastronomia (servono alla mappa), e senza
+ * questo filtro il nativo le prenderebbe per categorie da raccontare.
+ */
+export const CHIAVI_NATIVO_AUDIOGUIDA: ReadonlySet<string> = new Set([
+  'gemme', 'monumenti', 'musei', 'panorami', 'chiese', 'consigli',
+  'castelli', 'archeo', 'natura', 'spiagge', 'vette', 'acque', 'grotte', 'parchi',
+  'enogastronomia',
+]);
 
 // --- Modalita' attivazione ---------------------------------------------
 export function getActivationMode(): ActivationMode {
@@ -267,51 +333,94 @@ export function setTransportPreference(pref: TransportPreference): void {
   }
 }
 
-/** Modalita' trasporto effettiva data la velocita' (m/s) e la preferenza. */
+/** Soglie dell'isteresi piedi/auto, le STESSE del servizio nativo. */
+const AUTO_SOPRA_KMH = 12;
+const PIEDI_SOTTO_KMH = 6;
+/** L'ultimo modo deciso in 'auto': e' lo stato che rende possibile l'isteresi. */
+let ultimoModoAuto: TransportMode = 'walk';
+
+/**
+ * Modalita' trasporto effettiva data la velocita' (m/s) e la preferenza.
+ * In 'auto' applica la stessa ISTERESI del nativo: sopra 12 km/h si passa
+ * in auto, sotto 6 km/h si torna a piedi, in mezzo si resta come si era.
+ * Prima c'era una soglia secca a 10 km/h: a ogni semaforo il modo
+ * oscillava e locationService rilanciava il servizio nativo a ogni fix.
+ */
 export function resolveTransportMode(speedMetersPerSec: number | null): TransportMode {
   const pref = getTransportPreference();
   if (pref === 'walk') return 'walk';
   if (pref === 'car') return 'car';
   const kmh = (speedMetersPerSec || 0) * 3.6;
-  // Il nativo usa un'ISTERESI 12 km/h (sopra → auto) / 6 km/h (sotto → piedi)
-  // per evitare il flip ai semafori. Qui, senza stato tra i fix, una singola
-  // soglia intermedia (~10 km/h) approssima quel crossover: sopra → auto.
-  return kmh >= 10 ? 'car' : 'walk';
+  if (kmh >= AUTO_SOPRA_KMH) ultimoModoAuto = 'car';
+  else if (kmh <= PIEDI_SOTTO_KMH) ultimoModoAuto = 'walk';
+  return ultimoModoAuto;
+}
+
+/** Azzera lo stato dell'isteresi (allo spegnimento dell'audioguida). */
+export function resetTransportHysteresis(): void {
+  ultimoModoAuto = 'walk';
 }
 
 // --- Anti-ripetizione (POI gia' riprodotti) -----------------------------
-function readPlayed(): Set<string> {
+// Formato: { [poiId]: timestampMs }. Il vecchio formato (array di id) si
+// migra al volo con timestamp "adesso": un POI ascoltato ieri resta in
+// cooldown ancora un giorno, poi si libera — come sul nativo (24 h).
+
+/** Cooldown per-POI dopo un ascolto: lo stesso del servizio nativo. */
+export const PLAYED_COOLDOWN_MS = 24 * 3_600_000;
+
+function readPlayed(): Record<string, number> {
   try {
     const raw = localStorage.getItem(KEYS.played);
-    if (!raw) return new Set();
-    return new Set(JSON.parse(raw) as string[]);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      const now = Date.now();
+      const out: Record<string, number> = {};
+      for (const id of parsed) out[String(id)] = now;
+      return out;
+    }
+    return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
-    return new Set();
+    return {};
   }
 }
 
-function writePlayed(set: Set<string>): void {
+function writePlayed(map: Record<string, number>): void {
   try {
-    localStorage.setItem(KEYS.played, JSON.stringify([...set]));
+    localStorage.setItem(KEYS.played, JSON.stringify(map));
   } catch {
     /* ignore */
   }
 }
 
-export function isPlayed(poiId: string | number): boolean {
-  return readPlayed().has(String(poiId));
+/** Quando e' stato ascoltato l'ultima volta (ms), o null. */
+export function playedAt(poiId: string | number): number | null {
+  const ts = readPlayed()[String(poiId)];
+  return Number.isFinite(ts) ? ts : null;
+}
+
+/** true se ascoltato da meno di `maxAgeMs` (default 24 h). */
+export function isPlayed(poiId: string | number, maxAgeMs = PLAYED_COOLDOWN_MS): boolean {
+  const ts = playedAt(poiId);
+  return ts != null && Date.now() - ts < maxAgeMs;
 }
 
 export function markPlayed(poiId: string | number): void {
-  const set = readPlayed();
-  set.add(String(poiId));
-  writePlayed(set);
+  const map = readPlayed();
+  const now = Date.now();
+  // Potatura: le voci piu' vecchie di 7 giorni non servono piu' a nessuno.
+  for (const [id, ts] of Object.entries(map)) {
+    if (!Number.isFinite(ts) || now - ts > 7 * 24 * 3_600_000) delete map[id];
+  }
+  map[String(poiId)] = now;
+  writePlayed(map);
 }
 
 /** Reset esplicito di un singolo POI (es. click PLAY dalla scheda). */
 export function resetPlayedOne(poiId: string | number): void {
-  const set = readPlayed();
-  if (set.delete(String(poiId))) writePlayed(set);
+  const map = readPlayed();
+  if (String(poiId) in map) { delete map[String(poiId)]; writePlayed(map); }
 }
 
 /** Reset totale ("Reimposta audioguide ascoltate" nelle settings). */

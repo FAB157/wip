@@ -110,10 +110,17 @@ export interface StopPrefill {
   /** Assenti sulle voci AI non geocodificate: il planner geocodifica da sé. */
   coords?: { lat: number; lon: number };
   days: 1;
+  /** VUOTO: il prefill non impone interessi; il planner tiene quelli
+   *  dell'utente (prima erano fissati a fotografia+gastronomia per tutti). */
   interests: string[];
   specialRequests: string;
   /** Etichetta per il toast di conferma. */
   label: string;
+  /** Flag del form del planner: esperienza affiliata (includeTours) e
+   *  NON "solo gratis" — la regola è «sempre la versione gratis E
+   *  l'esperienza con biglietto», vedi FREE_ALTERNATIVE_REQUEST. */
+  includeTours?: boolean;
+  soloGratis?: boolean;
 }
 
 /** Pre-compilazione roadtrip (cammino: tappe come legs con coordinate). */
@@ -123,7 +130,15 @@ export interface RoutePrefill {
   interests: string[];
   specialRequests: string;
   label: string;
+  includeTours?: boolean;
+  soloGratis?: boolean;
 }
+
+/** Regola fissa di prodotto: ogni destinazione ha il taglio a costo zero e
+ *  quello con biglietto (Tiqets/Viator/GYG). Entra nelle richieste speciali
+ *  di tutti i prefill, così l'AI propone entrambi. */
+export const FREE_ALTERNATIVE_REQUEST =
+  'Per ogni tappa a pagamento indica anche l\'alternativa gratuita (ingresso libero o vista dall\'esterno) e, dove esiste, l\'esperienza prenotabile con biglietto.';
 
 /** Richieste speciali per un'escursione dalla nave: vincolo di rientro
  *  in termini di DURATA (mai orari assoluti), buffer 1h prima della
@@ -137,14 +152,17 @@ export function buildPortPrefill(p: CruisePort, o: StopOption): StopPrefill {
     `Traccia consigliata "${o.title}": ${o.outline.join(' → ')}.`,
     o.notes,
     'Solo tappe raggiungibili con certezza nei tempi: se una tappa è a rischio, sostituiscila con una più vicina al porto.',
+    FREE_ALTERNATIVE_REQUEST,
   ].filter(Boolean).join('\n');
   return {
     destination: p.city,
     coords: p.coords,
     days: 1,
-    interests: ['fotografia', 'gastronomia'],
+    interests: [],
     specialRequests,
     label: `${p.emoji} ${p.port} · ${o.hours}h`,
+    includeTours: true,
+    soloGratis: false,
   };
 }
 
@@ -171,14 +189,17 @@ export function buildLayoverPrefill(a: AirportLayover, o: StopOption): StopPrefi
   righe.push(
     `Traccia consigliata "${o.title}": ${o.outline.join(' → ')}.`,
     o.notes,
+    FREE_ALTERNATIVE_REQUEST,
   );
   return {
     destination: a.city,
     coords: a.coords,
     days: 1,
-    interests: inCitta ? ['fotografia', 'gastronomia'] : ['gastronomia', 'shopping'],
+    interests: [],
     specialRequests: righe.filter(Boolean).join('\n'),
     label: `✈️ ${a.code} · ${o.hours}h`,
+    includeTours: true,
+    soloGratis: false,
   };
 }
 
@@ -214,13 +235,18 @@ export function buildPilgrimPrefill(r: PilgrimRoute): RoutePrefill {
       : '',
     r.notes,
     'Ritmo cammino: poche tappe al giorno, pause acqua/ristoro segnalate, niente attività serali impegnative.',
+    FREE_ALTERNATIVE_REQUEST,
   ].filter(Boolean).join('\n');
   return {
     legs,
     days: r.days,
-    interests: ['spirituale', 'natura', 'borghi'],
+    // Il carattere del cammino è già tutto nelle richieste speciali: gli
+    // interessi restano quelli dell'utente.
+    interests: [],
     specialRequests,
     label: `${r.emoji} ${r.name}`,
+    includeTours: true,
+    soloGratis: false,
   };
 }
 

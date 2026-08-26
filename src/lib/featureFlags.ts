@@ -22,6 +22,49 @@ export const KNOWN_FLAGS: Array<{ key: string; label: string; desc: string }> = 
   { key: 'web_foreground_triggers', label: 'Trigger web foreground', desc: 'Audioguide per prossimità su PWA/browser in foreground (gate client, no nativo)' },
 ];
 
+/** Voce pronta da disegnare nel pannello admin. `desc` e `descrizione` sono
+ *  lo stesso testo: `desc` per non rompere chi già legge KNOWN_FLAGS. */
+export interface FlagDescritto {
+  key: string;
+  label: string;
+  desc: string;
+  descrizione: string;
+  /** false = flag creato lato server e non ancora documentato qui. */
+  noto: boolean;
+}
+
+/** `web_foreground_triggers` → "web foreground triggers": meglio di niente
+ *  quando il flag nasce sul server e nessuno l'ha ancora descritto. */
+const etichettaDiRipiego = (key: string): string =>
+  key.replace(/[_-]+/g, ' ').trim() || key;
+
+/**
+ * Elenco dei flag da mostrare all'admin: unione fra i flag cablati nel codice
+ * (KNOWN_FLAGS, con etichetta e descrizione) e TUTTE le chiavi arrivate dal
+ * server con /api/flags. Serve perché un kill switch che richiede un deploy
+ * per comparire nel pannello non è un kill switch: creando la chiave in
+ * api_cache il flag deve apparire da solo.
+ * Ordine: prima i noti nell'ordine in cui sono dichiarati (i più importanti
+ * stanno in cima), poi gli sconosciuti in ordine alfabetico.
+ */
+export function elencoFlagCompleto(remoto: Record<string, boolean> = {}): FlagDescritto[] {
+  const noti: FlagDescritto[] = KNOWN_FLAGS.map(f => ({
+    key: f.key, label: f.label, desc: f.desc, descrizione: f.desc, noto: true
+  }));
+  const chiaviNote = new Set(KNOWN_FLAGS.map(f => f.key));
+  const sconosciuti: FlagDescritto[] = Object.keys(remoto || {})
+    .filter(k => k && !chiaviNote.has(k))
+    .sort((a, b) => a.localeCompare(b))
+    .map(k => ({
+      key: k,
+      label: etichettaDiRipiego(k),
+      desc: 'Flag creato lato server: nessuna descrizione nel client',
+      descrizione: 'Flag creato lato server: nessuna descrizione nel client',
+      noto: false
+    }));
+  return [...noti, ...sconosciuti];
+}
+
 let flags: Record<string, boolean> = {};
 try { flags = JSON.parse(localStorage.getItem(LS_KEY) || '{}') || {}; } catch { /* storage bloccato */ }
 

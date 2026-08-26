@@ -120,10 +120,18 @@ final class WipSupabaseClient {
     }
 
     /// Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...".
-    private static func geojsonCompatto(_ geojson: String) -> String? {
+    /// Non privata: la usa anche WipPackageDownloadManager per il perimetro che
+    /// arriva nel bundle offline (stesso formato, una sola conversione).
+    static func geojsonCompatto(_ geojson: String) -> String? {
         guard let data = geojson.data(using: .utf8),
-              let g = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let tipo = g["type"] as? String else { return nil }
+              let g = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        return geojsonCompatto(g)
+    }
+
+    /// Variante per un GeoJSON già deserializzato (il bundle offline lo porta
+    /// come oggetto quando PostgREST lo serializza, come testo altrimenti).
+    static func geojsonCompatto(_ g: [String: Any]) -> String? {
+        guard let tipo = g["type"] as? String else { return nil }
         var anelli: [[[Double]]] = []
         // Polygon: [anello, buco, ...]. MultiPolygon: [[anello, ...], ...],
         // che si appiattisce — per il test dentro/fuori la parità degli

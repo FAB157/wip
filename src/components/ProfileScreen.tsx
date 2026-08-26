@@ -14,6 +14,7 @@ import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings'
 // solo agli admin, quindi non deve finire nel bundle di ogni utente.
 const AdminPanel = lazy(() => import('./AdminPanel'));
 import ShopScreen from './ShopScreen';
+import MapStartSetting from './MapStartSetting';
 import UserProfileSummary from './UserProfileSummary';
 import MyVisionTab from './MyVisionTab';
 import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
@@ -63,6 +64,18 @@ import { PilgrimCertificateAction } from './PilgrimWaysSheet';
 import ProminentDisclosure from './ProminentDisclosure';
 import { PRICING_LIST } from '../lib/pricing';
 import LiveTourPanel from './LiveTourPanel';
+import { TEMATICI_KEYS } from '../lib/poiTaxonomy';
+
+// Chiavi governate dall'interruttore "Seleziona / Deseleziona tutti" delle
+// categorie audioguida. La lista FINISCE a "Consigli & Info": decisione del
+// committente (22/08/2026) — da WIP Community in giu' (community e gli otto
+// verticali tematici) non c'e' audioguida. Restano sulla mappa, nelle chip,
+// negli itinerari; semplicemente non fanno partire la voce. Il gate vero e'
+// isCategoryAllowed (guideSettings), che le rifiuta qualunque cosa ci sia in
+// wip_active_subcategories.
+const CHIAVI_AUDIOGUIDA: string[] = [
+  'monumenti', 'musei', 'panorami', 'natura', 'chiese', 'consigli',
+];
 
 // Bridge al plugin nativo (solo su device): serve per azzerare in Room lo stato
 // dei trigger di geofencing quando l'utente resetta lo storico.
@@ -256,7 +269,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       image_url: fullPoi?.image_url || item.image_url,
     };
     window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
-      detail: { poiId: String(poi.id), poi, alreadyPaid: true, autoPlay: true }
+      // manual: riascolto chiesto a mano, mai zittito dalla modalita' silenziosa.
+      detail: { poiId: String(poi.id), poi, alreadyPaid: true, autoPlay: true, manual: true }
     }));
   };
   const [gamificationLevels, setGamificationLevels] = useState<any[]>(() => {
@@ -2034,7 +2048,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               className="space-y-6"
             >
               <h3 className="text-xl font-black text-primary tracking-tight mb-4">{getTranslation("app_settings", language)}</h3>
-              
+
+              {/* Dove si apre la mappa (22/08/2026): non più Carrara per tutti */}
+              <MapStartSetting language={language} />
+
               {/* Setup Consumi e Costi Dashboard Section */}
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
                 <div className="flex items-center gap-3 mb-5 border-b border-gray-100/60 pb-3">
@@ -2742,22 +2759,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       </label>
                       <button
                         onClick={() => {
-                          const allChecked = activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli && activeSubcats.community;
-                          const next = {
-                            monumenti: !allChecked,
-                            musei: !allChecked,
-                            panorami: !allChecked,
-                            chiese: !allChecked,
-                            consigli: !allChecked,
-                            community: !allChecked
-                          };
+                          const allChecked = CHIAVI_AUDIOGUIDA.every((k) => !!activeSubcats[k]);
+                          const next: Record<string, boolean> = {};
+                          CHIAVI_AUDIOGUIDA.forEach((k) => { next[k] = !allChecked; });
                           setActiveSubcats(next);
                           localStorage.setItem('wip_active_subcategories', JSON.stringify(next));
                           window.dispatchEvent(new CustomEvent('wip-settings-updated'));
                         }}
                         className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2 py-1 rounded-md active:scale-95 transition-transform"
                       >
-                        {activeSubcats.monumenti && activeSubcats.musei && activeSubcats.panorami && activeSubcats.chiese && activeSubcats.consigli && activeSubcats.community ? "Deseleziona Tutti" : "Seleziona Tutti"}
+                        {CHIAVI_AUDIOGUIDA.every((k) => !!activeSubcats[k]) ? "Deseleziona Tutti" : "Seleziona Tutti"}
                       </button>
                     </div>
 
@@ -2785,16 +2796,24 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                      <div className="space-y-2 bg-[#f8f5f0] p-3 rounded-2xl border border-outline-variant/5">
                         <SubcatItem label="Monumenti & Castelli" isChecked={!!activeSubcats.monumenti} onToggle={() => toggleSubcat('monumenti')} />
                         <SubcatItem label="Musei & Gallerie" isChecked={!!activeSubcats.musei} onToggle={() => toggleSubcat('musei')} />
-                        <SubcatItem label="Panorami & Parchi" isChecked={!!activeSubcats.panorami} onToggle={() => toggleSubcat('panorami')} />
+                        <SubcatItem label="Panorami & Belvedere" isChecked={!!activeSubcats.panorami} onToggle={() => toggleSubcat('panorami')} />
+                        <SubcatItem label="Natura: spiagge, vette, acque, grotte, parchi" isChecked={!!activeSubcats.natura} onToggle={() => toggleSubcat('natura')} />
                         <SubcatItem label="Chiese & Luoghi di Culto" isChecked={!!activeSubcats.chiese} onToggle={() => toggleSubcat('chiese')} />
                         <div className="border-t border-primary/10 mt-2 pt-2">
                            <SubcatItem label="Consigli & Info (Gratuiti)" isChecked={!!activeSubcats.consigli} onToggle={() => toggleSubcat('consigli')} />
                            <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">Questi POI speciali non consumano il credito delle audioguide.</p>
                         </div>
-                        <div className="border-t border-primary/10 mt-2 pt-2">
-                           <SubcatItem label="WIP Community 📸" isChecked={!!activeSubcats.community} onToggle={() => toggleSubcat('community')} />
-                           <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">I luoghi scoperti dalle foto dei viaggiatori WIP: pin magenta sulla mappa e audioguida dal loro racconto.</p>
-                        </div>
+                        {/* La lista si ferma qui. WIP Community e i verticali
+                            tematici (terme, cinema, cieli, murales, mercati,
+                            fioriture, memoria, viaggi lenti) NON hanno
+                            audioguida per decisione del committente
+                            (22/08/2026): si vedono sulla mappa e nelle chip,
+                            ma una voce che parte da sola davanti a un murale o
+                            a una fermata di treno sarebbe rumore, non guida.
+                            Il gate e' in guideSettings.isCategoryAllowed. */}
+                        <p className="text-[9px] text-primary/40 leading-tight mt-2 ml-1">
+                          WIP Community e i verticali tematici si esplorano dalla mappa: non hanno audioguida automatica.
+                        </p>
                      </div>
                   </div>
                 </div>
@@ -3510,7 +3529,10 @@ function GoogleMapsImportSection() {
  * Collassabile, visibile a tutti (anche gli italiani viaggiano all'estero).
  */
 function EsimSection() {
-  const [open, setOpen] = useState(false);
+  // Aperta di default: chiusa, si vedeva solo un titolo e "non c'erano i link
+  // ai fornitori" (segnalazione del 22/08/2026). La freccia resta per chi la
+  // vuole richiudere.
+  const [open, setOpen] = useState(true);
 
   // URL affiliato da env (deve restare sui domini in whitelist di /api/out),
   // altrimenti fallback al sito pubblico del provider.

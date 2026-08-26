@@ -28,3 +28,22 @@ export async function resolveVisionPhotoUrl(photoUrl: string | null | undefined)
     return /^https?:\/\//i.test(photoUrl) ? photoUrl : null;
   }
 }
+
+/**
+ * Firma più foto in parallelo, a blocchi di 10: una pagina dell'album (30
+ * schede) non apre 30 richieste di firma tutte insieme, ma neanche una per
+ * volta. L'ordine del risultato è quello dell'input (null dove manca la foto
+ * o la firma fallisce).
+ */
+export async function resolveVisionPhotoUrls(paths: (string | null | undefined)[]): Promise<(string | null)[]> {
+  const BLOCK = 10;
+  const out: (string | null)[] = new Array(paths.length).fill(null);
+  for (let start = 0; start < paths.length; start += BLOCK) {
+    const slice = paths.slice(start, start + BLOCK);
+    const settled = await Promise.allSettled(slice.map(p => resolveVisionPhotoUrl(p)));
+    settled.forEach((r, i) => {
+      out[start + i] = r.status === 'fulfilled' ? r.value : null;
+    });
+  }
+  return out;
+}

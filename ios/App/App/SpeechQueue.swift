@@ -46,11 +46,24 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// era in corso: dice a handleInterruptionEnded se c'è qualcosa da
     /// riprendere.
     private var pausedForInterruption = false
-    /// Rete di sicurezza: se isSpeaking resta true oltre questo timeout senza
+    /// Rete di sicurezza: se isSpeaking resta true oltre il timeout senza
     /// che il delegate di completamento scatti (interruzione gestita male dal
     /// sistema, item anomalo…) sblocchiamo comunque la coda invece di restare
-    /// mute per sempre. 45s è ampiamente sopra la durata di un teaser/frase.
-    private static let watchdogTimeoutS: TimeInterval = 45
+    /// mute per sempre.
+    /// (22/08/2026) Non più fisso a 45 s: tagliava a metà le audioguide
+    /// COMPLETE (3-4 min) del Day Pass e di ogni fallback TTS senza MP3.
+    /// Come Receiver.kt: TTS = 8 s + 120 ms per carattere, MP3 = durata + 15 s,
+    /// entrambi col tetto di 15 min. Il teaser (~200 char) resta ben sotto.
+    private static let watchdogMaxS: TimeInterval = 15 * 60
+    private static func watchdogTimeout(forTextLength length: Int) -> TimeInterval {
+        min(8.0 + Double(length) * 0.120, watchdogMaxS)
+    }
+    private static func watchdogTimeout(forMp3Duration duration: TimeInterval) -> TimeInterval {
+        min(max(duration + 15.0, 15.0), watchdogMaxS)
+    }
+    /// Timeout armato per l'item corrente (per il log del watchdog e per
+    /// ri-armare con lo stesso valore dopo un'interruzione).
+    private var currentWatchdogS: TimeInterval = 45
     private var watchdogTimer: Timer?
 
     /// Callback eventi verso il plugin (teaserStarted/teaserFinished), stesso
@@ -100,12 +113,15 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
                 self.deactivateAudioSessionIfIdle()
                 return
             }
-            if self.synthesizer.isSpeaking {
+            if self.synthesizer.isSpeaking || self.synthesizer.isPaused {
+                // Il delegate didCancel chiude lo stato (finishActiveSpeech +
+                // processNext): chiamarla anche qui produceva un doppio
+                // teaserFinished e, se nel frattempo partiva un altro item,
+                // chiudeva quello sbagliato. Stessa disciplina del watchdog.
                 self.synthesizer.stopSpeaking(at: .immediate)
-                // Il delegate didCancel chiude lo stato; in sua assenza:
-                self.finishActiveSpeech(notifyJs: true)
             } else {
                 self.finishActiveSpeech(notifyJs: true)
+                self.deactivateAudioSessionIfIdle()
             }
         }
     }
@@ -171,7 +187,8 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         if let path = next.audioFile,
            FileManager.default.fileExists(atPath: path),
            playMp3(path: path) {
-            armWatchdog()
+            // MP3: durata reale + 15 s (tetto 15 min), come Receiver.kt
+            armWatchdog(seconds: Self.watchdogTimeout(forMp3Duration: audioPlayer?.duration ?? 0))
             return
         }
 
@@ -189,7 +206,8 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         utterance.voice = Self.voiceForLanguage(prefs.string(forKey: "language") ?? "it")
         utterance.volume = 1.0
         synthesizer.speak(utterance)
-        armWatchdog()
+        // TTS: 8 s + 120 ms per carattere (tetto 15 min), come Receiver.kt
+        armWatchdog(seconds: Self.watchdogTimeout(forTextLength: spokenText.count))
     }
 
     /// Toglie emoji e pittogrammi dal testo da leggere: AVSpeechSynthesizer
@@ -303,9 +321,13 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         }
     }
 
-    private func armWatchdog() {
+    /// Arma il watchdog; senza `seconds` ri-usa il timeout dell'item corrente
+    /// (ripresa dopo un'interruzione).
+    private func armWatchdog(seconds: TimeInterval? = nil) {
+        if let s = seconds { currentWatchdogS = s }
+        let timeout = currentWatchdogS
         watchdogTimer?.invalidate()
-        watchdogTimer = Timer.scheduledTimer(withTimeInterval: Self.watchdogTimeoutS, repeats: false) { [weak self] _ in
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
             self?.handleWatchdogTimeout()
         }
     }
@@ -315,8 +337,8 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         watchdogTimer = nil
     }
 
-    /// Se il delegate di completamento (TTS o MP3) non scatta entro
-    /// watchdogTimeoutS — interruzione gestita male dal sistema, item
+    /// Se il delegate di completamento (TTS o MP3) non scatta entro il
+    /// timeout dell'item — interruzione gestita male dal sistema, item
     /// anomalo… — sblocca comunque la coda invece di restare mute a
     /// oltranza. Stessa disciplina di stopSpeaking: se il synth sta ancora
     /// "parlando" (o in pausa) lo fermiamo e lasciamo che didCancel chiuda lo
@@ -324,7 +346,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// sbagliato.
     private func handleWatchdogTimeout() {
         guard isSpeaking else { return }
-        print("[SpeechQueue] watchdog: nessun completamento entro \(Int(Self.watchdogTimeoutS))s, sblocco la coda")
+        print("[SpeechQueue] watchdog: nessun completamento entro \(Int(currentWatchdogS))s, sblocco la coda")
         pausedForInterruption = false
         if let player = audioPlayer {
             // AVAudioPlayer.stop() non chiama il delegate: chiudiamo noi.

@@ -43,7 +43,7 @@ function conPosizione(fn: (p?: { lat: number; lon: number }) => void) {
 export default function TourBanner({ language, istruzione, metriAllaSvolta, onRiascolta, onChiudi }: Props) {
   const [v, setV] = useState<VistaGiro | null>(tourService.vista());
   const [pausaManuale, setPausaManuale] = useState(false);
-  const [salvato, setSalvato] = useState<{ id: string; link: string } | null>(null);
+  const [salvato, setSalvato] = useState<{ id: string; link: string | null } | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [avviso, setAvviso] = useState<string | null>(null);
 
@@ -77,11 +77,16 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
 
   const condividi = async () => {
     // Condividere vuol dire prima salvare: il link apre la cache condivisa.
+    // salvaComeItinerario riusa l'id e la promise in corso: Salva e Condividi
+    // ravvicinati non creano due righe.
     let link = salvato?.link;
     if (!link) {
       try { const r = await tourService.salvaComeItinerario(); setSalvato({ id: r.id, link: r.link }); link = r.link; }
       catch (e: any) { setAvviso(String(e?.message || 'Condivisione non riuscita')); return; }
     }
+    // Senza cache condivisa non c'e' un link che apra qualcosa: si dice, non
+    // si finge.
+    if (!link) { setAvviso(t('tour_salvato')); return; }
     const titolo = tourService.comeItinerario()?.titolo || 'WIP';
     try {
       if (typeof navigator !== 'undefined' && (navigator as any).share) {
@@ -105,12 +110,14 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
         </div>
 
         {/* L'istruzione corrente. In pausa non si mostra: sarebbe un sollecito */}
-        {istruzione && !v.inPausa && !finito && (
+        {/* Dalla prop se il genitore la passa, altrimenti dalla vista del giro:
+            App.tsx non l'ha mai passata e l'istruzione restava invisibile. */}
+        {(istruzione ?? v.istruzione) && !v.inPausa && !finito && (
           <div className="flex items-center gap-2.5 px-4 pt-3">
             <Navigation2 className="w-4 h-4 text-blue-600 flex-shrink-0" />
-            <p className="text-[13px] font-bold text-gray-900 leading-snug flex-1">{istruzione}</p>
-            {metriAllaSvolta != null && (
-              <span className="text-[11px] font-bold text-blue-600 tabular-nums flex-shrink-0">{distanza(metriAllaSvolta)}</span>
+            <p className="text-[13px] font-bold text-gray-900 leading-snug flex-1">{istruzione ?? v.istruzione}</p>
+            {(metriAllaSvolta ?? v.metriAllaSvolta) != null && (
+              <span className="text-[11px] font-bold text-blue-600 tabular-nums flex-shrink-0">{distanza((metriAllaSvolta ?? v.metriAllaSvolta) as number)}</span>
             )}
           </div>
         )}
@@ -151,7 +158,20 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               <p className="text-[14px] font-bold text-gray-900 truncate">
                 {v.tappeFatte} {t('tour_tappa').toLowerCase()} · {distanza(v.metriTotali)}
               </p>
-              <p className="text-[11px] text-gray-500 truncate">{avviso || (salvato ? salvato.link.replace(/^https?:\/\//, '') : '')}</p>
+              <p className="text-[11px] text-gray-500 truncate">{avviso || (salvato?.link ? salvato.link.replace(/^https?:\/\//, '') : '')}</p>
+              {/* PROSEGUIRE (22/08/2026): il giro finito non e` un vicolo
+                  cieco. Si riapre il radar con la bozza vuota e la partenza
+                  da qui; o si tocca un pin e si aggiunge al giro in corso. */}
+              <button
+                onClick={() => {
+                  tourService.termina();
+                  onChiudi?.();
+                  window.dispatchEvent(new CustomEvent('wip-open-radar'));
+                }}
+                className="mt-1 text-[11px] font-black text-[#1e3a8a] underline underline-offset-2"
+              >
+                Nuovo giro da qui →
+              </button>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <button
@@ -228,6 +248,28 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 <X className="w-4 h-4 text-red-600" />
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Il pre-scaricamento, contato davvero: "3 testi, 2 audio, 1
+            mancante" con un Riprova. Prima l'esito esisteva e non lo
+            vedeva nessuno: offline si scopriva a meta' giro che una tappa
+            era muta. Sparisce quando e' tutto in tasca. */}
+        {!finito && (v.prescarico.inCorso || (v.prescarico.finitoIl > 0 && v.prescarico.mancanti > 0)) && (
+          <div className="px-4 pb-2.5 pt-1 flex items-center gap-2 text-[10px] bg-gray-50">
+            <span className={`flex-1 ${v.prescarico.mancanti > 0 && !v.prescarico.inCorso ? 'text-amber-700' : 'text-gray-500'}`}>
+              {v.prescarico.inCorso
+                ? `${t('tour_prescarico_in_corso')} ${v.prescarico.fatte}/${v.prescarico.totali}`
+                : `${v.prescarico.testi} ${t('tour_prescarico_testi')} · ${v.prescarico.audio} ${t('tour_prescarico_audio')} · ${v.prescarico.mancanti} ${t('tour_prescarico_mancanti')}`}
+            </span>
+            {!v.prescarico.inCorso && v.prescarico.mancanti > 0 && (
+              <button
+                onClick={() => { tourService.prescarica(undefined, language.toLowerCase()).catch(() => {}); }}
+                className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 font-bold active:scale-95"
+              >
+                {t('tour_prescarico_riprova')}
+              </button>
+            )}
           </div>
         )}
 

@@ -65,26 +65,115 @@ object CategoryMap {
             "glacier", "volcano", "nature_reserve", "lighthouse", "aerialway", "natura",
             "trail", "scenic_road", "tree", "desert", "forest", "garden",
             "botanical_garden", "geopark", "via_ferrata", "ski_resort"),
+        // NATURA DIVISA PER FAMIGLIE (21/08/2026). Sul web «panorami» era un
+        // mucchio solo: spiagge, vette, cascate, grotte e parchi insieme, o
+        // tutti o nessuno. Ora ognuna ha il suo sotto-filtro, e queste
+        // chiavi sono le stesse che il web scrive in
+        // `wip_active_subcategories` — senza, accendendo solo «spiagge»
+        // l'audioguida nativa non riconoscerebbe piu' niente.
+        // La chiave «panorami» sopra RESTA: le installazioni vecchie hanno
+        // ancora quella salvata, e va continuata a capire.
+        // Allineato a poiTaxonomy.ts (web) e PoiCategories.map (iOS).
+        // "natura" (22/08/2026): la macro che raccoglie le cinque famiglie —
+        // e' la chiave che le chip mappa e il setup scrivono quando si
+        // accende Natura senza toccare le singole famiglie.
+        "natura" to listOf("beach", "spiaggia", "spiagge", "bay", "baia", "island", "isola",
+            "cliff", "falesia", "coast", "costa", "dune",
+            "peak", "vetta", "vette", "volcano", "vulcano", "glacier", "ghiacciaio",
+            "mountain_pass", "valico", "ridge", "arete", "saddle",
+            "waterfall", "cascata", "cascate", "spring", "sorgente", "hot_spring",
+            "lake", "lago", "laghi", "river", "fiume", "gorge", "gola", "canyon",
+            "cave", "grotta", "grotte", "cave_entrance", "sinkhole", "abisso",
+            "park", "parchi", "parco", "garden", "giardino", "botanical_garden",
+            "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
+            "desert", "deserto", "tree", "albero", "national_park"),
+        "spiagge" to listOf("beach", "spiaggia", "spiagge", "bay", "baia", "island", "isola",
+            "cliff", "falesia", "coast", "costa", "dune"),
+        "vette" to listOf("peak", "vetta", "vette", "volcano", "vulcano", "glacier", "ghiacciaio",
+            "mountain_pass", "valico", "ridge", "arete", "saddle"),
+        "acque" to listOf("waterfall", "cascata", "cascate", "spring", "sorgente", "hot_spring",
+            "lake", "lago", "laghi", "river", "fiume", "gorge", "gola", "canyon"),
+        "grotte" to listOf("cave", "grotta", "grotte", "cave_entrance", "sinkhole", "abisso"),
+        "parchi" to listOf("park", "parchi", "parco", "garden", "giardino", "botanical_garden",
+            "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
+            "desert", "deserto", "tree", "albero", "national_park"),
         "locali" to listOf("restaurant", "cafe", "bar", "fast_food", "pub", "locali"),
         // Sync con CategoryChips/MapArea web: esperienze_locali eliminata,
         // i mercati (marketplace) confluiscono in utilita
         "utilita" to listOf("pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"),
         "famiglie" to listOf("playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"),
+        // Vino e Gusto (20/08/2026): cantine, vigneti, caseifici, frantoi,
+        // birrifici, botteghe del gusto e strade del vino, 199.280 nel mondo
+        // importati da OpenStreetMap. Chip OFF di default come community e
+        // beni_culturali: acceso, l'audioguida racconta la cantina davanti a
+        // cui si passa. La categoria DB e' 'enogastronomia', i valori qui
+        // sotto sono i poi_type scritti dall'harvest.
+        "enogastronomia" to listOf("enogastronomia",
+            "cantina", "enoteca", "vigneto", "uliveto", "birrificio", "distilleria",
+            "caseificio", "formaggi", "frantoio", "gastronomia", "fattoria",
+            "pasticceria", "cioccolato", "caffe", "te", "miele", "spezie",
+            "museo_gusto", "strada_del_vino",
+            "panificio", "macelleria", "pescheria", "ortofrutta", "dolciumi"),
         "consigli" to listOf("information", "tourism_information", "office", "consigli"),
         // Gemme: chiave del toggle web (useGeofencing.ts). Nel prodotto sono
         // "sempre attive", ma esposta per parità di mappa.
         "gemme" to listOf("gemme"),
         // WIP Community (Vision approvate): default OFF, MAI in culturalCats.
+        // È l'ULTIMA categoria con audioguida: vedi la nota qui sotto.
         "community" to listOf("community")
+        //
+        // ── VERTICALI TEMATICI: NON VANNO IN QUESTA MAPPA ──────────────────
+        // terme, cinema, cieli, street_art, mercati, fioriture, memoria, lento.
+        // Aggiunti il 21/08/2026 e RIMOSSI il 22/08 per decisione del
+        // committente: "le categorie delle audioguide devono fermarsi ai
+        // consigli gratuiti, da WIP Community in giù non hanno audioguide".
+        // I POI tematici restano visibili sulla mappa, nelle chip, negli
+        // itinerari e negli eventi: semplicemente non fanno partire la voce.
+        // Come per beni_culturali, l'esclusione è per OMISSIONE e va protetta:
+        // NON riaggiungerli qui. Ha senso anche tecnicamente — un murale, una
+        // pozza o la fermata di un treno panoramico non sono contenuti da
+        // audioguida che parte da sola mentre cammini.
     )
 
     /**
      * Default "insieme vuoto" (nessuna categoria selezionata dal setup),
      * allineato al web (useGeofencing.ts): { monumenti, musei, chiese }
      * attivi, panorami OFF.
+     *
+     * (22/08/2026) Derivato dalla MAP invece di una lista scritta a mano:
+     * quella aveva 13 valori mentre monumenti+musei+chiese ne contano ~100,
+     * quindi con l'insieme vuoto una basilica, un palazzo o un anfiteatro
+     * restavano muti anche se le stesse chip li avrebbero accesi.
      */
-    val DEFAULT_CULTURAL_CATEGORIES: List<String> = listOf(
-        "monument", "castle", "ruins", "archaeological_site", "artwork", "monumenti",
-        "museum", "gallery", "musei", "church", "place_of_worship", "cathedral", "chiese"
-    )
+    val DEFAULT_CULTURAL_CATEGORIES: Set<String> =
+        (MAP["monumenti"].orEmpty() + MAP["musei"].orEmpty() + MAP["chiese"].orEmpty()).toSet()
+
+    /**
+     * (22/08/2026) FILTRO UNICO categoria → attivo/non attivo, usato da TUTTI
+     * e tre i punti che prima lo reimplementavano a mano (fetch online in
+     * SupabaseClient.parsePoiList, filtro offline nel servizio, filtro
+     * trigger nel receiver). Tre copie = tre modi di divergere: un POI poteva
+     * essere scaricato dal fetch e poi rifiutato dal trigger, o viceversa.
+     *
+     * Regole (invariate rispetto alle copie precedenti):
+     * - le tappe dell'itinerario passano sempre;
+     * - le gemme passano salvo OFF esplicito (sentinella "gemme:off", vedi
+     *   GeofenceBroadcastReceiver.areGemsActive);
+     * - insieme vuoto = default culturale (monumenti, musei, chiese);
+     * - altrimenti la categoria DB deve stare nella MAP di una chiave UI
+     *   selezionata, oppure coincidere direttamente con una chiave selezionata.
+     */
+    fun isActive(
+        dbCategory: String?,
+        isGem: Boolean,
+        isFromItinerary: Boolean,
+        selected: Collection<String>
+    ): Boolean {
+        if (isFromItinerary) return true
+        if (isGem) return !selected.contains("gemme:off")
+        val cat = (dbCategory ?: "").lowercase()
+        if (selected.isEmpty()) return DEFAULT_CULTURAL_CATEGORIES.contains(cat)
+        if (selected.contains(cat)) return true
+        return selected.any { MAP[it]?.contains(cat) == true }
+    }
 }

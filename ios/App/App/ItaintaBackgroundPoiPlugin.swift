@@ -173,6 +173,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             options["lat"] = lat
             options["lon"] = lon
         }
+        // (22/08/2026) Il JS mandava guideCharacter (nicky/dante) ma nessuno lo
+        // leggeva: il manager in background usava sempre il guideDefault del
+        // POI. Si persiste solo se valido (stessa chiave prefs di Android,
+        // ItaintaBackgroundPoiPlugin.kt), letta da BackgroundPoiManager
+        // .resolveGuideVoice con il default del POI come riserva.
+        if let guideCharacter = call.getString("guideCharacter"),
+           guideCharacter == "nicky" || guideCharacter == "dante" {
+            prefs.set(guideCharacter, forKey: "guideCharacter")
+        }
         BackgroundPoiManager.shared.start(options: options)
         call.resolve()
     }
@@ -191,6 +200,10 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     /// ItaintaBackgroundPoiPlugin.kt::resetTriggerHistory.
     @objc func resetTriggerHistory(_ call: CAPPluginCall) {
         store.clearTriggerStates()
+        // (22/08/2026) Anche i teaser radar già notificati ripartono da zero,
+        // come Android (Plugin.kt resetTriggerHistory): senza, un POI
+        // notificato una volta non tornava mai nei teaser radar.
+        prefs.removeObject(forKey: "radarTeaserNotified")
         call.resolve()
     }
 
@@ -237,13 +250,18 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             return
         }
         let label = call.getString("name") ?? "Destinazione"
+        // `mode`: "driving" o "walking" (default). Prima era SEMPRE a piedi:
+        // chi toccava "Naviga in auto" riceveva un percorso pedonale, con ZTL e
+        // sensi unici ignorati (verificato il 22/08/2026). Stesso parametro del
+        // plugin Android.
+        let driving = (call.getString("mode") ?? "walking").lowercased().hasPrefix("driv")
         DispatchQueue.main.async {
-            if let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=walking"),
+            if let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=\(driving ? "driving" : "walking")"),
                UIApplication.shared.canOpenURL(gmaps) {
                 UIApplication.shared.open(gmaps)
             } else {
                 let encoded = label.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Destinazione"
-                if let apple = URL(string: "https://maps.apple.com/?daddr=\(lat),\(lon)&dirflg=w&q=\(encoded)") {
+                if let apple = URL(string: "https://maps.apple.com/?daddr=\(lat),\(lon)&dirflg=\(driving ? "d" : "w")&q=\(encoded)") {
                     UIApplication.shared.open(apple)
                 }
             }
@@ -440,7 +458,11 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let text = store.getOfflineAudioText(poiId, lang: lang)
         // MP3 prefetchato: parte istantaneo e copre anche il caso audio_text
         // assente nel pacchetto (catena fallback offline, come Android).
-        let mp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang)
+        // Il file è per personaggio: si cerca quello scelto dall'utente
+        // (stessa chiave prefs persistita da startBackgroundPoiService).
+        let chosen = prefs.string(forKey: "guideCharacter")
+        let character = (chosen == "nicky" || chosen == "dante") ? chosen : nil
+        let mp3 = AudioPrefetchManager.cachedFile(poiId: poiId, lang: lang, character: character)
         guard (text?.isEmpty == false) || mp3 != nil else {
             call.resolve(["ok": false, "reason": "no_text"])
             return

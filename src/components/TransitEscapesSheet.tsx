@@ -9,13 +9,18 @@
 // pre-compila il form del planner (1 giorno, vincolo in durata).
 // =====================================================================
 import { X, Search, Loader2, Anchor, Plane, Luggage } from 'lucide-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CRUISE_PORTS, AIRPORT_LAYOVERS,
   buildPortPrefill, buildLayoverPrefill,
   type CruisePort, type AirportLayover, type StopOption, type StopPrefill,
 } from '../lib/transitCatalog';
 import { getApiUrl } from '../lib/api';
+import { getTranslation, type Language } from '../lib/i18n';
+
+/** Stringhe della sheet (chiavi `te_*` in i18n.ts). */
+const asLang = (language: string) => String(language || 'IT').toUpperCase() as Language;
+const mkT = (language: string) => (key: string) => getTranslation(`te_${key}`, asLang(language));
 
 type Filtro = 'tutti' | 'porti' | 'aeroporti';
 
@@ -54,6 +59,11 @@ export default function TransitEscapesSheet({
   const [aiVoci, setAiVoci] = useState<Voce[]>([]);
   const [aiLoading, setAiLoading] = useState<'port' | 'airport' | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const t = useMemo(() => mkT(language), [language]);
+  // Fetch AI in corso: si annulla allo smontaggio della sheet (prima
+  // continuava in background e chiamava setState su un componente morto).
+  const aiAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { aiAbortRef.current?.abort(); }, []);
 
   const tutte: Voce[] = useMemo(() => [
     ...CRUISE_PORTS.map(p => ({ kind: 'port' as const, data: p })),
@@ -80,16 +90,21 @@ export default function TransitEscapesSheet({
     if (aiLoading || query.trim().length < 2) return;
     setAiLoading(kind);
     setAiError(null);
+    aiAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    aiAbortRef.current = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), 90000);
     try {
       const res = await fetch(getApiUrl('/api/transit-guide'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind, query: query.trim(), lang: (language || 'IT').toLowerCase() }),
-        signal: AbortSignal.timeout(90000),
+        signal: ctrl.signal,
       });
       const data = await res.json().catch(() => null);
+      if (ctrl.signal.aborted) return;
       if (!res.ok || !data?.item?.id) {
-        setAiError(data?.error || 'Guida non disponibile in questo momento: riprova.');
+        setAiError(data?.error || t('ai_unavailable'));
         return;
       }
       const voce: Voce = kind === 'port'
@@ -98,9 +113,10 @@ export default function TransitEscapesSheet({
       setAiVoci(prev => prev.some(v => v.data.id === data.item.id) ? prev : [...prev, voce]);
       setExpandedId(data.item.id);
     } catch {
-      setAiError('Rete assente o server occupato: riprova tra poco.');
+      if (!ctrl.signal.aborted) setAiError(t('network_error'));
     } finally {
-      setAiLoading(null);
+      clearTimeout(timer);
+      if (!ctrl.signal.aborted) setAiLoading(null);
     }
   };
 
@@ -121,8 +137,8 @@ export default function TransitEscapesSheet({
     <div className="fixed inset-0 z-[10002] bg-white flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-gray-100 shrink-0">
-        <h2 className="font-black text-primary text-lg">🛳✈️ Sosta breve</h2>
-        <button onClick={onClose} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition" aria-label="Chiudi">
+        <h2 className="font-black text-primary text-lg">🛳✈️ {t('title')}</h2>
+        <button onClick={onClose} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition" aria-label={getTranslation('close', asLang(language))}>
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -135,21 +151,21 @@ export default function TransitEscapesSheet({
             type="text"
             value={query}
             onChange={e => { setQuery(e.target.value); setAiError(null); }}
-            placeholder="Cerca porto o aeroporto in tutto il mondo…"
+            placeholder={t('search_placeholder')}
             className="w-full pl-9 pr-4 py-3 rounded-2xl bg-gray-50 border border-outline-variant/30 focus:border-primary outline-none text-sm font-medium"
           />
         </div>
         <p className="text-[10px] font-medium text-gray-400 mt-1 pl-1">
-          Escursioni con le ore contate: rientro alla nave o al gate sempre garantito.
+          {t('intro')}
         </p>
       </div>
 
       {/* Filtri: tipo + paese */}
       <div className="flex items-center gap-2 px-4 py-3 shrink-0 overflow-x-auto no-scrollbar">
         {([
-          { id: 'tutti' as Filtro, label: 'Tutti' },
-          { id: 'porti' as Filtro, label: '🛳 Porti' },
-          { id: 'aeroporti' as Filtro, label: '✈️ Aeroporti' },
+          { id: 'tutti' as Filtro, label: t('all') },
+          { id: 'porti' as Filtro, label: `🛳 ${t('ports')}` },
+          { id: 'aeroporti' as Filtro, label: `✈️ ${t('airports')}` },
         ]).map(c => (
           <button
             key={c.id}
@@ -166,9 +182,9 @@ export default function TransitEscapesSheet({
           value={paese}
           onChange={e => setPaese(e.target.value)}
           className="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black bg-white text-gray-500 border border-outline-variant/30 outline-none"
-          aria-label="Filtra per paese"
+          aria-label={t('filter_country')}
         >
-          <option value="tutti">🌍 Tutti i paesi</option>
+          <option value="tutti">🌍 {t('all_countries')}</option>
           {paesi.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
@@ -197,14 +213,14 @@ export default function TransitEscapesSheet({
                       </div>
                       <div className="text-[10px] font-bold text-gray-500 mt-0.5">
                         {v.data.city} · {v.data.country}
-                        {!isPort && ` · città da ${(v.data as AirportLayover).minLayoverForCity}h+ di scalo`}
+                        {!isPort && ` · ${t('city_from')} ${(v.data as AirportLayover).minLayoverForCity}h+`}
                       </div>
                     </div>
                   </div>
                   <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full ${
                     v.data.aiGenerated ? 'bg-gray-100 text-gray-500' : 'bg-primary/10 text-primary'
                   }`}>
-                    {v.data.aiGenerated ? '🤖 AI' : '✦ Redazione'}
+                    {v.data.aiGenerated ? '🤖 AI' : `✦ ${t('editorial')}`}
                   </span>
                 </div>
               </button>
@@ -214,12 +230,12 @@ export default function TransitEscapesSheet({
                   {/* Trasferimento + bagagli */}
                   <div className="bg-gray-50 rounded-xl p-2.5 space-y-1.5">
                     <p className="text-[11px] text-gray-600 leading-relaxed">
-                      <span className="font-black text-gray-700">🚌 Verso il centro: </span>{v.data.transferNote}
+                      <span className="font-black text-gray-700">🚌 {t('to_center')}: </span>{v.data.transferNote}
                     </p>
                     {!isPort && (
                       <p className="text-[11px] text-gray-600 leading-relaxed flex items-start gap-1">
                         <Luggage className="w-3 h-3 mt-0.5 shrink-0 text-gray-400" />
-                        <span>{(v.data as AirportLayover).luggageNote || 'Deposito bagagli: verifica in loco il punto left luggage del terminal prima di uscire.'}</span>
+                        <span>{(v.data as AirportLayover).luggageNote || t('luggage_default')}</span>
                       </p>
                     )}
                   </div>
@@ -227,7 +243,7 @@ export default function TransitEscapesSheet({
                   {/* Scelta ore di sosta */}
                   <div>
                     <p className="text-[10px] font-black text-primary uppercase tracking-widest mb-1.5">
-                      {isPort ? '⏱ Ore di sosta a terra' : '⏱ Ore di scalo'}
+                      {isPort ? `⏱ ${t('hours_ashore')}` : `⏱ ${t('hours_layover')}`}
                     </p>
                     <div className="flex gap-2">
                       {v.data.options.map(opt => (
@@ -254,10 +270,10 @@ export default function TransitEscapesSheet({
                       : <Plane className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600" />}
                     <p className="text-[11px] font-bold text-amber-800 leading-snug">
                       {isPort
-                        ? <>Rientro a bordo entro <span className="font-black">{rientroOre} ore</span> dall'inizio della sosta (1h di margine: la nave non aspetta).</>
+                        ? <>{t('back_aboard_within')} <span className="font-black">{rientroOre} h</span> {t('back_aboard_note')}</>
                         : o.stayNearAirport
-                          ? <>Si resta in aeroporto: al gate <span className="font-black">2 ore</span> prima del volo, senza stress.</>
-                          : <>Ritorno in aeroporto entro <span className="font-black">{rientroOre} ore</span> dall'inizio dello scalo (2h prima del volo per controlli e imbarco).</>}
+                          ? <>{t('stay_airport')} <span className="font-black">2 h</span> {t('stay_airport_note')}</>
+                          : <>{t('back_airport_within')} <span className="font-black">{rientroOre} h</span> {t('back_airport_note')}</>}
                     </p>
                   </div>
 
@@ -280,7 +296,7 @@ export default function TransitEscapesSheet({
                     onClick={() => usa(v)}
                     className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform"
                   >
-                    Usa questo itinerario ✨
+                    {t('use')} ✨
                   </button>
 
                   {/* 📚 Libreria: varianti già generate e verificate per
@@ -295,7 +311,7 @@ export default function TransitEscapesSheet({
                       })}
                       className="w-full py-2 rounded-xl border border-amber-300/70 bg-amber-50 text-amber-800 text-[11px] font-black hover:bg-amber-100 active:scale-95 transition"
                     >
-                      📚 Vedi gli itinerari pronti per questo {isPort ? 'porto' : 'aeroporto'}
+                      📚 {t('see_ready')}
                     </button>
                   )}
                 </div>
@@ -308,11 +324,11 @@ export default function TransitEscapesSheet({
         {lista.length === 0 && q.length >= 2 && (
           <div className="text-center py-8 space-y-3">
             <p className="text-xs font-bold text-gray-400">
-              "{query.trim()}" non è nel catalogo curato.
+              "{query.trim()}" {t('not_curated')}
             </p>
             {aiLoading ? (
               <div className="flex items-center justify-center gap-2 text-[11px] font-bold text-gray-400">
-                <Loader2 className="w-4 h-4 animate-spin" /> La redazione AI prepara la guida…
+                <Loader2 className="w-4 h-4 animate-spin" /> {t('ai_preparing')}
               </div>
             ) : (
               <div className="flex flex-col items-center gap-2">
@@ -322,7 +338,7 @@ export default function TransitEscapesSheet({
                     onClick={() => generaAi('port')}
                     className="px-5 py-2.5 rounded-full border border-primary/30 text-primary text-xs font-black hover:bg-primary/5 active:scale-95 transition"
                   >
-                    🔍 Genera la guida del porto "{query.trim()}" con l'AI
+                    🔍 {t('generate_port')} "{query.trim()}"
                   </button>
                 )}
                 {(filtro === 'tutti' || filtro === 'aeroporti') && (
@@ -331,7 +347,7 @@ export default function TransitEscapesSheet({
                     onClick={() => generaAi('airport')}
                     className="px-5 py-2.5 rounded-full border border-primary/30 text-primary text-xs font-black hover:bg-primary/5 active:scale-95 transition"
                   >
-                    🔍 Genera la guida dell'aeroporto "{query.trim()}" con l'AI
+                    🔍 {t('generate_airport')} "{query.trim()}"
                   </button>
                 )}
               </div>
@@ -341,7 +357,7 @@ export default function TransitEscapesSheet({
         )}
         {lista.length === 0 && q.length < 2 && (
           <p className="text-center text-xs font-bold text-gray-400 py-10">
-            Nessuna voce per questo filtro: prova un altro paese o cerca per nome.
+            {t('no_results')}
           </p>
         )}
       </div>

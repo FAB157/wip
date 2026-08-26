@@ -20,6 +20,13 @@ import { Polyline, Marker } from 'react-leaflet';
 import L from 'leaflet';
 import { useEffect, useState } from 'react';
 import { tourService, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
+import { getTranslation, type Language } from '../lib/i18n';
+
+/** La lingua della UI (App.tsx la scrive in wip_language): il layer non riceve props. */
+function linguaUi(): Language {
+  try { return ((localStorage.getItem('wip_language') || 'IT').toUpperCase() as Language); } catch { return 'IT'; }
+}
+const tr = (k: string) => getTranslation(k, linguaUi());
 
 const BLU = '#1e3a8a';
 const FATTA = '#94a3b8';
@@ -76,12 +83,13 @@ function iconaTappa(numero: number, stato: StatoPin, opz: { conX: boolean; sopra
  * Il puntino "+" dei posti lungo la strada (bozza): piccolo, verde, non
  * compete con le tappe numerate. Un tocco lo aggiunge al giro.
  */
-let iconaLungoStradaCache: L.DivIcon | null = null;
+let iconaLungoStradaCache: { lingua: string; icona: L.DivIcon } | null = null;
 function iconaLungoStrada(): L.DivIcon {
-  if (iconaLungoStradaCache) return iconaLungoStradaCache;
-  iconaLungoStradaCache = L.divIcon({
+  const lingua = linguaUi();
+  if (iconaLungoStradaCache?.lingua === lingua) return iconaLungoStradaCache.icona;
+  const icona = L.divIcon({
     className: 'wip-lungo-strada',
-    html: `<div title="Aggiungi al giro" style="
+    html: `<div title="${tr('tour_aggiungi').replace(/"/g, '&quot;')}" style="
       width:20px;height:20px;border-radius:50%;
       background:#ffffff;border:2px solid #059669;color:#059669;
       display:flex;align-items:center;justify-content:center;
@@ -92,7 +100,8 @@ function iconaLungoStrada(): L.DivIcon {
     iconSize: [20, 20],
     iconAnchor: [10, 10],
   });
-  return iconaLungoStradaCache;
+  iconaLungoStradaCache = { lingua, icona };
+  return icona;
 }
 
 /** Il tocco e` sulla X o sul numero? Leaflet da` un solo evento per tutto il marker. */
@@ -162,7 +171,7 @@ export default function TourRouteLayer() {
             <Marker
               key={`giro-${t.id}-${posizione}`}
               position={[p.lat, p.lon]}
-              icon={iconaTappa(posizione + 1, stato, { conX: stato !== 'fatta', sopraIlPin: false, titoloX: 'Togli questa tappa dal giro' })}
+              icon={iconaTappa(posizione + 1, stato, { conX: stato !== 'fatta', sopraIlPin: false, titoloX: tr('tour_togli_tappa') })}
               zIndexOffset={stato === 'corrente' ? 1000 : 500}
               eventHandlers={{
                 click: (e: any) => {
@@ -231,7 +240,7 @@ export default function TourRouteLayer() {
           <Marker
             key={`bozza-${t.id}`}
             position={[p.lat, p.lon]}
-            icon={iconaTappa(posizione + 1, fuoriTempo ? 'fuori_tempo' : 'da_fare', { conX: true, sopraIlPin: true, titoloX: 'Togli dal giro' })}
+            icon={iconaTappa(posizione + 1, fuoriTempo ? 'fuori_tempo' : 'da_fare', { conX: true, sopraIlPin: true, titoloX: tr('tour_togli') })}
             zIndexOffset={800}
             eventHandlers={{
               click: (e: any) => {

@@ -5,8 +5,57 @@
  */
 
 import { supabase } from '../lib/supabase';
-import { parsePartialJSON } from '../lib/partialJsonParser';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { Capacitor } from '@capacitor/core';
+
+// ── Salvataggio file: browser (<a download>) oppure nativo (Filesystem) ──────
+// Nel WebView di Capacitor il click su un <a download> con blob: URL non fa
+// NULLA (nessun download listener), ma il codice tornava `true` e il toast
+// diceva «scaricato». Stesso schema di AppGuide.writePdfNative: Documenti,
+// in fallback i file esterni dell'app. Torna false se il salvataggio non è
+// avvenuto davvero: il chiamante mostra il toast solo in quel caso.
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') resolve(reader.result.split(',')[1]);
+      else reject(new Error('Conversione base64 fallita'));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+export async function saveBlobAsFile(blob: Blob, filename: string): Promise<boolean> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { Filesystem, Directory } = await import('@capacitor/filesystem');
+      const data = await blobToBase64(blob);
+      try {
+        await Filesystem.writeFile({ path: filename, data, directory: Directory.Documents, recursive: true });
+      } catch {
+        await Filesystem.writeFile({ path: filename, data, directory: Directory.External, recursive: true });
+      }
+      return true;
+    } catch (e) {
+      console.warn('[saveBlobAsFile] salvataggio nativo fallito:', e);
+      return false;
+    }
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type GuideStyle = 'art' | 'family' | 'shopping' | 'food' | 'essential';
 
@@ -63,9 +112,35 @@ export interface GenerateGuideResult {
   fromCache: boolean;
 }
 
-// ── Compute SHA-256 hash from itinerary + style ─────────────────────────────
+// ── Hash stabile dell'itinerario ────────────────────────────────────────────
+// La chiave di cache è calcolata su una PROIEZIONE dell'itinerario: prima
+// entrava l'oggetto intero — id random per utente, «📚» nel titolo della
+// libreria, podcast_cache, contatori di sostituzione, badge di verifica — e
+// lo stesso itinerario produceva un hash diverso a ogni apertura: la guida
+// pagata non si ritrovava mai in cache e si rigenerava (e ripagava).
+export function stableGuideProjection(itinerary: any): any {
+  const round4 = (v: any) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 1e4) / 1e4 : null);
+  const coordOf = (t: any) => {
+    const lat = t?.coordinate?.lat ?? t?.lat;
+    const lon = t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lng ?? t?.lon;
+    const la = round4(lat), lo = round4(lon);
+    return la != null && lo != null && la !== 0 ? [la, lo] : null;
+  };
+  const pulisci = (s: any) => String(s || '').replace(/^[\p{Extended_Pictographic}\s]+/u, '').trim().toLowerCase();
+  return {
+    destinazione: pulisci(itinerary?.destinazione || itinerary?.destination || itinerary?.citta || itinerary?.titolo),
+    giorni: (itinerary?.giorni || []).map((g: any) => ({
+      n: g?.giorno,
+      tappe: (g?.tappe || []).map((t: any) => ({
+        titolo: pulisci(t?.titolo_tappa || t?.name || t?.title),
+        coord: coordOf(t),
+      })),
+    })),
+  };
+}
+
 export async function computeItineraryHash(itinerary: any, style: string): Promise<string> {
-  const raw = JSON.stringify({ itinerary, style });
+  const raw = JSON.stringify({ itinerary: stableGuideProjection(itinerary), style });
   const encoder = new TextEncoder();
   const data = encoder.encode(raw);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -188,79 +263,6 @@ export async function generatePremiumGuide(
   return result;
 }
 
-export async function generatePremiumGuideStream(
-  itinerary: any,
-  style: GuideStyle,
-  userId: string,
-  language: string,
-  onChunk: (text: string) => void
-): Promise<GenerateGuideResult> {
-  const hash = await computeItineraryHash(itinerary, style + "_" + language);
-
-  const cached = await getCachedGuide(hash);
-  if (cached) return cached;
-
-  const response = await fetch('/api/premium-guide/generate-stream', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${await getAccessToken()}`,
-    },
-    body: JSON.stringify({ itinerary, style, userId, hash, language }),
-  });
-
-  const reader = response.body?.getReader();
-  const decoder = new TextDecoder();
-  let fullJson = "";
-
-  if (reader) {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6).trim();
-          if (dataStr === '[DONE]') break;
-          if (dataStr) {
-            try {
-              const parsed = JSON.parse(dataStr);
-              if (parsed.text) {
-                fullJson += parsed.text;
-                const partialObj = parsePartialJSON(fullJson);
-                if (partialObj && partialObj.giorni) {
-                  onChunk(partialObj);
-                }
-              } else if (parsed.error) {
-                throw new Error(parsed.error);
-              }
-            } catch (e) {}
-          }
-        }
-      }
-    }
-  }
-
-  // Parse difensivo del JSON finale: rimuove eventuali fence markdown e testo
-  // spurio prima/dopo l'oggetto, invece di esplodere con un SyntaxError.
-  let cleanJson = fullJson.replace(/^```json\s*/i, '').replace(/```\s*$/, '');
-  const fb = cleanJson.indexOf('{');
-  const lb = cleanJson.lastIndexOf('}');
-  if (fb !== -1 && lb > fb) cleanJson = cleanJson.slice(fb, lb + 1);
-  const data = JSON.parse(cleanJson);
-  const verifiedContent = await verifyGuideAntiAllucinazioni(data, itinerary, language);
-  const result: GenerateGuideResult = {
-    content: verifiedContent as PremiumGuideContent,
-    media_manifest: {}, // Le immagini possono mancare nello stream veloce
-    hash,
-    fromCache: false,
-  };
-  // La guida appena generata/acquistata resta disponibile offline
-  saveGuideLocally(result);
-  return result;
-}
-
 /**
  * Verifica anti-allucinazione della guida d'autore: un motore AI DIVERSO
  * dal generatore rilegge i POI della guida e marca quelli sospetti
@@ -301,9 +303,33 @@ export async function downloadGuideAsPdf(
     html2pdf = mod.default || mod;
   } catch (e) {
     console.error('[PremiumGuide] html2pdf.js not available:', e);
-    // Fallback: stampa browser SOLO della guida. Il window.print() nudo
-    // stampava l'itinerario, perché PrintView si autoattiva in @media print.
+    // Ripiego: stampa del browser, SOLO della guida (printScoped nasconde
+    // gli altri documenti, e le regole in index.css nascondono l'app).
+    //
+    // IL NOME DEL FILE. Su questo ripiego il browser non usa `filename`: usa
+    // il TITOLO DELLA PAGINA. Senza toccarlo, il PDF si chiamava come l'app
+    // — «WIP guida premium.pdf» per qualunque città, e due guide diverse
+    // finivano con lo stesso nome nella cartella Download. Qui il titolo
+    // diventa quello vero della guida per il tempo della stampa, e poi si
+    // rimette com'era: è lo stesso meccanismo per cui il PDF dell'itinerario
+    // esce già col suo nome.
     const { printScoped } = await import('../lib/printScoped');
+    const titoloPrima = document.title;
+    document.title = filename.replace(/\.pdf$/i, '').replace(/_/g, ' ');
+    let ripristinato = false;
+    const ripristina = () => {
+      if (ripristinato) return;
+      ripristinato = true;
+      document.title = titoloPrima;
+      window.removeEventListener('afterprint', ripristina);
+      window.removeEventListener('focus', ripristina);
+    };
+    window.addEventListener('afterprint', ripristina);
+    // Rete di sicurezza: se 'afterprint' non arriva (succede su alcuni
+    // browser quando l'utente annulla), il titolo torna al ritorno del
+    // focus o comunque entro un minuto.
+    window.addEventListener('focus', ripristina);
+    setTimeout(ripristina, 60000);
     printScoped('guide');
     return null;
   }
@@ -335,15 +361,8 @@ export async function downloadGuideAsPdf(
     // Il PDF viene renderizzato UNA volta sola: il vecchio codice rifaceva
     // l'intero rendering html2canvas una seconda volta per il download.
     const pdfBlob: Blob = await html2pdf().set(opt).from(element).outputPdf('blob');
-    const dlUrl = URL.createObjectURL(pdfBlob);
-    const a = document.createElement('a');
-    a.href = dlUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(dlUrl);
-    return pdfBlob;
+    const saved = await saveBlobAsFile(pdfBlob, filename);
+    return saved ? pdfBlob : null;
   } catch (err) {
     console.error('[PremiumGuide] PDF generation failed:', err);
     return null;
@@ -398,15 +417,7 @@ export async function downloadGuideAsEpub(hash: string, titolo: string, language
   if (!ok || !blob) return false;
   const epubBlob = new Blob([blob], { type: 'application/epub+zip' });
   const filename = `WIP_${String(titolo || 'Guida').replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.epub`;
-  const url = URL.createObjectURL(epubBlob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  return true;
+  return saveBlobAsFile(epubBlob, filename);
 }
 
 // ── Helper: get current Supabase access token ────────────────────────────────

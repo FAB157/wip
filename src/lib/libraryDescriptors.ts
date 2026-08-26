@@ -36,6 +36,15 @@ import {
   type StopOption,
 } from './transitCatalog';
 import { WORLD_ZONES, type WorldZone } from './libraryZonesWorld';
+// Catalogo aggiuntivo (22/08/2026, ~5.000 descrittori in più su TUTTE le
+// categorie): zone mondiali nuove + luoghi nuovi per i 17 temi editoriali.
+// Solo dati, si fondono qui — vedi il commento in testa al file.
+import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra';
+// Secondo lotto (stesso giorno): stessa forma, altre zone e altri luoghi.
+// I due lotti si fondono insieme, il codice di merge scarta da solo i
+// doppioni fra i due (stesso taken-set/nomiEsistenti) — vedi i due punti
+// di fusione più sotto.
+import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2';
 import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
 import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
 import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog';
@@ -1687,13 +1696,30 @@ export const THEMES: ThemeDef[] = [
 export function themeDescriptors(): LibraryDescriptor[] {
   const out: LibraryDescriptor[] = [];
   for (const t of THEMES) {
+    // Luoghi aggiuntivi del 22/08/2026 (libraryDescriptorsExtra.ts e il
+    // secondo lotto in libraryDescriptorsExtra2.ts): stesso tema, stesso
+    // brief, altre città. Un luogo già presente (stesso nome città, in
+    // QUALSIASI dei lotti) non si duplica: chi arriva prima vince.
+    const nomiEsistenti = new Set(t.places.map((p) => slugify(p.city)));
+    const extraCandidati = [
+      ...(EXTRA_THEME_PLACES[t.id] || []),
+      ...(EXTRA_THEME_PLACES_2[t.id] || []),
+    ];
+    const extra: typeof t.places = [];
+    for (const p of extraCandidati) {
+      const key = slugify(p.city);
+      if (nomiEsistenti.has(key)) continue;
+      nomiEsistenti.add(key);
+      extra.push(p);
+    }
+    const placesConExtra = [...t.places, ...extra];
     // Due città omonime nello stesso tema producevano lo STESSO slug e la
     // seconda spariva dalla biblioteca (caso reale: Lagos in Portogallo e
     // Lagos in Nigeria nel tema "mare"). La prima tiene lo slug storico —
     // gli item già generati restano validi — la seconda prende il suffisso
     // del paese.
     const usedKeys = new Set<string>();
-    for (const pl of t.places) {
+    for (const pl of placesConExtra) {
       const cityKey = usedKeys.has(slugify(pl.city))
         ? `${slugify(pl.city)}-${slugify(pl.country)}`
         : slugify(pl.city);
@@ -1865,9 +1891,13 @@ function combinabilityRule(angleId: string, city: string): string {
 export function worldZoneDescriptors(): LibraryDescriptor[] {
   const out: LibraryDescriptor[] = [];
   // Le città già coperte da ZONE_CITIES non vanno duplicate, e nessuno
-  // slug può ripetersi (due zone con lo stesso nome slugificato).
+  // slug può ripetersi (due zone con lo stesso nome slugificato). Le zone
+  // aggiuntive (EXTRA_WORLD_ZONES e il secondo lotto EXTRA_WORLD_ZONES_2,
+  // 22/08/2026) hanno la stessa forma di WORLD_ZONES e passano dallo stesso
+  // taken-set: chi arriva prima nell'ordine dello spread vince, i doppioni
+  // fra i lotti si scartano da soli.
   const taken = new Set(ZONE_CITIES.map(z => slugify(z.city)));
-  for (const z of WORLD_ZONES) {
+  for (const z of [...WORLD_ZONES, ...EXTRA_WORLD_ZONES, ...EXTRA_WORLD_ZONES_2]) {
     const key = slugify(z.c);
     if (taken.has(key)) continue;
     taken.add(key);
@@ -3636,9 +3666,14 @@ export interface DescriptorSearchOptions {
   /** Solo descrittori orari con hours <= maxHours. */
   maxHours?: number;
   days?: number;
+  /** Tetto sui risultati (default 60, massimo 300). Serve al chip "Tutti"
+   *  di una categoria, che deve mostrare tutto quello che c'è e non i primi
+   *  sessanta in ordine di catalogo. */
+  limit?: number;
 }
 
 const SEARCH_MAX_RESULTS = 60;
+const SEARCH_HARD_MAX = 300;
 
 /** Ricerca client-side: filtro case-insensitive su title/city/country/
  *  theme/angle, con filtri strutturati opzionali. Max 60 risultati. */
@@ -3646,10 +3681,12 @@ export function searchDescriptors(
   query: string,
   opts: DescriptorSearchOptions = {},
 ): LibraryDescriptor[] {
-  const terms = (query || '')
-    .toLowerCase()
+  // Ricerca senza accenti: "Sao Paulo" trova "São Paulo" e viceversa.
+  const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const terms = fold(query || '')
     .split(/\s+/)
     .filter(Boolean);
+  const max = Math.min(SEARCH_HARD_MAX, Math.max(1, opts.limit || SEARCH_MAX_RESULTS));
   const out: LibraryDescriptor[] = [];
   for (const d of getAllDescriptors()) {
     if (opts.kind && d.kind !== opts.kind) continue;
@@ -3658,11 +3695,16 @@ export function searchDescriptors(
     if (opts.maxHours !== undefined && (d.hours === undefined || d.hours > opts.maxHours)) continue;
     if (opts.days !== undefined && d.days !== opts.days) continue;
     if (terms.length) {
-      const haystack = `${d.title} ${d.city} ${d.country} ${d.theme || ''} ${d.angle}`.toLowerCase();
+      // Anche lo slug (con i trattini resi spazi): è l'unico campo che porta
+      // sempre la forma "canonica" del nome, utile quando il titolo è
+      // editoriale ("Skagen: i pittori della luce"). Eventuali campi
+      // tradotti (title_en/titleEn) entrano se un giorno esisteranno.
+      const extra = (d as any).title_en || (d as any).titleEn || '';
+      const haystack = fold(`${d.title} ${d.city} ${d.country} ${d.theme || ''} ${d.angle} ${String(d.slug || '').replace(/[-_]+/g, ' ')} ${extra}`);
       if (!terms.every(t => haystack.includes(t))) continue;
     }
     out.push(d);
-    if (out.length >= SEARCH_MAX_RESULTS) break;
+    if (out.length >= max) break;
   }
   return out;
 }

@@ -57,7 +57,23 @@ data class OfflinePoiEntity(
     val descriptionShort: String? = null,
     /** Testo integrale dell'audioguida, letto dal TTS nativo quando offline */
     val audioText: String? = null,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    /**
+     * LA PORTA, non il centroide (shared_pois.entrance_lat/lon, 277.363 POI al
+     * 22/08/2026). Senza rete il geofence puntava al centro dell'edificio: per
+     * un palazzo a L o un parco si arrivava sul retro. Nullable: chi non ha un
+     * ingresso resta al centroide, identico a prima.
+     */
+    val entranceLat: Double? = null,
+    val entranceLon: Double? = null,
+    /**
+     * PERIMETRO dell'edificio nel formato compatto "lon,lat lon,lat;..." di
+     * PoiEntity.footprint: offline la domanda "sono dentro?" deve funzionare
+     * come online, e senza rete poi_footprints non si può interrogare.
+     */
+    val footprint: String? = null,
+    /** Indirizzo leggibile (via e civico), per la notifica e la voce. */
+    val address: String? = null
 )
 
 /** Un POI può appartenere a più pacchetti sovrapposti (aree che si intersecano). */
@@ -85,17 +101,29 @@ data class OfflineSpendEntity(
     val ts: Long
 )
 
-/** Adattatore verso la pipeline esistente (radar, geofence, receiver). */
+/**
+ * Adattatore verso la pipeline esistente (radar, geofence, receiver).
+ *
+ * Porta con sé ingresso, raggi calibrati e perimetro: prima passavano solo
+ * nome e centroide, e offline il geofence lavorava a cerchi sul centro
+ * dell'edificio anche per i POI che online hanno porta e perimetro.
+ * I raggi vanno in PoiEntity SOLO con l'ingresso (stesso gate hasEntrance di
+ * GeofenceManager): senza ingresso, 150/50 sono i default del server e non
+ * una misura sul perimetro.
+ */
 fun OfflinePoiEntity.toPoiEntity() = PoiEntity(
     id = id,
     nome = nome,
     lat = lat,
     lon = lon,
-    entranceLat = null,
-    entranceLon = null,
+    entranceLat = entranceLat,
+    entranceLon = entranceLon,
     poiType = poiType ?: category,
     guideDefault = "nicky",
     isGem = isGem,
     isFromItinerary = false,
-    teaserText = teaserText
+    teaserText = teaserText,
+    alertRadius = if (entranceLat != null && entranceLon != null) alertRadius else null,
+    geofenceRadius = if (entranceLat != null && entranceLon != null) arrivalRadius else null,
+    footprint = footprint
 )

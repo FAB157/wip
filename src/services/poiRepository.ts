@@ -368,7 +368,9 @@ const AUDIOGUIDABLE_CATEGORIES = new Set([
   'museum', 'gallery', 'musei',
   'information', 'tourism_information', 'office', 'consigli',
   'gemme',
-  'community',
+  // 'community' e gli otto verticali tematici NON ci sono piu' (22/08/2026):
+  // non hanno audioguida per decisione del committente. Vedi
+  // guideSettings.SENZA_AUDIOGUIDA.
 ]);
 
 /**

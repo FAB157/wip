@@ -164,6 +164,46 @@ export function dentroPerimetro(poiId: string, lat: number, lon: number): boolea
   return dentro(p.anelli, lat, lon);
 }
 
+/**
+ * DISTANZA DAL BORDO del perimetro, in metri. 0 se il punto e' dentro,
+ * Infinity se il POI non ha un perimetro (o non e' ancora arrivato).
+ *
+ * E' questa la misura che governa l'audioguida (decisione del 22/08/2026):
+ * la guida deve partire a 30 m DAL MURO, non quando si e' gia' dentro ne'
+ * a 50 m da un ingresso che per un parco o una cinta muraria puo' stare
+ * dall'altra parte. Chi cammina lungo la facciata e' "al POI", e lo e' da
+ * qualunque lato.
+ *
+ * Calcolo: minimo della distanza punto-segmento su tutti i lati di tutti
+ * gli anelli, in un frame equirettangolare locale (metri). Su 15 lati sono
+ * microsecondi; il riquadro allargato di `entro` metri scarta prima chi e'
+ * chiaramente lontano.
+ */
+export function distanzaDalPerimetro(poiId: string, lat: number, lon: number, entro = 100): number {
+  const p = cache.get(poiId);
+  if (!p) return Infinity;
+  const r = p.riquadro;
+  const mLat = 111_320;
+  const mLon = 111_320 * Math.cos((lat * Math.PI) / 180);
+  const dLat = entro / mLat, dLon = entro / (mLon || 1);
+  if (lat < r.minLat - dLat || lat > r.maxLat + dLat || lon < r.minLon - dLon || lon > r.maxLon + dLon) return Infinity;
+  if (dentro(p.anelli, lat, lon)) return 0;
+  let best = Infinity;
+  for (const anello of p.anelli) {
+    for (let i = 0, j = anello.length - 1; i < anello.length; j = i++) {
+      const ax = (anello[j][0] - lon) * mLon, ay = (anello[j][1] - lat) * mLat;
+      const bx = (anello[i][0] - lon) * mLon, by = (anello[i][1] - lat) * mLat;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy;
+      const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2));
+      const px = ax + t * dx, py = ay + t * dy;
+      const d = Math.sqrt(px * px + py * py);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
 /** true se per questo POI sappiamo gia' se ha o non ha un perimetro. */
 export function perimetroNoto(poiId: string): boolean {
   return cache.has(poiId);

@@ -17,7 +17,7 @@ import { X, Search, Loader2, ArrowLeft, Clock, MapPin, Sparkles, CheckCircle2, W
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getApiUrl } from '../lib/api';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 import TravelInfo from './itinerary/TravelInfo';
 import BudgetTable from './itinerary/BudgetTable';
 import LoadingQuiz from './LoadingQuiz';
@@ -93,6 +93,39 @@ const KIND_CHIPS: Array<{ id: string; label: string; kind?: string; theme?: stri
   { id: 'strade-del-gusto', label: '🍇 Strade del gusto', kind: 'theme', theme: 'strade-del-gusto', match: ['strade-del-gusto', 'strada del vino', 'wine route'] },
   { id: 'zone-del-gusto', label: '🍽 Zone del gusto', kind: 'theme', theme: 'zone-del-gusto', match: ['zone-del-gusto', 'zona del gusto', 'enogastronomia'] },
   { id: 'fiere-del-gusto', label: '🎪 Sagre e fiere', kind: 'theme', theme: 'fiere-del-gusto', match: ['fiere-del-gusto', 'fiera', 'sagra', 'festival'] },
+  // ── Turismo religioso ────────────────────────────────────────────────
+  // Un chip solo per tutte le fedi, non uno per religione: chi cerca
+  // "luoghi sacri" vuole vedere il Kumano Kodo accanto al Cammino di
+  // Santiago, e separarli per confessione trasformerebbe un filtro di
+  // viaggio in una dichiarazione di appartenenza.
+  { id: 'luoghi-sacri', label: '🙏 Luoghi sacri', kind: 'theme', theme: 'luoghi-sacri', match: ['luoghi-sacri', 'sacro', 'pellegrinaggio', 'religioso', 'santuario'] },
+  // ── Verticali tematici (21/08/2026) ──────────────────────────────────
+  // Hanno un catalogo REALE dietro (src/data/tematici/*.json → shared_pois),
+  // a differenza dei temi editoriali storici qui sopra: gli id sono
+  // prefissati 'tem-' perché 'fioriture' e 'memoria' erano già presi.
+  { id: 'tem-terme', label: '🛁 Terme e sorgenti', kind: 'theme', theme: 'tematici-terme', match: ['tematici-terme', 'terme', 'thermal'] },
+  { id: 'tem-cinema', label: '🎬 Set di film e serie', kind: 'theme', theme: 'tematici-cinema', match: ['tematici-cinema', 'set', 'location'] },
+  { id: 'tem-cieli', label: '🌌 Cieli bui e stelle', kind: 'theme', theme: 'tematici-cieli', match: ['tematici-cieli', 'stelle', 'astro'] },
+  { id: 'tem-street-art', label: '🎨 Street art', kind: 'theme', theme: 'tematici-street_art', match: ['tematici-street_art', 'street art', 'murales'] },
+  { id: 'tem-mercati', label: '🛍️ Mercati e mercatini', kind: 'theme', theme: 'tematici-mercati', match: ['tematici-mercati', 'mercato', 'mercatino'] },
+  { id: 'tem-fioriture', label: '🌸 Fioriture', kind: 'theme', theme: 'tematici-fioriture', match: ['tematici-fioriture', 'fioritura'] },
+  // Niente alias 'memoria': è il tema ESATTO del chip 'memoria' (gruppo
+  // Esperienze) e con l'alias "Tutti i tematici" mostrava i suoi 9
+  // itinerari mentre il chip tem-memoria ne mostrava 0 (verificato sui dati
+  // veri il 22/08/2026). Un alias non deve mai coincidere con il tema di
+  // un altro chip.
+  { id: 'tem-memoria', label: '🕯️ Memoria e case-museo', kind: 'theme', theme: 'tematici-memoria', match: ['tematici-memoria'] },
+  { id: 'tem-lento', label: '🚂 Viaggio lento', kind: 'theme', theme: 'tematici-lento', match: ['tematici-lento', 'treno panoramico', 'lento'] },
+  // ── Temi che erano ORFANI (22/08/2026) ───────────────────────────────
+  // Esistevano in biblioteca ma nessun chip li copriva: 116 itinerari
+  // raggiungibili solo da "Tutti", e invisibili qualunque categoria si
+  // aprisse. Misurato sui dati veri: mare 61, montagna-estate 33,
+  // parchi-tematici 22.
+  // È il difetto strutturale dei chip scritti a mano contro un catalogo che
+  // cresce: ogni tema nuovo nasce orfano finché qualcuno non se ne accorge.
+  { id: 'mare', label: '🌊 Mare', kind: 'theme', theme: 'mare', match: ['mare', 'spiagge', 'sea', 'beach'] },
+  { id: 'montagna-estate', label: '🏔 Montagna d\'estate', kind: 'theme', theme: 'montagna-estate', match: ['montagna-estate', 'montagna', 'alpi'] },
+  { id: 'parchi-tematici', label: '🎢 Parchi a tema', kind: 'theme', theme: 'parchi-tematici', match: ['parchi-tematici', 'parco divertimenti', 'theme park'] },
 ];
 
 /** Medium "luoghi di" con ricerca on-demand (POST /api/library/<medium>):
@@ -141,8 +174,10 @@ function anyChipMatches(chips: KindChip[], item: { kind?: any; theme?: any }): b
 // tutto il gruppo" mostrato per primo in riga 2.
 const CHIP_GROUPS: Array<{ id: string; label: string; emoji: string; allLabel: string; chipIds: string[] }> = [
   {
+    // 'pilgrim' è passato al gruppo "Luoghi sacri": un chip sta in UN solo
+    // gruppo, altrimenti la riga 2 lo mostra due volte.
     id: 'trasporti', emoji: '🧭', label: 'Viaggio & trasporti', allLabel: 'Tutti i viaggi & trasporti',
-    chipIds: ['port', 'airport', 'pilgrim', 'ciclovie'],
+    chipIds: ['port', 'airport', 'ciclovie'],
   },
   {
     id: 'citta', emoji: '📍', label: 'Città', allLabel: 'Tutte le città',
@@ -157,16 +192,37 @@ const CHIP_GROUPS: Array<{ id: string; label: string; emoji: string; allLabel: s
     chipIds: ['strade-del-gusto', 'zone-del-gusto', 'fiere-del-gusto', 'vino', 'fabbriche-del-gusto', 'agriturismi'],
   },
   {
+    // Le stagioni sono un gruppo a sé, non "esperienze a tema": mare,
+    // montagna e neve sono lo stesso viaggio in momenti diversi dell'anno, e
+    // chi cerca "dove andare adesso" cerca questo.
+    // È anche il gruppo che raccoglie i tre temi prima ORFANI — mare,
+    // montagna-estate, parchi-tematici — che nessun chip mostrava.
+    id: 'stagioni', emoji: '🌊', label: 'Natura e stagioni', allLabel: 'Tutta la natura',
+    chipIds: ['mare', 'montagna-estate', 'neve', 'fioriture', 'fauna', 'parchi-tematici'],
+  },
+  {
     id: 'cultura', emoji: '🎭', label: 'Ispirazioni culturali', allLabel: 'Tutte le ispirazioni culturali',
     chipIds: ['cinema', 'libri', 'musica', 'arte', 'storia', 'scienza', 'sport', 'moda'],
   },
   {
+    // Gruppo suo e non dentro "Esperienze a tema": questi hanno un catalogo
+    // di luoghi reali alle spalle, e chi cerca "le terme" o "i set di Game
+    // of Thrones" cerca quello, non un'ispirazione generica.
+    // I due chip del sacro stanno QUI e non in prima riga (decisione
+    // committente, 22/08/2026): sono un catalogo come gli altri, e la riga
+    // principale non regge un gruppo in più. 'pilgrim' sono i cammini a
+    // piedi catalogati, 'luoghi-sacri' i pellegrinaggi di tutte le fedi,
+    // anche quelli che si fanno in treno.
+    id: 'tematici', emoji: '🧭', label: 'Tematici', allLabel: 'Tutti i tematici',
+    chipIds: ['tem-terme', 'tem-cinema', 'tem-cieli', 'tem-street-art', 'tem-mercati', 'tem-fioriture', 'tem-memoria', 'tem-lento', 'luoghi-sacri', 'pilgrim'],
+  },
+  {
     id: 'esperienze', emoji: '🌿', label: 'Esperienze a tema', allLabel: 'Tutte le esperienze a tema',
     chipIds: [
-      // vino, fabbriche-del-gusto e agriturismi sono passati al gruppo
-      // "Mangiare e bere": un chip sta in un gruppo solo, altrimenti la
-      // riga 2 lo mostra due volte.
-      'fioriture', 'fauna', 'neve', 'botteghe', 'wellness',
+      // vino, fabbriche-del-gusto e agriturismi sono passati a "Mangiare e
+      // bere"; fioriture, fauna e neve a "Natura e stagioni". Un chip sta in
+      // UN gruppo solo, altrimenti la riga 2 lo mostra due volte.
+      'botteghe', 'wellness',
       'scoperta-urbana', 'musei-impresa', 'aperture-straordinarie',
       'memoria', 'souvenir',
     ],
@@ -227,23 +283,38 @@ export function normalizeLibraryItinerary(raw: any, meta?: any): any | null {
   if (!raw || typeof raw !== 'object') return null;
   const giorniRaw = raw.giorni || raw.days || [];
   const lista = Array.isArray(giorniRaw) ? giorniRaw : Object.values(giorniRaw || {});
+  // Coordinate della città (dal meta del descrittore/libreria), usate come
+  // ripiego per le tappe senza coordinate: prima diventavano (0,0) — un
+  // punto nel Golfo di Guinea — e la mappa ci centrava sopra.
+  const cityLat = Number(meta?.lat ?? meta?.coords?.lat ?? raw?.lat);
+  const cityLon = Number(meta?.lon ?? meta?.lng ?? meta?.coords?.lon ?? meta?.coords?.lng ?? raw?.lon ?? raw?.lng);
+  const cityCoord = Number.isFinite(cityLat) && Number.isFinite(cityLon) && cityLat !== 0 ? { lat: cityLat, lng: cityLon } : null;
+  const coordOf = (t: any) => {
+    const lat = Number(t?.coordinate?.lat ?? t?.lat);
+    const lng = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lng ?? t?.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0) return { lat, lng };
+    // Senza coordinate: quelle della città se ci sono, altrimenti nessuna
+    // (i renderer saltano il centraggio quando `coordinate` manca).
+    return cityCoord ? { ...cityCoord } : undefined;
+  };
   const giorni = lista
     .map((g: any, gi: number) => ({
       ...g,
       giorno: Number(g?.giorno) || gi + 1,
-      tappe: (Array.isArray(g?.tappe) ? g.tappe : []).map((t: any, ti: number) => ({
-        ...t,
-        id_tappa: t?.id_tappa || `lib_${gi + 1}_${ti + 1}_${Math.random().toString(36).slice(2, 8)}`,
-        ora: t?.ora || '',
-        titolo_tappa: t?.titolo_tappa || t?.titolo || t?.nome || 'Tappa',
-        attivita: t?.attivita || t?.descrizione || '',
-        consiglio_guida: t?.consiglio_guida || '',
-        tipo: t?.tipo || 'visita',
-        coordinate: {
-          lat: Number(t?.coordinate?.lat) || 0,
-          lng: Number(t?.coordinate?.lng ?? t?.coordinate?.lon) || 0,
-        },
-      })),
+      tappe: (Array.isArray(g?.tappe) ? g.tappe : []).map((t: any, ti: number) => {
+        const coordinate = coordOf(t);
+        const { coordinate: _scarta, ...resto } = t || {};
+        return {
+          ...resto,
+          id_tappa: t?.id_tappa || `lib_${gi + 1}_${ti + 1}_${Math.random().toString(36).slice(2, 8)}`,
+          ora: t?.ora || '',
+          titolo_tappa: t?.titolo_tappa || t?.titolo || t?.nome || 'Tappa',
+          attivita: t?.attivita || t?.descrizione || '',
+          consiglio_guida: t?.consiglio_guida || '',
+          tipo: t?.tipo || 'visita',
+          ...(coordinate ? { coordinate } : {}),
+        };
+      }),
     }))
     .filter((g: any) => g.tappe.length > 0);
   if (giorni.length === 0) return null;
@@ -296,6 +367,14 @@ function buildAngleLabels(mod: any): Record<string, string> {
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/** Attesa massima complessiva per "Genera ora" / "Cerca come …": il server
+ *  lavora fino a ~270 s prima di rispondere 202, e i 202 di lock (un altro
+ *  utente o il cron stanno già generando lo stesso item) NON sono tentativi
+ *  falliti: si continua a chiedere finché l'item non è pronto o scade il
+ *  budget. */
+const GEN_BUDGET_MS = 300000;
+const GEN_POLL_MS = 20000;
 
 // ── Componente ─────────────────────────────────────────────────────────
 export default function ItineraryLibrarySheet({
@@ -354,6 +433,13 @@ export default function ItineraryLibrarySheet({
   // Label leggibili per gli id di angolo/tema (dal modulo descrittori)
   const [angleLabels, setAngleLabels] = useState<Record<string, string>>({});
   const searchSeq = useRef(0);
+  // Sequenza delle aperture di dettaglio: due tap ravvicinati su due card
+  // facevano arrivare per ultima la risposta della PRIMA, che sovrascriveva
+  // il dettaglio della seconda. Si tiene solo la risposta dell'ultima richiesta.
+  const detailSeq = useRef(0);
+  // Stringhe UI della libreria (chiavi `lib_*` in i18n.ts).
+  const t = useCallback((key: string) => getTranslation(`lib_${key}`, language), [language]);
+  const dayWord = (n: number) => getTranslation(n === 1 ? 'day' : 'giorni', language).toLowerCase();
 
   useEffect(() => {
     let vivo = true;
@@ -390,6 +476,34 @@ export default function ItineraryLibrarySheet({
       if (q) params.set('q', q);
       if (chip?.kind) params.set('kind', chip.kind);
       if (chip?.theme) params.set('theme', chip.theme);
+      // "Tutti i <gruppo>": non c'è UN tema, ce ne sono otto. Si mandano
+      // tutti (più gli alias di `match`, perché i meta salvati non usano
+      // sempre l'id esatto del chip) e si alza il tetto: prima partiva una
+      // query senza filtro, tornavano i primi 100 di TUTTA la libreria e il
+      // filtro client li scartava quasi tutti — il chip "Tutti" mostrava
+      // una manciata di itinerari o nessuno.
+      if (!chip && activeChips.length) {
+        const temi = new Set<string>();
+        const kindsGruppo = new Set<string>();
+        for (const c of activeChips) {
+          if (c.theme) temi.add(c.theme);
+          if (c.kind && c.kind !== 'theme') kindsGruppo.add(c.kind);
+          // Gli alias finiscono in TUTTE E DUE le liste: alcuni sono temi
+          // ('pellegrinaggio'), altri kind ('port'), e il server fa l'OR.
+          // Prendere qualcosa in più non fa danno, il filtro fine è a valle.
+          for (const m of c.match || []) { temi.add(m); kindsGruppo.add(m); }
+        }
+        if (temi.size) params.set('themes', [...temi].join(','));
+        if (kindsGruppo.size) params.set('kinds', [...kindsGruppo].join(','));
+      }
+      // Tetto alto sempre, non solo per i gruppi: anche il "Tutti" generale e
+      // un chip singolo molto popolato si fermavano a 100 righe. E 500 non
+      // basta più: "Tutti" (nessuna categoria) deve mostrare TUTTI gli
+      // itinerari, e a catalogo sono oltre 1.000 (22/08/2026).
+      params.set('limit', '5000');
+      // Lingua su TUTTE le rotte library: titoli/meta tradotti dove il
+      // server li ha, e l'item generato nella lingua dell'utente.
+      params.set('lang', String(language));
       if (cityFilter.trim()) params.set('city', cityFilter.trim());
       if (maxHours) params.set('maxHours', maxHours);
       if (daysFilter) params.set('days', daysFilter);
@@ -417,22 +531,50 @@ export default function ItineraryLibrarySheet({
     generated.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
 
     // 2. Descrittori non ancora generati (modulo locale, best-effort)
+    //
+    // UNA CHIAMATA PER CHIP, non una sola per tutto il gruppo.
+    // `searchDescriptors` taglia a 60 risultati AL SUO INTERNO. Chiamandola
+    // una volta sola senza tema — com'era prima quando c'era selezionata solo
+    // la macro-categoria — quei 60 erano i primi del catalogo (porti, film) e
+    // il filtro di gruppo applicato DOPO li scartava tutti: la pagina usciva
+    // vuota anche quando di descrittori adatti ce n'erano migliaia.
+    // È quello che si vedeva aprendo "Tematici" o "Luoghi sacri" (22/08/2026).
+    // Ora si chiede al catalogo un pezzo per ciascun chip del gruppo: il
+    // taglio si applica dentro la categoria giusta, e ognuna porta i suoi.
     let descs: LibraryDescriptor[] = [];
     try {
       const mod = await getLibraryModule();
       if (typeof mod?.searchDescriptors === 'function') {
-        const out = await Promise.resolve(mod.searchDescriptors(q, {
-          kind: chip?.kind as any,
-          theme: chip?.theme,
+        const comuni = {
           city: cityFilter.trim() || undefined,
           maxHours: maxHours ? Number(maxHours) : undefined,
           days: daysFilter ? Number(daysFilter) : undefined,
-        }));
-        if (Array.isArray(out)) descs = out;
+        };
+        // Un chip preciso: una chiamata. Un gruppo: una per chip. Nessun
+        // filtro: una sola chiamata larga, come prima.
+        // Un chip solo può prendersi tutto lo spazio (200); dentro un gruppo
+        // si divide, altrimenti il primo chip riempie la pagina e gli altri
+        // sette non si vedono mai.
+        const perChip = activeChips.length > 1 ? 40 : 200;
+        const richieste = activeChips.length
+          ? activeChips.map(c => Promise.resolve(
+              mod.searchDescriptors(q, { ...comuni, kind: c.kind as any, theme: c.theme, limit: perChip })))
+          : [Promise.resolve(mod.searchDescriptors(q, { ...comuni, limit: 200 }))];
+        const blocchi = await Promise.all(richieste);
+        const visti = new Set<string>();
+        for (const blocco of blocchi) {
+          if (!Array.isArray(blocco)) continue;
+          for (const d of blocco) {
+            const k = String(d?.slug || d?.id || d?.title || '');
+            if (k && visti.has(k)) continue;
+            if (k) visti.add(k);
+            descs.push(d);
+          }
+        }
       }
     } catch { /* il catalogo locale non deve mai rompere la sheet */ }
-    // Filtro gruppo anche sui descrittori: con solo la macro-categoria
-    // selezionata, searchDescriptors non ha ricevuto kind/theme (vedi sopra).
+    // Rete di sicurezza: se un chip ha `match` più largo del suo `theme`, il
+    // catalogo può restituire qualcosa che al gruppo non appartiene.
     descs = descs.filter(d => anyChipMatches(activeChips, d));
 
     // Dedup: i descrittori già presenti in libreria non vanno riproposti
@@ -441,18 +583,41 @@ export default function ItineraryLibrarySheet({
       const slug = norm(d?.slug || d?.id);
       if (slug && inLibrary.has(slug)) return false;
       return true;
-    }).slice(0, 60);
+    }).slice(0, 400); // il taglio a video lo fa "Mostra altri", non questo
+
+    // ── SENTINELLA ANTI-ORFANI ────────────────────────────────────────
+    // I chip sono scritti a mano, il catalogo cresce da solo: ogni tema
+    // nuovo nasce senza un chip che lo mostri, e resta raggiungibile solo
+    // da "Tutti". È già successo — mare, montagna-estate e parchi-tematici
+    // hanno passato settimane invisibili, 116 itinerari in tutto.
+    // Qui, senza filtri attivi, si controlla che ogni tema tornato dal
+    // server abbia almeno un chip: se manca lo si scrive in console, così
+    // chi sviluppa lo vede al primo giro invece che dopo un mese.
+    if (import.meta.env?.DEV && !kind && !group) {
+      const coperti = new Set(KIND_CHIPS.map(c => norm(c.theme || '')).filter(Boolean));
+      const orfani = new Set(
+        generated.map(r => norm(r.theme)).filter(t => t && !coperti.has(t))
+      );
+      if (orfani.size) {
+        console.warn(
+          `[biblioteca] temi senza chip (invisibili se non da "Tutti"): ${[...orfani].join(', ')}`
+        );
+      }
+    }
 
     if (seq !== searchSeq.current) return; // risposta stantia
-    setResults(generated.slice(0, 100));
+    // Il taglio a 100 è quello che rendeva invisibili i "genera al volo":
+    // stavano sotto cento carte e nessuno ci arrivava. Ora i due elenchi si
+    // fondono in uno (vedi `voci` nel render) e il taglio si applica dopo
+    // l'ordinamento comune, quindi qui si tiene più materiale: tutto quello
+    // che il server ha restituito, senza tagli — a video li dosa `quanti`.
+    setResults(generated);
     setDescriptors(descs);
     if (!serverOk) {
-      setSearchError(generated.length || descs.length
-        ? null
-        : 'La libreria non risponde in questo momento: riprova tra poco.');
+      setSearchError(generated.length || descs.length ? null : t('server_down'));
     }
     setLoading(false);
-  }, [query, kind, group, cityFilter, maxHours, daysFilter]);
+  }, [query, kind, group, cityFilter, maxHours, daysFilter, language, t]);
 
   // Ricerca con debounce a ogni cambio di query/filtri
   useEffect(() => {
@@ -462,39 +627,49 @@ export default function ItineraryLibrarySheet({
 
   // ── Dettaglio di un item già in libreria ──────────────────────────────
   const openItem = async (r: LibraryResult) => {
+    const seq = ++detailSeq.current;
     setDetail({ slug: r.slug, itinerary: null, meta: r, loading: true, error: null });
     try {
       // review=1: l'utente sta aprendo DAVVERO questo itinerario — scatta
       // (una sola volta, poi resta marcato) il controllo finale DeepSeek.
       // Timeout più alto solo per assorbire quella prima chiamata: le
       // aperture successive dello stesso item sono già marcate e istantanee.
-      const res = await fetch(getApiUrl(`/api/library/item?slug=${encodeURIComponent(r.slug)}&review=1`), {
+      const res = await fetch(getApiUrl(`/api/library/item?slug=${encodeURIComponent(r.slug)}&review=1&lang=${encodeURIComponent(String(language))}`), {
         signal: AbortSignal.timeout(40000),
       });
       const data = await res.json().catch(() => null);
+      if (seq !== detailSeq.current) return; // risposta stantia: l'utente ha aperto un'altra card
       if (!res.ok || !data?.itinerary) throw new Error(data?.error || `HTTP ${res.status}`);
       const itin = normalizeLibraryItinerary(data.itinerary, { ...r, ...(data.meta || {}) });
       if (!itin) throw new Error('itinerario vuoto');
       setDetail({ slug: r.slug, itinerary: itin, meta: { ...r, ...(data.meta || {}) }, loading: false, error: null });
     } catch (e: any) {
+      if (seq !== detailSeq.current) return;
       setDetail({
         slug: r.slug, itinerary: null, meta: r, loading: false,
-        error: 'Impossibile aprire questo itinerario ora: riprova tra poco.',
+        error: t('open_failed'),
       });
     }
   };
 
-  // ── "🪄 Genera ora": POST /api/library/request con retry sul 202 ──────
+  // ── "🪄 Genera ora": POST /api/library/request con polling sul 202 ────
+  // Budget complessivo 300 s (GEN_BUDGET_MS). Un 202 — generazione in corso
+  // o lock di un'altra generazione dello stesso item — NON conta come
+  // tentativo: si continua a chiedere finché l'item non è pronto. Il server
+  // può anche rispondere { retryLater: true } (coda piena / motore occupato):
+  // si tratta come un 202.
   const requestDescriptor = async (d: LibraryDescriptor) => {
     const key = String(d?.slug || d?.id || d?.title || JSON.stringify(d).slice(0, 40));
     if (genState[key]) return;
     setGenError(null);
     setGenDestination(d?.city || d?.title || null);
     setQuizDismissed(false);
-    setGenState(prev => ({ ...prev, [key]: 'Genero l’itinerario…' }));
+    setGenState(prev => ({ ...prev, [key]: t('generating') }));
+    const inizio = Date.now();
     try {
-      // Max 3 tentativi: il 202 significa "in coda", si ritenta dopo ~20s.
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      while (true) {
+        const rimasto = GEN_BUDGET_MS - (Date.now() - inizio);
+        if (rimasto <= 0) throw new Error(t('still_working'));
         let res: Response;
         try {
           res = await fetch(getApiUrl('/api/library/request'), {
@@ -502,48 +677,40 @@ export default function ItineraryLibrarySheet({
             headers: { 'Content-Type': 'application/json' },
             // live:true → l'utente è qui in attesa: il server usa DeepSeek
             // (più affidabile di Agnes) invece del motore gratuito di semina.
-            body: JSON.stringify({ descriptor: d, live: true }),
+            body: JSON.stringify({ descriptor: d, live: true, lang: language }),
             // Il server lavora fino a 270s (LIB_SYNC_BUDGET_MS) prima di
-            // rispondere 202. Con l'attesa a 120s si mollava a metà strada e
-            // si mostrava un errore di rete mentre la generazione stava
-            // andando a buon fine: l'itinerario compariva in libreria pochi
-            // secondi dopo, ma l'utente aveva già letto "riprova".
-            signal: AbortSignal.timeout(150000),
+            // rispondere 202: l'attesa per singola chiamata copre quel tempo
+            // ma non oltre il budget residuo.
+            signal: AbortSignal.timeout(Math.min(150000, rimasto)),
           });
         } catch (netErr: any) {
           // Scaduta l'attesa NON vuol dire fallita: il server sta ancora
           // generando. Si ritenta come per il 202, e al giro dopo l'item
           // arriva dalla cache in un istante.
           const scaduta = netErr?.name === 'TimeoutError' || netErr?.name === 'AbortError';
-          if (!scaduta) throw new Error('Rete assente: controlla la connessione e riprova.');
-          if (attempt === 3) {
-            throw new Error('Ci sto ancora lavorando: riapri la libreria tra un minuto, lo troverai pronto.');
-          }
-          setGenState(prev => ({ ...prev, [key]: 'Ci vuole ancora un momento, resto in attesa…' }));
-          await sleep(20000);
-          continue;
-        }
-        if (res.status === 202) {
-          if (attempt === 3) {
-            throw new Error('La generazione è ancora in corso: riapri la libreria tra un minuto, lo troverai pronto.');
-          }
-          setGenState(prev => ({ ...prev, [key]: 'Sto preparando l’itinerario, ~1 minuto…' }));
-          await sleep(20000);
+          if (!scaduta) throw new Error(t('network_missing'));
+          setGenState(prev => ({ ...prev, [key]: t('still_waiting') }));
+          await sleep(Math.min(GEN_POLL_MS, Math.max(0, GEN_BUDGET_MS - (Date.now() - inizio))));
           continue;
         }
         const data = await res.json().catch(() => null);
+        if (res.status === 202 || data?.retryLater === true) {
+          setGenState(prev => ({ ...prev, [key]: t('preparing') }));
+          await sleep(Math.min(GEN_POLL_MS, Math.max(0, GEN_BUDGET_MS - (Date.now() - inizio))));
+          continue;
+        }
         if (!res.ok || !data?.itinerary) {
-          throw new Error(data?.error || 'Generazione non riuscita: riprova tra poco.');
+          throw new Error(data?.error || t('generation_failed'));
         }
         const meta = { ...d, ...(data.meta || {}) };
         const itin = normalizeLibraryItinerary(data.itinerary, meta);
-        if (!itin) throw new Error('L’itinerario generato è vuoto: riprova.');
+        if (!itin) throw new Error(t('generated_empty'));
         setDetail({ slug: String(meta.slug || key), itinerary: itin, meta, loading: false, error: null });
         runSearch(); // ora è in libreria: la lista si aggiorna
         return;
       }
     } catch (e: any) {
-      setGenError(e?.message || 'Generazione non riuscita: riprova tra poco.');
+      setGenError(e?.message || t('generation_failed'));
     } finally {
       setGenState(prev => {
         const next = { ...prev };
@@ -562,53 +729,58 @@ export default function ItineraryLibrarySheet({
   const [filmError, setFilmError] = useState<string | null>(null);
 
   const searchAsWork = async (medium: string) => {
-    const t = query.trim();
+    const q = query.trim();
     const info = ON_DEMAND_MEDIA.find(m => m.medium === medium);
     const noun = info?.noun || medium;
-    if (t.length < 2 || filmBusy) return;
+    if (q.length < 2 || filmBusy) return;
     setFilmError(null);
-    setGenDestination(t);
+    setGenDestination(q);
     setQuizDismissed(false);
-    setFilmBusy(`Cerco "${noun}" e i suoi luoghi…`);
+    setFilmBusy(`${t('searching_as')} "${noun}"…`);
+    const inizio = Date.now();
     try {
-      // Max 3 tentativi: il 202 significa "generazione in corso".
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      // Stesso polling di "Genera ora": budget 300 s, i 202 (e i
+      // { retryLater:true }) non contano come tentativi.
+      while (true) {
+        const rimasto = GEN_BUDGET_MS - (Date.now() - inizio);
+        if (rimasto <= 0) throw new Error(t('still_working'));
         let res: Response;
         try {
           res = await fetch(getApiUrl(`/api/library/${medium}`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: t, lang: language }),
-            signal: AbortSignal.timeout(120000),
+            body: JSON.stringify({ title: q, lang: language }),
+            signal: AbortSignal.timeout(Math.min(120000, rimasto)),
           });
-        } catch {
-          throw new Error('Rete assente o server occupato: riprova tra poco.');
-        }
-        if (res.status === 202) {
-          if (attempt === 3) {
-            throw new Error('L’itinerario è ancora in lavorazione: riprova tra un minuto, lo troverai pronto.');
-          }
-          setFilmBusy(`Sto costruendo l’itinerario sui luoghi veri, ~1 minuto…`);
-          await sleep(20000);
+        } catch (netErr: any) {
+          const scaduta = netErr?.name === 'TimeoutError' || netErr?.name === 'AbortError';
+          if (!scaduta) throw new Error(t('network_missing'));
+          setFilmBusy(t('still_waiting'));
+          await sleep(Math.min(GEN_POLL_MS, Math.max(0, GEN_BUDGET_MS - (Date.now() - inizio))));
           continue;
         }
         const data = await res.json().catch(() => null);
+        if (res.status === 202 || data?.retryLater === true) {
+          setFilmBusy(t('building_on_real_places'));
+          await sleep(Math.min(GEN_POLL_MS, Math.max(0, GEN_BUDGET_MS - (Date.now() - inizio))));
+          continue;
+        }
         if (res.status === 404) {
           // 404 onesto del server: niente location documentate o troppo sparse.
-          throw new Error(`${info?.emoji || ''} Per “${t}” i luoghi non sono documentati o sono troppo sparsi per farne un itinerario. Prova con un altro nome.`);
+          throw new Error(`${info?.emoji || ''} “${q}”: ${t('places_not_documented')}`);
         }
         if (!res.ok || !data?.itinerary) {
-          throw new Error(data?.error || 'Generazione non riuscita: riprova tra poco.');
+          throw new Error(data?.error || t('generation_failed'));
         }
         const meta = data.meta || {};
         const itin = normalizeLibraryItinerary(data.itinerary, meta);
-        if (!itin) throw new Error('L’itinerario generato è vuoto: riprova.');
-        setDetail({ slug: String(data.slug || meta.slug || t), itinerary: itin, meta, loading: false, error: null });
+        if (!itin) throw new Error(t('generated_empty'));
+        setDetail({ slug: String(data.slug || meta.slug || q), itinerary: itin, meta, loading: false, error: null });
         runSearch(); // ora è in libreria: la lista si aggiorna
         return;
       }
     } catch (e: any) {
-      setFilmError(e?.message || 'Ricerca non riuscita: riprova.');
+      setFilmError(e?.message || t('search_failed'));
     } finally {
       setFilmBusy(null);
       if (Object.keys(genState).length === 0) setGenDestination(null);
@@ -631,18 +803,70 @@ export default function ItineraryLibrarySheet({
     if (r.city) parts.push(r.city);
     else if (r.country) parts.push(r.country);
     if (Number(r.hours) > 0) parts.push(`${r.hours}h`);
-    else if (Number(r.days) > 0) parts.push(`${r.days} ${Number(r.days) === 1 ? 'giorno' : 'giorni'}`);
+    else if (Number(r.days) > 0) parts.push(`${r.days} ${dayWord(Number(r.days))}`);
     return parts.join(' · ');
   };
 
   const angleOf = (r: { angle?: string; theme?: string }) => prettyAngle(r.angle || r.theme, angleLabels);
+
+  // ── L'ELENCO UNICO ───────────────────────────────────────────────────
+  // Pronti e "da generare" in una lista sola, ordinata per PERTINENZA e non
+  // per tipo. Prima erano due blocchi e il secondo stava sotto cento carte:
+  // chi cercava una città senza itinerari pronti vedeva una lista che
+  // sembrava completa e non sapeva di poterne generare uno in un minuto.
+  //
+  // Il punteggio, in ordine di peso:
+  //   +100  il titolo comincia con quello che hai scritto
+  //    +60  la città comincia con quello che hai scritto
+  //    +40  il testo lo contiene da qualche parte
+  //    +12  è già pronto (a parità vince: è immediato)
+  //   + n   il voto della revisione, che separa i pronti fra loro
+  type Voce =
+    | { tipo: 'pronto'; r: LibraryResult; peso: number }
+    | { tipo: 'genera'; d: LibraryDescriptor; key: string; peso: number };
+
+  const voci: Voce[] = useMemo(() => {
+    const q = norm(query.trim());
+    const peso = (x: any, pronto: boolean) => {
+      let p = pronto ? 12 + (Number(x.score) || 0) / 10 : 0;
+      if (!q) return p;
+      const t = norm(x?.title || x?.slug || '');
+      const c = norm(x?.city || '');
+      if (t.startsWith(q)) p += 100;
+      else if (c.startsWith(q)) p += 60;
+      else if (t.includes(q) || c.includes(q) || norm(x?.country || '').includes(q)) p += 40;
+      return p;
+    };
+    const out: Voce[] = [
+      ...results.map((r) => ({ tipo: 'pronto' as const, r, peso: peso(r, true) })),
+      ...descriptors.map((d) => ({
+        tipo: 'genera' as const,
+        d,
+        // STESSA chiave di requestDescriptor, altrimenti lo spinner del
+        // tasto "Genera" non si accende mai e sembra che il clic non faccia
+        // nulla — era già successo.
+        key: String(d?.slug || d?.id || d?.title || JSON.stringify(d).slice(0, 40)),
+        peso: peso(d, false),
+      })),
+    ];
+    out.sort((a, b) => b.peso - a.peso);
+    // Nessun taglio nascosto qui: "Tutti" deve voler dire tutti. Quello che
+    // si vede a schermo lo decide `quanti` (bottone "Mostra altri"), così
+    // l'elenco è completo senza montare 600 carte in una volta.
+    return out;
+  }, [results, descriptors, query]);
+
+  // Carte visibili: si riparte da capo a ogni cambio di ricerca o filtro.
+  const [quanti, setQuanti] = useState(60);
+  useEffect(() => { setQuanti(60); }, [query, kind, group, cityFilter, maxHours, daysFilter]);
+  const vociVisibili = useMemo(() => voci.slice(0, quanti), [voci, quanti]);
 
   const verifiedBadge = (r: LibraryResult) => {
     const n = Array.isArray(r.verifiedBy) ? r.verifiedBy.length : Number(r.verifiedBy) || 0;
     if (n < 2) return null;
     return (
       <span className="shrink-0 flex items-center gap-1 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-        <CheckCircle2 className="w-2.5 h-2.5" /> Verificato da {n} AI
+        <CheckCircle2 className="w-2.5 h-2.5" /> {t('verified_by')} {n} AI
       </span>
     );
   };
@@ -668,14 +892,14 @@ export default function ItineraryLibrarySheet({
             <button
               onClick={() => setDetail(null)}
               className="p-2 rounded-full bg-gray-100 text-gray-500 hover:bg-gray-200 transition shrink-0"
-              aria-label="Torna ai risultati"
+              aria-label={t('back_to_results')}
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
-          <h2 className="font-black text-primary text-lg truncate">📚 Libreria itinerari</h2>
+          <h2 className="font-black text-primary text-lg truncate">📚 {t('title')}</h2>
         </div>
-        <button onClick={onClose} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition shrink-0" aria-label="Chiudi">
+        <button onClick={onClose} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition shrink-0" aria-label={getTranslation('close', language)}>
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -686,7 +910,7 @@ export default function ItineraryLibrarySheet({
           {detail.loading && (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-gray-400">
               <Loader2 className="w-6 h-6 animate-spin" />
-              <p className="text-xs font-bold">Apro l’itinerario…</p>
+              <p className="text-xs font-bold">{t('opening')}</p>
             </div>
           )}
           {!detail.loading && detail.error && (
@@ -731,7 +955,7 @@ export default function ItineraryLibrarySheet({
                       <div className="w-8 h-8 bg-primary text-white rounded-xl flex items-center justify-center font-black text-sm shrink-0">
                         {giorno.giorno}
                       </div>
-                      <h4 className="font-black text-primary uppercase tracking-widest text-xs">Giorno {giorno.giorno}</h4>
+                      <h4 className="font-black text-primary uppercase tracking-widest text-xs">{getTranslation('day', language)} {giorno.giorno}</h4>
                       <div className="flex-1 h-px bg-primary/10" />
                     </div>
                     <div className="space-y-2 pl-3 border-l border-dashed border-primary/20">
@@ -744,7 +968,7 @@ export default function ItineraryLibrarySheet({
                           <div key={t.id_tappa} className="bg-white border border-outline-variant/20 rounded-2xl p-3">
                             {dist && (
                               <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
-                                <MapPin className="w-2.5 h-2.5" /> {dist} dalla tappa precedente
+                                <MapPin className="w-2.5 h-2.5" /> {dist} {t('from_previous_stop')}
                               </div>
                             )}
                             <div className="flex items-start gap-2">
@@ -791,12 +1015,12 @@ export default function ItineraryLibrarySheet({
                 type="text"
                 value={query}
                 onChange={e => setQuery(e.target.value)}
-                placeholder="Cerca città, porto, tema…"
+                placeholder={t('search_placeholder')}
                 className="w-full pl-9 pr-4 py-3 rounded-2xl bg-gray-50 border border-outline-variant/30 focus:border-primary outline-none text-sm font-medium"
               />
             </div>
             <p className="text-[10px] font-medium text-gray-400 mt-1 pl-1">
-              Centinaia di itinerari pronti, già controllati da due AI indipendenti. Usarli è gratis.
+              {t('intro')}
             </p>
           </div>
 
@@ -811,7 +1035,7 @@ export default function ItineraryLibrarySheet({
                 group === '' ? 'bg-primary text-white border-primary shadow-sm' : 'bg-white text-gray-600 border-outline-variant/30 hover:border-primary/30'
               }`}
             >
-              Tutti
+              {t('all')}
             </button>
             {CHIP_GROUPS.map(g => (
               <button
@@ -881,26 +1105,26 @@ export default function ItineraryLibrarySheet({
               value={maxHours}
               onChange={e => setMaxHours(e.target.value)}
               className="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black bg-white text-gray-500 border border-outline-variant/30 outline-none"
-              aria-label="Ore per sosta"
+              aria-label={t('hours_per_stop')}
             >
-              <option value="">⏱ Ore sosta: tutte</option>
-              {[4, 6, 8, 10, 12].map(h => <option key={h} value={h}>fino a {h}h</option>)}
+              <option value="">⏱ {t('hours_all')}</option>
+              {[4, 6, 8, 10, 12].map(h => <option key={h} value={h}>{t('up_to')} {h}h</option>)}
             </select>
             <select
               value={daysFilter}
               onChange={e => setDaysFilter(e.target.value)}
               className="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black bg-white text-gray-500 border border-outline-variant/30 outline-none"
-              aria-label="Giorni"
+              aria-label={getTranslation('giorni', language)}
             >
-              <option value="">📅 Giorni: tutti</option>
-              {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>{d} {d === 1 ? 'giorno' : 'giorni'}</option>)}
+              <option value="">📅 {t('days_all')}</option>
+              {[1, 2, 3, 4, 5, 6, 7].map(d => <option key={d} value={d}>{d} {dayWord(d)}</option>)}
             </select>
             {cityFilter.trim() && (
               <button
                 type="button"
                 onClick={() => setCityFilter('')}
                 className="shrink-0 flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-black bg-primary/10 text-primary border border-primary/20"
-                title="Rimuovi il filtro città"
+                title={t('remove_city_filter')}
               >
                 📍 {cityFilter.trim()} <X className="w-3 h-3" />
               </button>
@@ -912,7 +1136,7 @@ export default function ItineraryLibrarySheet({
             {loading && (
               <div className="flex items-center justify-center gap-2 py-10 text-gray-400">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="text-xs font-bold">Sfoglio la libreria…</span>
+                <span className="text-xs font-bold">{t('browsing')}</span>
               </div>
             )}
 
@@ -920,89 +1144,94 @@ export default function ItineraryLibrarySheet({
               <p className="text-center text-xs font-bold text-red-400 py-10">{searchError}</p>
             )}
 
-            {/* PRIMA: itinerari già in libreria */}
-            {!loading && results.map(r => (
+            {/* L'errore di "Genera ora" sta IN TESTA all'elenco, non in fondo:
+                là nessuno lo vedeva e "Genera" sembrava non fare nulla
+                (l'`order-first` di prima non agiva: il contenitore non è flex). */}
+            {!loading && genError && (
+              <p role="alert" className="text-[11px] font-bold text-red-500 bg-red-50 border border-red-100 rounded-xl px-3 py-2">{genError}</p>
+            )}
+
+            {/* ── UN ELENCO SOLO ──────────────────────────────────────────
+                Prima erano due blocchi: cento itinerari pronti e, sotto,
+                una sezione "Da generare al volo" che nessuno raggiungeva —
+                per vederla bisognava scorrere oltre cento carte. Chi cercava
+                una città senza itinerari pronti vedeva la lista vuota e non
+                sapeva di poterne generare uno in un minuto.
+                Ora i due elenchi si fondono e l'ordine lo decide la
+                PERTINENZA, non il tipo: a parità, quello pronto viene prima
+                perché è immediato. Il tipo resta leggibile dal bordo e dal
+                distintivo, non dalla posizione nella pagina. */}
+            {!loading && vociVisibili.map(v => v.tipo === 'pronto' ? (
               <button
-                key={r.slug}
+                key={`p-${v.r.slug}`}
                 type="button"
-                onClick={() => openItem(r)}
+                onClick={() => openItem(v.r)}
                 className="w-full text-left bg-white border border-outline-variant/20 rounded-2xl p-3 shadow-sm hover:border-primary/40 hover:shadow-md transition-all active:scale-[0.99]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-xs font-black text-primary leading-tight">{r.title || r.slug}</div>
+                    <div className="text-xs font-black text-primary leading-tight">{v.r.title || v.r.slug}</div>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      {metaLine(r) && (
+                      <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
+                        ✓ Pronto
+                      </span>
+                      {metaLine(v.r) && (
                         <span className="text-[10px] font-black bg-primary/5 text-primary px-2 py-0.5 rounded-full">
-                          {metaLine(r)}
+                          {metaLine(v.r)}
                         </span>
                       )}
-                      {angleOf(r) && (
+                      {angleOf(v.r) && (
                         <span className="text-[10px] font-black bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full">
-                          {angleOf(r)}
+                          {angleOf(v.r)}
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    {verifiedBadge(r)}
-                    {Number(r.score) > 0 && (
-                      <span className="text-[9px] font-black text-gray-400">★ {Number(r.score).toFixed(1)}</span>
+                    {verifiedBadge(v.r)}
+                    {Number(v.r.score) > 0 && (
+                      <span className="text-[9px] font-black text-gray-400">★ {Number(v.r.score).toFixed(1)}</span>
                     )}
                   </div>
                 </div>
               </button>
-            ))}
-
-            {/* POI: descrittori disponibili non ancora generati (card tenue) */}
-            {!loading && descriptors.length > 0 && (
-              <>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest pt-2 pl-1 flex items-center gap-1.5">
-                  <Wand2 className="w-3 h-3" /> Da generare al volo
-                </p>
-                {descriptors.map((d, i) => {
-                  const key = String(d?.slug || d?.id || d?.title || i);
-                  const busy = genState[key];
-                  return (
-                    <div
-                      key={key}
-                      className="bg-gray-50/70 border border-dashed border-outline-variant/40 rounded-2xl p-3"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="text-xs font-bold text-gray-600 leading-tight">{d?.title || d?.slug || 'Itinerario'}</div>
-                          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                            {metaLine(d) && (
-                              <span className="text-[10px] font-bold bg-white text-gray-500 border border-outline-variant/30 px-2 py-0.5 rounded-full">
-                                {metaLine(d)}
-                              </span>
-                            )}
-                            {angleOf(d) && (
-                              <span className="text-[10px] font-bold bg-white text-amber-600 border border-amber-200/60 px-2 py-0.5 rounded-full">
-                                {angleOf(d)}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          disabled={!!busy}
-                          onClick={() => requestDescriptor(d)}
-                          className="shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black bg-white border border-primary/30 text-primary hover:bg-primary/5 disabled:opacity-60 transition"
-                        >
-                          {busy ? (
-                            <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> {busy}</span>
-                          ) : (
-                            '🪄 Genera ora (~1 min)'
-                          )}
-                        </button>
-                      </div>
+            ) : (
+              <div
+                key={`g-${v.key}`}
+                className="bg-gray-50/70 border border-dashed border-outline-variant/40 rounded-2xl p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-gray-600 leading-tight">{v.d?.title || v.d?.slug || getTranslation('itinerary', language)}</div>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <span className="text-[10px] font-black bg-white text-primary border border-primary/30 px-2 py-0.5 rounded-full">
+                        🪄 1 minuto
+                      </span>
+                      {metaLine(v.d) && (
+                        <span className="text-[10px] font-bold bg-white text-gray-500 border border-outline-variant/30 px-2 py-0.5 rounded-full">
+                          {metaLine(v.d)}
+                        </span>
+                      )}
+                      {angleOf(v.d) && (
+                        <span className="text-[10px] font-bold bg-white text-amber-600 border border-amber-200/60 px-2 py-0.5 rounded-full">
+                          {angleOf(v.d)}
+                        </span>
+                      )}
                     </div>
-                  );
-                })}
-              </>
-            )}
-            {genError && <p className="text-center text-[11px] font-bold text-red-400">{genError}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!!genState[v.key]}
+                    onClick={() => requestDescriptor(v.d)}
+                    className="shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black bg-white border border-primary/30 text-primary hover:bg-primary/5 disabled:opacity-60 transition"
+                  >
+                    {genState[v.key] ? (
+                      <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> {genState[v.key]}</span>
+                    ) : t('generate')}
+                  </button>
+                </div>
+              </div>
+            ))}
 
             {/* LUOGHI DELLE OPERE: nel chip di un medium con ricerca on-demand
                 (cinema/libri/musica/arte/storia/sport — o quando la ricerca
@@ -1028,23 +1257,37 @@ export default function ItineraryLibrarySheet({
                       {filmBusy ? (
                         <><Loader2 className="w-4 h-4 animate-spin" /> {filmBusy}</>
                       ) : (
-                        <>{m.emoji} Cerca “{query.trim().slice(0, 40)}” come {m.noun}</>
+                        <>{m.emoji} {t('search_as')} “{query.trim().slice(0, 40)}” · {m.noun}</>
                       )}
                     </button>
                   ))}
                   <p className="text-[10px] font-medium text-gray-400 text-center">
-                    Itinerario sui luoghi veri (riprese, ambientazioni, opere, eventi o venue), verificati su Wikidata.
+                    {t('real_places_note')}
                   </p>
                   {filmError && <p className="text-center text-[11px] font-bold text-red-400">{filmError}</p>}
                 </div>
               );
             })()}
 
+            {/* "Tutti" mostra tutti: l'elenco non è tagliato, è solo
+                impaginato. Senza questo bottone la lista finiva a 150 carte
+                senza dirlo, e sembrava che la categoria ne avesse 150. */}
+            {!loading && voci.length > vociVisibili.length && (
+              <button
+                type="button"
+                onClick={() => setQuanti(n => n + 120)}
+                className="w-full py-3 rounded-2xl text-xs font-black bg-white border border-primary/30 text-primary hover:bg-primary/5 transition"
+              >
+                {getTranslation('show_more', language)} ({Math.min(120, voci.length - vociVisibili.length)})
+                <span className="font-bold text-gray-400"> · {vociVisibili.length} / {voci.length}</span>
+              </button>
+            )}
+
             {!loading && !searchError && results.length === 0 && descriptors.length === 0 && (
               <div className="flex flex-col items-center justify-center gap-3 py-14 text-center">
                 <BookOpen className="w-8 h-8 text-primary/20" />
                 <p className="text-xs font-bold text-gray-400 max-w-xs">
-                  Nessun itinerario per questa ricerca. Prova con un’altra città o togli qualche filtro.
+                  {t('no_results')}
                 </p>
               </div>
             )}
@@ -1062,11 +1305,11 @@ export default function ItineraryLibrarySheet({
             className="w-full py-3.5 rounded-2xl bg-primary text-white text-sm font-black active:scale-[0.98] disabled:opacity-60 transition-transform flex items-center justify-center gap-2"
           >
             {using
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Lo salvo nei tuoi itinerari…</>
-              : <><Sparkles className="w-4 h-4" /> Usa questo itinerario (gratis)</>}
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> {t('saving')}</>
+              : <><Sparkles className="w-4 h-4" /> {t('use_free')}</>}
           </button>
           <p className="text-[10px] font-bold text-gray-400 text-center mt-1.5">
-            Si salva nei tuoi itinerari: guida premium, podcast e PDF funzionano come su ogni itinerario.
+            {t('use_hint')}
           </p>
         </div>
       )}

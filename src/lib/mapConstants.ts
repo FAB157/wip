@@ -18,6 +18,8 @@ export const CATEGORY_COLORS: Record<string, string> = {
   // Atlante dei beni vincolati: grigio pietra, volutamente spento — non deve
   // competere con i pin turistici che gli stanno accanto.
   beni_culturali:    "bg-[#78716c]",
+  // Vino e Gusto: bordeaux, il colore che nessun'altra macro usa.
+  enogastronomia:    "bg-[#7f1d1d]",
   church:            "bg-[#4338ca]",
   museum:            "bg-[#7c3aed]",
   viewpoint:         "bg-[#0369a1]",
@@ -73,6 +75,18 @@ export const CATEGORY_COLORS: Record<string, string> = {
   garden:            "bg-[#22c55e]",
   aquarium:          "bg-[#0e7490]",
   water_park:        "bg-[#06b6d4]",
+  // VERTICALI TEMATICI (21/08/2026) — la macro 🧭 e le sue otto categorie.
+  // Ognuna ha un colore proprio: sotto la stessa chip convivono una sorgente
+  // termale e un murale, e il pin deve dire subito quale dei due è.
+  tematiche:         "bg-[#4f46e5]",
+  terme:             "bg-[#0ea5e9]",
+  cinema:            "bg-[#7c3aed]",
+  cieli:             "bg-[#312e81]",
+  street_art:        "bg-[#ec4899]",
+  mercati:           "bg-[#f59e0b]",
+  fioriture:         "bg-[#f472b6]",
+  memoria:           "bg-[#57534e]",
+  lento:             "bg-[#16a34a]",
 };
 
 export const CATEGORY_HEX: Record<string, string> = {
@@ -98,6 +112,7 @@ export const CATEGORY_HEX: Record<string, string> = {
   attraction:        "#16a34a",
   community:         "#ec4899",
   beni_culturali:    "#78716c",
+  enogastronomia:    "#7f1d1d",
   // Verticali naturali — stessi valori di CATEGORY_COLORS, in esadecimale
   // (usati dai marker Leaflet, che non passano da Tailwind).
   beach:             "#06b6d4",
@@ -124,12 +139,24 @@ export const CATEGORY_HEX: Record<string, string> = {
   art_museum: "#7c3aed", natural_history_museum: "#7c3aed",
   trail: "#65a30d", scenic_road: "#84cc16", tree: "#15803d", desert: "#d97706",
   forest: "#166534", garden: "#22c55e", aquarium: "#0e7490", water_park: "#06b6d4",
+  // Verticali tematici — stessi valori di CATEGORY_COLORS, in esadecimale
+  // (i marker Leaflet non passano da Tailwind).
+  tematiche:         "#4f46e5",
+  terme:             "#0ea5e9",
+  cinema:            "#7c3aed",
+  cieli:             "#312e81",
+  street_art:        "#ec4899",
+  mercati:           "#f59e0b",
+  fioriture:         "#f472b6",
+  memoria:           "#57534e",
+  lento:             "#16a34a",
 };
 
 export const CATEGORY_EMOJIS: Record<string, string> = {
   gemme: "💎",
   community: "📸",
   beni_culturali: "🏺",
+  enogastronomia: "🍷",
   monumenti: "🏛️",
   chiese: "⛪",
   musei: "🖼️",
@@ -182,6 +209,16 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   art_museum: "🎨", natural_history_museum: "🦕",
   trail: "🥾", scenic_road: "🛣️", tree: "🌳", desert: "🏜️", forest: "🌲",
   garden: "🌺", aquarium: "🐠", water_park: "🎢",
+  // Verticali tematici (21/08/2026): l'emoji della chip è anche quella del pin.
+  tematiche: "🧭",
+  terme: "🛁",
+  cinema: "🎬",
+  cieli: "🌌",
+  street_art: "🎨",
+  mercati: "🛍️",
+  fioriture: "🌸",
+  memoria: "🕯️",
+  lento: "🚂",
 };
 
 export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
@@ -249,8 +286,14 @@ export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
   aquarium: "🐬",
   zoo: "🦁",
   artigianato: "🏺",
-  mercato: "🎪",
-  gastronomia: "🧀",
+  // 🧺 e non più 🎪: dal 20/08/2026 questa chiave serve anche ai 75.256
+  // mercati del layer Vino e Gusto, dove il tendone da circo non dice
+  // niente. Il chip Utilità ha la sua emoji cablata a parte.
+  mercato: "🧺",
+  // Era 🧀 e si confondeva con caseifici e botteghe di formaggi, che nel
+  // layer Vino e Gusto stanno spesso sulla stessa via: una gastronomia
+  // vende salumi e piatti pronti, non è una formaggeria.
+  gastronomia: "🥓",
   winery: "🍷",
   craft: "🏺",
   marketplace: "🧺",
@@ -259,7 +302,53 @@ export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
   cheese: "🧀",
   pasta: "🍝",
   wine: "🍷",
-  farm: "🚜"
+  farm: "🚜",
+  // Vino e Gusto — i poi_type scritti dall'harvest enogastronomico. Senza
+  // questi il pin cadrebbe sull'emoji generica della macro e in mappa una
+  // cantina sarebbe indistinguibile da un caseificio.
+  // Ogni tipo la sua icona, e MAI due uguali: sulla mappa questi pin
+  // convivono nello stesso isolato, e se un caseificio e una formaggeria
+  // hanno lo stesso simbolo il layer non dice niente. La coppia
+  // produzione/vendita si distingue col simbolo, non solo con la dimensione:
+  //   dove NASCE          dove si COMPRA
+  //   🐄 caseificio   →   🧀 botteghe di formaggi
+  //   🌿 uliveto      →   🫒 frantoio (la molitura)
+  //   🍇 vigneto      →   🍷 cantina  →  🍾 enoteca
+  cantina: "🍷",
+  enoteca: "🍾",
+  vigneto: "🍇",
+  uliveto: "🌿",
+  birrificio: "🍺",
+  distilleria: "🥃",
+  caseificio: "🐄",
+  formaggi: "🧀",
+  frantoio: "🫒",
+  pasticceria: "🍰",
+  cioccolato: "🍫",
+  caffe: "☕",
+  te: "🍵",
+  miele: "🍯",
+  spezie: "🌶️",
+  fattoria: "🚜",
+  // 🍴 era già di ristorante/restaurant: un museo del gusto non è un locale.
+  museo_gusto: "🥄",
+  // Secondo giro: i paesaggi e i luoghi della trasformazione.
+  // NB: `mercato` è già definito più sopra (🎪, eredità della vecchia chip
+  // Utilità) e non si può ridichiarare qui: un letterale non ammette due
+  // volte la stessa chiave.
+  mulino: "⚙️",
+  pastificio: "🍝",
+  frutteto: "🍎",
+  risaia: "🍚",
+  salina: "🧂",
+  piantagione: "🌱",
+  frutta_secca: "🥜",
+  strada_del_vino: "🛣️",
+  panificio: "🥖",
+  macelleria: "🥩",
+  pescheria: "🐟",
+  ortofrutta: "🥬",
+  dolciumi: "🍬"
 };
 
 export const CATEGORY_GRADIENT: Record<string, string> = {
@@ -284,4 +373,14 @@ export const CATEGORY_GRADIENT: Record<string, string> = {
   attraction: "from-green-900 via-green-800 to-emerald-700",
   community: "from-pink-900 via-pink-800 to-fuchsia-800",
   beni_culturali: "from-stone-800 via-stone-700 to-neutral-600",
+  // Verticali tematici: la testata della scheda prende il colore del verticale.
+  tematiche: "from-indigo-900 via-indigo-800 to-violet-700",
+  terme: "from-sky-900 via-sky-800 to-cyan-700",
+  cinema: "from-violet-950 via-purple-900 to-fuchsia-800",
+  cieli: "from-indigo-950 via-indigo-900 to-blue-900",
+  street_art: "from-pink-900 via-fuchsia-800 to-rose-700",
+  mercati: "from-amber-900 via-amber-800 to-yellow-700",
+  fioriture: "from-pink-800 via-pink-700 to-rose-600",
+  memoria: "from-stone-900 via-stone-800 to-neutral-700",
+  lento: "from-green-900 via-green-800 to-emerald-700",
 };

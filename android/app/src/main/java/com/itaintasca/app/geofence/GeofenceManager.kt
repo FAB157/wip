@@ -20,6 +20,13 @@ class GeofenceManager(private val context: Context) {
     // della configurazione (modalità/raggi). Vive in memoria: se il processo
     // muore, i geofence restano nell'OS ma il set torna vuoto → il primo
     // register successivo fa un full re-register (remove-by-PendingIntent).
+    //
+    // (22/08/2026) THREAD-SAFETY: registerGeofencesForPois arriva sia dalla
+    // coroutine del fetch radar (checkRefreshGeofences) sia da quella di
+    // syncManualSelection, in parallelo su Dispatchers.IO; i callback dei
+    // Task di Play Services girano sul main thread. Ogni lettura/scrittura di
+    // registeredPoiIds/registrationSignature/sentinelCenter passa da `lock`.
+    private val lock = Any()
     private val registeredPoiIds = mutableSetOf<String>()
     private var registrationSignature: String? = null
     private var sentinelCenter: Location? = null
@@ -46,8 +53,9 @@ class GeofenceManager(private val context: Context) {
     ) {
         if (pois.isEmpty()) return
 
-        // Ordina: Gemme prima, poi per distanza REALE dall'utente (logica pura
-        // in SlidingWindowLogic, condivisa col percorso offline e coi test).
+        // Ordina: tappe itinerario, poi Gemme, poi per distanza REALE
+        // dall'utente (logica pura in SlidingWindowLogic, condivisa col
+        // percorso offline e coi test).
         // 33 POI × 3 geofence = 99 + 1 sentinella = 100, il cap Android.
         val byId = pois.associateBy { it.id }
         val windowInput = pois.map { poi ->
@@ -60,7 +68,8 @@ class GeofenceManager(private val context: Context) {
                         longitude = poi.entranceLon ?: poi.lon
                     }
                     origin.distanceTo(loc)
-                }
+                },
+                isItinerary = poi.isFromItinerary
             )
         }
         val targetIds = SlidingWindowLogic.selectWindow(windowInput)
@@ -68,39 +77,47 @@ class GeofenceManager(private val context: Context) {
 
         val signature = "$guideMode|$alertRadiusWalk|$arrivalRadiusWalk|$alertRadiusCar|$arrivalRadiusCar"
 
-        // Full re-register quando: prima registrazione del processo, cambio
-        // raggi/modalità (i raggi dei geofence esistenti sarebbero sbagliati),
-        // o richiesta di initial trigger.
-        val needsFullRegister = initialTrigger ||
-            registeredPoiIds.isEmpty() ||
-            signature != registrationSignature
-
-        if (needsFullRegister) {
-            fullRegister(sortedPois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin, initialTrigger, signature)
-            return
-        }
-
-        // Diff incrementale: niente finestra cieca sui geofence in comune.
-        val diff = SlidingWindowLogic.computeDiff(registeredPoiIds, targetIds)
-        val sentinelMoved = origin != null && sentinelCenter?.let { it.distanceTo(origin) > 1000f } ?: true
-
-        if (diff.isEmpty && !sentinelMoved) return
-
+        // Tutta la decisione (full vs diff) e l'aggiornamento dello stato in
+        // memoria avvengono sotto lock: due chiamate concorrenti non possono
+        // calcolare il diff sullo stesso set e scriverlo entrambe.
         val removeIds = mutableListOf<String>()
-        diff.toRemoveIds.forEach { removeIds.addAll(SlidingWindowLogic.requestIdsFor(it)) }
-        if (sentinelMoved) removeIds.add(SlidingWindowLogic.SENTINEL_ID)
-
         val addList = mutableListOf<Geofence>()
-        diff.toAddIds.mapNotNull { byId[it] }.forEach {
-            addList.addAll(buildGeofencesForPoi(it, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar))
-        }
-        if (sentinelMoved && origin != null) {
-            addList.add(buildSentinel(origin))
-            sentinelCenter = Location(origin)
-        }
+        var diffOrNull: SlidingWindowLogic.Diff? = null
+        synchronized(lock) {
+            // Full re-register quando: prima registrazione del processo, cambio
+            // raggi/modalità (i raggi dei geofence esistenti sarebbero sbagliati),
+            // o richiesta di initial trigger.
+            val needsFullRegister = initialTrigger ||
+                registeredPoiIds.isEmpty() ||
+                signature != registrationSignature
 
-        registeredPoiIds.removeAll(diff.toRemoveIds.toSet())
-        registeredPoiIds.addAll(diff.toAddIds)
+            if (needsFullRegister) {
+                fullRegister(sortedPois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin, initialTrigger, signature)
+                return
+            }
+
+            // Diff incrementale: niente finestra cieca sui geofence in comune.
+            val diff = SlidingWindowLogic.computeDiff(registeredPoiIds, targetIds)
+            diffOrNull = diff
+            val sentinelMoved = origin != null && sentinelCenter?.let { it.distanceTo(origin) > 1000f } ?: true
+
+            if (diff.isEmpty && !sentinelMoved) return
+
+            diff.toRemoveIds.forEach { removeIds.addAll(SlidingWindowLogic.requestIdsFor(it)) }
+            if (sentinelMoved) removeIds.add(SlidingWindowLogic.SENTINEL_ID)
+
+            diff.toAddIds.mapNotNull { byId[it] }.forEach {
+                addList.addAll(buildGeofencesForPoi(it, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar))
+            }
+            if (sentinelMoved && origin != null) {
+                addList.add(buildSentinel(origin))
+                sentinelCenter = Location(origin)
+            }
+
+            registeredPoiIds.removeAll(diff.toRemoveIds.toSet())
+            registeredPoiIds.addAll(diff.toAddIds)
+        }
+        val diff = diffOrNull ?: return
 
         val doAdd = {
             if (addList.isNotEmpty()) {
@@ -110,13 +127,14 @@ class GeofenceManager(private val context: Context) {
                 }.build()
                 geofencingClient.addGeofences(request, geofencePendingIntent).run {
                     addOnSuccessListener {
-                        Log.d(TAG, "Incremental window: +${diff.toAddIds.size} -${diff.toRemoveIds.size} POIs (now ${registeredPoiIds.size})")
+                        val now = synchronized(lock) { registeredPoiIds.size }
+                        Log.d(TAG, "Incremental window: +${diff.toAddIds.size} -${diff.toRemoveIds.size} POIs (now $now)")
                     }
                     addOnFailureListener {
                         // Se l'add fallisce lo stato in memoria non è più affidabile:
                         // forza un full re-register al prossimo giro.
                         Log.e(TAG, "Incremental add failed: ${it.message}")
-                        registeredPoiIds.clear()
+                        synchronized(lock) { registeredPoiIds.clear() }
                     }
                 }
             }
@@ -147,7 +165,7 @@ class GeofenceManager(private val context: Context) {
         // offline). Copre il caso di update GPS strozzati in Doze profondo.
         if (origin != null) {
             geofenceList.add(buildSentinel(origin))
-            sentinelCenter = Location(origin)
+            synchronized(lock) { sentinelCenter = Location(origin) }
         }
 
         val request = GeofencingRequest.Builder().apply {
@@ -165,14 +183,18 @@ class GeofenceManager(private val context: Context) {
         geofencingClient.removeGeofences(geofencePendingIntent).addOnCompleteListener {
             geofencingClient.addGeofences(request, geofencePendingIntent).run {
                 addOnSuccessListener {
-                    registeredPoiIds.clear()
-                    registeredPoiIds.addAll(sortedPois.map { p -> p.id })
-                    registrationSignature = signature
-                    Log.d(TAG, "Geofences registered for ${sortedPois.size} POIs (${sortedPois.count { p -> p.isGem }} gems, initialTrigger=$initialTrigger)")
+                    synchronized(lock) {
+                        registeredPoiIds.clear()
+                        registeredPoiIds.addAll(sortedPois.map { p -> p.id })
+                        registrationSignature = signature
+                    }
+                    Log.d(TAG, "Geofences registered for ${sortedPois.size} POIs (${sortedPois.count { p -> p.isGem }} gems, ${sortedPois.count { p -> p.isFromItinerary }} tappe, initialTrigger=$initialTrigger)")
                 }
                 addOnFailureListener {
-                    registeredPoiIds.clear()
-                    registrationSignature = null
+                    synchronized(lock) {
+                        registeredPoiIds.clear()
+                        registrationSignature = null
+                    }
                     Log.e(TAG, "Failed to register geofences: ${it.message}")
                 }
             }
@@ -200,6 +222,17 @@ class GeofenceManager(private val context: Context) {
         if (hasEntrance) {
             poi.alertRadius?.let { if (it > 0) alertRadius = maxOf(alertRadius, it.toFloat()) }
             poi.geofenceRadius?.let { if (it > 0) arrivalRadius = maxOf(arrivalRadius, it.toFloat()) }
+        }
+
+        // A 30 M DAL PERIMETRO (22/08/2026). Il sistema conosce solo cerchi:
+        // perche' il Receiver possa decidere "sei a 30 m dal muro", l'ENTER
+        // deve arrivare da QUALUNQUE lato dell'edificio. Il cerchio d'arrivo
+        // copre quindi il vertice piu' lontano del perimetro + 30 m; per
+        // un edificio compatto non cambia nulla, per un parco o una cinta
+        // muraria e' la differenza fra parlare e tacere sul lato opposto.
+        Footprints.raggioCopertura(poi.id, poi.footprint, lat, lon)?.let {
+            arrivalRadius = maxOf(arrivalRadius, it.toFloat())
+            alertRadius = maxOf(alertRadius, arrivalRadius)
         }
 
         // Raggio isteresi (uscita silenziosa): 1.5× il raggio di alert
@@ -239,9 +272,11 @@ class GeofenceManager(private val context: Context) {
             .build()
 
     fun removeAllGeofences() {
-        registeredPoiIds.clear()
-        registrationSignature = null
-        sentinelCenter = null
+        synchronized(lock) {
+            registeredPoiIds.clear()
+            registrationSignature = null
+            sentinelCenter = null
+        }
         geofencingClient.removeGeofences(geofencePendingIntent).run {
             addOnSuccessListener {
                 Log.d(TAG, "All geofences removed")

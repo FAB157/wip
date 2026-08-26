@@ -25,6 +25,9 @@ export type PoiCategory =
   | 'musei'
   | 'chiese'
   | 'panorami'
+  // Vino e Gusto (20/08/2026): macro-categoria propria in shared_pois. Il
+  // tipo preciso (cantina, caseificio, frantoio…) vive in `poi_type`.
+  | 'enogastronomia'
   // Verticali NATURALI (harvest non culturale, 16/08/2026): confluiscono
   // nel filtro "panorami" — vedi guideSettings.isCategoryAllowed,
   // CategoryMap.kt e PoiCategories.map (iOS), che vanno tenuti allineati.
@@ -65,7 +68,14 @@ export type PoiCategory =
   | 'racetrack' | 'racecourse' | 'ski_resort' | 'ski_jump'
   | 'war_cemetery' | 'concentration_camp' | 'rack_railway' | 'pier' | 'shipyard'
   | 'art_gallery' | 'archive' | 'radio_telescope' | 'hydro_plant'
-  | 'cathedral' | 'basilica' | 'baptistery' | 'bell_tower' | 'cloister' | 'crypt';
+  | 'cathedral' | 'basilica' | 'baptistery' | 'bell_tower' | 'cloister' | 'crypt'
+  // VERTICALI TEMATICI (21/08/2026): otto categorie proprie in shared_pois,
+  // raccolte sotto la macro-chip 🧭 "Tematici". Il tipo preciso (hot_spring,
+  // film_location, dark_sky_park…) vive in `poi_type` — vedi
+  // TEMATICI_TYPE_LABELS in lib/poiTaxonomy.ts.
+  | 'tematiche'
+  | 'terme' | 'cinema' | 'cieli' | 'street_art'
+  | 'mercati' | 'fioriture' | 'memoria' | 'lento';
 
 export type PoiSource = 'csv' | 'overpass_auto';
 export type PoiStatus = 'approved' | 'auto' | 'deleted';

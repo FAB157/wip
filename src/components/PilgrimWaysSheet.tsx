@@ -19,6 +19,7 @@ import {
   type PilgrimRoute, type PilgrimDifficulty, type RoutePrefill,
 } from '../lib/transitCatalog';
 import { getApiUrl } from '../lib/api';
+import { getTranslation, type Language } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 import {
   recordPilgrimActivation, getProgress, computeCertHash, renderCertificate,
@@ -30,9 +31,11 @@ type DurataFiltro = 'tutte' | 'brevi' | 'lunghi';
 
 const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 
-const DIFF_LABEL: Record<PilgrimDifficulty, string> = {
-  facile: '🟢 Facile', media: '🟡 Media', impegnativa: '🔴 Impegnativa',
-};
+/** Stringhe della sheet (chiavi `pw_*` in i18n.ts). */
+const asLang = (language: string) => String(language || 'IT').toUpperCase() as Language;
+const mkT = (language: string) => (key: string) => getTranslation(`pw_${key}`, asLang(language));
+
+const DIFF_EMOJI: Record<PilgrimDifficulty, string> = { facile: '🟢', media: '🟡', impegnativa: '🔴' };
 
 export default function PilgrimWaysSheet({
   language = 'IT',
@@ -57,6 +60,13 @@ export default function PilgrimWaysSheet({
   // Itinerari dell'utente (per barra progresso e attestato): stessa
   // coppia di fonti di ProfileScreen — Supabase + mirror mock locale.
   const [myItineraries, setMyItineraries] = useState<any[]>([]);
+  const t = useMemo(() => mkT(language), [language]);
+  const giorniWord = getTranslation('giorni', asLang(language));
+  const diffLabel = (d: PilgrimDifficulty | string) => `${DIFF_EMOJI[d as PilgrimDifficulty] || ''} ${t(`diff_${d}`)}`.trim();
+  // Fetch AI in corso: si annulla allo smontaggio della sheet (prima
+  // continuava in background e chiamava setState su un componente morto).
+  const aiAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { aiAbortRef.current?.abort(); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -121,25 +131,31 @@ export default function PilgrimWaysSheet({
     if (aiLoading || query.trim().length < 2) return;
     setAiLoading(true);
     setAiError(null);
+    aiAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    aiAbortRef.current = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), 120000);
     try {
       const res = await fetch(getApiUrl('/api/transit-guide'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind: 'pilgrim', query: query.trim(), lang: (language || 'IT').toLowerCase() }),
-        signal: AbortSignal.timeout(120000),
+        signal: ctrl.signal,
       });
       const data = await res.json().catch(() => null);
+      if (ctrl.signal.aborted) return;
       if (!res.ok || !data?.item?.id) {
-        setAiError(data?.error || 'Cammino non disponibile in questo momento: riprova.');
+        setAiError(data?.error || t('ai_unavailable'));
         return;
       }
       const r = data.item as PilgrimRoute;
       setAiRoutes(prev => prev.some(x => x.id === r.id) ? prev : [...prev, r]);
       setExpandedId(r.id);
     } catch {
-      setAiError('Rete assente o server occupato: riprova tra poco.');
+      if (!ctrl.signal.aborted) setAiError(t('network_error'));
     } finally {
-      setAiLoading(false);
+      clearTimeout(timer);
+      if (!ctrl.signal.aborted) setAiLoading(false);
     }
   };
 
@@ -147,8 +163,8 @@ export default function PilgrimWaysSheet({
     <div className="fixed inset-0 z-[10002] bg-white flex flex-col">
       {/* Header — identità verde/contemplativa */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-emerald-100 bg-emerald-50/50 shrink-0">
-        <h2 className="font-black text-emerald-800 text-lg">🥾 Cammini e pellegrinaggi</h2>
-        <button onClick={onClose} className="p-2 rounded-full bg-white text-gray-400 hover:bg-gray-100 transition" aria-label="Chiudi">
+        <h2 className="font-black text-emerald-800 text-lg">🥾 {t('title')}</h2>
+        <button onClick={onClose} className="p-2 rounded-full bg-white text-gray-400 hover:bg-gray-100 transition" aria-label={getTranslation('close', asLang(language))}>
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -161,12 +177,12 @@ export default function PilgrimWaysSheet({
             type="text"
             value={query}
             onChange={e => { setQuery(e.target.value); setAiError(null); }}
-            placeholder="Cerca un cammino nel mondo…"
+            placeholder={t('search_placeholder')}
             className="w-full pl-9 pr-4 py-3 rounded-2xl bg-emerald-50/60 border border-emerald-200/60 focus:border-emerald-500 outline-none text-sm font-medium"
           />
         </div>
         <p className="text-[10px] font-medium text-gray-400 mt-1 pl-1">
-          Un passo alla volta: tappe, alloggi e timbri già pensati. La strada è la meta.
+          {t('intro')}
         </p>
       </div>
 
@@ -176,15 +192,15 @@ export default function PilgrimWaysSheet({
           value={continente}
           onChange={e => setContinente(e.target.value)}
           className="shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black bg-white text-gray-500 border border-emerald-200/60 outline-none"
-          aria-label="Filtra per continente"
+          aria-label={t('filter_continent')}
         >
-          <option value="tutti">🌍 Ovunque</option>
+          <option value="tutti">🌍 {t('anywhere')}</option>
           {continenti.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         {([
-          { id: 'tutte' as DurataFiltro, label: 'Ogni durata' },
-          { id: 'brevi' as DurataFiltro, label: '3-4 giorni' },
-          { id: 'lunghi' as DurataFiltro, label: '5-7 giorni' },
+          { id: 'tutte' as DurataFiltro, label: t('any_duration') },
+          { id: 'brevi' as DurataFiltro, label: `3-4 ${giorniWord}` },
+          { id: 'lunghi' as DurataFiltro, label: `5-7 ${giorniWord}` },
         ]).map(d => (
           <button
             key={d.id}
@@ -206,7 +222,7 @@ export default function PilgrimWaysSheet({
               difficolta === d ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-gray-500 border-emerald-200/60 hover:border-emerald-400'
             }`}
           >
-            {d === 'tutte' ? 'Ogni passo' : DIFF_LABEL[d]}
+            {d === 'tutte' ? t('any_pace') : diffLabel(d)}
           </button>
         ))}
       </div>
@@ -234,14 +250,14 @@ export default function PilgrimWaysSheet({
                     <div className="min-w-0">
                       <div className="text-xs font-black text-emerald-800 leading-tight">{r.name}</div>
                       <div className="text-[10px] font-bold text-gray-500 mt-0.5">
-                        {r.country} · {r.days} giorni · ~{totKm} km · {DIFF_LABEL[r.difficulty] || r.difficulty}
+                        {r.country} · {r.days} {giorniWord} · ~{totKm} km · {diffLabel(r.difficulty)}
                       </div>
                     </div>
                   </div>
                   <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full ${
                     r.aiGenerated ? 'bg-gray-100 text-gray-500' : 'bg-emerald-100 text-emerald-700'
                   }`}>
-                    {r.aiGenerated ? '🤖 AI' : '✦ Redazione'}
+                    {r.aiGenerated ? '🤖 AI' : `✦ ${t('editorial')}`}
                   </span>
                 </div>
               </button>
@@ -254,9 +270,9 @@ export default function PilgrimWaysSheet({
                       <thead>
                         <tr className="bg-emerald-50 text-emerald-800">
                           <th className="text-left font-black px-2 py-1.5">G</th>
-                          <th className="text-left font-black px-2 py-1.5">Tappa</th>
+                          <th className="text-left font-black px-2 py-1.5">{t('stage')}</th>
                           <th className="text-right font-black px-2 py-1.5">km</th>
-                          <th className="text-left font-black px-2 py-1.5">Terreno</th>
+                          <th className="text-left font-black px-2 py-1.5">{t('terrain')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -269,7 +285,7 @@ export default function PilgrimWaysSheet({
                                 {s.note && <div className="font-medium text-gray-400 mt-0.5">{s.note}</div>}
                               </td>
                               <td className="px-2 py-1.5 text-right font-black text-gray-600 align-top">{s.km}</td>
-                              <td className="px-2 py-1.5 font-medium text-gray-500 align-top">{s.terrain || 'collinare'}</td>
+                              <td className="px-2 py-1.5 font-medium text-gray-500 align-top">{s.terrain || t('terrain_hilly')}</td>
                             </tr>
                             {s.lodging && (
                               <tr>
@@ -290,7 +306,7 @@ export default function PilgrimWaysSheet({
                     <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
                       <Stamp className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-600" />
                       <p className="text-[11px] font-bold text-emerald-800 leading-snug">
-                        <span className="font-black">Credenziale: </span>{r.credential}
+                        <span className="font-black">{t('credential')}: </span>{r.credential}
                       </p>
                     </div>
                   )}
@@ -308,11 +324,11 @@ export default function PilgrimWaysSheet({
                       <div className="bg-white border border-emerald-200 rounded-xl px-3 py-2.5 space-y-2">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] font-black text-emerald-800">
-                            🥾 {m.progress.stagesDone}/{m.progress.stagesTotal} tappe completate
+                            🥾 {m.progress.stagesDone}/{m.progress.stagesTotal} {t('stages_completed')}
                           </span>
                           {m.progress.completed && (
                             <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                              Cammino completato 🎉
+                              {t('route_completed')} 🎉
                             </span>
                           )}
                         </div>
@@ -322,7 +338,7 @@ export default function PilgrimWaysSheet({
                             style={{ width: `${pct}%` }}
                           />
                         </div>
-                        <PilgrimCertificateAction itinerary={m.itinerary} />
+                        <PilgrimCertificateAction itinerary={m.itinerary} language={language} />
                       </div>
                     );
                   })()}
@@ -338,7 +354,7 @@ export default function PilgrimWaysSheet({
                     }}
                     className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-1.5"
                   >
-                    <Footprints className="w-3.5 h-3.5" /> Prepara il cammino ✨
+                    <Footprints className="w-3.5 h-3.5" /> {t('prepare')} ✨
                   </button>
 
                   {/* 📚 Libreria: itinerari già generati e verificati per
@@ -349,7 +365,7 @@ export default function PilgrimWaysSheet({
                       onClick={() => onOpenLibrary({ kind: 'pilgrim', city: r.start, query: r.name })}
                       className="w-full py-2 rounded-xl border border-amber-300/70 bg-amber-50 text-amber-800 text-[11px] font-black hover:bg-amber-100 active:scale-95 transition"
                     >
-                      📚 Vedi gli itinerari pronti per questo cammino
+                      📚 {t('see_ready')}
                     </button>
                   )}
                 </div>
@@ -362,11 +378,11 @@ export default function PilgrimWaysSheet({
         {lista.length === 0 && q.length >= 2 && (
           <div className="text-center py-8 space-y-3">
             <p className="text-xs font-bold text-gray-400">
-              "{query.trim()}" non è tra i cammini curati.
+              "{query.trim()}" {t('not_curated')}
             </p>
             {aiLoading ? (
               <div className="flex items-center justify-center gap-2 text-[11px] font-bold text-gray-400">
-                <Loader2 className="w-4 h-4 animate-spin" /> La redazione AI traccia le tappe…
+                <Loader2 className="w-4 h-4 animate-spin" /> {t('ai_tracing')}
               </div>
             ) : (
               <button
@@ -374,7 +390,7 @@ export default function PilgrimWaysSheet({
                 onClick={generaAi}
                 className="px-5 py-2.5 rounded-full border border-emerald-400/60 text-emerald-700 text-xs font-black hover:bg-emerald-50 active:scale-95 transition"
               >
-                🔍 Genera la guida del cammino "{query.trim()}" con l'AI
+                🔍 {t('generate_ai')} "{query.trim()}"
               </button>
             )}
             {aiError && <p className="text-[11px] font-bold text-red-400">{aiError}</p>}
@@ -382,7 +398,7 @@ export default function PilgrimWaysSheet({
         )}
         {lista.length === 0 && q.length < 2 && (
           <p className="text-center text-xs font-bold text-gray-400 py-10">
-            Nessun cammino per questi filtri: allarga la ricerca.
+            {t('no_results')}
           </p>
         )}
       </div>
@@ -396,7 +412,8 @@ export default function PilgrimWaysSheet({
 // (getProgress: check-in tappe o passaggio fisico via visitedFog).
 // Riusato da ProfileScreen sulle card degli itinerari-cammino.
 // =====================================================================
-export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
+export function PilgrimCertificateAction({ itinerary, language = 'IT' }: { itinerary: any; language?: string }) {
+  const t = useMemo(() => mkT(language), [language]);
   const progress = useMemo(() => {
     try { return getProgress(itinerary); } catch { return null; }
   }, [itinerary]);
@@ -416,9 +433,14 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
       const user: any = sess?.session?.user;
       const userName = user?.user_metadata?.display_name
         || user?.user_metadata?.full_name
-        || 'Viaggiatore WIP';
+        || t('default_traveler');
       const dateISO = progress.dates.end || new Date().toISOString().slice(0, 10);
-      const code = await computeCertHash(user?.id || 'anon', progress.routeId, dateISO);
+      // Codice: PRIMA si registra sul server; se il server emette il suo
+      // hash è quello che va sull'attestato (e solo allora è «verificabile»).
+      // L'hash locale resta il ripiego offline/anonimo, senza promesse.
+      const localCode = await computeCertHash(user?.id || 'anon', progress.routeId, dateISO);
+      const reg = await registerCertificate(progress, localCode, sess?.session?.access_token);
+      const code = reg.serverCode || localCode;
       const data: CertificateData = {
         userName,
         routeName: progress.name,
@@ -426,14 +448,13 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
         stages: progress.stagesTotal,
         dates: progress.dates,
         code,
+        serverIssued: !!reg.serverCode,
       };
       const canvas = renderCertificate(data);
       canvasRef.current = canvas;
       setPreview({ url: canvas.toDataURL('image/png'), data });
-      // Registrazione verificabile su wip.guide: best-effort, mai bloccante
-      void registerCertificate(progress, code, sess?.session?.access_token);
     } catch {
-      setFeedback('Generazione non riuscita: riprova.');
+      setFeedback(t('cert_failed'));
     } finally {
       setBusy(false);
     }
@@ -443,10 +464,10 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
     if (!canvasRef.current || !preview) return;
     try {
       const esito = await shareOrDownloadCertificate(canvasRef.current, preview.data, forceDownload);
-      if (esito === 'downloaded') setFeedback('PNG scaricato: incornicialo dove vuoi! 🖼');
+      if (esito === 'downloaded') setFeedback(t('png_saved'));
     } catch (e: any) {
       // Condivisione annullata dall'utente: nessun errore da mostrare
-      if (e?.name !== 'AbortError') setFeedback('Condivisione non riuscita: prova con "Scarica PNG".');
+      if (e?.name !== 'AbortError') setFeedback(t('share_failed'));
     }
   };
 
@@ -458,7 +479,7 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
         disabled={busy}
         className="w-full py-2.5 rounded-xl bg-amber-500 text-white text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-1.5 disabled:opacity-60"
       >
-        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '🎓'} Genera il tuo attestato
+        {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '🎓'} {t('generate_cert')}
       </button>
       {feedback && !preview && <p className="text-[10px] font-bold text-gray-400 text-center">{feedback}</p>}
 
@@ -472,7 +493,7 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-black text-emerald-800">🎓 Attestato del Pellegrino</h3>
+              <h3 className="text-sm font-black text-emerald-800">🎓 {t('cert_title')}</h3>
               <button
                 type="button"
                 onClick={() => setPreview(null)}
@@ -488,7 +509,7 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
               className="w-full rounded-lg border border-amber-200 shadow-sm"
             />
             <p className="text-[10px] font-bold text-gray-400 text-center">
-              Codice di verifica <span className="font-black text-amber-700">{preview.data.code}</span> · verificabile su wip.guide
+              {t('code')} <span className="font-black text-amber-700">{preview.data.code}</span>{preview.data.serverIssued ? ` · ${t('verifiable')}` : ' · wip.guide'}
             </p>
             <div className="flex gap-2">
               <button
@@ -496,14 +517,14 @@ export function PilgrimCertificateAction({ itinerary }: { itinerary: any }) {
                 onClick={() => esporta(false)}
                 className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black active:scale-95 transition"
               >
-                📤 Condividi
+                📤 {t('share')}
               </button>
               <button
                 type="button"
                 onClick={() => esporta(true)}
                 className="flex-1 py-2.5 rounded-xl border border-emerald-300 text-emerald-700 text-xs font-black hover:bg-emerald-50 active:scale-95 transition"
               >
-                ⬇️ Scarica PNG
+                ⬇️ {t('download_png')}
               </button>
             </div>
             {feedback && <p className="text-[10px] font-bold text-gray-400 text-center">{feedback}</p>}

@@ -18,11 +18,20 @@ import { speakInstruction, speakArrivalNative } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
 import { notify } from '../lib/toast';
 import { reportTrigger } from '../lib/geofencing/telemetry';
+import { puntoArrivo } from '../lib/puntoArrivo';
+import { getTranslation, type Language } from '../lib/i18n';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
 const SPEAK_DISTANCE_M = 30;    // leggi la manovra entro 30 m dalla svolta
-const ARRIVE_DISTANCE_M = 25;   // soglia di arrivo
+// Soglia di arrivo: 30 m DALLA PORTA (la meta e' l'ingresso, o il civico
+// dell'indirizzo, vedi puntoArrivoSuStrada), la stessa distanza a cui il
+// geofence fa partire la guida dal perimetro. Il router ci porta sulla via del
+// portone e a 30 m si e' "davanti": WIP Nav chiude, l'audioguida apre.
+const ARRIVE_DISTANCE_M = 30;
+const NEARBY_M = 60;            // "nei paraggi": entro questi metri per NEARBY_S secondi = arrivato
+const NEARBY_S = 45;
+const ARRIVE_ACCURACY_MAX_M = 150; // per il SOLO controllo d'arrivo si accetta un fix peggiore di 80 m
 const WALK_SPEED_MS = 1.3;      // ~4.7 km/h per stima ETA
 const POI_TRIGGER_M = 80;       // audioguida automatica entro 80 m dal POI scelto
 const OFF_ROUTE_M = 45;         // oltre 45 m dal tracciato = fuori rotta
@@ -159,6 +168,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // False finché l'utente non si avvicina al tracciato (solo con origine
   // personalizzata): sospende ricalcolo e arrivo finché non è "sul percorso".
   const joinedRouteRef = useRef(true);
+  // Da quando si e' "nei paraggi" della meta (entro NEARBY_M) senza essere
+  // riusciti a entrare nei 25 m: verso il centroide di un edificio grande, o
+  // con un GPS che balla, i 25 m possono non arrivare MAI — e la navigazione
+  // restava aperta per sempre, con wake lock e GPS accesi (verificato 22/08).
+  const nearbySinceRef = useRef<number | null>(null);
 
   const releaseWakeLock = () => {
     try { wakeLockRef.current?.release?.(); } catch { /* già rilasciato */ }
@@ -233,7 +247,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (pending.length === 0) return;
     const stillPending: RoutePoi[] = [];
     for (const p of pending) {
-      const d = haversineMeters(here.lat, here.lon, p.lat, p.lon);
+      // Dall'INGRESSO quando lo conosciamo, non dal centroide: su un edificio
+      // grande il trigger scattava dal lato sbagliato (stesso criterio di
+      // foregroundTriggers e del nativo).
+      const arrivo = puntoArrivo(p);
+      const d = haversineMeters(here.lat, here.lon, arrivo.lat, arrivo.lon);
       if (d <= POI_TRIGGER_M) {
         const lastTrig = (window as any).__wipLastPoiTrigger;
         const isDup = lastTrig && String(lastTrig.id) === String(p.id) && Date.now() - lastTrig.ts < 60000;
@@ -242,6 +260,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         else reportTrigger('fired', { poiId: p.id });
         if (!isDup) {
           (window as any).__wipLastPoiTrigger = { id: String(p.id), ts: Date.now() };
+          // Anche il cooldown di 6 h dei trigger web: senza, passati 60 s il
+          // modulo di prossimita' rifaceva parlare lo stesso POI gia' raccontato
+          // da WIP Nav (segnalato 22/08/2026).
+          import('../lib/geofencing/foregroundTriggers').then(m => m.segnaScattato(String(p.id))).catch(() => {});
           window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
             detail: {
               poiId: p.id,
@@ -298,6 +320,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     remainingFromVertexRef.current = [];
     offRouteCountRef.current = 0;
     routeTotalRef.current = 0;
+    // Anche il cooldown del ricalcolo (22/08/2026): restava l'orario
+    // dell'ultimo ricalcolo, e una navigazione nuova avviata subito dopo non
+    // poteva ricalcolare per RECALC_COOLDOWN_MS anche se gia' fuori rotta.
+    lastRecalcRef.current = 0;
+    recalcInFlightRef.current = false;
+    // La notifica dell'ultima svolta non deve restare nel centro notifiche.
+    locationService.cancelNavNotification().catch(() => {});
     releaseWakeLock();
     setState('idle');
     setCurrentInstruction(null);
@@ -365,8 +394,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       setCurrentInstruction(first?.instruction ?? null);
       setCurrentManeuver(first ? { type: first.maneuverType, modifier: first.maneuverModifier, street: first.name } : null);
       setDistanceToDestination(Math.round(route.distance));
-      setEtaSeconds(Math.round(route.distance / WALK_SPEED_MS));
+      // ETA dalla durata del router (salite, scale, ZTL) quando c'e'; la
+      // velocita' fissa resta solo come riserva. Prima `duration` arrivava e
+      // veniva buttata: l'orario d'arrivo era sempre "distanza / 4,7 km/h".
+      setEtaSeconds(Math.round(route.duration > 0 ? route.duration : route.distance / WALK_SPEED_MS));
       setProgress(0);
+      nearbySinceRef.current = null;
       acquireWakeLock();
 
       // Sottoscrizione al flusso GPS condiviso
@@ -382,9 +415,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         checkRoutePois(here);
 
         // Fix GPS poco accurato: non lo usiamo per la navigazione attiva
-        // (snap-to-route, fuori-rotta, distanza dalla manovra, arrivo) — si
-        // aspetta semplicemente il prossimo fix migliore.
-        if (loc.accuracy > MAX_GPS_ACCURACY_M) return;
+        // (snap-to-route, fuori-rotta, distanza dalla manovra) — si aspetta
+        // il prossimo fix migliore. ECCEZIONE: l'arrivo. Sotto un portico o
+        // fra palazzi alti l'accuratezza resta sopra gli 80 m a lungo, e
+        // scartare tutti i fix significava non arrivare mai.
+        const dDestGrezza = haversineMeters(here.lat, here.lon, t.lat, t.lon);
+        const fixBuono = loc.accuracy <= MAX_GPS_ACCURACY_M;
+        if (!fixBuono && !(loc.accuracy <= ARRIVE_ACCURACY_MAX_M && dDestGrezza <= ARRIVE_DISTANCE_M && joinedRouteRef.current)) return;
 
         // Distanza residua LUNGO IL TRACCIATO (non in linea d'aria) + ETA.
         // In linea d'aria un percorso a U dava ETA assurde ("200 m" con 15
@@ -394,7 +431,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const dDestAir = haversineMeters(here.lat, here.lon, t.lat, t.lon);
         const dDest = remaining;
         setDistanceToDestination(Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist)));
-        setEtaSeconds(Math.round((dDest + nearest.dist) / WALK_SPEED_MS));
+        // Velocita' media del percorso secondo il router (distanza/durata),
+        // riserva 1,3 m/s: cosi' l'ETA sente salite e scalinate.
+        const velocitaRotta = r.duration > 0 && r.distance > 0 ? Math.min(2, Math.max(0.6, r.distance / r.duration)) : WALK_SPEED_MS;
+        setEtaSeconds(Math.round((dDest + nearest.dist) / velocitaRotta));
         setProgress(Math.min(1, Math.max(0, 1 - dDest / routeTotalRef.current)));
 
         // Aggancio al tracciato (origine personalizzata): da qui in poi
@@ -404,8 +444,21 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // Fuori rotta → ricalcolo automatico (solo se già sul percorso)
         if (joinedRouteRef.current) maybeRecalc(here, nearest.dist);
 
-        // Arrivo (in linea d'aria: conta la vicinanza fisica alla meta)
-        if (joinedRouteRef.current && dDestAir <= ARRIVE_DISTANCE_M) {
+        // Arrivo. Tre modi, perche' i 30 m in linea d'aria da soli non bastavano:
+        //  1. entro 30 m dalla meta (la porta, se il POI ha l'ingresso);
+        //  2. il tracciato e' finito (meno di 15 m residui) e la meta e' a
+        //     meno di 60 m: il router ci ha portati dove poteva;
+        //  3. "nei paraggi": entro 60 m da 45 secondi — e' un edificio grande
+        //     o un GPS che balla, e restare in navigazione per sempre e' peggio.
+        if (joinedRouteRef.current && dDestAir <= NEARBY_M) { if (nearbySinceRef.current == null) nearbySinceRef.current = Date.now(); }
+        else nearbySinceRef.current = null;
+        const arrivato = joinedRouteRef.current && (
+          dDestAir <= ARRIVE_DISTANCE_M ||
+          (remaining <= 15 && dDestAir <= NEARBY_M) ||
+          (nearbySinceRef.current != null && Date.now() - nearbySinceRef.current >= NEARBY_S * 1000)
+        );
+        if (arrivato) {
+          nearbySinceRef.current = null;
           setState('arrived');
           setProgress(1);
           setCurrentManeuver({ type: 'arrive' });
@@ -440,7 +493,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
               speakInstruction(step.instruction, language);
               // Trigger local notification for background Android
-              locationService.sendLocalNotification("Indicazione Stradale", step.instruction);
+              locationService.sendLocalNotification(getTranslation('nav_indicazione', (language || 'it').toUpperCase() as Language), step.instruction);
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;

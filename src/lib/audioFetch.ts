@@ -1,4 +1,22 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { supabase } from './supabase';
+
+/**
+ * Intestazioni con il token di sessione (Bearer), se c'e` una sessione.
+ * Le rotte audio (/api/tts/smart, /api/poi/audioguide) fanno quota e
+ * addebito PER UTENTE solo se sanno chi chiama: senza token il server
+ * vede una richiesta anonima e non puo` ne' contare ne' addebitare.
+ * Best-effort: senza sessione si manda la richiesta com'era.
+ */
+export async function bearerHeaders(): Promise<Record<string, string>> {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const t = data?.session?.access_token;
+    return t ? { Authorization: `Bearer ${t}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 /**
  * POST che riceve un MP3 come Blob in modo affidabile ANCHE su app nativa.
@@ -11,16 +29,21 @@ import { Capacitor, CapacitorHttp } from '@capacitor/core';
  *
  * Su nativo si usa quindi l'API CapacitorHttp diretta con responseType
  * 'blob' (base64 → Blob); sul web resta la fetch standard.
+ *
+ * Manda SEMPRE il Bearer della sessione (se esiste): e` cio` che permette al
+ * server di fare quota e addebito per utente.
  */
 export async function postForAudioBlob(
   url: string,
   body: any
 ): Promise<{ ok: boolean; status: number; blob: Blob | null; errorText?: string }> {
+  const headers = { 'Content-Type': 'application/json', ...(await bearerHeaders()) };
+
   if (Capacitor.isNativePlatform()) {
     const res = await CapacitorHttp.request({
       url,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       data: body,
       responseType: 'blob',
     });
@@ -43,7 +66,7 @@ export async function postForAudioBlob(
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {

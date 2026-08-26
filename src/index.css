@@ -121,6 +121,19 @@
   .print\:hidden {
     display: none !important;
   }
+  /* Un `transform` (anche a riposo: framer-motion lo lascia inline su ogni
+     motion.div animato, es. i pannelli delle modali) crea un containing
+     block per i discendenti `position: absolute` — la posizione assoluta
+     del documento stampato non arriva più alla pagina ma si aggancia al
+     pannello trasformato, che nel flusso normale (invisibile ma presente,
+     vedi sotto) può stare a metà pagina. Nessuna stampa ha bisogno di
+     un'animazione: si azzera ovunque. */
+  * {
+    transform: none !important;
+    filter: none !important;
+    perspective: none !important;
+    will-change: auto !important;
+  }
 
   /* Stampa "con ambito" (vedi src/lib/printScoped.ts): di default nessuno
      dei due documenti stampabili è visibile; la classe sul body attiva solo
@@ -136,6 +149,54 @@
      printScoped('manual'), mai sulle altre stampe. */
   body:not(.printing-manual) #app-guide-print-view {
     display: none !important;
+  }
+
+  /* ── ISOLAMENTO: si stampa IL DOCUMENTO, non la pagina ──────────────
+     Le regole qui sopra nascondono gli ALTRI documenti stampabili, ma non
+     l'applicazione: sul ripiego «stampa del browser» finivano nel PDF la
+     finestra modale, la mappa dietro, la barra dei tab. Nel PDF della guida
+     premium del 22/08/2026 si vedono proprio quelle parti che non
+     c'entrano.
+     La tecnica è quella classica: si rende invisibile tutto e si riaccende
+     solo il documento richiesto. `visibility` e non `display`, perché
+     display:none sugli antenati porterebbe via anche il figlio.
+     L'itinerario (.print-optimized-view) mancava da questo isolamento: era
+     montato dentro PlanScreen, sotto mappa/pulsanti/DayPassCard mai nascosti
+     per la stampa. Quegli elementi restavano nel flusso (invisibili ma con
+     la loro altezza intatta: `visibility`, non `display`) e spingevano il
+     titolo a metà della prima pagina — il "grande spazio vuoto" del
+     26/08/2026. */
+  body.printing-itinerary,
+  body.printing-guide,
+  body.printing-manual {
+    visibility: hidden !important;
+  }
+  body.printing-itinerary .print-optimized-view,
+  body.printing-itinerary .print-optimized-view *,
+  body.printing-guide #premium-guide-pdf-container,
+  body.printing-guide #premium-guide-pdf-container *,
+  body.printing-manual #app-guide-print-view,
+  body.printing-manual #app-guide-print-view * {
+    visibility: visible !important;
+  }
+  body.printing-itinerary .print-optimized-view,
+  body.printing-guide #premium-guide-pdf-container,
+  body.printing-manual #app-guide-print-view {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+  /* Guida Premium col ripiego "stampa del browser": la copertina è già
+     misurata in mm (PremiumGuideRenderer, PAGE_H), qui si evita che un
+     blocco POI o un'immagine si spezzi tra due fogli. */
+  body.printing-guide #premium-guide-pdf-container img {
+    max-width: 100% !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 }
 

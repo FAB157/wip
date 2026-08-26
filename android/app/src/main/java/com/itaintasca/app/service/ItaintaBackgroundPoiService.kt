@@ -19,7 +19,9 @@ import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
 import com.itaintasca.app.geofence.ActivityMonitor
+import com.itaintasca.app.geofence.ArrivalWorker
 import com.itaintasca.app.geofence.CategoryMap
+import com.itaintasca.app.geofence.Footprints
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
 import com.itaintasca.app.geofence.PredictiveTrigger
@@ -80,6 +82,17 @@ class ItaintaBackgroundPoiService : Service() {
     
     private var lastQueryLocation: Location? = null
     private var currentPois: List<PoiEntity> = emptyList()
+
+    // (22/08/2026) Tappe dell'itinerario, SEPARATE dal radar. Prima vivevano
+    // solo dentro currentPois, e checkRefreshGeofences faceva
+    // `currentPois = pois` (solo radar) + full/diff register sul solo radar:
+    // al primo refresh (200 m a piedi) i geofence delle tappe sparivano.
+    // Ora ogni registrazione fonde SEMPRE radar + itineraryPois
+    // (mergeWithItinerary), in entrambi i percorsi (online e offline).
+    // Persistite in prefs (JSON) per sopravvivere ai riavvii STICKY/watchdog;
+    // svuotate quando il JS sincronizza una selezione vuota.
+    @Volatile private var itineraryPois: List<PoiEntity> = emptyList()
+    private val PREF_ITINERARY_POIS = "itineraryPoisJson"
 
     // Guard anti-sovrapposizione: gli update GPS arrivano ogni 2-5s ma un fetch
     // di rete può durare 15s — senza guard partivano fetch concorrenti che
@@ -160,16 +173,20 @@ class ItaintaBackgroundPoiService : Service() {
             // geofence dell'OS restano la rete di sicurezza.
             Log.w(TAG, "startForeground non consentito (background start): ${e.message}")
             // Non ci si arrende in silenzio se l'audioguida dovrebbe essere
-            // attiva: si pianifica un retry ravvicinato (30s, vedi
-            // ServiceWatchdog.scheduleRetry) invece di aspettare i 15 min
-            // della catena normale — la restrizione è spesso temporanea
-            // (si risolve quando l'utente riapre l'app).
+            // attiva: si pianifica un retry con backoff esponenziale (30 s,
+            // 1, 2, 5, 15 min, max 6 tentativi — vedi
+            // ServiceWatchdog.scheduleRetry) su una catena SEPARATA da quella
+            // dei 15 min — la restrizione è spesso temporanea (si risolve
+            // quando l'utente riapre l'app).
             if (isReallyActive) {
                 ServiceWatchdog.scheduleRetry(this)
             }
             stopSelf()
             return START_NOT_STICKY
         }
+        // startForeground riuscito: azzera il contatore del backoff e
+        // cancella un eventuale retry ancora armato.
+        ServiceWatchdog.resetRetry(this)
 
         if (intent == null && !isReallyActive) {
             stopSelf()
@@ -177,7 +194,17 @@ class ItaintaBackgroundPoiService : Service() {
         }
 
         if (intent?.action == ACTION_STOP) {
-            prefs.edit { putBoolean("isServiceActive", false) }
+            // (22/08/2026) radarTeaserNotified cresceva per sempre: senza reset
+            // allo stop un POI notificato una volta non tornava mai nei teaser
+            // radar, nemmeno in un viaggio successivo mesi dopo.
+            prefs.edit {
+                putBoolean("isServiceActive", false)
+                remove("radarTeaserNotified")
+                // Le tappe persistite non devono sopravvivere a uno stop
+                // esplicito: al prossimo avvio il JS le risincronizza.
+                remove(PREF_ITINERARY_POIS)
+            }
+            itineraryPois = emptyList()
             com.itaintasca.app.geofence.GeofenceBroadcastReceiver.stopSpeaking(this)
             ServiceWatchdog.cancel(this)
             RadarState.setActive(false)
@@ -191,6 +218,17 @@ class ItaintaBackgroundPoiService : Service() {
             if (selectedCategories.isEmpty() && currentPois.isEmpty()) restoreSettingsFromPrefs(prefs)
             val jsonPois = intent.getStringExtra("poisJson") ?: "[]"
             syncManualSelection(jsonPois)
+            return START_STICKY
+        }
+
+        if (intent?.action == ArrivalWorker.ACTION_HANDLE_ARRIVAL) {
+            // (22/08/2026) Lavoro lungo dell'arrivo inoltrato dal receiver
+            // (teaser dal server, testo integrale, MP3): qui non c'è il limite
+            // di ~10 s di goAsync(). Vedi ArrivalWorker.
+            val params = ArrivalWorker.fromIntent(intent)
+            if (params != null) {
+                serviceScope.launch { ArrivalWorker.run(this@ItaintaBackgroundPoiService, params) }
+            }
             return START_STICKY
         }
 
@@ -230,6 +268,10 @@ class ItaintaBackgroundPoiService : Service() {
                 Log.d(TAG, "Categories changed, forcing POI refresh...")
                 lastQueryLocation = null
             }
+            // Avvio a processo freddo con itinerario ancora in corso: le tappe
+            // persistite tornano subito nella fusione (il JS le risincronizzerà
+            // comunque con ACTION_SYNC_SELECTION).
+            restoreItineraryFromPrefs(prefs)
         } else {
             // Riavvio senza payload (START_STICKY dopo kill, watchdog, boot):
             // senza questo restore il servizio ripartiva con categorie vuote,
@@ -309,6 +351,12 @@ class ItaintaBackgroundPoiService : Service() {
         guideMode = target
         getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit { putString("guideMode", guideMode) }
         lastQueryLocation = null
+        // (22/08/2026) La cadenza GPS è mode-aware (applyLocationRate) ma veniva
+        // ricostruita solo quando cambiava lo stato armato: dopo il passaggio
+        // piedi→auto la richiesta IDLE restava quella a piedi, con batching
+        // fino a 60 s — a 100 km/h sono ~1,7 km percorsi alla cieca. Si rifà
+        // subito la richiesta con la modalità nuova, allo stesso livello armato.
+        applyLocationRate(isArmed)
         Log.d(TAG, "Travel mode switched to $guideMode (${kmh.toInt()} km/h)")
     }
 
@@ -325,6 +373,18 @@ class ItaintaBackgroundPoiService : Service() {
      * Services) stillForMs è 0 e il gate non scatta mai.
      */
     private fun isGpsTeleport(location: Location): Boolean {
+        // (22/08/2026) In auto, o comunque con velocità GPS > 3 m/s, il gate è
+        // DISATTIVATO: a 90 km/h un fix ogni 20 s (IDLE) è un salto di 500 m
+        // del tutto legittimo, e l'Activity Recognition può dichiarare STILL
+        // in autostrada (accelerazioni nulle a velocità costante) — il gate
+        // avrebbe scartato fix veri a raffica, ciechi proprio dove serve
+        // reattività.
+        val moving = location.hasSpeed() && location.speed > 3f
+        if (guideMode == "driving" || moving) {
+            suspectFix = null
+            lastAcceptedFix = location
+            return false
+        }
         val prev = lastAcceptedFix
         val stillMs = ActivityMonitor.stillForMs(this)
         if (prev != null && stillMs > 5 * 60_000L) {
@@ -355,27 +415,82 @@ class ItaintaBackgroundPoiService : Service() {
         transportPref = prefs.getString("transportPref", "auto") ?: "auto"
         appLanguage = prefs.getString("language", "it") ?: "it"
         selectedCategories = prefs.getStringSet("selectedCategories", emptySet())?.toList() ?: emptyList()
-        alertRadiusWalk = prefs.getFloat("alertRadiusWalk", 150f)
-        arrivalRadiusWalk = prefs.getFloat("arrivalRadiusWalk", 30f)
-        alertRadiusCar = prefs.getFloat("alertRadiusCar", 300f)
-        arrivalRadiusCar = prefs.getFloat("arrivalRadiusCar", 50f)
-        Log.d(TAG, "Settings restored from prefs: lang=$appLanguage, cats=${selectedCategories.size}, mode=$guideMode")
+        // (22/08/2026) Stessi clamp di onStartCommand: un valore fuori range
+        // scritto da una versione vecchia dell'app (o da prefs corrotte)
+        // sopravviveva ai riavvii STICKY/watchdog e dava raggi assurdi.
+        alertRadiusWalk = prefs.getFloat("alertRadiusWalk", 150f).coerceIn(50f, 400f)
+        arrivalRadiusWalk = prefs.getFloat("arrivalRadiusWalk", 30f).coerceIn(15f, 100f)
+        alertRadiusCar = prefs.getFloat("alertRadiusCar", 300f).coerceIn(100f, 600f)
+        arrivalRadiusCar = prefs.getFloat("arrivalRadiusCar", 50f).coerceIn(20f, 150f)
+        restoreItineraryFromPrefs(prefs)
+        Log.d(TAG, "Settings restored from prefs: lang=$appLanguage, cats=${selectedCategories.size}, mode=$guideMode, tappe=${itineraryPois.size}")
+    }
+
+    /** Tappe itinerario persistite (vedi itineraryPois): solo se in memoria non ci sono già. */
+    private fun restoreItineraryFromPrefs(prefs: SharedPreferences) {
+        if (itineraryPois.isNotEmpty()) return
+        try {
+            val json = prefs.getString(PREF_ITINERARY_POIS, null)
+            if (!json.isNullOrBlank()) {
+                val type = object : com.google.gson.reflect.TypeToken<List<PoiEntity>>() {}.type
+                val restored: List<PoiEntity> = gson.fromJson(json, type) ?: emptyList()
+                itineraryPois = restored.map { it.copy(isFromItinerary = true) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Ripristino tappe itinerario fallito: ${e.message}")
+        }
+    }
+
+    /**
+     * Fusione radar + tappe itinerario: tappe davanti (priorità nel
+     * predittore e nella finestra geofence), poi il radar senza i doppioni
+     * (per id). È l'UNICA lista che va in currentPois e ai geofence.
+     */
+    private fun mergeWithItinerary(radar: List<PoiEntity>): List<PoiEntity> {
+        val stops = itineraryPois
+        if (stops.isEmpty()) return radar
+        val stopIds = stops.map { it.id }.toSet()
+        return stops + radar.filter { it.id !in stopIds }
     }
 
     private fun syncManualSelection(json: String) {
         serviceScope.launch {
             try {
                 val type = object : com.google.gson.reflect.TypeToken<List<PoiEntity>>() {}.type
-                val selectedPois: List<PoiEntity> = gson.fromJson(json, type)
+                val selectedPois: List<PoiEntity> = gson.fromJson(json, type) ?: emptyList()
                 val prioritizedPois = selectedPois.map { it.copy(isFromItinerary = true) }
+                val prefs = getSharedPreferences("ItaintaPrefs", MODE_PRIVATE)
 
-                currentPois = prioritizedPois
-                RadarState.updatePois(prioritizedPois)
+                // Selezione vuota = l'itinerario è stato chiuso: via le tappe
+                // (anche dalle prefs) e si resta col solo radar.
+                itineraryPois = prioritizedPois
+                if (prioritizedPois.isEmpty()) {
+                    prefs.edit { remove(PREF_ITINERARY_POIS) }
+                } else {
+                    prefs.edit { putString(PREF_ITINERARY_POIS, gson.toJson(prioritizedPois)) }
+                }
 
-                db.poiDao().insertPois(prioritizedPois)
-                // initialTrigger=true: se l'utente avvia l'itinerario già dentro il
-                // raggio della prima tappa, il teaser parte subito.
-                geofenceManager.registerGeofencesForPois(prioritizedPois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin = null, initialTrigger = true)
+                // Radar "puro" = currentPois senza le vecchie tappe; poi si
+                // rifonde con le tappe nuove. Prima `currentPois = prioritizedPois`
+                // SOSTITUIVA il radar con le sole tappe: fino al prossimo fetch
+                // i POI lungo la strada sparivano dal predittore e dai banner.
+                val radarOnly = currentPois.filter { !it.isFromItinerary }
+                val mergedPois = mergeWithItinerary(radarOnly)
+                currentPois = mergedPois
+                RadarState.updatePois(mergedPois)
+
+                if (prioritizedPois.isNotEmpty()) db.poiDao().insertPois(prioritizedPois)
+                if (mergedPois.isNotEmpty()) {
+                    // Si registra la lista FUSA (tappe + radar), mai le sole
+                    // tappe: il full register rimuove tutti i geofence del
+                    // PendingIntent, e con le sole tappe il radar restava senza.
+                    // initialTrigger=true: se l'utente avvia l'itinerario già
+                    // dentro il raggio della prima tappa, il teaser parte subito.
+                    geofenceManager.registerGeofencesForPois(
+                        mergedPois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar,
+                        origin = lastAcceptedFix ?: lastQueryLocation, initialTrigger = prioritizedPois.isNotEmpty()
+                    )
+                }
                 updateNotificationAndStatus("Audioguida attiva", "${prioritizedPois.size} tappe itinerario caricate")
             } catch (e: Exception) {
                 Log.e(TAG, "Sync failed: ${e.message}")
@@ -503,6 +618,20 @@ class ItaintaBackgroundPoiService : Service() {
     }
 
     /**
+     * (22/08/2026) Le uscite anticipate del valutatore (radar vuoto, fix
+     * impreciso o stantio) non toccavano isArmed: se il dispositivo era stato
+     * armato a 1-2 s HIGH_ACCURACY e poi il GPS degradava (indoor, galleria)
+     * restava a quella cadenza all'infinito, perché il disarmo avviene solo a
+     * valutazione completata. Torna a IDLE appena la valutazione non può girare.
+     */
+    private fun disarmIfArmed() {
+        if (isArmed) {
+            isArmed = false
+            applyLocationRate(false)
+        }
+    }
+
+    /**
      * Valutatore predittivo in-process (Blocchi 2 e 3).
      *
      * Fa tre cose che i geofence circolari dell'OS non possono fare:
@@ -514,7 +643,7 @@ class ItaintaBackgroundPoiService : Service() {
      *   3. REGOLA IL DUTY CYCLE in base a quanto è vicino il prossimo POI.
      */
     private fun runPredictiveEvaluation(location: Location) {
-        if (currentPois.isEmpty()) return
+        if (currentPois.isEmpty()) { disarmIfArmed(); return }
         // GATE ACCURATEZZA (fail-closed): senza un fix RECENTE e PRECISO ogni
         // trigger è sospetto. Indoor/seminterrato la posizione di RETE ha
         // incertezza chilometrica e il predittore, valutando comunque, poteva
@@ -525,6 +654,7 @@ class ItaintaBackgroundPoiService : Service() {
         val maxFixAgeMs = 2 * 60_000L
         if (!location.hasAccuracy() || location.accuracy <= 0f || location.accuracy > maxAccuracyM ||
             System.currentTimeMillis() - location.time > maxFixAgeMs) {
+            disarmIfArmed()
             return
         }
         if (!predictiveBusy.compareAndSet(false, true)) return
@@ -544,15 +674,32 @@ class ItaintaBackgroundPoiService : Service() {
 
                 // Si valutano solo i candidati plausibili: oltre 3× il raggio
                 // di alert il CPA non può cadere nella finestra di anticipo.
+                // (22/08/2026) ORDINE: filtro categoria → distanza → take(5).
+                // Prima il take(5) precedeva il filtro categoria (dentro il
+                // for): in una piazza con 5 POI di categorie spente i 5 posti
+                // erano occupati da POI muti e il monumento attivo a 80 m non
+                // veniva mai valutato.
                 val candidates = currentPois
+                    .filter { isPoiCategorySelected(it) }
                     .map { poi ->
                         val poiLoc = Location("").apply {
                             latitude = poi.entranceLat ?: poi.lat
                             longitude = poi.entranceLon ?: poi.lon
                         }
-                        poi to location.distanceTo(poiLoc)
+                        // La distanza che ordina e' la MINORE fra ingresso e
+                        // bordo del perimetro: in un centro storico a 30 m dal
+                        // muro di tre chiese vince quella di cui si sfiora il
+                        // muro, non quella col portone piu' vicino in linea d'aria.
+                        val dIngresso = location.distanceTo(poiLoc)
+                        val dMuro = Footprints.distanzaDalPerimetro(
+                            poi.id, poi.footprint, location.latitude, location.longitude,
+                            entro = Footprints.TRIGGER_CAR_M
+                        )
+                        poi to minOf(dIngresso, dMuro.toFloat())
                     }
-                    .filter { (_, d) -> d <= alertRad * 3f }
+                    // ...oppure a 30 m dal perimetro: un parco o una cinta
+                    // muraria si estendono ben oltre 3× il raggio dall'ingresso.
+                    .filter { (_, d) -> d <= alertRad * 3f || d <= Footprints.triggerM(isDriving) }
                     .sortedWith(
                         compareByDescending<Pair<PoiEntity, Float>> { it.first.isFromItinerary }
                             .thenByDescending { it.first.isGem }
@@ -561,8 +708,6 @@ class ItaintaBackgroundPoiService : Service() {
                     .take(MAX_PREDICTIVE_CANDIDATES)
 
                 for ((poi, _) in candidates) {
-                    if (!isPoiCategorySelected(poi)) continue
-
                     val pred = PredictiveTrigger.evaluate(
                         location = location,
                         poiLat = poi.entranceLat ?: poi.lat,
@@ -575,16 +720,45 @@ class ItaintaBackgroundPoiService : Service() {
                     val prevDist = lastDistances[poi.id]
                     val distNow = pred.distanceNowMeters.toFloat()
 
+                    // A 30 M DAL PERIMETRO (22/08/2026): la misura che governa
+                    // la guida quando il POI ha il poligono. 0 = dentro.
+                    val distPerimetro = Footprints.distanzaDalPerimetro(
+                        poi.id, poi.footprint, location.latitude, location.longitude,
+                        entro = Footprints.TRIGGER_CAR_M
+                    )
+                    val alPerimetro = distPerimetro <= Footprints.triggerM(isDriving)
+
                     // Finestra di attenzione: se un POI è a meno di 90 s, si alza il rate.
                     if (!pred.tCpaSeconds.isNaN() && pred.tCpaSeconds > 0 && pred.tCpaSeconds <= ARM_WINDOW_S) {
                         shouldArm = true
-                    } else if (distNow <= alertRad * 1.5f) {
+                    } else if (distNow <= alertRad * 1.5f || alPerimetro) {
                         shouldArm = true
+                    }
+
+                    // ARRIVO DAL PERIMETRO: il sistema emette l'ENTER una volta,
+                    // all'ingresso nel cerchio (che col perimetro e' allargato a
+                    // coprirlo tutto); i 30 m dal muro si raggiungono dopo, e li
+                    // vede solo questo loop. Vale da PENDING, APPROACH_FIRED e da
+                    // EXITED dopo il cooldown; handleArrival ri-verifica sotto
+                    // lock che non sia gia' ARRIVED_FIRED.
+                    if (alPerimetro && (state == TriggerState.PENDING || state == TriggerState.APPROACH_FIRED ||
+                            (state == TriggerState.EXITED &&
+                                (stateEntity?.let { System.currentTimeMillis() - it.updatedAt } ?: Long.MAX_VALUE) >
+                                    GeofenceBroadcastReceiver.ARRIVAL_AFTER_EXIT_COOLDOWN_MS))
+                    ) {
+                        GeofenceBroadcastReceiver.firePerimeterArrival(
+                            this@ItaintaBackgroundPoiService, poi, isAutomaticMode, db,
+                            distanceM = distPerimetro.toFloat()
+                        )
+                        lastDistances[poi.id] = distNow
+                        continue
                     }
 
                     when (state) {
                         // ── Superamento: si ferma la voce e si libera il POI ──
-                        TriggerState.APPROACH_FIRED, TriggerState.ARRIVED_FIRED -> {
+                        // A 30 m dal muro non si e' mai "superato" il POI, per
+                        // quanto ci si allontani dal suo ingresso.
+                        TriggerState.APPROACH_FIRED, TriggerState.ARRIVED_FIRED -> if (!alPerimetro) {
                             // Pavimento radiale per modalità: in auto basta
                             // uscire dal cerchio di arrivo (sorpasso netto);
                             // a piedi la voce vive finché resti nel raggio di
@@ -676,6 +850,9 @@ class ItaintaBackgroundPoiService : Service() {
         GeofenceBroadcastReceiver.stopSpeakingForPoi(this, poi.id)
 
         val intent = Intent("com.itaintasca.POI_EVENT")
+        // (22/08/2026) Broadcast implicito senza setPackage: id e nome del POI
+        // superato erano leggibili da qualsiasi app installata.
+        intent.setPackage(packageName)
         intent.putExtra("event", "poiPassed")
         intent.putExtra("poiId", poi.id)
         intent.putExtra("name", poi.nome)
@@ -792,6 +969,9 @@ class ItaintaBackgroundPoiService : Service() {
                 val dataObj = JSONObject()
                 dataObj.put("entries", approachingPoisArray)
                 val intent = Intent("com.itaintasca.POI_EVENT")
+                // (22/08/2026) Come sendEventToPlugin: senza setPackage le
+                // distanze ai POI (= posizione dell'utente) uscivano in chiaro.
+                intent.setPackage(packageName)
                 intent.putExtra("event", "wip-poi-distance-update")
                 intent.putExtra("data1", dataObj.toString())
                 sendBroadcast(intent)
@@ -884,12 +1064,16 @@ class ItaintaBackgroundPoiService : Service() {
                         val isFirstRegistration = currentPois.isEmpty() &&
                             location.hasAccuracy() && location.accuracy <= 100f
                         db.poiDao().insertPois(pois)
-                        currentPois = pois
-                        RadarState.updatePois(pois)
+                        // (22/08/2026) SEMPRE radar + tappe itinerario: prima
+                        // `currentPois = pois` e il register sul solo radar
+                        // facevano sparire i geofence delle tappe al refresh.
+                        val merged = mergeWithItinerary(pois)
+                        currentPois = merged
+                        RadarState.updatePois(merged)
 
-                        Log.d(TAG, "Fetched ${pois.size} nearby POIs (after deduplication). Selected categories: $selectedCategories")
+                        Log.d(TAG, "Fetched ${pois.size} nearby POIs (after deduplication, +${itineraryPois.size} tappe). Selected categories: $selectedCategories")
 
-                        geofenceManager.registerGeofencesForPois(pois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin = location, initialTrigger = isFirstRegistration)
+                        geofenceManager.registerGeofencesForPois(merged, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin = location, initialTrigger = isFirstRegistration)
 
                         // Bonifica stati incoerenti: dopo un falso ENTER (fix
                         // impreciso / teleport GPS) i POI restavano APPROACH o
@@ -930,9 +1114,25 @@ class ItaintaBackgroundPoiService : Service() {
                             }
                         }
 
-                        // ✅ [BATCH TEASER] - Richiedi la generazione dei teaser mancanti per i POI scaricati
-                        // Questo popola Supabase per i prossimi utenti e prepara il database locale
-                        generateTeasersInBackground(pois.map { it.id })
+                        // ✅ [BATCH TEASER] - Richiedi la generazione dei teaser mancanti
+                        // (22/08/2026) Solo i 10 POI PIÙ VICINI SENZA teaser, non
+                        // tutto il radar: prima si mandavano anche 200-1000 id al
+                        // server (che li rigenerava/controllava tutti) a ogni
+                        // refresh da 200 m — costo AI e banda per teaser di POI a
+                        // 5 km che l'utente non avrebbe mai incontrato.
+                        val teaserTargets = pois
+                            .filter { it.teaserText.isNullOrBlank() }
+                            .map { poi ->
+                                val poiLoc = Location("").apply {
+                                    latitude = poi.entranceLat ?: poi.lat
+                                    longitude = poi.entranceLon ?: poi.lon
+                                }
+                                poi.id to location.distanceTo(poiLoc)
+                            }
+                            .sortedBy { it.second }
+                            .take(10)
+                            .map { it.first }
+                        if (teaserTargets.isNotEmpty()) generateTeasersInBackground(teaserTargets)
 
                         // ✅ [TEASER RADAR] - Avvisi teaser per i POI nel radar
                         // che l'utente non ha ancora avvicinato
@@ -992,10 +1192,12 @@ class ItaintaBackgroundPoiService : Service() {
             lastQueryLocation = location
             lastFetchFailedAt = 0L
             db.poiDao().insertPois(pois)
-            currentPois = pois
-            RadarState.updatePois(pois)
+            // Come nel percorso online: radar + tappe itinerario, sempre.
+            val merged = mergeWithItinerary(pois)
+            currentPois = merged
+            RadarState.updatePois(merged)
 
-            geofenceManager.registerGeofencesForPois(pois, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin = location, initialTrigger = isFirstRegistration)
+            geofenceManager.registerGeofencesForPois(merged, guideMode, alertRadiusWalk, arrivalRadiusWalk, alertRadiusCar, arrivalRadiusCar, origin = location, initialTrigger = isFirstRegistration)
 
             updateNotificationAndStatus("Audioguida attiva (offline)", "${pois.size} luoghi dal pacchetto offline")
             sendEventToPlugin("poisDownloaded", gson.toJson(pois))
@@ -1008,21 +1210,13 @@ class ItaintaBackgroundPoiService : Service() {
         }
     }
 
-    /** Filtro categorie offline: stessa semantica di SupabaseClient.parsePoiList. */
-    private fun isOfflineCategoryActive(p: com.itaintasca.app.db.OfflinePoiEntity): Boolean {
-        if (p.isGem) return true
-        val cat = (p.poiType ?: p.category ?: "").lowercase()
-        if (selectedCategories.isEmpty()) {
-            // Default "insieme vuoto" allineato al web (useGeofencing.ts):
-            // { monumenti, musei, chiese } attivi, panorami OFF. Prima il nativo
-            // includeva viewpoint/park/panorami di default (divergenza dal web).
-            return CategoryMap.DEFAULT_CULTURAL_CATEGORIES.contains(cat)
-        }
-        if (selectedCategories.contains(cat)) return true
-        return selectedCategories.any {
-            CategoryMap.MAP[it]?.contains(cat) == true
-        }
-    }
+    /**
+     * Filtro categorie offline: (22/08/2026) STESSA funzione del fetch online
+     * (SupabaseClient.parsePoiList) e del filtro trigger (receiver):
+     * CategoryMap.isActive. Insieme vuoto = { monumenti, musei, chiese }.
+     */
+    private fun isOfflineCategoryActive(p: com.itaintasca.app.db.OfflinePoiEntity): Boolean =
+        CategoryMap.isActive(p.poiType ?: p.category, p.isGem, isFromItinerary = false, selected = selectedCategories)
 
     /**
      * Teaser per i POI presenti nel radar ma non ancora avvicinati: notifica
@@ -1091,20 +1285,37 @@ class ItaintaBackgroundPoiService : Service() {
     private fun generateTeasersInBackground(poiIds: List<String>) {
         serviceScope.launch {
             try {
-                val client = OkHttpClient()
+                // Timeout espliciti (come il receiver): la generazione AI può
+                // superare i 10 s del default OkHttp.
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
                 val body = JSONObject().apply {
                     put("poiIds", JSONArray(poiIds))
                     put("lang", appLanguage)
                 }.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                // (22/08/2026) Il server risponde 403 senza Authorization: la
+                // generazione teaser in background non partiva MAI e l'esito
+                // non veniva nemmeno loggato. Stesso token utente (SecurePrefs)
+                // già usato per /api/poi/audioguide; senza token la richiesta
+                // resta com'era (e il warning sotto lo rende visibile).
+                val accessToken = SecurePrefs.get(this@ItaintaBackgroundPoiService)
+                    .getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+                val requestBuilder = Request.Builder()
                     .url("https://wip.guide/api/poi/batch-teaser")
                     .post(body)
-                    .build()
+                if (!accessToken.isNullOrBlank()) {
+                    requestBuilder.addHeader("Authorization", "Bearer $accessToken")
+                }
+                val request = requestBuilder.build()
 
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
-                        Log.d(TAG, "Batch teaser generation requested successfully")
+                        Log.d(TAG, "Batch teaser generation requested successfully (HTTP ${response.code})")
+                    } else {
+                        Log.w(TAG, "Batch teaser: HTTP ${response.code} (token ${if (accessToken.isNullOrBlank()) "assente" else "presente"})")
                     }
                 }
             } catch (e: Exception) {

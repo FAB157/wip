@@ -15,6 +15,7 @@ import { X, Volume2, Car, Footprints } from 'lucide-react';
 import { CATEGORY_EMOJI } from '../lib/poiCategories';
 import type { PoiCategory } from '../types/poi';
 import { getTranslation, Language } from '../lib/i18n';
+import { puntoArrivo } from '../lib/puntoArrivo';
 
 // ─── Tipi ─────────────────────────────────────────────────────────
 
@@ -147,6 +148,13 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
       playBeep(isArrival ? 2 : 1);
       navigator.vibrate?.(isArrival ? [250, 100, 250] : [200]);
 
+      // La distanza e la freccia puntano all'INGRESSO quando lo conosciamo,
+      // non al centroide: su un edificio grande il banner diceva "40 m" a
+      // chi era davanti alla porta (stesso criterio del trigger).
+      const arrivo = puntoArrivo(poi);
+      const lat = Number.isFinite(arrivo.lat) ? arrivo.lat : poi.lat;
+      const lon = Number.isFinite(arrivo.lon) ? arrivo.lon : poi.lon;
+
       setEntries(prev => {
         if (prev.find(x => String(x.poiId) === poiId)) return prev; // già presente
         return [...prev, {
@@ -160,8 +168,8 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
           queueNames: [],
           enteredAt: Date.now(),
           image: poi.image_url || poi.photo_url || undefined,
-          lat: poi.lat,
-          lon: poi.lon,
+          lat,
+          lon,
           poi,
           alreadyPaid: d.alreadyPaid || false
         }];
@@ -196,6 +204,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
             // Entry sconosciuta (approach perso mentre la WebView dormiva):
             // entra solo se non è stata chiusa/aperta da poco.
             if (isDismissedRecently(id)) return null;
+            const arrivo = entry.poi ? puntoArrivo(entry.poi) : { lat: NaN, lon: NaN };
             return {
               poiId: id,
               name: entry.poi?.name || entry.name || '',
@@ -207,8 +216,8 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
               queueNames: [],
               enteredAt: Date.now(),
               image: entry.poi?.image_url,
-              lat: entry.lat ?? entry.poi?.lat,
-              lon: entry.lon ?? entry.poi?.lon,
+              lat: Number.isFinite(arrivo.lat) ? arrivo.lat : (entry.lat ?? entry.poi?.lat),
+              lon: Number.isFinite(arrivo.lon) ? arrivo.lon : (entry.lon ?? entry.poi?.lon),
               poi: entry.poi,
               alreadyPaid: entry.alreadyPaid || false,
             } as ApproachEntry;
@@ -292,6 +301,22 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     // distance-update nativo (arrivava ogni ~5 m e resuscitava il banner).
     dismissedRef.current.set(String(poiId), Date.now());
     window.dispatchEvent(new CustomEvent('wip-poi-exit-manual', { detail: { poiId } }));
+    // Anche il servizio nativo dovrebbe sapere che l'utente ha chiuso il
+    // POI (uscito/ignorato), altrimenti al prossimo fix lo riannuncia. Il
+    // plugin (ItaintaBackgroundPoiPlugin, Kotlin/Swift) oggi NON ha un
+    // metodo del genere: si prova `markPoiExited` se una build lo espone.
+    // TODO(nativo): aggiungere markPoiExited({poiId}) al plugin.
+    (async () => {
+      try {
+        const { Capacitor, registerPlugin } = await import('@capacitor/core');
+        if (!Capacitor.isNativePlatform()) return;
+        const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
+        if (typeof plugin.markPoiExited === 'function') { await plugin.markPoiExited({ poiId: String(poiId) }); return; }
+        console.warn('[ApproachBanner] markPoiExited non disponibile nel plugin nativo: il POI chiuso resta attivo lato servizio');
+      } catch {
+        console.warn('[ApproachBanner] markPoiExited non disponibile nel plugin nativo: il POI chiuso resta attivo lato servizio');
+      }
+    })();
     setEntries(prev => prev.filter(x => x.poiId !== poiId));
   };
 
@@ -322,7 +347,9 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     // manca (entry ricostruita da un distance-update) App.tsx lo ricarica dal
     // repository invece di ignorare il click.
     window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
-      detail: { poi: entry.poi, poiId: entry.poiId, alreadyPaid: entry.alreadyPaid, autoPlay: true },
+      // manual: e' l'utente che ha premuto "Ascolta" — la modalita' silenziosa
+      // non deve zittirlo (locationService non lo registra come trigger).
+      detail: { poi: entry.poi, poiId: entry.poiId, alreadyPaid: entry.alreadyPaid, autoPlay: true, manual: true },
     }));
     setEntries(prev => prev.filter(x => x.poiId !== entry.poiId));
   };
@@ -438,13 +465,13 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
             className="pointer-events-auto bg-stone-900/80 backdrop-blur-lg text-white rounded-xl px-4 py-2 flex items-center justify-between shadow-lg border border-white/10"
           >
             <span className="text-[10px] font-black uppercase tracking-widest">
-              +{entries.length - 2} {language === 'IT' ? 'altri luoghi vicini' : 'other nearby places'}
+              +{entries.length - 2} {getTranslation('altri_luoghi_vicini', language)}
             </span>
             <button
               onClick={() => setEntries(prev => prev.slice(0, 2))}
               className="text-[10px] font-black bg-white/20 hover:bg-white/30 px-2 py-1 rounded-lg transition-colors"
             >
-              {language === 'IT' ? 'PULISCI' : 'CLEAR'}
+              {getTranslation('pulisci', language)}
             </button>
           </motion.div>
         )}

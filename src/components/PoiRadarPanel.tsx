@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language } from "../lib/i18n";
 import { tourService, MAX_TAPPE } from "../services/tourService";
+import { getGuideCharacter } from "../lib/guideSettings";
 import { useBozzaGiro } from "../lib/tour/useGiro";
 
 /** "Ho un'ora": i tagli di tempo fra cui scegliere. `null` = tutto il giro. */
@@ -16,7 +17,7 @@ const TEMPI: { min: number | null; label: string }[] = [
   { min: 240, label: '4 h' },
   { min: null, label: 'Tutto' },
 ];
-import { puntoArrivo } from "../lib/puntoArrivo";
+import NavChoiceSheet from "./NavChoiceSheet";
 
 interface PoiRadarPanelProps {
   pois: any[];
@@ -55,8 +56,9 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
     try {
       await tourService.avviaDaBozza();
       // Il pre-scaricamento parte subito e non blocca: si cammina verso la
-      // prima tappa mentre il resto arriva.
-      tourService.prescarica().catch(() => {});
+      // prima tappa mentre il resto arriva. Lingua e personaggio dell'utente,
+      // non 'it' fisso: l'esito si legge nel banner del giro.
+      tourService.prescarica(undefined, String(language || 'IT').toLowerCase(), getGuideCharacter()).catch(() => {});
       window.dispatchEvent(new CustomEvent('wip-giro-avviato'));
       onClose();
     } catch (e: any) {
@@ -69,6 +71,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
 
   // La riga sotto il conteggio: prima diceva sempre la stessa frase; ora dice
   // il giro che ne esce — km e minuti — appena il server ha risposto.
+  const passRichiesto = (errore || '').startsWith('Il giro a piu') || bozza.errore === 'PASS_RICHIESTO';
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
   const rigaAnteprima = errore
     ? errore
@@ -79,7 +82,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         : bozza.errore === 'POSIZIONE'
           ? 'Serve la posizione per disegnare il percorso da dove sei.'
           : bozza.metri > 0
-            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} min a piedi · ad anello da dove sei`
+            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} min a piedi · ${bozza.anello ? 'ad anello da dove sei' : 'da dove sei all’ultima tappa'}`
             : 'WIP Nav mette le tappe nell’ordine che fa camminare meno';
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
@@ -105,17 +108,11 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
     return result;
   }, [pois]);
 
-  const handleNavigate = async (poi: any) => {
-    const { registerPlugin, Capacitor } = await import('@capacitor/core');
-    // Verso la PORTA, non verso il centro dell'edificio: vedi puntoArrivo.
-    const a = puntoArrivo(poi);
-    if (Capacitor.isNativePlatform()) {
-      const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
-      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.nome || poi.name });
-    } else {
-      window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}`, '_blank');
-    }
-  };
+  // Doppia scelta (22/08/2026): 🚶 WIP Nav o 🚗 Google Maps / Mappe, come
+  // negli itinerari. NavChoiceSheet punta alla porta (puntoArrivo) e gestisce
+  // il plugin nativo col ripiego sul link web.
+  const [navPoi, setNavPoi] = useState<any | null>(null);
+  const handleNavigate = (poi: any) => setNavPoi(poi);
 
   const handleItemClick = (poi: any) => {
     setFocusedId(poi.id);
@@ -191,6 +188,28 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         </div>
       )}
 
+      {/* Senza pass il cancello sta sul server (402). La riga di testo da sola
+          non bastava: chi ha appena scelto le tappe deve poter attivare il pass
+          da qui, non andare a cercarlo nel profilo (22/08/2026). */}
+      {!isCollapsed && passRichiesto && (
+        <div className="px-4 py-2.5 border-b border-black/5 bg-amber-50 flex items-center gap-3">
+          <p className="flex-1 text-[11px] text-amber-800 leading-snug">
+            Il giro a più tappe e l’ascolto fluido — avviso, teaser e audioguida da soli — sono inclusi nel Day Pass.
+          </p>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const prima = scelte[0] as any;
+              const city = prima?.city || prima?.citta;
+              window.dispatchEvent(new CustomEvent('wip-open-daypass', { detail: { city } }));
+            }}
+            className="px-3 py-2 rounded-xl bg-[#1e3a8a] text-white text-[11px] font-black shadow-md hover:bg-blue-800 active:scale-95 shrink-0"
+          >
+            Attiva il Day Pass
+          </button>
+        </div>
+      )}
+
       {/* Il tempo che hai e l'ordine delle tappe. Il tempo rovescia la
           domanda — non "quali dieci?" ma "quanto hai?" — e il giro si taglia
           alle tappe che ci stanno, cammino PIU` ascolto. L'ordine si trascina:
@@ -206,6 +225,24 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                 onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaTempo(min); }}
                 className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
                   bozza.minutiDisponibili === min
+                    ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
+                    : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Ad anello o aperto. Era sempre ad anello: chi dorme dall'altra
+              parte della citta` non vuole tornare al punto di partenza. */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">Arrivo</span>
+            {[{ v: true, label: '🔁 Torno da dove parto' }, { v: false, label: '🏁 Finisco all’ultima tappa' }].map(({ v, label }) => (
+              <button
+                key={String(v)}
+                onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaAnello(v); }}
+                className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+                  bozza.anello === v
                     ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
                     : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
                 }`}
@@ -397,6 +434,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           )}
         </AnimatePresence>
       </div>
+      <NavChoiceSheet poi={navPoi} language={language} onClose={() => setNavPoi(null)} />
     </motion.div>
   );
 }

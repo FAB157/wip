@@ -37,6 +37,15 @@ final class WipPackageDownloadManager {
         return genericPoiNames.contains(n)
     }
 
+    /// Il perimetro del bundle nel formato compatto di Poi.footprint. Il campo
+    /// può arrivare come oggetto GeoJSON o come testo; qualunque altra cosa
+    /// (nil, NSNull) → nil, e il POI resta ai raggi.
+    static func footprintCompatto(_ raw: Any?) -> String? {
+        if let o = raw as? [String: Any] { return WipSupabaseClient.geojsonCompatto(o) }
+        if let s = raw as? String { return WipSupabaseClient.geojsonCompatto(s) }
+        return nil
+    }
+
     private let store = PoiStore.shared
     private let session: URLSession
 
@@ -205,12 +214,13 @@ final class WipPackageDownloadManager {
                     descriptionShort: p["description_short"] as? String,
                     audioText: p["audio_text"] as? String,
                     updatedAt: p["updated_at"] as? String,
-                    // /api/area/bundle non li restituisce ancora (vedi commento
-                    // su OfflinePoi.entranceLat in PoiModels.swift): letti già
-                    // qui, pronti per quando il server li aggiungerà, nil finché
-                    // non arrivano — nessun contratto server inventato.
+                    // Porta, perimetro e indirizzo (area_bundle_pois dal
+                    // 22/08/2026). Pagine di server vecchi non li hanno: restano
+                    // nil e il POI lavora al centroide come prima.
                     entranceLat: (p["entrance_lat"] as? NSNumber)?.doubleValue,
-                    entranceLon: (p["entrance_lon"] as? NSNumber)?.doubleValue
+                    entranceLon: (p["entrance_lon"] as? NSNumber)?.doubleValue,
+                    footprint: Self.footprintCompatto(p["footprint"]),
+                    address: p["address"] as? String
                 ))
             }
             if !pois.isEmpty {

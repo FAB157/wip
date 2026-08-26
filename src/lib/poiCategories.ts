@@ -183,6 +183,7 @@ export const CATEGORY_LABELS_IT: Record<PoiCategory, string> = {
   musei: 'Musei',
   chiese: 'Chiese',
   panorami: 'Panorami',
+  enogastronomia: 'Vino e Gusto',
   natura: 'Natura',
   beach: 'Spiaggia',
   bay: 'Baia',
@@ -231,10 +232,21 @@ export const CATEGORY_LABELS_IT: Record<PoiCategory, string> = {
   radio_telescope: 'Radiotelescopio', hydro_plant: 'Centrale idroelettrica',
   cathedral: 'Cattedrale', basilica: 'Basilica', baptistery: 'Battistero',
   bell_tower: 'Campanile', cloister: 'Chiostro', crypt: 'Cripta',
+  // Verticali tematici (21/08/2026): la macro e le sue otto categorie.
+  tematiche: 'Tematici',
+  terme: 'Terme e sorgenti',
+  cinema: 'Location di film e serie',
+  cieli: 'Cieli bui e stelle',
+  street_art: 'Street art',
+  mercati: 'Mercati e mercatini',
+  fioriture: 'Fioriture',
+  memoria: 'Memoria e case-museo',
+  lento: 'Viaggio lento',
 };
 
 /** Colore marker per categoria (cluster mappa). */
 export const CATEGORY_COLORS: Record<PoiCategory, string> = {
+  enogastronomia: '#7f1d1d',
   museum: '#8b5cf6',
   monument: '#b45309',
   viewpoint: '#0ea5e9',
@@ -297,10 +309,22 @@ export const CATEGORY_COLORS: Record<PoiCategory, string> = {
   radio_telescope: '#1e40af', hydro_plant: '#0891b2', cathedral: '#4338ca',
   basilica: '#4338ca', baptistery: '#4338ca', bell_tower: '#4338ca',
   cloister: '#4338ca', crypt: '#44403c',
+  // Verticali tematici: un colore per verticale, scelto perché nessuno di
+  // questi pin si confonda con i marroni del patrimonio culturale.
+  tematiche: '#4f46e5',
+  terme: '#0ea5e9',
+  cinema: '#7c3aed',
+  cieli: '#312e81',
+  street_art: '#ec4899',
+  mercati: '#f59e0b',
+  fioriture: '#f472b6',
+  memoria: '#57534e',
+  lento: '#16a34a',
 };
 
 /** Emoji per categoria (popup/scheda). */
 export const CATEGORY_EMOJI: Record<PoiCategory, string> = {
+  enogastronomia: '🍷',
   museum: '🏛️',
   monument: '🗿',
   viewpoint: '🌄',
@@ -358,4 +382,14 @@ export const CATEGORY_EMOJI: Record<PoiCategory, string> = {
   art_gallery: '🖼️', archive: '📜', radio_telescope: '📡', hydro_plant: '⚡',
   cathedral: '⛪', basilica: '⛪', baptistery: '⛪', bell_tower: '🔔',
   cloister: '🏛️', crypt: '🕯️',
+  // Verticali tematici (21/08/2026).
+  tematiche: '🧭',
+  terme: '🛁',
+  cinema: '🎬',
+  cieli: '🌌',
+  street_art: '🎨',
+  mercati: '🛍️',
+  fioriture: '🌸',
+  memoria: '🕯️',
+  lento: '🚂',
 };

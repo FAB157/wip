@@ -195,12 +195,27 @@ export function getProgress(itinerary: any): PilgrimProgress | null {
   const giorni = Array.isArray(dati?.giorni) ? dati.giorni : [];
 
   let done = 0;
+  // Data dell'ultimo check-in (visited_at/visitedAt sulle tappe): è la data
+  // di completamento REALE dell'attestato, non l'updated_at del piano.
+  let ultimoCheckin = '';
   for (let i = 0; i < route.stages.length; i++) {
     const s = route.stages[i];
     // Giorno del piano allineato alla tappa: per numero (day) o indice.
     const g = giorni[(Number(s.day) || i + 1) - 1] || giorni[i];
-    const tappe = Array.isArray(g?.tappe) ? g.tappe : [];
-    const checkedIn = tappe.some((t: any) => t?.visited === true);
+    const tappe: any[] = Array.isArray(g?.tappe) ? g.tappe : [];
+    // La tappa-giorno è percorsa solo se è l'ARRIVO DI TAPPA a risultare
+    // visitato: prima bastava un check-in su una tappa qualsiasi del giorno
+    // (il bar della partenza) per contare l'intera giornata di cammino.
+    const arrivoNome = norm(s.to);
+    const arrivo = tappe.find((t: any) => {
+      const n = norm(t?.titolo_tappa || t?.nome || t?.name);
+      return arrivoNome.length >= 4 && n && (n.includes(arrivoNome) || arrivoNome.includes(n));
+    }) || tappe[tappe.length - 1]; // senza corrispondenza per nome: l'ultima tappa del giorno è l'arrivo
+    const checkedIn = arrivo?.visited === true;
+    if (checkedIn) {
+      const quando = String(arrivo?.visited_at || arrivo?.visitedAt || '').slice(0, 10);
+      if (quando && quando > ultimoCheckin) ultimoCheckin = quando;
+    }
     const walkedThere = Number.isFinite(s.lat as number) && Number.isFinite(s.lon as number)
       && fogCoversPoint(s.lat as number, s.lon as number);
     if (checkedIn || walkedThere) done++;
@@ -209,7 +224,7 @@ export function getProgress(itinerary: any): PilgrimProgress | null {
   const completed = done >= route.stages.length;
   const start = String(itinerary?.created_at || '').slice(0, 10) || undefined;
   const end = completed
-    ? (String(itinerary?.updated_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))
+    ? (ultimoCheckin || String(itinerary?.updated_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10))
     : undefined;
   return {
     routeId: route.routeId,
@@ -254,6 +269,8 @@ export interface CertificateData {
   stages: number;
   dates: { start?: string; end?: string };
   code: string;
+  /** true se `code` è stato emesso/registrato dal server (allora è verificabile). */
+  serverIssued?: boolean;
 }
 
 const fmtDate = (iso?: string) => {
@@ -360,10 +377,13 @@ export function renderCertificate(data: CertificateData): HTMLCanvasElement {
   ctx.beginPath(); ctx.moveTo(W / 2 - 260, 960); ctx.lineTo(W / 2 + 260, 960); ctx.stroke();
   ctx.fillStyle = '#7c5c2b';
   ctx.font = '700 30px ui-monospace, Menlo, monospace';
-  ctx.fillText(`Codice di verifica  ${data.code}`, W / 2, 1020);
+  ctx.fillText(`Codice  ${data.code}`, W / 2, 1020);
   ctx.fillStyle = '#8b6f3e';
   ctx.font = `700 28px ${serif}`;
-  ctx.fillText('Verificabile su wip.guide', W / 2, 1068);
+  // «Verificabile» SOLO se il codice è stato emesso dal server (registrato
+  // su /api/pilgrim/certificate): un hash calcolato nel browser non è
+  // verificabile da nessuno e scriverlo sarebbe una promessa falsa.
+  ctx.fillText(data.serverIssued ? 'Verificabile su wip.guide' : 'wip.guide', W / 2, 1068);
   ctx.fillStyle = 'rgba(31,41,55,0.75)';
   ctx.font = `900 26px ${serif}`;
   ctx.fillText('world in pocket · wip.guide', W / 2, 1140);
@@ -381,18 +401,17 @@ export async function shareOrDownloadCertificate(canvas: HTMLCanvasElement, data
     await nav.share({
       files: [file],
       title: `Attestato del Pellegrino · ${data.routeName}`,
-      text: `Ho completato il ${data.routeName} (${data.km} km) 🥾 — verificabile su wip.guide, codice ${data.code}`,
+      text: data.serverIssued
+        ? `Ho completato il ${data.routeName} (${data.km} km) 🥾 — verificabile su wip.guide, codice ${data.code}`
+        : `Ho completato il ${data.routeName} (${data.km} km) 🥾 — wip.guide`,
     });
     return 'shared';
   }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = file.name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  // Download: nel WebView nativo <a download> non fa nulla, si passa dal
+  // Filesystem (saveBlobAsFile); torna false se il file non è stato scritto.
+  const { saveBlobAsFile } = await import('../services/premiumGuideService');
+  const ok = await saveBlobAsFile(blob, file.name);
+  if (!ok) throw new Error('salvataggio non riuscito');
   return 'downloaded';
 }
 
@@ -401,9 +420,16 @@ export async function shareOrDownloadCertificate(canvas: HTMLCanvasElement, data
 /**
  * Registra l'attestato su POST /api/pilgrim/certificate (Bearer utente).
  * Best-effort: un fallimento non blocca la generazione locale.
+ * Se il server risponde con un proprio `hash`/`code`, è QUELLO il codice
+ * verificabile (torna in `serverCode`): il chiamante deve preferirlo
+ * all'hash calcolato nel browser.
  */
-export async function registerCertificate(progress: PilgrimProgress, code: string, accessToken?: string | null): Promise<boolean> {
-  if (!accessToken) return false;
+export async function registerCertificate(
+  progress: PilgrimProgress,
+  code: string,
+  accessToken?: string | null
+): Promise<{ ok: boolean; serverCode: string | null }> {
+  if (!accessToken) return { ok: false, serverCode: null };
   try {
     const res = await fetch(getApiUrl('/api/pilgrim/certificate'), {
       method: 'POST',
@@ -418,6 +444,11 @@ export async function registerCertificate(progress: PilgrimProgress, code: strin
       }),
       signal: AbortSignal.timeout(15000),
     });
-    return res.ok;
-  } catch { return false; }
+    if (!res.ok) return { ok: false, serverCode: null };
+    const body = await res.json().catch(() => null);
+    const serverCode = typeof body?.hash === 'string' && body.hash
+      ? body.hash
+      : (typeof body?.code === 'string' && body.code ? body.code : null);
+    return { ok: true, serverCode };
+  } catch { return { ok: false, serverCode: null }; }
 }

@@ -2,17 +2,20 @@
 // ITAINTA · LocationService — Gestore centralizzato posizione e audio
 // =====================================================================
 
-import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
+import { incrementUserQuota } from '../lib/quotaManager';
 import { Language, getTranslation } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
-import { getGeofencePois } from './poiRepository';
-import { getOrCreateAudioguideText } from './audioguideService';
 import { recordListening } from '../lib/listeningHistory';
 import type { GeofencePoi } from '../types/poi';
-import { fetchWalkingRoute } from './osrmService';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
-import { radiiForTransport, resolveTransportMode, getTransportPreference, markPlayed, isCategoryAllowed } from '../lib/guideSettings';
+import { radiiForTransport, resolveTransportMode, resetTransportHysteresis, getTransportPreference, markPlayed, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
+// La mappa voci Azure vive in UN posto solo (ttsService.azureVoiceName): qui
+// c'era una copia identica che prima o poi sarebbe divergita. L'import e'
+// circolare (ttsService importa locationService) ma sicuro: nessuno dei due
+// usa l'altro al caricamento del modulo, solo dentro le funzioni.
+import { azureVoiceName } from './ttsService';
+import { VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
 
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
@@ -105,9 +108,22 @@ class LocationService {
   private fallbackUtterance: SpeechSynthesisUtterance | null = null;
   /** Timer del progresso stimato per il fallback Web Speech (nessun evento nativo). */
   private fallbackProgressTimer: ReturnType<typeof setInterval> | null = null;
-  /** Guardia anti-rientranza per stopGuideAudio (l'evento wip-audio-stopped
-   *  può a sua volta richiamare stopGuideAudio via AudioQueueManager). */
+  /** Guardia anti-rientranza per stopGuideAudio: chi ascolta 'wip-audio-stopped'
+   *  (PoiAudioPlayer, giroDriver) puo' a sua volta richiamare stopGuideAudio. */
   private isStoppingGuide = false;
+  /**
+   * Ducking (direttore audio del giro): la guida si abbassa a VOLUME_ABBASSATO
+   * mentre il navigatore dice la svolta, poi risale. Solo sul percorso web:
+   * WipBackgroundAudio non espone un setVolume, e sul nativo il ducking lo fa
+   * gia' il focus audio della coda TTS di sistema.
+   */
+  private ducked = false;
+  /** Ultimo rilancio del servizio nativo per cambio modo: mai piu' di uno ogni 30 s. */
+  private lastNativeRestartTs = 0;
+  /** Dove e quando e' partito l'ultimo fetch POI web: da fermi si rallenta. */
+  private lastWebPoiFetchPos: { lat: number; lon: number } | null = null;
+  /** Permesso posizione negato dal browser: stato esposto a chi monta dopo. */
+  private locationDenied = false;
 
   /** true quando la riproduzione corrente e' gestita dal player nativo (ExoPlayer). */
   private isNativePlayback = false;
@@ -175,27 +191,14 @@ class LocationService {
   private isVibrationEnabled = true;
   private activeCategories: string[] = [];
 
-  private isDeviceStationary: boolean = false;
-  private lastMotionTime: number = Date.now();
   // Ultima modalità di spostamento comunicata al servizio nativo
   private lastTravelMode: 'walk' | 'car' | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
-      // Activity Detection (Motion)
-      window.addEventListener('devicemotion', (event) => {
-        const acc = event.acceleration;
-        if (!acc) return;
-        const total = Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0);
-        if (total > 0.15) {
-          this.lastMotionTime = Date.now();
-          this.isDeviceStationary = false;
-        } else {
-          if (!this.isDeviceStationary && Date.now() - this.lastMotionTime > 40000) {
-            this.isDeviceStationary = true;
-          }
-        }
-      });
+      // (22/08/2026) Qui c'era un listener 'devicemotion' che calcolava
+      // isDeviceStationary senza che nessuno lo leggesse: tolto. Il "da
+      // fermi" lo decide il GPS (spostamento fra due fix), vedi handlePosition.
 
       this.isOnline = navigator.onLine;
       window.addEventListener('online', () => { this.isOnline = true; });
@@ -219,7 +222,10 @@ class LocationService {
       window.addEventListener('wip-poi-trigger', (e: any) => {
         const d = e?.detail || {};
         const id = d.poiId ?? d.poi?.id;
-        if (id && d.autoPlay) this.lastGeoTrigger = { poiId: String(id), ts: Date.now() };
+        // `manual: true` = l'utente ha premuto "Ascolta" o "Riascolta": NON e'
+        // un trigger di prossimita', e la modalita' silenziosa non deve zittire
+        // una cosa chiesta a mano (segnalato 22/08/2026).
+        if (id && d.autoPlay && !d.manual) this.lastGeoTrigger = { poiId: String(id), ts: Date.now() };
       });
 
       // 🎧 Audio direzionale già attivo da una sessione precedente: riparte
@@ -763,13 +769,17 @@ class LocationService {
     if (isMuted !== undefined) this.isGuideMuted = isMuted;
 
     if (isTourActive) {
-      // ✅ [FEEDBACK] - Notifica immediata all'utente
-      window.dispatchEvent(new CustomEvent('audioguide-status', { detail: "📡 Attivazione radar e GPS..." }));
+      // Banner e musica d'ambiente SOLO alla transizione spento→acceso:
+      // syncSettings riparte a ogni cambio di lingua/categorie/itinerario, e
+      // prima ogni cambio rifaceva "📡 Attivazione..." e riavviava la musica
+      // (e il doppio montaggio da GeofenceAudioGuide lo raddoppiava ancora).
+      if (!wasActive) {
+        window.dispatchEvent(new CustomEvent('audioguide-status', { detail: "📡 Attivazione radar e GPS..." }));
+        this.startAmbientMusic();
+      }
 
       // ✅ [OTTIMIZZAZIONE] - Forza il fetch immediato dei POI al cambio modalità
       this.lastWebPoiFetchTime = 0;
-
-      this.startAmbientMusic();
       if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
         // Sempre rinfresca le impostazioni se il servizio è attivo o deve esserlo.
         // Poi INOLTRA LE TAPPE al geofencing nativo: prima syncSettings riceveva
@@ -785,10 +795,37 @@ class LocationService {
       }
     } else {
       this.stopAmbientMusic();
+      if (wasActive) this.azzeraAlloSpegnimento();
       if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
         this.stopNativeBackgroundService();
       }
     }
+  }
+
+  /**
+   * Spegnere le cuffie deve spegnere DAVVERO. Prima restavano in piedi la coda
+   * audio (un POI accodato partiva dopo lo spegnimento), lo stato del player
+   * (banner incastrato su "in riproduzione"), l'origine dell'ultimo trigger,
+   * i candidati del geofence e la modalita' di trasporto (il servizio nativo
+   * non veniva rilanciato al riavvio finche' il modo non cambiava).
+   */
+  private azzeraAlloSpegnimento() {
+    this.audioQueue = [];
+    this.lastGeoTrigger = null;
+    this.geofenceCandidates = [];
+    this.lastTravelMode = null;
+    this.lastNativeRestartTs = 0;
+    this.lastWebPoiFetchPos = null;
+    resetTransportHysteresis();
+    this.currentPlaybackFromTrigger = false;
+    this.audioState.isPlaying = false;
+    this.audioState.isActive = false;
+    this.audioState.poiId = null;
+    this.audioState.poiName = null;
+    this.audioState.progress = 0;
+    this.audioState.currentTime = 0;
+    this.audioState.duetIndex = -1;
+    this.notifyAudioState();
   }
 
   private async triggerWebPoiFetch(loc: LocationUpdate) {
@@ -835,13 +872,58 @@ class LocationService {
             isFromItinerary: true,
             isGem: false,
             guideDefault: (this.guideMode as any) || 'nicky',
-            teaserText: t.descrizione || t.attivita || t.descrizione_breve || ''
+            teaserText: t.descrizione || t.attivita || t.descrizione_breve || '',
+            // L'ingresso, se noto: il nativo fa scattare l'arrivo li' (poi.entranceLat ?: poi.lat).
+            ...(typeof t.entranceLat === 'number' && typeof t.entranceLon === 'number'
+              ? { entranceLat: t.entranceLat, entranceLon: t.entranceLon }
+              : {}),
           };
         })
         .filter(Boolean);
       if (pois.length === 0) return;
       ItaintaBackgroundPoiPlugin.syncManualSelection({ poisJson: JSON.stringify(pois) });
     } catch (e) { /* best-effort */ }
+  }
+
+  /**
+   * Dieci Tappe sul telefono: le tappe del giro entrano nel geofencing nativo
+   * come tappe d'itinerario (isFromItinerary=true → geofence prioritari,
+   * notifica di arrivo, ascolto incluso). Stesso canale di syncItineraryToNative.
+   * Le tappe arrivano gia' nel formato {id, nome, lat, lon}; `ingresso`, se
+   * c'e', e' il punto a cui il nativo deve far scattare l'arrivo.
+   */
+  public syncTappeGiroToNative(tappe: Array<{ id: string | number; nome: string; lat: number; lon: number; ingresso?: { lat: number; lon: number } | null; testo?: string | null }>) {
+    if (!ItaintaBackgroundPoiPlugin || !Array.isArray(tappe) || tappe.length === 0) return;
+    this.syncItineraryToNative(tappe.map(t => ({
+      id: t.id,
+      nome: t.nome,
+      lat: t.lat,
+      lon: t.lon,
+      entranceLat: t.ingresso?.lat,
+      entranceLon: t.ingresso?.lon,
+      descrizione: t.testo ? String(t.testo).slice(0, 200) : '',
+    })));
+  }
+
+  /**
+   * Fine del giro: le tappe non devono restare geofence prioritari. Il plugin
+   * nativo oggi NON ha un metodo per togliere una selezione manuale
+   * (syncManualSelection fonde, non sostituisce): si prova un
+   * `clearManualSelection` se la build lo espone, altrimenti resta un TODO
+   * nativo e si lascia traccia in console.
+   */
+  public unsyncTappeGiroFromNative() {
+    if (!ItaintaBackgroundPoiPlugin) return;
+    (async () => {
+      try {
+        if (typeof ItaintaBackgroundPoiPlugin.clearManualSelection === 'function') {
+          await ItaintaBackgroundPoiPlugin.clearManualSelection();
+          return;
+        }
+      } catch { /* metodo assente nella build: si passa al warn */ }
+      // TODO(nativo): aggiungere clearManualSelection al plugin Kotlin/Swift.
+      console.warn('[LocationService] clearManualSelection non disponibile: le tappe del giro restano nel geofencing nativo fino al prossimo riavvio del servizio');
+    })();
   }
 
   private async startNativeBackgroundService() {
@@ -867,7 +949,15 @@ class LocationService {
         const stored = localStorage.getItem('wip_active_subcategories');
         if (stored) {
           const parsed = JSON.parse(stored);
-          categories = Object.keys(parsed).filter(k => parsed[k]);
+          // Solo le chiavi con audioguida: nello stesso oggetto le chip mappa
+          // scrivono anche community/tematici, che il nativo NON deve
+          // raccontare (decisione del 22/08/2026, vedi guideSettings).
+          categories = Object.keys(parsed).filter(k => parsed[k] && CHIAVI_NATIVO_AUDIOGUIDA.has(k));
+          // Gemme SPENTE: il nativo le include di default (areGemsActive in
+          // GeofenceBroadcastReceiver) e le spegne solo con la sentinella
+          // "gemme:off". Fino al 22/08/2026 nessuno la mandava: il toggle
+          // gemme del setup non aveva effetto sul telefono.
+          if ('gemme' in parsed && !parsed.gemme) categories.push('gemme:off');
         }
       } catch { }
 
@@ -956,18 +1046,23 @@ class LocationService {
   private startAmbientMusic() {
     if (typeof window === 'undefined' || this.ambientPlayer) return;
     try {
-      const player = new Audio("https://assets.mixkit.co/music/preview/mixkit-ambient-tone-340.mp3");
-      player.loop = true;
-      player.volume = 0.15;
-      player.play().catch(() => {});
-      this.ambientPlayer = player;
-
-      // PWA AUDIO UNLOCK: Inizializziamo anche il player vocale nel contesto interattivo
+      // PWA AUDIO UNLOCK: il player vocale va inizializzato nel contesto
+      // interattivo anche senza musica (offline): e' lui che poi suona la guida.
       if (!this.speechPlayer) {
         const sp = new Audio("data:audio/mp3;base64,//NExAAAAANIAAAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq");
         sp.play().catch(() => {});
         this.speechPlayer = sp;
       }
+
+      // Musica d'ambiente: e' un MP3 remoto. Senza rete il tentativo fallisce
+      // comunque ma lascia un <audio> in errore e un avviso in console a ogni
+      // avvio: se siamo offline non si prova nemmeno.
+      if (!this.isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+      const player = new Audio("https://assets.mixkit.co/music/preview/mixkit-ambient-tone-340.mp3");
+      player.loop = true;
+      player.volume = 0.15;
+      player.play().catch(() => {});
+      this.ambientPlayer = player;
     } catch (e) {}
   }
 
@@ -1015,25 +1110,43 @@ class LocationService {
       // Passaggio piedi ⇄ auto durante il tour: il servizio nativo va
       // rilanciato con la nuova modalità, altrimenti resta con i raggi
       // (e il raggio radar) con cui era partito.
+      // Il rilancio costa (startForegroundService + rilettura POI): si fa
+      // SOLO se il modo e' cambiato davvero — resolveTransportMode ha
+      // l'isteresi 12/6 km/h del nativo, quindi niente flip ai semafori — e
+      // con una preferenza forzata (piedi/auto) il modo non cambia mai. In
+      // piu', mai piu' di un rilancio ogni 30 s: il nativo con transportPref
+      // 'auto' si adatta da solo alla velocita', questo e' solo l'allineamento.
       if (this.isTourActive && Capacitor.isNativePlatform()) {
         const mode = resolveTransportMode(update.speed ?? null);
-        if (this.lastTravelMode && this.lastTravelMode !== mode) {
+        if (!this.lastTravelMode) {
           this.lastTravelMode = mode;
-          this.startNativeBackgroundService();
-        } else if (!this.lastTravelMode) {
+        } else if (this.lastTravelMode !== mode && getTransportPreference() === 'auto') {
           this.lastTravelMode = mode;
+          if (now - this.lastNativeRestartTs > 30_000) {
+            this.lastNativeRestartTs = now;
+            this.startNativeBackgroundService();
+          }
         }
       }
       // Notifica il banner di avvicinamento per aggiornare le distanze in tempo
       // reale. accuracy inclusa: i trigger web foreground scartano i fix > 50 m
       // (foregroundTriggers.ts) senza dover risalire al servizio.
+      // speed inclusa (22/08/2026): senza, il trigger web non poteva sapere se
+      // si e' a piedi o in auto e usava 50 m fissi anche a 90 km/h.
       window.dispatchEvent(new CustomEvent('wip-location-update', {
-        detail: { lat: update.latitude, lon: update.longitude, heading: update.heading, accuracy: update.accuracy }
+        detail: { lat: update.latitude, lon: update.longitude, heading: update.heading, accuracy: update.accuracy, speed: update.speed }
       }));
 
-      // [WEB/PWA FALLBACK] Fetch POIs per Radar se non siamo su app nativa Android e se la guida è attiva
-      if (this.isTourActive && !isNative && (now - this.lastWebPoiFetchTime > 15000)) {
+      // [WEB/PWA FALLBACK] Fetch POIs per Radar se non siamo su app nativa Android e se la guida è attiva.
+      // Ogni 15 s in movimento; DA FERMI (meno di 30 m dall'ultimo fetch) si
+      // rallenta a uno al minuto: prima si interrogava il DB quattro volte al
+      // minuto anche seduti al bar, per riavere la stessa lista.
+      const fermo = this.lastWebPoiFetchPos
+        && this.distanzaMetri(this.lastWebPoiFetchPos.lat, this.lastWebPoiFetchPos.lon, update.latitude, update.longitude) < 30;
+      const intervallo = fermo ? 60_000 : 15_000;
+      if (this.isTourActive && !isNative && (now - this.lastWebPoiFetchTime > intervallo)) {
         this.lastWebPoiFetchTime = now;
+        this.lastWebPoiFetchPos = { lat: update.latitude, lon: update.longitude };
         try {
           const { supabase } = await import('../lib/supabase');
           const { data: sessionData } = await supabase.auth.getSession();
@@ -1092,11 +1205,51 @@ class LocationService {
 
   private startWatchingWeb(handlePosition: (p: any, n: boolean) => void) {
     if (typeof window === 'undefined') return;
+    if (!navigator.geolocation) { this.segnalaPosizioneNegata(); return; }
     this.watchId = navigator.geolocation.watchPosition(
-      p => handlePosition(p, false),
-      e => console.error(e),
+      p => { this.locationDenied = false; handlePosition(p, false); },
+      e => {
+        console.warn('[LocationService] watchPosition web error', e?.code, e?.message);
+        // PERMISSION_DENIED (1): fino al 22/08/2026 finiva in console e basta,
+        // e l'audioguida restava muta senza dire perche'. Ora si avvisa.
+        if (e?.code === 1) this.segnalaPosizioneNegata();
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     ) as any;
+  }
+
+  /** Permesso posizione negato (web): evento per i banner + stato di servizio. */
+  private segnalaPosizioneNegata() {
+    this.locationDenied = true;
+    if (typeof window === 'undefined') return;
+    try {
+      window.dispatchEvent(new CustomEvent('location-denied', { detail: { ts: Date.now() } }));
+      window.dispatchEvent(new CustomEvent('audioguide-status', { detail: getTranslation('posizione_negata_stato', this.language) }));
+    } catch { /* ignore */ }
+  }
+
+  public isLocationDenied(): boolean { return this.locationDenied; }
+
+  /**
+   * Al tocco delle cuffie (web): se il browser ha gia' negato la posizione,
+   * lo si dice SUBITO invece di aspettare il primo errore del watch.
+   */
+  public async checkWebLocationPermission(): Promise<'granted' | 'denied' | 'prompt' | 'unknown'> {
+    if (typeof navigator === 'undefined' || Capacitor.isNativePlatform()) return 'unknown';
+    try {
+      const perms = (navigator as any).permissions;
+      if (!perms?.query) return 'unknown';
+      const st = await perms.query({ name: 'geolocation' });
+      if (st?.state === 'denied') this.segnalaPosizioneNegata();
+      return (st?.state as any) || 'unknown';
+    } catch { return 'unknown'; }
+  }
+
+  private distanzaMetri(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371000, toRad = (d: number) => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(a));
   }
 
   public async stopWatching() {
@@ -1112,7 +1265,23 @@ class LocationService {
     }
   }
 
-  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>): Promise<boolean> {
+  /** Vibrazione breve, solo se l'utente non l'ha spenta nel setup. */
+  private vibra(pattern: number[]) {
+    if (!this.isVibrationEnabled) return;
+    try { (navigator as any).vibrate?.(pattern); } catch { /* niente vibrazione */ }
+  }
+
+  /**
+   * Esito di playAudio/playAudioUrl:
+   *  - 'started': la traccia e' partita ADESSO (e' il momento in cui addebitare);
+   *  - 'queued':  un'altra traccia suona, questa partira' dopo (o mai, se si
+   *               ferma tutto prima) — NON va addebitata qui;
+   *  - false:     niente audio (muto, silenziosa, errore).
+   * Chi testava `if (ok)` continua a funzionare: entrambe le stringhe sono
+   * truthy. Chi addebita deve guardare 'started' o passare `authorize`, che
+   * viene chiamata solo al vero avvio anche per le tracce accodate.
+   */
+  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>): Promise<'started' | 'queued' | false> {
     if (this.isGuideMuted || !text) return false;
 
     // 🤫 «Solo vibrazione + testo»: se il play nasce da un trigger geofencing
@@ -1122,9 +1291,9 @@ class LocationService {
     // L'origine viene consumata: il ▶ manuale successivo suona normalmente.
     const fromTrigger = this.consumeTriggerOrigin(poiId);
     if (fromTrigger && this.isSilentModeEnabled()) {
-      try { (navigator as any).vibrate?.([200, 100, 200]); } catch { /* niente vibrazione */ }
+      this.vibra([200, 100, 200]);
       window.dispatchEvent(new CustomEvent('audioguide-status', {
-        detail: `🤫 ${poiName || 'Punto di interesse'}: modalità silenziosa — leggi il testo nella scheda o premi ▶ per ascoltare`
+        detail: `🤫 ${getTranslation('silenziosa_leggi_testo', this.language).replace('{poi}', poiName || getTranslation('poi_generico', this.language))}`
       }));
       this.maybeRequestTriggerFeedback(poiId || null);
       return false;
@@ -1134,14 +1303,14 @@ class LocationService {
     // Ma qui la logica è "avvia riproduzione", quindi se è lo stesso e siamo in pausa, riprendiamo
     if (poiId && this.audioState.poiId === poiId && this.isGuidePlaybackActive()) {
        this.resumeGuideAudio();
-       return true;
+       return 'started';
     }
 
     if (this.isGuidePlaybackActive()) {
       // NB: l'eventuale autorizzazione/addebito NON avviene all'accodamento,
       // ma quando la traccia parte davvero (vedi sotto).
       this.audioQueue.push({ text, poiName, poiCategory, poiId, character, authorize });
-      return true;
+      return 'queued';
     }
 
     // Autorizzazione pagamento SOLO al vero avvio della traccia: se fallisce
@@ -1185,7 +1354,7 @@ class LocationService {
           window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
             detail: { textToSpeak: text, poiName }
           }));
-          return true;
+          return 'started';
         }
         // Parsing/TTS del duetto fallito: si prosegue col percorso mono-voce
         // (tutto il testo con la voce del personaggio base) — mai il silenzio.
@@ -1194,10 +1363,11 @@ class LocationService {
       // maschile) ha priorità sullo stato globale: senza questo override la
       // voce restava quella di guideMode (default Nicky) anche selezionando
       // Dante, in tutte le lingue.
-      const voice = this.getNeuralVoiceName(this.language, character || this.guideMode);
+      const voice = azureVoiceName(this.language, character || this.guideMode);
       // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
       // corrompeva il corpo binario (MP3 → 0 byte, "click a vuoto" su iPhone).
-      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice });
+      // Manda anche il Bearer di sessione: quota/addebito per utente sul server.
+      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice, poi_id: poiId });
       if (!ok || !blob) throw new Error(`TTS ${status}`);
       // Un blob vuoto o una risposta JSON scambiata per audio produceva un
       // player "fantasma" con durata 0:00: meglio fallire esplicitamente.
@@ -1214,7 +1384,7 @@ class LocationService {
           detail: { textToSpeak: text, poiName }
         }));
       }
-      return started;
+      return started ? 'started' : false;
     } catch (e) {
       console.error("[LocationService] Generazione audio TTS fallita:", e);
       // Degradazione: se c'è un testo da leggere non falliamo mai in silenzio.
@@ -1224,7 +1394,7 @@ class LocationService {
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
           detail: { textToSpeak: text, poiName }
         }));
-        return true;
+        return 'started';
       }
       if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
       this.audioState.isPlaying = false;
@@ -1296,7 +1466,7 @@ class LocationService {
   /** Scarica l'MP3 di una singola battuta con la voce del suo personaggio. */
   private async fetchDuetBlob(line: { speaker: 'nicky' | 'dante'; text: string }): Promise<Blob | null> {
     try {
-      const voice = this.getNeuralVoiceName(this.language, line.speaker);
+      const voice = azureVoiceName(this.language, line.speaker);
       const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: line.text, voice });
       if (!ok || !blob || blob.size < 500 || blob.type.includes('json')) return null;
       return blob;
@@ -1358,13 +1528,24 @@ class LocationService {
     return ok;
   }
 
-  public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<boolean> {
+  public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<'started' | 'queued' | false> {
     if (this.isGuideMuted || !url) return false;
+    // Stesso cancello di playAudio: un MP3 gia' scaricato/acquistato che parte
+    // da un trigger di prossimita' deve rispettare la modalita' silenziosa.
+    // Prima la bypassava: chi aveva il pacchetto offline sentiva la voce
+    // anche col silenzioso acceso (segnalato 22/08/2026).
+    if (this.consumeTriggerOrigin(poiId) && this.isSilentModeEnabled()) {
+      this.vibra([200, 100, 200]);
+      window.dispatchEvent(new CustomEvent('audioguide-status', {
+        detail: `🤫 ${getTranslation('silenziosa_pronta', this.language).replace('{poi}', poiName || getTranslation('audioguida_label', this.language))}`
+      }));
+      return false;
+    }
     if (this.isGuidePlaybackActive()) {
       // Player occupato: accoda invece di scartare (la traccia partirà a fine
       // riproduzione via checkAudioQueue, come per playAudio).
       this.audioQueue.push({ url, poiId, poiName });
-      return true;
+      return 'queued';
     }
 
     this.stopExternalSpeech();
@@ -1382,7 +1563,7 @@ class LocationService {
     try {
       const res = await fetch(url);
       const blob = await res.blob();
-      return await this.playAudioBlob(blob, "");
+      return (await this.playAudioBlob(blob, "")) ? 'started' : false;
     } catch (e) {
       if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
       this.audioState.isPlaying = false;
@@ -1403,8 +1584,8 @@ class LocationService {
 
         await WipBackgroundAudio.play({
           url: nativeUri,
-          title: this.audioState.poiName || "ItaInta Audioguida",
-          subtitle: "Narrazione in corso..."
+          title: this.audioState.poiName || `WIP ${getTranslation('audioguida_label', this.language)}`,
+          subtitle: getTranslation('narrazione_in_corso', this.language)
         });
         await WipBackgroundAudio.setSpeed({ speed: this.audioState.playbackSpeed }).catch(() => {});
 
@@ -1440,7 +1621,9 @@ class LocationService {
     this.initAudioContext();
 
     audio.src = url;
-    audio.volume = 1; // il fallback dal percorso nativo poteva lasciarlo a 0 (audio muto)
+    // Il fallback dal percorso nativo poteva lasciarlo a 0 (audio muto). Se
+    // il direttore audio del giro ha chiesto il ducking, si parte gia' bassi.
+    audio.volume = this.ducked ? VOLUME_ABBASSATO : 1;
     this.activeGuideAudio = audio;
     audio.playbackRate = this.audioState.playbackSpeed;
 
@@ -1549,18 +1732,23 @@ class LocationService {
     }
   }
 
-  private getNeuralVoiceName(lang: Language, mode: 'nicky' | 'dante'): string {
-    const l = lang.toUpperCase();
-    const voiceMapping: Record<string, { nicky: string; dante: string }> = {
-      IT: { nicky: "it-IT-ElsaNeural", dante: "it-IT-DiegoNeural" },
-      EN: { nicky: "en-US-JennyNeural", dante: "en-US-GuyNeural" },
-      FR: { nicky: "fr-FR-DeniseNeural", dante: "fr-FR-HenriNeural" },
-      ES: { nicky: "es-ES-ElviraNeural", dante: "es-ES-AlvaroNeural" },
-      RU: { nicky: "ru-RU-SvetlanaNeural", dante: "ru-RU-DmitryNeural" },
-      ZH: { nicky: "zh-CN-XiaoxiaoNeural", dante: "zh-CN-YunxiNeural" },
-      DE: { nicky: "de-DE-KatjaNeural", dante: "de-DE-ConradNeural" }
-    };
-    return voiceMapping[l]?.[mode] || "it-IT-ElsaNeural";
+  /**
+   * Ducking chiesto dal direttore audio del giro (abbassa_e_parla): la guida
+   * scende a VOLUME_ABBASSATO mentre il navigatore dice la svolta, e risale a
+   * fine frase. Sul percorso web si scala il volume dell'<audio>; sul player
+   * nativo (ExoPlayer/AVPlayer) il plugin WipBackgroundAudio non ha un
+   * setVolume, e la coda TTS di sistema chiede gia' il ducking al focus audio
+   * — quindi li' non si fa nulla.
+   */
+  public setDucking(on: boolean) {
+    this.ducked = on;
+    try {
+      if (this.activeGuideAudio && !this.isNativePlayback) {
+        this.activeGuideAudio.volume = on ? VOLUME_ABBASSATO : 1;
+      }
+      // Il fallback Web Speech non ha un volume regolabile a frase avviata:
+      // si lascia com'e'.
+    } catch { /* volume non regolabile su questo elemento */ }
   }
 
   public unlockAudio() { this.audioUnlocked = true; this.initAudioContext(); }
@@ -1592,8 +1780,8 @@ class LocationService {
   }
 
   public stopGuideAudio() {
-    // Guardia anti-rientranza: il dispatch di 'wip-audio-stopped' fa avanzare
-    // la coda in AudioQueueManager, che a sua volta richiama stopGuideAudio.
+    // Guardia anti-rientranza: chi ascolta 'wip-audio-stopped' puo' a sua
+    // volta richiamare stopGuideAudio (es. ttsService.stopSpeech).
     if (this.isStoppingGuide) return;
     this.isStoppingGuide = true;
     try {
@@ -1633,8 +1821,9 @@ class LocationService {
       this.setMediaSessionPlaybackState('none');
       this.notifyAudioState();
       if (this.ambientPlayer) this.ambientPlayer.volume = 0.15;
-      // Notifica lo stop ai listener esterni: useGeofencing lo usa per far
-      // avanzare la coda geofence quando l'utente preme STOP.
+      // Notifica lo stop ai listener esterni (PoiAudioPlayer, giroDriver):
+      // una traccia ACCODATA e poi fermata non e' mai partita, quindi chi
+      // aspettava 'started' per addebitare non addebita.
       if (typeof window !== 'undefined') {
         try { window.dispatchEvent(new CustomEvent('wip-audio-stopped')); } catch { /* ignore */ }
       }
@@ -1665,10 +1854,25 @@ class LocationService {
     }
   }
 
+  /** Id fisso della notifica di navigazione: una svolta SOSTITUISCE la precedente. */
+  private static readonly NAV_NOTIFICATION_ID = 4242;
+
   public async sendLocalNotification(title: string, body: string) {
     if (!Capacitor.isNativePlatform()) return;
     const { LocalNotifications } = await import('@capacitor/local-notifications');
-    await LocalNotifications.schedule({ notifications: [{ title, body, id: Math.floor(Math.random() * 100000) }] });
+    // Id fisso e non casuale (22/08/2026): con un id nuovo a ogni svolta le
+    // notifiche si accumulavano nel centro notifiche e nessuno le cancellava
+    // a fine navigazione.
+    await LocalNotifications.schedule({ notifications: [{ title, body, id: LocationService.NAV_NOTIFICATION_ID }] });
+  }
+
+  /** A fine navigazione la notifica della svolta non deve restare appesa. */
+  public async cancelNavNotification() {
+    if (!Capacitor.isNativePlatform()) return;
+    try {
+      const { LocalNotifications } = await import('@capacitor/local-notifications');
+      await LocalNotifications.cancel({ notifications: [{ id: LocationService.NAV_NOTIFICATION_ID }] });
+    } catch { /* plugin assente o gia' cancellata */ }
   }
 
   public injectMockLocation(lat: number, lon: number) {

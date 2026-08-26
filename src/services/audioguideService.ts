@@ -12,6 +12,7 @@ import {
 } from './poiRepository';
 import { ensurePoiDetails, type EnrichInput } from './enrichmentService';
 import { getApiUrl } from '../lib/api';
+import { bearerHeaders } from '../lib/audioFetch';
 import type { GuideCharacter } from '../types/poi';
 
 /** Numero massimo di livelli "Chiedi di piu'" (poi bottone grigio). */
@@ -41,7 +42,7 @@ async function regenerate(params: {
     // getApiUrl: sull'app nativa il path relativo non raggiunge le API Vercel.
     const res = await fetch(getApiUrl('/api/regenerate'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await bearerHeaders()) },
       body: JSON.stringify(params),
     });
     if (!res.ok) return null;
@@ -62,7 +63,16 @@ export async function getOrCreateAudioguideText(
   poi: EnrichInput,
   language: string,
   character: GuideCharacter,
+  options?: {
+    /**
+     * false = PREFETCH (avvicinamento, pre-scaricamento del giro): il testo
+     * si prepara ma non e' un ascolto, e play_count non deve crescere.
+     * Default true (ascolto vero).
+     */
+    incrementPlay?: boolean;
+  },
 ): Promise<string | null> {
+  const incrementPlay = options?.incrementPlay !== false;
   // 1. cache (la SELECT su poi_audioguides resta consentita dalla RLS).
   //    poi_audioguides.language e' scritto SEMPRE in MAIUSCOLO lato server
   //    (IT/EN/...): normalizziamo qui per non perdere la cache locale quando
@@ -71,7 +81,7 @@ export async function getOrCreateAudioguideText(
   const languageDb = language.toUpperCase();
   const cached = await getAudioguide(poi.id, languageDb, character);
   if (cached?.audio_text) {
-    await incrementAudioguidePlay(cached.id);
+    if (incrementPlay) await incrementAudioguidePlay(cached.id);
     return cached.audio_text;
   }
 
@@ -97,10 +107,12 @@ export async function getOrCreateAudioguideText(
   //    ritorna il testo. Il client NON scrive più direttamente su quella tabella
   //    (RLS deny). Alla prossima apertura getAudioguide leggerà dal DB.
   try {
+    // Bearer: cosi' il server sa CHI chiede e puo' fare quota/addebito per
+    // utente invece di vedere una richiesta anonima.
     const res = await fetch(getApiUrl('/api/poi/audioguide'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ poiId: poi.id, lang: language, character }),
+      headers: { 'Content-Type': 'application/json', ...(await bearerHeaders()) },
+      body: JSON.stringify({ poiId: poi.id, lang: language, character, prefetch: !incrementPlay }),
     });
     if (res.ok) {
       const data = await res.json();

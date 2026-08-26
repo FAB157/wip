@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { getTranslation } from "../lib/i18n";
+import NavChoiceSheet from "./NavChoiceSheet";
 import { Play, Navigation, Sparkles, Loader2, X } from 'lucide-react';
 import { ensurePoiDetails } from '../services/enrichmentService';
 import {
@@ -42,6 +43,7 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
   const [image, setImage] = useState<string | null>(null);
   const [loadingCard, setLoadingCard] = useState(true);
   const [playing, setPlaying] = useState(false);
+  const [showNavChoice, setShowNavChoice] = useState(false);   // 🚶 WIP Nav / 🚗 Maps
 
   const [askLevel, setAskLevel] = useState(0);          // 0 = nessun approfondimento ancora
   const [extraTexts, setExtraTexts] = useState<string[]>([]);
@@ -171,15 +173,16 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
           </button>
 
           <button
-            onClick={() => {
-              window.open(`https://www.google.com/maps/dir/?api=1&destination=${poi.lat},${poi.lon}`, '_blank');
-            }}
+            // Doppia scelta (22/08/2026): a piedi con WIP Nav, in auto con
+            // Google Maps / Mappe. NavChoiceSheet punta alla porta (puntoArrivo).
+            onClick={() => setShowNavChoice(true)}
             className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#f8f5f0] border border-outline-variant px-3 py-2.5 text-sm font-semibold text-[#1e3a8a]"
           >
             <Navigation size={16} />
             Naviga
           </button>
         </div>
+        <NavChoiceSheet poi={showNavChoice ? poi : null} language={language} onClose={() => setShowNavChoice(false)} />
 
         <button
           onClick={handleAskMore}

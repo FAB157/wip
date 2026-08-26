@@ -21,6 +21,10 @@
       ]
     },
     "allowImportingTsExtensions": true,
+    // I cataloghi tematici (src/data/tematici/*.json) sono importati sia dal
+    // client (import dinamico) sia da server.ts (import statico, così finiscono
+    // nel bundle esbuild: su Vercel la funzione non ha i file del repo).
+    "resolveJsonModule": true,
     "noEmit": true
   },
   "exclude": [

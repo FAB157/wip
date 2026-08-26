@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
-  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket
+  RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket,
+  ClipboardList, SlidersHorizontal
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
@@ -24,8 +25,23 @@ import ChallengeForm from './admin/ChallengeForm';
 import LevelForm from './admin/LevelForm';
 import UserEditModal from './admin/UserEditModal';
 
+// Le tre schermate nuove pesano parecchio (gestione utenti, coda contenuti,
+// console operativa): caricate a richiesta, cosi' aprire il pannello resta
+// veloce anche per chi usa solo le schede storiche.
+const AdminUsersPro = lazy(() => import('./admin/AdminUsersPro'));
+const AdminContentQueue = lazy(() => import('./admin/AdminContentQueue'));
+const AdminOpsConsole = lazy(() => import('./admin/AdminOpsConsole'));
+
+const CaricamentoScheda = () => (
+  <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
+);
+
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops'>('users');
+  // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
+  // tracciate). La vista storica resta raggiungibile con un interruttore:
+  // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
+  const [vistaUtentiClassica, setVistaUtentiClassica] = useState(false);
   // Utente aperto nella gestione completa (movimenti, rettifiche, sospensione)
   const [managedUser, setManagedUser] = useState<any | null>(null);
   const [pendingReports, setPendingReports] = useState<number>(0);
@@ -48,10 +64,10 @@ export default function AdminPanel() {
   const [editingQuotaId, setEditingQuotaId] = useState<string | null>(null);
   const [editQuotaForm, setEditQuotaForm] = useState<any>({});
 
-  // Bulk actions state
-  const [bulkPlanType, setBulkPlanType] = useState<'free' | 'premium' | 'all'>('all');
-  const [bulkFeature, setBulkFeature] = useState<'itinerari' | 'audioguide' | 'vision'>('itinerari');
-  const [bulkAmount, setBulkAmount] = useState<number>(5);
+  // (Rimossa la "regola di massa sui limiti": la funzione esisteva ma nessun
+  // form la richiamava — era codice morto che filtrava per giunta su una
+  // colonna `plan_type` di dubbia esistenza. I limiti si cambiano per utente
+  // dalla scheda Utenti, che passa dal server e lascia traccia.)
 
   // Record selezionati dalle tabelle, passati ai form gamification estratti
   const [editingChallenge, setEditingChallenge] = useState<any | null>(null);
@@ -189,7 +205,13 @@ export default function AdminPanel() {
 
       // 2. Fetch Coupons — stesso principio: nessun seeding di coupon demo
       // riscattabili da utenti veri (CAV2026/AMALFI30 erano coupon REALI).
-      const { data: couponsData, error: couponsErr } = await supabase.from('coupons').select('*');
+      // Ordine e limite espliciti: senza `order` PostgREST restituisce le righe
+      // in ordine arbitrario, e senza `limit` tronca in silenzio a 1000 —
+      // i coupon piu' vecchi sparivano dalla lista senza che nessuno lo sapesse.
+      const { data: couponsData, error: couponsErr } = await supabase.from('coupons')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(500);
       if (couponsErr) throw couponsErr;
       setCoupons([...(couponsData || [])]);
 
@@ -291,60 +313,23 @@ export default function AdminPanel() {
     }
   };
 
-  const handleBulkAdjust = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    try {
-      // 1. Fetch current quotas matching bulk selection
-      let query = supabase.from('user_quotas').select('*');
-      if (bulkPlanType !== 'all') {
-        query = query.eq('plan_type', bulkPlanType);
-      }
-      const { data, error } = await query;
-      if (error) throw error;
-
-      if (!data || data.length === 0) {
-        setMessage({ type: 'error', text: 'Nessun utente trovato con questo piano.' });
-        setIsLoading(false);
-        return;
-      }
-
-      // 2. Adjust records and perform a single batch upsert
-      const limitField = `${bulkFeature}_limit`;
-      
-      // Update each record individually to avoid bulk upsert RLS issues
-      for (const record of data) {
-        const currentLimit = record[limitField] || 0;
-        const newLimit = Math.max(0, currentLimit + bulkAmount);
-        const { error: updateErr } = await supabase
-          .from('user_quotas')
-          .update({ [limitField]: newLimit })
-          .eq('user_id', record.user_id);
-          
-        if (updateErr) {
-          console.warn(`Failed to update user_quotas for user ${record.user_id}`);
-        }
-      }
-
-      setMessage({ type: 'success', text: `Regola applicata con successo! Limiti di ${bulkFeature} modificati di ${bulkAmount > 0 ? '+' : ''}${bulkAmount} per tutti i profili ${bulkPlanType.toUpperCase()}` });
-      fetchData();
-    } catch (err: any) {
-      console.error(err);
-      setMessage({ type: 'error', text: 'Errore durante la modifica di massa: ' + err.message });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const toggleUserAdmin = async (user: UserProfile) => {
     setIsLoading(true);
     try {
-      // supabase-js non lancia sugli errori di query: senza il check su error
-      // il messaggio di successo appariva anche a operazione fallita (es. RLS deny)
-      const { error } = await supabase.from('user_profiles')
-        .update({ is_admin: !user.is_admin })
-        .eq('id', user.id);
-      if (error) throw error;
+      // Il ruolo admin si cambia SOLO dal server: la scrittura diretta dal
+      // client dipendeva interamente dal trigger RLS, e in un ambiente dove
+      // quella migration non fosse applicata chiunque potrebbe promuoversi.
+      // La rotta verifica il chiamante, impedisce di declassare se stessi e
+      // lascia una traccia in system_errors.
+      const { data: s } = await supabase.auth.getSession();
+      const token = s?.session?.access_token;
+      const r = await fetch(getApiUrl('/api/admin/user/set-admin'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ user_id: user.id, is_admin: !user.is_admin }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error || `Errore ${r.status}`);
       setMessage({ type: 'success', text: `Ruolo admin per ${user.email} aggiornato con successo!` });
       fetchData();
     } catch (err: any) {
@@ -473,6 +458,27 @@ export default function AdminPanel() {
             <Users className="w-4 h-4" />
             Utenti ({users.length})
           </button>
+          {/* Coda contenuti: POI da rivedere, itinerari, errori, manutenzione.
+              Porta in superficie rotte server che esistevano da mesi senza UI. */}
+          <button
+            onClick={() => setActiveTab('content_queue')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'content_queue' ? 'bg-white text-amber-600 shadow-sm' : 'text-primary/60 hover:text-amber-600'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4" />
+            Coda contenuti
+          </button>
+          {/* Console: listino crediti, cache, salute, budget AI. */}
+          <button
+            onClick={() => setActiveTab('ops')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'ops' ? 'bg-white text-emerald-700 shadow-sm' : 'text-primary/60 hover:text-emerald-700'
+            }`}
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            Console
+          </button>
           <button
             onClick={() => setActiveTab('health')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -597,9 +603,30 @@ export default function AdminPanel() {
       {activeTab === 'vision' && <AdminVisionCommunity />}
       {activeTab === 'poi_map' && <AdminPoiMapEditor />}
       {activeTab === 'beni_culturali' && <AdminBeniCulturali />}
+      {activeTab === 'content_queue' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminContentQueue /></Suspense>
+      )}
+      {activeTab === 'ops' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminOpsConsole /></Suspense>
+      )}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 
+      {/* Utenti: interruttore fra la scheda nuova e quella storica */}
       {activeTab === 'users' && (
+        <div className="flex justify-end mb-3">
+          <button
+            onClick={() => setVistaUtentiClassica(v => !v)}
+            className="px-3 py-1.5 rounded-full text-[11px] font-black border border-outline-variant text-on-surface-variant hover:bg-primary/10 transition-colors"
+          >
+            {vistaUtentiClassica ? '← Torna alla scheda completa' : 'Vista classica (ascolti e pass) →'}
+          </button>
+        </div>
+      )}
+      {activeTab === 'users' && !vistaUtentiClassica && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminUsersPro /></Suspense>
+      )}
+
+      {activeTab === 'users' && vistaUtentiClassica && (
         <div className="space-y-4">
           {/* Search bar */}
           <div className="relative">

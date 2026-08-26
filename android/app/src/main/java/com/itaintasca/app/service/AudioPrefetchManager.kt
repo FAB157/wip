@@ -64,18 +64,41 @@ object AudioPrefetchManager {
     private fun cacheDir(context: Context): File =
         File(context.cacheDir, "audio_prefetch").apply { if (!exists()) mkdirs() }
 
-    private fun fileFor(context: Context, poiId: String, lang: String): File {
-        val safe = "${poiId}_$lang".replace(Regex("[^A-Za-z0-9_-]"), "_")
+    /**
+     * (22/08/2026) Personaggio per la chiave cache: PRIMA quello scelto
+     * dall'utente e persistito dal plugin (prefs "guideCharacter", vedi
+     * ItaintaBackgroundPoiPlugin.startBackgroundPoiService), poi quello
+     * passato dal chiamante (di norma il guide_default del POI), infine
+     * "nicky" (= guide_default più comune). Stesso ordine di
+     * GeofenceBroadcastReceiver.resolveGuideVoice.
+     */
+    fun resolveCharacter(context: Context, guideCharacter: String?): String {
+        val fromPrefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            .getString("guideCharacter", null)
+        if (fromPrefs != null && (fromPrefs == "nicky" || fromPrefs == "dante")) return fromPrefs
+        if (guideCharacter != null && guideCharacter.isNotBlank()) return guideCharacter
+        return "nicky"
+    }
+
+    /**
+     * Nome file {poi}_{lang}_{character}.mp3. Prima era {poi}_{lang}: chi
+     * cambiava voce da nicky a dante nel profilo riascoltava l'MP3 della
+     * voce precedente, perché la cache non distingueva il personaggio.
+     */
+    private fun fileFor(context: Context, poiId: String, lang: String, guideCharacter: String?): File {
+        val character = resolveCharacter(context, guideCharacter)
+        val safe = "${poiId}_${lang}_$character".replace(Regex("[^A-Za-z0-9_-]"), "_")
         return File(cacheDir(context), "$safe.mp3")
     }
 
     /**
      * MP3 in cache pronto da riprodurre, oppure null. I file scaduti (>24h)
      * o troppo piccoli per essere audio vero vengono eliminati al volo.
+     * guideCharacter null = personaggio dalle prefs (resolveCharacter).
      */
-    fun cachedFile(context: Context, poiId: String, lang: String): File? {
+    fun cachedFile(context: Context, poiId: String, lang: String, guideCharacter: String? = null): File? {
         return try {
-            val f = fileFor(context, poiId, lang)
+            val f = fileFor(context, poiId, lang, guideCharacter)
             when {
                 !f.exists() -> null
                 System.currentTimeMillis() - f.lastModified() > MAX_AGE_MS -> {
@@ -113,10 +136,11 @@ object AudioPrefetchManager {
         scope.launch {
             try {
                 cleanup(appContext)
-                if (cachedFile(appContext, poiId, lang) != null) return@launch
+                val character = resolveCharacter(appContext, guideCharacter)
+                if (cachedFile(appContext, poiId, lang, character) != null) return@launch
                 if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return@launch
-                val text = resolveAudioText(appContext, poiId, lang, guideCharacter ?: "nicky") ?: return@launch
-                downloadBlocking(appContext, poiId, lang, guideCharacter, text)
+                val text = resolveAudioText(appContext, poiId, lang, character) ?: return@launch
+                downloadBlocking(appContext, poiId, lang, character, text)
             } catch (e: Exception) {
                 Log.w(TAG, "prefetch failed for $poiId: ${e.message}")
             }
@@ -137,8 +161,9 @@ object AudioPrefetchManager {
         text: String
     ): File? {
         return try {
-            cachedFile(context, poiId, lang)
-                ?: downloadBlocking(context.applicationContext, poiId, lang, guideCharacter, text, quick = true)
+            val character = resolveCharacter(context, guideCharacter)
+            cachedFile(context, poiId, lang, character)
+                ?: downloadBlocking(context.applicationContext, poiId, lang, character, text, quick = true)
         } catch (e: Exception) {
             Log.w(TAG, "downloadNow failed for $poiId: ${e.message}")
             null
@@ -183,12 +208,13 @@ object AudioPrefetchManager {
         text: String,
         quick: Boolean = false
     ): File? {
-        val key = "${poiId}_$lang"
+        val character = resolveCharacter(context, guideCharacter)
+        val key = "${poiId}_${lang}_$character"
         if (!inFlight.add(key)) return null // già in corso da un altro percorso
         try {
             val body = JSONObject().apply {
                 put("text", text)
-                put("voice", azureVoiceFor(lang, guideCharacter))
+                put("voice", azureVoiceFor(lang, character))
             }.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder().url(TTS_ENDPOINT).post(body).build()
@@ -200,7 +226,7 @@ object AudioPrefetchManager {
                 val bytes = response.body?.bytes() ?: return null
                 if (bytes.size < MIN_VALID_BYTES) return null
 
-                val dest = fileFor(context, poiId, lang)
+                val dest = fileFor(context, poiId, lang, character)
                 val tmp = File(dest.parentFile, dest.name + ".tmp")
                 tmp.writeBytes(bytes)
                 if (!tmp.renameTo(dest)) {

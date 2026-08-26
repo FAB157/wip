@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { 
   Search, RefreshCw, CheckCircle2, AlertTriangle, Sparkles, Volume2,
-  Image as ImageIcon, Globe, Check, Edit, HelpCircle, MapPin, Plus, Ban, Info
+  Image as ImageIcon, Globe, Check, Edit, HelpCircle, MapPin, Plus, Ban, Info, RotateCcw
 } from 'lucide-react';
 
 interface POI {
@@ -20,7 +20,6 @@ interface POI {
   last_reviewed_at?: string | null;
   reviewed_by?: string | null;
   created_at?: string;
-  hasPendingEdits?: boolean;
 }
 
 /** Opzione foto proposta dal curatore: URL + fonte reale + attribuzione. */
@@ -34,7 +33,10 @@ export default function AdminEditor() {
   const [pois, setPois] = useState<POI[]>([]);
   const [selectedPoi, setSelectedPoi] = useState<POI | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'text' | 'audio' | 'photo'>('text');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'needs_revision'>('all');
+  // 'verified' e 'banned' esistono come filtro perché un POI uscito dalla coda
+  // (pubblicato o bannato) deve restare raggiungibile: senza questi due tab un
+  // POI bannato spariva dall'interfaccia e non era più recuperabile.
+  const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'needs_revision' | 'verified' | 'banned'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
 
@@ -50,6 +52,11 @@ export default function AdminEditor() {
   const [isLoading, setIsLoading] = useState(false);
   const [listLoading, setListLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  // Conferma inline per le azioni irreversibili (ban/sbanna): il primo click
+  // arma il bottone, il secondo esegue. Meglio di window.confirm perché non
+  // blocca il thread, resta dentro lo stile del pannello ed è annullabile
+  // semplicemente cambiando POI.
+  const [pendingDanger, setPendingDanger] = useState<'ban' | 'unban' | null>(null);
   const [editedText, setEditedText] = useState('');
   const [imageOptions, setImageOptions] = useState<ImageOption[] | null>(null);
   // Cache di sessione delle ricerche foto per POI: evita di ripetere le
@@ -69,6 +76,9 @@ export default function AdminEditor() {
   useEffect(() => {
     setEditingName(false);
     setNameDraft(selectedPoi?.name || '');
+    // Cambiando POI la conferma armata decade: evita di bannare per sbaglio il
+    // POI sbagliato con un secondo click destinato a quello precedente.
+    setPendingDanger(null);
   }, [selectedPoi?.id]);
 
   const saveName = async () => {
@@ -201,6 +211,10 @@ export default function AdminEditor() {
         // Colonna `status`: potrebbe non esistere su tutti i DB → gestita col
         // retry sotto.
         query = query.eq('status', 'needs_revision');
+      } else if (statusFilter === 'verified' || statusFilter === 'banned') {
+        // Stessa colonna `status`, stesso retry difensivo se manca. Il filtro
+        // 'banned' è l'unico modo per ritrovare un POI bannato.
+        query = query.eq('status', statusFilter);
       }
 
       let poisResponse = await query.order('created_at', { ascending: false });
@@ -447,10 +461,9 @@ export default function AdminEditor() {
 
       const localUpdates: Partial<POI> = {
         description_ai: editedText,
-        status: 'verified',
-        hasPendingEdits: false
+        status: 'verified'
       };
-      
+
       updateLocalPoiState(selectedPoi.id, localUpdates);
       setMessage({ type: 'success', text: 'POI approvato con successo e pubblicato live!' });
       
@@ -467,7 +480,13 @@ export default function AdminEditor() {
   // BANNA E RIMUOVI (status = banned)
   const banPoi = async () => {
     if (!selectedPoi) return;
-    if (!confirm('Sei sicuro di voler bannare questo POI? Verrà nascosto dalla mappa e non verrà più scaricato automaticamente.')) return;
+    // Primo click: arma la conferma e spiega cosa succede. Secondo click: esegue.
+    if (pendingDanger !== 'ban') {
+      setPendingDanger('ban');
+      setMessage({ type: 'info', text: 'Il POI verrà nascosto dalla mappa e non verrà più scaricato automaticamente. Premi di nuovo "Sicuro? Banna" per confermare. Resterà comunque recuperabile dal filtro "Bannati".' });
+      return;
+    }
+    setPendingDanger(null);
     setIsLoading(true);
     setMessage(null);
     try {
@@ -492,6 +511,49 @@ export default function AdminEditor() {
     } catch (err: any) {
       console.error(err);
       setMessage({ type: 'error', text: 'Errore durante il ban: ' + err.message });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // SBANNA (banned -> needs_revision)
+  // NON ripubblica: un POI era stato bannato perché qualcosa non andava, quindi
+  // torna in CODA DI REVISIONE (verified=false) e non live. Un curatore deve
+  // rileggerlo e premere "Approva e Pubblica" per rimetterlo in mappa.
+  // is_hidden torna false perché la riga non è più materiale da nascondere:
+  // è di nuovo lavorabile come una bozza qualsiasi.
+  const unbanPoi = async () => {
+    if (!selectedPoi) return;
+    if (pendingDanger !== 'unban') {
+      setPendingDanger('unban');
+      setMessage({ type: 'info', text: 'Lo sbanno NON pubblica il POI: lo rimette in coda di revisione, da approvare a mano. Premi di nuovo "Sicuro? Sbanna" per confermare.' });
+      return;
+    }
+    setPendingDanger(null);
+    setIsLoading(true);
+    setMessage(null);
+    try {
+      const updates = {
+        status: 'needs_revision',
+        verified: false,
+        is_hidden: false
+      };
+
+      const { error } = await supabase
+        .from('shared_pois')
+        .update(updates)
+        .eq('id', selectedPoi.id);
+
+      if (error) throw error;
+
+      updateLocalPoiState(selectedPoi.id, { status: 'needs_revision' });
+      setMessage({ type: 'success', text: 'POI sbannato: ora è in revisione. Controlla testo e foto, poi premi "Approva e Pubblica live".' });
+      // Ricarico la lista perché con il filtro "Bannati" attivo il POI non ne fa
+      // più parte: senza refresh resterebbe una riga fantasma.
+      setTimeout(() => fetchPois(), 500);
+    } catch (err: any) {
+      console.error(err);
+      setMessage({ type: 'error', text: 'Errore durante lo sbanno: ' + err.message });
     } finally {
       setIsLoading(false);
     }
@@ -580,32 +642,27 @@ export default function AdminEditor() {
               </span>
             </div>
 
-            {/* Filter Bar */}
-            <div className="flex bg-surface p-1 rounded-2xl gap-1">
-              <button
-                onClick={() => setStatusFilter('all')}
-                className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-                  statusFilter === 'all' ? 'bg-surface text-primary shadow-sm' : 'text-primary/60 hover:text-primary'
-                }`}
-              >
-                Tutti
-              </button>
-              <button
-                onClick={() => setStatusFilter('draft')}
-                className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-                  statusFilter === 'draft' ? 'bg-surface text-orange-600 shadow-sm' : 'text-primary/60 hover:text-orange-600'
-                }`}
-              >
-                Bozze
-              </button>
-              <button
-                onClick={() => setStatusFilter('needs_revision')}
-                className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
-                  statusFilter === 'needs_revision' ? 'bg-surface text-rose-600 shadow-sm' : 'text-primary/60 hover:text-rose-600'
-                }`}
-              >
-                Revisioni
-              </button>
+            {/* Filter Bar — le classi attive sono stringhe intere e non
+                composte, altrimenti Tailwind non le genera in build. */}
+            <div className="flex flex-wrap bg-surface p-1 rounded-2xl gap-1">
+              {([
+                { key: 'all', label: 'Tutti', active: 'bg-surface text-primary shadow-sm', idle: 'text-primary/60 hover:text-primary', title: 'Tutti i POI, in qualsiasi stato' },
+                { key: 'draft', label: 'Bozze', active: 'bg-surface text-orange-600 shadow-sm', idle: 'text-primary/60 hover:text-orange-600', title: 'POI mai approvati' },
+                { key: 'needs_revision', label: 'Revisioni', active: 'bg-surface text-rose-600 shadow-sm', idle: 'text-primary/60 hover:text-rose-600', title: 'POI in attesa di un controllo' },
+                { key: 'verified', label: 'Pubblicati', active: 'bg-surface text-emerald-600 shadow-sm', idle: 'text-primary/60 hover:text-emerald-600', title: 'POI già live in mappa' },
+                { key: 'banned', label: 'Bannati', active: 'bg-surface text-red-700 shadow-sm', idle: 'text-primary/60 hover:text-red-700', title: 'POI bannati: da qui si possono sbannare' },
+              ] as const).map(f => (
+                <button
+                  key={f.key}
+                  onClick={() => setStatusFilter(f.key)}
+                  title={f.title}
+                  className={`flex-1 min-w-[68px] py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                    statusFilter === f.key ? f.active : f.idle
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
             </div>
 
             {/* Search */}
@@ -649,20 +706,19 @@ export default function AdminEditor() {
                     <div className="flex items-start justify-between gap-2">
                       <h5 className="font-black text-primary text-xs leading-tight line-clamp-1">{p.name}</h5>
                       <div className="flex flex-col items-end gap-1">
+                        {/* Il bannato ha un rosso pieno, non una tinta pastello:
+                            deve saltare all'occhio anche nel filtro "Tutti". */}
                         <span className={`text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 ${
-                          p.status === 'verified' 
-                            ? 'bg-emerald-100 text-emerald-800' 
-                            : p.status === 'needs_revision' 
-                              ? 'bg-rose-100 text-rose-800' 
-                              : 'bg-orange-100 text-orange-800'
+                          p.status === 'banned'
+                            ? 'bg-red-600 text-white'
+                            : p.status === 'verified'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : p.status === 'needs_revision'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-orange-100 text-orange-800'
                         }`}>
-                          {p.status === 'verified' ? 'Pubblicato' : p.status === 'needs_revision' ? 'Da Rivedere' : 'Bozza'}
+                          {p.status === 'banned' ? '⛔ Bannato' : p.status === 'verified' ? 'Pubblicato' : p.status === 'needs_revision' ? 'Da Rivedere' : 'Bozza'}
                         </span>
-                        {p.hasPendingEdits && (
-                          <span className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0 bg-blue-100 text-blue-800 animate-pulse">
-                            Shadow Edit
-                          </span>
-                        )}
                       </div>
                     </div>
 
@@ -869,13 +925,15 @@ export default function AdminEditor() {
                   </div>
                   
                   <span className={`text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full ${
-                    selectedPoi.status === 'verified' 
-                      ? 'bg-emerald-100 text-emerald-800' 
-                      : selectedPoi.status === 'needs_revision' 
-                        ? 'bg-rose-100 text-rose-800' 
-                        : 'bg-orange-100 text-orange-800'
+                    selectedPoi.status === 'banned'
+                      ? 'bg-red-600 text-white'
+                      : selectedPoi.status === 'verified'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : selectedPoi.status === 'needs_revision'
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-orange-100 text-orange-800'
                   }`}>
-                    Stato: {selectedPoi.status === 'verified' ? 'Approvato' : selectedPoi.status === 'needs_revision' ? 'In Revisione' : 'Bozza'}
+                    Stato: {selectedPoi.status === 'banned' ? '⛔ Bannato' : selectedPoi.status === 'verified' ? 'Approvato' : selectedPoi.status === 'needs_revision' ? 'In Revisione' : 'Bozza'}
                   </span>
                 </div>
 
@@ -1114,16 +1172,39 @@ export default function AdminEditor() {
 
               {/* Curation Footer Actions Workspace */}
               <div className="flex flex-col sm:flex-row gap-2 border-t border-outline-variant pt-4 mt-2">
-                <button
-                  type="button"
-                  onClick={banPoi}
-                  disabled={isLoading}
-                  className="flex-1 py-3 bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5"
-                  title="Nasconde il POI e previene il riscaricamento da OSM"
-                >
-                  <Ban className="w-4 h-4 shrink-0" />
-                  Banna
-                </button>
+                {/* Su un POI bannato "Banna" non ha senso: al suo posto compare
+                    lo "Sbanna", l'unica via d'uscita dal ban. */}
+                {selectedPoi.status === 'banned' ? (
+                  <button
+                    type="button"
+                    onClick={unbanPoi}
+                    disabled={isLoading}
+                    className={`flex-1 py-3 font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                      pendingDanger === 'unban'
+                        ? 'bg-amber-500 text-white shadow-md animate-pulse'
+                        : 'bg-amber-50 hover:bg-amber-100 text-amber-700'
+                    }`}
+                    title="Toglie il ban e rimette il POI in coda di revisione (non lo pubblica)"
+                  >
+                    <RotateCcw className="w-4 h-4 shrink-0" />
+                    {pendingDanger === 'unban' ? 'Sicuro? Sbanna' : 'Sbanna'}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={banPoi}
+                    disabled={isLoading}
+                    className={`flex-1 py-3 font-black text-xs uppercase tracking-wider rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                      pendingDanger === 'ban'
+                        ? 'bg-rose-600 text-white shadow-md animate-pulse'
+                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
+                    }`}
+                    title="Nasconde il POI e previene il riscaricamento da OSM (reversibile dal filtro 'Bannati')"
+                  >
+                    <Ban className="w-4 h-4 shrink-0" />
+                    {pendingDanger === 'ban' ? 'Sicuro? Banna' : 'Banna'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={saveLocalTextChanges}

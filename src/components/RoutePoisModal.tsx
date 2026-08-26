@@ -213,7 +213,7 @@ export default function RoutePoisModal({
                 <Info className="w-4 h-4" />
               </button>
             </h2>
-            <p className="text-sm text-gray-500 mt-1">{isIt ? 'Verso' : 'To'}: {destinationName}</p>
+            <p className="text-sm text-gray-500 mt-1">{getTranslation('rp_to', language)}: {destinationName}</p>
           </div>
           <button onClick={onClose} aria-label="Chiudi" className="p-2 bg-white dark:bg-gray-800 rounded-full hover:bg-gray-100 shadow-sm">
             <X className="w-5 h-5 text-gray-500" />
@@ -240,7 +240,7 @@ export default function RoutePoisModal({
           {/* ── Punto di partenza ── */}
           <div className="space-y-2">
             <p className="text-[11px] font-black uppercase tracking-widest text-gray-500">
-              {isIt ? 'Punto di partenza' : 'Starting point'}
+              {getTranslation('starting_point', language)}
             </p>
             <div className="flex gap-2">
               <button
@@ -250,7 +250,7 @@ export default function RoutePoisModal({
                 }`}
               >
                 <Crosshair className="w-4 h-4" />
-                {getTranslation('from_my_location', language) || (isIt ? 'Dalla mia posizione' : 'From my location')}
+                {getTranslation('from_my_location', language)}
               </button>
               <button
                 onClick={() => setOriginMode('custom')}
@@ -259,7 +259,7 @@ export default function RoutePoisModal({
                 }`}
               >
                 <MapPin className="w-4 h-4" />
-                {getTranslation('custom_address', language) || (isIt ? 'Indirizzo personalizzato' : 'Custom address')}
+                {getTranslation('custom_address', language)}
               </button>
             </div>
 
@@ -268,8 +268,8 @@ export default function RoutePoisModal({
                 {gpsCoords
                   ? `GPS: ${gpsCoords.lat.toFixed(4)}, ${gpsCoords.lon.toFixed(4)}`
                   : gpsError
-                    ? (isIt ? 'GPS non disponibile: usa un indirizzo personalizzato.' : 'GPS unavailable: use a custom address.')
-                    : (getTranslation('acquiring_gps', language) || (isIt ? 'Acquisizione GPS...' : 'Acquiring GPS...'))}
+                    ? getTranslation('rp_gps_unavailable', language)
+                    : getTranslation('acquiring_gps', language)}
               </p>
             )}
 
@@ -282,7 +282,7 @@ export default function RoutePoisModal({
                   onChange={(e) => { setCustomQuery(e.target.value); setCustomCoords(null); setShowSuggestions(true); }}
                   onFocus={() => setShowSuggestions(true)}
                   onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                  placeholder={getTranslation('custom_address_placeholder', language) || (isIt ? 'Inserisci un indirizzo' : 'Enter an address')}
+                  placeholder={getTranslation('custom_address_placeholder', language)}
                   className="w-full pl-9 pr-3 py-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 {showSuggestions && suggestions.length > 0 && (
@@ -316,32 +316,30 @@ export default function RoutePoisModal({
           {/* ── POI lungo il percorso ── */}
           {!origin ? (
             <div className="text-center py-8 text-sm text-gray-500 font-medium">
-              {isIt ? 'Scegli il punto di partenza per scansionare il percorso.' : 'Choose a starting point to scan the route.'}
+              {getTranslation('rp_choose_start', language)}
             </div>
           ) : loading ? (
             <div className="flex flex-col items-center justify-center py-10 space-y-4">
               <Loader2 className="w-10 h-10 text-primary animate-spin" />
-              <p className="text-gray-500 font-medium">{isIt ? 'Scansione percorso in corso...' : 'Scanning route...'}</p>
+              <p className="text-gray-500 font-medium">{getTranslation('rp_scanning', language)}</p>
             </div>
           ) : scanError ? (
             <div className="text-center py-8">
-              <p className="text-sm text-red-500 font-bold">{isIt ? 'Errore durante la scansione del percorso.' : 'Route scan failed.'}</p>
-              <p className="text-xs text-gray-500 mt-1">{isIt ? 'Puoi comunque avviare la navigazione.' : 'You can still start navigating.'}</p>
+              <p className="text-sm text-red-500 font-bold">{getTranslation('rp_scan_failed', language)}</p>
+              <p className="text-xs text-gray-500 mt-1">{getTranslation('rp_can_still_navigate', language)}</p>
             </div>
           ) : routePois.length === 0 ? (
             <div className="text-center py-8">
               <div className="bg-gray-100 dark:bg-gray-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                 <MapPin className="w-8 h-8 text-gray-400" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{isIt ? 'Nessun POI sul percorso' : 'No POIs on the route'}</h3>
-              <p className="text-gray-500 text-sm">{isIt ? 'Non abbiamo trovato luoghi di interesse a meno di 300 metri dal tuo tragitto stradale.' : 'No points of interest found within 300 meters of your route.'}</p>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{getTranslation('rp_no_pois', language)}</h3>
+              <p className="text-gray-500 text-sm">{getTranslation('rp_no_pois_desc', language)}</p>
             </div>
           ) : (
             <div className="space-y-4">
               <p className="text-sm font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 p-3 rounded-xl">
-                {isIt
-                  ? 'Ecco i luoghi che incontrerai lungo la strada. L\'audioguida partirà in automatico solo per quelli selezionati.'
-                  : 'These are the places you will pass along the way. The audio guide will start automatically only for the selected ones.'}
+                {getTranslation('rp_places_along_way', language)}
               </p>
 
               {routePois.map(poi => (
@@ -374,7 +372,7 @@ export default function RoutePoisModal({
             onClick={() => onStartNavigation([], origin)}
             className="w-1/3 py-4 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold active:scale-[0.98] transition-transform"
           >
-            {isIt ? 'Salta' : 'Skip'}
+            {getTranslation('skip', language)}
           </button>
           <button
             onClick={handleStart}
@@ -382,7 +380,7 @@ export default function RoutePoisModal({
             className="w-2/3 py-4 rounded-2xl bg-gradient-to-r from-primary to-orange-500 text-white font-bold text-lg shadow-lg shadow-primary/30 flex items-center justify-center space-x-2 active:scale-[0.98] transition-transform disabled:opacity-50"
           >
             <Navigation className="w-5 h-5 fill-white" />
-            <span>{loading ? (isIt ? 'Attendi...' : 'Wait...') : (isIt ? 'Inizia Navigazione' : 'Start Navigation')}</span>
+            <span>{loading ? getTranslation('rp_wait', language) : getTranslation('rp_start_navigation', language)}</span>
           </button>
         </div>
       </div>

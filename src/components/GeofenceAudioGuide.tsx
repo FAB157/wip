@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
-import { Download, AlertTriangle, X } from 'lucide-react';
-import { Language } from '../lib/i18n';
+import { Download, AlertTriangle, X, MapPinOff } from 'lucide-react';
+import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
-import { isCategoryAllowed } from '../lib/guideSettings';
+import { isCategoryAllowed, isPlayed } from '../lib/guideSettings';
 import { useFeatureFlag } from '../lib/featureFlags';
+
+/** Tetto al prefetch dei testi in avvicinamento: 3 al minuto. */
+const PREFETCH_MAX_PER_MIN = 3;
 // Side-effect: attiva il registratore di tracce GPS (wip_gps_record) al load
 // dell'app — ascolta 'wip-location-update', non tocca locationService.
 import '../lib/geofencing/gpsReplay';
@@ -20,16 +23,37 @@ interface GeofenceAudioGuideProps {
 }
 
 export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guideMode, language }: GeofenceAudioGuideProps) {
-  useEffect(() => {
-    // Keep locationService settings synchronized dynamically as React states change
-    locationService.syncSettings(itinerary, guideMode, language, isActive, isMuted);
-  }, [isActive, isMuted, itinerary, guideMode, language]);
+  // NIENTE syncSettings qui: lo fa gia' App.tsx con gli stessi argomenti (e
+  // in piu' le categorie). Con entrambi, ogni cambio di stato faceva partire
+  // due volte banner, musica d'ambiente, lettura dei POI e rilancio del
+  // servizio nativo (misurato 22/08/2026). `itinerary`, `guideMode` e
+  // `isMuted` restano nelle props per i listener sotto.
+  void itinerary; void guideMode; void isMuted;
 
   // Trigger web autonomi in FOREGROUND (solo PWA/browser): il geofencing di
   // prossimità fuori da WIP Nav. Su nativo non parte mai (il service in
   // background ha la stessa logica: niente doppi trigger). Kill switch admin:
   // feature flag 'web_foreground_triggers' (fail-open).
   const webTriggersOn = useFeatureFlag('web_foreground_triggers');
+
+  // PERMESSO POSIZIONE NEGATO (web): fino al 22/08/2026 finiva in console e
+  // l'audioguida restava muta senza spiegazione. Al tocco delle cuffie si
+  // interroga navigator.permissions (se c'e'): se e' 'denied' il banner esce
+  // subito; altrimenti esce al primo errore del watch ('location-denied').
+  const [posizioneNegata, setPosizioneNegata] = useState(false);
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+    const onDenied = () => setPosizioneNegata(true);
+    window.addEventListener('location-denied', onDenied);
+    if (isActive) {
+      locationService.checkWebLocationPermission().then(st => { if (st === 'denied') setPosizioneNegata(true); }).catch(() => {});
+      if (locationService.isLocationDenied()) setPosizioneNegata(true);
+    } else {
+      setPosizioneNegata(false);
+    }
+    return () => window.removeEventListener('location-denied', onDenied);
+  }, [isActive]);
+
   useEffect(() => {
     if (Capacitor.isNativePlatform()) return;
     if (!isActive || !webTriggersOn) return;
@@ -125,7 +149,11 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       // deep-link (launchApp/notifica) per lo stesso POI — gestiamo il primo.
       const now = Date.now();
       const last = (window as any).__wipLastPoiTrigger || { id: '', ts: 0 };
-      if (last.id === String(poiId) && now - last.ts < 15000) return;
+      // 60 s, non 15: con la WebView fredda il deep link arriva ben dopo il
+      // 'poi-arrived' (gli eventi nativi sono retainUntilConsumed) e la stessa
+      // tappa si apriva e parlava due volte. 60 s e' la stessa finestra di
+      // WIP Nav e dei trigger web.
+      if (last.id === String(poiId) && now - last.ts < 60_000) return;
       (window as any).__wipLastPoiTrigger = { id: String(poiId), ts: now };
 
       // ✅ [RECUPERO DATI COMPLETI] - Necessario per la visualizzazione corretta della scheda
@@ -184,6 +212,9 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
 
     return () => window.removeEventListener('deep-link-poi', handleDeepLinkPoi);
   }, [isActive, language, guideMode]);
+
+  // Prefetch in avvicinamento: finestra scorrevole degli ultimi 60 s.
+  const prefetchTsRef = useRef<number[]>([]);
 
   // Listener per eventi nativi di arrivo/avvicinamento dal plugin nativo Android
   useEffect(() => {
@@ -277,6 +308,29 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       const poiData = await fetchPoiFull(poiId);
       const poi = poiData || { id: poiId, name: poiName, lat, lon };
 
+      // PREFETCH DEL TESTO DELL'AUDIOGUIDA, come fa il nativo (AudioPrefetch-
+      // Manager a 150/300 m): all'arrivo la scheda trova il testo gia' in
+      // cache (poi_audioguides) e in modalita' pass l'ascolto parte subito
+      // invece di aspettare la generazione. Best-effort, mai bloccante: un
+      // errore qui non deve toccare il banner di avvicinamento.
+      // SOLO se il POI passera' davvero il trigger (categoria attiva, non in
+      // cooldown, non gia' ascoltato) e al massimo 3 al minuto: prima si
+      // generava (e si contava un play) anche per POI che non avrebbero mai
+      // parlato — in auto, decine di chiamate LLM per niente.
+      try {
+        const { passerebbeIlTrigger } = await import('../lib/geofencing/foregroundTriggers');
+        const now = Date.now();
+        prefetchTsRef.current = prefetchTsRef.current.filter(ts => now - ts < 60_000);
+        const ammesso = passerebbeIlTrigger(poi) && !isPlayed(String(poiId)) && prefetchTsRef.current.length < PREFETCH_MAX_PER_MIN;
+        if (ammesso) {
+          prefetchTsRef.current.push(now);
+          const { getOrCreateAudioguideText } = await import('../services/audioguideService');
+          const lingua = (localStorage.getItem('wip_language') || 'IT').toUpperCase();
+          const personaggio = (localStorage.getItem('wip_guide_character') || guideMode || 'nicky') as any;
+          void getOrCreateAudioguideText(poi as any, lingua, personaggio, { incrementPlay: false }).catch(() => { /* si generera' all'arrivo */ });
+        }
+      } catch { /* modulo non disponibile: nessun prefetch */ }
+
       // La distanza NON è 150 fissa: il raggio di alert è 150 m a piedi ma
       // 300 m in auto, e il banner mostrava "150m" anche per POI molto più
       // lontani. Se il nativo la fornisce si usa quella; altrimenti si parte
@@ -314,7 +368,36 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
 
   return (
     <AnimatePresence>
-      {(isActive && isPwa && !dismissedPwaBanner) && (
+      {(isActive && isPwa && posizioneNegata) && (
+        <motion.div
+          key="posizione-negata"
+          initial={{ y: -100, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: -100, opacity: 0 }}
+          role="alert"
+          className="fixed top-20 left-4 right-4 z-[9999] bg-white/95 backdrop-blur-xl border border-red-200 p-4 rounded-3xl shadow-2xl flex items-center gap-4"
+        >
+          <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center shrink-0">
+            <MapPinOff className="w-6 h-6 text-red-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-black text-red-700 uppercase tracking-tight mb-0.5">
+              {getTranslation('posizione_negata_titolo', language)}
+            </p>
+            <p className="text-[10px] font-bold text-gray-600 leading-tight">
+              {getTranslation('posizione_negata_testo', language)}
+            </p>
+          </div>
+          <button
+            onClick={() => setPosizioneNegata(false)}
+            className="p-2 bg-gray-100 text-gray-400 rounded-xl hover:text-gray-600 transition-colors"
+            aria-label={getTranslation('tour_chiudi', language)}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </motion.div>
+      )}
+      {(isActive && isPwa && !dismissedPwaBanner && !posizioneNegata) && (
         <motion.div
           initial={{ y: -100, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -326,12 +409,10 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-xs font-black text-primary uppercase tracking-tight mb-0.5">
-              {language === 'IT' ? 'Esperienza Web Limitata' : 'Limited Web Experience'}
+              {getTranslation('web_limitata_titolo', language)}
             </p>
             <p className="text-[10px] font-bold text-gray-500 leading-tight">
-              {language === 'IT'
-                ? 'Su browser l\'audio si interrompe se spegni lo schermo. Scarica l\'App per il tour automatico!'
-                : 'Audio stops if the screen turns off in the browser. Download the App for the automatic tour!'}
+              {getTranslation('web_limitata_testo', language)}
             </p>
           </div>
           <div className="flex flex-col gap-2">

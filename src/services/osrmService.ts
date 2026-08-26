@@ -151,6 +151,19 @@ const MANEUVER_LANGS: Record<string, ManeuverPhrases> = {
   },
 };
 
+/**
+ * La frase per uno step OSRM grezzo (legs[].steps[]): la stessa regola di
+ * fetchWalkingRoute — il testo della fonte se c'e' (ORS/Geoapify lo mettono in
+ * maneuver.instruction), altrimenti la traduzione da type/modifier. La usa
+ * anche Dieci Tappe, che tiene le legs del server e prima non le leggeva mai.
+ */
+export function istruzionePerStep(s: any, lang: string, poiName?: string): string {
+  const testoFonte = typeof s?.maneuver?.instruction === 'string' && s.maneuver.instruction.trim() ? s.maneuver.instruction.trim() : undefined;
+  if (testoFonte) return testoFonte;
+  const name: string | undefined = typeof s?.name === 'string' && s.name.trim() ? s.name.trim() : undefined;
+  return translateManeuver(s?.maneuver?.type ?? 'continue', s?.maneuver?.modifier, lang, poiName, s?.maneuver?.exit, name);
+}
+
 /** Traduce una manovra OSRM in una frase vocale nella lingua data. */
 export function translateManeuver(
   type: string,
@@ -210,11 +223,16 @@ export async function fetchWalkingRoute(
 ): Promise<WalkingRoute | null> {
   try {
     const coords = `${from.lon},${from.lat};${to.lon},${to.lat}`;
-    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true`;
-    // Timeout: senza, una richiesta OSRM appesa lasciava la navigazione bloccata
-    // in "routing" all'infinito (né percorso né errore, avvio silenziosamente
-    // fallito). AbortSignal.timeout fa scattare il catch → ritorna null.
-    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    // `language`: il server la passa a Valhalla/ORS/Geoapify per le istruzioni
+    // testuali; senza, usava 'it' per tutti (anche utenti EN/FR/DE).
+    const langCode = String(lang || 'it').slice(0, 2).toLowerCase();
+    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}`;
+    // Timeout: senza, una richiesta appesa lasciava la navigazione bloccata in
+    // "routing" all'infinito. Ma 6 s erano TROPPO POCHI: dietro /api/route/foot
+    // il server prova cinque fonti in serie (6+7+8+8+8 s) e il client mollava
+    // mentre la prima era ancora in corso — le quattro riserve non venivano mai
+    // raggiunte (verificato il 22/08/2026). 45 s copre l'intera catena.
+    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
     if (!res.ok) return null;
     const data = await res.json();
     const route = data?.routes?.[0];
@@ -229,8 +247,12 @@ export async function fetchWalkingRoute(
       // undefined qui, così i consumatori non devono ripetere il controllo.
       const name: string | undefined = typeof s.name === 'string' && s.name.trim() ? s.name.trim() : undefined;
       const [lon, lat] = s.maneuver?.location ?? [from.lon, from.lat];
+      // Le fonti di riserva (ORS, Geoapify) rispondono con type 'continue' e il
+      // testo vero della manovra in maneuver.instruction: ignorarlo faceva dire
+      // "continua dritto" a ogni svolta appena la prima fonte cadeva.
+      const testoFonte: string | undefined = typeof s.maneuver?.instruction === 'string' && s.maneuver.instruction.trim() ? s.maneuver.instruction.trim() : undefined;
       return {
-        instruction: translateManeuver(type, modifier, lang, poiName, s.maneuver?.exit, name),
+        instruction: testoFonte || translateManeuver(type, modifier, lang, poiName, s.maneuver?.exit, name),
         location: { lat, lon },
         distance: s.distance ?? 0,
         maneuverType: type,

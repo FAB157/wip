@@ -35,22 +35,23 @@ interface PrintViewProps {
 
 const getPrintTranslation = (key: string, lang: string) => {
   const dict: Record<string, Record<string, string>> = {
-    page: { IT: "Pagina", EN: "Page", FR: "Page", ES: "Página", RU: "Страница", ZH: "页" },
-    day: { IT: "Giorno", EN: "Day", FR: "Jour", ES: "Día", RU: "День", ZH: "天" },
-    days: { IT: "giorni", EN: "days", FR: "jours", ES: "días", RU: "дней", ZH: "天" },
-    single_day: { IT: "giorno", EN: "day", FR: "jour", ES: "día", RU: "день", ZH: "天" },
-    itinerary_by: { IT: "di viaggio curato da World in Pocket", EN: "trip curated by World in Pocket", FR: "de voyage organisé par World in Pocket", ES: "de viaje curado por World in Pocket", RU: "поездки от World in Pocket", ZH: "旅行路线（由 World in Pocket 策划）" },
+    page: { IT: "Pagina", EN: "Page", FR: "Page", ES: "Página", DE: "Seite", RU: "Страница", ZH: "页" },
+    day: { IT: "Giorno", EN: "Day", FR: "Jour", ES: "Día", DE: "Tag", RU: "День", ZH: "天" },
+    days: { IT: "giorni", EN: "days", FR: "jours", ES: "días", DE: "Tage", RU: "дней", ZH: "天" },
+    single_day: { IT: "giorno", EN: "day", FR: "jour", ES: "día", DE: "Tag", RU: "день", ZH: "天" },
+    itinerary_by: { IT: "di viaggio curato da World in Pocket", EN: "trip curated by World in Pocket", FR: "de voyage organisé par World in Pocket", ES: "de viaje curado por World in Pocket", DE: "Reise, kuratiert von World in Pocket", RU: "поездки от World in Pocket", ZH: "旅行路线（由 World in Pocket 策划）" },
     intro: {
       IT: "Benvenuto nella tua guida di viaggio curata da World in Pocket. Questo itinerario ti condurrà attraverso una selezione speciale di tappe e punti di interesse storici, artistici e culturali. Usa l'app \"World in Pocket\" durante la visita per sbloccare le audioguide interattive e ascoltare la storia di questi luoghi dal vivo.",
       EN: "Welcome to your travel guide curated by World in Pocket. This itinerary will lead you through a special selection of historic, artistic, and cultural points of interest. Use the \"World in Pocket\" app during your visit to unlock interactive audio guides and listen to the history of these locations live.",
       FR: "Bienvenue dans votre guide de voyage conçu par World in Pocket. Cet itinéraire vous mènera à travers une sélection spéciale de points d'intérêt historiques, artistiques et culturels. Utilisez l'application \"World in Pocket\" pendant votre visite pour débloquer des audioguides interactifs.",
       ES: "Bienvenido a tu guía de viaje seleccionada por World in Pocket. Este itinerario te llevará a través de una selección especial de puntos de interés históricos, artísticos y culturales. Utiliza la aplicación \"World in Pocket\" durante tu visita para desbloquear audioguías interactivas.",
+      DE: "Willkommen zu deinem Reiseführer, kuratiert von World in Pocket. Diese Route führt dich zu einer besonderen Auswahl historischer, künstlerischer und kultureller Sehenswürdigkeiten. Nutze die App \"World in Pocket\" während des Besuchs, um interaktive Audioguides freizuschalten und die Geschichte dieser Orte live zu hören.",
       RU: "Добро пожаловать в путеводитель от World in Pocket. Этот маршрут проведет вас по лучшим историческим, художественным и культурным местам. Используйте приложение «World in Pocket» во время визита, чтобы слушать аудиогиды.",
       ZH: "欢迎使用由 World in Pocket 策划的旅行指南。此路线将带您领略精选的历史、艺术和文化景点。在游览期间使用 \"World in Pocket\" 应用程序，可解锁互动式语音导览，聆听这些景点的生动历史。"
     },
-    guide_advice: { IT: "Consiglio della Guida", EN: "Guide's Advice", FR: "Conseil du Guide", ES: "Consejo de la Guía", RU: "Совет гида", ZH: "导游建议" },
-    visit_time: { IT: "Tempo di visita", EN: "Duration", FR: "Durée de visite", ES: "Tiempo de visita", RU: "Время визита", ZH: "游览时间" },
-    movement: { IT: "Spostamento", EN: "Transfer", FR: "Déplacement", ES: "Traslado", RU: "Перемещение", ZH: "交通" }
+    guide_advice: { IT: "Consiglio della Guida", EN: "Guide's Advice", FR: "Conseil du Guide", ES: "Consejo de la Guía", DE: "Tipp des Guides", RU: "Совет гида", ZH: "导游建议" },
+    visit_time: { IT: "Tempo di visita", EN: "Duration", FR: "Durée de visite", ES: "Tiempo de visita", DE: "Besuchsdauer", RU: "Время визита", ZH: "游览时间" },
+    movement: { IT: "Spostamento", EN: "Transfer", FR: "Déplacement", ES: "Traslado", DE: "Transfer", RU: "Перемещение", ZH: "交通" }
   };
   
   const l = (lang || 'IT').toUpperCase();
@@ -66,8 +67,13 @@ export default function PrintView({ plan, language }: PrintViewProps) {
       <style>{`
         @media print {
           /* Setup the print environment */
+          /* Margine superiore stretto: il titolo deve stare IN ALTO.
+             A 10 mm più il margine del contenitore restava una fascia
+             bianca che mangiava la prima riga utile della pagina.
+             Il margine inferiore resta più largo dei laterali perché ci
+             vive il piè di pagina fisso. */
           @page {
-            margin: 10mm 12mm 15mm 12mm;
+            margin: 6mm 12mm 14mm 12mm;
             size: A4 portrait;
           }
 
@@ -96,6 +102,8 @@ export default function PrintView({ plan, language }: PrintViewProps) {
             align-items: flex-start;
             justify-content: space-between;
             border-bottom: 2px solid #1e3a8a;
+            padding-top: 0;
+            margin-top: 0;
             padding-bottom: 8px;
             margin-bottom: 12px;
             gap: 16px;
@@ -374,10 +382,15 @@ export default function PrintView({ plan, language }: PrintViewProps) {
         {/* Header compatto: titolo + eyebrow + intro breve, logo discreto */}
         <div className="print-header">
           <div style={{ flex: 1 }}>
-            <p className="print-subtitle">
-              {plan.giorni.length} {plan.giorni.length === 1 ? getPrintTranslation('single_day', langStr) : getPrintTranslation('days', langStr)} {getPrintTranslation('itinerary_by', langStr)}
-            </p>
+            {/* IL TITOLO È LA PRIMA COSA. L'occhiello sopra al titolo lo
+                spingeva giù e sprecava la riga più preziosa del foglio: ora
+                il titolo apre la pagina e il resto lo segue.
+                Accanto, il dominio: un PDF stampato gira per le mani di chi
+                non ha l'app, e deve dire da dove viene. */}
             <h1 className="print-title">{plan.titolo}</h1>
+            <p className="print-subtitle">
+              wip.guide · {plan.giorni.length} {plan.giorni.length === 1 ? getPrintTranslation('single_day', langStr) : getPrintTranslation('days', langStr)} {getPrintTranslation('itinerary_by', langStr)}
+            </p>
             <p className="print-intro-desc">
               {getPrintTranslation('intro', langStr)}
             </p>
@@ -535,7 +548,15 @@ export default function PrintView({ plan, language }: PrintViewProps) {
         )}
 
         {/* Mappa del percorso (Pagina a sé stante) */}
-        <div className="print-day-container" style={{ marginTop: '24px', marginBottom: '24px', height: '850px', pageBreakBefore: 'always', breakBefore: 'page', border: '1.5px solid #1e3a8a', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
+        {/* LA MAPPA, alta quanto la pagina e non un pixel di più.
+            Prima era `height: 850px` con margine sotto di 24px: su A4 la
+            zona stampabile è 272 mm (297 meno i margini) e 850 px + 24 px
+            la superano, così l'ultimo pezzo di riquadro scivolava su un
+            foglio nuovo — è l'ULTIMA PAGINA VUOTA del PDF del 22/08/2026.
+            In stampa i millimetri sono affidabili, i pixel no: si misura in
+            mm, si lascia spazio al piè di pagina fisso, e si vieta qualsiasi
+            interruzione dentro e dopo. */}
+        <div className="print-day-container print-map-page" style={{ marginTop: '18px', marginBottom: 0, height: '245mm', pageBreakBefore: 'always', breakBefore: 'page', pageBreakAfter: 'avoid', breakAfter: 'avoid', pageBreakInside: 'avoid', breakInside: 'avoid', border: '1.5px solid #1e3a8a', borderRadius: '12px', overflow: 'hidden', position: 'relative' }}>
             <h3 style={{ position: 'absolute', top: 44, left: 12, zIndex: 1000, margin: 0, fontSize: '11pt', color: '#1e3a8a', fontWeight: 800, background: 'white', padding: '4px 12px', borderRadius: '999px', border: '1px solid #1e3a8a', fontFamily: 'sans-serif', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mappa del Percorso</h3>
             <PlanMap giorni={plan.giorni} isPrint={true} />
         </div>

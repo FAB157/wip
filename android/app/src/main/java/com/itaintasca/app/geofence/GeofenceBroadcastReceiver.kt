@@ -43,7 +43,6 @@ import kotlinx.coroutines.tasks.await
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
-import com.itaintasca.app.service.SupabaseClient
 import org.json.JSONObject
 import org.json.JSONArray
 import java.util.*
@@ -201,6 +200,26 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // Il companion può accedere ai membri privati della propria classe.
             GeofenceBroadcastReceiver().handleApproach(
                 context, poiId, name, guide, isGem, isItinerary, db, speak
+            )
+        }
+
+        /**
+         * ARRIVO A 30 M DAL PERIMETRO, deciso dal servizio a ogni fix (22/08/2026).
+         * Il sistema emette l'ENTER una volta sola, quando si entra nel
+         * cerchio: per un edificio grande quel momento puo' essere a 80 m dal
+         * muro, e i 30 m dal perimetro si raggiungono DOPO, senza nessun altro
+         * evento. Il servizio li vede nel suo loop e arriva da qui.
+         */
+        suspend fun firePerimeterArrival(
+            context: Context,
+            poi: PoiEntity,
+            isAutomaticMode: Boolean,
+            db: PoiDatabase,
+            distanceM: Float
+        ) {
+            GeofenceBroadcastReceiver().handleArrival(
+                context, poi.id, poi.nome, poi.guideDefault, poi.isGem, poi.isFromItinerary,
+                isAutomaticMode, db, distanceM = distanceM
             )
         }
 
@@ -567,8 +586,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             val pIntent = PendingIntent.getActivity(context, 9999, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
             val builder = NotificationCompat.Builder(context, "geofencing_channel")
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("Tappa completata! ✅")
-                .setContentText("Vuoi passare alla prossima destinazione?")
+                // (22/08/2026) Localizzate sulla lingua delle prefs, non più italiano fisso
+                .setContentTitle(NotificationStrings.get(context, "checkin_title"))
+                .setContentText(NotificationStrings.get(context, "checkin_text"))
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setAutoCancel(true)
                 .setContentIntent(pIntent)
@@ -692,14 +712,16 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // ✅ [SICUREZZA DISTANZA] - Trigger accettato solo se la distanza
             // reale è compatibile col raggio configurato (+ margine per
             // l'incertezza del fix). Evita i falsi allarmi da GPS jitter.
-            // DENTRO IL PERIMETRO: se l'utente sta dentro il poligono
-            // dell'edificio, la distanza dal centroide non conta piu'. In una
-            // basilica di 120 metri o dentro una cinta muraria si e' spesso
-            // oltre il distLimit pur essendo esattamente dove si deve essere,
-            // e il controllo qui sotto scarterebbe un trigger giusto.
-            val dentroPerimetro = Footprints.dentroPerimetro(
+            // A 30 METRI DAL PERIMETRO (22/08/2026): se il POI ha il poligono,
+            // la misura che conta e' la distanza dal MURO (0 dentro), non
+            // quella dall'ingresso. Lungo la facciata di una basilica di 120
+            // metri o accanto a una cinta muraria si e' spesso oltre il
+            // distLimit pur essendo esattamente dove si deve essere, e il
+            // controllo qui sotto scarterebbe un trigger giusto.
+            val dentroPerimetro = Footprints.alPerimetro(
                 info.poiId, poi.footprint,
-                currentLoc.latitude, currentLoc.longitude
+                currentLoc.latitude, currentLoc.longitude,
+                isDriving = isDrivingMode
             )
 
             val targetRadius = if (info.type == "arrival") arrivalRad else alertRad
@@ -748,15 +770,28 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 }
             } else if (info.type == "arrival") {
                 // Blocco arrivo (port iOS blockedArrival): il TTL 24h copre
-                // ARRIVED e ora anche PASSED — prima un POI superato ri-arrivava
-                // al primo rientro (il ramo else lo lasciava passare). EXITED
-                // recente blocca il rientro-da-rumore-GPS con un cooldown più
-                // corto (10 min).
+                // ARRIVED_FIRED. EXITED recente blocca il rientro-da-rumore-GPS
+                // con un cooldown più corto (10 min).
+                // (22/08/2026) PASSED NON blocca più l'arrivo quando la distanza
+                // reale è dentro il raggio di arrivo: il predittore marca PASSED
+                // già 40 m oltre il CPA dopo un APPROACH, quindi chi cammina
+                // svelto, supera di poco il punto e poi si ferma davanti al POI
+                // perdeva l'arrivo per 24 ore. Il rientro da lontano (realDist
+                // fuori raggio) resta bloccato come prima.
                 val age = if (triggerEntity != null) System.currentTimeMillis() - triggerEntity.updatedAt else Long.MAX_VALUE
                 val blockedArrival =
-                    ((triggerState == TriggerState.ARRIVED_FIRED || triggerState == TriggerState.PASSED) && age < ARRIVAL_RETRIGGER_TTL_MS) ||
+                    (triggerState == TriggerState.ARRIVED_FIRED && age < ARRIVAL_RETRIGGER_TTL_MS) ||
+                    (triggerState == TriggerState.PASSED && age < ARRIVAL_RETRIGGER_TTL_MS && info.realDist > targetRadius) ||
                     (triggerState == TriggerState.EXITED && age < ARRIVAL_AFTER_EXIT_COOLDOWN_MS)
-                if (!blockedArrival) {
+                // Col perimetro il cerchio d'arrivo e' allargato a coprirlo
+                // tutto (GeofenceManager): l'ENTER puo' arrivare a 80 m dal
+                // muro. Se non si e' ancora a 30 m, non e' un arrivo: ci
+                // pensera' il loop del servizio (firePerimeterArrival) al
+                // fix in cui lo si diventa.
+                val haPerimetro = !poi.footprint.isNullOrBlank()
+                if (haPerimetro && !dentroPerimetro) {
+                    Log.d(TAG, "Arrivo rinviato per ${poi.nome}: dentro il cerchio ma a piu' di ${Footprints.triggerM(isDrivingMode).toInt()} m dal perimetro")
+                } else if (!blockedArrival) {
                     // ✅ [ROBUSTEZZA] - Permettiamo l'arrivo anche se l'approccio è stato saltato (es. marcia veloce)
                     handleArrival(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, isAutomaticMode, db, distanceM = info.realDist)
                 }
@@ -873,14 +908,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // Solo con rete utilizzabile: offline sarebbe un timeout a vuoto.
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         val lang = prefs.getString("language", "it") ?: "it"
+        val guideVoice = resolveGuideVoice(prefs, guide)
         if (com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)) {
-            triggerTeaserGeneration(poiId, lang)
+            triggerTeaserGeneration(context, poiId, lang)
         }
 
         // ✅ [PREFETCH MP3] - Al primo avviso scarichiamo in background l'MP3
         // dell'audioguida nella cache locale: al trigger di arrivo la
         // riproduzione parte istantanea (best-effort, mai bloccante).
-        com.itaintasca.app.service.AudioPrefetchManager.prefetch(context, poiId, lang, guide)
+        com.itaintasca.app.service.AudioPrefetchManager.prefetch(context, poiId, lang, guideVoice)
 
         // Messaggio localizzato: prima era italiano fisso anche per utenti EN/FR/ES/DE
         val approachMsg = when (lang) {
@@ -908,7 +944,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         } else {
             vibrate(context, if (isItinerary || isGem) longArrayOf(0, 300, 100, 500) else longArrayOf(0, 500))
         }
-        val notifTitle = if (isItinerary) "📍 Tappa Itinerario" else "Esplorazione"
+        // (22/08/2026) Titolo/testo notifica nella lingua dell'utente (NotificationStrings)
+        val notifTitle = NotificationStrings.get(lang, if (isItinerary) "approach_title_stop" else "approach_title_explore")
         // Raggio reale della modalità corrente, non "150m" fisso: in auto
         // l'alert scatta a 300 m e la notifica mentiva (stesso fix di iOS).
         val guideModeNow = prefs.getString("guideMode", "walking") ?: "walking"
@@ -919,7 +956,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val approachBigText = if (silentMode && !poi.teaserText.isNullOrBlank()) {
             "$approachMsg\n\n${poi.teaserText}"
         } else null
-        showNotification(context, "$notifTitle: $name", "A circa ${alertRadNow.toInt()}m. Tocca per i dettagli.", poiId, guide, false, bigText = approachBigText)
+        showNotification(context, "$notifTitle: $name", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), poiId, guideVoice, false, bigText = approachBigText)
     }
 
     private suspend fun handleArrival(
@@ -950,22 +987,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // --- LOGICA TEASER MULTILINGUA ---
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         val lang = prefs.getString("language", "it") ?: "it"
+        // (22/08/2026) Voce scelta dall'utente (nicky/dante) anche in background,
+        // non il guideDefault del POI: vedi resolveGuideVoice.
+        val guideVoice = resolveGuideVoice(prefs, guide)
 
-        // ✅ [RECOVERY] - Teaser nullo: prima il pacchetto offline locale (gratis
-        // e disponibile sempre), poi il server — ma solo con rete utilizzabile
-        // (offline il vecchio fetch bloccava il receiver per 15s di timeout).
+        // ✅ [RECOVERY] - Teaser nullo: qui SOLO il pacchetto offline locale
+        // (gratis e immediato). Il recupero dal server è lavoro di rete e va
+        // nel servizio (ArrivalWorker), non dentro goAsync().
         if (poi?.teaserText.isNullOrBlank()) {
             val offlinePoi = db.offlineDao().getPoiById(poiId)
             if (offlinePoi != null && !offlinePoi.teaserText.isNullOrBlank()) {
                 val recovered = offlinePoi.toPoiEntity()
                 poi = recovered
                 db.poiDao().insertPois(listOf(recovered))
-            } else if (com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)) {
-                val freshPoi = SupabaseClient().fetchPoiById(poiId, lang)
-                if (freshPoi != null && !freshPoi.teaserText.isNullOrBlank()) {
-                    poi = freshPoi
-                    db.poiDao().insertPois(listOf(freshPoi)) // Aggiorna cache locale
-                }
             }
         }
 
@@ -979,15 +1013,47 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             else -> "Sei arrivato a $name."
         }
 
-        val fallbackTeaser = when (lang) {
-            "en" -> "Open the app to discover the secrets of this place."
-            "fr" -> "Ouvrez l'application pour découvrir les secrets de ce lieu."
-            "es" -> "Abre la aplicación para descubrir los secretos de este lugar."
-            "de" -> "Öffnen Sie die App, um die Geheimnisse dieses Ortes zu entdecken."
-            "ru" -> "Откройте приложение, чтобы узнать секреты этого места."
-            "zh" -> "打开应用，探索这个地方的秘密。"
-            else -> "Apri l'app per scoprire i segreti di questo luogo."
+        // Frase di ripiego quando il teaser manca: NON sempre la stessa. In un
+        // giro di dieci luoghi senza teaser l'utente sentiva dieci volte "Apri
+        // l'app per scoprire i segreti di questo luogo" (regola del committente
+        // 22/08/2026: "il piu' possibile variegati"). La variante si sceglie da
+        // un hash deterministico dell'id: lo stesso luogo dice sempre la stessa
+        // cosa, due luoghi vicini dicono cose diverse. Allineato a
+        // BackgroundPoiManager.swift (stesse tre frasi per lingua).
+        val variantiRipiego = when (lang) {
+            "en" -> listOf(
+                "Open the app to discover the secrets of this place.",
+                "The full story is in the app: open it and listen.",
+                "Want to know what happened here? The audio guide is one tap away.")
+            "fr" -> listOf(
+                "Ouvrez l'application pour découvrir les secrets de ce lieu.",
+                "Toute l'histoire est dans l'application : ouvrez-la et écoutez.",
+                "Envie de savoir ce qui s'est passé ici ? L'audioguide est à un geste.")
+            "es" -> listOf(
+                "Abre la aplicación para descubrir los secretos de este lugar.",
+                "La historia completa está en la app: ábrela y escucha.",
+                "¿Quieres saber qué pasó aquí? La audioguía está a un toque.")
+            "de" -> listOf(
+                "Öffnen Sie die App, um die Geheimnisse dieses Ortes zu entdecken.",
+                "Die ganze Geschichte steht in der App: öffnen und zuhören.",
+                "Was ist hier passiert? Der Audioguide ist nur einen Tipp entfernt.")
+            "ru" -> listOf(
+                "Откройте приложение, чтобы узнать секреты этого места.",
+                "Вся история — в приложении: откройте и слушайте.",
+                "Хотите узнать, что здесь произошло? Аудиогид в одном касании.")
+            "zh" -> listOf(
+                "打开应用，探索这个地方的秘密。",
+                "完整的故事都在应用里：打开并聆听。",
+                "想知道这里发生过什么？语音导览只需轻点一下。")
+            else -> listOf(
+                "Apri l'app per scoprire i segreti di questo luogo.",
+                "La storia completa è nell'app: aprila e ascolta.",
+                "Vuoi sapere cosa è successo qui? L'audioguida è a un tocco.")
         }
+        // hashCode() di String e' stabile in Kotlin/JVM, ma lo si ricalcola a
+        // mano per restare identici allo Swift (stesso seme, stessa frase).
+        val semeRipiego = poiId.fold(0) { acc, c -> (acc * 31 + c.code) and 0x7fffffff }
+        val fallbackTeaser = variantiRipiego[semeRipiego % variantiRipiego.size]
 
         val teaser = poi?.teaserText
         val fullMsg = if (!teaser.isNullOrBlank()) "$arrivalMsg $teaser" else "$arrivalMsg $fallbackTeaser"
@@ -999,134 +1065,83 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // disponibile nell'app.
         val silentMode = com.itaintasca.app.service.WebViewPrefs.isSilentMode(context)
         if (!silentMode) {
-            enqueue(context, SpeechItem(fullMsg, isGem, isItinerary, poiId, priority, kind = "arrival"))
             vibrate(context, longArrayOf(0, 400, 200, 400))
         } else {
             vibrate(context, longArrayOf(0, 150, 100, 150))
         }
 
-        // DAY PASS: con pass attivo WIP fa tutto da solo — dopo il teaser accoda
-        // l'audioguida COMPLETA (+ info aggiuntive) in coda TTS, online e
-        // offline, senza mai aprire l'app. Il contatore vive in prefs, quindi
-        // il cap regge anche a display spento e senza rete.
-        // GIÀ ACQUISTATO: un POI presente nello storico ascolti (mirror locale
-        // sincronizzato dal cloud) è riprodotto GRATIS, senza consumare il pass
-        // — stesso ordine del web (dayPassService.authorizeGuidePlayback).
-        // Senza pass il teaser resta gratuito; l'ascolto completo passa dal
-        // tasto "Ascolta" (per-listen a crediti, plugin playOfflineGuide).
-        // Solo con app NON in foreground: in foreground se ne occupa il JS
-        // (mai due voci sovrapposte).
-        // In modalità silenziosa la catena audio del pass NON parte (e il pass
-        // NON si consuma): l'utente potrà ascoltare dal tasto della scheda.
-        if (isAutomaticMode && !silentMode && !isAppInForeground(context)) {
-            val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore
-                .isAlreadyPurchased(context, poiId)
-            val passUsed = prefs.getInt("daypass_used", 0)
-            val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
-                System.currentTimeMillis(),
-                prefs.getLong("daypass_expires_at", 0L),
-                passUsed,
-                prefs.getInt("daypass_cap", 0)
-            )
-            if (alreadyPurchased || passActive) {
-                // CATENA FALLBACK GUIDA COMPLETA:
-                // 1) MP3 prefetchato in cache locale (partenza istantanea)
-                // 2) MP3 scaricabile ORA (online; il server è caldo grazie al
-                //    prefetch dell'approach → di solito solo un redirect)
-                // 3) testo integrale audio_text letto dal TTS di sistema
-                // Il teaser (già in coda sopra) e la notifica (sotto) sono i
-                // gradini 4 e 5: mai silenzio totale.
-                var fullText = db.offlineDao().getPoiById(poiId)?.audioText
-                // Mono-lingua: il testo offline (audioText) è nella lingua del
-                // pacchetto scaricato; se non combacia con la lingua utente lo
-                // scartiamo, così i rami sotto lo rifetchano nella lingua giusta
-                // (stessa guardia di AudioPrefetchManager.resolveAudioText).
-                val pkgLang = db.offlineDao().getPoiPackageLanguage(poiId)
-                if (!fullText.isNullOrBlank() && pkgLang != null && !pkgLang.equals(lang, ignoreCase = true)) {
-                    fullText = null
-                }
-                var mp3File = com.itaintasca.app.service.AudioPrefetchManager
-                    .cachedFile(context, poiId, lang)
-                if (fullText.isNullOrBlank() && mp3File == null &&
-                    com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
-                ) {
-                    // Testo NELLA LINGUA dell'utente (get-or-create per-lingua),
-                    // non i campi italiani grezzi di shared_pois. Token utente se
-                    // disponibile (rollout fase 1, vedi SupabaseClient
-                    // .fetchAudioguideText): mai bloccante se assente.
-                    val audioguideToken = com.itaintasca.app.service.SecurePrefs.get(context)
-                        .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
-                    fullText = SupabaseClient().fetchAudioguideText(poiId, lang, poi?.guideDefault ?: "nicky", audioguideToken)
-                }
-                if (mp3File == null && !fullText.isNullOrBlank() &&
-                    com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
-                ) {
-                    mp3File = com.itaintasca.app.service.AudioPrefetchManager
-                        .downloadNow(context, poiId, lang, poi?.guideDefault, fullText)
-                }
-                if (mp3File != null || !fullText.isNullOrBlank()) {
-                    // Il pass si consuma solo se il POI NON era già acquistato
-                    if (!alreadyPurchased) {
-                        prefs.edit().putInt("daypass_used", passUsed + 1).apply()
-                    }
-                    enqueue(context, SpeechItem(fullText ?: "", isGem, isItinerary, poiId, priority, kind = "arrival", audioFile = mp3File?.absolutePath))
-                    if (mp3File == null && !fullText.isNullOrBlank()) {
-                        // Prefetch/redirect MP3 falliti (rete lenta o server freddo):
-                        // l'intera audioguida viene letta dal TTS robotico di sistema
-                        // invece della voce AI. Evento per il JS (stesso canale di
-                        // poiArrived/poiApproaching) così può mostrare un avviso tipo
-                        // "voce di riserva, rete lenta" invece di degradare in silenzio.
-                        sendEventToPlugin(context, "audioQualityDegraded", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0)
-                    }
-                    // Info aggiuntive incluse nel pass (1 livello): la descrizione
-                    // breve se distinta dal testo guida.
-                    // Stessa guardia lingua della guida: niente descrizione IT
-                    // sotto una guida EN (pacchetto in lingua diversa → salta).
-                    val extra = if (pkgLang != null && !pkgLang.equals(lang, ignoreCase = true)) null
-                                else db.offlineDao().getPoiById(poiId)?.descriptionShort
-                    if (!extra.isNullOrBlank() && extra != fullText && fullText?.contains(extra) != true) {
-                        enqueue(context, SpeechItem(extra, isGem, isItinerary, poiId, priority, kind = "arrival"))
-                    }
-                    // Ogni ascolto completo in background finisce nello storico
-                    // (mirror subito, cloud best-effort): il web lo vedrà in
-                    // ProfileScreen e i prossimi trigger saranno gratis.
-                    com.itaintasca.app.service.ListeningHistoryStore.recordListening(
-                        context, poiId, name, poi?.poiType, null
-                    )
-                }
-            }
+        // (22/08/2026) LAVORO LUNGO FUORI DAL RECEIVER. Voce del teaser
+        // (con eventuale recupero dal server), DAY PASS / già acquistato
+        // (testo integrale + MP3) vivono in ArrivalWorker.run: se serve rete
+        // si inoltra al Foreground Service (ACTION_HANDLE_ARRIVAL), che non ha
+        // il limite di ~10 s di goAsync(); altrimenti, o se l'inoltro fallisce,
+        // si esegue inline come prima. Regole invariate: il pass si consuma
+        // solo se non già acquistato, in modalità silenziosa la catena non
+        // parte, con app in foreground se ne occupa il JS.
+        val params = ArrivalWorker.Params(
+            poiId = poiId, name = name, isGem = isGem, isItinerary = isItinerary,
+            isAutomaticMode = isAutomaticMode, priority = priority, lang = lang,
+            guideVoice = guideVoice, silentMode = silentMode, arrivalMsg = arrivalMsg,
+            fallbackTeaser = fallbackTeaser, poiLat = poi?.lat ?: 0.0, poiLon = poi?.lon ?: 0.0,
+            poiType = poi?.poiType
+        )
+        val online = com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
+        val mayNeedFullGuide = isAutomaticMode && !silentMode && !isAppInForeground(context)
+        val needsLongWork = online && (teaser.isNullOrBlank() || mayNeedFullGuide)
+        val forwarded = needsLongWork && ArrivalWorker.dispatchToService(context, params)
+        if (!forwarded) {
+            ArrivalWorker.run(context, params)
         }
 
         if (silentMode) {
             // Notifica d'arrivo con il TESTO del teaser ben leggibile: è il
             // sostituto della voce. Niente launchApp: aprirebbe l'app che in
             // automatico farebbe partire l'audio.
-            showNotification(context, "Arrivo a $name", teaser ?: fallbackTeaser, poiId, guide, true, bigText = fullMsg)
+            // (22/08/2026) Notifiche nella lingua dell'utente (NotificationStrings), non più italiano fisso
+            showNotification(context, NotificationStrings.get(lang, "arrival_at", name), teaser ?: fallbackTeaser, poiId, guideVoice, true, bigText = fullMsg)
         } else if (isAutomaticMode) {
-            showNotification(context, "Sei arrivato!", "Avvio audioguida di $name", poiId, guide, true)
-            launchApp(context, poiId, guide)
+            showNotification(context, NotificationStrings.get(lang, "arrived_title"), NotificationStrings.get(lang, "arrived_starting", name), poiId, guideVoice, true)
+            launchApp(context, poiId, guideVoice)
         } else {
-            showNotification(context, "Arrivo a $name", "Tocca per ascoltare la storia", poiId, guide, true)
+            showNotification(context, NotificationStrings.get(lang, "arrival_at", name), NotificationStrings.get(lang, "arrived_tap"), poiId, guideVoice, true)
         }
     }
 
-    private fun triggerTeaserGeneration(poiId: String, lang: String) {
+    private fun triggerTeaserGeneration(context: Context, poiId: String, lang: String) {
+        val appContext = context.applicationContext
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val client = OkHttpClient()
+                // (22/08/2026) Timeout espliciti: il default di OkHttp (10 s
+                // connect, 10 s read) tagliava la generazione AI del teaser,
+                // che può superare i 10 s; 25 s di read è il tetto ragionevole
+                // per un job in background che non blocca nessuno.
+                val client = OkHttpClient.Builder()
+                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
                 val body = JSONObject().apply {
                     put("poiIds", JSONArray(listOf(poiId)))
                     put("lang", lang)
                 }.toString().toRequestBody("application/json".toMediaType())
 
-                val request = Request.Builder()
+                // (22/08/2026) Senza Authorization il server risponde 403 e il
+                // teaser predittivo non veniva mai generato, senza traccia nei
+                // log. Stesso token utente di /api/poi/audioguide (SecurePrefs).
+                val accessToken = com.itaintasca.app.service.SecurePrefs.get(appContext)
+                    .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+                val requestBuilder = Request.Builder()
                     .url("https://wip.guide/api/poi/batch-teaser")
                     .post(body)
-                    .build()
+                if (!accessToken.isNullOrBlank()) {
+                    requestBuilder.addHeader("Authorization", "Bearer $accessToken")
+                }
+                val request = requestBuilder.build()
 
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
-                        Log.d(TAG, "Predictive teaser requested for $poiId")
+                        Log.d(TAG, "Predictive teaser requested for $poiId (HTTP ${response.code})")
+                    } else {
+                        Log.w(TAG, "Predictive teaser $poiId: HTTP ${response.code} (token ${if (accessToken.isNullOrBlank()) "assente" else "presente"})")
                     }
                 }
             } catch (e: Exception) {
@@ -1147,16 +1162,28 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun isPoiCategoryActive(poi: PoiEntity, selected: List<String>): Boolean {
-        if (poi.isFromItinerary) return true
-        if (poi.isGem) return areGemsActive(selected)
-        val cat = (poi.poiType ?: "").lowercase()
-        if (selected.contains(cat)) return true
-        for (uiCat in selected) {
-            if (CATEGORY_MAP[uiCat]?.contains(cat) == true) return true
-        }
-        return false
+    /**
+     * (22/08/2026) Il personaggio scelto nel profilo (nicky/dante) arrivava al
+     * plugin ma non veniva mai letto: prefetch MP3, testo del pass e deep link
+     * `?guide=` usavano sempre il guideDefault del POI, quindi in background
+     * parlava la voce sbagliata. Il plugin ora persiste `guideCharacter`; qui si
+     * preferisce quello, con il default del POI come riserva.
+     */
+    private fun resolveGuideVoice(prefs: SharedPreferences, fallback: String): String {
+        val chosen = prefs.getString("guideCharacter", null)
+        return if (chosen == "nicky" || chosen == "dante") chosen else fallback
     }
+
+    /**
+     * (22/08/2026) Delega a CategoryMap.isActive: la STESSA funzione usata dal
+     * fetch (SupabaseClient.parsePoiList) e dal filtro offline del servizio.
+     * Prima erano tre copie a mano: un POI poteva essere scaricato dal fetch
+     * e rifiutato qui al trigger (o viceversa). Regole: tappe sempre attive,
+     * gemme attive salvo "gemme:off" (vedi areGemsActive), insieme vuoto =
+     * default culturale.
+     */
+    private fun isPoiCategoryActive(poi: PoiEntity, selected: List<String>): Boolean =
+        CategoryMap.isActive(poi.poiType, poi.isGem, poi.isFromItinerary, selected)
 
     /**
      * Attivazione delle gemme (parità con useGeofencing.ts `activeSubcats.gemme

@@ -2,6 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- (22/08/2026) Senza questa dichiarazione, su Android 11+ il package
+         visibility filtering fa tornare null a resolveActivity per Google Maps
+         e openSystemNavigator cadeva SEMPRE sul fallback geo: generico. -->
+    <queries>
+        <package android:name="com.google.android.apps.maps" />
+    </queries>
+
     <application
         android:name="androidx.multidex.MultiDexApplication"
         android:allowBackup="false"
@@ -76,12 +83,9 @@
 
         <!-- Old ItaIntaService removed — replaced by ItaintaBackgroundPoiService -->
 
-        <service
-            android:name="com.equimaps.capacitor_background_geolocation.BackgroundGeolocationService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="location"
-            tools:replace="android:exported" />
+        <!-- (22/08/2026) Rimosso il service di @capacitor-community/background-geolocation:
+             il plugin è stubbato in vite.config.ts, il lavoro in background lo fa
+             ItaintaBackgroundPoiService. -->
         <service
             android:name=".service.ItaintaBackgroundPoiService"
             android:foregroundServiceType="location"

@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { RefreshCw, Sparkles, MapPin, Search, CalendarDays, ExternalLink, ImageIcon, CheckCircle2, AlertCircle } from 'lucide-react';
+import { RefreshCw, Sparkles, MapPin, Search, CalendarDays, ExternalLink, ImageIcon, CheckCircle2, AlertCircle, Wand2, Camera, ChevronLeft, ChevronRight, X } from 'lucide-react';
+
+// Tetto di righe caricate: shared_pois ha ~2,4 milioni di righe e prima questa
+// pagina le scorreva TUTTE a blocchi di 1000, renderizzandole poi in un'unica
+// tabella. Con "Sempre" + "Tutti" significava provare a stampare il database.
+const MAX_RIGHE_CARICATE = 500;
+const RIGHE_PER_PAGINA = 50;
+// Il batch lato server e' fisso: /api/poi/batch-enrich non legge alcun
+// parametro dalla query string, la limit=50 e' scritta nell'URL REST della
+// rotta. Finche' resta cosi', qui il numero si dichiara e basta.
+const BATCH_FISSO = 50;
 
 interface EnrichedPoi {
   id: string;
@@ -39,78 +49,222 @@ export default function AdminEnrichedPois() {
   const [isBatching, setIsBatching] = useState(false);
   const [stats, setStats] = useState({ enriched: 0, seeded: 0, total: 0 });
   const [fieldStats, setFieldStats] = useState<FieldStat[]>([]);
+  // Riscontro in pagina al posto degli alert() nativi.
+  const [esito, setEsito] = useState<{ tipo: 'ok' | 'errore'; testo: string } | null>(null);
+  // Conferme inline: invece di confirm(), il bottone stesso diventa "Sicuro?".
+  const [confermaBatch, setConfermaBatch] = useState(false);
+  const [confermaRiga, setConfermaRiga] = useState<string | null>(null);
+  // Stato "in corso" per singola riga: chiave `${poiId}:${azione}`.
+  const [azioneInCorso, setAzioneInCorso] = useState<string | null>(null);
+  const [esitoRiga, setEsitoRiga] = useState<Record<string, { tipo: 'ok' | 'errore'; testo: string }>>({});
+  // Foto proposte dal server per un POI: la rotta le restituisce SENZA salvarle,
+  // e' l'admin a scegliere quale scrivere sul POI.
+  const [fotoProposte, setFotoProposte] = useState<Record<string, { url: string; source?: string; attribution?: string }[]>>({});
+  const [pagina, setPagina] = useState(0);
+  // Totale STIMATO del periodo (count 'planned': su shared_pois il count esatto
+  // e' proibito, il 18/08/2026 ha abbattuto Supabase in produzione).
+  const [totaleStimato, setTotaleStimato] = useState<number | null>(null);
+  const [troncata, setTroncata] = useState(false);
 
   useEffect(() => {
     fetchPois();
   }, [filterMode, displayMode]);
 
+  /** Token admin per le rotte protette: stessa forma usata da AdminEditor. */
+  const tokenAdmin = async (): Promise<string> => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData?.session?.access_token;
+    if (!accessToken) throw new Error('Sessione scaduta: effettua di nuovo il login.');
+    return accessToken;
+  };
+
   const triggerBatchEnrich = async () => {
-    if (!confirm('Vuoi forzare l\'arricchimento batch di 50 POI ora? (Consuma chiamate API Gemini)')) return;
+    // La conferma e' inline (il bottone diventa "Sicuro?"), niente confirm().
+    setConfermaBatch(false);
     setIsBatching(true);
+    setEsito(null);
     try {
       // L'header x-vercel-cron non è più accettato dal server (era spoofabile):
       // il bottone si autentica come admin con il token della sessione.
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) throw new Error('Sessione scaduta: effettua di nuovo il login.');
+      const accessToken = await tokenAdmin();
       const res = await fetch(getApiUrl('/api/poi/batch-enrich'), {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
       const data = await res.json();
       if (data.success) {
-        alert(`Arricchimento completato! POI elaborati: ${data.processed}, Arricchiti con successo: ${data.enriched}`);
+        // Quando non c'e' nulla da arricchire il server risponde solo con un
+        // message, senza processed/enriched: non spacciarlo per "0 su 0".
+        setEsito({
+          tipo: 'ok',
+          testo: typeof data.processed === 'number'
+            ? `Arricchimento completato. POI elaborati: ${data.processed}, arricchiti con successo: ${data.enriched}.`
+            : (data.message || 'Arricchimento completato.')
+        });
         fetchPois();
       } else {
-        alert('Errore: ' + data.error);
+        setEsito({ tipo: 'errore', testo: 'Il server ha rifiutato il batch: ' + (data.error || 'motivo non indicato.') });
       }
     } catch (err: any) {
-      alert('Errore durante il batch: ' + err.message);
+      setEsito({ tipo: 'errore', testo: 'Errore durante il batch: ' + (err?.message || 'errore imprevisto.') });
     } finally {
       setIsBatching(false);
     }
   };
 
+  /**
+   * Arricchisce UN POI: prima i chip dicevano cosa mancava ma non c'era modo di
+   * porvi rimedio da qui. Stessa rotta e stesso corpo usati da AdminEditor.
+   */
+  const arricchisciPoi = async (poi: EnrichedPoi) => {
+    const chiave = `${poi.id}:testo`;
+    setConfermaRiga(null);
+    setAzioneInCorso(chiave);
+    setEsitoRiga(prev => { const n = { ...prev }; delete n[poi.id]; return n; });
+    try {
+      const accessToken = await tokenAdmin();
+      const res = await fetch(getApiUrl('/api/poi/regenerate-content'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          poi_id: poi.id,
+          type: 'text',
+          name: poi.name,
+          category: poi.category,
+          lat: poi.lat,
+          lon: poi.lon
+        })
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Operazione fallita sul server.');
+
+      // Il server scrive description_ai e porta il POI in 'needs_revision':
+      // si allinea la riga senza ricaricare l'intera tabella.
+      setPois(prev => prev.map(p => p.id === poi.id
+        ? { ...p, description_ai: result.description || p.description_ai, status: 'needs_revision' }
+        : p));
+      setEsitoRiga(prev => ({
+        ...prev,
+        [poi.id]: { tipo: 'ok', testo: result.message || 'Testo rigenerato: il POI è ora in revisione.' }
+      }));
+    } catch (err: any) {
+      setEsitoRiga(prev => ({
+        ...prev,
+        [poi.id]: { tipo: 'errore', testo: err?.message || 'Arricchimento fallito.' }
+      }));
+    } finally {
+      setAzioneInCorso(null);
+    }
+  };
+
+  /**
+   * Cerca foto REALI (Wikimedia Commons → Wikipedia → Unsplash come ultimo
+   * fallback). La rotta restituisce le opzioni ma NON le salva: la scelta e
+   * la scrittura sul POI restano all'admin.
+   */
+  const cercaFoto = async (poi: EnrichedPoi) => {
+    const chiave = `${poi.id}:foto`;
+    setConfermaRiga(null);
+    setAzioneInCorso(chiave);
+    setEsitoRiga(prev => { const n = { ...prev }; delete n[poi.id]; return n; });
+    try {
+      const accessToken = await tokenAdmin();
+      const res = await fetch(getApiUrl('/api/poi/regenerate-content'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          poi_id: poi.id,
+          type: 'image',
+          name: poi.name,
+          lat: poi.lat,
+          lon: poi.lon
+        })
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Nessuna foto trovata.');
+
+      // Compat: le risposte legacy erano stringhe, oggi sono {url, source, attribution}.
+      const opzioni = (result.image_options || []).map((opt: any) =>
+        typeof opt === 'string' ? { url: opt } : opt
+      );
+      setFotoProposte(prev => ({ ...prev, [poi.id]: opzioni }));
+      setEsitoRiga(prev => ({
+        ...prev,
+        [poi.id]: { tipo: 'ok', testo: result.message || `Trovate ${opzioni.length} foto: scegli quale salvare.` }
+      }));
+    } catch (err: any) {
+      setEsitoRiga(prev => ({
+        ...prev,
+        [poi.id]: { tipo: 'errore', testo: err?.message || 'Ricerca foto fallita.' }
+      }));
+    } finally {
+      setAzioneInCorso(null);
+    }
+  };
+
+  /** Salva sul POI la foto scelta fra quelle proposte. */
+  const applicaFoto = async (poi: EnrichedPoi, url: string) => {
+    const chiave = `${poi.id}:salvafoto`;
+    setAzioneInCorso(chiave);
+    try {
+      const { error } = await supabase
+        .from('shared_pois')
+        .update({ image_url: url, photo_url: url })
+        .eq('id', poi.id);
+      if (error) throw error;
+
+      setPois(prev => prev.map(p => p.id === poi.id ? { ...p, image_url: url, photo_url: url } : p));
+      setFotoProposte(prev => { const n = { ...prev }; delete n[poi.id]; return n; });
+      setEsitoRiga(prev => ({ ...prev, [poi.id]: { tipo: 'ok', testo: 'Foto salvata sul POI.' } }));
+    } catch (err: any) {
+      setEsitoRiga(prev => ({
+        ...prev,
+        [poi.id]: { tipo: 'errore', testo: 'Impossibile salvare la foto: ' + (err?.message || 'permesso negato o errore DB.') }
+      }));
+    } finally {
+      setAzioneInCorso(null);
+    }
+  };
+
   const fetchPois = async () => {
     setIsLoading(true);
+    setPagina(0);
     try {
-      let allFetched: any[] = [];
-      let from = 0;
-      const step = 1000;
-      let hasMore = true;
+      // Una sola query con un tetto, non piu' un ciclo che scorreva tutta la
+      // tabella a blocchi di 1000. count 'planned' e non 'exact': su
+      // shared_pois (~2,4 milioni di righe) il conteggio esatto e' una
+      // scansione completa e il 18/08/2026 ha messo in ginocchio Supabase in
+      // produzione. Il totale e' quindi una stima, e la UI lo dichiara.
+      let query = supabase
+        .from('shared_pois')
+        .select('*', { count: 'planned' })
+        .order('created_at', { ascending: false })
+        .limit(MAX_RIGHE_CARICATE);
 
-      while (hasMore) {
-        let query = supabase
-          .from('shared_pois')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .range(from, from + step - 1);
-
-        if (filterMode === 'today') {
-          const startOfToday = new Date();
-          startOfToday.setHours(0, 0, 0, 0);
-          const iso = startOfToday.toISOString();
-          query = query.or(`enriched_at.gte.${iso},created_at.gte.${iso}`);
-        } else if (filterMode === 'month') {
-          const startOfMonth = new Date();
-          startOfMonth.setDate(1);
-          startOfMonth.setHours(0, 0, 0, 0);
-          const iso = startOfMonth.toISOString();
-          query = query.or(`enriched_at.gte.${iso},created_at.gte.${iso}`);
-        }
-
-        const { data, error } = await query;
-        if (error) throw error;
-        
-        if (data && data.length > 0) {
-          allFetched = [...allFetched, ...data];
-          from += step;
-          if (data.length < step) hasMore = false;
-        } else {
-          hasMore = false;
-        }
+      if (filterMode === 'today') {
+        const startOfToday = new Date();
+        startOfToday.setHours(0, 0, 0, 0);
+        const iso = startOfToday.toISOString();
+        query = query.or(`enriched_at.gte.${iso},created_at.gte.${iso}`);
+      } else if (filterMode === 'month') {
+        const startOfMonth = new Date();
+        startOfMonth.setDate(1);
+        startOfMonth.setHours(0, 0, 0, 0);
+        const iso = startOfMonth.toISOString();
+        query = query.or(`enriched_at.gte.${iso},created_at.gte.${iso}`);
       }
-      
-      const allData = allFetched as EnrichedPoi[];
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+
+      const allData = (data || []) as EnrichedPoi[];
+      setTotaleStimato(typeof count === 'number' ? count : null);
+      setTroncata(allData.length >= MAX_RIGHE_CARICATE);
       let statEnriched = 0;
       let statSeeded = 0;
       allData.forEach(p => {
@@ -140,16 +294,23 @@ export default function AdminEnrichedPois() {
       }
       
       setPois(filtered);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error fetching enriched pois:", err);
+      setPois([]);
+      setTotaleStimato(null);
+      setTroncata(false);
+      setEsito({ tipo: 'errore', testo: 'Caricamento POI fallito: ' + (err?.message || 'errore imprevisto.') });
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleResetPhoto = async (id: string, name: string) => {
-    if (!confirm(`Sei sicuro di voler azzerare la foto di ${name}? Al prossimo tap l'app cercherà una vera foto da Wikipedia o Google Places.`)) return;
-    
+  const handleResetPhoto = async (id: string, _name: string) => {
+    // Conferma inline (il bottone diventa "Sicuro?"), non piu' confirm().
+    setConfermaRiga(null);
+    setAzioneInCorso(`${id}:azzera`);
+    setEsitoRiga(prev => { const n = { ...prev }; delete n[id]; return n; });
+
     try {
       // Supabase non lancia: l'errore (es. RLS che nega l'update) torna in
       // `error`. Prima non veniva controllato e l'alert dava sempre "successo"
@@ -161,22 +322,39 @@ export default function AdminEnrichedPois() {
 
       if (error) {
         console.error("Error resetting photo", error);
-        alert('Impossibile azzerare la foto: ' + (error.message || 'permesso negato o errore DB.'));
+        setEsitoRiga(prev => ({
+          ...prev,
+          [id]: { tipo: 'errore', testo: 'Impossibile azzerare la foto: ' + (error.message || 'permesso negato o errore DB.') }
+        }));
         return;
       }
 
-      alert('Foto azzerata. Verrà riscaricata al prossimo caricamento.');
-      fetchPois();
+      // Si aggiorna la riga in locale invece di ricaricare tutta la tabella.
+      setPois(prev => prev.map(p => p.id === id ? { ...p, image_url: '', photo_url: '' } : p));
+      setEsitoRiga(prev => ({
+        ...prev,
+        [id]: { tipo: 'ok', testo: 'Foto azzerata. Usa "Cerca foto" per trovarne una reale.' }
+      }));
     } catch (err: any) {
       console.error("Error resetting photo", err);
-      alert('Impossibile azzerare la foto: ' + (err?.message || 'errore imprevisto.'));
+      setEsitoRiga(prev => ({
+        ...prev,
+        [id]: { tipo: 'errore', testo: 'Impossibile azzerare la foto: ' + (err?.message || 'errore imprevisto.') }
+      }));
+    } finally {
+      setAzioneInCorso(null);
     }
   };
 
-  const filteredPois = pois.filter(p => 
-    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+  const filteredPois = pois.filter(p =>
+    p.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     p.category?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Paginazione client: prima venivano stampate in tabella TUTTE le righe filtrate.
+  const totalePagine = Math.max(1, Math.ceil(filteredPois.length / RIGHE_PER_PAGINA));
+  const paginaCorrente = Math.min(pagina, totalePagine - 1);
+  const poisPagina = filteredPois.slice(paginaCorrente * RIGHE_PER_PAGINA, (paginaCorrente + 1) * RIGHE_PER_PAGINA);
 
   return (
     <div className="space-y-6">

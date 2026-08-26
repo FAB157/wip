@@ -16,7 +16,7 @@ export default function BudgetTable({ giorno, language }: BudgetTableProps) {
         <Wallet className="w-24 h-24" />
       </div>
       <h4 className="font-black text-primary uppercase tracking-widest text-xs mb-6 flex items-center gap-2 relative z-10">
-        <Coins className="w-4 h-4" /> Budget della Giornata
+        <Coins className="w-4 h-4" /> {getTranslation("daily_budget", language)}
       </h4>
 
       <div className="space-y-3 relative z-10">

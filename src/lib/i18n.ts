@@ -15,6 +15,179 @@ export const LANGUAGES: Partial<Record<Language, { label: string; flag: string }
 // Il CONTENUTO generato (audioguide, dettagli, teaser) è invece in tedesco
 // vero, perché prodotto dall'AI nella lingua richiesta.
 export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
+  // ── 🧭 Gate di bussola (22/08/2026): non raccontare ciò che hai alle spalle ──
+  bearing_gate_label: { IT: "Racconta solo ciò che hai davanti", EN: "Only tell me what's in front of me", FR: "Ne raconter que ce qui est devant moi", ES: "Cuenta solo lo que tienes delante", DE: "Nur erzählen, was vor dir liegt", RU: "Рассказывать только о том, что впереди", ZH: "只讲述你前方的地点" },
+  bearing_gate_desc: { IT: "Se hai già superato un luogo, l'audioguida aspetta invece di partire quando ce l'hai alle spalle: riparte se torni indietro o ti giri a guardarlo. Se dopo un po' non ti sei girato, la racconta comunque.", EN: "If you've already walked past a place, the audio guide waits instead of starting when it's behind you: it starts if you turn back or turn to look at it. If you haven't turned after a while, it tells you anyway.", FR: "Si tu as déjà dépassé un lieu, l'audioguide attend au lieu de démarrer quand tu l'as dans le dos : il démarre si tu reviens ou si tu te retournes pour le regarder. Si tu ne t'es pas retourné au bout d'un moment, il le raconte quand même.", ES: "Si ya has pasado un lugar, la audioguía espera en vez de arrancar cuando lo tienes a tu espalda: arranca si vuelves atrás o te giras a mirarlo. Si al cabo de un rato no te has girado, te lo cuenta igualmente.", DE: "Wenn du einen Ort schon passiert hast, wartet der Audioguide, statt loszulegen, wenn du ihn im Rücken hast: Er startet, sobald du umkehrst oder dich danach umdrehst. Drehst du dich eine Weile nicht um, erzählt er ihn trotzdem.", RU: "Если вы уже прошли мимо места, аудиогид подождёт, а не начнёт рассказ, когда объект у вас за спиной: он включится, если вы вернётесь или обернётесь. Если вы так и не обернулись, через некоторое время он расскажет всё равно.", ZH: "如果你已经走过某个地点，语音导览会先等待，而不是在它已在你身后时才开口：当你折返或转身望向它时才会播放。若过一会儿你仍未转身，它也会照常讲述。" },
+  // ── Vision / WIP Community v2 (21/08/2026) ──
+  // CameraScreen
+  vis_tab_scan: { IT: "Scansione AI", EN: "AI Scan", FR: "Scan IA", ES: "Escaneo IA", DE: "KI-Scan", RU: "ИИ-сканирование", ZH: "AI 扫描" },
+  vis_tab_ar: { IT: "Radar AR", EN: "AR Radar", FR: "Radar RA", ES: "Radar RA", DE: "AR-Radar", RU: "AR-радар", ZH: "AR 雷达" },
+  vis_title: { IT: "Analizza il Mondo", EN: "Analyze the World", FR: "Analyse le monde", ES: "Analiza el mundo", DE: "Analysiere die Welt", RU: "Исследуйте мир", ZH: "分析世界" },
+  vis_hint_place: { IT: "Scansiona per riconoscere il punto di interesse: la scheda finisce in My Vision e sblocchi 10 XP.", EN: "Scan to recognize the point of interest: the card goes to My Vision and you unlock 10 XP.", FR: "Scanne pour reconnaître le point d'intérêt : la fiche arrive dans My Vision et tu débloques 10 XP.", ES: "Escanea para reconocer el punto de interés: la ficha va a My Vision y desbloqueas 10 XP.", DE: "Scanne, um den Ort zu erkennen: Die Karte landet in My Vision und du schaltest 10 XP frei.", RU: "Отсканируйте, чтобы распознать достопримечательность: карточка попадёт в My Vision, и вы получите 10 XP.", ZH: "扫描以识别兴趣点：卡片会保存到 My Vision，并解锁 10 XP。" },
+  vis_hint_artwork: { IT: "Inquadra un quadro, una statua o un reperto: WIP riconosce l'opera e te la racconta come un'audioguida.", EN: "Frame a painting, a statue or an artifact: WIP recognizes the work and tells you about it like an audio guide.", FR: "Cadre un tableau, une statue ou un objet : WIP reconnaît l'œuvre et te la raconte comme un audioguide.", ES: "Enfoca un cuadro, una estatua o una pieza: WIP reconoce la obra y te la cuenta como una audioguía.", DE: "Richte die Kamera auf ein Gemälde, eine Statue oder ein Exponat: WIP erkennt das Werk und erzählt es dir wie ein Audioguide.", RU: "Наведите камеру на картину, статую или экспонат: WIP распознает произведение и расскажет о нём как аудиогид.", ZH: "对准一幅画、一座雕像或一件文物：WIP 会识别作品，并像语音导览一样为你讲解。" },
+  vis_hint_nature: { IT: "Inquadra una pianta, un animale o un panorama: WIP li riconosce e ti racconta habitat e curiosità da naturalista.", EN: "Frame a plant, an animal or a landscape: WIP recognizes them and tells you about habitat and naturalist curiosities.", FR: "Cadre une plante, un animal ou un paysage : WIP les reconnaît et te raconte habitat et anecdotes de naturaliste.", ES: "Enfoca una planta, un animal o un paisaje: WIP los reconoce y te cuenta su hábitat y curiosidades de naturalista.", DE: "Richte die Kamera auf eine Pflanze, ein Tier oder eine Landschaft: WIP erkennt sie und erzählt dir von Lebensraum und Naturkunde.", RU: "Наведите камеру на растение, животное или пейзаж: WIP распознает их и расскажет о среде обитания и интересных фактах.", ZH: "对准一株植物、一只动物或一处风景：WIP 会识别它们，并以博物学家的视角讲述栖息地和趣闻。" },
+  vis_hint_screenshot: { IT: "Carica lo screenshot di un reel o di un articolo (\"5 posti da vedere a…\"): WIP estrae i luoghi citati e li trasforma in preferiti o in un itinerario.", EN: "Upload a screenshot of a reel or an article (\"5 places to see in…\"): WIP extracts the places mentioned and turns them into favorites or an itinerary.", FR: "Charge la capture d'écran d'un reel ou d'un article (« 5 lieux à voir à… ») : WIP extrait les lieux cités et les transforme en favoris ou en itinéraire.", ES: "Sube la captura de un reel o de un artículo (\"5 lugares que ver en…\"): WIP extrae los lugares citados y los convierte en favoritos o en un itinerario.", DE: "Lade den Screenshot eines Reels oder Artikels hoch („5 Orte, die du in … sehen musst“): WIP extrahiert die genannten Orte und macht daraus Favoriten oder eine Route.", RU: "Загрузите скриншот рилса или статьи («5 мест, которые стоит увидеть в…»): WIP извлечёт упомянутые места и превратит их в избранное или маршрут.", ZH: "上传短视频或文章的截图（“……必看的 5 个地方”）：WIP 会提取其中提到的地点，并将其加入收藏或生成行程。" },
+  vis_mode_place: { IT: "📍 Luogo", EN: "📍 Place", FR: "📍 Lieu", ES: "📍 Lugar", DE: "📍 Ort", RU: "📍 Место", ZH: "📍 地点" },
+  vis_mode_artwork: { IT: "🖼️ Opera", EN: "🖼️ Artwork", FR: "🖼️ Œuvre", ES: "🖼️ Obra", DE: "🖼️ Kunstwerk", RU: "🖼️ Искусство", ZH: "🖼️ 艺术品" },
+  vis_mode_nature: { IT: "🌿 Natura", EN: "🌿 Nature", FR: "🌿 Nature", ES: "🌿 Naturaleza", DE: "🌿 Natur", RU: "🌿 Природа", ZH: "🌿 自然" },
+  vis_mode_screenshot: { IT: "📱 Screenshot", EN: "📱 Screenshot", FR: "📱 Capture", ES: "📱 Captura", DE: "📱 Screenshot", RU: "📱 Скриншот", ZH: "📱 截图" },
+  vis_take_photo: { IT: "Scatta Foto", EN: "Take Photo", FR: "Prendre une photo", ES: "Hacer foto", DE: "Foto aufnehmen", RU: "Сделать фото", ZH: "拍照" },
+  vis_pick_gallery: { IT: "Scegli dalla Galleria", EN: "Choose from Gallery", FR: "Choisir dans la galerie", ES: "Elegir de la galería", DE: "Aus Galerie wählen", RU: "Выбрать из галереи", ZH: "从相册选择" },
+  vis_upload_screenshot: { IT: "Carica screenshot", EN: "Upload screenshot", FR: "Charger une capture", ES: "Subir captura", DE: "Screenshot hochladen", RU: "Загрузить скриншот", ZH: "上传截图" },
+  vis_queue_processing: { IT: "⏳ Riconoscimento di {n} foto in coda…", EN: "⏳ Recognizing {n} queued photos…", FR: "⏳ Reconnaissance de {n} photos en attente…", ES: "⏳ Reconociendo {n} fotos en cola…", DE: "⏳ {n} Fotos in der Warteschlange werden erkannt…", RU: "⏳ Распознавание {n} фото из очереди…", ZH: "⏳ 正在识别队列中的 {n} 张照片…" },
+  vis_queue_waiting: { IT: "📶 {n} foto in coda — verranno riconosciute appena torni online", EN: "📶 {n} photos queued — they'll be recognized as soon as you're back online", FR: "📶 {n} photos en attente — elles seront reconnues dès que tu seras de nouveau en ligne", ES: "📶 {n} fotos en cola — se reconocerán en cuanto vuelvas a estar en línea", DE: "📶 {n} Fotos in der Warteschlange — sie werden erkannt, sobald du wieder online bist", RU: "📶 {n} фото в очереди — они будут распознаны, как только появится сеть", ZH: "📶 {n} 张照片排队中 — 恢复联网后将自动识别" },
+  vis_queue_full: { IT: "Coda offline piena ({n} foto): torna online per svuotarla prima di scattare ancora.", EN: "Offline queue full ({n} photos): go back online to clear it before taking more.", FR: "File hors ligne pleine ({n} photos) : reviens en ligne pour la vider avant de photographier encore.", ES: "Cola sin conexión llena ({n} fotos): vuelve a conectarte para vaciarla antes de hacer más fotos.", DE: "Offline-Warteschlange voll ({n} Fotos): Geh wieder online, um sie zu leeren, bevor du weiter fotografierst.", RU: "Офлайн-очередь заполнена ({n} фото): подключитесь к сети, чтобы очистить её, прежде чем снимать дальше.", ZH: "离线队列已满（{n} 张照片）：请先联网清空队列，再继续拍摄。" },
+  vis_offline_saved: { IT: "📶 Sei offline: foto salvata in coda, verrà riconosciuta appena torni online.", EN: "📶 You're offline: photo saved to the queue, it'll be recognized as soon as you're back online.", FR: "📶 Tu es hors ligne : photo mise en attente, elle sera reconnue dès que tu seras de nouveau en ligne.", ES: "📶 Estás sin conexión: foto guardada en cola, se reconocerá en cuanto vuelvas a estar en línea.", DE: "📶 Du bist offline: Foto in die Warteschlange gelegt, es wird erkannt, sobald du wieder online bist.", RU: "📶 Вы офлайн: фото добавлено в очередь и будет распознано, как только появится сеть.", ZH: "📶 你已离线：照片已加入队列，恢复联网后将自动识别。" },
+  vis_offline_fail: { IT: "Sei offline e la foto non può essere salvata in coda. Riprova quando torni in rete.", EN: "You're offline and the photo can't be queued. Try again when you're back online.", FR: "Tu es hors ligne et la photo ne peut pas être mise en attente. Réessaie quand tu seras de nouveau en ligne.", ES: "Estás sin conexión y la foto no se puede guardar en cola. Inténtalo de nuevo cuando vuelvas a tener red.", DE: "Du bist offline und das Foto kann nicht in die Warteschlange gelegt werden. Versuch es erneut, sobald du wieder online bist.", RU: "Вы офлайн, и фото не удалось добавить в очередь. Повторите попытку, когда появится сеть.", ZH: "你已离线，照片无法加入队列。请在恢复联网后重试。" },
+  vis_login_required: { IT: "Accedi con il tuo account per usare la Visione AI.", EN: "Sign in with your account to use AI Vision.", FR: "Connecte-toi avec ton compte pour utiliser la Vision IA.", ES: "Inicia sesión con tu cuenta para usar la Visión IA.", DE: "Melde dich mit deinem Konto an, um KI-Vision zu nutzen.", RU: "Войдите в аккаунт, чтобы использовать ИИ-зрение.", ZH: "请登录账号以使用 AI 视觉。" },
+  vis_no_credits: { IT: "Crediti insufficienti. Visita lo store per ricaricare.", EN: "Not enough credits. Visit the store to top up.", FR: "Crédits insuffisants. Passe par la boutique pour recharger.", ES: "Créditos insuficientes. Visita la tienda para recargar.", DE: "Nicht genug Guthaben. Lade im Store nach.", RU: "Недостаточно кредитов. Пополните баланс в магазине.", ZH: "积分不足。请前往商店充值。" },
+  vis_resize_error: { IT: "Errore durante l'elaborazione dell'immagine. Riprova.", EN: "Error while processing the image. Try again.", FR: "Erreur lors du traitement de l'image. Réessaie.", ES: "Error al procesar la imagen. Inténtalo de nuevo.", DE: "Fehler bei der Bildverarbeitung. Versuch es erneut.", RU: "Ошибка при обработке изображения. Попробуйте ещё раз.", ZH: "处理图片时出错，请重试。" },
+  vis_generic_error: { IT: "Errore durante l'analisi", EN: "Error during analysis", FR: "Erreur pendant l'analyse", ES: "Error durante el análisis", DE: "Fehler bei der Analyse", RU: "Ошибка при анализе", ZH: "分析时出错" },
+  vis_too_many_unrecognized: { IT: "Troppe foto non riconosciute oggi: riprova domani con un luogo, un'opera o un panorama ben inquadrati.", EN: "Too many unrecognized photos today: try again tomorrow with a well-framed place, artwork or landscape.", FR: "Trop de photos non reconnues aujourd'hui : réessaie demain avec un lieu, une œuvre ou un paysage bien cadrés.", ES: "Demasiadas fotos no reconocidas hoy: inténtalo mañana con un lugar, una obra o un paisaje bien encuadrados.", DE: "Heute zu viele nicht erkannte Fotos: Versuch es morgen wieder mit einem gut fotografierten Ort, Kunstwerk oder Panorama.", RU: "Сегодня слишком много нераспознанных фото: попробуйте завтра с хорошо снятым местом, произведением или пейзажем.", ZH: "今天未识别的照片太多：请明天再试，并确保地点、艺术品或风景取景清晰。" },
+  vis_first_title: { IT: "📸 La tua prima scoperta", EN: "📸 Your first discovery", FR: "📸 Ta première découverte", ES: "📸 Tu primer descubrimiento", DE: "📸 Deine erste Entdeckung", RU: "📸 Ваше первое открытие", ZH: "📸 你的第一个发现" },
+  vis_first_step1: { IT: "Inquadra un monumento, una chiesa o uno scorcio che ti colpisce: il mirino AI lo riconosce da solo.", EN: "Frame a monument, a church or a view that catches your eye: the AI viewfinder recognizes it on its own.", FR: "Cadre un monument, une église ou un coin qui te plaît : le viseur IA le reconnaît tout seul.", ES: "Enfoca un monumento, una iglesia o un rincón que te llame la atención: el visor IA lo reconoce solo.", DE: "Richte die Kamera auf ein Denkmal, eine Kirche oder einen Blickwinkel, der dich anspricht: Der KI-Sucher erkennt ihn von selbst.", RU: "Наведите камеру на памятник, церковь или вид, который вас впечатлил: ИИ-видоискатель распознает его сам.", ZH: "对准一座纪念碑、一座教堂或一处打动你的景致：AI 取景器会自动识别。" },
+  vis_first_step2: { IT: "Scatta: ottieni subito la scheda del luogo con l'audioguida da ascoltare.", EN: "Shoot: you instantly get the place card with an audio guide to listen to.", FR: "Photographie : tu obtiens aussitôt la fiche du lieu avec l'audioguide à écouter.", ES: "Dispara: obtienes al instante la ficha del lugar con la audioguía para escuchar.", DE: "Fotografiere: Du bekommst sofort die Karte des Ortes mit dem Audioguide zum Anhören.", RU: "Снимите: вы сразу получите карточку места с аудиогидом.", ZH: "拍摄：立即获得该地点的卡片和可收听的语音导览。" },
+  vis_first_step3: { IT: "Guadagna crediti: se la tua foto viene pubblicata nella WIP Community ricevi fino a +15 crediti da spendere nell'app.", EN: "Earn credits: if your photo is published in the WIP Community you get up to +15 credits to spend in the app.", FR: "Gagne des crédits : si ta photo est publiée dans la WIP Community, tu reçois jusqu'à +15 crédits à dépenser dans l'app.", ES: "Gana créditos: si tu foto se publica en la WIP Community recibes hasta +15 créditos para gastar en la app.", DE: "Verdiene Guthaben: Wird dein Foto in der WIP Community veröffentlicht, bekommst du bis zu +15 Credits für die App.", RU: "Зарабатывайте кредиты: если ваше фото опубликуют в WIP Community, вы получите до +15 кредитов для использования в приложении.", ZH: "赚取积分：如果你的照片发布到 WIP Community，最多可获得 +15 积分在应用内使用。" },
+  vis_first_nearby: { IT: "Vicino a te, da provare subito", EN: "Near you, try it now", FR: "Près de toi, à essayer tout de suite", ES: "Cerca de ti, para probar ahora", DE: "In deiner Nähe, gleich ausprobieren", RU: "Рядом с вами — попробуйте прямо сейчас", ZH: "就在附近，马上试试" },
+  vis_first_cta: { IT: "Iniziamo!", EN: "Let's go!", FR: "C'est parti !", ES: "¡Empecemos!", DE: "Los geht's!", RU: "Начнём!", ZH: "开始吧！" },
+  vis_where_title: { IT: "Dove hai scattato questa foto?", EN: "Where did you take this photo?", FR: "Où as-tu pris cette photo ?", ES: "¿Dónde hiciste esta foto?", DE: "Wo hast du dieses Foto gemacht?", RU: "Где сделано это фото?", ZH: "这张照片是在哪里拍的？" },
+  vis_where_desc: { IT: "La foto viene dalla galleria e non ha coordinate: tocca la mappa per indicare il luogo, così la scheda e la community avranno la posizione giusta.", EN: "The photo comes from the gallery and has no coordinates: tap the map to mark the place, so the card and the community get the right location.", FR: "La photo vient de la galerie et n'a pas de coordonnées : touche la carte pour indiquer le lieu, ainsi la fiche et la communauté auront la bonne position.", ES: "La foto viene de la galería y no tiene coordenadas: toca el mapa para indicar el lugar, así la ficha y la comunidad tendrán la posición correcta.", DE: "Das Foto stammt aus der Galerie und hat keine Koordinaten: Tippe auf die Karte, um den Ort anzugeben, damit Karte und Community die richtige Position haben.", RU: "Фото из галереи без координат: коснитесь карты, чтобы указать место, — тогда у карточки и сообщества будет верное расположение.", ZH: "这张照片来自相册，没有坐标：点击地图标记地点，这样卡片和社区就能获得正确的位置。" },
+  vis_where_use_here: { IT: "Usa la mia posizione attuale", EN: "Use my current location", FR: "Utiliser ma position actuelle", ES: "Usar mi ubicación actual", DE: "Meinen aktuellen Standort verwenden", RU: "Использовать моё текущее местоположение", ZH: "使用我的当前位置" },
+  vis_where_confirm: { IT: "Conferma posizione", EN: "Confirm location", FR: "Confirmer la position", ES: "Confirmar ubicación", DE: "Standort bestätigen", RU: "Подтвердить место", ZH: "确认位置" },
+  vis_where_skip: { IT: "Non lo so", EN: "I don't know", FR: "Je ne sais pas", ES: "No lo sé", DE: "Weiß ich nicht", RU: "Не знаю", ZH: "不知道" },
+  vis_exif_found: { IT: "Posizione e data lette dalla foto", EN: "Location and date read from the photo", FR: "Position et date lues depuis la photo", ES: "Ubicación y fecha leídas de la foto", DE: "Standort und Datum aus dem Foto gelesen", RU: "Место и дата считаны из фото", ZH: "已从照片读取位置和日期" },
+  vis_cand_title: { IT: "Non sono sicuro: quale di questi è?", EN: "I'm not sure: which one is it?", FR: "Je ne suis pas sûr : lequel est-ce ?", ES: "No estoy seguro: ¿cuál de estos es?", DE: "Ich bin nicht sicher: Welches ist es?", RU: "Не уверен: что из этого?", ZH: "不太确定：是下面哪一个？" },
+  vis_cand_desc: { IT: "Scegli il soggetto giusto e la scheda verrà riscritta su di lui, gratis.", EN: "Pick the right subject and the card will be rewritten for it, free of charge.", FR: "Choisis le bon sujet et la fiche sera réécrite pour lui, gratuitement.", ES: "Elige el sujeto correcto y la ficha se reescribirá sobre él, gratis.", DE: "Wähle das richtige Motiv und die Karte wird kostenlos dafür neu geschrieben.", RU: "Выберите верный объект — карточка будет переписана под него бесплатно.", ZH: "选择正确的对象，卡片将免费为它重新生成。" },
+  vis_cand_keep: { IT: "Tieni la scheda così", EN: "Keep the card as is", FR: "Garder la fiche telle quelle", ES: "Dejar la ficha así", DE: "Karte so lassen", RU: "Оставить карточку как есть", ZH: "保留当前卡片" },
+  vis_cand_rewriting: { IT: "Riscrivo la scheda…", EN: "Rewriting the card…", FR: "Je réécris la fiche…", ES: "Reescribiendo la ficha…", DE: "Karte wird neu geschrieben…", RU: "Переписываю карточку…", ZH: "正在重新生成卡片…" },
+  vis_reel_title: { IT: "📱 Luoghi trovati", EN: "📱 Places found", FR: "📱 Lieux trouvés", ES: "📱 Lugares encontrados", DE: "📱 Gefundene Orte", RU: "📱 Найденные места", ZH: "📱 找到的地点" },
+  vis_reel_desc: { IT: "Spunta i luoghi che ti interessano, poi salvali o trasformali in un itinerario.", EN: "Tick the places you're interested in, then save them or turn them into an itinerary.", FR: "Coche les lieux qui t'intéressent, puis enregistre-les ou transforme-les en itinéraire.", ES: "Marca los lugares que te interesan y luego guárdalos o conviértelos en un itinerario.", DE: "Hake die Orte ab, die dich interessieren, und speichere sie oder mach daraus eine Route.", RU: "Отметьте интересующие места, затем сохраните их или превратите в маршрут.", ZH: "勾选你感兴趣的地点，然后保存或生成行程。" },
+  vis_reel_found: { IT: "✓ trovato sulla mappa", EN: "✓ found on the map", FR: "✓ trouvé sur la carte", ES: "✓ encontrado en el mapa", DE: "✓ auf der Karte gefunden", RU: "✓ найдено на карте", ZH: "✓ 已在地图上找到" },
+  vis_reel_not_found: { IT: "⚠ non trovato", EN: "⚠ not found", FR: "⚠ introuvable", ES: "⚠ no encontrado", DE: "⚠ nicht gefunden", RU: "⚠ не найдено", ZH: "⚠ 未找到" },
+  vis_reel_save: { IT: "Salva nei preferiti", EN: "Save to favorites", FR: "Enregistrer dans les favoris", ES: "Guardar en favoritos", DE: "In Favoriten speichern", RU: "Сохранить в избранное", ZH: "保存到收藏" },
+  vis_reel_create: { IT: "✨ Crea itinerario con questi luoghi", EN: "✨ Create an itinerary with these places", FR: "✨ Créer un itinéraire avec ces lieux", ES: "✨ Crear itinerario con estos lugares", DE: "✨ Route mit diesen Orten erstellen", RU: "✨ Создать маршрут из этих мест", ZH: "✨ 用这些地点创建行程" },
+  vis_reel_none: { IT: "Nessun luogo trovato nello screenshot. Prova con un'immagine dove i nomi dei posti si leggono chiaramente.", EN: "No places found in the screenshot. Try an image where the place names are clearly readable.", FR: "Aucun lieu trouvé dans la capture. Essaie avec une image où les noms des lieux se lisent clairement.", ES: "No se encontró ningún lugar en la captura. Prueba con una imagen donde los nombres de los sitios se lean bien.", DE: "Keine Orte im Screenshot gefunden. Versuch es mit einem Bild, auf dem die Ortsnamen gut lesbar sind.", RU: "На скриншоте не найдено мест. Попробуйте изображение, где названия мест хорошо читаются.", ZH: "截图中未找到任何地点。请换一张地名清晰可读的图片。" },
+  vis_reel_select_one: { IT: "Seleziona almeno un luogo.", EN: "Select at least one place.", FR: "Sélectionne au moins un lieu.", ES: "Selecciona al menos un lugar.", DE: "Wähle mindestens einen Ort.", RU: "Выберите хотя бы одно место.", ZH: "请至少选择一个地点。" },
+  vis_reel_saved: { IT: "💛 Salvati: {n}.", EN: "💛 Saved: {n}.", FR: "💛 Enregistrés : {n}.", ES: "💛 Guardados: {n}.", DE: "💛 Gespeichert: {n}.", RU: "💛 Сохранено: {n}.", ZH: "💛 已保存：{n}。" },
+  vis_reel_in_favorites: { IT: "{n} nei preferiti", EN: "{n} in favorites", FR: "{n} dans les favoris", ES: "{n} en favoritos", DE: "{n} in den Favoriten", RU: "{n} в избранном", ZH: "{n} 个已收藏" },
+  vis_reel_in_wishlist: { IT: "{n} nella wishlist (non ancora sulla mappa WIP)", EN: "{n} in the wishlist (not on the WIP map yet)", FR: "{n} dans la wishlist (pas encore sur la carte WIP)", ES: "{n} en la wishlist (aún no están en el mapa WIP)", DE: "{n} auf der Wunschliste (noch nicht auf der WIP-Karte)", RU: "{n} в списке желаний (пока нет на карте WIP)", ZH: "{n} 个在心愿单中（尚未出现在 WIP 地图上）" },
+  vis_reel_offline: { IT: "Per estrarre i luoghi da uno screenshot serve la connessione: lo screenshot resta in galleria, riprova quando torni online.", EN: "Extracting places from a screenshot needs a connection: the screenshot stays in your gallery, try again when you're back online.", FR: "Extraire les lieux d'une capture demande une connexion : la capture reste dans la galerie, réessaie quand tu seras de nouveau en ligne.", ES: "Para extraer los lugares de una captura hace falta conexión: la captura se queda en la galería, inténtalo de nuevo cuando vuelvas a estar en línea.", DE: "Um Orte aus einem Screenshot zu extrahieren, brauchst du eine Verbindung: Der Screenshot bleibt in der Galerie, versuch es erneut, sobald du wieder online bist.", RU: "Для извлечения мест из скриншота нужна сеть: скриншот останется в галерее, повторите попытку, когда появится подключение.", ZH: "从截图中提取地点需要联网：截图会保留在相册中，请在恢复联网后重试。" },
+  vis_service_name: { IT: "Visione AI", EN: "AI Vision", FR: "Vision IA", ES: "Visión IA", DE: "KI-Vision", RU: "ИИ-зрение", ZH: "AI 视觉" },
+  vis_service_artwork: { IT: "Visione AI — Opera d'arte", EN: "AI Vision — Artwork", FR: "Vision IA — Œuvre d'art", ES: "Visión IA — Obra de arte", DE: "KI-Vision — Kunstwerk", RU: "ИИ-зрение — Произведение искусства", ZH: "AI 视觉 — 艺术品" },
+  vis_service_nature: { IT: "Visione AI — Natura", EN: "AI Vision — Nature", FR: "Vision IA — Nature", ES: "Visión IA — Naturaleza", DE: "KI-Vision — Natur", RU: "ИИ-зрение — Природа", ZH: "AI 视觉 — 自然" },
+  vis_service_reel: { IT: "Da reel a itinerario", EN: "From reel to itinerary", FR: "Du reel à l'itinéraire", ES: "De reel a itinerario", DE: "Vom Reel zur Route", RU: "Из рилса в маршрут", ZH: "从短视频到行程" },
+  vis_queue_recognized: { IT: "✅ Foto in coda riconosciuta: {name}", EN: "✅ Queued photo recognized: {name}", FR: "✅ Photo en attente reconnue : {name}", ES: "✅ Foto en cola reconocida: {name}", DE: "✅ Foto aus der Warteschlange erkannt: {name}", RU: "✅ Фото из очереди распознано: {name}", ZH: "✅ 队列中的照片已识别：{name}" },
+  vis_queue_not_recognized: { IT: "Foto in coda non riconosciuta: crediti rimborsati, la trovi in My Vision.", EN: "Queued photo not recognized: credits refunded, you'll find it in My Vision.", FR: "Photo en attente non reconnue : crédits remboursés, tu la retrouves dans My Vision.", ES: "Foto en cola no reconocida: créditos reembolsados, la encuentras en My Vision.", DE: "Foto aus der Warteschlange nicht erkannt: Guthaben erstattet, du findest es in My Vision.", RU: "Фото из очереди не распознано: кредиты возвращены, оно сохранено в My Vision.", ZH: "队列中的照片未识别：积分已退还，可在 My Vision 中查看。" },
+  vis_pass_login: { IT: "Accedi con il tuo account per attivare il Pass Museo.", EN: "Sign in with your account to activate the Museum Pass.", FR: "Connecte-toi avec ton compte pour activer le Pass Musée.", ES: "Inicia sesión con tu cuenta para activar el Pase Museo.", DE: "Melde dich mit deinem Konto an, um den Museumspass zu aktivieren.", RU: "Войдите в аккаунт, чтобы активировать Музейный пасс.", ZH: "请登录账号以激活博物馆通票。" },
+  vis_privacy_people: { IT: "Nella foto ci sono persone riconoscibili: se verrà pubblicata, i volti saranno sfocati.", EN: "There are recognizable people in the photo: if it gets published, faces will be blurred.", FR: "Il y a des personnes reconnaissables sur la photo : si elle est publiée, les visages seront floutés.", ES: "En la foto hay personas reconocibles: si se publica, las caras se difuminarán.", DE: "Auf dem Foto sind erkennbare Personen: Wird es veröffentlicht, werden die Gesichter unkenntlich gemacht.", RU: "На фото есть узнаваемые люди: в случае публикации лица будут размыты.", ZH: "照片中有可辨认的人物：如果发布，面部将被模糊处理。" },
+  // MyVisionTab
+  vis_my_title: { IT: "My Vision", EN: "My Vision", FR: "My Vision", ES: "My Vision", DE: "My Vision", RU: "My Vision", ZH: "My Vision" },
+  vis_shot_one: { IT: "scatto", EN: "shot", FR: "photo", ES: "foto", DE: "Aufnahme", RU: "снимок", ZH: "张照片" },
+  vis_shot_many: { IT: "scatti", EN: "shots", FR: "photos", ES: "fotos", DE: "Aufnahmen", RU: "снимков", ZH: "张照片" },
+  vis_my_sub: { IT: "Ogni foto approvata diventa un luogo WIP Community e ti premia in crediti.", EN: "Every approved photo becomes a WIP Community place and rewards you with credits.", FR: "Chaque photo approuvée devient un lieu WIP Community et te rapporte des crédits.", ES: "Cada foto aprobada se convierte en un lugar WIP Community y te premia con créditos.", DE: "Jedes freigegebene Foto wird zu einem Ort der WIP Community und bringt dir Credits.", RU: "Каждое одобренное фото становится местом WIP Community и приносит вам кредиты.", ZH: "每张通过审核的照片都会成为 WIP Community 地点，并为你赢得积分。" },
+  vis_tab_mine: { IT: "Le mie Vision", EN: "My Visions", FR: "Mes Visions", ES: "Mis Visions", DE: "Meine Visions", RU: "Мои Vision", ZH: "我的 Vision" },
+  vis_tab_community: { IT: "WIP Community", EN: "WIP Community", FR: "WIP Community", ES: "WIP Community", DE: "WIP Community", RU: "WIP Community", ZH: "WIP Community" },
+  vis_badge_published: { IT: "WIP Community", EN: "WIP Community", FR: "WIP Community", ES: "WIP Community", DE: "WIP Community", RU: "WIP Community", ZH: "WIP Community" },
+  vis_badge_memory: { IT: "Ricordo", EN: "Memory", FR: "Souvenir", ES: "Recuerdo", DE: "Erinnerung", RU: "Воспоминание", ZH: "回忆" },
+  vis_badge_pending: { IT: "In revisione", EN: "Under review", FR: "En révision", ES: "En revisión", DE: "In Prüfung", RU: "На проверке", ZH: "审核中" },
+  vis_badge_rejected: { IT: "Non pubblicata", EN: "Not published", FR: "Non publiée", ES: "No publicada", DE: "Nicht veröffentlicht", RU: "Не опубликовано", ZH: "未发布" },
+  vis_badge_first: { IT: "Primo scopritore", EN: "First discoverer", FR: "Premier découvreur", ES: "Primer descubridor", DE: "Erstentdecker", RU: "Первооткрыватель", ZH: "首位发现者" },
+  vis_loading: { IT: "Caricamento delle tue Vision…", EN: "Loading your Visions…", FR: "Chargement de tes Visions…", ES: "Cargando tus Visions…", DE: "Deine Visions werden geladen…", RU: "Загрузка ваших Vision…", ZH: "正在加载你的 Vision…" },
+  vis_loading_community: { IT: "Caricamento WIP Community…", EN: "Loading WIP Community…", FR: "Chargement de la WIP Community…", ES: "Cargando WIP Community…", DE: "WIP Community wird geladen…", RU: "Загрузка WIP Community…", ZH: "正在加载 WIP Community…" },
+  vis_empty_title: { IT: "Nessuna Vision", EN: "No Visions", FR: "Aucune Vision", ES: "Ninguna Vision", DE: "Keine Visions", RU: "Пока нет Vision", ZH: "暂无 Vision" },
+  vis_empty_desc: { IT: "Scatta una foto a un monumento, un panorama o un'opera d'arte dalla fotocamera: l'AI la riconosce e la scheda arriva qui.", EN: "Take a photo of a monument, a landscape or an artwork from the camera: the AI recognizes it and the card lands here.", FR: "Prends en photo un monument, un paysage ou une œuvre d'art depuis l'appareil : l'IA la reconnaît et la fiche arrive ici.", ES: "Haz una foto a un monumento, un paisaje o una obra de arte desde la cámara: la IA la reconoce y la ficha llega aquí.", DE: "Fotografiere mit der Kamera ein Denkmal, eine Landschaft oder ein Kunstwerk: Die KI erkennt es und die Karte landet hier.", RU: "Сфотографируйте памятник, пейзаж или произведение искусства через камеру: ИИ распознает его, и карточка появится здесь.", ZH: "用相机拍摄一座纪念碑、一处风景或一件艺术品：AI 会识别它，卡片就会出现在这里。" },
+  vis_comm_empty_title: { IT: "Ancora nessuna Vision pubblicata", EN: "No Visions published yet", FR: "Aucune Vision publiée pour l'instant", ES: "Aún no hay Visions publicadas", DE: "Noch keine Visions veröffentlicht", RU: "Пока нет опубликованных Vision", ZH: "还没有发布的 Vision" },
+  vis_comm_empty_desc: { IT: "Qui compaiono le foto approvate dei viaggiatori WIP. La prossima potrebbe essere la tua!", EN: "Approved photos from WIP travelers show up here. The next one could be yours!", FR: "Ici apparaissent les photos approuvées des voyageurs WIP. La prochaine pourrait être la tienne !", ES: "Aquí aparecen las fotos aprobadas de los viajeros WIP. ¡La próxima podría ser la tuya!", DE: "Hier erscheinen die freigegebenen Fotos der WIP-Reisenden. Das nächste könnte deins sein!", RU: "Здесь появляются одобренные фото путешественников WIP. Следующим может быть ваше!", ZH: "这里展示 WIP 旅行者通过审核的照片。下一张可能就是你的！" },
+  vis_delete_confirm: { IT: "Cancellare \"{name}\" dal tuo album? L'operazione non si può annullare.", EN: "Delete \"{name}\" from your album? This can't be undone.", FR: "Supprimer « {name} » de ton album ? Cette action est irréversible.", ES: "¿Eliminar \"{name}\" de tu álbum? Esta acción no se puede deshacer.", DE: "„{name}“ aus deinem Album löschen? Das lässt sich nicht rückgängig machen.", RU: "Удалить «{name}» из вашего альбома? Это действие нельзя отменить.", ZH: "要从相册中删除“{name}”吗？此操作无法撤销。" },
+  vis_delete_retract: { IT: "Questa foto è pubblicata nella WIP Community: verrà ritirata anche da lì.", EN: "This photo is published in the WIP Community: it will be removed from there too.", FR: "Cette photo est publiée dans la WIP Community : elle en sera retirée aussi.", ES: "Esta foto está publicada en la WIP Community: también se retirará de allí.", DE: "Dieses Foto ist in der WIP Community veröffentlicht: Es wird auch dort entfernt.", RU: "Это фото опубликовано в WIP Community: оно будет удалено и оттуда.", ZH: "这张照片已发布到 WIP Community：也会从那里撤回。" },
+  vis_deleted: { IT: "Scatto cancellato dal tuo album.", EN: "Shot deleted from your album.", FR: "Photo supprimée de ton album.", ES: "Foto eliminada de tu álbum.", DE: "Aufnahme aus deinem Album gelöscht.", RU: "Снимок удалён из вашего альбома.", ZH: "照片已从相册中删除。" },
+  vis_delete_failed: { IT: "Cancellazione non riuscita: riprova.", EN: "Deletion failed: try again.", FR: "Suppression échouée : réessaie.", ES: "No se pudo eliminar: inténtalo de nuevo.", DE: "Löschen fehlgeschlagen: Versuch es erneut.", RU: "Не удалось удалить: попробуйте ещё раз.", ZH: "删除失败，请重试。" },
+  vis_feed_near: { IT: "Vicino a me", EN: "Near me", FR: "Près de moi", ES: "Cerca de mí", DE: "In meiner Nähe", RU: "Рядом со мной", ZH: "附近" },
+  vis_feed_recent: { IT: "Più recenti", EN: "Most recent", FR: "Plus récentes", ES: "Más recientes", DE: "Neueste", RU: "Новые", ZH: "最新" },
+  vis_load_more: { IT: "Carica altri", EN: "Load more", FR: "Charger plus", ES: "Cargar más", DE: "Mehr laden", RU: "Загрузить ещё", ZH: "加载更多" },
+  vis_today: { IT: "Oggi", EN: "Today", FR: "Aujourd'hui", ES: "Hoy", DE: "Heute", RU: "Сегодня", ZH: "今天" },
+  vis_updates_approved: { IT: "{n} foto pubblicate nella WIP Community (+{credits} crediti)", EN: "{n} photos published in the WIP Community (+{credits} credits)", FR: "{n} photos publiées dans la WIP Community (+{credits} crédits)", ES: "{n} fotos publicadas en la WIP Community (+{credits} créditos)", DE: "{n} Fotos in der WIP Community veröffentlicht (+{credits} Credits)", RU: "{n} фото опубликовано в WIP Community (+{credits} кредитов)", ZH: "{n} 张照片已发布到 WIP Community（+{credits} 积分）" },
+  vis_updates_rejected: { IT: "{n} foto non pubblicate", EN: "{n} photos not published", FR: "{n} photos non publiées", ES: "{n} fotos no publicadas", DE: "{n} Fotos nicht veröffentlicht", RU: "{n} фото не опубликовано", ZH: "{n} 张照片未发布" },
+  vis_updates_dismiss: { IT: "Ok", EN: "OK", FR: "Ok", ES: "Ok", DE: "Ok", RU: "Ок", ZH: "好的" },
+  vis_reason_duplicate: { IT: "Luogo già presente sulla mappa", EN: "Place already on the map", FR: "Lieu déjà présent sur la carte", ES: "Lugar ya presente en el mapa", DE: "Ort bereits auf der Karte", RU: "Место уже есть на карте", ZH: "地图上已有该地点" },
+  vis_reason_not_a_place: { IT: "Non è un luogo di interesse", EN: "Not a place of interest", FR: "Ce n'est pas un lieu d'intérêt", ES: "No es un lugar de interés", DE: "Kein Ort von Interesse", RU: "Не является достопримечательностью", ZH: "不是兴趣点" },
+  vis_reason_photo_quality: { IT: "Qualità della foto insufficiente", EN: "Insufficient photo quality", FR: "Qualité de la photo insuffisante", ES: "Calidad de la foto insuficiente", DE: "Unzureichende Fotoqualität", RU: "Недостаточное качество фото", ZH: "照片质量不足" },
+  vis_reason_people: { IT: "Persone riconoscibili nella foto", EN: "Recognizable people in the photo", FR: "Personnes reconnaissables sur la photo", ES: "Personas reconocibles en la foto", DE: "Erkennbare Personen auf dem Foto", RU: "На фото узнаваемые люди", ZH: "照片中有可辨认的人物" },
+  vis_reason_inappropriate: { IT: "Contenuto non adatto", EN: "Inappropriate content", FR: "Contenu inapproprié", ES: "Contenido no adecuado", DE: "Unangemessener Inhalt", RU: "Неприемлемое содержание", ZH: "内容不适宜" },
+  vis_reason_other: { IT: "Altro", EN: "Other", FR: "Autre", ES: "Otro", DE: "Sonstiges", RU: "Другое", ZH: "其他" },
+  vis_reason_label: { IT: "Motivo", EN: "Reason", FR: "Motif", ES: "Motivo", DE: "Grund", RU: "Причина", ZH: "原因" },
+  vis_published_label: { IT: "Pubblicata", EN: "Published", FR: "Publiée", ES: "Publicada", DE: "Veröffentlicht", RU: "Опубликовано", ZH: "已发布" },
+  vis_community_label: { IT: "Community", EN: "Community", FR: "Communauté", ES: "Comunidad", DE: "Community", RU: "Сообщество", ZH: "社区" },
+  // VisionCardSheet
+  vis_section_desc: { IT: "Descrizione", EN: "Description", FR: "Description", ES: "Descripción", DE: "Beschreibung", RU: "Описание", ZH: "描述" },
+  vis_section_history: { IT: "Storia", EN: "History", FR: "Histoire", ES: "Historia", DE: "Geschichte", RU: "История", ZH: "历史" },
+  vis_section_curiosity: { IT: "Curiosità", EN: "Fun facts", FR: "Anecdotes", ES: "Curiosidades", DE: "Wissenswertes", RU: "Интересные факты", ZH: "趣闻" },
+  vis_ai_disclaimer: { IT: "Scheda generata dall'AI e salvata nella tua collezione.", EN: "Card generated by AI and saved to your collection.", FR: "Fiche générée par l'IA et enregistrée dans ta collection.", ES: "Ficha generada por la IA y guardada en tu colección.", DE: "Von der KI erstellte Karte, in deiner Sammlung gespeichert.", RU: "Карточка создана ИИ и сохранена в вашей коллекции.", ZH: "卡片由 AI 生成，已保存到你的收藏。" },
+  vis_close: { IT: "Chiudi", EN: "Close", FR: "Fermer", ES: "Cerrar", DE: "Schließen", RU: "Закрыть", ZH: "关闭" },
+  vis_ask_more: { IT: "Chiedi di più", EN: "Ask for more", FR: "En savoir plus", ES: "Pregunta más", DE: "Mehr erfahren", RU: "Узнать больше", ZH: "了解更多" },
+  vis_ask_more_context: { IT: "Sto guardando la scheda Vision \"{name}\". Raccontami altri dettagli e rispondi alle mie domande su questo luogo.", EN: "I'm looking at the Vision card \"{name}\". Tell me more details and answer my questions about this place.", FR: "Je regarde la fiche Vision « {name} ». Donne-moi plus de détails et réponds à mes questions sur ce lieu.", ES: "Estoy viendo la ficha Vision \"{name}\". Cuéntame más detalles y responde a mis preguntas sobre este lugar.", DE: "Ich sehe mir die Vision-Karte „{name}“ an. Erzähl mir mehr Details und beantworte meine Fragen zu diesem Ort.", RU: "Я смотрю карточку Vision «{name}». Расскажите подробнее и ответьте на мои вопросы об этом месте.", ZH: "我正在查看 Vision 卡片“{name}”。请告诉我更多细节，并回答我关于这个地点的问题。" },
+  vis_save_photo: { IT: "Salva la foto sul dispositivo", EN: "Save photo to device", FR: "Enregistrer la photo sur l'appareil", ES: "Guardar la foto en el dispositivo", DE: "Foto auf dem Gerät speichern", RU: "Сохранить фото на устройство", ZH: "保存照片到设备" },
+  vis_share_photo: { IT: "Condividi la foto", EN: "Share photo", FR: "Partager la photo", ES: "Compartir la foto", DE: "Foto teilen", RU: "Поделиться фото", ZH: "分享照片" },
+  vis_listen: { IT: "Ascolta la scheda", EN: "Listen to the card", FR: "Écouter la fiche", ES: "Escuchar la ficha", DE: "Karte anhören", RU: "Прослушать карточку", ZH: "收听卡片" },
+  vis_pause: { IT: "Metti in pausa", EN: "Pause", FR: "Mettre en pause", ES: "Pausar", DE: "Pausieren", RU: "Пауза", ZH: "暂停" },
+  vis_saved_docs: { IT: "Foto salvata in Documenti/WIP Vision.", EN: "Photo saved to Documents/WIP Vision.", FR: "Photo enregistrée dans Documents/WIP Vision.", ES: "Foto guardada en Documentos/WIP Vision.", DE: "Foto in Dokumente/WIP Vision gespeichert.", RU: "Фото сохранено в Документы/WIP Vision.", ZH: "照片已保存到 文档/WIP Vision。" },
+  vis_photo_unavailable: { IT: "Foto non disponibile per il download.", EN: "Photo not available for download.", FR: "Photo non disponible au téléchargement.", ES: "Foto no disponible para descargar.", DE: "Foto nicht zum Download verfügbar.", RU: "Фото недоступно для скачивания.", ZH: "照片无法下载。" },
+  vis_save_failed: { IT: "Salvataggio non riuscito, riprova.", EN: "Saving failed, try again.", FR: "Enregistrement échoué, réessaie.", ES: "No se pudo guardar, inténtalo de nuevo.", DE: "Speichern fehlgeschlagen, versuch es erneut.", RU: "Не удалось сохранить, попробуйте ещё раз.", ZH: "保存失败，请重试。" },
+  vis_share_fallback: { IT: "Condivisione non disponibile: foto salvata in locale.", EN: "Sharing not available: photo saved locally.", FR: "Partage indisponible : photo enregistrée en local.", ES: "Compartir no disponible: foto guardada en local.", DE: "Teilen nicht verfügbar: Foto lokal gespeichert.", RU: "Поделиться нельзя: фото сохранено локально.", ZH: "无法分享：照片已保存到本地。" },
+  vis_share_text: { IT: "Scoperto con WIP Vision · wip.guide", EN: "Discovered with WIP Vision · wip.guide", FR: "Découvert avec WIP Vision · wip.guide", ES: "Descubierto con WIP Vision · wip.guide", DE: "Entdeckt mit WIP Vision · wip.guide", RU: "Открыто с WIP Vision · wip.guide", ZH: "由 WIP Vision 发现 · wip.guide" },
+  vis_open_on_map: { IT: "Vedi sulla mappa", EN: "See on map", FR: "Voir sur la carte", ES: "Ver en el mapa", DE: "Auf der Karte ansehen", RU: "Показать на карте", ZH: "在地图上查看" },
+  // VisionCommentModal
+  vis_comment_title: { IT: "Non l'ho riconosciuta… ma di sicuro è speciale!", EN: "I didn't recognize it… but it's surely special!", FR: "Je ne l'ai pas reconnu… mais c'est sûrement spécial !", ES: "No la he reconocido… ¡pero seguro que es especial!", DE: "Ich habe es nicht erkannt… aber es ist bestimmt etwas Besonderes!", RU: "Не удалось распознать… но это наверняка что-то особенное!", ZH: "没能认出来……但它一定很特别！" },
+  vis_comment_refunded: { IT: "I tuoi crediti sono stati rimborsati e la foto è salvata in My Vision.", EN: "Your credits have been refunded and the photo is saved in My Vision.", FR: "Tes crédits ont été remboursés et la photo est enregistrée dans My Vision.", ES: "Tus créditos se han reembolsado y la foto está guardada en My Vision.", DE: "Dein Guthaben wurde erstattet und das Foto ist in My Vision gespeichert.", RU: "Кредиты возвращены, а фото сохранено в My Vision.", ZH: "你的积分已退还，照片已保存到 My Vision。" },
+  vis_comment_saved: { IT: "La foto è salvata in My Vision.", EN: "The photo is saved in My Vision.", FR: "La photo est enregistrée dans My Vision.", ES: "La foto está guardada en My Vision.", DE: "Das Foto ist in My Vision gespeichert.", RU: "Фото сохранено в My Vision.", ZH: "照片已保存到 My Vision。" },
+  vis_comment_ask: { IT: "Raccontaci perché questo posto è speciale: il tuo racconto aiuterà la revisione per WIP Community.", EN: "Tell us why this place is special: your story will help the WIP Community review.", FR: "Raconte-nous pourquoi ce lieu est spécial : ton récit aidera la révision pour la WIP Community.", ES: "Cuéntanos por qué este lugar es especial: tu relato ayudará en la revisión para WIP Community.", DE: "Erzähl uns, warum dieser Ort besonders ist: Deine Geschichte hilft bei der Prüfung für die WIP Community.", RU: "Расскажите, чем особенно это место: ваш рассказ поможет при проверке для WIP Community.", ZH: "告诉我们这个地方为什么特别：你的讲述将有助于 WIP Community 的审核。" },
+  vis_comment_placeholder: { IT: "Scrivi qualcosa su questo posto… (facoltativo)", EN: "Write something about this place… (optional)", FR: "Écris quelque chose sur ce lieu… (facultatif)", ES: "Escribe algo sobre este lugar… (opcional)", DE: "Schreib etwas über diesen Ort… (optional)", RU: "Напишите что-нибудь об этом месте… (необязательно)", ZH: "写点关于这个地方的内容……（可选）" },
+  vis_comment_skip: { IT: "Salta", EN: "Skip", FR: "Passer", ES: "Omitir", DE: "Überspringen", RU: "Пропустить", ZH: "跳过" },
+  vis_comment_send: { IT: "Invia il racconto", EN: "Send your story", FR: "Envoyer le récit", ES: "Enviar el relato", DE: "Geschichte senden", RU: "Отправить рассказ", ZH: "发送讲述" },
+  vis_comment_footer: { IT: "Se la foto verrà approvata diventerà un luogo WIP Community", EN: "If the photo is approved it will become a WIP Community place", FR: "Si la photo est approuvée, elle deviendra un lieu WIP Community", ES: "Si la foto se aprueba, se convertirá en un lugar WIP Community", DE: "Wird das Foto freigegeben, wird es zu einem Ort der WIP Community", RU: "Если фото одобрят, оно станет местом WIP Community", ZH: "如果照片通过审核，将成为 WIP Community 地点" },
+  vis_comment_thanks: { IT: "Grazie! Il tuo racconto aiuterà la revisione della foto.", EN: "Thanks! Your story will help with the photo review.", FR: "Merci ! Ton récit aidera la révision de la photo.", ES: "¡Gracias! Tu relato ayudará en la revisión de la foto.", DE: "Danke! Deine Geschichte hilft bei der Prüfung des Fotos.", RU: "Спасибо! Ваш рассказ поможет при проверке фото.", ZH: "谢谢！你的讲述将有助于照片审核。" },
+  vis_comment_failed: { IT: "Invio non riuscito: la foto resta comunque salvata in My Vision.", EN: "Sending failed: the photo is still saved in My Vision.", FR: "Envoi échoué : la photo reste quand même enregistrée dans My Vision.", ES: "No se pudo enviar: la foto sigue guardada en My Vision.", DE: "Senden fehlgeschlagen: Das Foto bleibt trotzdem in My Vision gespeichert.", RU: "Не удалось отправить: фото всё равно сохранено в My Vision.", ZH: "发送失败：照片仍已保存在 My Vision 中。" },
+  vis_saved_in_myvision: { IT: "Salvata in My Vision", EN: "Saved in My Vision", FR: "Enregistrée dans My Vision", ES: "Guardada en My Vision", DE: "In My Vision gespeichert", RU: "Сохранено в My Vision", ZH: "已保存到 My Vision" },
+  vis_tag_view: { IT: "Panorama speciale", EN: "Special view", FR: "Panorama spécial", ES: "Vista especial", DE: "Besondere Aussicht", RU: "Особенный вид", ZH: "特别风景" },
+  vis_tag_hidden: { IT: "Angolo nascosto", EN: "Hidden corner", FR: "Coin caché", ES: "Rincón escondido", DE: "Verstecktes Plätzchen", RU: "Укромный уголок", ZH: "隐秘角落" },
+  vis_tag_street_art: { IT: "Arte di strada", EN: "Street art", FR: "Street art", ES: "Arte urbano", DE: "Street Art", RU: "Стрит-арт", ZH: "街头艺术" },
+  vis_tag_tradition: { IT: "Tradizione locale", EN: "Local tradition", FR: "Tradition locale", ES: "Tradición local", DE: "Lokale Tradition", RU: "Местная традиция", ZH: "当地传统" },
+  vis_tag_nature: { IT: "Natura", EN: "Nature", FR: "Nature", ES: "Naturaleza", DE: "Natur", RU: "Природа", ZH: "自然" },
+  vis_tag_memory: { IT: "Ricordo di viaggio", EN: "Travel memory", FR: "Souvenir de voyage", ES: "Recuerdo de viaje", DE: "Reiseerinnerung", RU: "Воспоминание о поездке", ZH: "旅行回忆" },
+  // PlanScreen
+  vis_reel_banner: { IT: "Itinerario dal reel: {n} luoghi da includere", EN: "Itinerary from the reel: {n} places to include", FR: "Itinéraire depuis le reel : {n} lieux à inclure", ES: "Itinerario desde el reel: {n} lugares a incluir", DE: "Route aus dem Reel: {n} Orte zum Aufnehmen", RU: "Маршрут из рилса: {n} мест для включения", ZH: "来自短视频的行程：包含 {n} 个地点" },
+  vis_reel_banner_cancel: { IT: "Annulla", EN: "Cancel", FR: "Annuler", ES: "Cancelar", DE: "Abbrechen", RU: "Отмена", ZH: "取消" },
+  // ── Tematici (21/08/2026) ──
+  // La macro-chip 🧭 e i suoi otto verticali. Le chiavi sono nude (terme,
+  // cinema, cieli…) perché sono le stesse in shared_pois.category, nei chip,
+  // in GeoControl e qui: una chiave sola per tutta la catena.
+  tematiche: { IT: "Tematici", EN: "Themes", FR: "Thématiques", ES: "Temáticos", DE: "Themen", RU: "Тематики", ZH: "主题" },
+  terme: { IT: "Terme e sorgenti", EN: "Hot springs & spas", FR: "Thermes et sources", ES: "Termas y manantiales", DE: "Thermen & Quellen", RU: "Термы и источники", ZH: "温泉与浴场" },
+  cinema: { IT: "Location di film e serie", EN: "Film & series locations", FR: "Lieux de tournage", ES: "Localizaciones de cine y series", DE: "Film- & Seriendrehorte", RU: "Локации фильмов и сериалов", ZH: "影视取景地" },
+  cieli: { IT: "Cieli bui e stelle", EN: "Dark skies & stargazing", FR: "Ciels étoilés", ES: "Cielos oscuros y estrellas", DE: "Dunkler Himmel & Sterne", RU: "Тёмное небо и звёзды", ZH: "暗夜星空" },
+  street_art: { IT: "Street art", EN: "Street art", FR: "Street art", ES: "Arte urbano", DE: "Street Art", RU: "Стрит-арт", ZH: "街头艺术" },
+  mercati: { IT: "Mercati e mercatini", EN: "Markets & fairs", FR: "Marchés et brocantes", ES: "Mercados y mercadillos", DE: "Märkte & Trödelmärkte", RU: "Рынки и ярмарки", ZH: "市集与市场" },
+  fioriture: { IT: "Fioriture", EN: "Blossoms & blooms", FR: "Floraisons", ES: "Floraciones", DE: "Blütezeiten", RU: "Цветение", ZH: "花期" },
+  memoria: { IT: "Memoria e case-museo", EN: "Memory & house museums", FR: "Mémoire et maisons-musées", ES: "Memoria y casas museo", DE: "Erinnerung & Hausmuseen", RU: "Память и дома-музеи", ZH: "纪念地与故居博物馆" },
+  lento: { IT: "Viaggio lento", EN: "Slow travel", FR: "Voyage lent", ES: "Viaje lento", DE: "Langsames Reisen", RU: "Медленные путешествия", ZH: "慢旅行" },
+  tem_sheet_title: { IT: "Itinerari tematici", EN: "Themed itineraries", FR: "Itinéraires thématiques", ES: "Itinerarios temáticos", DE: "Themenrouten", RU: "Тематические маршруты", ZH: "主题行程" },
+  tem_sheet_desc: { IT: "Terme, set cinematografici, cieli stellati, murales, mercatini, fioriture, luoghi della memoria e viaggi lenti: scegli un tema e un luogo, WIP compone il giro.", EN: "Hot springs, film sets, starry skies, murals, markets, blossoms, places of memory and slow journeys: pick a theme and a place, WIP builds the tour.", FR: "Thermes, lieux de tournage, ciels étoilés, fresques, marchés, floraisons, lieux de mémoire et voyages lents : choisis un thème et un lieu, WIP compose la balade.", ES: "Termas, sets de rodaje, cielos estrellados, murales, mercadillos, floraciones, lugares de memoria y viajes lentos: elige un tema y un lugar, WIP compone la ruta.", DE: "Thermen, Filmkulissen, Sternenhimmel, Wandbilder, Märkte, Blütezeiten, Erinnerungsorte und langsames Reisen: Wähle ein Thema und einen Ort, WIP stellt die Tour zusammen.", RU: "Термы, съёмочные площадки, звёздное небо, муралы, рынки, цветение, места памяти и медленные путешествия: выберите тему и место — WIP составит маршрут.", ZH: "温泉、影视取景地、星空、壁画、市集、花期、纪念地与慢旅行：选一个主题和一个地点，WIP 为你编排行程。" },
+  tem_near_me: { IT: "Vicino a me", EN: "Near me", FR: "Près de moi", ES: "Cerca de mí", DE: "In meiner Nähe", RU: "Рядом со мной", ZH: "我的附近" },
+  tem_all_world: { IT: "Nel mondo", EN: "Worldwide", FR: "Dans le monde", ES: "En el mundo", DE: "Weltweit", RU: "По всему миру", ZH: "全球" },
+  tem_free: { IT: "Gratis", EN: "Free", FR: "Gratuit", ES: "Gratis", DE: "Kostenlos", RU: "Бесплатно", ZH: "免费" },
+  tem_paid: { IT: "Con biglietto", EN: "With ticket", FR: "Avec billet", ES: "Con entrada", DE: "Mit Ticket", RU: "По билету", ZH: "需购票" },
+  tem_use_plan: { IT: "Crea l'itinerario", EN: "Create the itinerary", FR: "Créer l'itinéraire", ES: "Crear el itinerario", DE: "Route erstellen", RU: "Создать маршрут", ZH: "生成行程" },
+  tem_stagionali: { IT: "Stagionali", EN: "Seasonal", FR: "Saisonniers", ES: "De temporada", DE: "Saisonal", RU: "Сезонные", ZH: "季节性" },
+  tem_stelle_tonight: { IT: "Stanotte sotto le stelle", EN: "Tonight under the stars", FR: "Cette nuit sous les étoiles", ES: "Esta noche bajo las estrellas", DE: "Heute Nacht unter den Sternen", RU: "Сегодня ночью под звёздами", ZH: "今夜观星" },
+  tem_stelle_clouds: { IT: "Nuvolosità prevista", EN: "Expected cloud cover", FR: "Nébulosité prévue", ES: "Nubosidad prevista", DE: "Erwartete Bewölkung", RU: "Ожидаемая облачность", ZH: "预计云量" },
+  tem_stelle_moon: { IT: "Luna", EN: "Moon", FR: "Lune", ES: "Luna", DE: "Mond", RU: "Луна", ZH: "月相" },
+  tem_stelle_meteor: { IT: "Sciame meteorico", EN: "Meteor shower", FR: "Pluie d'étoiles filantes", ES: "Lluvia de meteoros", DE: "Meteorschauer", RU: "Метеорный поток", ZH: "流星雨" },
+  tem_mercatini_open: { IT: "Mercatini aperti ora", EN: "Markets open now", FR: "Marchés ouverts maintenant", ES: "Mercadillos abiertos ahora", DE: "Jetzt geöffnete Märkte", RU: "Рынки открыты сейчас", ZH: "此刻开放的市集" },
+  tem_fioriture_now: { IT: "Fioriture in corso", EN: "Blooming now", FR: "Floraisons en cours", ES: "Floraciones en curso", DE: "Blüht gerade", RU: "Цветёт сейчас", ZH: "正在花期" },
+  tem_fioriture_soon: { IT: "In arrivo", EN: "Coming soon", FR: "Bientôt", ES: "Próximamente", DE: "Demnächst", RU: "Скоро", ZH: "即将开放" },
+  tem_no_data: { IT: "Nessun dato per questa zona", EN: "No data for this area", FR: "Aucune donnée pour cette zone", ES: "No hay datos para esta zona", DE: "Keine Daten für dieses Gebiet", RU: "Нет данных по этой зоне", ZH: "该区域暂无数据" },
+  tem_bortle: { IT: "Cielo (scala Bortle)", EN: "Sky (Bortle scale)", FR: "Ciel (échelle de Bortle)", ES: "Cielo (escala Bortle)", DE: "Himmel (Bortle-Skala)", RU: "Небо (шкала Бортля)", ZH: "夜空（波特尔等级）" },
+  tem_free_access: { IT: "Accesso libero", EN: "Free access", FR: "Accès libre", ES: "Acceso libre", DE: "Freier Zugang", RU: "Свободный доступ", ZH: "自由进入" },
   // Navigazione a piedi (NavigationOverlay) — prima erano hardcoded in IT
   nav_calculating: { IT: "Calcolo del percorso…", EN: "Calculating route…", FR: "Calcul de l'itinéraire…", ES: "Calculando la ruta…", DE: "Route wird berechnet…", RU: "Расчёт маршрута…", ZH: "正在计算路线…" },
   nav_proceed: { IT: "Prosegui", EN: "Continue", FR: "Continuez", ES: "Continúa", DE: "Weiter", RU: "Продолжайте", ZH: "继续前行" },
@@ -73,6 +246,9 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   beni_culturali: { IT: "Beni Culturali", EN: "Cultural Heritage", FR: "Patrimoine culturel", ES: "Patrimonio cultural", DE: "Kulturgüter", RU: "Культурное наследие", ZH: "文化遗产" },
   beni_culturali_tutelato: { IT: "Bene culturale tutelato", EN: "Protected heritage site", FR: "Bien culturel protégé", ES: "Bien cultural protegido", DE: "Geschütztes Kulturgut", RU: "Охраняемый объект наследия", ZH: "受保护文化遗产" },
   beni_culturali_no_guida: { IT: "Scheda informativa: questo bene non ha audioguida", EN: "Information only: this site has no audio guide", FR: "Fiche d'information : ce bien n'a pas d'audioguide", ES: "Ficha informativa: este bien no tiene audioguía", DE: "Nur Information: zu diesem Kulturgut gibt es keinen Audioguide", RU: "Только справка: у этого объекта нет аудиогида", ZH: "仅供参考：此地点没有语音导览" },
+  beni_culturali_scheda_ufficiale: { IT: "Scheda ufficiale del catalogo", EN: "Official catalogue record", FR: "Fiche officielle du catalogue", ES: "Ficha oficial del catálogo", DE: "Offizieller Katalogeintrag", RU: "Официальная карточка каталога", ZH: "官方目录条目" },
+  indirizzo_vicino_a: { IT: "Vicino a", EN: "Near", FR: "Près de", ES: "Cerca de", DE: "In der Nähe von", RU: "Рядом с", ZH: "靠近" },
+  beni_culturali_posizione_approssimata: { IT: "Posizione approssimata: il catalogo non dà le coordinate, il punto è il centro del comune", EN: "Approximate location: the register gives no coordinates, this point is the town centre", FR: "Position approximative : le registre ne donne pas de coordonnées, ce point est le centre de la commune", ES: "Ubicación aproximada: el catálogo no da coordenadas, el punto es el centro del municipio", DE: "Ungefähre Lage: Das Register nennt keine Koordinaten, dieser Punkt ist der Ortsmittelpunkt", RU: "Приблизительное расположение: в реестре нет координат, точка — центр населённого пункта", ZH: "位置为近似值：登记册未提供坐标，此点为该市镇中心" },
   monumenti: {
     IT: "Monumenti",
     EN: "Monuments",
@@ -105,6 +281,15 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Панорамы",
     ZH: "全景"
   , DE: "Aussichten"},
+  localita: { IT: "Località", EN: "Villages & towns", FR: "Villages et bourgs", ES: "Pueblos y localidades", DE: "Orte & Dörfer", RU: "Городки и деревни", ZH: "小镇村落" },
+  natura: {
+    IT: "Natura",
+    EN: "Nature",
+    FR: "Nature",
+    ES: "Naturaleza",
+    RU: "Природа",
+    ZH: "自然"
+  , DE: "Natur"},
   gemme: {
     IT: "Gemme",
     EN: "Gems",
@@ -137,6 +322,16 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Семья",
     ZH: "亲子家庭"
   , DE: "Familien"},
+  // Chip del patrimonio del gusto: cantine, vigneti, caseifici, frantoi,
+  // birrifici e strade del vino. Distinta da "locali" (dove ci si siede).
+  enogastronomia: {
+    IT: "Vino e Gusto",
+    EN: "Wine & Food",
+    FR: "Vin & Terroir",
+    ES: "Vino y Sabor",
+    RU: "Вино и вкус",
+    ZH: "美酒与风味"
+  , DE: "Wein & Genuss"},
   eventi: {
     IT: "Eventi",
     EN: "Events",
@@ -663,6 +858,42 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   tour_salvato: { IT: "Salvato", EN: "Saved", FR: "Enregistré", ES: "Guardado", DE: "Gespeichert", RU: "Сохранено", ZH: "已保存" },
   tour_link_copiato: { IT: "Link copiato", EN: "Link copied", FR: "Lien copié", ES: "Enlace copiado", DE: "Link kopiert", RU: "Ссылка скопирована", ZH: "链接已复制" },
   tour_chiudi: { IT: "Chiudi", EN: "Close", FR: "Fermer", ES: "Cerrar", DE: "Schließen", RU: "Закрыть", ZH: "关闭" },
+  // Dieci Tappe: pre-scaricamento (testi + audio per l'offline) nel banner.
+  tour_prescarico_in_corso: { IT: "Preparo le tappe per l'offline…", EN: "Preparing stops for offline…", FR: "Préparation des étapes hors ligne…", ES: "Preparando paradas sin conexión…", DE: "Stationen für offline vorbereiten…", RU: "Готовлю точки для офлайна…", ZH: "正在准备离线站点…" },
+  tour_prescarico_testi: { IT: "testi", EN: "texts", FR: "textes", ES: "textos", DE: "Texte", RU: "текстов", ZH: "段文字" },
+  tour_prescarico_audio: { IT: "audio", EN: "audio", FR: "audio", ES: "audios", DE: "Audio", RU: "аудио", ZH: "段音频" },
+  tour_prescarico_mancanti: { IT: "mancanti", EN: "missing", FR: "manquants", ES: "faltan", DE: "fehlen", RU: "не хватает", ZH: "缺失" },
+  tour_prescarico_riprova: { IT: "Riprova", EN: "Retry", FR: "Réessayer", ES: "Reintentar", DE: "Erneut", RU: "Повторить", ZH: "重试" },
+  tour_prescarico_pronto: { IT: "Tutto pronto anche offline", EN: "All set, even offline", FR: "Tout est prêt, même hors ligne", ES: "Todo listo, incluso sin conexión", DE: "Alles bereit, auch offline", RU: "Всё готово, даже офлайн", ZH: "已就绪，离线也可用" },
+  // Dieci Tappe: il giro salvato come itinerario e le istruzioni vocali.
+  tour_giro_a_piedi: { IT: "Giro a piedi", EN: "Walking tour", FR: "Parcours à pied", ES: "Recorrido a pie", DE: "Rundgang zu Fuß", RU: "Пешая прогулка", ZH: "步行路线" },
+  tour_tappe: { IT: "tappe", EN: "stops", FR: "étapes", ES: "paradas", DE: "Stationen", RU: "точек", ZH: "站" },
+  tour_tappa_descrizione: { IT: "Tappa del giro a piedi con audioguida WIP.", EN: "Stop of the walking tour with the WIP audio guide.", FR: "Étape du parcours à pied avec l'audioguide WIP.", ES: "Parada del recorrido a pie con la audioguía WIP.", DE: "Station des Rundgangs mit dem WIP-Audioguide.", RU: "Точка пешей прогулки с аудиогидом WIP.", ZH: "WIP 语音导览步行路线的站点。" },
+  tour_suggerimento_percorso: { IT: "Percorso {anello}di {km} km: circa {min} minuti a piedi, più l'ascolto delle audioguide.", EN: "{anello}route of {km} km: about {min} minutes on foot, plus the audio guides.", FR: "Parcours {anello}de {km} km : environ {min} minutes à pied, plus l'écoute des audioguides.", ES: "Recorrido {anello}de {km} km: unos {min} minutos a pie, más la escucha de las audioguías.", DE: "{anello}Route von {km} km: etwa {min} Minuten zu Fuß, plus die Audioguides.", RU: "{anello}маршрут {km} км: около {min} минут пешком плюс прослушивание аудиогидов.", ZH: "{anello}路线 {km} 公里：步行约 {min} 分钟，另加语音导览时间。" },
+  tour_ad_anello: { IT: "ad anello ", EN: "Loop ", FR: "en boucle ", ES: "circular ", DE: "Rund", RU: "Кольцевой ", ZH: "环形" },
+  tour_fra_metri: { IT: "Fra {n} metri,", EN: "In {n} meters,", FR: "Dans {n} mètres,", ES: "En {n} metros,", DE: "In {n} Metern", RU: "Через {n} метров", ZH: "{n}米后，" },
+  tour_togli_tappa: { IT: "Togli questa tappa dal giro", EN: "Remove this stop from the tour", FR: "Retirer cette étape du parcours", ES: "Quitar esta parada del recorrido", DE: "Diese Station aus der Tour entfernen", RU: "Убрать эту точку из маршрута", ZH: "从行程中移除此站" },
+  // Audioguida: stati e avvisi del player.
+  poi_generico: { IT: "Punto di interesse", EN: "Point of interest", FR: "Point d'intérêt", ES: "Punto de interés", DE: "Sehenswürdigkeit", RU: "Точка интереса", ZH: "兴趣点" },
+  audioguida_label: { IT: "Audioguida", EN: "Audio guide", FR: "Audioguide", ES: "Audioguía", DE: "Audioguide", RU: "Аудиогид", ZH: "语音导览" },
+  narrazione_in_corso: { IT: "Narrazione in corso...", EN: "Narration in progress...", FR: "Narration en cours...", ES: "Narración en curso...", DE: "Erzählung läuft...", RU: "Идёт рассказ...", ZH: "正在讲解..." },
+  silenziosa_leggi_testo: { IT: "{poi}: modalità silenziosa — leggi il testo nella scheda o premi ▶ per ascoltare", EN: "{poi}: silent mode — read the text in the sheet or press ▶ to listen", FR: "{poi} : mode silencieux — lisez le texte dans la fiche ou appuyez sur ▶ pour écouter", ES: "{poi}: modo silencioso — lee el texto en la ficha o pulsa ▶ para escuchar", DE: "{poi}: Stummmodus — lies den Text in der Karte oder drücke ▶ zum Anhören", RU: "{poi}: тихий режим — прочитайте текст в карточке или нажмите ▶, чтобы послушать", ZH: "{poi}：静音模式 — 请在卡片中阅读文字，或按 ▶ 收听" },
+  silenziosa_pronta: { IT: "{poi} pronta: modalità silenziosa", EN: "{poi} ready: silent mode", FR: "{poi} prête : mode silencieux", ES: "{poi} lista: modo silencioso", DE: "{poi} bereit: Stummmodus", RU: "{poi} готов: тихий режим", ZH: "{poi} 已就绪：静音模式" },
+  nav_indicazione: { IT: "Indicazione stradale", EN: "Turn-by-turn", FR: "Indication routière", ES: "Indicación de ruta", DE: "Wegweisung", RU: "Подсказка маршрута", ZH: "路线指引" },
+  riproduzione_fallita: { IT: "Riproduzione non riuscita. Riprova.", EN: "Playback failed. Please try again.", FR: "Lecture impossible. Réessayez.", ES: "No se pudo reproducir. Inténtalo de nuevo.", DE: "Wiedergabe fehlgeschlagen. Bitte erneut versuchen.", RU: "Не удалось воспроизвести. Попробуйте снова.", ZH: "播放失败，请重试。" },
+  contenuti_in_caricamento: { IT: "Contenuti in caricamento, riprova tra un attimo.", EN: "Content still loading, try again in a moment.", FR: "Contenu en cours de chargement, réessayez dans un instant.", ES: "Contenido cargando, inténtalo en un momento.", DE: "Inhalte werden geladen, gleich noch einmal versuchen.", RU: "Контент загружается, попробуйте через мгновение.", ZH: "内容加载中，请稍后再试。" },
+  offline_crediti_insufficienti: { IT: "Crediti insufficienti per l'ascolto offline", EN: "Not enough credits for offline listening", FR: "Crédits insuffisants pour l'écoute hors ligne", ES: "Créditos insuficientes para la escucha sin conexión", DE: "Nicht genug Guthaben zum Offline-Hören", RU: "Недостаточно кредитов для офлайн-прослушивания", ZH: "离线收听的积分不足" },
+  offline_crediti_disponibili: { IT: "(disponibili: {n})", EN: "(available: {n})", FR: "(disponibles : {n})", ES: "(disponibles: {n})", DE: "(verfügbar: {n})", RU: "(доступно: {n})", ZH: "（可用：{n}）" },
+  offline_ricarica_suggerimento: { IT: ". Ricarica quando torni online, o attiva il Day Pass prima di partire.", EN: ". Top up when you are back online, or activate the Day Pass before leaving.", FR: ". Rechargez en revenant en ligne, ou activez le Day Pass avant de partir.", ES: ". Recarga cuando vuelvas a estar en línea, o activa el Day Pass antes de salir.", DE: ". Lade auf, sobald du wieder online bist, oder aktiviere den Day Pass vor dem Start.", RU: ". Пополните счёт, когда снова будете онлайн, или активируйте Day Pass заранее.", ZH: "。恢复在线后充值，或出发前激活 Day Pass。" },
+  offline_guida_non_disponibile: { IT: "Audioguida non disponibile offline per questo luogo. Scarica il pacchetto della zona dalla tab Mappe Offline.", EN: "Audio guide not available offline for this place. Download the area package from the Offline Maps tab.", FR: "Audioguide non disponible hors ligne pour ce lieu. Téléchargez le pack de la zone depuis l'onglet Cartes hors ligne.", ES: "Audioguía no disponible sin conexión para este lugar. Descarga el paquete de la zona desde la pestaña Mapas sin conexión.", DE: "Audioguide für diesen Ort offline nicht verfügbar. Lade das Gebietspaket im Tab Offline-Karten herunter.", RU: "Аудиогид для этого места недоступен офлайн. Скачайте пакет района во вкладке Офлайн-карты.", ZH: "此地点的语音导览离线不可用。请在离线地图标签中下载该区域包。" },
+  web_limitata_titolo: { IT: "Esperienza Web Limitata", EN: "Limited Web Experience", FR: "Expérience web limitée", ES: "Experiencia web limitada", DE: "Eingeschränkte Web-Erfahrung", RU: "Ограниченная веб-версия", ZH: "网页版功能受限" },
+  web_limitata_testo: { IT: "Su browser l'audio si interrompe se spegni lo schermo. Scarica l'App per il tour automatico!", EN: "Audio stops if the screen turns off in the browser. Download the App for the automatic tour!", FR: "Dans le navigateur, l'audio s'arrête si l'écran s'éteint. Téléchargez l'app pour le tour automatique !", ES: "En el navegador el audio se detiene si apagas la pantalla. ¡Descarga la App para el tour automático!", DE: "Im Browser stoppt der Ton, wenn der Bildschirm ausgeht. Lade die App für die automatische Tour!", RU: "В браузере звук останавливается при выключении экрана. Скачайте приложение для автоматического тура!", ZH: "在浏览器中关闭屏幕会中断音频。下载应用以使用自动导览！" },
+  altri_luoghi_vicini: { IT: "altri luoghi vicini", EN: "other nearby places", FR: "autres lieux à proximité", ES: "otros lugares cercanos", DE: "weitere Orte in der Nähe", RU: "других мест рядом", ZH: "个附近的其他地点" },
+  pulisci: { IT: "PULISCI", EN: "CLEAR", FR: "EFFACER", ES: "LIMPIAR", DE: "LEEREN", RU: "ОЧИСТИТЬ", ZH: "清除" },
+  // Posizione negata sul web: non deve essere un silenzio.
+  posizione_negata_titolo: { IT: "Posizione non consentita", EN: "Location not allowed", FR: "Position refusée", ES: "Ubicación no permitida", DE: "Standort nicht erlaubt", RU: "Доступ к геопозиции запрещён", ZH: "未允许获取位置" },
+  posizione_negata_testo: { IT: "Senza la posizione l'audioguida non sa dove sei. Consenti la posizione a questo sito dalle impostazioni del browser (icona del lucchetto accanto all'indirizzo) e ricarica la pagina.", EN: "Without your location the audio guide cannot know where you are. Allow location for this site in the browser settings (the lock icon next to the address) and reload the page.", FR: "Sans la position, l'audioguide ne sait pas où vous êtes. Autorisez la position pour ce site dans les réglages du navigateur (icône cadenas à côté de l'adresse) et rechargez la page.", ES: "Sin la ubicación la audioguía no sabe dónde estás. Permite la ubicación para este sitio en los ajustes del navegador (icono del candado junto a la dirección) y recarga la página.", DE: "Ohne Standort weiß der Audioguide nicht, wo du bist. Erlaube den Standort für diese Seite in den Browser-Einstellungen (Schloss-Symbol neben der Adresse) und lade die Seite neu.", RU: "Без геопозиции аудиогид не знает, где вы. Разрешите доступ к геопозиции для этого сайта в настройках браузера (значок замка рядом с адресом) и перезагрузите страницу.", ZH: "没有位置信息，语音导览无法知道您在哪里。请在浏览器设置中（地址栏旁的锁形图标）允许此网站获取位置，然后刷新页面。" },
+  posizione_negata_stato: { IT: "GPS negato: l'audioguida non può sapere dove sei", EN: "GPS denied: the audio guide cannot know where you are", FR: "GPS refusé : l'audioguide ne peut pas savoir où vous êtes", ES: "GPS denegado: la audioguía no puede saber dónde estás", DE: "GPS verweigert: der Audioguide weiß nicht, wo du bist", RU: "GPS запрещён: аудиогид не знает, где вы", ZH: "GPS 被拒绝：语音导览无法知道您的位置" },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",
@@ -971,6 +1202,18 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Настройки приложения",
     ZH: "系统与个性化设置"
   , DE: "App-Einstellungen"},
+  // Dove si apre la mappa (22/08/2026)
+  map_start_title: { IT: "Dove si apre la mappa", EN: "Where the map opens", FR: "Où s'ouvre la carte", ES: "Dónde se abre el mapa", DE: "Wo die Karte startet", RU: "Где открывается карта", ZH: "地图打开位置" },
+  map_start_subtitle: { IT: "Scegli da dove parte la mappa ogni volta che apri l'app.", EN: "Choose where the map starts each time you open the app.", FR: "Choisissez d'où part la carte à chaque ouverture.", ES: "Elige desde dónde parte el mapa cada vez que abres la app.", DE: "Wähle, wo die Karte bei jedem Start beginnt.", RU: "Выберите, откуда начинается карта при каждом запуске.", ZH: "选择每次打开应用时地图的起始位置。" },
+  map_start_gps: { IT: "La mia posizione", EN: "My location", FR: "Ma position", ES: "Mi ubicación", DE: "Mein Standort", RU: "Моё местоположение", ZH: "我的位置" },
+  map_start_gps_hint: { IT: "Appena il GPS trova dove sei, la mappa vola lì.", EN: "As soon as GPS finds you, the map flies there.", FR: "Dès que le GPS vous trouve, la carte s'y déplace.", ES: "En cuanto el GPS te encuentra, el mapa vuela allí.", DE: "Sobald GPS dich findet, springt die Karte dorthin.", RU: "Как только GPS найдёт вас, карта переместится туда.", ZH: "GPS 定位后地图会飞到你的位置。" },
+  map_start_last: { IT: "Dove ero l'ultima volta", EN: "Where I was last time", FR: "Là où j'étais la dernière fois", ES: "Donde estaba la última vez", DE: "Wo ich zuletzt war", RU: "Где я был в прошлый раз", ZH: "上次所在位置" },
+  map_start_last_hint: { IT: "Riapre la mappa sull'ultima zona che stavi guardando.", EN: "Reopens the map on the last area you were looking at.", FR: "Rouvre la carte sur la dernière zone consultée.", ES: "Reabre el mapa en la última zona que mirabas.", DE: "Öffnet die Karte auf dem zuletzt betrachteten Gebiet.", RU: "Открывает карту на последней просмотренной области.", ZH: "在上次查看的区域重新打开地图。" },
+  map_start_city: { IT: "Una città a mia scelta", EN: "A city of my choice", FR: "Une ville de mon choix", ES: "Una ciudad a mi elección", DE: "Eine Stadt meiner Wahl", RU: "Город по моему выбору", ZH: "我选择的城市" },
+  map_start_city_hint: { IT: "Utile se stai pianificando un viaggio altrove.", EN: "Handy when you're planning a trip elsewhere.", FR: "Pratique si vous préparez un voyage ailleurs.", ES: "Útil si estás planeando un viaje a otro lugar.", DE: "Praktisch, wenn du eine Reise woanders planst.", RU: "Удобно, если вы планируете поездку в другое место.", ZH: "计划去别处旅行时很有用。" },
+  map_start_city_placeholder: { IT: "Cerca una città…", EN: "Search a city…", FR: "Rechercher une ville…", ES: "Buscar una ciudad…", DE: "Stadt suchen…", RU: "Найти город…", ZH: "搜索城市…" },
+  map_start_city_help: { IT: "Scrivi almeno tre lettere.", EN: "Type at least three letters.", FR: "Saisissez au moins trois lettres.", ES: "Escribe al menos tres letras.", DE: "Mindestens drei Buchstaben eingeben.", RU: "Введите не менее трёх букв.", ZH: "至少输入三个字母。" },
+  map_start_search_error: { IT: "Ricerca non disponibile, riprova tra poco.", EN: "Search unavailable, try again shortly.", FR: "Recherche indisponible, réessayez bientôt.", ES: "Búsqueda no disponible, inténtalo en breve.", DE: "Suche nicht verfügbar, bitte gleich erneut versuchen.", RU: "Поиск недоступен, попробуйте позже.", ZH: "搜索不可用，请稍后再试。" },
   personal_area: {
     IT: "Area Personale",
     EN: "Personal Profile",
@@ -1669,6 +1912,141 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Фестивали, выставки, концерты и ярмарки в радиусе",
     ZH: "为您网罗周边的艺术展、美食节、音乐会与集市，范围："
   , DE: "Feste, Ausstellungen, Konzerte und Märkte im Umkreis von"},
+  events_view_exhibitions: {
+    IT: "Mostre",
+    EN: "Exhibitions",
+    FR: "Expositions",
+    ES: "Exposiciones",
+    DE: "Ausstellungen",
+    RU: "Выставки",
+    ZH: "展览"
+  },
+  events_exhibitions_subtitle: {
+    IT: "Mostre temporanee nei musei della zona, lette dai loro siti",
+    EN: "Temporary exhibitions in nearby museums, read from their websites",
+    FR: "Expositions temporaires des musées voisins, lues sur leurs sites",
+    ES: "Exposiciones temporales en los museos de la zona, leídas de sus webs",
+    DE: "Wechselausstellungen der Museen in der Nähe, von ihren Websites gelesen",
+    RU: "Временные выставки музеев поблизости, с их сайтов",
+    ZH: "周边博物馆的临时展览，来自各馆官网"
+  },
+  events_exhibitions_none: {
+    IT: "Nessuna mostra trovata",
+    EN: "No exhibitions found",
+    FR: "Aucune exposition trouvée",
+    ES: "No se encontraron exposiciones",
+    DE: "Keine Ausstellungen gefunden",
+    RU: "Выставки не найдены",
+    ZH: "未找到展览"
+  },
+  events_exhibitions_none_desc: {
+    IT: "Prova ad allargare il raggio o le date: leggiamo i siti dei musei entro il raggio scelto.",
+    EN: "Try a wider radius or other dates: we read the websites of the museums within the chosen radius.",
+    FR: "Essayez un rayon plus large ou d'autres dates : nous lisons les sites des musées dans le rayon choisi.",
+    ES: "Prueba un radio mayor u otras fechas: leemos las webs de los museos dentro del radio elegido.",
+    DE: "Versuchen Sie einen größeren Radius oder andere Daten: wir lesen die Websites der Museen im gewählten Umkreis.",
+    RU: "Попробуйте расширить радиус или изменить даты: мы читаем сайты музеев в выбранном радиусе.",
+    ZH: "请尝试扩大范围或更改日期：我们会读取所选范围内博物馆的官网。"
+  },
+  events_exhibitions_note: {
+    IT: "Date e titoli letti dai siti dei musei e da Wikidata: verifica sul sito prima di andare.",
+    EN: "Dates and titles read from museum websites and Wikidata: check the website before you go.",
+    FR: "Dates et titres lus sur les sites des musées et Wikidata : vérifiez avant de partir.",
+    ES: "Fechas y títulos leídos de las webs de los museos y Wikidata: compruébalo antes de ir.",
+    DE: "Daten und Titel von Museums-Websites und Wikidata: vor dem Besuch prüfen.",
+    RU: "Даты и названия взяты с сайтов музеев и Wikidata: проверьте перед визитом.",
+    ZH: "日期与标题来自博物馆官网和维基数据，出发前请在官网核实。"
+  },
+  events_exh_current: {
+    IT: "In corso",
+    EN: "On now",
+    FR: "En cours",
+    ES: "En curso",
+    DE: "Aktuell",
+    RU: "Сейчас",
+    ZH: "正在展出"
+  },
+  events_permanent_none: {
+    IT: "Nessun museo in questa zona",
+    EN: "No museums in this area",
+    FR: "Aucun musée dans cette zone",
+    ES: "Ningún museo en esta zona",
+    DE: "Keine Museen in dieser Gegend",
+    RU: "Музеев поблизости нет",
+    ZH: "该区域没有博物馆"
+  },
+  events_permanent_none_desc: {
+    IT: "Allarga il raggio: le collezioni permanenti sono i musei del nostro catalogo entro la distanza scelta.",
+    EN: "Widen the radius: permanent collections are the museums in our catalogue within the chosen distance.",
+    FR: "Élargissez le rayon : les collections permanentes sont les musées de notre catalogue dans la distance choisie.",
+    ES: "Amplía el radio: las colecciones permanentes son los museos de nuestro catálogo dentro de la distancia elegida.",
+    DE: "Radius vergrößern: Dauerausstellungen sind die Museen unseres Katalogs im gewählten Umkreis.",
+    RU: "Расширьте радиус: постоянные экспозиции — это музеи из нашего каталога в выбранном радиусе.",
+    ZH: "请扩大范围：常设展览即我们目录中所选距离内的博物馆。"
+  },
+  events_exh_permanent: {
+    IT: "Collezioni permanenti",
+    EN: "Permanent collections",
+    FR: "Collections permanentes",
+    ES: "Colecciones permanentes",
+    DE: "Dauerausstellungen",
+    RU: "Постоянные экспозиции",
+    ZH: "常设展览"
+  },
+  events_permanent_label: {
+    IT: "Collezione permanente",
+    EN: "Permanent collection",
+    FR: "Collection permanente",
+    ES: "Colección permanente",
+    DE: "Dauerausstellung",
+    RU: "Постоянная экспозиция",
+    ZH: "常设展"
+  },
+  events_open_on_map: {
+    IT: "Vedi sulla mappa",
+    EN: "See on map",
+    FR: "Voir sur la carte",
+    ES: "Ver en el mapa",
+    DE: "Auf der Karte",
+    RU: "На карте",
+    ZH: "在地图上查看"
+  },
+  events_exhibition_site: {
+    IT: "Sito del museo",
+    EN: "Museum website",
+    FR: "Site du musée",
+    ES: "Web del museo",
+    DE: "Website des Museums",
+    RU: "Сайт музея",
+    ZH: "博物馆官网"
+  },
+  events_last_days: {
+    IT: "Ultimi giorni",
+    EN: "Last days",
+    FR: "Derniers jours",
+    ES: "Últimos días",
+    DE: "Letzte Tage",
+    RU: "Последние дни",
+    ZH: "即将结束"
+  },
+  events_opens_on: {
+    IT: "apre il",
+    EN: "opens on",
+    FR: "ouvre le",
+    ES: "abre el",
+    DE: "öffnet am",
+    RU: "открытие",
+    ZH: "开幕"
+  },
+  events_until: {
+    IT: "fino al",
+    EN: "until",
+    FR: "jusqu'au",
+    ES: "hasta el",
+    DE: "bis",
+    RU: "до",
+    ZH: "截至"
+  },
   events_from: {
     IT: "Dal",
     EN: "From",
@@ -1960,6 +2338,15 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Ваш браузер не поддерживает геолокацию.",
     ZH: "抱歉，您当前使用的浏览器不支持网页定位服务。"
   , DE: "Dein Browser unterstützt keine Standortbestimmung."},
+  entrance_label: {
+    IT: "Ingresso",
+    EN: "Entrance",
+    FR: "Entrée",
+    ES: "Entrada",
+    DE: "Eingang",
+    RU: "Вход",
+    ZH: "入口"
+  },
   geocontrol_title: {
     IT: "GeoControl Avanzato",
     EN: "Advanced GeoControl",
@@ -2481,6 +2868,14 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Карта маршрута",
     ZH: "行程地图"
   , DE: "Routenkarte"},
+  map_all_days: {
+    IT: "Tutti",
+    EN: "All",
+    FR: "Tous",
+    ES: "Todos",
+    RU: "Все",
+    ZH: "全部"
+  , DE: "Alle"},
   total_estimated_trip: {
     IT: "Totale Stimato Viaggio",
     EN: "Total Estimated Trip",
@@ -3461,6 +3856,25 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Свайпайте и выбирайте достопримечательности",
     ZH: "滑动卡片挑选景点"
   , DE: "Wische und wähle die Attraktionen"},
+  // ── Agente WIP: l'itinerario si crea parlando (23/08/2026) ─────────────
+  // Il nome dell'agente è WIP, come nel resto dell'app (decisione utente):
+  // nessun personaggio nuovo, una sola identità dappertutto.
+  wip_agent_mode: { IT: "Parla con WIP", EN: "Talk to WIP", FR: "Parlez à WIP", ES: "Habla con WIP", DE: "Sprich mit WIP", RU: "Поговори с WIP", ZH: "和 WIP 聊聊" },
+  wip_agent_mode_desc: { IT: "Racconta il viaggio a voce o per iscritto: WIP chiede e poi crea l'itinerario", EN: "Tell your trip by voice or text: WIP asks, then builds the itinerary", FR: "Racontez le voyage à l'oral ou à l'écrit : WIP demande, puis crée l'itinéraire", ES: "Cuenta el viaje por voz o por escrito: WIP pregunta y luego crea el itinerario", DE: "Erzähl die Reise per Stimme oder Text: WIP fragt nach und baut dann die Route", RU: "Расскажите о поездке голосом или текстом: WIP спросит и создаст маршрут", ZH: "用语音或文字讲述旅程：WIP 会提问，然后生成行程" },
+  wip_agent_title: { IT: "WIP", EN: "WIP", FR: "WIP", ES: "WIP", DE: "WIP", RU: "WIP", ZH: "WIP" },
+  wip_agent_subtitle: { IT: "Il tuo agente di viaggio", EN: "Your travel agent", FR: "Votre agent de voyage", ES: "Tu agente de viajes", DE: "Dein Reiseagent", RU: "Ваш турагент", ZH: "你的旅行助手" },
+  wip_agent_intro: { IT: "Ciao, sono WIP. Dimmi dove vuoi andare, per quanti giorni e che viaggio hai in mente: ci penso io. Puoi parlare col microfono o scrivere.", EN: "Hi, I'm WIP. Tell me where you want to go, for how many days and what kind of trip you have in mind: I'll take care of it. You can talk with the microphone or type.", FR: "Bonjour, je suis WIP. Dites-moi où vous voulez aller, pour combien de jours et quel voyage vous avez en tête : je m'en occupe. Vous pouvez parler au micro ou écrire.", ES: "Hola, soy WIP. Dime adónde quieres ir, cuántos días y qué viaje tienes en mente: yo me encargo. Puedes hablar con el micrófono o escribir.", DE: "Hallo, ich bin WIP. Sag mir, wohin du willst, für wie viele Tage und welche Reise dir vorschwebt: ich kümmere mich darum. Du kannst ins Mikrofon sprechen oder schreiben.", RU: "Привет, я WIP. Скажите, куда хотите поехать, на сколько дней и какую поездку задумали — остальное сделаю я. Можно говорить в микрофон или писать.", ZH: "你好，我是 WIP。告诉我你想去哪里、玩几天、想要怎样的旅程，剩下的交给我。可以用麦克风说，也可以打字。" },
+  wip_agent_placeholder: { IT: "Es. «tre giorni a Lisbona a ottobre, niente musei»", EN: "E.g. \"three days in Lisbon in October, no museums\"", FR: "Ex. « trois jours à Lisbonne en octobre, sans musées »", ES: "Ej. «tres días en Lisboa en octubre, sin museos»", DE: "Z. B. „drei Tage Lissabon im Oktober, keine Museen“", RU: "Напр. «три дня в Лиссабоне в октябре, без музеев»", ZH: "例如“十月去里斯本三天，不去博物馆”" },
+  wip_agent_send: { IT: "Invia", EN: "Send", FR: "Envoyer", ES: "Enviar", DE: "Senden", RU: "Отправить", ZH: "发送" },
+  wip_agent_listening: { IT: "Ti ascolto…", EN: "Listening…", FR: "Je vous écoute…", ES: "Te escucho…", DE: "Ich höre zu…", RU: "Слушаю…", ZH: "正在听…" },
+  wip_agent_thinking: { IT: "WIP sta pensando…", EN: "WIP is thinking…", FR: "WIP réfléchit…", ES: "WIP está pensando…", DE: "WIP überlegt…", RU: "WIP думает…", ZH: "WIP 正在思考…" },
+  wip_agent_mic_unsupported: { IT: "Il microfono non è supportato da questo browser: scrivi pure, WIP legge lo stesso.", EN: "The microphone isn't supported by this browser: just type, WIP reads it anyway.", FR: "Le micro n'est pas pris en charge par ce navigateur : écrivez, WIP lit quand même.", ES: "El micrófono no es compatible con este navegador: escribe, WIP lo lee igual.", DE: "Das Mikrofon wird von diesem Browser nicht unterstützt: schreib einfach, WIP liest es trotzdem.", RU: "Микрофон не поддерживается этим браузером: пишите, WIP всё равно прочитает.", ZH: "此浏览器不支持麦克风：直接打字即可，WIP 一样能读。" },
+  wip_agent_voice_on: { IT: "WIP parla: attivo", EN: "WIP speaks: on", FR: "WIP parle : activé", ES: "WIP habla: activado", DE: "WIP spricht: an", RU: "WIP говорит: вкл", ZH: "WIP 语音：开" },
+  wip_agent_voice_off: { IT: "WIP parla: spento", EN: "WIP speaks: off", FR: "WIP parle : désactivé", ES: "WIP habla: desactivado", DE: "WIP spricht: aus", RU: "WIP говорит: выкл", ZH: "WIP 语音：关" },
+  wip_agent_ready_cta: { IT: "Crea l'itinerario", EN: "Create the itinerary", FR: "Créer l'itinéraire", ES: "Crear el itinerario", DE: "Route erstellen", RU: "Создать маршрут", ZH: "生成行程" },
+  wip_agent_ready_edit: { IT: "Cambia qualcosa", EN: "Change something", FR: "Modifier quelque chose", ES: "Cambiar algo", DE: "Etwas ändern", RU: "Изменить", ZH: "修改一下" },
+  wip_agent_error: { IT: "WIP non risponde in questo momento: riprova tra poco.", EN: "WIP isn't answering right now: try again shortly.", FR: "WIP ne répond pas pour le moment : réessayez bientôt.", ES: "WIP no responde ahora mismo: inténtalo en breve.", DE: "WIP antwortet gerade nicht: versuche es gleich erneut.", RU: "WIP сейчас не отвечает: попробуйте чуть позже.", ZH: "WIP 暂时没有回应，请稍后重试。" },
+  wip_agent_login_required: { IT: "Accedi per parlare con WIP: è gratis, basta un account.", EN: "Log in to talk to WIP: it's free, you just need an account.", FR: "Connectez-vous pour parler à WIP : c'est gratuit, un compte suffit.", ES: "Inicia sesión para hablar con WIP: es gratis, solo necesitas una cuenta.", DE: "Melde dich an, um mit WIP zu sprechen: kostenlos, es genügt ein Konto.", RU: "Войдите, чтобы поговорить с WIP: это бесплатно, нужен только аккаунт.", ZH: "登录后即可与 WIP 对话：免费，只需一个账户。" },
   swip_subtitle: {
     IT: "Scegli le attrazioni che ti piacciono",
     EN: "Choose attractions you like",
@@ -4036,11 +4450,580 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ES: "Gratis: solo pagas el itinerario que elijas",
     RU: "Бесплатно — вы платите только за выбранный маршрут",
     ZH: "免费——仅为您选择的行程付费"
-  , DE: "Kostenlos — du zahlst nur für die Route, die du auswählst"}
+  , DE: "Kostenlos — du zahlst nur für die Route, die du auswählst"},
+
+  // ── Eventi: stringhe che prima erano hardcoded in italiano ──
+  events_only_free: {
+    IT: "Solo gratis", EN: "Free only", FR: "Gratuit seulement", ES: "Solo gratis", RU: "Только бесплатные", ZH: "仅免费"
+  , DE: "Nur kostenlos"},
+  events_free_badge: {
+    IT: "Gratis", EN: "Free", FR: "Gratuit", ES: "Gratis", RU: "Бесплатно", ZH: "免费"
+  , DE: "Kostenlos"},
+  events_evening_cta: {
+    IT: "Serata perfetta in un tap", EN: "Perfect evening in one tap", FR: "Soirée parfaite en un clic", ES: "Noche perfecta en un toque", RU: "Идеальный вечер в одно касание", ZH: "一键完美夜晚"
+  , DE: "Perfekter Abend mit einem Tipp"},
+  events_evening_preparing: {
+    IT: "Preparo la tua serata...", EN: "Preparing your evening...", FR: "Je prépare votre soirée...", ES: "Preparando tu noche...", RU: "Готовлю ваш вечер...", ZH: "正在准备您的夜晚..."
+  , DE: "Ich bereite deinen Abend vor..."},
+  events_evening_no_position: {
+    IT: "Posizione non disponibile per comporre la serata.", EN: "Position unavailable to plan the evening.", FR: "Position indisponible pour composer la soirée.", ES: "Posición no disponible para preparar la noche.", RU: "Местоположение недоступно для планирования вечера.", ZH: "无法获取位置，无法安排夜晚。"
+  , DE: "Position nicht verfügbar, um den Abend zu planen."},
+  events_evening_unavailable: {
+    IT: "Serata perfetta non disponibile al momento, riprova tra poco.", EN: "Perfect evening unavailable right now, try again shortly.", FR: "Soirée parfaite indisponible pour le moment, réessayez bientôt.", ES: "Noche perfecta no disponible ahora, inténtalo en breve.", RU: "Идеальный вечер сейчас недоступен, попробуйте позже.", ZH: "完美夜晚暂不可用，请稍后再试。"
+  , DE: "Perfekter Abend gerade nicht verfügbar, versuche es gleich noch einmal."},
+  events_evening_not_composable: {
+    IT: "Qui non ho abbastanza locali ed eventi reali per comporre una serata: prova da una città più grande.", EN: "Not enough real venues and events here to plan an evening: try from a bigger city.", FR: "Pas assez de lieux et d'événements réels ici pour composer une soirée : essayez depuis une plus grande ville.", ES: "No hay suficientes locales y eventos reales aquí para preparar una noche: prueba desde una ciudad más grande.", RU: "Здесь недостаточно реальных заведений и событий, чтобы составить вечер: попробуйте из города побольше.", ZH: "这里真实的场所和活动不足以安排夜晚：请尝试更大的城市。"
+  , DE: "Hier gibt es nicht genug echte Lokale und Events für einen Abend: versuche es von einer größeren Stadt aus."},
+  events_evening_timeout: {
+    IT: "La serata ci sta mettendo troppo: riprova tra poco.", EN: "The evening plan is taking too long: try again shortly.", FR: "La soirée prend trop de temps : réessayez bientôt.", ES: "La noche está tardando demasiado: inténtalo en breve.", RU: "Планирование вечера занимает слишком много времени: попробуйте позже.", ZH: "夜晚规划耗时过长：请稍后再试。"
+  , DE: "Der Abend dauert zu lange: versuche es gleich noch einmal."},
+  events_evening_budget: {
+    IT: "Budget stimato", EN: "Estimated budget", FR: "Budget estimé", ES: "Presupuesto estimado", RU: "Ориентировочный бюджет", ZH: "预计预算"
+  , DE: "Geschätztes Budget"},
+  events_evening_open_map: {
+    IT: "Apri in mappa", EN: "Open in map", FR: "Ouvrir sur la carte", ES: "Abrir en el mapa", RU: "Открыть на карте", ZH: "在地图中打开"
+  , DE: "In Karte öffnen"},
+  events_evening_tickets: {
+    IT: "Biglietti", EN: "Tickets", FR: "Billets", ES: "Entradas", RU: "Билеты", ZH: "门票"
+  , DE: "Tickets"},
+  events_evening_disclaimer: {
+    IT: "Proposta generata con AI su locali ed eventi reali della zona: verifica orari e disponibilità.", EN: "AI-generated proposal based on real venues and events in the area: check times and availability.", FR: "Proposition générée par IA sur des lieux et événements réels : vérifiez horaires et disponibilité.", ES: "Propuesta generada con IA sobre locales y eventos reales de la zona: verifica horarios y disponibilidad.", RU: "Предложение создано ИИ на основе реальных заведений и событий: проверьте время и доступность.", ZH: "由 AI 根据该区域真实场所和活动生成：请核实时间和可用性。"
+  , DE: "KI-Vorschlag auf Basis echter Lokale und Events der Gegend: Zeiten und Verfügbarkeit prüfen."},
+  events_tonight_title: {
+    IT: "Stasera vicino a te", EN: "Tonight near you", FR: "Ce soir près de vous", ES: "Esta noche cerca de ti", RU: "Сегодня вечером рядом", ZH: "今晚在您附近"
+  , DE: "Heute Abend in deiner Nähe"},
+  events_tonight_at: {
+    IT: "ore", EN: "at", FR: "à", ES: "a las", RU: "в", ZH: "时间"
+  , DE: "um"},
+  events_loading_source: {
+    IT: "Carico", EN: "Loading", FR: "Chargement", ES: "Cargando", RU: "Загрузка", ZH: "加载中"
+  , DE: "Lade"},
+  events_source_unavailable: {
+    IT: "non disponibile", EN: "unavailable", FR: "indisponible", ES: "no disponible", RU: "недоступно", ZH: "不可用"
+  , DE: "nicht verfügbar"},
+  events_source_local_label: {
+    IT: "Sagre & Mercati", EN: "Fairs & Markets", FR: "Fêtes & Marchés", ES: "Ferias y Mercados", RU: "Ярмарки и рынки", ZH: "集市与节庆"
+  , DE: "Feste & Märkte"},
+  events_err_virgilio: {
+    IT: "Impossibile caricare eventi da Virgilio.", EN: "Could not load events from Virgilio.", FR: "Impossible de charger les événements de Virgilio.", ES: "No se pudieron cargar eventos de Virgilio.", RU: "Не удалось загрузить события Virgilio.", ZH: "无法从 Virgilio 加载活动。"
+  , DE: "Events von Virgilio konnten nicht geladen werden."},
+  events_err_ticketmaster: {
+    IT: "Nessun evento o API key mancante.", EN: "No events or missing API key.", FR: "Aucun événement ou clé API manquante.", ES: "Sin eventos o falta la clave API.", RU: "Нет событий или отсутствует API-ключ.", ZH: "无活动或缺少 API 密钥。"
+  , DE: "Keine Events oder API-Schlüssel fehlt."},
+  events_err_local: {
+    IT: "Sagre e mercati non disponibili.", EN: "Fairs and markets unavailable.", FR: "Fêtes et marchés indisponibles.", ES: "Ferias y mercados no disponibles.", RU: "Ярмарки и рынки недоступны.", ZH: "集市与节庆不可用。"
+  , DE: "Feste und Märkte nicht verfügbar."},
+  events_err_tiqets: {
+    IT: "Impossibile recuperare biglietti Tiqets", EN: "Could not fetch Tiqets tickets", FR: "Impossible de récupérer les billets Tiqets", ES: "No se pudieron obtener entradas de Tiqets", RU: "Не удалось получить билеты Tiqets", ZH: "无法获取 Tiqets 门票"
+  , DE: "Tiqets-Tickets konnten nicht geladen werden"},
+  events_err_viator: {
+    IT: "Impossibile caricare esperienze Viator.", EN: "Could not load Viator experiences.", FR: "Impossible de charger les expériences Viator.", ES: "No se pudieron cargar experiencias de Viator.", RU: "Не удалось загрузить впечатления Viator.", ZH: "无法加载 Viator 体验。"
+  , DE: "Viator-Erlebnisse konnten nicht geladen werden."},
+  events_err_gyg: {
+    IT: "Impossibile recuperare eventi GetYourGuide", EN: "Could not fetch GetYourGuide activities", FR: "Impossible de récupérer les activités GetYourGuide", ES: "No se pudieron obtener actividades de GetYourGuide", RU: "Не удалось получить GetYourGuide", ZH: "无法获取 GetYourGuide 活动"
+  , DE: "GetYourGuide-Aktivitäten konnten nicht geladen werden"},
+  events_err_mostre: {
+    IT: "Mostre non disponibili.", EN: "Exhibitions unavailable.", FR: "Expositions indisponibles.", ES: "Exposiciones no disponibles.", RU: "Выставки недоступны.", ZH: "展览不可用。"
+  , DE: "Ausstellungen nicht verfügbar."},
+  events_err_permanenti: {
+    IT: "Collezioni permanenti non disponibili.", EN: "Permanent collections unavailable.", FR: "Collections permanentes indisponibles.", ES: "Colecciones permanentes no disponibles.", RU: "Постоянные коллекции недоступны.", ZH: "常设展不可用。"
+  , DE: "Dauerausstellungen nicht verfügbar."},
+  events_save_login: {
+    IT: "Devi essere loggato per salvare un evento.", EN: "Log in to save an event.", FR: "Connectez-vous pour enregistrer un événement.", ES: "Inicia sesión para guardar un evento.", RU: "Войдите, чтобы сохранить событие.", ZH: "请登录以保存活动。"
+  , DE: "Melde dich an, um ein Event zu speichern."},
+  events_save_already: {
+    IT: "Evento già salvato nei preferiti!", EN: "Event already in favorites!", FR: "Événement déjà dans les favoris !", ES: "¡Evento ya guardado en favoritos!", RU: "Событие уже в избранном!", ZH: "活动已在收藏中！"
+  , DE: "Event ist schon in den Favoriten!"},
+  events_save_watch: {
+    IT: "Evento salvato! Ti avviso qui se il prezzo o lo stato dei biglietti cambia.", EN: "Event saved! I'll let you know here if the price or ticket status changes.", FR: "Événement enregistré ! Je vous préviens ici si le prix ou l'état des billets change.", ES: "¡Evento guardado! Te aviso aquí si cambia el precio o el estado de las entradas.", RU: "Событие сохранено! Сообщу здесь, если изменится цена или статус билетов.", ZH: "活动已保存！价格或票务状态变化时会在此通知您。"
+  , DE: "Event gespeichert! Ich sage dir hier Bescheid, wenn sich Preis oder Ticketstatus ändern."},
+  events_save_done: {
+    IT: "Evento salvato nei Preferiti! Potrai usarlo per generare itinerari personalizzati.", EN: "Event saved to Favorites! You can use it to build custom itineraries.", FR: "Événement enregistré dans les favoris ! Utilisez-le pour créer des itinéraires personnalisés.", ES: "¡Evento guardado en Favoritos! Podrás usarlo para generar itinerarios personalizados.", RU: "Событие сохранено в избранное! Используйте его для персональных маршрутов.", ZH: "活动已保存至收藏！可用于生成个性化行程。"
+  , DE: "Event in den Favoriten gespeichert! Du kannst es für persönliche Routen nutzen."},
+  events_save_error: {
+    IT: "Errore durante il salvataggio.", EN: "Error while saving.", FR: "Erreur lors de l'enregistrement.", ES: "Error al guardar.", RU: "Ошибка при сохранении.", ZH: "保存时出错。"
+  , DE: "Fehler beim Speichern."},
+  events_save_title: {
+    IT: "Salva nei preferiti", EN: "Save to favorites", FR: "Enregistrer dans les favoris", ES: "Guardar en favoritos", RU: "В избранное", ZH: "保存到收藏"
+  , DE: "In Favoriten speichern"},
+  events_book_viator: {
+    IT: "Prenota su Viator", EN: "Book on Viator", FR: "Réserver sur Viator", ES: "Reservar en Viator", RU: "Забронировать на Viator", ZH: "在 Viator 预订"
+  , DE: "Auf Viator buchen"},
+  events_book_gyg: {
+    IT: "Prenota su GetYourGuide", EN: "Book on GetYourGuide", FR: "Réserver sur GetYourGuide", ES: "Reservar en GetYourGuide", RU: "Забронировать на GetYourGuide", ZH: "在 GetYourGuide 预订"
+  , DE: "Auf GetYourGuide buchen"},
+  events_show_more: {
+    IT: "Mostra altri 20", EN: "Show 20 more", FR: "Afficher 20 de plus", ES: "Mostrar 20 más", RU: "Показать ещё 20", ZH: "再显示 20 个"
+  , DE: "20 weitere anzeigen"},
+  events_type_all: {
+    IT: "Tutti", EN: "All", FR: "Tous", ES: "Todos", RU: "Все", ZH: "全部"
+  , DE: "Alle"},
+  events_type_concerts: {
+    IT: "Concerti", EN: "Concerts", FR: "Concerts", ES: "Conciertos", RU: "Концерты", ZH: "音乐会"
+  , DE: "Konzerte"},
+  events_type_fairs: {
+    IT: "Sagre", EN: "Fairs", FR: "Fêtes", ES: "Ferias", RU: "Ярмарки", ZH: "节庆"
+  , DE: "Feste"},
+  events_type_markets: {
+    IT: "Mercati", EN: "Markets", FR: "Marchés", ES: "Mercados", RU: "Рынки", ZH: "集市"
+  , DE: "Märkte"},
+  events_type_tours: {
+    IT: "Tour", EN: "Tours", FR: "Visites", ES: "Tours", RU: "Туры", ZH: "导览"
+  , DE: "Touren"},
+  events_type_tickets: {
+    IT: "Biglietti", EN: "Tickets", FR: "Billets", ES: "Entradas", RU: "Билеты", ZH: "门票"
+  , DE: "Tickets"},
+  events_trip_active: {
+    IT: "Eventi a {city} (viaggio attivo)", EN: "Events in {city} (active trip)", FR: "Événements à {city} (voyage en cours)", ES: "Eventos en {city} (viaje activo)", RU: "События в {city} (активная поездка)", ZH: "{city} 的活动（当前行程）"
+  , DE: "Events in {city} (aktive Reise)"},
+  events_current_position: {
+    IT: "Posizione attuale", EN: "Current position", FR: "Position actuelle", ES: "Posición actual", RU: "Текущее положение", ZH: "当前位置"
+  , DE: "Aktuelle Position"},
+  events_alert_dismiss: {
+    IT: "Ho capito, nascondi", EN: "Got it, hide", FR: "Compris, masquer", ES: "Entendido, ocultar", RU: "Понятно, скрыть", ZH: "知道了，隐藏"
+  , DE: "Verstanden, ausblenden"},
+  // ── Pianificatore: errori specifici di generazione (22/08/2026) ──────
+  err_quota_exceeded_itinerary: {
+    IT: "Hai raggiunto il limite giornaliero di itinerari. Riprova domani.",
+    EN: "You've reached today's itinerary limit. Try again tomorrow.",
+    FR: "Vous avez atteint la limite quotidienne d'itinéraires. Réessayez demain.",
+    ES: "Has alcanzado el límite diario de itinerarios. Vuelve a intentarlo mañana.",
+    DE: "Du hast das tägliche Routenlimit erreicht. Versuche es morgen erneut.",
+    RU: "Достигнут дневной лимит маршрутов. Попробуйте завтра.",
+    ZH: "已达到今日行程上限，请明天再试。" },
+  err_feature_disabled: {
+    IT: "La generazione itinerari è temporaneamente in manutenzione. Riprova più tardi.",
+    EN: "Itinerary generation is temporarily under maintenance. Try again later.",
+    FR: "La génération d'itinéraires est temporairement en maintenance. Réessayez plus tard.",
+    ES: "La generación de itinerarios está temporalmente en mantenimiento. Inténtalo más tarde.",
+    DE: "Die Routenerstellung ist vorübergehend in Wartung. Versuche es später erneut.",
+    RU: "Создание маршрутов временно недоступно. Попробуйте позже.",
+    ZH: "行程生成暂时维护中，请稍后再试。" },
+  err_charge_failed: {
+    IT: "Problema temporaneo con l'addebito dei crediti. Nessun credito è stato scalato: riprova tra poco.",
+    EN: "Temporary problem charging credits. No credits were deducted: try again shortly.",
+    FR: "Problème temporaire lors du débit des crédits. Aucun crédit n'a été prélevé : réessayez bientôt.",
+    ES: "Problema temporal al cobrar los créditos. No se ha descontado nada: inténtalo en breve.",
+    DE: "Vorübergehendes Problem beim Abbuchen der Credits. Es wurde nichts abgezogen: versuche es gleich erneut.",
+    RU: "Временная ошибка списания кредитов. Кредиты не списаны: попробуйте чуть позже.",
+    ZH: "扣除点数时出现临时问题，未扣除任何点数，请稍后重试。" },
+  err_ai_timeout: {
+    IT: "Il server sta impiegando troppo tempo a rispondere. Riprova tra poco.",
+    EN: "The server is taking too long to respond. Try again shortly.",
+    FR: "Le serveur met trop de temps à répondre. Réessayez bientôt.",
+    ES: "El servidor tarda demasiado en responder. Inténtalo en breve.",
+    DE: "Der Server braucht zu lange. Versuche es gleich erneut.",
+    RU: "Сервер отвечает слишком долго. Попробуйте чуть позже.",
+    ZH: "服务器响应超时，请稍后重试。" },
+  err_ai_empty: {
+    IT: "Il server non ha restituito dati. Riprova tra qualche secondo.",
+    EN: "The server returned no data. Try again in a few seconds.",
+    FR: "Le serveur n'a renvoyé aucune donnée. Réessayez dans quelques secondes.",
+    ES: "El servidor no ha devuelto datos. Inténtalo en unos segundos.",
+    DE: "Der Server hat keine Daten geliefert. Versuche es in ein paar Sekunden erneut.",
+    RU: "Сервер не вернул данных. Попробуйте через несколько секунд.",
+    ZH: "服务器未返回数据，请几秒后重试。" },
+  err_ai_invalid_response: {
+    IT: "Risposta AI incompleta o non valida. Riprova; se persiste, prova con meno giorni o una destinazione più semplice.",
+    EN: "Incomplete or invalid AI response. Try again; if it persists, try fewer days or a simpler destination.",
+    FR: "Réponse IA incomplète ou invalide. Réessayez ; si le problème persiste, réduisez les jours ou simplifiez la destination.",
+    ES: "Respuesta de la IA incompleta o no válida. Inténtalo de nuevo; si persiste, prueba con menos días o un destino más sencillo.",
+    DE: "Unvollständige oder ungültige KI-Antwort. Versuche es erneut; bleibt es dabei, nimm weniger Tage oder ein einfacheres Ziel.",
+    RU: "Неполный или неверный ответ ИИ. Попробуйте снова; если повторяется, уменьшите число дней или упростите направление.",
+    ZH: "AI 响应不完整或无效。请重试；若仍失败，请减少天数或选择更简单的目的地。" },
+  err_login_required: {
+    IT: "Accedi per continuare.", EN: "Sign in to continue.", FR: "Connectez-vous pour continuer.",
+    ES: "Inicia sesión para continuar.", DE: "Melde dich an, um fortzufahren.", RU: "Войдите, чтобы продолжить.", ZH: "请登录以继续。" },
+  err_generation_failed: {
+    IT: "Generazione non riuscita. Riprova tra poco.", EN: "Generation failed. Try again shortly.",
+    FR: "Échec de la génération. Réessayez bientôt.", ES: "La generación ha fallado. Inténtalo en breve.",
+    DE: "Generierung fehlgeschlagen. Versuche es gleich erneut.", RU: "Не удалось сгенерировать. Попробуйте чуть позже.", ZH: "生成失败，请稍后重试。" },
+  library_cache_hit_free: {
+    IT: "Trovato in biblioteca: nessun credito scalato.", EN: "Found in the library: no credits charged.",
+    FR: "Trouvé dans la bibliothèque : aucun crédit débité.", ES: "Encontrado en la biblioteca: no se han descontado créditos.",
+    DE: "In der Bibliothek gefunden: keine Credits abgebucht.", RU: "Найдено в библиотеке: кредиты не списаны.", ZH: "已在图书馆中找到：未扣除点数。" },
+  replacing_stop: {
+    IT: "Sostituisco la tappa…", EN: "Replacing stop…", FR: "Remplacement de l'étape…", ES: "Sustituyendo la parada…",
+    DE: "Station wird ersetzt…", RU: "Замена остановки…", ZH: "正在替换行程点…" },
+  prefill_applied_check_form: {
+    IT: "applicato. Controlla il form e premi Genera.", EN: "applied. Check the form and press Generate.",
+    FR: "appliqué. Vérifiez le formulaire et appuyez sur Générer.", ES: "aplicado. Revisa el formulario y pulsa Generar.",
+    DE: "angewendet. Prüfe das Formular und tippe auf Erstellen.", RU: "применено. Проверьте форму и нажмите «Создать».", ZH: "已应用。请检查表单并点击“生成”。" },
+  prefill_route_applied: {
+    IT: "tappe caricate come roadtrip. Controlla il form e premi Genera.", EN: "stages loaded as a road trip. Check the form and press Generate.",
+    FR: "étapes chargées en road trip. Vérifiez le formulaire et appuyez sur Générer.", ES: "etapas cargadas como roadtrip. Revisa el formulario y pulsa Generar.",
+    DE: "Etappen als Roadtrip geladen. Prüfe das Formular und tippe auf Erstellen.", RU: "этапы загружены как автопутешествие. Проверьте форму и нажмите «Создать».", ZH: "行程段已作为公路旅行加载。请检查表单并点击“生成”。" },
+  rain_plan_failed: {
+    IT: "Piano B non riuscito", EN: "Plan B failed", FR: "Plan B échoué", ES: "El plan B ha fallado",
+    DE: "Plan B fehlgeschlagen", RU: "План Б не удался", ZH: "备选方案失败" },
+  saved_to_my_itineraries: {
+    IT: "Salvato nei tuoi itinerari ✅ — guida premium, podcast e PDF sono già attivi.",
+    EN: "Saved to your itineraries ✅ — premium guide, podcast and PDF are ready.",
+    FR: "Enregistré dans vos itinéraires ✅ — guide premium, podcast et PDF sont prêts.",
+    ES: "Guardado en tus itinerarios ✅ — guía premium, pódcast y PDF ya activos.",
+    DE: "In deinen Routen gespeichert ✅ — Premium-Guide, Podcast und PDF sind bereit.",
+    RU: "Сохранено в ваших маршрутах ✅ — премиум-гид, подкаст и PDF уже доступны.",
+    ZH: "已保存到我的行程 ✅ — 高级指南、播客和 PDF 已可用。" },
+  err_save_itinerary_retry: {
+    IT: "Non sono riuscito a salvare l'itinerario: riprova tra poco.", EN: "Couldn't save the itinerary: try again shortly.",
+    FR: "Impossible d'enregistrer l'itinéraire : réessayez bientôt.", ES: "No se ha podido guardar el itinerario: inténtalo en breve.",
+    DE: "Die Route konnte nicht gespeichert werden: versuche es gleich erneut.", RU: "Не удалось сохранить маршрут: попробуйте чуть позже.", ZH: "无法保存行程，请稍后重试。" },
+  mini_guide_daily_limit: {
+    IT: "Hai già letto le mini-guide gratuite di 3 città oggi ✨ Torna domani per la prossima, o genera subito l'itinerario di questa.",
+    EN: "You've already read today's 3 free mini-guides ✨ Come back tomorrow for the next one, or generate this city's itinerary now.",
+    FR: "Vous avez déjà lu les 3 mini-guides gratuits du jour ✨ Revenez demain, ou générez tout de suite l'itinéraire de cette ville.",
+    ES: "Ya has leído las 3 miniguías gratuitas de hoy ✨ Vuelve mañana o genera ahora el itinerario de esta ciudad.",
+    DE: "Du hast die 3 kostenlosen Mini-Guides von heute schon gelesen ✨ Komm morgen wieder oder erstelle jetzt die Route dieser Stadt.",
+    RU: "Вы уже прочитали 3 бесплатных мини-гида на сегодня ✨ Возвращайтесь завтра или создайте маршрут по этому городу сейчас.",
+    ZH: "今天的 3 份免费迷你指南已读完 ✨ 明天再来，或立即生成这座城市的行程。" },
+  rain_variant_applied: {
+    IT: "Giornata sostituita con la variante al coperto. Pranzo e cena sono rimasti al loro posto.",
+    EN: "Day replaced with the indoor variant. Lunch and dinner stayed where they were.",
+    FR: "Journée remplacée par la variante en intérieur. Déjeuner et dîner sont restés en place.",
+    ES: "Día sustituido por la variante a cubierto. Comida y cena siguen en su sitio.",
+    DE: "Tag durch die Indoor-Variante ersetzt. Mittag- und Abendessen blieben an ihrem Platz.",
+    RU: "День заменён на вариант в помещении. Обед и ужин остались на месте.",
+    ZH: "已替换为室内方案，午餐和晚餐保持不变。" },
+  choose_destination_first: {
+    IT: "Scegli prima una destinazione dall'elenco", EN: "Pick a destination from the list first",
+    FR: "Choisissez d'abord une destination dans la liste", ES: "Elige primero un destino de la lista",
+    DE: "Wähle zuerst ein Ziel aus der Liste", RU: "Сначала выберите направление из списка", ZH: "请先从列表中选择目的地" },
+  login_to_continue: {
+    IT: "Accedi per continuare", EN: "Sign in to continue", FR: "Connectez-vous pour continuer", ES: "Inicia sesión para continuar",
+    DE: "Melde dich an, um fortzufahren", RU: "Войдите, чтобы продолжить", ZH: "请登录以继续" },
+  group_trip_title: {
+    IT: "Viaggio di gruppo", EN: "Group trip", FR: "Voyage de groupe", ES: "Viaje en grupo", DE: "Gruppenreise", RU: "Групповая поездка", ZH: "团体旅行" },
+  group_trip_desc: {
+    IT: "Ognuno vota le sue preferenze via PIN, WIP le fonde in un itinerario per tutti.",
+    EN: "Everyone votes their preferences via PIN, WIP merges them into one itinerary for all.",
+    FR: "Chacun vote ses préférences via un PIN, WIP les fusionne en un itinéraire pour tous.",
+    ES: "Cada uno vota sus preferencias con un PIN y WIP las fusiona en un itinerario para todos.",
+    DE: "Alle stimmen per PIN ab, WIP verschmilzt die Wünsche zu einer Route für alle.",
+    RU: "Каждый голосует через PIN, WIP объединяет предпочтения в один маршрут для всех.",
+    ZH: "每个人通过 PIN 投票，WIP 将偏好融合为一份共同行程。" },
+  library_card_title: {
+    IT: "Libreria itinerari", EN: "Itinerary library", FR: "Bibliothèque d'itinéraires", ES: "Biblioteca de itinerarios",
+    DE: "Routen-Bibliothek", RU: "Библиотека маршрутов", ZH: "行程图书馆" },
+  library_card_desc: {
+    IT: "Centinaia di itinerari pronti e verificati: porti, scali, cammini, cinema, fioriture… Gratis.",
+    EN: "Hundreds of ready, verified itineraries: ports, layovers, pilgrim ways, cinema, blooms… Free.",
+    FR: "Des centaines d'itinéraires prêts et vérifiés : ports, escales, chemins, cinéma, floraisons… Gratuit.",
+    ES: "Cientos de itinerarios listos y verificados: puertos, escalas, caminos, cine, floraciones… Gratis.",
+    DE: "Hunderte fertige, geprüfte Routen: Häfen, Zwischenstopps, Pilgerwege, Kino, Blüten… Kostenlos.",
+    RU: "Сотни готовых проверенных маршрутов: порты, пересадки, паломнические пути, кино, цветение… Бесплатно.",
+    ZH: "数百条现成且经过验证的行程：港口、中转、朝圣之路、电影、花季……免费。" },
+  group_prefs_applied: {
+    IT: "Preferenze del gruppo applicate: controlla il form e premi Genera.", EN: "Group preferences applied: check the form and press Generate.",
+    FR: "Préférences du groupe appliquées : vérifiez le formulaire et appuyez sur Générer.", ES: "Preferencias del grupo aplicadas: revisa el formulario y pulsa Generar.",
+    DE: "Gruppenwünsche übernommen: prüfe das Formular und tippe auf Erstellen.", RU: "Предпочтения группы применены: проверьте форму и нажмите «Создать».", ZH: "已应用团队偏好，请检查表单并点击“生成”。" },
+  seasonal_inspirations_label: {
+    IT: "Ispirazioni di stagione", EN: "Seasonal inspirations", FR: "Inspirations de saison", ES: "Inspiraciones de temporada",
+    DE: "Saisonale Inspirationen", RU: "Сезонные идеи", ZH: "当季灵感" },
+  no_inspiration_for_filter: {
+    IT: "Nessuna ispirazione per questo filtro nel periodo.", EN: "No inspirations for this filter in this period.",
+    FR: "Aucune inspiration pour ce filtre à cette période.", ES: "Sin inspiraciones para este filtro en este periodo.",
+    DE: "Keine Inspirationen für diesen Filter in diesem Zeitraum.", RU: "Нет идей для этого фильтра в этот период.", ZH: "此时段下该筛选无灵感。" },
+  special_itineraries_label: {
+    IT: "Itinerari speciali", EN: "Special itineraries", FR: "Itinéraires spéciaux", ES: "Itinerarios especiales",
+    DE: "Besondere Routen", RU: "Особые маршруты", ZH: "特色行程" },
+  short_stop_label: {
+    IT: "Sosta breve", EN: "Short stop", FR: "Escale courte", ES: "Parada breve", DE: "Kurzer Stopp", RU: "Короткая остановка", ZH: "短暂停留" },
+  taste_routes_label: {
+    IT: "Strade del vino e del gusto", EN: "Wine and food routes", FR: "Routes du vin et du goût", ES: "Rutas del vino y del sabor",
+    DE: "Wein- und Genussstraßen", RU: "Винные и гастрономические маршруты", ZH: "美酒美食之路" },
+  thematic_trips_label: {
+    IT: "Viaggi tematici", EN: "Themed trips", FR: "Voyages thématiques", ES: "Viajes temáticos", DE: "Themenreisen", RU: "Тематические поездки", ZH: "主题旅行" },
+  roadtrip_hint: {
+    IT: "Roadtrip multi-città: i giorni verranno ripartiti tra le città e i trasferimenti diventano tappe con km e tempi reali. In auto tieni attiva l'audioguida GPS: i luoghi lungo il percorso si raccontano da soli.",
+    EN: "Multi-city road trip: days are split between cities and transfers become stops with real km and times. Keep the GPS audio guide on in the car: places along the way tell their own story.",
+    FR: "Road trip multi-villes : les jours sont répartis entre les villes et les transferts deviennent des étapes avec km et temps réels. En voiture, gardez l'audioguide GPS actif : les lieux sur la route se racontent d'eux-mêmes.",
+    ES: "Roadtrip multiciudad: los días se reparten entre ciudades y los traslados se convierten en paradas con km y tiempos reales. En el coche mantén activa la audioguía GPS: los lugares del camino se cuentan solos.",
+    DE: "Roadtrip über mehrere Städte: die Tage werden auf die Städte verteilt, Transfers werden zu Stationen mit echten km und Zeiten. Lass im Auto den GPS-Audioguide an: die Orte am Weg erzählen sich selbst.",
+    RU: "Автопутешествие по нескольким городам: дни распределяются между городами, переезды становятся остановками с реальными км и временем. В машине держите GPS-аудиогид включённым: места по пути расскажут о себе сами.",
+    ZH: "多城市公路旅行：天数在城市间分配，转移成为带真实公里数和时间的行程点。开车时请保持 GPS 语音导览开启：沿途景点会自动讲述。" },
+  mini_guide_free_hint: {
+    IT: "Mini-guida gratuita, da leggere subito", EN: "Free mini-guide, read it now", FR: "Mini-guide gratuit, à lire tout de suite",
+    ES: "Miniguía gratuita, para leer ahora", DE: "Kostenloser Mini-Guide, sofort lesbar", RU: "Бесплатный мини-гид, читайте сейчас", ZH: "免费迷你指南，立即阅读" },
+  placeholder_destination_example: {
+    IT: "Es: Firenze, Roma...", EN: "E.g. Florence, Rome...", FR: "Ex : Florence, Rome...", ES: "Ej.: Florencia, Roma...",
+    DE: "Z. B. Florenz, Rom...", RU: "Напр.: Флоренция, Рим...", ZH: "例如：佛罗伦萨、罗马……" },
+  rain_variant_tooltip: {
+    IT: "Variante al coperto: musei, chiese e gallerie al posto delle tappe all'aperto, pranzo e cena invariati",
+    EN: "Indoor variant: museums, churches and galleries instead of outdoor stops, lunch and dinner unchanged",
+    FR: "Variante en intérieur : musées, églises et galeries à la place des étapes en plein air, déjeuner et dîner inchangés",
+    ES: "Variante a cubierto: museos, iglesias y galerías en lugar de las paradas al aire libre, comida y cena sin cambios",
+    DE: "Indoor-Variante: Museen, Kirchen und Galerien statt Stationen im Freien, Mittag- und Abendessen unverändert",
+    RU: "Вариант в помещении: музеи, церкви и галереи вместо остановок на открытом воздухе, обед и ужин без изменений",
+    ZH: "室内方案：以博物馆、教堂和画廊替代户外行程点，午餐和晚餐不变" },
+  resume: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续" },
+  pause: { IT: "Pausa", EN: "Pause", FR: "Pause", ES: "Pausa", DE: "Pause", RU: "Пауза", ZH: "暂停" },
+  stop: { IT: "Stop", EN: "Stop", FR: "Stop", ES: "Detener", DE: "Stopp", RU: "Стоп", ZH: "停止" },
+  replay_from_start: {
+    IT: "Riascolta dall'inizio", EN: "Replay from the start", FR: "Réécouter depuis le début", ES: "Volver a escuchar desde el inicio",
+    DE: "Von vorn anhören", RU: "Прослушать с начала", ZH: "从头重播" },
+  no_tours_viator: {
+    IT: "Nessun tour Viator trovato.", EN: "No Viator tours found.", FR: "Aucun tour Viator trouvé.", ES: "No se han encontrado tours de Viator.",
+    DE: "Keine Viator-Touren gefunden.", RU: "Туры Viator не найдены.", ZH: "未找到 Viator 行程。" },
+  no_tours_gyg: {
+    IT: "Nessun tour GetYourGuide trovato.", EN: "No GetYourGuide tours found.", FR: "Aucun tour GetYourGuide trouvé.", ES: "No se han encontrado tours de GetYourGuide.",
+    DE: "Keine GetYourGuide-Touren gefunden.", RU: "Туры GetYourGuide не найдены.", ZH: "未找到 GetYourGuide 行程。" },
+  no_events_ticketmaster: {
+    IT: "Nessun evento Ticketmaster trovato.", EN: "No Ticketmaster events found.", FR: "Aucun événement Ticketmaster trouvé.", ES: "No se han encontrado eventos de Ticketmaster.",
+    DE: "Keine Ticketmaster-Events gefunden.", RU: "События Ticketmaster не найдены.", ZH: "未找到 Ticketmaster 活动。" },
+  no_tickets_tiqets: {
+    IT: "Nessun biglietto Tiqets trovato.", EN: "No Tiqets tickets found.", FR: "Aucun billet Tiqets trouvé.", ES: "No se han encontrado entradas de Tiqets.",
+    DE: "Keine Tiqets-Tickets gefunden.", RU: "Билеты Tiqets не найдены.", ZH: "未找到 Tiqets 门票。" },
+  search_nearby_city: {
+    IT: "Cerca una città vicina…", EN: "Search a nearby city…", FR: "Chercher une ville proche…", ES: "Busca una ciudad cercana…",
+    DE: "Stadt in der Nähe suchen…", RU: "Найти город поблизости…", ZH: "搜索附近城市…" },
+  day_theme: { IT: "Tema del giorno", EN: "Theme of the day", FR: "Thème du jour", ES: "Tema del día", DE: "Thema des Tages", RU: "Тема дня", ZH: "今日主题" },
+  rain_preview_desc: {
+    IT: "Pranzo e cena restano invariati; le visite all'aperto sono sostituite da alternative al coperto.",
+    EN: "Lunch and dinner stay the same; outdoor visits are replaced by indoor alternatives.",
+    FR: "Déjeuner et dîner inchangés ; les visites en plein air sont remplacées par des alternatives en intérieur.",
+    ES: "Comida y cena no cambian; las visitas al aire libre se sustituyen por alternativas a cubierto.",
+    DE: "Mittag- und Abendessen bleiben; Besuche im Freien werden durch Indoor-Alternativen ersetzt.",
+    RU: "Обед и ужин без изменений; прогулки на открытом воздухе заменены вариантами в помещении.",
+    ZH: "午餐和晚餐不变；户外参观替换为室内方案。" },
+  apply_variant: { IT: "Applica variante", EN: "Apply variant", FR: "Appliquer la variante", ES: "Aplicar variante", DE: "Variante übernehmen", RU: "Применить вариант", ZH: "应用方案" },
+  generate_plan_first_guide: {
+    IT: "Genera prima l'itinerario: a piano pronto troverai la Guida d'Autore completa 📖",
+    EN: "Generate the itinerary first: once it's ready you'll find the full Author's Guide 📖",
+    FR: "Générez d'abord l'itinéraire : une fois prêt, vous trouverez le Guide d'auteur complet 📖",
+    ES: "Genera primero el itinerario: con el plan listo encontrarás la Guía de Autor completa 📖",
+    DE: "Erstelle zuerst die Route: sobald sie fertig ist, findest du den kompletten Autoren-Guide 📖",
+    RU: "Сначала создайте маршрут: когда он будет готов, появится полный Авторский гид 📖",
+    ZH: "请先生成行程：计划就绪后即可查看完整的作者指南 📖" },
+
+  // ── Guida Premium: renderer PDF (pg_*) ───────────────────────────────
+  pg_premium_guide: { IT: "Guida Premium", EN: "Premium Guide", FR: "Guide Premium", ES: "Guía Premium", DE: "Premium-Guide", RU: "Премиум-гид", ZH: "高级指南" },
+  pg_dedication: { IT: "Dedica", EN: "Dedication", FR: "Dédicace", ES: "Dedicatoria", DE: "Widmung", RU: "Посвящение", ZH: "题词" },
+  pg_toc: { IT: "Sommario", EN: "Contents", FR: "Sommaire", ES: "Índice", DE: "Inhalt", RU: "Содержание", ZH: "目录" },
+  pg_toc_sub: { IT: "Indice della guida", EN: "Guide index", FR: "Index du guide", ES: "Índice de la guía", DE: "Verzeichnis des Guides", RU: "Указатель гида", ZH: "指南索引" },
+  pg_day: { IT: "Giorno", EN: "Day", FR: "Jour", ES: "Día", DE: "Tag", RU: "День", ZH: "第天" },
+  pg_poi: { IT: "Punto di interesse", EN: "Point of interest", FR: "Point d'intérêt", ES: "Punto de interés", DE: "Sehenswürdigkeit", RU: "Достопримечательность", ZH: "景点" },
+  pg_discover_destination: { IT: "Scopri la destinazione", EN: "Discover the destination", FR: "Découvrez la destination", ES: "Descubre el destino", DE: "Entdecke das Ziel", RU: "Откройте направление", ZH: "探索目的地" },
+  pg_history: { IT: "Storia & Identità", EN: "History & Identity", FR: "Histoire & Identité", ES: "Historia e identidad", DE: "Geschichte & Identität", RU: "История и идентичность", ZH: "历史与身份" },
+  pg_culture: { IT: "Cultura & Tradizioni", EN: "Culture & Traditions", FR: "Culture & Traditions", ES: "Cultura y tradiciones", DE: "Kultur & Traditionen", RU: "Культура и традиции", ZH: "文化与传统" },
+  pg_practical_tips: { IT: "Consigli pratici", EN: "Practical tips", FR: "Conseils pratiques", ES: "Consejos prácticos", DE: "Praktische Tipps", RU: "Практические советы", ZH: "实用建议" },
+  pg_address: { IT: "Indirizzo", EN: "Address", FR: "Adresse", ES: "Dirección", DE: "Adresse", RU: "Адрес", ZH: "地址" },
+  pg_how_to_get: { IT: "Come arrivare", EN: "Getting there", FR: "Comment s'y rendre", ES: "Cómo llegar", DE: "Anreise", RU: "Как добраться", ZH: "如何到达" },
+  pg_hours: { IT: "Orari", EN: "Opening hours", FR: "Horaires", ES: "Horarios", DE: "Öffnungszeiten", RU: "Часы работы", ZH: "开放时间" },
+  pg_admission: { IT: "Ingresso", EN: "Admission", FR: "Entrée", ES: "Entrada", DE: "Eintritt", RU: "Вход", ZH: "门票" },
+  pg_best_time: { IT: "Momento ideale", EN: "Best time", FR: "Meilleur moment", ES: "Mejor momento", DE: "Beste Zeit", RU: "Лучшее время", ZH: "最佳时间" },
+  pg_contacts: { IT: "Contatti", EN: "Contacts", FR: "Contacts", ES: "Contactos", DE: "Kontakt", RU: "Контакты", ZH: "联系方式" },
+  pg_curiosities: { IT: "Lo sapevi? Curiosità & Segreti", EN: "Did you know? Curiosities & Secrets", FR: "Le saviez-vous ? Curiosités & Secrets", ES: "¿Sabías que…? Curiosidades y secretos", DE: "Wusstest du? Kurioses & Geheimnisse", RU: "Знаете ли вы? Факты и секреты", ZH: "你知道吗？趣闻与秘密" },
+  pg_historical_detail: { IT: "Dettaglio storico & architettonico", EN: "Historical & architectural detail", FR: "Détail historique & architectural", ES: "Detalle histórico y arquitectónico", DE: "Historisches & architektonisches Detail", RU: "Исторические и архитектурные детали", ZH: "历史与建筑细节" },
+  pg_insider_tip: { IT: "Consiglio insider", EN: "Insider tip", FR: "Conseil d'initié", ES: "Consejo de experto", DE: "Insider-Tipp", RU: "Совет знатока", ZH: "内行建议" },
+  pg_must_order: { IT: "Da ordinare assolutamente", EN: "Must-order dishes", FR: "À commander absolument", ES: "Imprescindible pedir", DE: "Unbedingt bestellen", RU: "Обязательно закажите", ZH: "必点菜品" },
+  pg_back_cover_tagline: { IT: "La tua guida di viaggio intelligente.", EN: "Your smart travel guide.", FR: "Votre guide de voyage intelligent.", ES: "Tu guía de viaje inteligente.", DE: "Dein smarter Reiseführer.", RU: "Ваш умный путеводитель.", ZH: "您的智能旅行指南。" },
+  pg_back_cover_sources: { IT: "Generata con Wikipedia, Wikivoyage, Foursquare e TripAdvisor.", EN: "Generated with Wikipedia, Wikivoyage, Foursquare and TripAdvisor.", FR: "Générée avec Wikipedia, Wikivoyage, Foursquare et TripAdvisor.", ES: "Generada con Wikipedia, Wikivoyage, Foursquare y TripAdvisor.", DE: "Erstellt mit Wikipedia, Wikivoyage, Foursquare und TripAdvisor.", RU: "Создано с помощью Wikipedia, Wikivoyage, Foursquare и TripAdvisor.", ZH: "基于 Wikipedia、Wikivoyage、Foursquare 和 TripAdvisor 生成。" },
+
+  // ── Guida Premium: modale ────────────────────────────────────────────
+  premium_guide_share_text: { IT: "Guarda la mia Guida Premium per", EN: "Check out my Premium Guide for", FR: "Découvrez mon Guide Premium pour", ES: "Mira mi Guía Premium de", DE: "Schau dir meinen Premium-Guide für", RU: "Посмотрите мой премиум-гид по", ZH: "看看我的高级指南：" },
+  link_copied: { IT: "Link copiato negli appunti!", EN: "Link copied to clipboard!", FR: "Lien copié dans le presse-papiers !", ES: "¡Enlace copiado al portapapeles!", DE: "Link in die Zwischenablage kopiert!", RU: "Ссылка скопирована!", ZH: "链接已复制到剪贴板！" },
+  premium_guide_podcast: { IT: "Podcast della Guida", EN: "Guide Podcast", FR: "Podcast du Guide", ES: "Pódcast de la Guía", DE: "Guide-Podcast", RU: "Подкаст гида", ZH: "指南播客" },
+  podcast_generation_failed: { IT: "Errore nella generazione del podcast. Nessun credito è stato scalato.", EN: "Podcast generation failed. No credits were charged.", FR: "Échec de la génération du podcast. Aucun crédit débité.", ES: "Error al generar el pódcast. No se han descontado créditos.", DE: "Podcast-Erstellung fehlgeschlagen. Keine Credits abgebucht.", RU: "Не удалось создать подкаст. Кредиты не списаны.", ZH: "播客生成失败，未扣除点数。" },
+  epub_export_failed: { IT: "Export EPUB non riuscito. Riprova.", EN: "EPUB export failed. Try again.", FR: "Échec de l'export EPUB. Réessayez.", ES: "La exportación EPUB ha fallado. Inténtalo de nuevo.", DE: "EPUB-Export fehlgeschlagen. Versuche es erneut.", RU: "Экспорт EPUB не удался. Попробуйте снова.", ZH: "EPUB 导出失败，请重试。" },
+  file_saved: { IT: "File salvato.", EN: "File saved.", FR: "Fichier enregistré.", ES: "Archivo guardado.", DE: "Datei gespeichert.", RU: "Файл сохранён.", ZH: "文件已保存。" },
+  dedication_optional: { IT: "Dedica (opzionale)", EN: "Dedication (optional)", FR: "Dédicace (facultatif)", ES: "Dedicatoria (opcional)", DE: "Widmung (optional)", RU: "Посвящение (необязательно)", ZH: "题词（可选）" },
+  dedication_placeholder: { IT: "Es. \"A Maria, per i tuoi 50 anni — Fabrizio\"", EN: "E.g. \"To Maria, for your 50th — Fabrizio\"", FR: "Ex. « À Maria, pour tes 50 ans — Fabrizio »", ES: "Ej. \"Para María, por tus 50 años — Fabrizio\"", DE: "Z. B. \"Für Maria, zum 50. — Fabrizio\"", RU: "Напр. «Марии, на 50-летие — Фабрицио»", ZH: "例如：“献给玛丽亚，五十岁生日快乐 — 法布里奇奥”" },
+  dedication_hint: { IT: "Appare in copertina con stile elegante: perfetta per la guida-regalo. Costo invariato.", EN: "Shown on the cover in an elegant style: perfect for a gift guide. Same price.", FR: "Apparaît en couverture avec élégance : parfait pour un guide-cadeau. Prix inchangé.", ES: "Aparece en la portada con estilo elegante: perfecta para regalar. Mismo precio.", DE: "Erscheint elegant auf dem Cover: perfekt als Geschenk-Guide. Gleicher Preis.", RU: "Элегантно размещается на обложке: идеально для гида в подарок. Цена та же.", ZH: "以优雅风格显示在封面上：适合作为礼物。价格不变。" },
+  oops: { IT: "Ops!", EN: "Oops!", FR: "Oups !", ES: "¡Vaya!", DE: "Hoppla!", RU: "Упс!", ZH: "哎呀！" },
+  share_guide: { IT: "Condividi guida", EN: "Share guide", FR: "Partager le guide", ES: "Compartir guía", DE: "Guide teilen", RU: "Поделиться гидом", ZH: "分享指南" },
+  playing: { IT: "In riproduzione", EN: "Playing", FR: "Lecture en cours", ES: "Reproduciendo", DE: "Wird abgespielt", RU: "Воспроизведение", ZH: "播放中" },
+  epub_download_hint: { IT: "Scarica la guida in formato EPUB (gratuito)", EN: "Download the guide as EPUB (free)", FR: "Télécharger le guide en EPUB (gratuit)", ES: "Descargar la guía en EPUB (gratis)", DE: "Guide als EPUB herunterladen (kostenlos)", RU: "Скачать гид в формате EPUB (бесплатно)", ZH: "下载 EPUB 格式指南（免费）" },
+
+  // ── Libreria itinerari (lib_*) ───────────────────────────────────────
+  lib_title: { IT: "Libreria itinerari", EN: "Itinerary library", FR: "Bibliothèque d'itinéraires", ES: "Biblioteca de itinerarios", DE: "Routen-Bibliothek", RU: "Библиотека маршрутов", ZH: "行程图书馆" },
+  lib_server_down: { IT: "La libreria non risponde in questo momento: riprova tra poco.", EN: "The library isn't responding right now: try again shortly.", FR: "La bibliothèque ne répond pas pour le moment : réessayez bientôt.", ES: "La biblioteca no responde ahora mismo: inténtalo en breve.", DE: "Die Bibliothek antwortet gerade nicht: versuche es gleich erneut.", RU: "Библиотека сейчас не отвечает: попробуйте чуть позже.", ZH: "图书馆暂时无响应，请稍后重试。" },
+  lib_open_failed: { IT: "Impossibile aprire questo itinerario ora: riprova tra poco.", EN: "Can't open this itinerary right now: try again shortly.", FR: "Impossible d'ouvrir cet itinéraire pour le moment : réessayez bientôt.", ES: "No se puede abrir este itinerario ahora: inténtalo en breve.", DE: "Diese Route lässt sich gerade nicht öffnen: versuche es gleich erneut.", RU: "Не удалось открыть маршрут: попробуйте чуть позже.", ZH: "暂时无法打开此行程，请稍后重试。" },
+  lib_generating: { IT: "Genero l'itinerario…", EN: "Generating the itinerary…", FR: "Génération de l'itinéraire…", ES: "Generando el itinerario…", DE: "Route wird erstellt…", RU: "Создаю маршрут…", ZH: "正在生成行程…" },
+  lib_still_working: { IT: "Ci sto ancora lavorando: riapri la libreria tra un minuto, lo troverai pronto.", EN: "Still working on it: reopen the library in a minute, it'll be ready.", FR: "J'y travaille encore : rouvrez la bibliothèque dans une minute, il sera prêt.", ES: "Sigo trabajando: vuelve a abrir la biblioteca en un minuto y lo encontrarás listo.", DE: "Ich arbeite noch daran: öffne die Bibliothek in einer Minute erneut, dann ist sie fertig.", RU: "Ещё работаю: откройте библиотеку через минуту, маршрут будет готов.", ZH: "仍在处理中：一分钟后重新打开图书馆即可。" },
+  lib_network_missing: { IT: "Rete assente: controlla la connessione e riprova.", EN: "No network: check your connection and try again.", FR: "Pas de réseau : vérifiez la connexion et réessayez.", ES: "Sin red: comprueba la conexión e inténtalo de nuevo.", DE: "Kein Netz: prüfe die Verbindung und versuche es erneut.", RU: "Нет сети: проверьте соединение и попробуйте снова.", ZH: "无网络：请检查连接后重试。" },
+  lib_still_waiting: { IT: "Ci vuole ancora un momento, resto in attesa…", EN: "Just a little longer, still waiting…", FR: "Encore un instant, j'attends…", ES: "Un momento más, sigo esperando…", DE: "Noch einen Moment, ich warte…", RU: "Ещё немного, жду…", ZH: "还需一点时间，请稍候…" },
+  lib_preparing: { IT: "Sto preparando l'itinerario, ~1 minuto…", EN: "Preparing the itinerary, ~1 minute…", FR: "Préparation de l'itinéraire, ~1 minute…", ES: "Preparando el itinerario, ~1 minuto…", DE: "Route wird vorbereitet, ~1 Minute…", RU: "Готовлю маршрут, ~1 минута…", ZH: "正在准备行程，约 1 分钟…" },
+  lib_generation_failed: { IT: "Generazione non riuscita: riprova tra poco.", EN: "Generation failed: try again shortly.", FR: "Échec de la génération : réessayez bientôt.", ES: "La generación ha fallado: inténtalo en breve.", DE: "Generierung fehlgeschlagen: versuche es gleich erneut.", RU: "Не удалось создать: попробуйте чуть позже.", ZH: "生成失败，请稍后重试。" },
+  lib_login_required: { IT: "Accedi per generare questo itinerario: è gratis, basta un account.", EN: "Log in to generate this itinerary: it's free, you just need an account.", FR: "Connectez-vous pour générer cet itinéraire : c'est gratuit, un compte suffit.", ES: "Inicia sesión para generar este itinerario: es gratis, solo necesitas una cuenta.", DE: "Melde dich an, um diese Route zu erstellen: kostenlos, es genügt ein Konto.", RU: "Войдите, чтобы создать этот маршрут: это бесплатно, нужен только аккаунт.", ZH: "登录后即可生成此行程：免费，只需一个账户。" },
+  lib_generated_empty: { IT: "L'itinerario generato è vuoto: riprova.", EN: "The generated itinerary is empty: try again.", FR: "L'itinéraire généré est vide : réessayez.", ES: "El itinerario generado está vacío: inténtalo de nuevo.", DE: "Die erstellte Route ist leer: versuche es erneut.", RU: "Созданный маршрут пуст: попробуйте снова.", ZH: "生成的行程为空，请重试。" },
+  lib_searching_as: { IT: "Cerco i luoghi di", EN: "Looking for the places of", FR: "Je cherche les lieux de", ES: "Busco los lugares de", DE: "Suche die Orte von", RU: "Ищу места из", ZH: "正在查找相关地点：" },
+  lib_building_on_real_places: { IT: "Sto costruendo l'itinerario sui luoghi veri, ~1 minuto…", EN: "Building the itinerary on real places, ~1 minute…", FR: "Je construis l'itinéraire sur des lieux réels, ~1 minute…", ES: "Construyendo el itinerario sobre lugares reales, ~1 minuto…", DE: "Route aus echten Orten wird gebaut, ~1 Minute…", RU: "Строю маршрут по реальным местам, ~1 минута…", ZH: "正在基于真实地点构建行程，约 1 分钟…" },
+  lib_places_not_documented: { IT: "i luoghi non sono documentati o sono troppo sparsi per farne un itinerario. Prova con un altro nome.", EN: "the places aren't documented or are too scattered for an itinerary. Try another name.", FR: "les lieux ne sont pas documentés ou trop dispersés pour un itinéraire. Essayez un autre nom.", ES: "los lugares no están documentados o están demasiado dispersos para un itinerario. Prueba con otro nombre.", DE: "die Orte sind nicht dokumentiert oder zu verstreut für eine Route. Versuche einen anderen Namen.", RU: "места не задокументированы или слишком разбросаны для маршрута. Попробуйте другое название.", ZH: "相关地点没有记录或过于分散，无法构成行程。请尝试其他名称。" },
+  lib_search_failed: { IT: "Ricerca non riuscita: riprova.", EN: "Search failed: try again.", FR: "Échec de la recherche : réessayez.", ES: "La búsqueda ha fallado: inténtalo de nuevo.", DE: "Suche fehlgeschlagen: versuche es erneut.", RU: "Поиск не удался: попробуйте снова.", ZH: "搜索失败，请重试。" },
+  lib_verified_by: { IT: "Verificato da", EN: "Verified by", FR: "Vérifié par", ES: "Verificado por", DE: "Geprüft von", RU: "Проверено", ZH: "已验证：" },
+  lib_back_to_results: { IT: "Torna ai risultati", EN: "Back to results", FR: "Retour aux résultats", ES: "Volver a los resultados", DE: "Zurück zu den Ergebnissen", RU: "К результатам", ZH: "返回结果" },
+  lib_opening: { IT: "Apro l'itinerario…", EN: "Opening the itinerary…", FR: "Ouverture de l'itinéraire…", ES: "Abriendo el itinerario…", DE: "Route wird geöffnet…", RU: "Открываю маршрут…", ZH: "正在打开行程…" },
+  lib_from_previous_stop: { IT: "dalla tappa precedente", EN: "from the previous stop", FR: "depuis l'étape précédente", ES: "desde la parada anterior", DE: "von der vorherigen Station", RU: "от предыдущей остановки", ZH: "距上一行程点" },
+  lib_search_placeholder: { IT: "Cerca città, porto, tema…", EN: "Search city, port, theme…", FR: "Chercher ville, port, thème…", ES: "Busca ciudad, puerto, tema…", DE: "Stadt, Hafen, Thema suchen…", RU: "Город, порт, тема…", ZH: "搜索城市、港口、主题…" },
+  lib_intro: { IT: "Centinaia di itinerari pronti, già controllati da due AI indipendenti. Usarli è gratis.", EN: "Hundreds of ready itineraries, already checked by two independent AIs. Using them is free.", FR: "Des centaines d'itinéraires prêts, déjà vérifiés par deux IA indépendantes. Gratuit.", ES: "Cientos de itinerarios listos, ya revisados por dos IA independientes. Usarlos es gratis.", DE: "Hunderte fertige Routen, bereits von zwei unabhängigen KIs geprüft. Die Nutzung ist kostenlos.", RU: "Сотни готовых маршрутов, проверенных двумя независимыми ИИ. Использование бесплатно.", ZH: "数百条现成行程，已由两个独立 AI 核验。免费使用。" },
+  lib_all: { IT: "Tutti", EN: "All", FR: "Tous", ES: "Todos", DE: "Alle", RU: "Все", ZH: "全部" },
+  lib_hours_per_stop: { IT: "Ore per sosta", EN: "Hours per stop", FR: "Heures par escale", ES: "Horas por parada", DE: "Stunden pro Stopp", RU: "Часов на остановку", ZH: "每次停留时长" },
+  lib_hours_all: { IT: "Ore sosta: tutte", EN: "Stop hours: all", FR: "Heures d'escale : toutes", ES: "Horas de parada: todas", DE: "Stopp-Stunden: alle", RU: "Часы стоянки: все", ZH: "停留时长：全部" },
+  lib_up_to: { IT: "fino a", EN: "up to", FR: "jusqu'à", ES: "hasta", DE: "bis zu", RU: "до", ZH: "最多" },
+  lib_days_all: { IT: "Giorni: tutti", EN: "Days: all", FR: "Jours : tous", ES: "Días: todos", DE: "Tage: alle", RU: "Дни: все", ZH: "天数：全部" },
+  lib_remove_city_filter: { IT: "Rimuovi il filtro città", EN: "Remove the city filter", FR: "Retirer le filtre ville", ES: "Quitar el filtro de ciudad", DE: "Stadtfilter entfernen", RU: "Убрать фильтр города", ZH: "移除城市筛选" },
+  lib_browsing: { IT: "Sfoglio la libreria…", EN: "Browsing the library…", FR: "Je parcours la bibliothèque…", ES: "Hojeando la biblioteca…", DE: "Bibliothek wird durchsucht…", RU: "Просматриваю библиотеку…", ZH: "正在浏览图书馆…" },
+  lib_ready: { IT: "Pronto", EN: "Ready", FR: "Prêt", ES: "Listo", DE: "Fertig", RU: "Готов", ZH: "就绪" },
+  lib_one_minute: { IT: "1 minuto", EN: "1 minute", FR: "1 minute", ES: "1 minuto", DE: "1 Minute", RU: "1 минута", ZH: "1 分钟" },
+  lib_generate: { IT: "Genera", EN: "Generate", FR: "Générer", ES: "Generar", DE: "Erstellen", RU: "Создать", ZH: "生成" },
+  lib_search_as: { IT: "Cerca", EN: "Search", FR: "Chercher", ES: "Buscar", DE: "Suchen", RU: "Искать", ZH: "搜索" },
+  lib_real_places_note: { IT: "Itinerario sui luoghi veri (riprese, ambientazioni, opere, eventi o venue), verificati su Wikidata.", EN: "Itinerary on real places (shoots, settings, works, events or venues), verified on Wikidata.", FR: "Itinéraire sur des lieux réels (tournages, décors, œuvres, événements ou salles), vérifiés sur Wikidata.", ES: "Itinerario sobre lugares reales (rodajes, escenarios, obras, eventos o sedes), verificados en Wikidata.", DE: "Route über echte Orte (Drehorte, Schauplätze, Werke, Events oder Venues), geprüft auf Wikidata.", RU: "Маршрут по реальным местам (съёмки, локации, произведения, события или площадки), проверенным в Wikidata.", ZH: "基于真实地点（拍摄地、场景、作品、活动或场馆）的行程，已在 Wikidata 核验。" },
+  lib_no_results: { IT: "Nessun itinerario per questa ricerca. Prova con un'altra città o togli qualche filtro.", EN: "No itineraries for this search. Try another city or remove some filters.", FR: "Aucun itinéraire pour cette recherche. Essayez une autre ville ou retirez des filtres.", ES: "Ningún itinerario para esta búsqueda. Prueba con otra ciudad o quita algún filtro.", DE: "Keine Routen für diese Suche. Versuche eine andere Stadt oder entferne Filter.", RU: "Маршрутов не найдено. Попробуйте другой город или уберите фильтры.", ZH: "没有符合的行程。请尝试其他城市或减少筛选条件。" },
+  lib_saving: { IT: "Lo salvo nei tuoi itinerari…", EN: "Saving to your itineraries…", FR: "Enregistrement dans vos itinéraires…", ES: "Guardando en tus itinerarios…", DE: "Wird in deinen Routen gespeichert…", RU: "Сохраняю в ваши маршруты…", ZH: "正在保存到我的行程…" },
+  lib_use_free: { IT: "Usa questo itinerario (gratis)", EN: "Use this itinerary (free)", FR: "Utiliser cet itinéraire (gratuit)", ES: "Usar este itinerario (gratis)", DE: "Diese Route verwenden (kostenlos)", RU: "Использовать маршрут (бесплатно)", ZH: "使用此行程（免费）" },
+  lib_use_hint: { IT: "Si salva nei tuoi itinerari: guida premium, podcast e PDF funzionano come su ogni itinerario.", EN: "It's saved to your itineraries: premium guide, podcast and PDF work like on any itinerary.", FR: "Il est enregistré dans vos itinéraires : guide premium, podcast et PDF fonctionnent comme pour tout itinéraire.", ES: "Se guarda en tus itinerarios: guía premium, pódcast y PDF funcionan como en cualquier itinerario.", DE: "Wird in deinen Routen gespeichert: Premium-Guide, Podcast und PDF funktionieren wie bei jeder Route.", RU: "Сохраняется в ваши маршруты: премиум-гид, подкаст и PDF работают как обычно.", ZH: "保存到我的行程后，高级指南、播客和 PDF 均可正常使用。" },
+
+  // ── Cammini e pellegrinaggi (pw_*) ───────────────────────────────────
+  pw_title: { IT: "Cammini e pellegrinaggi", EN: "Pilgrim ways & trails", FR: "Chemins et pèlerinages", ES: "Caminos y peregrinaciones", DE: "Pilgerwege", RU: "Паломнические пути", ZH: "朝圣之路" },
+  pw_search_placeholder: { IT: "Cerca un cammino nel mondo…", EN: "Search a trail worldwide…", FR: "Chercher un chemin dans le monde…", ES: "Busca un camino en el mundo…", DE: "Pilgerweg weltweit suchen…", RU: "Найти путь в мире…", ZH: "搜索世界各地的步道…" },
+  pw_intro: { IT: "Un passo alla volta: tappe, alloggi e timbri già pensati. La strada è la meta.", EN: "One step at a time: stages, lodging and stamps already planned. The road is the destination.", FR: "Un pas à la fois : étapes, hébergements et tampons déjà prévus. Le chemin est la destination.", ES: "Paso a paso: etapas, alojamientos y sellos ya pensados. El camino es la meta.", DE: "Schritt für Schritt: Etappen, Unterkünfte und Stempel schon geplant. Der Weg ist das Ziel.", RU: "Шаг за шагом: этапы, ночлег и печати уже продуманы. Дорога и есть цель.", ZH: "一步一步来：路段、住宿和印章已规划好。路途即目的地。" },
+  pw_filter_continent: { IT: "Filtra per continente", EN: "Filter by continent", FR: "Filtrer par continent", ES: "Filtrar por continente", DE: "Nach Kontinent filtern", RU: "Фильтр по континенту", ZH: "按大洲筛选" },
+  pw_anywhere: { IT: "Ovunque", EN: "Anywhere", FR: "Partout", ES: "Cualquier lugar", DE: "Überall", RU: "Везде", ZH: "任何地方" },
+  pw_any_duration: { IT: "Ogni durata", EN: "Any duration", FR: "Toute durée", ES: "Cualquier duración", DE: "Jede Dauer", RU: "Любая длительность", ZH: "任意时长" },
+  pw_any_pace: { IT: "Ogni passo", EN: "Any pace", FR: "Tout rythme", ES: "Cualquier ritmo", DE: "Jedes Tempo", RU: "Любой темп", ZH: "任意强度" },
+  pw_diff_facile: { IT: "Facile", EN: "Easy", FR: "Facile", ES: "Fácil", DE: "Leicht", RU: "Лёгкий", ZH: "简单" },
+  pw_diff_media: { IT: "Media", EN: "Moderate", FR: "Moyenne", ES: "Media", DE: "Mittel", RU: "Средний", ZH: "中等" },
+  pw_diff_impegnativa: { IT: "Impegnativa", EN: "Demanding", FR: "Exigeante", ES: "Exigente", DE: "Anspruchsvoll", RU: "Сложный", ZH: "困难" },
+  pw_editorial: { IT: "Redazione", EN: "Editorial", FR: "Rédaction", ES: "Redacción", DE: "Redaktion", RU: "Редакция", ZH: "编辑精选" },
+  pw_stage: { IT: "Tappa", EN: "Stage", FR: "Étape", ES: "Etapa", DE: "Etappe", RU: "Этап", ZH: "路段" },
+  pw_terrain: { IT: "Terreno", EN: "Terrain", FR: "Terrain", ES: "Terreno", DE: "Gelände", RU: "Рельеф", ZH: "地形" },
+  pw_terrain_hilly: { IT: "collinare", EN: "hilly", FR: "vallonné", ES: "ondulado", DE: "hügelig", RU: "холмистый", ZH: "丘陵" },
+  pw_credential: { IT: "Credenziale", EN: "Credential", FR: "Credencial", ES: "Credencial", DE: "Pilgerpass", RU: "Креденсиаль", ZH: "朝圣护照" },
+  pw_stages_completed: { IT: "tappe completate", EN: "stages completed", FR: "étapes terminées", ES: "etapas completadas", DE: "Etappen geschafft", RU: "этапов пройдено", ZH: "路段已完成" },
+  pw_route_completed: { IT: "Cammino completato", EN: "Trail completed", FR: "Chemin terminé", ES: "Camino completado", DE: "Pilgerweg abgeschlossen", RU: "Путь пройден", ZH: "已完成全程" },
+  pw_prepare: { IT: "Prepara il cammino", EN: "Prepare the trail", FR: "Préparer le chemin", ES: "Preparar el camino", DE: "Pilgerweg vorbereiten", RU: "Подготовить путь", ZH: "准备行程" },
+  pw_see_ready: { IT: "Vedi gli itinerari pronti per questo cammino", EN: "See ready itineraries for this trail", FR: "Voir les itinéraires prêts pour ce chemin", ES: "Ver itinerarios listos para este camino", DE: "Fertige Routen für diesen Pilgerweg ansehen", RU: "Готовые маршруты для этого пути", ZH: "查看此步道的现成行程" },
+  pw_not_curated: { IT: "non è tra i cammini curati.", EN: "isn't among the curated trails.", FR: "ne figure pas parmi les chemins sélectionnés.", ES: "no está entre los caminos seleccionados.", DE: "ist nicht unter den kuratierten Wegen.", RU: "нет среди отобранных путей.", ZH: "不在精选步道中。" },
+  pw_ai_tracing: { IT: "La redazione AI traccia le tappe…", EN: "The AI editors are tracing the stages…", FR: "La rédaction IA trace les étapes…", ES: "La redacción IA traza las etapas…", DE: "Die KI-Redaktion zeichnet die Etappen…", RU: "ИИ-редакция прокладывает этапы…", ZH: "AI 编辑正在规划路段…" },
+  pw_generate_ai: { IT: "Genera con l'AI la guida del cammino", EN: "Generate the trail guide with AI:", FR: "Générer avec l'IA le guide du chemin", ES: "Generar con IA la guía del camino", DE: "Wegführer mit KI erstellen:", RU: "Создать гид по пути с ИИ:", ZH: "用 AI 生成步道指南：" },
+  pw_no_results: { IT: "Nessun cammino per questi filtri: allarga la ricerca.", EN: "No trails for these filters: widen the search.", FR: "Aucun chemin pour ces filtres : élargissez la recherche.", ES: "Ningún camino para estos filtros: amplía la búsqueda.", DE: "Keine Wege für diese Filter: erweitere die Suche.", RU: "Нет путей для этих фильтров: расширьте поиск.", ZH: "没有符合筛选的步道，请放宽条件。" },
+  pw_ai_unavailable: { IT: "Cammino non disponibile in questo momento: riprova.", EN: "Trail not available right now: try again.", FR: "Chemin indisponible pour le moment : réessayez.", ES: "Camino no disponible ahora mismo: inténtalo de nuevo.", DE: "Pilgerweg gerade nicht verfügbar: versuche es erneut.", RU: "Путь сейчас недоступен: попробуйте снова.", ZH: "步道暂不可用，请重试。" },
+  pw_network_error: { IT: "Rete assente o server occupato: riprova tra poco.", EN: "No network or busy server: try again shortly.", FR: "Pas de réseau ou serveur occupé : réessayez bientôt.", ES: "Sin red o servidor ocupado: inténtalo en breve.", DE: "Kein Netz oder Server ausgelastet: versuche es gleich erneut.", RU: "Нет сети или сервер занят: попробуйте чуть позже.", ZH: "无网络或服务器繁忙，请稍后重试。" },
+  pw_default_traveler: { IT: "Viaggiatore WIP", EN: "WIP traveller", FR: "Voyageur WIP", ES: "Viajero WIP", DE: "WIP-Reisender", RU: "Путешественник WIP", ZH: "WIP 旅行者" },
+  pw_cert_failed: { IT: "Generazione non riuscita: riprova.", EN: "Generation failed: try again.", FR: "Échec de la génération : réessayez.", ES: "La generación ha fallado: inténtalo de nuevo.", DE: "Erstellung fehlgeschlagen: versuche es erneut.", RU: "Не удалось создать: попробуйте снова.", ZH: "生成失败，请重试。" },
+  pw_png_saved: { IT: "PNG salvato: incornicialo dove vuoi! 🖼", EN: "PNG saved: frame it wherever you like! 🖼", FR: "PNG enregistré : encadrez-le où vous voulez ! 🖼", ES: "PNG guardado: ¡enmárcalo donde quieras! 🖼", DE: "PNG gespeichert: rahme es ein, wo du willst! 🖼", RU: "PNG сохранён: повесьте в рамку! 🖼", ZH: "PNG 已保存：随意装裱吧！🖼" },
+  pw_share_failed: { IT: "Condivisione non riuscita: prova con \"Scarica PNG\".", EN: "Sharing failed: try \"Download PNG\".", FR: "Partage impossible : essayez « Télécharger PNG ».", ES: "No se ha podido compartir: prueba \"Descargar PNG\".", DE: "Teilen fehlgeschlagen: versuche \"PNG herunterladen\".", RU: "Не удалось поделиться: попробуйте «Скачать PNG».", ZH: "分享失败：请尝试“下载 PNG”。" },
+  pw_generate_cert: { IT: "Genera il tuo attestato", EN: "Generate your certificate", FR: "Générer votre attestation", ES: "Genera tu certificado", DE: "Urkunde erstellen", RU: "Создать сертификат", ZH: "生成证书" },
+  pw_cert_title: { IT: "Attestato del Pellegrino", EN: "Pilgrim's Certificate", FR: "Attestation du Pèlerin", ES: "Certificado del Peregrino", DE: "Pilgerurkunde", RU: "Сертификат паломника", ZH: "朝圣者证书" },
+  pw_code: { IT: "Codice", EN: "Code", FR: "Code", ES: "Código", DE: "Code", RU: "Код", ZH: "代码" },
+  pw_verifiable: { IT: "verificabile su wip.guide", EN: "verifiable on wip.guide", FR: "vérifiable sur wip.guide", ES: "verificable en wip.guide", DE: "überprüfbar auf wip.guide", RU: "можно проверить на wip.guide", ZH: "可在 wip.guide 验证" },
+  pw_share: { IT: "Condividi", EN: "Share", FR: "Partager", ES: "Compartir", DE: "Teilen", RU: "Поделиться", ZH: "分享" },
+  pw_download_png: { IT: "Scarica PNG", EN: "Download PNG", FR: "Télécharger PNG", ES: "Descargar PNG", DE: "PNG herunterladen", RU: "Скачать PNG", ZH: "下载 PNG" },
+
+  // ── Sosta breve: porti & aeroporti (te_*) ────────────────────────────
+  te_title: { IT: "Sosta breve", EN: "Short stop", FR: "Escale courte", ES: "Parada breve", DE: "Kurzer Stopp", RU: "Короткая остановка", ZH: "短暂停留" },
+  te_search_placeholder: { IT: "Cerca porto o aeroporto in tutto il mondo…", EN: "Search a port or airport worldwide…", FR: "Chercher un port ou un aéroport dans le monde…", ES: "Busca un puerto o aeropuerto en el mundo…", DE: "Hafen oder Flughafen weltweit suchen…", RU: "Найти порт или аэропорт в мире…", ZH: "搜索世界各地的港口或机场…" },
+  te_intro: { IT: "Escursioni con le ore contate: rientro alla nave o al gate sempre garantito.", EN: "Excursions with the clock ticking: return to the ship or gate always guaranteed.", FR: "Excursions chronométrées : retour au navire ou à la porte toujours garanti.", ES: "Excursiones con el tiempo contado: regreso al barco o a la puerta siempre garantizado.", DE: "Ausflüge mit knapper Zeit: Rückkehr zum Schiff oder Gate immer garantiert.", RU: "Экскурсии с ограниченным временем: возвращение на корабль или к выходу гарантировано.", ZH: "时间有限的短途游：保证按时返回邮轮或登机口。" },
+  te_all: { IT: "Tutti", EN: "All", FR: "Tous", ES: "Todos", DE: "Alle", RU: "Все", ZH: "全部" },
+  te_ports: { IT: "Porti", EN: "Ports", FR: "Ports", ES: "Puertos", DE: "Häfen", RU: "Порты", ZH: "港口" },
+  te_airports: { IT: "Aeroporti", EN: "Airports", FR: "Aéroports", ES: "Aeropuertos", DE: "Flughäfen", RU: "Аэропорты", ZH: "机场" },
+  te_filter_country: { IT: "Filtra per paese", EN: "Filter by country", FR: "Filtrer par pays", ES: "Filtrar por país", DE: "Nach Land filtern", RU: "Фильтр по стране", ZH: "按国家筛选" },
+  te_all_countries: { IT: "Tutti i paesi", EN: "All countries", FR: "Tous les pays", ES: "Todos los países", DE: "Alle Länder", RU: "Все страны", ZH: "所有国家" },
+  te_city_from: { IT: "città da", EN: "city from", FR: "ville dès", ES: "ciudad desde", DE: "Stadt ab", RU: "город от", ZH: "进城需中转" },
+  te_editorial: { IT: "Redazione", EN: "Editorial", FR: "Rédaction", ES: "Redacción", DE: "Redaktion", RU: "Редакция", ZH: "编辑精选" },
+  te_to_center: { IT: "Verso il centro", EN: "To the centre", FR: "Vers le centre", ES: "Hacia el centro", DE: "Ins Zentrum", RU: "В центр", ZH: "前往市中心" },
+  te_luggage_default: { IT: "Deposito bagagli: verifica in loco il punto left luggage del terminal prima di uscire.", EN: "Luggage storage: check the terminal's left-luggage point on site before leaving.", FR: "Consigne à bagages : vérifiez sur place la consigne du terminal avant de sortir.", ES: "Consigna de equipaje: comprueba in situ el punto de consigna de la terminal antes de salir.", DE: "Gepäckaufbewahrung: prüfe vor Ort die Gepäckaufbewahrung des Terminals, bevor du hinausgehst.", RU: "Камера хранения: уточните на месте, где она в терминале, прежде чем выходить.", ZH: "行李寄存：离开前请在航站楼现场确认寄存点。" },
+  te_hours_ashore: { IT: "Ore di sosta a terra", EN: "Hours ashore", FR: "Heures à terre", ES: "Horas en tierra", DE: "Stunden an Land", RU: "Часов на берегу", ZH: "上岸停留时长" },
+  te_hours_layover: { IT: "Ore di scalo", EN: "Layover hours", FR: "Heures d'escale", ES: "Horas de escala", DE: "Stunden Aufenthalt", RU: "Часов пересадки", ZH: "中转时长" },
+  te_back_aboard_within: { IT: "Rientro a bordo entro", EN: "Back on board within", FR: "Retour à bord dans", ES: "Regreso a bordo en", DE: "Zurück an Bord innerhalb von", RU: "Возвращение на борт в течение", ZH: "返回船上需在" },
+  te_back_aboard_note: { IT: "dall'inizio della sosta (1h di margine: la nave non aspetta).", EN: "from the start of the stop (1h margin: the ship won't wait).", FR: "après le début de l'escale (1 h de marge : le navire n'attend pas).", ES: "desde el inicio de la parada (1 h de margen: el barco no espera).", DE: "ab Beginn des Stopps (1 h Puffer: das Schiff wartet nicht).", RU: "с начала стоянки (запас 1 ч: корабль не ждёт).", ZH: "内（自停留开始计，预留 1 小时：邮轮不会等人）。" },
+  te_stay_airport: { IT: "Si resta in aeroporto: al gate", EN: "Staying at the airport: at the gate", FR: "On reste à l'aéroport : à la porte", ES: "Nos quedamos en el aeropuerto: en la puerta", DE: "Wir bleiben am Flughafen: am Gate", RU: "Остаёмся в аэропорту: у выхода", ZH: "留在机场：到达登机口" },
+  te_stay_airport_note: { IT: "prima del volo, senza stress.", EN: "before the flight, stress-free.", FR: "avant le vol, sans stress.", ES: "antes del vuelo, sin estrés.", DE: "vor dem Flug, ganz entspannt.", RU: "до вылета, без спешки.", ZH: "提前于航班，轻松无压力。" },
+  te_back_airport_within: { IT: "Ritorno in aeroporto entro", EN: "Back at the airport within", FR: "Retour à l'aéroport dans", ES: "Regreso al aeropuerto en", DE: "Zurück am Flughafen innerhalb von", RU: "Возвращение в аэропорт в течение", ZH: "返回机场需在" },
+  te_back_airport_note: { IT: "dall'inizio dello scalo (2h prima del volo per controlli e imbarco).", EN: "from the start of the layover (2h before the flight for security and boarding).", FR: "après le début de l'escale (2 h avant le vol pour les contrôles et l'embarquement).", ES: "desde el inicio de la escala (2 h antes del vuelo para controles y embarque).", DE: "ab Beginn des Aufenthalts (2 h vor dem Flug für Kontrollen und Boarding).", RU: "с начала пересадки (за 2 ч до вылета на контроль и посадку).", ZH: "内（自中转开始计，航班前 2 小时用于安检和登机）。" },
+  te_use: { IT: "Usa questo itinerario", EN: "Use this itinerary", FR: "Utiliser cet itinéraire", ES: "Usar este itinerario", DE: "Diese Route verwenden", RU: "Использовать маршрут", ZH: "使用此行程" },
+  te_see_ready: { IT: "Vedi gli itinerari pronti per questa sosta", EN: "See ready itineraries for this stop", FR: "Voir les itinéraires prêts pour cette escale", ES: "Ver itinerarios listos para esta parada", DE: "Fertige Routen für diesen Stopp ansehen", RU: "Готовые маршруты для этой остановки", ZH: "查看此停留的现成行程" },
+  te_not_curated: { IT: "non è nel catalogo curato.", EN: "isn't in the curated catalogue.", FR: "n'est pas dans le catalogue sélectionné.", ES: "no está en el catálogo seleccionado.", DE: "ist nicht im kuratierten Katalog.", RU: "нет в отобранном каталоге.", ZH: "不在精选目录中。" },
+  te_ai_preparing: { IT: "La redazione AI prepara la guida…", EN: "The AI editors are preparing the guide…", FR: "La rédaction IA prépare le guide…", ES: "La redacción IA prepara la guía…", DE: "Die KI-Redaktion bereitet den Guide vor…", RU: "ИИ-редакция готовит гид…", ZH: "AI 编辑正在准备指南…" },
+  te_generate_port: { IT: "Genera con l'AI la guida del porto", EN: "Generate the port guide with AI:", FR: "Générer avec l'IA le guide du port", ES: "Generar con IA la guía del puerto", DE: "Hafen-Guide mit KI erstellen:", RU: "Создать гид по порту с ИИ:", ZH: "用 AI 生成港口指南：" },
+  te_generate_airport: { IT: "Genera con l'AI la guida dell'aeroporto", EN: "Generate the airport guide with AI:", FR: "Générer avec l'IA le guide de l'aéroport", ES: "Generar con IA la guía del aeropuerto", DE: "Flughafen-Guide mit KI erstellen:", RU: "Создать гид по аэропорту с ИИ:", ZH: "用 AI 生成机场指南：" },
+  te_no_results: { IT: "Nessuna voce per questo filtro: prova un altro paese o cerca per nome.", EN: "Nothing for this filter: try another country or search by name.", FR: "Rien pour ce filtre : essayez un autre pays ou cherchez par nom.", ES: "Nada para este filtro: prueba otro país o busca por nombre.", DE: "Nichts für diesen Filter: versuche ein anderes Land oder suche nach Namen.", RU: "Ничего для этого фильтра: попробуйте другую страну или поиск по названию.", ZH: "该筛选无结果：请尝试其他国家或按名称搜索。" },
+  te_ai_unavailable: { IT: "Guida non disponibile in questo momento: riprova.", EN: "Guide not available right now: try again.", FR: "Guide indisponible pour le moment : réessayez.", ES: "Guía no disponible ahora mismo: inténtalo de nuevo.", DE: "Guide gerade nicht verfügbar: versuche es erneut.", RU: "Гид сейчас недоступен: попробуйте снова.", ZH: "指南暂不可用，请重试。" },
+  te_network_error: { IT: "Rete assente o server occupato: riprova tra poco.", EN: "No network or busy server: try again shortly.", FR: "Pas de réseau ou serveur occupé : réessayez bientôt.", ES: "Sin red o servidor ocupado: inténtalo en breve.", DE: "Kein Netz oder Server ausgelastet: versuche es gleich erneut.", RU: "Нет сети или сервер занят: попробуйте чуть позже.", ZH: "无网络或服务器繁忙，请稍后重试。" },
+
+  // ── Calendario .ics (cal_*) ──────────────────────────────────────────
+  cal_invalid_date: { IT: "Scegli una data valida.", EN: "Pick a valid date.", FR: "Choisissez une date valide.", ES: "Elige una fecha válida.", DE: "Wähle ein gültiges Datum.", RU: "Выберите корректную дату.", ZH: "请选择有效日期。" },
+  cal_ready: { IT: "File calendario pronto: aprilo per aggiungere le tappe.", EN: "Calendar file ready: open it to add the stops.", FR: "Fichier calendrier prêt : ouvrez-le pour ajouter les étapes.", ES: "Archivo de calendario listo: ábrelo para añadir las paradas.", DE: "Kalenderdatei bereit: öffne sie, um die Stationen hinzuzufügen.", RU: "Файл календаря готов: откройте его, чтобы добавить остановки.", ZH: "日历文件已就绪：打开即可添加行程点。" },
+  cal_download_failed: { IT: "Impossibile scaricare il file su questo dispositivo.", EN: "Couldn't download the file on this device.", FR: "Impossible de télécharger le fichier sur cet appareil.", ES: "No se ha podido descargar el archivo en este dispositivo.", DE: "Die Datei konnte auf diesem Gerät nicht heruntergeladen werden.", RU: "Не удалось скачать файл на этом устройстве.", ZH: "无法在此设备上下载文件。" },
+  cal_export_error: { IT: "Errore durante l'esportazione. Riprova.", EN: "Export error. Try again.", FR: "Erreur lors de l'export. Réessayez.", ES: "Error al exportar. Inténtalo de nuevo.", DE: "Fehler beim Export. Versuche es erneut.", RU: "Ошибка экспорта. Попробуйте снова.", ZH: "导出出错，请重试。" },
+  cal_button_title: { IT: "Esporta le tappe come eventi nel tuo calendario", EN: "Export the stops as events in your calendar", FR: "Exporter les étapes comme événements dans votre calendrier", ES: "Exporta las paradas como eventos en tu calendario", DE: "Stationen als Termine in deinen Kalender exportieren", RU: "Экспортировать остановки как события в календарь", ZH: "将行程点导出为日历事件" },
+  cal_add_to_calendar: { IT: "Aggiungi al calendario", EN: "Add to calendar", FR: "Ajouter au calendrier", ES: "Añadir al calendario", DE: "Zum Kalender hinzufügen", RU: "Добавить в календарь", ZH: "添加到日历" },
+  cal_stops: { IT: "tappe", EN: "stops", FR: "étapes", ES: "paradas", DE: "Stationen", RU: "остановок", ZH: "个行程点" },
+  cal_when_starts: { IT: "Quando inizia il viaggio?", EN: "When does the trip start?", FR: "Quand commence le voyage ?", ES: "¿Cuándo empieza el viaje?", DE: "Wann beginnt die Reise?", RU: "Когда начинается поездка?", ZH: "旅行何时开始？" },
+  cal_one_event_per_stop: { IT: "Un evento per ogni tappa, con promemoria 30 minuti prima.", EN: "One event per stop, with a reminder 30 minutes before.", FR: "Un événement par étape, avec un rappel 30 minutes avant.", ES: "Un evento por parada, con recordatorio 30 minutos antes.", DE: "Ein Termin pro Station, mit Erinnerung 30 Minuten vorher.", RU: "Одно событие на остановку, с напоминанием за 30 минут.", ZH: "每个行程点一个事件，提前 30 分钟提醒。" },
+  cal_download_ics: { IT: "Scarica il calendario (.ics)", EN: "Download the calendar (.ics)", FR: "Télécharger le calendrier (.ics)", ES: "Descargar el calendario (.ics)", DE: "Kalender herunterladen (.ics)", RU: "Скачать календарь (.ics)", ZH: "下载日历 (.ics)" },
+
+  // ── WIP Nav: POI lungo il percorso (rp_*) ────────────────────────────
+  rp_to: { IT: "Verso", EN: "To", FR: "Vers", ES: "Hacia", DE: "Nach", RU: "В", ZH: "前往" },
+  rp_gps_unavailable: { IT: "GPS non disponibile: usa un indirizzo personalizzato.", EN: "GPS unavailable: use a custom address.", FR: "GPS indisponible : utilisez une adresse personnalisée.", ES: "GPS no disponible: usa una dirección personalizada.", DE: "GPS nicht verfügbar: nutze eine eigene Adresse.", RU: "GPS недоступен: укажите адрес вручную.", ZH: "GPS 不可用：请使用自定义地址。" },
+  rp_choose_start: { IT: "Scegli il punto di partenza per scansionare il percorso.", EN: "Choose a starting point to scan the route.", FR: "Choisissez un point de départ pour analyser l'itinéraire.", ES: "Elige el punto de partida para escanear la ruta.", DE: "Wähle einen Startpunkt, um die Route zu scannen.", RU: "Выберите точку старта, чтобы просканировать маршрут.", ZH: "选择起点以扫描路线。" },
+  rp_scanning: { IT: "Scansione percorso in corso...", EN: "Scanning route...", FR: "Analyse de l'itinéraire...", ES: "Escaneando la ruta...", DE: "Route wird gescannt...", RU: "Сканирование маршрута...", ZH: "正在扫描路线…" },
+  rp_scan_failed: { IT: "Errore durante la scansione del percorso.", EN: "Route scan failed.", FR: "Échec de l'analyse de l'itinéraire.", ES: "Error al escanear la ruta.", DE: "Routen-Scan fehlgeschlagen.", RU: "Ошибка сканирования маршрута.", ZH: "路线扫描失败。" },
+  rp_can_still_navigate: { IT: "Puoi comunque avviare la navigazione.", EN: "You can still start navigating.", FR: "Vous pouvez quand même démarrer la navigation.", ES: "Aun así puedes iniciar la navegación.", DE: "Du kannst die Navigation trotzdem starten.", RU: "Вы всё равно можете начать навигацию.", ZH: "您仍可开始导航。" },
+  rp_no_pois: { IT: "Nessun POI sul percorso", EN: "No POIs on the route", FR: "Aucun POI sur l'itinéraire", ES: "Ningún POI en la ruta", DE: "Keine POIs auf der Route", RU: "На маршруте нет точек интереса", ZH: "路线上没有景点" },
+  rp_no_pois_desc: { IT: "Non abbiamo trovato luoghi di interesse a meno di 300 metri dal tuo tragitto stradale.", EN: "No points of interest found within 300 metres of your route.", FR: "Aucun point d'intérêt trouvé à moins de 300 mètres de votre trajet.", ES: "No se han encontrado puntos de interés a menos de 300 metros de tu ruta.", DE: "Keine Sehenswürdigkeiten im Umkreis von 300 Metern deiner Route gefunden.", RU: "В пределах 300 метров от маршрута точек интереса не найдено.", ZH: "路线 300 米范围内未找到景点。" },
+  rp_wait: { IT: "Attendi...", EN: "Wait...", FR: "Patientez...", ES: "Espera...", DE: "Warten...", RU: "Подождите...", ZH: "请稍候…" },
+  rp_start_navigation: { IT: "Inizia navigazione", EN: "Start navigation", FR: "Démarrer la navigation", ES: "Iniciar navegación", DE: "Navigation starten", RU: "Начать навигацию", ZH: "开始导航" },
+  // ── Mappe offline: peso dichiarato PRIMA del download (offl_*) ───────
+  offl_size_estimate: { IT: "Sfondo mappa: ~{min}-{max} MB ({tiles} tessere) per {radius} km.", EN: "Map background: ~{min}-{max} MB ({tiles} tiles) for {radius} km.", FR: "Fond de carte : ~{min}-{max} Mo ({tiles} tuiles) pour {radius} km.", ES: "Fondo de mapa: ~{min}-{max} MB ({tiles} teselas) para {radius} km.", DE: "Kartenhintergrund: ~{min}-{max} MB ({tiles} Kacheln) für {radius} km.", RU: "Фон карты: ~{min}-{max} МБ ({tiles} тайлов) на {radius} км.", ZH: "地图底图：约 {min}-{max} MB（{tiles} 张瓦片），半径 {radius} 公里。" },
+  offl_size_pick_city: { IT: "Scegli una città: ti diciamo quanti MB pesa prima di scaricare.", EN: "Pick a city: we'll tell you how many MB it weighs before downloading.", FR: "Choisissez une ville : nous indiquons le poids en Mo avant le téléchargement.", ES: "Elige una ciudad: te decimos cuántos MB ocupa antes de descargar.", DE: "Wähle eine Stadt: Wir nennen die MB, bevor du herunterlädst.", RU: "Выберите город: мы покажем размер в МБ до загрузки.", ZH: "选择城市：下载前我们会告诉您占用多少 MB。" },
+  offl_zoom_note: { IT: "Oltre lo zoom 15 la mappa offline si ingrandisce sfocata invece di restare grigia.", EN: "Beyond zoom 15 the offline map scales up blurry instead of staying grey.", FR: "Au-delà du zoom 15, la carte hors ligne s'agrandit en flou au lieu de rester grise.", ES: "Más allá del zoom 15 el mapa sin conexión se amplía borroso en vez de quedarse gris.", DE: "Ab Zoom 15 wird die Offline-Karte unscharf vergrößert, statt grau zu bleiben.", RU: "Выше зума 15 офлайн-карта увеличивается размыто, а не остаётся серой.", ZH: "超过 15 级缩放时，离线地图会模糊放大，而不是变成灰色。" },
+  offl_storage_short: { IT: "Spazio quasi esaurito: il download richiede circa {needed} ma sul dispositivo ne restano {free}. Il download potrebbe risultare incompleto. Vuoi procedere comunque?", EN: "Storage almost full: the download needs about {needed} but only {free} are left on the device. The download may end up incomplete. Continue anyway?", FR: "Espace presque épuisé : le téléchargement demande environ {needed} mais il ne reste que {free} sur l'appareil. Le téléchargement pourrait être incomplet. Continuer quand même ?", ES: "Espacio casi agotado: la descarga necesita unos {needed} pero en el dispositivo quedan {free}. La descarga podría quedar incompleta. ¿Continuar igualmente?", DE: "Speicher fast voll: Der Download braucht etwa {needed}, auf dem Gerät sind noch {free} frei. Der Download könnte unvollständig bleiben. Trotzdem fortfahren?", RU: "Места почти нет: загрузке нужно около {needed}, а на устройстве осталось {free}. Загрузка может остаться неполной. Продолжить?", ZH: "存储空间将满：下载约需 {needed}，设备仅剩 {free}。下载可能不完整。仍要继续吗？" },
+  offl_levels_skipped: { IT: "Alcuni livelli di dettaglio (zoom {levels}) sono stati saltati per non superare il limite di spazio: in quelle zone lo zoom resterà sfocato.", EN: "Some detail levels (zoom {levels}) were skipped to stay within the size cap: zooming there will stay blurry.", FR: "Certains niveaux de détail (zoom {levels}) ont été ignorés pour respecter la limite d'espace : le zoom y restera flou.", ES: "Algunos niveles de detalle (zoom {levels}) se han omitido para no superar el límite de espacio: allí el zoom se verá borroso.", DE: "Einige Detailstufen (Zoom {levels}) wurden übersprungen, um das Speicherlimit einzuhalten: Dort bleibt der Zoom unscharf.", RU: "Некоторые уровни детализации (зум {levels}) пропущены, чтобы уложиться в лимит: там зум останется размытым.", ZH: "为不超出容量上限，已跳过部分细节层级（缩放 {levels}）：这些区域放大后会显示模糊。" },
+
+  // ── Chat WIP (AgentControls) — 23/08/2026: era tutta in italiano cablato ──
+  chat_mic_unsupported: { IT: "Il tuo browser non supporta il riconoscimento vocale. Usa Chrome o Edge.", EN: "Your browser doesn't support speech recognition. Use Chrome or Edge.", FR: "Ton navigateur ne prend pas en charge la reconnaissance vocale. Utilise Chrome ou Edge.", ES: "Tu navegador no admite el reconocimiento de voz. Usa Chrome o Edge.", DE: "Dein Browser unterstützt keine Spracherkennung. Nutze Chrome oder Edge.", RU: "Ваш браузер не поддерживает распознавание речи. Используйте Chrome или Edge.", ZH: "你的浏览器不支持语音识别。请使用 Chrome 或 Edge。" },
+  chat_listening: { IT: "Ascolto in corso...", EN: "Listening...", FR: "Écoute en cours...", ES: "Escuchando...", DE: "Ich höre zu...", RU: "Слушаю...", ZH: "正在聆听..." },
+  chat_write_message: { IT: "Scrivi un messaggio...", EN: "Write a message...", FR: "Écris un message...", ES: "Escribe un mensaje...", DE: "Schreib eine Nachricht...", RU: "Напишите сообщение...", ZH: "输入消息..." },
+  chat_ask_wip: { IT: "Chiedi a WIP o ottimizza l'itinerario...", EN: "Ask WIP or optimize the itinerary...", FR: "Demande à WIP ou optimise l'itinéraire...", ES: "Pregunta a WIP u optimiza el itinerario...", DE: "Frag WIP oder optimiere die Route...", RU: "Спросите WIP или улучшите маршрут...", ZH: "询问 WIP 或优化行程..." },
+  chat_thinking: { IT: "Sto pensando...", EN: "Thinking...", FR: "Je réfléchis...", ES: "Estoy pensando...", DE: "Ich denke nach...", RU: "Думаю...", ZH: "思考中..." },
+  chat_welcome_general: { IT: "Ciao! Sono WIP, il tuo esperto di viaggi. Chiedimi pure qualsiasi cosa sui monumenti, la storia locale o consigli per il tuo tour!", EN: "Hi! I'm WIP, your travel expert. Ask me anything about monuments, local history or tips for your tour!", FR: "Salut ! Je suis WIP, ton expert voyages. Demande-moi ce que tu veux sur les monuments, l'histoire locale ou des conseils pour ton tour !", ES: "¡Hola! Soy WIP, tu experto en viajes. Pregúntame lo que quieras sobre monumentos, historia local o consejos para tu tour.", DE: "Hallo! Ich bin WIP, dein Reiseexperte. Frag mich alles über Denkmäler, lokale Geschichte oder Tipps für deine Tour!", RU: "Привет! Я WIP, ваш эксперт по путешествиям. Спрашивайте о памятниках, местной истории или советах для тура!", ZH: "你好！我是 WIP，你的旅行专家。关于古迹、本地历史或行程建议，尽管问我！" },
+  chat_welcome_itinerary: { IT: "Ciao! L'itinerario è pronto, ma se vuoi modificarlo (es. aggiungere un museo, scambiare orari, trovare alternative se piove) o farmi domande sui luoghi... sono a tua disposizione!", EN: "Hi! The itinerary is ready, but if you want to change it (add a museum, swap times, find rain alternatives) or ask about the places... I'm here for you!", FR: "Salut ! L'itinéraire est prêt, mais si tu veux le modifier (ajouter un musée, échanger des horaires, trouver des alternatives s'il pleut) ou me poser des questions sur les lieux... je suis là !", ES: "¡Hola! El itinerario está listo, pero si quieres modificarlo (añadir un museo, cambiar horarios, buscar alternativas si llueve) o preguntarme por los lugares... ¡estoy a tu disposición!", DE: "Hallo! Die Route ist fertig — wenn du sie ändern willst (ein Museum ergänzen, Zeiten tauschen, Regen-Alternativen finden) oder Fragen zu den Orten hast... bin ich für dich da!", RU: "Привет! Маршрут готов, но если хотите его изменить (добавить музей, поменять время, найти альтернативы на случай дождя) или спросить о местах — я к вашим услугам!", ZH: "你好！行程已就绪。如果你想修改（比如加个博物馆、调整时间、下雨时找替代方案）或询问这些地点……随时找我！" },
+  chat_login_required: { IT: "Per chattare con WIP devi prima accedere con il tuo account (serve per i crediti).", EN: "To chat with WIP you first need to sign in with your account (needed for credits).", FR: "Pour discuter avec WIP, connecte-toi d'abord avec ton compte (nécessaire pour les crédits).", ES: "Para chatear con WIP primero debes iniciar sesión con tu cuenta (necesario para los créditos).", DE: "Um mit WIP zu chatten, melde dich zuerst mit deinem Konto an (für die Credits nötig).", RU: "Чтобы общаться с WIP, сначала войдите в аккаунт (это нужно для кредитов).", ZH: "要与 WIP 聊天，请先登录账号（积分需要）。" },
+  chat_messages_left: { IT: "{n} messaggi rimasti", EN: "{n} messages left", FR: "{n} messages restants", ES: "{n} mensajes restantes", DE: "{n} Nachrichten übrig", RU: "Осталось сообщений: {n}", ZH: "剩余 {n} 条消息" },
+  chat_included_exhausted: { IT: "Messaggi inclusi esauriti · +10 per {c} crediti", EN: "Included messages used up · +10 for {c} credits", FR: "Messages inclus épuisés · +10 pour {c} crédits", ES: "Mensajes incluidos agotados · +10 por {c} créditos", DE: "Inklusive Nachrichten aufgebraucht · +10 für {c} Credits", RU: "Включённые сообщения закончились · +10 за {c} кредитов", ZH: "赠送消息已用完 · {c} 积分再获 10 条" },
+  chat_price_for_messages: { IT: "{c} crediti per 10 messaggi", EN: "{c} credits for 10 messages", FR: "{c} crédits pour 10 messages", ES: "{c} créditos por 10 mensajes", DE: "{c} Credits für 10 Nachrichten", RU: "{c} кредитов за 10 сообщений", ZH: "{c} 积分换 10 条消息" },
+  chat_info_title: { IT: "Cosa puoi chiedere a WIP?", EN: "What can you ask WIP?", FR: "Que peux-tu demander à WIP ?", ES: "¿Qué puedes preguntar a WIP?", DE: "Was kannst du WIP fragen?", RU: "О чём можно спросить WIP?", ZH: "可以问 WIP 什么？" },
+  chat_info_b1t: { IT: "Modificare l'itinerario:", EN: "Change the itinerary:", FR: "Modifier l'itinéraire :", ES: "Modificar el itinerario:", DE: "Route ändern:", RU: "Изменить маршрут:", ZH: "修改行程：" },
+  chat_info_b1: { IT: "\"Aggiungi un museo alle 15:00\", \"Ho un'ora di ritardo\", \"Piove, cambia i piani.\"", EN: "\"Add a museum at 3 PM\", \"I'm an hour late\", \"It's raining, change the plans.\"", FR: "« Ajoute un musée à 15 h », « J'ai une heure de retard », « Il pleut, change les plans. »", ES: "\"Añade un museo a las 15:00\", \"Llevo una hora de retraso\", \"Llueve, cambia los planes.\"", DE: "„Füge um 15 Uhr ein Museum hinzu“, „Ich bin eine Stunde zu spät“, „Es regnet, ändere die Pläne.“", RU: "«Добавь музей на 15:00», «Я опаздываю на час», «Идёт дождь, поменяй планы».", ZH: "“下午 3 点加一个博物馆”“我晚了一小时”“下雨了，改一下计划”。" },
+  chat_info_b2t: { IT: "Informazioni Locali:", EN: "Local information:", FR: "Infos locales :", ES: "Información local:", DE: "Lokale Infos:", RU: "Местная информация:", ZH: "本地信息：" },
+  chat_info_b2: { IT: "\"Dove si trova lo stadio?\", \"A che ora apre la galleria d'arte?\"", EN: "\"Where is the stadium?\", \"What time does the art gallery open?\"", FR: "« Où se trouve le stade ? », « À quelle heure ouvre la galerie d'art ? »", ES: "\"¿Dónde está el estadio?\", \"¿A qué hora abre la galería de arte?\"", DE: "„Wo ist das Stadion?“, „Wann öffnet die Kunstgalerie?“", RU: "«Где находится стадион?», «Во сколько открывается галерея?»", ZH: "“体育场在哪里？”“美术馆几点开门？”" },
+  chat_info_b3t: { IT: "Consigli Pratici:", EN: "Practical tips:", FR: "Conseils pratiques :", ES: "Consejos prácticos:", DE: "Praktische Tipps:", RU: "Практические советы:", ZH: "实用建议：" },
+  chat_info_b3: { IT: "\"Che tempo fa oggi?\", \"Quali documenti mi servono?\"", EN: "\"What's the weather today?\", \"Which documents do I need?\"", FR: "« Quel temps fait-il aujourd'hui ? », « Quels documents me faut-il ? »", ES: "\"¿Qué tiempo hace hoy?\", \"¿Qué documentos necesito?\"", DE: "„Wie ist das Wetter heute?“, „Welche Dokumente brauche ich?“", RU: "«Какая сегодня погода?», «Какие документы мне нужны?»", ZH: "“今天天气怎么样？”“我需要哪些证件？”" },
+  chat_error_connection: { IT: "Ops! Si è verificato un errore di connessione. Riprova tra poco.", EN: "Oops! A connection error occurred. Try again shortly.", FR: "Oups ! Une erreur de connexion s'est produite. Réessaie dans un instant.", ES: "¡Vaya! Se ha producido un error de conexión. Inténtalo de nuevo en un momento.", DE: "Hoppla! Ein Verbindungsfehler ist aufgetreten. Versuch es gleich noch mal.", RU: "Ой! Произошла ошибка соединения. Повторите попытку чуть позже.", ZH: "哎呀！连接出错了。请稍后重试。" },
+  chat_updated_itinerary: { IT: "Ho aggiornato l'itinerario come richiesto!", EN: "I've updated the itinerary as requested!", FR: "J'ai mis à jour l'itinéraire comme demandé !", ES: "¡He actualizado el itinerario como pediste!", DE: "Ich habe die Route wie gewünscht aktualisiert!", RU: "Я обновил маршрут, как вы просили!", ZH: "已按你的要求更新行程！" },
+  chat_no_credits: { IT: "Crediti insufficienti. Ricarica nel WIP Shop.", EN: "Not enough credits. Top up in the WIP Shop.", FR: "Crédits insuffisants. Recharge dans le WIP Shop.", ES: "Créditos insuficientes. Recarga en la WIP Shop.", DE: "Nicht genug Credits. Lade im WIP Shop nach.", RU: "Недостаточно кредитов. Пополните в WIP Shop.", ZH: "积分不足。请在 WIP Shop 充值。" },
+  chat_voice_replies_on: { IT: "Risposte a voce: attive", EN: "Voice replies: on", FR: "Réponses vocales : activées", ES: "Respuestas de voz: activas", DE: "Sprachantworten: an", RU: "Голосовые ответы: включены", ZH: "语音回复：已开启" },
+  chat_voice_replies_off: { IT: "Leggi le risposte a voce", EN: "Read replies aloud", FR: "Lire les réponses à voix haute", ES: "Leer las respuestas en voz alta", DE: "Antworten vorlesen", RU: "Читать ответы вслух", ZH: "朗读回复" },
+  chat_empty_hint: { IT: "Scrivi un messaggio per chattare con WIP o modificare il tuo itinerario.", EN: "Write a message to chat with WIP or change your itinerary.", FR: "Écris un message pour discuter avec WIP ou modifier ton itinéraire.", ES: "Escribe un mensaje para chatear con WIP o modificar tu itinerario.", DE: "Schreib eine Nachricht, um mit WIP zu chatten oder deine Route zu ändern.", RU: "Напишите сообщение, чтобы пообщаться с WIP или изменить маршрут.", ZH: "输入消息与 WIP 聊天或修改行程。" },
+  chat_service_name: { IT: "WIP - Esperto Viaggi (10 messaggi)", EN: "WIP - Travel Expert (10 messages)", FR: "WIP - Expert Voyages (10 messages)", ES: "WIP - Experto en Viajes (10 mensajes)", DE: "WIP - Reiseexperte (10 Nachrichten)", RU: "WIP — эксперт по путешествиям (10 сообщений)", ZH: "WIP - 旅行专家（10 条消息）" },
+  chat_speak_btn: { IT: "Parla", EN: "Speak", FR: "Parler", ES: "Hablar", DE: "Sprechen", RU: "Говорить", ZH: "说话" },
+  chat_stop_listening: { IT: "Ferma ascolto", EN: "Stop listening", FR: "Arrêter l'écoute", ES: "Detener escucha", DE: "Zuhören beenden", RU: "Остановить прослушивание", ZH: "停止聆听" },
+  rp_places_along_way: { IT: "Ecco i luoghi che incontrerai lungo la strada. L'audioguida partirà in automatico solo per quelli selezionati.", EN: "These are the places you'll pass along the way. The audio guide starts automatically only for the selected ones.", FR: "Voici les lieux que vous croiserez en chemin. L'audioguide se lancera automatiquement uniquement pour ceux sélectionnés.", ES: "Estos son los lugares que encontrarás por el camino. La audioguía se activará solo para los seleccionados.", DE: "Das sind die Orte, an denen du vorbeikommst. Der Audioguide startet automatisch nur für die ausgewählten.", RU: "Вот места, которые встретятся по пути. Аудиогид включится автоматически только для выбранных.", ZH: "这些是您沿途将经过的地点。语音导览仅对选中的地点自动播放。" },
 };
 
+// I dizionari per area della bonifica 24/08/2026 (lib/traduzioni/*): import
+// pigro-circolare evitato importando QUI il modulo aggregatore, che a sua
+// volta importa solo il tipo Language da questo file.
+import { DIZIONARI_EXTRA } from './i18nDizionari';
+
+/**
+ * La lingua della UI per chi NON riceve `language` via props (banner, modali
+ * montate fuori dall'albero principale): la stessa chiave localStorage che
+ * App.tsx scrive a ogni cambio lingua. Fallback IT.
+ */
+export function linguaCorrente(): Language {
+  try {
+    const l = String(localStorage.getItem('wip_language') || 'IT').toUpperCase();
+    return (['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'].includes(l) ? l : 'IT') as Language;
+  } catch { return 'IT'; }
+}
+
 export function getTranslation(key: string, lang: Language): string {
-  const dictionary = TRANSLATIONS[key];
+  let dictionary = TRANSLATIONS[key];
+  if (!dictionary) {
+    for (const d of DIZIONARI_EXTRA) { if (d[key]) { dictionary = d[key]; break; } }
+  }
   if (!dictionary) return key;
   return dictionary[lang] || dictionary["EN"] || key;
 }

@@ -22,6 +22,14 @@ export const VIATOR_MCID = import.meta.env.VITE_VIATOR_MCID || '42383';
  */
 export const VIATOR_TRACKING_PREFIX = 'https://vi.me/vNn2S?url=';
 
+let viatorAvvisato = false;
+/** console.warn una sola volta per sessione: VITE_VIATOR_PARTNER_ID assente. */
+function avvisaViatorSenzaPartner(): void {
+  if (viatorAvvisato) return;
+  viatorAvvisato = true;
+  console.warn('[affiliates] VITE_VIATOR_PARTNER_ID non configurato: i link Viator usano il vecchio shortlink e le commissioni potrebbero non essere attribuite.');
+}
+
 /** Parametro di tracking Ticketmaster (programma Impact), se configurato. */
 export const TICKETMASTER_CLICKREF = import.meta.env.VITE_TICKETMASTER_CLICKREF || '';
 
@@ -78,7 +86,9 @@ export function ensureViatorAffiliateUrl(url: string): string {
   if (/[?&]pid=/i.test(target)) return target;
 
   if (!VIATOR_PARTNER_ID) {
-    // Nessun partner id configurato: si conserva il comportamento storico
+    // Nessun partner id configurato: si conserva il comportamento storico,
+    // ma lo si dice UNA volta in console (le commissioni non si attribuiscono).
+    avvisaViatorSenzaPartner();
     return url.startsWith(VIATOR_TRACKING_PREFIX)
       ? url
       : VIATOR_TRACKING_PREFIX + encodeURIComponent(target);

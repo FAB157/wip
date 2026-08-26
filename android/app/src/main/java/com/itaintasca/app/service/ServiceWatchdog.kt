@@ -23,6 +23,31 @@ class ServiceWatchdog : BroadcastReceiver() {
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         val isServiceActive = prefs.getBoolean("isServiceActive", false)
 
+        // (22/08/2026) Allarme di RETRY (catena separata, vedi scheduleRetry):
+        // si tenta il riavvio e basta. Il prossimo tentativo, se serve, lo
+        // pianifica il servizio stesso quando startForeground fallisce di
+        // nuovo; la catena dei 15 min non viene toccata.
+        if (intent.getBooleanExtra(EXTRA_RETRY, false)) {
+            if (!isServiceActive) {
+                Log.d(TAG, "🐕 Retry: servizio non attivo, fine.")
+                return
+            }
+            Log.d(TAG, "🐕 Retry startForeground (tentativo ${prefs.getInt(PREF_RETRY_ATTEMPTS, 0)}).")
+            try {
+                val serviceIntent = Intent(context, ItaintaBackgroundPoiService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(serviceIntent)
+                } else {
+                    context.startService(serviceIntent)
+                }
+            } catch (e: Exception) {
+                // Rifiuto sincrono (Android 12+): si riprova col backoff.
+                Log.w(TAG, "Watchdog retry blocked: ${e.message}")
+                scheduleRetry(context)
+            }
+            return
+        }
+
         if (isServiceActive) {
             // Heartbeat vero: ItaintaBackgroundPoiService scrive questo
             // timestamp a ogni fix GPS processato (anche in IDLE, ogni ~20s,
@@ -61,12 +86,28 @@ class ServiceWatchdog : BroadcastReceiver() {
         private const val TAG = "ServiceWatchdog"
         private const val INTERVAL_MS = 15 * 60 * 1000L
 
-        // Retry ravvicinato dopo un rifiuto di startForeground (Android 12+:
+        // Retry dopo un rifiuto di startForeground (Android 12+:
         // ForegroundServiceStartNotAllowedException quando il servizio viene
-        // avviato da background — boot, sentinella exit geofence, ecc.). Non
-        // ha senso aspettare i 15 min della catena normale: la restrizione
-        // spesso si risolve appena l'utente riapre l'app o poco dopo.
-        private const val RETRY_DELAY_MS = 30 * 1000L
+        // avviato da background — boot, sentinella exit geofence, ecc.).
+        // (22/08/2026) BACKOFF ESPONENZIALE invece di un retry fisso a 30 s:
+        // 30 s, 1, 2, 5, 15 min, e dopo 6 tentativi ci si ferma (resta la
+        // catena normale dei 15 min). Prima scheduleRetry usava la STESSA
+        // PendingIntent del watchdog periodico (requestCode 0 +
+        // FLAG_UPDATE_CURRENT), quindi ogni retry SOVRASCRIVEVA l'allarme dei
+        // 15 min: se anche il retry falliva, la catena era morta. Ora il retry
+        // ha il suo requestCode (1) e un extra che lo distingue.
+        private val RETRY_BACKOFF_MS = longArrayOf(
+            30 * 1000L,
+            1 * 60 * 1000L,
+            2 * 60 * 1000L,
+            5 * 60 * 1000L,
+            15 * 60 * 1000L
+        )
+        private const val MAX_RETRY_ATTEMPTS = 6
+        private const val PREF_RETRY_ATTEMPTS = "fgsRetryAttempts"
+        private const val EXTRA_RETRY = "wip_fgs_retry"
+        private const val REQUEST_CODE_CHAIN = 0
+        private const val REQUEST_CODE_RETRY = 1
 
         // Soglia di "heartbeat stantio": in IDLE il batching arriva a 60s a
         // piedi (20s in auto); 2x + margine per deferimenti Doze ≈ 3 min. Un
@@ -77,25 +118,60 @@ class ServiceWatchdog : BroadcastReceiver() {
             val intent = Intent(context, ServiceWatchdog::class.java)
             return PendingIntent.getBroadcast(
                 context,
-                0,
+                REQUEST_CODE_CHAIN,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         }
 
-        fun schedule(context: Context) = scheduleAt(context, INTERVAL_MS)
+        private fun retryPendingIntent(context: Context): PendingIntent {
+            val intent = Intent(context, ServiceWatchdog::class.java).putExtra(EXTRA_RETRY, true)
+            return PendingIntent.getBroadcast(
+                context,
+                REQUEST_CODE_RETRY,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+        }
+
+        fun schedule(context: Context) = scheduleAt(context, INTERVAL_MS, pendingIntent(context))
 
         /**
-         * Retry ravvicinato dopo un fallimento di startForeground. Stessa
-         * PendingIntent del watchdog periodico (FLAG_UPDATE_CURRENT sovrascrive
-         * l'allarme già armato, niente doppie catene), solo con un ritardo
-         * molto più corto della catena normale.
+         * Retry dopo un fallimento di startForeground, con backoff
+         * esponenziale e tetto di MAX_RETRY_ATTEMPTS. Catena SEPARATA da
+         * quella dei 15 min (requestCode diverso): non la sovrascrive mai.
          */
-        fun scheduleRetry(context: Context) = scheduleAt(context, RETRY_DELAY_MS)
+        fun scheduleRetry(context: Context) {
+            val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val attempts = prefs.getInt(PREF_RETRY_ATTEMPTS, 0)
+            if (attempts >= MAX_RETRY_ATTEMPTS) {
+                Log.w(TAG, "🐕 Retry startForeground: raggiunti $MAX_RETRY_ATTEMPTS tentativi, mi fermo (resta la catena dei 15 min).")
+                return
+            }
+            val delayMs = RETRY_BACKOFF_MS[attempts.coerceIn(0, RETRY_BACKOFF_MS.size - 1)]
+            prefs.edit().putInt(PREF_RETRY_ATTEMPTS, attempts + 1).apply()
+            scheduleAt(context, delayMs, retryPendingIntent(context))
+        }
 
-        private fun scheduleAt(context: Context, delayMs: Long) {
+        /**
+         * Da chiamare quando startForeground RIESCE: azzera il contatore dei
+         * tentativi e cancella un eventuale retry ancora armato.
+         */
+        fun resetRetry(context: Context) {
+            try {
+                val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                if (prefs.getInt(PREF_RETRY_ATTEMPTS, 0) != 0) {
+                    prefs.edit().remove(PREF_RETRY_ATTEMPTS).apply()
+                }
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                alarmManager.cancel(retryPendingIntent(context))
+            } catch (e: Exception) {
+                Log.w(TAG, "Watchdog resetRetry failed: ${e.message}")
+            }
+        }
+
+        private fun scheduleAt(context: Context, delayMs: Long, pi: PendingIntent) {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val pi = pendingIntent(context)
             val triggerAt = System.currentTimeMillis() + delayMs
 
             val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
@@ -117,6 +193,10 @@ class ServiceWatchdog : BroadcastReceiver() {
             try {
                 val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
                 alarmManager.cancel(pendingIntent(context))
+                // Anche la catena di retry e il suo contatore
+                alarmManager.cancel(retryPendingIntent(context))
+                context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                    .edit().remove(PREF_RETRY_ATTEMPTS).apply()
                 Log.d(TAG, "🐕 Watchdog cancellato.")
             } catch (e: Exception) {
                 Log.w(TAG, "Watchdog cancel failed: ${e.message}")

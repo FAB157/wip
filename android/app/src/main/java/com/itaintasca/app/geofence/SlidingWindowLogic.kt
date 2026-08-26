@@ -12,7 +12,10 @@ object SlidingWindowLogic {
     const val SENTINEL_ID = "window_sentinel"
     const val SENTINEL_RADIUS_M = 2000f
 
-    data class WindowPoi(val id: String, val isGem: Boolean, val distanceM: Float)
+    // isItinerary (22/08/2026): le tappe dell'itinerario vanno SEMPRE nella
+    // finestra, anche se distano chilometri — altrimenti un radar denso le
+    // spingeva fuori dai 33 e i loro geofence sparivano.
+    data class WindowPoi(val id: String, val isGem: Boolean, val distanceM: Float, val isItinerary: Boolean = false)
 
     data class Diff(
         val toAddIds: List<String>,
@@ -22,13 +25,17 @@ object SlidingWindowLogic {
     }
 
     /**
-     * Selezione della finestra: gemme prima, poi per distanza reale.
-     * Stessa priorità del vecchio GeofenceManager, estratta per il riuso
-     * (percorso online e offline) e per i test.
+     * Selezione della finestra: tappe itinerario prima, poi gemme, poi per
+     * distanza reale. Stessa priorità del vecchio GeofenceManager, estratta
+     * per il riuso (percorso online e offline) e per i test.
      */
     fun selectWindow(pois: List<WindowPoi>, maxPois: Int = MAX_POIS): List<String> =
         pois
-            .sortedWith(compareByDescending<WindowPoi> { it.isGem }.thenBy { it.distanceM })
+            .sortedWith(
+                compareByDescending<WindowPoi> { it.isItinerary }
+                    .thenByDescending { it.isGem }
+                    .thenBy { it.distanceM }
+            )
             .take(maxPois)
             .map { it.id }
 

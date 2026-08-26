@@ -31,6 +31,44 @@ export const DAY_PASS_GUIDE_CAP = 40;
 
 export type PricingFeature = keyof typeof PRICING_LIST;
 
+/**
+ * LISTINO MODIFICABILE SENZA DEPLOY.
+ *
+ * I prezzi qui sopra restano i valori di riferimento cablati, ma l'admin puo'
+ * sovrascriverli dal pannello (rotta `/api/admin/pricing`, salvataggio in
+ * `api_cache`). Il server e' comunque l'autorita': addebita usando il proprio
+ * listino effettivo. Questa funzione serve solo a far vedere all'utente lo
+ * STESSO prezzo che gli verra' addebitato, invece di uno vecchio.
+ *
+ * Si chiama una volta all'avvio (App.tsx) ed e' volutamente fail-open: se la
+ * rotta non risponde restano i valori cablati, che e' esattamente ciò che
+ * l'app faceva prima.
+ */
+let listinoAllineato = false;
+export async function allineaListino(): Promise<void> {
+  if (listinoAllineato) return;
+  listinoAllineato = true;
+  try {
+    const r = await fetch(getApiUrl('/api/pricing'), { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return;
+    const j = await r.json();
+    const remoto = j?.pricing;
+    if (!remoto || typeof remoto !== 'object') return;
+    for (const [k, v] of Object.entries(remoto)) {
+      // Solo voci gia' note e solo numeri interi sensati: una risposta
+      // malformata non deve poter azzerare o gonfiare un prezzo.
+      if (k in PRICING_LIST && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 10000) {
+        (PRICING_LIST as Record<string, number>)[k] = Math.round(Number(v));
+      }
+    }
+  } catch { /* listino cablato: comportamento identico a prima */ }
+}
+
+// Si allinea da solo all'avvio, ma SOLO nel browser: gli script di
+// manutenzione importano questo modulo e non devono fare richieste di rete.
+// Non si aspetta il risultato: nel frattempo valgono i prezzi cablati.
+if (typeof window !== 'undefined') { void allineaListino(); }
+
 export interface WalletBalance {
   purchased: number;
   earned: number;
@@ -143,45 +181,3 @@ export async function refundCredits(userId: string, cost: number): Promise<boole
   }
 }
 
-async function consumeCreditsFallback(userId: string, cost: number): Promise<boolean> {
-  try {
-    const profile = await getUserProfile(userId);
-    let earned = Number(profile.earned_credits) || 0;
-    let purchased = Number(profile.purchased_credits) || 0;
-    
-    if (earned + purchased < cost) {
-      return false;
-    }
-    
-    let remainingCost = cost;
-    if (earned >= remainingCost) {
-      earned -= remainingCost;
-      remainingCost = 0;
-    } else {
-      remainingCost -= earned;
-      earned = 0;
-    }
-    
-    if (remainingCost > 0) {
-      // Guardia anti-negativo: tra la lettura e la scrittura il saldo può
-      // essere cambiato (doppio click, seconda scheda) — mai sotto zero.
-      if (purchased < remainingCost) return false;
-      purchased -= remainingCost;
-    }
-    
-    const { error } = await supabase.from('user_profiles').update({
-      earned_credits: earned,
-      purchased_credits: purchased
-    }).eq('id', userId);
-    
-    if (error) {
-      console.error('[pricing] Fallback update failed:', error);
-      return false;
-    }
-    notifyCreditsChanged({ userId, delta: -cost });
-    return true;
-  } catch (e) {
-    console.error('[pricing] Fallback exception:', e);
-    return false;
-  }
-}

@@ -122,38 +122,13 @@ class SupabaseClient {
         return@withContext fuori
     }
 
-    /** Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...". */
-    private fun geojsonCompatto(geojson: String): String? {
-        if (geojson.isBlank()) return null
-        return try {
-            val g = JSONObject(geojson)
-            val tipo = g.optString("type", "")
-            val coord = g.optJSONArray("coordinates") ?: return null
-            // Polygon: [anello, buco, ...]. MultiPolygon: [[anello, ...], ...],
-            // che si appiattisce — per il test dentro/fuori la parità degli
-            // attraversamenti gestisce tutti gli anelli insieme.
-            val anelli = ArrayList<JSONArray>()
-            when (tipo) {
-                "Polygon" -> for (i in 0 until coord.length()) coord.optJSONArray(i)?.let { anelli.add(it) }
-                "MultiPolygon" -> for (i in 0 until coord.length()) {
-                    val poly = coord.optJSONArray(i) ?: continue
-                    for (j in 0 until poly.length()) poly.optJSONArray(j)?.let { anelli.add(it) }
-                }
-                else -> return null
-            }
-            if (anelli.isEmpty()) return null
-            val sb = StringBuilder()
-            for ((n, anello) in anelli.withIndex()) {
-                if (n > 0) sb.append(';')
-                for (k in 0 until anello.length()) {
-                    val p = anello.optJSONArray(k) ?: continue
-                    if (k > 0) sb.append(' ')
-                    sb.append(p.optDouble(0)).append(',').append(p.optDouble(1))
-                }
-            }
-            sb.toString().ifBlank { null }
-        } catch (e: Exception) { null }
-    }
+    /**
+     * Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...". La
+     * conversione vive in Footprints perche' la usa anche il download dei
+     * pacchetti offline (PackageDownloadManager).
+     */
+    private fun geojsonCompatto(geojson: String): String? =
+        com.itaintasca.app.geofence.Footprints.geojsonCompatto(geojson)
 
     suspend fun fetchPoiById(poiId: String, lang: String = "it"): PoiEntity? = withContext(Dispatchers.IO) {
         val url = "${BuildConfig.SUPABASE_URL}/rest/v1/shared_pois?id=eq.$poiId&select=*"
@@ -385,11 +360,6 @@ class SupabaseClient {
             status !in hiddenStatuses && map["is_hidden"] != true
         }
 
-        val targetDbCategories = mutableSetOf<String>()
-        uiCategories.forEach { uiCat ->
-            CategoryMap.MAP[uiCat]?.let { targetDbCategories.addAll(it) }
-        }
-
         val pois = rawList.map { map ->
             val catFromDb = (map["categoria"] ?: map["category"] ?: "").toString().lowercase()
             
@@ -426,16 +396,9 @@ class SupabaseClient {
             )
         }
 
-        return if (uiCategories.isEmpty()) {
-            // Default "insieme vuoto" allineato al web (useGeofencing.ts):
-            // { monumenti, musei, chiese } attivi; panorami OFF. Prima il nativo
-            // includeva viewpoint/park/panorami di default, il web no.
-            pois.filter { it.isGem || CategoryMap.DEFAULT_CULTURAL_CATEGORIES.contains(it.poiType) }
-        } else {
-            pois.filter { poi -> 
-                val poiCat = (poi.poiType ?: "").lowercase()
-                poi.isGem || targetDbCategories.contains(poiCat) || uiCategories.contains(poiCat)
-            }
-        }
+        // (22/08/2026) Stessa funzione del filtro trigger (receiver) e di
+        // quello offline (servizio): CategoryMap.isActive. Insieme vuoto =
+        // default culturale { monumenti, musei, chiese }, panorami OFF.
+        return pois.filter { CategoryMap.isActive(it.poiType, it.isGem, it.isFromItinerary, uiCategories) }
     }
 }

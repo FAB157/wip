@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { KNOWN_FLAGS } from '../lib/featureFlags';
+import { elencoFlagCompleto } from '../lib/featureFlags';
 import { Activity, Play, RefreshCw, CheckCircle2, XCircle, AlertTriangle, Database, Wifi, Smartphone, HardDrive, Map, Award, Trash2, Bell, ShieldCheck, Globe2, Volume2, Navigation, Bird, ToggleLeft, BookOpen } from 'lucide-react';
 
 // Header di autenticazione admin condiviso dalle sezioni canarino e flag.
@@ -157,7 +157,10 @@ function FlagsSection() {
         <div className="text-xs text-on-surface-variant italic">Caricamento flag...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-          {KNOWN_FLAGS.map(f => {
+          {/* Non piu' solo i flag cablati: si mostrano anche quelli nati sul
+              server. Un kill switch che per comparire nel pannello richiede un
+              deploy non e' un kill switch. */}
+          {elencoFlagCompleto(flags).map(f => {
             const on = flags[f.key] !== false;
             return (
               <button
@@ -165,15 +168,18 @@ function FlagsSection() {
                 onClick={() => toggle(f.key)}
                 disabled={savingKey === f.key}
                 className={`text-left rounded-xl border p-3 transition-colors ${on ? 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100' : 'bg-red-50 border-red-200 hover:bg-red-100'}`}
-                title={f.desc}
+                title={f.descrizione}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-black text-primary">{f.label}</span>
+                  <span className="text-xs font-black text-primary">
+                    {f.label}
+                    {!f.noto && <span className="ml-1 text-[9px] font-black text-amber-600 uppercase">nuovo</span>}
+                  </span>
                   {savingKey === f.key
                     ? <RefreshCw className="w-4 h-4 animate-spin text-gray-400" />
                     : <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${on ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}>{on ? 'ATTIVA' : 'SPENTA'}</span>}
                 </div>
-                <div className="text-[10px] text-on-surface-variant mt-1 leading-tight">{f.desc}</div>
+                <div className="text-[10px] text-on-surface-variant mt-1 leading-tight">{f.descrizione}</div>
               </button>
             );
           })}

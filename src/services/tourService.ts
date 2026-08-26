@@ -19,15 +19,23 @@
  * IL GPS NON STA QUI. `aggiorna()` riceve i campioni da `lib/tour/giroDriver`,
  * che ascolta i fix di locationService: questo file decide, quello sente.
  */
+import { Capacitor } from '@capacitor/core';
 import { getApiUrl } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
+import { postForAudioBlob } from '../lib/audioFetch';
+import { getGuideCharacter } from '../lib/guideSettings';
+import { getTranslation, type Language } from '../lib/i18n';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine,
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
+import { istruzionePerStep } from './osrmService';
 import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
+import { getOrCreateAudioguideText } from './audioguideService';
+import { azureVoiceName } from './ttsService';
+import { locationService } from './locationService';
 
 /** Il tetto delle tappe: decisione di prodotto, non tecnica. */
 export const MAX_TAPPE = 10;
@@ -69,6 +77,24 @@ export interface PropostaSostituta {
   quando: number;
 }
 
+/**
+ * L'esito del pre-scaricamento, contato davvero: quanti testi e quanti audio
+ * sono in tasca, quante tappe restano scoperte. Prima il conteggio esisteva
+ * ma non lo leggeva nessuno, e il banner non poteva dire "3 tappe senza
+ * audio: riprova".
+ */
+export interface StatoPrescarico {
+  inCorso: boolean;
+  fatte: number;
+  totali: number;
+  testi: number;
+  audio: number;
+  /** Tappe senza audio (o senza testo): quelle che offline resterebbero mute. */
+  mancanti: number;
+  /** Quando e' finito l'ultimo giro di pre-scaricamento (0 = mai). */
+  finitoIl: number;
+}
+
 export interface VistaGiro {
   stato: StatoGiro;
   tappaCorrente: number;
@@ -79,9 +105,47 @@ export interface VistaGiro {
   nomeTappa: string | null;
   istruzione: string | null;
   metriAllaSvolta: number | null;
+  /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
+  suAttraversamento: boolean;
   inPausa: boolean;
   /** "A 120 m c'e` X, lo metto al suo posto?" — null se non c'e` niente da proporre. */
   proposta: PropostaSostituta | null;
+  prescarico: StatoPrescarico;
+}
+
+const PRESCARICO_VUOTO: StatoPrescarico = { inCorso: false, fatte: 0, totali: 0, testi: 0, audio: 0, mancanti: 0, finitoIl: 0 };
+
+/**
+ * La chiave dell'MP3 in IndexedDB e' la STESSA che legge PoiDetailSheet
+ * (`${poiId}_${personaggio}`): chi apre la scheda di una tappa pre-scaricata
+ * trova l'audio "posseduto" e lo suona senza rete e senza sapere che viene
+ * da un giro. Prima la chiave era `giro_<id>_<tappa>_<lingua>` e nessuno la
+ * leggeva: l'MP3 scaricato restava in IndexedDB e la scheda richiedeva il
+ * TTS al server.
+ */
+export function chiaveAudioTappa(poiId: string | number, personaggio: string): string {
+  return `${String(poiId)}_${personaggio}`;
+}
+
+/**
+ * Il blob in IndexedDB, passando dalla funzione esistente di offlineStorage
+ * (che accetta un URL): un object URL del blob e' un URL come un altro.
+ */
+async function salvaBlobAudio(blob: Blob, chiave: string): Promise<boolean> {
+  const url = URL.createObjectURL(blob);
+  try { return await saveOfflineAudio(url, chiave); }
+  finally { try { URL.revokeObjectURL(url); } catch { /* ignore */ } }
+}
+
+/** Manovre OSRM che sono un attraversamento (tipo, modificatore o nome della via). */
+function stepEAttraversamento(s: any): boolean {
+  if (!s) return false;
+  const tipo = String(s?.maneuver?.type || '').toLowerCase();
+  if (tipo.includes('crossing')) return true;
+  const nome = String(s?.name || '').toLowerCase();
+  if (/crossing|attraversamento|passage pi[eé]ton|paso de peatones|zebrastreifen|переход|人行横道/.test(nome)) return true;
+  const inters: any[] = Array.isArray(s?.intersections) ? s.intersections : [];
+  return inters.some(i => Array.isArray(i?.classes) && i.classes.some((c: any) => String(c).toLowerCase().includes('crossing')));
 }
 
 /**
@@ -113,15 +177,27 @@ export interface BozzaGiro {
   /** I POI che il giro sfiorerebbe, letti lungo il corridoio del tracciato: candidati ad aggiungersi. */
   lungoLaStrada: PoiLungoStrada[];
   cercandoLungoStrada: boolean;
+  /**
+   * Ad anello (si torna dove si e` partiti) o aperto (si finisce all'ultima
+   * tappa). Era fisso ad anello; dal 22/08/2026 lo sceglie l'utente — chi ha
+   * l'albergo dall'altra parte della citta` non vuole tornare indietro.
+   * Preferenza, non selezione: sopravvive allo svuotamento come il tempo.
+   */
+  anello: boolean;
 }
 
 const CHIAVE_RIPRESA = 'wip_giro_in_corso';
+const CHIAVE_ANELLO = 'wip_giro_anello';
 const BOZZA_VUOTA: BozzaGiro = {
   tappe: [], ordine: null, geometria: [], metri: 0, minutiCammino: 0, tratteSecondi: [],
   problemi: [], partenza: null, calcolando: false, errore: null,
   ordineManuale: false, minutiDisponibili: null, tappeNelTempo: null,
   lungoLaStrada: [], cercandoLungoStrada: false,
+  anello: true,
 };
+function leggiPreferenzaAnello(): boolean {
+  try { return localStorage.getItem(CHIAVE_ANELLO) !== 'false'; } catch { return true; }
+}
 
 /**
  * QUANTO CI FIDIAMO DEL PUNTO D'INGRESSO.
@@ -166,7 +242,7 @@ class TourService {
   private pausaManuale = false;
   private proposta: PropostaSostituta | null = null;
 
-  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA };
+  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA, anello: leggiPreferenzaAnello() };
   private ascoltatoriBozza = new Set<(b: BozzaGiro) => void>();
   private bozzaVersione = 0;
   private bozzaTimer: ReturnType<typeof setTimeout> | null = null;
@@ -191,7 +267,24 @@ class TourService {
 
   /** L'ultima posizione vista da `aggiorna`: serve al ricalcolo quando nessuno ne passa una. */
   private ultimaPosizione: { lat: number; lon: number } | null = null;
+  /**
+   * IL NAVIGATORE DEL GIRO. Le tratte OSRM arrivano dal server con gli step
+   * (le manovre), ma fino al 22/08/2026 nessuno le leggeva: vista() tornava
+   * istruzione null e il giro camminava muto fra una tappa e l'altra.
+   * `passoCorrente` e` l'indice dello step della tratta corrente la cui
+   * manovra e` la prossima davanti a noi; si azzera a ogni tappa e ricalcolo.
+   */
+  private lingua = 'it';
+  private passoCorrente = 0;
+  private tappaDelPasso = -1;
+  private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean } = { istruzione: null, metri: null, attraversamento: false };
+  private ultimoRicalcoloDeviazione = 0;
   private posizioneCache: { p: { lat: number; lon: number }; ts: number } | null = null;
+  private prescarico: StatoPrescarico = { ...PRESCARICO_VUOTO };
+  /** L'ultima tappa a cui si e' arrivati (per "Riascolta"), anche dopo averla completata. */
+  private ultimaTappaArrivata: TappaGiro | null = null;
+  /** Id gia' assegnato dal salvataggio: Salva e Condividi ravvicinati non devono fare due righe. */
+  private idSalvato: string | null = null;
 
   // ── BOZZA: la scelta delle tappe ─────────────────────────────────────────
 
@@ -256,6 +349,14 @@ class TourService {
     this.programmaAnteprima();
   }
 
+  /** Ad anello o aperto: si ricalcola l'anteprima e si ricorda la scelta. */
+  bozzaImpostaAnello(anello: boolean) {
+    if (this.bozzaStato.anello === anello) return;
+    this.bozzaStato = { ...this.bozzaStato, anello, errore: null };
+    try { localStorage.setItem(CHIAVE_ANELLO, anello ? 'true' : 'false'); } catch {}
+    this.programmaAnteprima();
+  }
+
   /** "Riordina per me": si torna all'ordine che fa camminare meno. */
   bozzaOrdineAutomatico() {
     if (!this.bozzaStato.ordineManuale) return;
@@ -295,7 +396,7 @@ class TourService {
     this.bozzaVersione++;
     if (this.bozzaTimer) { clearTimeout(this.bozzaTimer); this.bozzaTimer = null; }
     // Il tempo scelto si tiene: e` una preferenza, non parte della selezione.
-    this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili };
+    this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello };
     this.avvisaBozza();
   }
 
@@ -314,7 +415,7 @@ class TourService {
     this.bozzaStato = { ...this.bozzaStato, calcolando: this.bozzaStato.tappe.length > 0 };
     this.avvisaBozza();
     if (this.bozzaStato.tappe.length === 0) {
-      this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili };
+      this.bozzaStato = { ...BOZZA_VUOTA, minutiDisponibili: this.bozzaStato.minutiDisponibili, anello: this.bozzaStato.anello };
       this.avvisaBozza();
       return;
     }
@@ -341,7 +442,7 @@ class TourService {
       return;
     }
     try {
-      const { g, dati } = await this.chiediRotta(tappe, { partenza, anello: true, ordina: !this.bozzaStato.ordineManuale });
+      const { g, dati } = await this.chiediRotta(tappe, { partenza, anello: this.bozzaStato.anello, ordina: !this.bozzaStato.ordineManuale });
       if (mia !== this.bozzaVersione) return;
       this.bozzaStato = {
         ...this.bozzaStato,
@@ -421,7 +522,7 @@ class TourService {
     this.passMancante = false;
     // La sequenza e` gia` in ordine di cammino (del server o dell'utente):
     // si passa com'e`, cosi` il giro e` quello che si e` visto in anteprima.
-    const giro = await this.crea(tappe, { partenza, anello: true, ordina: false });
+    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false });
     this.bozzaSvuota();
     return giro;
   }
@@ -458,11 +559,25 @@ class TourService {
     this.pausaManuale = false;
     this.corridoio = [];
     this.lungoIlPercorsoCache = null;
+    this.prescarico = { ...PRESCARICO_VUOTO };
+    this.ultimaTappaArrivata = null;
+    this.idSalvato = null;
     this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
     this.salva();
     this.avvisa();
     void this.cercaLungoLaStradaGiro();
+    // Sul telefono l'arrivo lo dichiara il servizio nativo: le tappe entrano
+    // nel suo geofencing come tappe d'itinerario (isFromItinerary=true).
+    this.sincronizzaTappeNative();
     return giro;
+  }
+
+  /** Le tappe ancora da fare al geofencing nativo (no-op sul web). */
+  private sincronizzaTappeNative() {
+    if (!this.giro || !Capacitor.isNativePlatform()) return;
+    try {
+      locationService.syncTappeGiroToNative(this.giro.tappe.filter(t => !t.fatta && !t.saltata && !t.esclusa));
+    } catch { /* best-effort */ }
   }
 
   /**
@@ -516,45 +631,49 @@ class TourService {
    */
   async prescarica(
     onProgresso?: (fatte: number, totali: number) => void,
-    lingua = 'it',
-  ): Promise<{ testi: number; audio: number; totali: number }> {
-    if (!this.giro) return { testi: 0, audio: 0, totali: 0 };
-    const tappe = this.giro.tappe;
+    lingua?: string,
+    personaggio?: 'nicky' | 'dante',
+  ): Promise<{ testi: number; audio: number; totali: number; mancanti: number }> {
+    if (!this.giro) return { testi: 0, audio: 0, totali: 0, mancanti: 0 };
+    if (this.prescarico.inCorso) return { testi: this.prescarico.testi, audio: this.prescarico.audio, totali: this.prescarico.totali, mancanti: this.prescarico.mancanti };
+    const giroId = this.giro.id;
+    const tappe = this.giro.tappe.filter(t => !t.esclusa);
+    // Lingua e personaggio dal contesto utente (non 'it' fisso come prima):
+    // un utente EN si ritrovava testi e voce italiani nel pre-scaricamento.
+    const lang = String(lingua || this.lingua || localStorage.getItem('wip_language') || 'it').toLowerCase().slice(0, 2) || 'it';
+    const carattere: 'nicky' | 'dante' = personaggio || getGuideCharacter() || 'nicky';
+    const voce = azureVoiceName(lang, carattere);
     let fatte = 0, testi = 0, audio = 0;
+    this.prescarico = { inCorso: true, fatte: 0, totali: tappe.length, testi: 0, audio: 0, mancanti: 0, finitoIl: 0 };
+    this.avvisa();
 
     await Promise.all(tappe.map(async (t) => {
-      // 1. Il testo. Senza, non c'e` niente da dire alla tappa.
+      // 1. Il testo, dalla stessa catena della scheda (cache poi_audioguides →
+      //    get-or-create sul server): incrementPlay:false perche' preparare
+      //    non e' ascoltare.
       try {
         if (!t.testo) {
-          const r = await fetch(getApiUrl(`/api/poi/audioguide?poi_id=${encodeURIComponent(String(t.id))}&language=${lingua}`));
-          if (r.ok) {
-            const j = await r.json();
-            t.testo = j?.text || j?.testo || j?.audio_script || null;
-            t.durata_ascolto_s = durataAscolto(t.testo);
-          }
+          const poi = { id: String(t.id), name: t.nome, lat: t.lat, lon: t.lon, category: t.categoria || undefined, city: t.citta || undefined } as any;
+          t.testo = await getOrCreateAudioguideText(poi, lang, carattere, { incrementPlay: false });
+          t.durata_ascolto_s = durataAscolto(t.testo);
         }
         if (t.testo) testi++;
       } catch { /* si prendera` al momento */ }
 
       // 2. L'AUDIO. Il testo da solo non basta: senza rete la sintesi vocale
       //    del server non risponde, e il giro premium diventa muto proprio nel
-      //    centro storico dove il segnale manca. Si scarica l'MP3 e si mette in
-      //    IndexedDB con la stessa chiave che usa gia` la scheda POI, cosi` chi
-      //    riproduce lo trova senza sapere che viene da un giro.
+      //    centro storico dove il segnale manca. Si scarica l'MP3 (stesso
+      //    canale della scheda: /api/tts/smart con Bearer, voce del
+      //    personaggio) e si mette in IndexedDB con la chiave che la scheda
+      //    POI legge gia' (`${poiId}_${personaggio}`).
       try {
-        const chiave = `giro_${this.giro!.id}_${t.id}_${lingua}`;
+        const chiave = chiaveAudioTappa(t.id, carattere);
         const gia = await getOfflineAudioUrl(chiave);
         if (gia) { t.audio = gia; audio++; }
         else if (t.testo) {
-          const r = await fetch(getApiUrl('/api/tts'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: t.testo, lang: lingua, poi_id: t.id }),
-          });
-          if (r.ok) {
-            const j = await r.json().catch(() => null);
-            const url = j?.audioUrl || j?.url || null;
-            if (url && await saveOfflineAudio(url, chiave)) {
+          const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: t.testo, voice: voce, poi_id: t.id, prefetch: true });
+          if (ok && blob && blob.size >= 500 && !(blob.type || '').includes('json')) {
+            if (await salvaBlobAudio(blob, chiave)) {
               t.audio = await getOfflineAudioUrl(chiave);
               audio++;
             }
@@ -563,12 +682,24 @@ class TourService {
       } catch { /* l'audio si generera` al momento se la rete c'e` */ }
 
       fatte++;
+      if (this.giro?.id === giroId) {
+        this.prescarico = { ...this.prescarico, fatte, testi, audio, mancanti: tappe.length - audio };
+        this.avvisa();
+      }
       onProgresso?.(fatte, tappe.length);
     }));
 
-    this.salva();
-    return { testi, audio, totali: tappe.length };
+    const esito = { testi, audio, totali: tappe.length, mancanti: tappe.length - audio };
+    if (this.giro?.id === giroId) {
+      this.prescarico = { inCorso: false, fatte, ...esito, finitoIl: Date.now() };
+      this.salva();
+      this.avvisa();
+    }
+    return esito;
   }
+
+  /** Lo stato del pre-scaricamento (per il banner). */
+  statoPrescarico(): StatoPrescarico { return this.prescarico; }
 
   /** Un campione di posizione: fa avanzare la macchina a stati. */
   aggiorna(pos: { lat: number; lon: number; velocita?: number }, extra?: { guidaInCorso?: boolean; pausaManuale?: boolean; suAttraversamento?: boolean; metriAllaSvolta?: number | null }) {
@@ -589,8 +720,74 @@ class TourService {
       pausaManuale: extra?.pausaManuale ?? this.pausaManuale,
       adesso: Date.now(),
     });
+    if (this.stato.stato === 'ALL_INGRESSO') this.ultimaTappaArrivata = tappa;
+    this.aggiornaPasso(pos);
     this.salva();
     this.avvisa();
+  }
+
+  /**
+   * "Riascolta" dal banner: la tappa a cui si e' arrivati per ultima (anche se
+   * gia' completata), altrimenti la corrente. Null solo senza giro.
+   */
+  tappaDaRiascoltare(): TappaGiro | null {
+    if (!this.giro) return null;
+    return this.ultimaTappaArrivata
+      ?? [...this.giro.tappe].reverse().find(t => t.fatta && !t.esclusa)
+      ?? this.tappaCorrente();
+  }
+
+  /** Lingua delle istruzioni vocali: la imposta il driver dalla UI. */
+  impostaLingua(l: string) { this.lingua = String(l || 'it').toLowerCase().slice(0, 2) || 'it'; }
+
+  /**
+   * La prossima manovra davanti a noi, sulla tratta corrente.
+   * Lo step 0 e` il `depart` (la partenza), l'ultimo e` l'`arrive`; la manovra
+   * di uno step sta al suo INIZIO. Si avanza quando si e` passati sopra la
+   * manovra (15 m) o quando la successiva e` gia` piu` vicina: cosi` un fix
+   * saltato non lascia il navigatore a ripetere una svolta gia` fatta.
+   */
+  private aggiornaPasso(pos: { lat: number; lon: number }) {
+    const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
+    const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
+    if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false }; return; }
+    const punto = (s: any) => {
+      const l = s?.maneuver?.location;
+      return Array.isArray(l) && l.length >= 2 ? { lat: Number(l[1]), lon: Number(l[0]) } : null;
+    };
+    let i = Math.max(this.passoCorrente, 0);
+    while (i < steps.length - 1) {
+      const qui = punto(steps[i]), dopo = punto(steps[i + 1]);
+      if (!qui || !dopo) { i++; continue; }
+      const d = metri(pos, qui), dDopo = metri(pos, dopo);
+      if (i === 0 || d < 15 || (dDopo < d && dDopo < 40)) i++; else break;
+    }
+    this.passoCorrente = i;
+    const s = steps[i];
+    const p = punto(s);
+    const m = p ? Math.round(metri(pos, p)) : null;
+    this.navAttuale = {
+      istruzione: istruzionePerStep(s, this.lingua, this.tappaCorrente()?.nome || undefined),
+      metri: m,
+      // Attraversamento a ridosso (entro 20 m): il direttore audio tace.
+      // OSRM foot non ha un tipo di manovra "crossing" proprio: si legge dal
+      // tipo, dal nome della via o dalle classi dell'intersezione, se ci sono.
+      attraversamento: m != null && m <= 20 && stepEAttraversamento(s),
+    };
+  }
+
+  /**
+   * Fuori percorso da piu` di 30 s (stato DEVIATO): si rifa` il percorso da
+   * dove si e`. Un ricalcolo al minuto al massimo — il GPS in un vicolo puo`
+   * oscillare per un po' prima di rientrare.
+   */
+  async ricalcolaDaDeviazione(pos: { lat: number; lon: number }): Promise<boolean> {
+    if (!this.giro || this.stato.stato !== 'DEVIATO') return false;
+    if (Date.now() - this.ultimoRicalcoloDeviazione < 60_000) return false;
+    this.ultimoRicalcoloDeviazione = Date.now();
+    await this.ricalcola(pos);
+    return true;
   }
 
   /** La pausa dal banner: la macchina a stati la vede al prossimo campione. */
@@ -707,6 +904,35 @@ class TourService {
     this.avvisa();
   }
 
+  /** C'e` un giro in corso e questo POI ne e` gia` una tappa (fatta o da fare)? */
+  giroHa(id: string | number): boolean {
+    return !!this.giro?.tappe.some(t => String(t.id) === String(id) && !t.esclusa);
+  }
+
+  /**
+   * "Aggiungi al giro" A GIRO GIA` PARTITO (22/08/2026): la tappa entra fra
+   * quelle da fare e il percorso si rifa` da dove si e`, con lo stesso
+   * ricalcolo delle deviazioni. Il tetto resta dieci tappe vive. Torna
+   * false se non c'e` giro, se e` piena o se la tappa c'e` gia`.
+   */
+  async aggiungiTappaAlVolo(poi: any): Promise<boolean> {
+    const giro = this.giro;
+    if (!giro) return false;
+    const t = tappaDaPoi(poi);
+    if (!Number.isFinite(t.lat) || !Number.isFinite(t.lon)) return false;
+    if (this.giroHa(t.id)) return false;
+    const vive = giro.tappe.filter(x => !x.esclusa).length;
+    if (vive >= MAX_TAPPE) return false;
+    giro.tappe.push({ ...t, durata_ascolto_s: t.durata_ascolto_s ?? durataAscolto(t.testo) });
+    // Era FINITO (ultima tappa fatta) e si vuole proseguire: si riparte.
+    await this.ricalcola();
+    // Geofence prioritari sul telefono: la lista e` cambiata.
+    if (Capacitor.isNativePlatform()) {
+      try { locationService.syncTappeGiroToNative(giro.tappe.filter(x => !x.fatta && !x.saltata && !x.esclusa)); } catch { /* best-effort */ }
+    }
+    return true;
+  }
+
   /**
    * Rifa` il percorso sulle tappe ancora da fare, partendo dalla posizione
    * data (o dall'ultima nota). `ordine` da qui in poi contiene SOLO le tappe
@@ -741,6 +967,8 @@ class TourService {
         giro.minutiCammino = g.minuti_cammino;
         giro.problemi = g.problemi || [];
         this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
+        this.passoCorrente = 0; this.tappaDelPasso = -1;
+        this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
         this.salva(); this.avvisa();
         void this.cercaLungoLaStradaGiro();
         return;
@@ -753,18 +981,26 @@ class TourService {
     giro.ordine = [...posizioniTenute.map(p => giro.ordine[p]), ...nuove.map(t => giro.tappe.indexOf(t))];
     giro.tratte = posizioniTenute.map(p => giro.tratte[p]).filter(Boolean);
     this.stato = { ...this.stato, tappaCorrente: 0, stato: 'IN_CAMMINO', da: Date.now() };
+    this.passoCorrente = 0; this.tappaDelPasso = -1;
+    this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
     this.salva(); this.avvisa();
   }
 
   termina() {
+    const aveva = !!this.giro;
     this.giro = null;
     this.proposta = null;
     this.pausaManuale = false;
     this.corridoio = [];
     this.lungoIlPercorsoCache = null;
+    this.prescarico = { ...PRESCARICO_VUOTO };
+    this.ultimaTappaArrivata = null;
+    this.idSalvato = null;
     this.coda.svuota();
     this.stato = { stato: 'FINITO', tappaCorrente: 0, da: Date.now() };
     try { localStorage.removeItem(CHIAVE_RIPRESA); } catch {}
+    // Le tappe non devono restare geofence prioritari sul telefono.
+    if (aveva && Capacitor.isNativePlatform()) { try { locationService.unsyncTappeGiroFromNative(); } catch { /* best-effort */ } }
     this.avvisa();
   }
 
@@ -773,12 +1009,23 @@ class TourService {
     try {
       const grezzo = localStorage.getItem(CHIAVE_RIPRESA);
       if (!grezzo) return null;
-      const { giro, stato } = JSON.parse(grezzo);
+      const { giro, stato, prescarico } = JSON.parse(grezzo);
       // Un giro di ieri non si riprende: si e` andati a dormire, non in pausa.
       if (!giro || Date.now() - giro.creatoIl > 12 * 60 * 60 * 1000) { localStorage.removeItem(CHIAVE_RIPRESA); return null; }
-      this.giro = giro; this.stato = stato;
+      this.giro = giro;
+      // I timer "da fermo" e "fuori percorso" di PRIMA della chiusura non
+      // valgono piu': riaprendo l'app dopo dieci minuti il giro andava
+      // dritto in IN_PAUSA (fermoDa vecchio) o in DEVIATO senza averlo mai
+      // visto. Si riparte con i contatori azzerati.
+      this.stato = { ...stato, fermoDa: null, fuoriPercorsoDa: null, da: Date.now() };
+      if (this.stato.stato === 'IN_PAUSA' || this.stato.stato === 'DEVIATO') this.stato.stato = 'IN_CAMMINO';
+      // Gli object URL salvati non sopravvivono al reload: l'audio si rilegge da IndexedDB.
+      for (const t of this.giro.tappe) t.audio = null;
+      this.prescarico = prescarico && typeof prescarico === 'object' ? { ...PRESCARICO_VUOTO, ...prescarico, inCorso: false } : { ...PRESCARICO_VUOTO };
+      this.idSalvato = null;
       this.avvisa();
       void this.cercaLungoLaStradaGiro();
+      this.sincronizzaTappeNative();
       return giro;
     } catch { return null; }
   }
@@ -799,10 +1046,12 @@ class TourService {
       metriTotali: this.giro.metri,
       metriRimanenti: Math.round(restanti),
       nomeTappa: t?.nome ?? null,
-      istruzione: null,
-      metriAllaSvolta: null,
+      istruzione: this.navAttuale.istruzione,
+      metriAllaSvolta: this.navAttuale.metri,
+      suAttraversamento: this.navAttuale.attraversamento,
       inPausa: this.stato.stato === 'IN_PAUSA',
       proposta,
+      prescarico: this.prescarico,
     };
   }
 
@@ -886,6 +1135,8 @@ class TourService {
     const sequenza = [...fuoriOrdine, ...nelOrdine];
     if (sequenza.length === 0) return null;
 
+    const L = (this.lingua || 'it').toUpperCase() as Language;
+    const tr = (k: string) => getTranslation(k, L);
     let minuti = 9 * 60 + 30;
     const hhmm = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`;
     const tappe = sequenza.map((t, i) => {
@@ -896,7 +1147,7 @@ class TourService {
       const riga = {
         ora: hhmm(minuti),
         titolo_tappa: t.nome,
-        attivita: t.testo ? primaFrase(t.testo, 220) : 'Tappa del giro a piedi con audioguida WIP.',
+        attivita: t.testo ? primaFrase(t.testo, 220) : tr('tour_tappa_descrizione'),
         tempo_necessario: `${Math.max(5, Math.round(ascolto / 60))} min`,
         tipo: t.categoria || 'monumenti',
         coordinate: { lat: t.lat, lng: t.lon },
@@ -909,15 +1160,27 @@ class TourService {
 
     const km = (giro.metri / 1000).toFixed(1);
     const citta = giro.citta || '';
+    const nTappe = tappe.length === 1 ? tr('tour_tappa').toLowerCase() : tr('tour_tappe');
+    // L'id resta lo stesso finche' il giro non cambia: Salva e poi Condividi
+    // (o due tocchi ravvicinati) non devono creare due righe.
+    if (!this.idSalvato) {
+      this.idSalvato = (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `giro-${Date.now()}`;
+    }
     return {
-      id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto) ? crypto.randomUUID() : `giro-${Date.now()}`,
-      titolo: `Giro a piedi: ${tappe.length} ${tappe.length === 1 ? 'tappa' : 'tappe'}${citta ? ` a ${citta}` : ''}`,
+      id: this.idSalvato,
+      titolo: `${tr('tour_giro_a_piedi')}: ${tappe.length} ${nTappe}${citta ? ` · ${citta}` : ''}`,
       destinazione: citta,
       origine: 'dieci_tappe',
       giro: { metri: giro.metri, minuti_cammino: giro.minutiCammino, minuti_ascolto: giro.minutiAscolto, anello: giro.anello },
       info_viaggio: {
         precauzioni: [],
-        suggerimenti: [`Percorso ${giro.anello ? 'ad anello ' : ''}di ${km} km: circa ${giro.minutiCammino} minuti a piedi, più l'ascolto delle audioguide.`],
+        suggerimenti: [
+          tr('tour_suggerimento_percorso')
+            .replace('{anello}', giro.anello ? tr('tour_ad_anello') : '')
+            .replace('{km}', km)
+            .replace('{min}', String(giro.minutiCammino))
+            .replace(/^\s+/, ''),
+        ],
         raccomandazioni: [],
         zone_da_evitare: [],
       },
@@ -930,7 +1193,16 @@ class TourService {
    * Salva nei "miei itinerari" e nella cache condivisa (e` quella che rende
    * apribile il link). Senza sessione si salva in locale, come fa PlanScreen.
    */
-  async salvaComeItinerario(): Promise<{ id: string; link: string; titolo: string }> {
+  async salvaComeItinerario(): Promise<{ id: string; link: string | null; titolo: string }> {
+    // Due tocchi ravvicinati (Salva, poi subito Condividi) aspettano lo
+    // stesso salvataggio invece di farne due.
+    if (this.salvataggioInCorso) return this.salvataggioInCorso;
+    this.salvataggioInCorso = this.salvaDavvero().finally(() => { this.salvataggioInCorso = null; });
+    return this.salvataggioInCorso;
+  }
+  private salvataggioInCorso: Promise<{ id: string; link: string | null; titolo: string }> | null = null;
+
+  private async salvaDavvero(): Promise<{ id: string; link: string | null; titolo: string }> {
     const piano = this.comeItinerario();
     if (!piano) throw new Error('niente da salvare');
     const adesso = new Date().toISOString();
@@ -944,21 +1216,26 @@ class TourService {
       if (error) throw new Error(error.message);
     } else {
       try {
-        const locali = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]');
-        locali.push({ id: piano.id, titolo: piano.titolo, dati_itinerario: piano, created_at: adesso, updated_at: adesso });
+        const locali: any[] = JSON.parse(localStorage.getItem('mock_db_user_itineraries') || '[]');
+        const i = locali.findIndex(x => x?.id === piano.id);
+        const riga = { id: piano.id, titolo: piano.titolo, dati_itinerario: piano, created_at: adesso, updated_at: adesso };
+        if (i >= 0) locali[i] = { ...locali[i], ...riga, created_at: locali[i].created_at || adesso }; else locali.push(riga);
         localStorage.setItem('mock_db_user_itineraries', JSON.stringify(locali));
       } catch { /* niente spazio: il link sotto vale comunque se la cache condivisa risponde */ }
     }
 
     // La cache condivisa e` cio` che apre il link anche a chi non e` l'autore.
-    // Best-effort: se fallisce, l'itinerario e` comunque salvato per l'utente.
+    // Se l'upsert fallisce NON si offre un link: sarebbe un link che apre il
+    // nulla. L'itinerario resta comunque salvato per l'utente.
+    let link: string | null = null;
     try {
-      await supabase.from('shared_itinerary_cache').upsert({
+      const { error } = await supabase.from('shared_itinerary_cache').upsert({
         id: piano.id, destination: piano.destinazione || 'Giro a piedi', days: 1, dati_itinerario: piano, created_at: adesso,
       }, { onConflict: 'id' });
+      if (!error) link = `https://wip.guide/?giro=${encodeURIComponent(piano.id)}`;
     } catch { /* vedi sopra */ }
 
-    return { id: piano.id, link: `https://wip.guide/?giro=${encodeURIComponent(piano.id)}`, titolo: piano.titolo };
+    return { id: piano.id, link, titolo: piano.titolo };
   }
 
   /** Dal link `?giro=ID` al piano, o null se non esiste (o non e` un giro). */
@@ -1018,7 +1295,7 @@ class TourService {
   }
 
   private salva() {
-    try { localStorage.setItem(CHIAVE_RIPRESA, JSON.stringify({ giro: this.giro, stato: this.stato })); } catch {}
+    try { localStorage.setItem(CHIAVE_RIPRESA, JSON.stringify({ giro: this.giro, stato: this.stato, prescarico: this.prescarico })); } catch {}
   }
 
   private avvisa() {

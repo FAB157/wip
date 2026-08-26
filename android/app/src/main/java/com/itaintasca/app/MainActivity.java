@@ -4,13 +4,19 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.WindowManager;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import com.itaintasca.app.plugin.ItaintaBackgroundPoiPlugin;
 import com.itaintasca.app.service.ServiceWatchdog;
+import java.util.regex.Pattern;
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
+    private static final String TAG = "MainActivity";
+    private static final Pattern SAFE_ID = Pattern.compile("^[A-Za-z0-9_:.-]{1,80}$");
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ItaintaBackgroundPoiPlugin.class);
@@ -42,8 +48,16 @@ public class MainActivity extends BridgeActivity {
         // --- 1. Check-in logic (sequential itinerary) ---
         if ("ACTION_CHECKIN".equals(intent.getAction())) {
             String poiId = intent.getStringExtra("poiId");
+            // (22/08/2026) L'extra finiva in evaluateJavascript senza escape:
+            // whitelist + JSONObject.quote, mai interpolazione diretta.
+            if (!isSafeId(poiId)) {
+                Log.w(TAG, "ACTION_CHECKIN con poiId non valido, ignorato");
+                return;
+            }
+            final String quotedPoiId = JSONObject.quote(poiId);
             getBridge().getWebView().post(() -> {
-                String js = String.format("window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: '%s' } }));", poiId);
+                String js = "window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: "
+                        + quotedPoiId + " } }));";
                 getBridge().getWebView().evaluateJavascript(js, null);
             });
             return;
@@ -64,26 +78,34 @@ public class MainActivity extends BridgeActivity {
             String poiId = (path != null && path.length() > 1) ? path.substring(1) : null;
             String guide = uri.getQueryParameter("guide");
 
-            if (poiId != null && !poiId.isEmpty()) {
-                // A cold start l'evento JS parte prima che React monti i listener e
-                // va perso: persistiamo il deep link, il JS lo consuma all'avvio
-                // via ItaintaBackgroundPoiPlugin.getPendingDeepLink().
-                getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit()
-                        .putString("pending_deeplink_poi", poiId)
-                        .putString("pending_deeplink_guide", guide != null ? guide : "nicky")
-                        .putLong("pending_deeplink_ts", System.currentTimeMillis())
-                        .apply();
-
-                getBridge().getWebView().post(() -> {
-                    String js = String.format(
-                        "window.dispatchEvent(new CustomEvent('deep-link-poi', { detail: { poiId: '%s', guide: '%s' } }));",
-                        poiId.replace("'", "\\'"),
-                        (guide != null ? guide : "nicky").replace("'", "\\'")
-                    );
-                    getBridge().getWebView().evaluateJavascript(js, null);
-                });
+            if (!isSafeId(poiId)) {
+                Log.w(TAG, "Deep link con poiId non valido, ignorato");
+                return;
             }
+            final String safeGuide = isSafeId(guide) ? guide : "nicky";
+
+            // A cold start l'evento JS parte prima che React monti i listener e
+            // va perso: persistiamo il deep link, il JS lo consuma all'avvio
+            // via ItaintaBackgroundPoiPlugin.getPendingDeepLink().
+            getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit()
+                    .putString("pending_deeplink_poi", poiId)
+                    .putString("pending_deeplink_guide", safeGuide)
+                    .putLong("pending_deeplink_ts", System.currentTimeMillis())
+                    .apply();
+
+            final String quotedPoiId = JSONObject.quote(poiId);
+            final String quotedGuide = JSONObject.quote(safeGuide);
+            getBridge().getWebView().post(() -> {
+                String js = "window.dispatchEvent(new CustomEvent('deep-link-poi', { detail: { poiId: "
+                        + quotedPoiId + ", guide: " + quotedGuide + " } }));";
+                getBridge().getWebView().evaluateJavascript(js, null);
+            });
         }
+    }
+
+    /** Whitelist per gli id che finiscono nel JS: solo caratteri innocui, max 80. */
+    private static boolean isSafeId(String value) {
+        return value != null && SAFE_ID.matcher(value).matches();
     }
 
     @Override

@@ -227,8 +227,11 @@ Rispondi esclusivamente con il JSON valido. Non aggiungere spiegazioni o markdow
     const lonId = numericLon.toFixed(5).replace('.', '_');
     const poiId = `${latId}_${lonId}`;
 
-    // Unsplash cover photo generator
-    const defaultImage = `https://images.unsplash.com/photo-1552832230-c0197dd311b5?w=800`;
+    // NESSUNA foto di ripiego (22/08/2026): qui la stessa foto stock Unsplash
+    // (photo-1552832230) veniva assegnata a OGNI POI creato. Una foto che non
+    // è del luogo è una bugia stampata: meglio null, l'arricchimento la
+    // troverà per coordinate (Wikidata P18 / Commons geosearch) se esiste.
+    const defaultImage: string | null = null;
 
     const finalPoi = {
       id: poiId,

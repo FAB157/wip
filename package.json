@@ -12,7 +12,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "check-brackets": "node scratch/check_brackets.js",
-    "deploy": "vercel --prod --yes",
+    "deploy": "vercel --prod --yes && node scripts/smoke-deploy.mjs",
+    "smoke": "node scripts/smoke-deploy.mjs",
     "generate-assets": "capacitor-assets generate --android --ios --iconBackgroundColor '#1e3a8a' --iconBackgroundColorDark '#1e3a8a' --splashBackgroundColor '#1e3a8a' --splashBackgroundColorDark '#1e3a8a'",
     "repair-carrara": "node scripts/repair_cararra_poi.js",
     "enrich": "npx tsx scripts/mass_enrich_background.ts",
@@ -22,7 +23,6 @@
     "test-google-tts": "node scratch/test_google_tts.cjs"
   },
   "dependencies": {
-    "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor-community/native-audio": "^8.0.0",
     "@capacitor/android": "^7.6.6",
     "@capacitor/app": "^8.1.1",
@@ -71,6 +71,7 @@
     "react-swipeable": "^7.0.2",
     "ssh2": "^1.17.0",
     "stripe": "^22.1.1",
+    "tz-lookup": "^6.1.25",
     "vite": "^6.2.3",
     "which-country": "^1.0.0"
   },

@@ -114,7 +114,13 @@ export default function App() {
   const [mapRadiusKm, setMapRadiusKm] = useState<number>(DEFAULT_EVENTS_RADIUS_KM);
   const [isRecovering, setIsRecovering] = useState(() => window.location.hash.includes('type=recovery'));
 
-  const { bundleState, closeBundle, triggerBundleCheck } = usePredictiveDownload();
+  const { bundleState, closeBundle, triggerBundleCheck, openOffer } = usePredictiveDownload();
+  // Invito al Day Pass su richiesta (radar → Dieci Tappe senza pass, 22/08/2026).
+  useEffect(() => {
+    const h = (e: Event) => { openOffer((e as CustomEvent).detail?.city); };
+    window.addEventListener('wip-open-daypass', h);
+    return () => window.removeEventListener('wip-open-daypass', h);
+  }, [openOffer]);
 
   // --- 2. Navigation & UI ---
   const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("map");
@@ -135,6 +141,12 @@ export default function App() {
     setMountedTabs(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
   }
   const [isRadarMode, setIsRadarMode] = useState(false);
+  // "Nuovo giro da qui" dal banner a giro finito (22/08/2026): riapre il radar.
+  useEffect(() => {
+    const h = () => { setActiveTab('map'); setIsRadarMode(true); };
+    window.addEventListener('wip-open-radar', h);
+    return () => window.removeEventListener('wip-open-radar', h);
+  }, []);
   // Dieci Tappe: un giro in corso. Si riprende all'avvio, perche' l'app chiusa
   // a meta` percorso non deve far perdere il giro (e l'audio gia` scaricato).
   const [giroInCorso, setGiroInCorso] = useState(false);
@@ -234,8 +246,10 @@ export default function App() {
     startCoords: { lat: number, lon: number } | null;
     endCoords: { lat: number, lon: number } | null;
     destinationName: string;
+    /** Id vero del POI di destinazione (popup/radar): all'arrivo apre la scheda con autoplay. */
+    poiId?: string | null;
     onStart: (pois: any[]) => void;
-  }>({ isOpen: false, startCoords: null, endCoords: null, destinationName: "", onStart: () => {} });
+  }>({ isOpen: false, startCoords: null, endCoords: null, destinationName: "", poiId: null, onStart: () => {} });
 
   // --- 7. Global Chat State ---
   const [globalChatConfig, setGlobalChatConfig] = useState<{
@@ -271,6 +285,10 @@ export default function App() {
         startCoords: e.detail.startCoords || null,
         endCoords: e.detail.endCoords,
         destinationName: e.detail.destinationName,
+        // L'id VERO del POI di destinazione (dal popup/radar): all'arrivo serve
+        // per aprire la scheda e far partire l'audioguida. Senza, PlanScreen
+        // inventava un id sintetico "wipnav_<nome>" che non apriva niente.
+        poiId: e.detail.poiId || null,
         // Default sicuro: il dispatch di ItineraryStop non fornisce onStart e
         // il vecchio `routeModalConfig.onStart(pois)` esplodeva con TypeError
         // alla conferma. Senza callback esplicita si avvia il navigatore
@@ -280,6 +298,61 @@ export default function App() {
     };
     window.addEventListener('wip-smart-navigate', handleSmartNav);
     return () => window.removeEventListener('wip-smart-navigate', handleSmartNav);
+  }, []);
+
+  // ARRIVO DEL WIP NAV → AUDIOGUIDA. Sul web `wip-nav-arrived` aveva un solo
+  // ascoltatore (PlanScreen, che marca la tappa visitata): la promessa "arrivi
+  // e la guida parte" reggeva solo sul nativo. Qui, se la destinazione era un
+  // POI vero (poiId non sintetico), si apre la scheda con autoPlay — lo stesso
+  // evento centralizzato che usa il banner di avvicinamento, quindi stesso
+  // flusso di pagamento/pass, niente logica nuova.
+  useEffect(() => {
+    const handleNavArrived = (e: any) => {
+      const poiId = e?.detail?.poiId;
+      if (!poiId || String(poiId).startsWith('wipnav_')) return;
+      // Stesso dedupe e stesso cooldown degli altri dispatcher (trigger web,
+      // nativo, giro): senza, il trigger di prossimita' rifaceva parlare il
+      // POI appena raccontato all'arrivo, e un doppio 'wip-nav-arrived' lo
+      // apriva due volte.
+      const now = Date.now();
+      const last = (window as any).__wipLastPoiTrigger || { id: '', ts: 0 };
+      if (String(last.id) === String(poiId) && now - last.ts < 60_000) return;
+      (window as any).__wipLastPoiTrigger = { id: String(poiId), ts: now };
+      import('./lib/geofencing/foregroundTriggers').then(m => m.segnaScattato(String(poiId))).catch(() => {});
+      window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+        detail: { poiId: String(poiId), poi: e?.detail?.poi || undefined, autoPlay: true, manual: false, fromNav: true, ts: now },
+      }));
+    };
+    window.addEventListener('wip-nav-arrived', handleNavArrived);
+    return () => window.removeEventListener('wip-nav-arrived', handleNavArrived);
+  }, []);
+
+  // Deep link "?poi=<id>" (condivisione schede Vision, link dal pannello
+  // admin): carica il POI da shared_pois, apre la mappa e lo mette a fuoco;
+  // poi pulisce l'URL così un refresh non lo riapre.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const poiId = params.get('poi');
+      if (!poiId) return;
+      (async () => {
+        const { data } = await supabase
+          .from('shared_pois')
+          .select('id, name, lat, lon, category, poi_type, description_short, image_url')
+          .eq('id', poiId)
+          .limit(1);
+        const p: any = data?.[0];
+        if (!p || p.lat == null || p.lon == null) return;
+        setActiveTab('map');
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: Number(p.lat), lon: Number(p.lon), zoom: 16 } }));
+          window.dispatchEvent(new CustomEvent('focus-poi', { detail: { ...p, lat: Number(p.lat), lon: Number(p.lon) } }));
+        }, 1200);
+      })();
+      params.delete('poi');
+      const qs = params.toString();
+      window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
+    } catch { /* nessun deep link */ }
   }, []);
 
   // "Apri sulla mappa" dalle aree offline scaricate: porta al tab mappa
@@ -307,12 +380,21 @@ export default function App() {
   // nativo e solo dopo l'onboarding (durante il quale ci pensa PermissionsModal).
   const [showLocDeniedBanner, setShowLocDeniedBanner] = useState(false);
   useEffect(() => {
-    if (!Capacitor.isNativePlatform() || !permissionsGranted) return;
+    if (!permissionsGranted) return;
     let cancelled = false;
     (async () => {
       try {
-        const status = await Geolocation.checkPermissions();
-        if (!cancelled && (status as any)?.location === 'denied') setShowLocDeniedBanner(true);
+        if (Capacitor.isNativePlatform()) {
+          const status = await Geolocation.checkPermissions();
+          if (!cancelled && (status as any)?.location === 'denied') setShowLocDeniedBanner(true);
+        } else if ((navigator as any).permissions?.query) {
+          // Anche sul web (22/08/2026): prima il banner era solo nativo, e chi
+          // aveva negato la posizione nel browser aveva un tasto cuffie muto
+          // senza alcuna spiegazione.
+          const st = await (navigator as any).permissions.query({ name: 'geolocation' });
+          if (!cancelled && st?.state === 'denied') setShowLocDeniedBanner(true);
+          st?.addEventListener?.('change', () => setShowLocDeniedBanner(st.state === 'denied'));
+        }
       } catch {}
     })();
     return () => { cancelled = true; };
@@ -321,11 +403,22 @@ export default function App() {
   const handleToggleAudioGuide = useCallback((active: boolean) => {
     console.log(`[App.tsx] Audio Guide toggle: ${active}`);
     setIsAudioGuideActive(active);
-    localStorage.setItem('wip_audioguide_active', active ? 'true' : 'false');
+    try { localStorage.setItem('wip_audioguide_active', active ? 'true' : 'false'); } catch { /* storage bloccato (privato) */ }
     if (active) {
       locationService.unlockAudio();
       // Proponi il bundle delle audioguide solo all'attivazione del tasto cuffie
       triggerBundleCheck();
+      // Sul web il permesso di posizione non veniva MAI chiesto da questo
+      // flusso: la modale dei permessi e' un no-op nel browser e l'errore del
+      // watch finiva in console. Qui si chiede al tocco — il momento in cui
+      // l'utente capisce perche' — e se e' negato lo si dice.
+      if (!Capacitor.isNativePlatform() && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          () => setShowLocDeniedBanner(false),
+          (err) => { if (err?.code === 1) setShowLocDeniedBanner(true); },
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 },
+        );
+      }
     }
   }, [triggerBundleCheck]);
 
@@ -683,7 +776,16 @@ export default function App() {
       const stored = localStorage.getItem('wip_active_subcategories');
       if (stored) {
         const parsed = JSON.parse(stored);
-        const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali'];
+        // NB: 'enogastronomia' NON è qui. Non è una chip mappa: è un layer del
+    // pannello ⓘ, e la sua chiave in wip_active_subcategories la scrive il
+    // toggle del layer (MapArea.toggleStradeGusto). Metterla in questa lista
+    // la azzererebbe a ogni tap sui chip culturali.
+    // I VERTICALI TEMATICI entrano con le loro OTTO chiavi, non con la macro
+    // 'tematiche': la macro è solo il contenitore della riga di chip e non ha
+    // POI propri, mentre terme/cinema/cieli/… si accendono e si spengono una
+    // per una, qui come in GeoControl.
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
+      'terme', 'cinema', 'cieli', 'street_art', 'mercati', 'fioriture', 'memoria', 'lento'];
         const cats = MAP_FILTER_KEYS.filter(k => parsed[k]);
         // Anche la lista vuota va rispettata ("Deseleziona tutti"): prima
         // veniva ignorata e restava attiva la selezione precedente.
@@ -840,7 +942,16 @@ export default function App() {
     // equivalente qui (musei/chiese/panorami/consigli/castelli/archeo)
     // restavano azzerate ad ogni tap sui chip mappa, disattivando a sua
     // insaputa le categorie audioguida scelte dall'utente in GeoControl.
-    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali'];
+    // NB: 'enogastronomia' NON è qui. Non è una chip mappa: è un layer del
+    // pannello ⓘ, e la sua chiave in wip_active_subcategories la scrive il
+    // toggle del layer (MapArea.toggleStradeGusto). Metterla in questa lista
+    // la azzererebbe a ogni tap sui chip culturali.
+    // I VERTICALI TEMATICI entrano con le loro OTTO chiavi, non con la macro
+    // 'tematiche': la macro è solo il contenitore della riga di chip e non ha
+    // POI propri, mentre terme/cinema/cieli/… si accendono e si spengono una
+    // per una, qui come in GeoControl.
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
+      'terme', 'cinema', 'cieli', 'street_art', 'mercati', 'fioriture', 'memoria', 'lento'];
     let obj: Record<string, boolean> = {};
     try { obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { obj = {}; }
     MAP_FILTER_KEYS.forEach(k => { obj[k] = selectedCategories.includes(k); });
@@ -934,7 +1045,24 @@ export default function App() {
               corso e solo sulla mappa — altrove coprirebbe contenuto senza
               servire a niente, perche' il giro si cammina guardando la mappa. */}
           {giroInCorso && activeTab === "map" && (
-            <TourBanner language={language} onChiudi={() => setGiroInCorso(false)} />
+            <TourBanner
+              language={language}
+              onChiudi={() => setGiroInCorso(false)}
+              onRiascolta={() => {
+                // "Riascolta": la scheda dell'ultima tappa con autoplay MANUALE
+                // (origine utente): la modalita' silenziosa non lo zittisce e
+                // il cooldown non lo blocca. Prima il bottone non faceva nulla.
+                const t = tourService.tappaDaRiascoltare();
+                if (!t) return;
+                window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+                  detail: {
+                    poiId: String(t.id),
+                    poi: { id: t.id, name: t.nome, lat: t.lat, lon: t.lon, category: t.categoria || undefined, city: t.citta || undefined },
+                    autoPlay: true, manual: true, fromTour: true, ts: Date.now(),
+                  },
+                }));
+              }}
+            />
           )}
 
           <CategoryChips selectedIds={selectedCategories} onToggle={(id) => setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])} onEventClick={() => setActiveTab("events")} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} />
@@ -1066,15 +1194,30 @@ export default function App() {
               // Avvia il navigatore interno (WIP Nav): PlanScreen ascolta e
               // chiama useWalkingNavigation.startNavigation con l'origine
               // scelta nel modal (GPS o indirizzo personalizzato).
+              // Il listener vive in PlanScreen, che e' montato lazy al primo
+              // accesso alla tab: chi parte dalla mappa senza averla mai aperta
+              // trovava zero listener e l'evento si perdeva in silenzio
+              // (verificato il 22/08/2026). Quindi: si va sulla tab Plan — e'
+              // li' che stanno percorso e istruzioni — e si ridispatcha finche'
+              // il listener non marca detail.handled, per 12 secondi al massimo
+              // (il chunk lazy deve ancora arrivare).
               if (routeModalConfig.endCoords) {
-                window.dispatchEvent(new CustomEvent('wip-internal-nav-start', {
-                  detail: {
-                    endCoords: routeModalConfig.endCoords,
-                    destinationName: routeModalConfig.destinationName,
-                    origin: origin || null,
-                    pois
-                  }
-                }));
+                const detail: any = {
+                  endCoords: routeModalConfig.endCoords,
+                  destinationName: routeModalConfig.destinationName,
+                  poiId: (routeModalConfig as any).poiId || null,
+                  origin: origin || null,
+                  pois,
+                  handled: false,
+                };
+                setActiveTab("plan");
+                let tentativi = 0;
+                const spara = () => {
+                  window.dispatchEvent(new CustomEvent('wip-internal-nav-start', { detail }));
+                  if (!detail.handled && ++tentativi < 40) setTimeout(spara, 300);
+                  else if (!detail.handled) console.warn('[WIP Nav] nessun listener per wip-internal-nav-start dopo 12 s');
+                };
+                spara();
               }
             }}
           />
