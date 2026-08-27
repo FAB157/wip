@@ -3,8 +3,9 @@ import Foundation
 /**
  * Port iOS di offline/PackageDownloadManager.kt: download e delta-sync dei
  * pacchetti area (solo testi). Manifest paginato da POST /api/area/bundle con
- * paginazione keyset; ogni pagina viene scritta subito con upsert idempotenti,
- * tombstone per i POI cancellati. Il progresso arriva al JS con l'evento
+ * paginazione keyset; le pagine sono upsert idempotenti, persistite a batch
+ * (ogni 10 pagine, vedi PoiStore.upsertOfflinePois) con flush esplicito a fine
+ * download e su errore; tombstone per i POI cancellati. Il progresso arriva al JS con l'evento
  * 'offlinePackageProgress' {packageId, done, total, phase}.
  */
 final class WipPackageDownloadManager {
@@ -161,6 +162,16 @@ final class WipPackageDownloadManager {
         req.httpMethod = "POST"
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
         req.addValue("Itainta-iOS-Native", forHTTPHeaderField: "User-Agent")
+        // TOKEN UTENTE (23/08/2026). Dal 23/08 /api/area/bundle lo pretende:
+        // la rotta serve nome, descrizione e TESTO INTEGRALE dell'audioguida a
+        // pagine da 500, ed era il modo piu' comodo per portarsi via l'intero
+        // catalogo. Stesso token del prefetch audio (SecureSessionStore,
+        // scritto da setUserContext). Se manca si prova lo stesso: il server
+        // risponde 401 e il download fallisce subito con un errore chiaro,
+        // invece di scaricare a meta'.
+        if let token = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken), !token.isEmpty {
+            req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
         session.dataTask(with: req) { [weak self] data, response, error in
@@ -251,6 +262,10 @@ final class WipPackageDownloadManager {
         state: PageState,
         completion: @escaping (Result<OfflinePackage, Error>) -> Void
     ) {
+        // Flush esplicito PRIMA di leggere il conteggio e di marcare "ready":
+        // upsertOfflinePois accumula in memoria e tocca il disco ogni 10
+        // pagine, qui si garantisce che l'ultimo batch sia persistito.
+        store.flushOfflinePois()
         let existing = store.getPackage(id)
         let pkg = OfflinePackage(
             id: id, name: name, centerLat: lat, centerLon: lon,
@@ -269,6 +284,10 @@ final class WipPackageDownloadManager {
     }
 
     private func fail(id: String, state: PageState, error: Error, completion: @escaping (Result<OfflinePackage, Error>) -> Void) {
+        // Anche su errore/annullamento le pagine già scaricate non si buttano:
+        // si scrivono su disco, così il prossimo tentativo riparte da lì
+        // invece di rifare tutto.
+        store.flushOfflinePois()
         if var pkg = store.getPackage(id) {
             pkg.status = "error"
             store.upsertPackage(pkg)

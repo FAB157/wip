@@ -24,6 +24,8 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "checkAndRequestPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "syncManualSelection", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearManualSelection", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "markPoiExited", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resetTriggerHistory", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stopBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
@@ -113,6 +115,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         switch status {
         case .authorizedAlways:
             call.resolve(["status": "all_granted"])
+            rilasciaPermissionManager()
         case .authorizedWhenInUse:
             // Upgrade a "Sempre": iOS mostra il prompt una sola volta, poi
             // servono le Impostazioni (stesso messaggio del dialog Android).
@@ -125,6 +128,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                     if #available(iOS 14.0, *) { now = manager.authorizationStatus }
                     else { now = CLLocationManager.authorizationStatus() }
                     pending.resolve(["status": now == .authorizedAlways ? "all_granted" : "requesting_background_location"])
+                    self.rilasciaPermissionManager()
                 }
             }
         case .notDetermined:
@@ -132,7 +136,19 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             manager.requestAlwaysAuthorization()
         default:
             call.reject("Permesso posizione necessario")
+            rilasciaPermissionManager()
         }
+    }
+
+    /// Il CLLocationManager qui serve SOLO a chiedere i permessi: risposta
+    /// data, si rilascia (prima restava vivo e delegato per tutta la vita del
+    /// plugin, accanto a quello vero di BackgroundPoiManager). Da chiamare
+    /// solo a chiamata già risolta: mai mentre il prompt di sistema è aperto,
+    /// o si perde il callback di autorizzazione.
+    private func rilasciaPermissionManager() {
+        guard pendingPermissionCall == nil else { return }
+        permissionManager?.delegate = nil
+        permissionManager = nil
     }
 
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -153,6 +169,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         default:
             break // .notDetermined: prompt ancora aperto
         }
+        // Risposta data (o prompt ancora aperto: allora è un no-op, la guardia
+        // controlla pendingPermissionCall): il manager dei permessi si rilascia.
+        rilasciaPermissionManager()
     }
 
     // MARK: - Servizio
@@ -182,6 +201,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
            guideCharacter == "nicky" || guideCharacter == "dante" {
             prefs.set(guideCharacter, forKey: "guideCharacter")
         }
+        // 🧭 GATE DI BUSSOLA: preferenza utente, persistita come guideCharacter
+        // (stessa chiave su Android). Si scrive SOLO se il JS la manda: assente
+        // = si tiene quella salvata, e mai salvata = ACCESO (default in
+        // BearingGate.abilitato). Un `false` esplicito spegne anche la bussola
+        // subito, senza aspettare il prossimo fix.
+        if let bearingGate = call.getBool("bearingGate") {
+            BearingGate.shared.setAbilitato(bearingGate)
+        }
         BackgroundPoiManager.shared.start(options: options)
         call.resolve()
     }
@@ -190,6 +217,38 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let poisJson = call.getString("poisJson") ?? "[]"
         BackgroundPoiManager.shared.syncManualSelection(poisJson: poisJson)
         call.resolve()
+    }
+
+    /**
+     * Fine del giro (locationService.unsyncTappeGiroFromNative). Il JS lo
+     * chiamava già con guardia `typeof`, ma il metodo non esisteva: le tappe
+     * di un itinerario chiuso restavano monitorate — e prioritarie sul radar —
+     * fino allo stop del servizio. `syncManualSelection` non basta: FONDE con
+     * quanto c'è, non sostituisce.
+     * Port di ItaintaBackgroundPoiPlugin.kt::clearManualSelection.
+     * Sempre resolve: il JS non deve restare appeso alla fine di un giro.
+     */
+    @objc func clearManualSelection(_ call: CAPPluginCall) {
+        BackgroundPoiManager.shared.clearManualSelection()
+        call.resolve()
+    }
+
+    /**
+     * L'utente ha chiuso il banner di quel POI (ApproachBanner): per il
+     * servizio è come se ne fosse uscito, così al fix successivo non viene
+     * riannunciato. Lo stato EXITED porta con sé il cooldown della macchina a
+     * stati (30 min): non è un "mai più", chi ci ripassa davvero lo risente.
+     * Port di ItaintaBackgroundPoiPlugin.kt::markPoiExited — stesso ritorno
+     * {ok, reason} e stessa regola: mai un reject, il JS chiama e va avanti.
+     */
+    @objc func markPoiExited(_ call: CAPPluginCall) {
+        let poiId = (call.getString("poiId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !poiId.isEmpty else {
+            call.resolve(["ok": false, "reason": "missing_poiId"])
+            return
+        }
+        BackgroundPoiManager.shared.markPoiExited(poiId: poiId)
+        call.resolve(["ok": true])
     }
 
     /// Azzera lo storico dei trigger di geofencing (trigger_state): dopo il

@@ -68,20 +68,29 @@ enum TriggerTelemetry {
         isDriving: Bool,
         radiusM: Double
     ) {
+        // (23/08/2026) L'INTERRUTTORE PRIMA DEL LAVORO. Prima la riga di
+        // console — dodici valori interpolati, cinque `String(format:)` —
+        // veniva composta SEMPRE, anche a telemetria spenta, e per ogni POI
+        // candidato a ogni fix GPS. Con l'interruttore in testa, spegnere la
+        // telemetria costa davvero zero; resta accendibile a runtime dalle
+        // prefs (`telemetryEnabled`, default acceso) senza ricompilare, che
+        // è quello che serve per la prova in strada.
+        guard isEnabled else { return }
+
         let fixAgeMs = max(0, Date().timeIntervalSince1970 * 1000
                               - location.timestamp.timeIntervalSince1970 * 1000)
         let accuracy = location.horizontalAccuracy
         let speed = location.speed
         let course = location.course
 
-        // Console sempre: è il canale utile mentre si cammina col telefono in mano.
+        // Console: il canale utile mentre si cammina col telefono in mano.
         print("[WipTelemetry] \(phase) \(result.decision) \"\(poiName)\" " +
               "t_cpa=\(num(result.tCpaSeconds))s d_cpa=\(num(result.dCpaMeters))m " +
               "d_now=\(Int(result.distanceNowMeters))m r=\(Int(radiusM))m " +
               "age=\(Int(fixAgeMs))ms acc=\(Int(accuracy))m v=\(num(speed))m/s " +
               "brg=\(Int(course))° pred=\(result.usedPrediction) — \(result.reason)")
 
-        guard isEnabled, let url = fileURL else { return }
+        guard let url = fileURL else { return }
 
         let row = [
             isoFormatter.string(from: Date()),

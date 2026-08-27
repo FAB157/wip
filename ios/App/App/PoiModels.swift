@@ -34,9 +34,62 @@ struct Poi: Codable {
     /// quelli continuano a ragionare a raggi come sempre.
     /// Parità con PoiEntity.footprint (Android) e footprints.ts (web).
     var footprint: String? = nil
+    /// Indirizzo leggibile del POI (shared_pois.address) e la sua PROVENIENZA
+    /// (shared_pois.address_source). La stringa da sola NON fa gradino nella
+    /// scala di fiducia: un testo non si può trasformare in un cerchio. Serve
+    /// alla notifica e alla voce; il gradino lo fa il PUNTO qui sotto.
+    /// `address_source == "strada_vicina"` è solo la via con nome più vicina —
+    /// non l'indirizzo del luogo: scarta anche il punto (vedi puntoIndirizzo).
+    /// Default nil: l'init membrowise resta compatibile con i chiamanti
+    /// esistenti e i pacchetti offline già scaricati restano decodificabili.
+    var address: String? = nil
+    var addressSource: String? = nil
+    /// IL PUNTO DELL'INDIRIZZO (23/08/2026, migration
+    /// 20260823160000_poi_address_point.sql: address_point_lat/lon/source).
+    /// NON è una geocodifica testuale: è la casa più vicina al POI nel dump
+    /// Nominatim, cioè vicinanza MISURATA a pochi metri. Per questo vale come
+    /// punto d'ARRIVO anche senza numero civico — «chi ha indirizzo, quello È
+    /// l'arrivo: il trigger a 30 m da lì, e il navigatore punta a
+    /// quell'indirizzo» (regola dell'utente).
+    /// `addressPointSource` (photon_casa_civico | photon_casa | …) oggi non
+    /// cambia il raggio — il punto è misurato in entrambi i casi — ma è
+    /// l'unico appiglio se un domani una fonte peggiore scriverà qui.
+    /// Parità con PoiEntity.addressPoint* (Android).
+    var addressPointLat: Double? = nil
+    var addressPointLon: Double? = nil
+    var addressPointSource: String? = nil
 
+    /// GUARDIA: oltre questa distanza dal centroide il punto dell'indirizzo non
+    /// è l'indirizzo di QUESTO POI ma di qualcos'altro (un abbinamento
+    /// sbagliato, una casa dall'altra parte del paese). Meglio il centroide,
+    /// che è sicuramente il posto giusto per quanto impreciso, di un punto
+    /// preciso nel posto sbagliato. Stesso valore di
+    /// RaggiFiducia.MAX_DISTANZA_PUNTO_INDIRIZZO (Android).
+    static let maxDistanzaPuntoIndirizzo: Double = 250
+
+    /// Il PUNTO dell'indirizzo, se utilizzabile, altrimenti nil.
+    /// Due condizioni, entrambe necessarie: la fonte non è `strada_vicina`, e
+    /// il punto sta entro `maxDistanzaPuntoIndirizzo` dal centroide.
+    var puntoIndirizzo: CLLocation? {
+        guard let pLat = addressPointLat, let pLon = addressPointLon,
+              addressSource != "strada_vicina" else { return nil }
+        let punto = CLLocation(latitude: pLat, longitude: pLon)
+        guard punto.distance(from: CLLocation(latitude: lat, longitude: lon))
+                <= Self.maxDistanzaPuntoIndirizzo else { return nil }
+        return punto
+    }
+
+    /// IL PUNTO D'ARRIVO di questo POI: ingresso → punto dell'indirizzo →
+    /// centroide. È lo stesso punto per il trigger e per il navigatore.
+    /// Tutti i chiamanti (BackgroundPoiManager, BearingGate, le region
+    /// CLLocationManager) leggono da qui: la gerarchia si cambia in un posto
+    /// solo. Parità con RaggiFiducia.puntoArrivo (Android).
     var coordinate: CLLocation {
-        CLLocation(latitude: entranceLat ?? lat, longitude: entranceLon ?? lon)
+        if let eLat = entranceLat, let eLon = entranceLon {
+            return CLLocation(latitude: eLat, longitude: eLon)
+        }
+        if let punto = puntoIndirizzo { return punto }
+        return CLLocation(latitude: lat, longitude: lon)
     }
 
     func toJson() -> [String: Any] {
@@ -56,6 +109,106 @@ struct Poi: Codable {
         // scarica da solo), e su un radar da 120 POI sarebbero decine di KB
         // attraversati a ogni aggiornamento del ponte Capacitor.
         return d
+    }
+}
+
+/// RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO.
+///
+/// Un geofence è un cerchio attorno a un punto, ma non tutti i punti valgono
+/// uguale. Sappiamo esattamente dov'è il muro di una chiesa se ne abbiamo il
+/// perimetro; sappiamo dov'è la porta se abbiamo l'ingresso OSM; col PUNTO
+/// dell'indirizzo sappiamo la casa più vicina misurata a pochi metri; col solo
+/// centroide di un poligono grande, o di un POI importato da un registro, il
+/// punto può cadere decine di metri fuori dall'edificio. Allargare il cerchio
+/// per tutti significa parlare dall'altra parte della strada dove il punto è
+/// preciso; non allargarlo mai significa non parlare affatto dove il punto è
+/// approssimativo.
+///
+/// LA SCALA A QUATTRO LIVELLI (identica a web e Android):
+///  • `perimetro` — c'è il poligono: la distanza si misura DAL MURO
+///    (PoiFootprints), il cerchio non serve e non si allarga di un metro.
+///  • `ingresso`  — c'è entrance_lat/lon: è la porta, raggio BASE.
+///  • `indirizzo` — c'è il PUNTO dell'indirizzo (address_point_lat/lon)
+///    utilizzabile: raggio BASE, stretto, perché quel punto È l'arrivo.
+///  • `centroide` — nient'altro: raggio ×2, è l'unico caso davvero incerto.
+///
+/// COSA FA GRADINO (23/08/2026): il PUNTO, non la stringa. La distinzione
+/// civico/via provata poche ore prima è stata tolta: il criterio non è il
+/// numero dentro il testo dell'indirizzo, è l'esistenza delle coordinate. Un
+/// POI con la sola stringa e nessun punto è `centroide`.
+///
+/// I TETTI valgono solo per l'allargamento: non possono mai portare un raggio
+/// SOTTO la preferenza dell'utente (chi mette lo slider a 400 m di avviso
+/// continua ad avere 400 m).
+///
+/// Il `geofence_radius`/`alert_radius` calibrati dal DB, quando ci sono,
+/// VINCONO su tutto: sono misure sul perimetro reale, non stime.
+enum PoiRadii {
+    /// Fonte del punto del POI, in ordine di fiducia decrescente.
+    enum FontePunto { case perimetro, ingresso, indirizzo, centroide }
+
+    /// Tetti all'allargamento, per modalità.
+    static let tettoTriggerPiedi: Double = 80
+    static let tettoTriggerAuto: Double = 120
+    static let tettoAvvisoPiedi: Double = 250
+    static let tettoAvvisoAuto: Double = 400
+
+    static func fontePunto(_ poi: Poi) -> FontePunto {
+        if poi.footprint?.isEmpty == false { return .perimetro }
+        if poi.entranceLat != nil && poi.entranceLon != nil { return .ingresso }
+        // Il gradino lo fa il PUNTO (con le sue guardie: fonte e distanza dal
+        // centroide), non la stringa `address`.
+        if poi.puntoIndirizzo != nil { return .indirizzo }
+        return .centroide
+    }
+
+    /// UNICA funzione dei raggi operativi: la usano sia la registrazione delle
+    /// region CLLocationManager sia la valutazione predittiva dei trigger. Se
+    /// due chiamanti calcolassero raggi diversi, la region di rilancio e il
+    /// trigger vero scatterebbero in due punti diversi.
+    static func effettivi(
+        poi: Poi,
+        isDriving: Bool,
+        baseAlert: Double,
+        baseArrival: Double
+    ) -> (alert: Double, arrival: Double) {
+        var alert = baseAlert
+        var arrival = baseArrival
+
+        // RAGGI CALIBRATI DAL DB (footprint OSM). Gated sull'ingresso reale
+        // come radiiForTransport lato web: senza entrance i default 50/150 di
+        // un POI mai processato sarebbero indistinguibili da una misura.
+        // In auto il calibrato può solo ALLARGARE (a 50 km/h un raggio di 15 m
+        // si attraversa fra due fix); a piedi la misura batte la stima.
+        let hasEntrance = poi.entranceLat != nil && poi.entranceLon != nil
+        let calAlert = Double(poi.alertRadius ?? 0)
+        let calArrival = Double(poi.arrivalRadius ?? 0)
+        if hasEntrance && (calAlert > 0 || calArrival > 0) {
+            if calArrival > 0 { arrival = isDriving ? max(baseArrival, calArrival) : calArrival }
+            if calAlert > 0 { alert = max(baseAlert, calAlert) }
+            // Nessun tetto: è una misura, non una stima. Un parco ha davvero
+            // quel raggio.
+            return (alert, arrival)
+        }
+
+        switch fontePunto(poi) {
+        case .perimetro:
+            break // il muro è la misura: nessun allargamento
+        case .ingresso:
+            break // la porta è il punto giusto: raggio base
+        case .indirizzo:
+            break // il punto dell'indirizzo È l'arrivo: raggio base, stretto
+        case .centroide:
+            alert *= 2
+            arrival *= 2
+        }
+
+        let tettoTrigger = isDriving ? tettoTriggerAuto : tettoTriggerPiedi
+        let tettoAvviso = isDriving ? tettoAvvisoAuto : tettoAvvisoPiedi
+        // Il tetto limita la CRESCITA, mai la preferenza dell'utente.
+        arrival = min(arrival, max(baseArrival, tettoTrigger))
+        alert = min(alert, max(baseAlert, tettoAvviso))
+        return (alert, arrival)
     }
 }
 
@@ -113,12 +266,19 @@ struct OfflinePoi: Codable {
         // offline deve dare la STESSA risposta di quello online sullo stesso
         // punto. effectiveRadii gestisce già hasEntrance, dentroPerimetro il
         // poligono.
+        // `address` passa anche lui, ma solo come testo per notifica e voce:
+        // dal 23/08/2026 il gradino «indirizzo» lo fa il PUNTO
+        // (address_point_lat/lon), che /api/area/bundle NON manda ancora. Un
+        // POI offline con la sola stringa resta quindi «centroide» (raggio ×2),
+        // esattamente com'era prima della migration: conservativo. Quando il
+        // bundle porterà anche le due coordinate, vanno aggiunte a OfflinePoi e
+        // passate qui, e l'offline tornerà a dare la stessa risposta dell'online.
         Poi(id: id, nome: nome, lat: lat, lon: lon,
             entranceLat: entranceLat, entranceLon: entranceLon,
             poiType: poiType ?? category, guideDefault: "nicky",
             isGem: isGem, isFromItinerary: false, teaserText: teaserText,
             alertRadius: alertRadius, arrivalRadius: arrivalRadius,
-            footprint: footprint)
+            footprint: footprint, address: address)
     }
 }
 

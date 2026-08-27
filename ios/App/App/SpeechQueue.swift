@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import AudioToolbox
 import UIKit
+import UserNotifications
 
 /**
  * Port iOS della coda TTS nativa (companion di GeofenceBroadcastReceiver.kt):
@@ -86,6 +87,16 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
             name: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance()
         )
+        // Cambio di uscita audio. Serve SOLO a riprendere quando un
+        // dispositivo torna disponibile dopo una vera interruzione: staccare
+        // gli auricolari NON mette in pausa, si continua dall'altoparlante
+        // (decisione dell'utente, 23/08/2026 — vedi handleRouteChange).
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
     }
 
     deinit {
@@ -93,10 +104,35 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         watchdogTimer?.invalidate()
     }
 
+    /// Tetto della coda. In zona densa — un centro storico, un fix ogni pochi
+    /// metri — arrivavano più teaser di quanti se ne potessero leggere, e i
+    /// delegate di errore (MP3 che non parte, decode fallito) ne riaccodavano
+    /// altri: la coda cresceva senza limite e si finiva per sentire il POI di
+    /// venti minuti prima mentre se ne aveva un altro davanti. Otto elementi
+    /// sono già più di quanto una persona ascolti prima di essersi spostata.
+    private static let maxCoda = 8
+
     func enqueue(_ item: SpeechItem) {
         DispatchQueue.main.async {
             self.queue.append(item)
+            self.potaCoda()
             self.processNext()
+        }
+    }
+
+    /// Sfratta i MENO prioritari finché la coda rientra nel tetto: prima i
+    /// POI normali, poi le gemme, per ultime le tappe dell'itinerario (che
+    /// l'utente ha scelto). A parità di priorità esce il più VECCHIO: è
+    /// quello che con ogni probabilità si è già lasciato alle spalle.
+    private func potaCoda() {
+        while queue.count > Self.maxCoda {
+            var peggiore = 0
+            // Il confronto stretto tiene il primo indice a parità: fra due
+            // elementi ugualmente importanti esce quello entrato prima.
+            for i in queue.indices where queue[i].priority > queue[peggiore].priority {
+                peggiore = i
+            }
+            queue.remove(at: peggiore)
         }
     }
 
@@ -202,8 +238,36 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
             return
         }
 
+        // LA VOCE C'È DAVVERO? (23/08/2026). `voiceForLanguage` ha un ripiego
+        // su en-US (o it-IT): senza voce della lingua dell'utente parlava
+        // comunque, con la pronuncia sbagliata su un testo in un'altra lingua —
+        // e nessuno lo diceva. Prima si verifica per davvero, e se manca si
+        // avvisa invece di leggere a caso. Android fa lo stesso in
+        // GeofenceBroadcastReceiver.applyTtsConfig/processNextSpeech.
+        let userLang = prefs.string(forKey: "language") ?? "it"
+        guard let voice = Self.installedVoice(for: userLang) else {
+            notifyVoiceMissing(lang: userLang)
+            onEvent?("listenFailed", [
+                "poiId": next.poiId ?? "",
+                "kind": next.kind,
+                "reason": "voice_not_installed"
+            ])
+            finishActiveSpeech(notifyJs: true)
+            processNext()
+            deactivateAudioSessionIfIdle()
+            return
+        }
+
         let utterance = AVSpeechUtterance(string: spokenText)
-        utterance.voice = Self.voiceForLanguage(prefs.string(forKey: "language") ?? "it")
+        // Il timbro (Nicky/Dante) resta scelto da voiceForLanguage; si accetta
+        // però solo se è davvero della lingua dell'utente — quella funzione ha
+        // dentro un ripiego su en-US che qui non deve più passare.
+        let scelta = Self.voiceForLanguage(
+            userLang,
+            character: prefs.string(forKey: "guideCharacter")
+        )
+        let prefisso = String(Self.regionalCode(for: userLang).prefix(2))
+        utterance.voice = (scelta?.language.hasPrefix(prefisso) == true) ? scelta : voice
         utterance.volume = 1.0
         synthesizer.speak(utterance)
         // TTS: 8 s + 120 ms per carattere (tetto 15 min), come Receiver.kt
@@ -277,6 +341,43 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
                 let optionsValue = info[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
                 let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
                 self.handleInterruptionEnded(shouldResume: options.contains(.shouldResume))
+            }
+        }
+    }
+
+    /// Cambio di uscita audio (auricolari sfilati, Bluetooth spento, dock
+    /// tolto). Il sistema dirotta l'audio sullo SPEAKER e non manda nessuna
+    /// interruzione.
+    ///
+    /// DECISIONE DI PRODOTTO (utente, 23/08/2026): **si continua a parlare
+    /// dall'altoparlante**, non si mette in pausa. Le linee guida Apple
+    /// suggeriscono la pausa — nasce dal lettore musicale, dove l'audio è
+    /// privato e continuare in metropolitana e' imbarazzante — ma qui l'audio
+    /// E' la funzione: chi cammina davanti a una chiesa col telefono in mano e
+    /// senza auricolari deve sentire il racconto, non trovare una guida muta
+    /// che aspetta un tocco che nessuno sa di dover dare. Senza cuffie
+    /// l'altoparlante e' l'uscita normale, non un ripiego.
+    ///
+    /// La versione precedente (pausa + watchdog riarmato) e' stata tolta di
+    /// proposito: si limita a NON interferire, e la riproduzione prosegue
+    /// esattamente dove era. Chi non vuole farsi sentire ha gia' la modalita'
+    /// silenziosa, che e' una scelta esplicita e non un effetto collaterale.
+    @objc private func handleRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let raw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+
+        DispatchQueue.main.async {
+            switch reason {
+            case .newDeviceAvailable:
+                // Gli auricolari (ri)collegati: si riprende solo se eravamo in
+                // pausa per una vera interruzione (telefonata, Siri), mai per
+                // un cambio di uscita — che ormai non mette piu' in pausa.
+                guard self.pausedForInterruption else { return }
+                self.handleInterruptionEnded(shouldResume: true)
+            default:
+                // `.oldDeviceUnavailable` compreso: si prosegue sullo speaker.
+                return
             }
         }
     }
@@ -423,6 +524,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
                 var fallback = item
                 fallback.audioFile = nil
                 self.queue.append(fallback)
+                self.potaCoda()
             }
             self.onUtteranceFinished()
         }
@@ -434,6 +536,7 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
                 var fallback = item
                 fallback.audioFile = nil
                 self.queue.append(fallback)
+                self.potaCoda()
             }
             self.onUtteranceFinished()
         }
@@ -441,26 +544,113 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
 
     // MARK: - Voci
 
+    /// Mappa lingua dell'app → codice regionale della voce. Unico punto di
+    /// verità: la usano voiceForLanguage e il controllo di disponibilità, che
+    /// devono parlare della stessa voce (equivalente di
+    /// GeofenceBroadcastReceiver.localeForLang su Android).
+    static func regionalCode(for lang: String) -> String {
+        switch lang {
+        case "en": return "en-US"
+        case "fr": return "fr-FR"
+        case "es": return "es-ES"
+        case "de": return "de-DE"
+        case "ru": return "ru-RU"
+        case "zh": return "zh-CN"
+        default: return "it-IT"
+        }
+    }
+
     /// Stessa mappa lingue di applyTtsConfig Android, con fallback inglese se
     /// la voce locale manca (meno straniante dell'italiano per utenti RU/ZH).
-    static func voiceForLanguage(_ lang: String) -> AVSpeechSynthesisVoice? {
-        let code: String
-        switch lang {
-        case "en": code = "en-US"
-        case "fr": code = "fr-FR"
-        case "es": code = "es-ES"
-        case "de": code = "de-DE"
-        case "ru": code = "ru-RU"
-        case "zh": code = "zh-CN"
-        default: code = "it-IT"
+    /// ATTENZIONE: quel ripiego è per i casi in cui parlare comunque è meglio
+    /// che tacere (una frase di servizio); per l'audioguida passare SEMPRE da
+    /// `installedVoice(for:)`, che dice la verità invece di cambiare lingua.
+    static func voiceForLanguage(_ lang: String, character: String? = nil) -> AVSpeechSynthesisVoice? {
+        let code = regionalCode(for: lang)
+
+        // Il genere della voce di sistema segue il personaggio, come già fa
+        // l'MP3 neurale (AudioPrefetchManager.azureVoice: Nicky femminile,
+        // Dante maschile in tutte e sette le lingue). Prima si chiedeva solo
+        // la lingua e iOS restituiva la sua voce di default (femminile): con
+        // Dante scelto, il teaser e il ripiego offline cambiavano sesso.
+        if let character = character, character == "nicky" || character == "dante" {
+            let wanted: AVSpeechSynthesisVoiceGender = character == "dante" ? .male : .female
+            let prefix = String(code.prefix(2))
+            let byGender = AVSpeechSynthesisVoice.speechVoices().filter {
+                $0.language.hasPrefix(prefix) && $0.gender == wanted
+            }
+            // Voce della variante regionale esatta se c'è, altrimenti una
+            // qualsiasi della stessa lingua col genere giusto.
+            if let exact = byGender.first(where: { $0.language == code }) ?? byGender.first {
+                return exact
+            }
         }
+
         return AVSpeechSynthesisVoice(language: code)
             ?? AVSpeechSynthesisVoice(language: lang == "it" ? "it-IT" : "en-US")
     }
 
+    /// LA VOCE DI QUESTA LINGUA È INSTALLATA SUL TELEFONO? (23/08/2026)
+    ///
+    /// `AVSpeechSynthesisVoice(language:)` non basta come controllo, perché il
+    /// chiamante storico ci appiccicava dietro un `?? en-US`: rispondeva
+    /// sempre di sì, e a un utente tedesco senza voce tedesca l'audioguida
+    /// veniva letta in inglese. Qui si guarda l'elenco vero delle voci
+    /// installate e si accetta solo un vero corrispondente di lingua (prefisso:
+    /// de-AT va benissimo per un utente "de").
+    ///
+    /// Su iOS non esiste l'equivalente esatto di `isNetworkConnectionRequired`
+    /// di Android: le voci elencate da `speechVoices()` sono installate sul
+    /// dispositivo e sintetizzano in locale. Le voci "enhanced/premium" e la
+    /// Personal Voice si scaricano dalle impostazioni, ma una volta scaricate
+    /// compaiono qui e funzionano senza rete. Il controllo di presenza è quindi
+    /// il massimo che il sistema consenta — ed è già molto più di quanto si
+    /// facesse prima, cioè niente.
+    static func installedVoice(for lang: String) -> AVSpeechSynthesisVoice? {
+        let prefix = String(regionalCode(for: lang).prefix(2))
+        let installate = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix(prefix) }
+        guard !installate.isEmpty else { return nil }
+        // Variante regionale esatta se c'è, altrimenti una qualunque della
+        // stessa lingua.
+        let code = regionalCode(for: lang)
+        return installate.first(where: { $0.language == code }) ?? installate.first
+    }
+
     /// checkOfflineTtsVoice: su iOS le voci AVSpeech sono sempre utilizzabili
-    /// offline una volta presenti nel sistema.
+    /// offline una volta presenti nel sistema. Ora però la domanda è posta
+    /// sull'elenco delle voci installate, non sul costruttore col ripiego.
     static func isVoiceAvailable(_ lang: String) -> Bool {
-        voiceForLanguage(lang) != nil
+        installedVoice(for: lang) != nil
+    }
+
+    /// Ultima notifica "voce non installata": una ogni 10 minuti, non una per
+    /// POI (in centro storico sarebbero decine). Stesso throttle di Android.
+    private static var ultimoAvvisoVoce: Date?
+
+    /// La verità al posto del silenzio: l'utente sta camminando e non guarda lo
+    /// schermo, quindi l'unico modo di dirglielo è una notifica. Il testo
+    /// spiega dove si installano le voci: su iOS non esiste un URL che apra
+    /// direttamente Impostazioni ▸ Accessibilità ▸ Contenuto pronunciato, e
+    /// mandare l'utente su una schermata sbagliata sarebbe peggio che dargli
+    /// il percorso scritto.
+    private func notifyVoiceMissing(lang: String) {
+        let now = Date()
+        if let ultimo = Self.ultimoAvvisoVoce, now.timeIntervalSince(ultimo) < 600 { return }
+        Self.ultimoAvvisoVoce = now
+
+        let content = UNMutableNotificationContent()
+        content.title = NotificationStrings.listenFailedTitle(lang)
+        content.body = NotificationStrings.listenFailedBody(
+            lang, reason: "voice_not_installed",
+            name: NotificationStrings.thisPlace(lang)
+        )
+        content.sound = .default
+        let req = UNNotificationRequest(
+            identifier: "voice_missing_\(lang)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
     }
 }

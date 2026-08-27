@@ -85,12 +85,36 @@ final class WipSupabaseClient {
     /// l'aggiornamento dell'intero radar.
     func fetchFootprints(poiIds: [String], completion: @escaping ([String: String]) -> Void) {
         guard !poiIds.isEmpty else { completion([:]); return }
+
+        // (23/08/2026) I PERIMETRI GIÀ NOTI NON SI RISCARICANO.
+        // Un poligono OSM non cambia: riscaricarlo a ogni refresh del radar
+        // (ogni 200 m a piedi, ogni chilometro in auto) significava rifare le
+        // stesse due richieste da 60 id in una zona in cui i POI sono per lo
+        // più gli stessi. Il registro tiene sia i perimetri trovati sia i POI
+        // che risultano SENZA perimetro (stringa vuota): sono 4 su 5, e sono
+        // proprio quelli che si richiedevano inutilmente all'infinito.
+        // Il negativo si annota SOLO quando il lotto ha risposto bene: un
+        // errore di rete non deve marcare "senza perimetro" mezzo radar.
+        var giaNoti: [String: String] = [:]
+        var daChiedere: [String] = []
+        Self.registroLock.lock()
+        for id in poiIds {
+            if let noto = Self.registroPerimetri[id] {
+                if !noto.isEmpty { giaNoti[id] = noto }
+            } else {
+                daChiedere.append(id)
+            }
+        }
+        Self.registroLock.unlock()
+
+        guard !daChiedere.isEmpty else { completion(giaNoti); return }
+
         // A lotti: l'URL di PostgREST ha un limite di lunghezza e 120 id
         // lunghi lo supererebbero.
-        let lotti = stride(from: 0, to: poiIds.count, by: 60).map {
-            Array(poiIds[$0..<min($0 + 60, poiIds.count)])
+        let lotti = stride(from: 0, to: daChiedere.count, by: 60).map {
+            Array(daChiedere[$0..<min($0 + 60, daChiedere.count)])
         }
-        var risultato: [String: String] = [:]
+        var risultato: [String: String] = giaNoti
         let gruppo = DispatchGroup()
         let lock = NSLock()
 
@@ -107,16 +131,44 @@ final class WipSupabaseClient {
                       let data = data,
                       let righe = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
                 else { return }
-                lock.lock(); defer { lock.unlock() }
+                var trovati: [String: String] = [:]
                 for r in righe {
                     guard let id = r["poi_id"] as? String,
                           let gj = r["geojson"] as? String,
                           let compatto = Self.geojsonCompatto(gj) else { continue }
-                    risultato[id] = compatto
+                    trovati[id] = compatto
                 }
+                lock.lock()
+                for (id, compatto) in trovati { risultato[id] = compatto }
+                lock.unlock()
+                // Lotto risposto bene: si annotano i perimetri trovati E i POI
+                // del lotto che non ne hanno (stringa vuota).
+                Self.annota(idRichiesti: lotto, trovati: trovati)
             }.resume()
         }
         gruppo.notify(queue: .global()) { completion(risultato) }
+    }
+
+    /// Registro dei perimetri già scaricati: `""` = "questo POI non ha
+    /// perimetro". Tetto FIFO perché in un viaggio lungo il radar attraversa
+    /// molte zone; 4.000 voci sono qualche centinaio di kB.
+    private static var registroPerimetri: [String: String] = [:]
+    private static var registroOrdine: [String] = []
+    private static let registroLock = NSLock()
+    private static let registroMax = 4000
+
+    private static func annota(idRichiesti: [String], trovati: [String: String]) {
+        registroLock.lock(); defer { registroLock.unlock() }
+        for id in idRichiesti {
+            let valore = trovati[id] ?? ""
+            if registroPerimetri.updateValue(valore, forKey: id) == nil {
+                registroOrdine.append(id)
+            }
+        }
+        while registroPerimetri.count > registroMax, !registroOrdine.isEmpty {
+            let vecchio = registroOrdine.removeFirst()
+            registroPerimetri.removeValue(forKey: vecchio)
+        }
     }
 
     /// Da GeoJSON Polygon/MultiPolygon a "lon,lat lon,lat;lon,lat ...".
@@ -375,7 +427,28 @@ final class WipSupabaseClient {
                 // dal trigger solo se il POI ha un ingresso (entrance_lat/lon),
                 // come radiiForTransport lato web. Prima venivano ignorati.
                 alertRadius: (map["alert_radius"] as? NSNumber)?.intValue,
-                arrivalRadius: (map["geofence_radius"] as? NSNumber)?.intValue
+                arrivalRadius: (map["geofence_radius"] as? NSNumber)?.intValue,
+                // INDIRIZZO (23/08/2026). La stringa serve a notifica e voce;
+                // `address_source` non e' decorazione: 'strada_vicina' vuol
+                // dire "la strada piu' vicina", non l'indirizzo del luogo —
+                // una chiesa in mezzo ai campi non sta al civico di quella
+                // via, e quel valore scarta anche il punto qui sotto.
+                // Le due RPC li restituiscono dalle migration 20260823090000
+                // e 20260823150000; con RPC vecchie restano nil e la scala
+                // ricade sul comportamento di prima.
+                address: map["address"] as? String,
+                addressSource: map["address_source"] as? String,
+                // IL PUNTO dell'indirizzo (migration 20260823160000). E' la
+                // casa piu' vicina al POI nel dump Nominatim — vicinanza
+                // MISURATA, non una geocodifica testuale — quindi e' il PUNTO
+                // D'ARRIVO: Poi.coordinate lo mette fra l'ingresso e il
+                // centroide, e il trigger scatta a 30 m da li'.
+                // Finche' la passata dei punti non e' girata (e finche' le RPC
+                // non restituiscono le colonne) restano nil: comportamento
+                // identico a prima.
+                addressPointLat: (map["address_point_lat"] as? NSNumber)?.doubleValue,
+                addressPointLon: (map["address_point_lon"] as? NSNumber)?.doubleValue,
+                addressPointSource: map["address_point_source"] as? String
             )
         }
 

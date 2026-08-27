@@ -35,8 +35,26 @@ enum PoiFootprints {
     /// I perimetri già analizzati. Il parsing della stringa è la parte cara:
     /// rifarlo a ogni fix per ogni POI vicino brucerebbe batteria, che in
     /// background è la risorsa che conta.
+    ///
+    /// Il valore è `Perimetro?`: il `nil` NON è "non ancora calcolato", è
+    /// l'informazione "questo POI non ha perimetro, non riprovare ad
+    /// analizzarlo" — la stessa distinzione che su Android costa la
+    /// sentinella NESSUN_PERIMETRO (ConcurrentHashMap non accetta null).
+    /// Qui il dizionario Swift la porta da solo, ma va letta con
+    /// `if let voce = cache[poiId]` (doppio Optional), mai con `!= nil`.
     private static var cache: [String: Perimetro?] = [:]
-    private static let maxCache = 400
+    /// Ordine di inserimento, per lo sfratto FIFO.
+    ///
+    /// (23/08/2026) Prima, oltre la soglia, si faceva `removeAll()`: appena
+    /// superato il tetto si ri-analizzavano TUTTI i poligoni a OGNI fix GPS —
+    /// esattamente il lavoro che la cache doveva evitare, e proprio in centro
+    /// città dove i POI sono tanti. Ora si toglie una voce alla volta, la più
+    /// vecchia. Stessa correzione già applicata a Footprints.kt.
+    private static var ordineInserimento: [String] = []
+    /// Tetto alzato da 400 a 2.000 (parità con Footprints.kt): un poligono
+    /// compatto (15 vertici) sono ~240 byte — 2.000 stanno in mezzo mega,
+    /// meno di una singola tile di mappa.
+    private static let maxCache = 2000
     private static let lock = NSLock()
 
     /// Da "lon,lat lon,lat;lon,lat ..." agli anelli.
@@ -70,13 +88,19 @@ enum PoiFootprints {
 
     private static func perimetro(_ poiId: String, _ testo: String?) -> Perimetro? {
         lock.lock(); defer { lock.unlock() }
-        if let g = cache[poiId] { return g }
+        // Doppio Optional: la voce ESISTE anche quando vale nil ("nessun
+        // perimetro"), e in quel caso si esce senza ri-analizzare nulla.
+        if let voce = cache[poiId] { return voce }
         let p: Perimetro? = (testo?.isEmpty == false) ? analizza(testo!) : nil
-        // Cache di comodo: quando è piena si azzera invece di ordinare per
-        // ultimo uso. Ricostruirla costa qualche millisecondo e il codice
-        // resta corto — un LRU qui sarebbe complessità senza guadagno.
-        if cache.count >= maxCache { cache.removeAll(keepingCapacity: true) }
         cache[poiId] = p
+        ordineInserimento.append(poiId)
+        // Sfratto FIFO una voce alla volta: le altre restano analizzate.
+        // La guardia su ordineInserimento evita il ciclo infinito se la coda
+        // si svuota prima della cache (chiavi già tolte da svuota()).
+        while cache.count > maxCache, !ordineInserimento.isEmpty {
+            let vecchio = ordineInserimento.removeFirst()
+            cache.removeValue(forKey: vecchio)
+        }
         return p
     }
 
@@ -170,5 +194,6 @@ enum PoiFootprints {
     static func svuota() {
         lock.lock(); defer { lock.unlock() }
         cache.removeAll()
+        ordineInserimento.removeAll()
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import UIKit
 import Capacitor
 
 /**
@@ -37,6 +38,11 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentTitle = "Italia in Tasca"
     private var currentSubtitle = "Audioguida"
     private var remoteCommandsConfigured = false
+    /// Spegnimento differito della sessione audio quando si resta in pausa
+    /// (vedi `programmaSpegnimentoSessione`).
+    private var timerSpegnimentoSessione: Timer?
+    /// Secondi di pausa dopo i quali la sessione audio si disattiva.
+    private static let attesaSpegnimentoSessioneS: TimeInterval = 30
 
     override public func load() {
         super.load()
@@ -45,6 +51,24 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             selector: #selector(handleInterruption(_:)),
             name: AVAudioSession.interruptionNotification,
             object: AVAudioSession.sharedInstance()
+        )
+        // Il timer di progresso non deve battere a schermo spento: gli eventi
+        // attraversano il ponte Capacitor per aggiornare una barra che nessuno
+        // sta guardando. Si sospende in background e riparte al ritorno.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appInBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appInPrimoPiano),
+            // didBecomeActive e non willEnterForeground: durante il secondo
+            // `applicationState` vale ancora `.background`, e la guardia in
+            // startProgressTimer rifiuterebbe di far ripartire il timer.
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil
         )
     }
 
@@ -111,6 +135,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             self.player?.pause()
+            self.programmaSpegnimentoSessione()
             self.updateNowPlayingInfo()
             self.notifyPlaybackState(isPlaying: false)
             call.resolve()
@@ -119,6 +144,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func resume(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.annullaSpegnimentoSessione()
             self.activateAudioSession()
             self.player?.playImmediately(atRate: self.desiredRate)
             self.updateNowPlayingInfo()
@@ -171,8 +197,8 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             let clamped = max(0, targetSeconds)
-            player.seek(to: CMTime(seconds: clamped, preferredTimescale: 1000)) { _ in
-                self.updateNowPlayingInfo()
+            player.seek(to: CMTime(seconds: clamped, preferredTimescale: 1000)) { [weak self] _ in
+                self?.updateNowPlayingInfo()
                 call.resolve()
             }
         }
@@ -206,6 +232,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// "Elite" — prima qui `options: []` era esclusivo (stop netto di
     /// Spotify/Musica) mentre il resto dell'app abbassa soltanto.
     private func activateAudioSession() {
+        annullaSpegnimentoSessione()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
@@ -213,6 +240,33 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         } catch {
             CAPLog.print("[WipBackgroundAudio] AVAudioSession error: \(error)")
         }
+    }
+
+    /// IN PAUSA LA SESSIONE VA SPENTA. Una AVAudioSession attiva tiene acceso
+    /// il percorso audio e, con `.duckOthers`, tiene la musica dell'utente
+    /// abbassata: chi metteva in pausa l'audioguida per ascoltare la guida
+    /// vera e propria si ritrovava Spotify a metà volume finché non chiudeva
+    /// l'app. Non si spegne all'istante — una pausa dura spesso pochi secondi
+    /// e riattivare la sessione a ogni ripresa fa perdere l'attacco della
+    /// traccia: si aspettano trenta secondi, e la ripresa annulla l'attesa.
+    private func programmaSpegnimentoSessione() {
+        timerSpegnimentoSessione?.invalidate()
+        timerSpegnimentoSessione = Timer.scheduledTimer(
+            withTimeInterval: Self.attesaSpegnimentoSessioneS, repeats: false
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            // Ancora in pausa? (una ripresa avrebbe già annullato il timer,
+            // ma il controllo costa nulla ed evita di spegnere sotto i piedi
+            // a una riproduzione ripartita da un'altra strada).
+            guard (self.player?.rate ?? 0) == 0 else { return }
+            self.timerSpegnimentoSessione = nil
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    private func annullaSpegnimentoSessione() {
+        timerSpegnimentoSessione?.invalidate()
+        timerSpegnimentoSessione = nil
     }
 
     @objc private func handleInterruption(_ notification: Notification) {
@@ -245,9 +299,18 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    /// Progresso verso il JS. Era a 2 Hz e batteva anche a schermo spento:
+    /// due attraversamenti del ponte Capacitor al secondo per aggiornare una
+    /// barra che nessuno vedeva. Un secondo è la granularità che serve a un
+    /// contatore in minuti e secondi, e in background il timer non parte
+    /// proprio (vedi gli observer di ciclo di vita in `load`).
     private func startProgressTimer() {
         progressTimer?.invalidate()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        progressTimer = nil
+        // Riproduzione avviata a schermo spento (trigger in background): il
+        // timer non parte nemmeno, lo accende il ritorno in primo piano.
+        guard UIApplication.shared.applicationState != .background else { return }
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, let player = self.player, player.rate > 0 else { return }
             let duration = player.currentItem?.duration.seconds ?? 0
             self.notifyListeners("playbackProgress", data: [
@@ -257,11 +320,28 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc private func appInBackground() {
+        DispatchQueue.main.async {
+            self.progressTimer?.invalidate()
+            self.progressTimer = nil
+        }
+    }
+
+    @objc private func appInPrimoPiano() {
+        DispatchQueue.main.async {
+            // Solo se c'è davvero qualcosa in riproduzione: un timer acceso
+            // su un player fermo è la stessa batteria sprecata di prima.
+            guard let player = self.player, player.rate > 0 else { return }
+            self.startProgressTimer()
+        }
+    }
+
     private func notifyPlaybackState(isPlaying: Bool) {
         notifyListeners("playbackStatus", data: ["isPlaying": isPlaying])
     }
 
     private func teardownPlayer(deactivateSession: Bool) {
+        annullaSpegnimentoSessione()
         progressTimer?.invalidate()
         progressTimer = nil
         statusObservation?.invalidate()
@@ -312,6 +392,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         center.pauseCommand.addTarget { [weak self] _ in
             guard let self = self, self.player != nil else { return .noSuchContent }
             self.player?.pause()
+            self.programmaSpegnimentoSessione()
             self.updateNowPlayingInfo()
             self.notifyPlaybackState(isPlaying: false)
             return .success
@@ -329,8 +410,11 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let self = self, let player = self.player,
                   let positionEvent = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
-            player.seek(to: CMTime(seconds: positionEvent.positionTime, preferredTimescale: 1000)) { _ in
-                self.updateNowPlayingInfo()
+            // `[weak self]` anche qui dentro: i target del command center non
+            // vengono mai rimossi, e una closure di seek che trattiene il
+            // plugin per forte lo tiene in vita oltre la sua WebView.
+            player.seek(to: CMTime(seconds: positionEvent.positionTime, preferredTimescale: 1000)) { [weak self] _ in
+                self?.updateNowPlayingInfo()
             }
             return .success
         }
@@ -339,8 +423,8 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private func seekRelative(_ offset: Double) {
         guard let player = player else { return }
         let target = max(0, player.currentTime().seconds + offset)
-        player.seek(to: CMTime(seconds: target, preferredTimescale: 1000)) { _ in
-            self.updateNowPlayingInfo()
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 1000)) { [weak self] _ in
+            self?.updateNowPlayingInfo()
         }
     }
 }

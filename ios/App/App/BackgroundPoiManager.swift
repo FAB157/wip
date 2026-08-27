@@ -44,11 +44,47 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private let prefs = UserDefaults.standard
     private let workQueue = DispatchQueue(label: "com.itaintasca.poimanager")
 
+    // ─────────────────────────────────────────────────────────────────────
+    // CONFINAMENTO DI THREAD (23/08/2026)
+    //
+    // TUTTO lo stato mutabile qui sotto vive SOLO sulla `workQueue` seriale.
+    // Prima `currentPois`, `itineraryPois`, `lastQueryLocation` e `guideMode`
+    // venivano scritti anche dal main (start/stop/syncManualSelection, chiamati
+    // dal plugin Capacitor) mentre la workQueue li leggeva e riassegnava a ogni
+    // fix GPS: un array Swift riassegnato sotto una lettura concorrente non è
+    // "un valore stantio", è comportamento indefinito — crash casuali,
+    // irriproducibili, quasi sempre in strada.
+    //
+    // Regola da tenere: i metodi pubblici sono solo un `workQueue.async` verso
+    // la controparte `…Confinato`; nessuno tocca questi campi fuori dalla
+    // workQueue. Le API UIKit/CoreLocation che pretendono il main (i metodi di
+    // CLLocationManager, i feedback aptici) si raggiungono con un
+    // `DispatchQueue.main.async` in uscita, MAI con un `sync`: la workQueue non
+    // deve mai bloccarsi sul main né viceversa (vedi isAppInForeground).
+    // ─────────────────────────────────────────────────────────────────────
     private var lastQueryLocation: CLLocation?
     private var currentPois: [Poi] = []
+    /// PUNTI D'ARRIVO dei POI di `currentPois`, stesso ordine e stesso indice.
+    ///
+    /// (23/08/2026) `Poi.coordinate` è una proprietà CALCOLATA: ogni lettura
+    /// costruisce fino a tre CLLocation e, per il punto dell'indirizzo, fa
+    /// pure una haversine per la guardia dei 250 m. Veniva letta da quattro
+    /// posti diversi per ogni POI a ogni fix GPS — su un radar da 120 POI
+    /// sono centinaia di allocazioni al secondo, in background, per
+    /// ricalcolare sempre lo stesso punto. Il punto non cambia finché non
+    /// cambia il radar: si calcola quando si assegna `currentPois` e basta.
+    ///
+    /// Si scrivono SEMPRE insieme, con `impostaPoiCorrenti(_:)`: mai assegnare
+    /// `currentPois` a mano, o gli indici si disallineano.
+    private var puntiArrivo: [CLLocation] = []
     private var isFetching = false
     private var lastFetchFailedAt: Double = 0
     private var isRunning = false
+
+    /// Ultima posizione vista dal manager, copia CONFINATA nella workQueue.
+    /// Sostituisce le letture di `locationManager.location` fatte fuori dal
+    /// main (CLLocationManager non è thread-safe).
+    private var ultimaPosizioneNota: CLLocation?
 
     // Impostazioni (persistite in prefs con le stesse chiavi di Android)
     private var isAutomaticMode = true
@@ -85,20 +121,67 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         super.init()
         locationManager.delegate = self
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            self?.isOnline = path.status == .satisfied
+            // `isOnline` è stato del manager: si scrive sulla workQueue come
+            // tutto il resto (prima lo scriveva la coda di NWPathMonitor
+            // mentre la workQueue lo leggeva a ogni fix).
+            guard let self = self else { return }
+            let online = path.status == .satisfied
+            self.workQueue.async { self.isOnline = online }
         }
         pathMonitor.start(queue: DispatchQueue.global(qos: .utility))
         SpeechQueue.shared.onEvent = { [weak self] event, data in
             self?.sendEvent(event, json: data)
         }
         SpeechQueue.shared.onItineraryFinished = { [weak self] poiId in
-            self?.showCheckInNotification(poiId: poiId)
+            // showCheckInNotification legge appLanguage: workQueue.
+            guard let self = self else { return }
+            self.workQueue.async { self.showCheckInNotification(poiId: poiId) }
+        }
+        Self.installaOsservatoriCicloDiVita()
+    }
+
+    // MARK: - Ciclo di vita dell'app (sostituisce il main.sync)
+
+    /// Stato «app in primo piano» mantenuto dagli osservatori di ciclo di vita
+    /// e letto senza bloccare. Prima `isAppInForeground()` faceva un
+    /// `DispatchQueue.main.sync` dalla workQueue: inversione di priorità
+    /// garantita e stallo certo ogni volta che il main stava a sua volta
+    /// aspettando la workQueue.
+    private static let foregroundLock = NSLock()
+    private static var appInForegroundFlag = false
+
+    private static func setAppInForeground(_ valore: Bool) {
+        foregroundLock.lock()
+        appInForegroundFlag = valore
+        foregroundLock.unlock()
+    }
+
+    /// Registrata una sola volta (init del singleton). Il valore iniziale si
+    /// legge sul main, dove `applicationState` è legale.
+    private static func installaOsservatoriCicloDiVita() {
+        let centro = NotificationCenter.default
+        centro.addObserver(
+            forName: UIApplication.didBecomeActiveNotification,
+            object: nil, queue: .main
+        ) { _ in setAppInForeground(true) }
+        centro.addObserver(
+            forName: UIApplication.willResignActiveNotification,
+            object: nil, queue: .main
+        ) { _ in setAppInForeground(false) }
+        DispatchQueue.main.async {
+            setAppInForeground(UIApplication.shared.applicationState == .active)
         }
     }
 
     // MARK: - Avvio / arresto (port di onStartCommand / ACTION_STOP)
 
+    /// Ingresso pubblico (main / coda del plugin Capacitor): NON tocca lo
+    /// stato, lo consegna alla workQueue.
     func start(options: [String: Any]) {
+        workQueue.async { self.startConfinato(options: options) }
+    }
+
+    private func startConfinato(options: [String: Any]) {
         isAutomaticMode = options["isAutomaticMode"] as? Bool ?? true
         guideMode = options["guideMode"] as? String ?? "walking"
         transportPref = options["transportPref"] as? String ?? "auto"
@@ -137,6 +220,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// Riavvio a freddo (rilancio dell'app da parte dell'OS per un evento
     /// location): equivalente di restoreSettingsFromPrefs + START_STICKY.
     func restartFromPrefsIfActive() {
+        workQueue.async { self.restartFromPrefsIfActiveConfinato() }
+    }
+
+    private func restartFromPrefsIfActiveConfinato() {
         guard prefs.bool(forKey: "isServiceActive"), !isRunning else { return }
         isAutomaticMode = prefs.object(forKey: "isAutomaticMode") as? Bool ?? true
         guideMode = prefs.string(forKey: "guideMode") ?? "walking"
@@ -153,22 +240,40 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     func stop() {
+        // La bandiera va giù SUBITO, non quando la coda arriva al turno:
+        // getStatus (plugin) e le guardie "isServiceActive" sparse nel file la
+        // leggono da altri thread e non devono vedere un servizio ancora
+        // acceso dopo che il JS ha ricevuto il resolve. UserDefaults è
+        // thread-safe; il resto dello spegnimento resta confinato.
+        prefs.set(false, forKey: "isServiceActive")
+        workQueue.async { self.stopConfinato() }
+    }
+
+    private func stopConfinato() {
         prefs.set(false, forKey: "isServiceActive")
         // (22/08/2026) radarTeaserNotified cresceva per sempre: senza reset
         // allo stop un POI notificato una volta non tornava mai nei teaser
         // radar, nemmeno in un viaggio successivo mesi dopo (come Service.kt).
         prefs.removeObject(forKey: "radarTeaserNotified")
         MotionActivityGate.shared.stop()
+        // Guida spenta: bussola giù (accesa a vuoto è solo batteria) e rinvii
+        // dimenticati — al prossimo avvio si riparte puliti.
+        BearingGate.shared.spegni()
         SpeechQueue.shared.stopSpeaking()
         isRunning = false
-        locationManager.stopUpdatingLocation()
-        locationManager.stopMonitoringSignificantLocationChanges()
-        for region in locationManager.monitoredRegions {
-            locationManager.stopMonitoring(for: region)
+        // CLLocationManager si tocca sul main (non è thread-safe e la
+        // workQueue non deve bloccarsi ad aspettarlo).
+        DispatchQueue.main.async {
+            self.locationManager.stopUpdatingLocation()
+            self.locationManager.stopMonitoringSignificantLocationChanges()
+            for region in self.locationManager.monitoredRegions {
+                self.locationManager.stopMonitoring(for: region)
+            }
         }
-        currentPois = []
+        impostaPoiCorrenti([])
         itineraryPois = []
         lastQueryLocation = nil
+        ultimaPosizioneNota = nil
     }
 
     /// Tappe dell'itinerario manuale, tenute SEPARATE dal radar: prima
@@ -177,6 +282,28 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// e dai trigger. Ora vengono sempre unite al radar (mergedPois) e
     /// svuotate solo quando il JS manda una selezione vuota o allo stop.
     private var itineraryPois: [Poi] = []
+
+    /// UNICO punto di scrittura del radar attivo (workQueue, come tutto il
+    /// resto dello stato). Tiene allineati i punti d'arrivo e pota le distanze
+    /// del fix precedente: `lastDistances` è indicizzato per id POI e prima non
+    /// veniva mai ripulito — in un viaggio lungo accumulava una voce per ogni
+    /// POI incontrato da quando il servizio era acceso, senza che nessuna
+    /// potesse più servire (il superamento si valuta solo sui POI del radar).
+    private func impostaPoiCorrenti(_ pois: [Poi]) {
+        currentPois = pois
+        puntiArrivo = pois.map { $0.coordinate }
+        if !lastDistances.isEmpty {
+            let idAttivi = Set(pois.map { $0.id })
+            lastDistances = lastDistances.filter { idAttivi.contains($0.key) }
+        }
+    }
+
+    /// Punto d'arrivo del POI all'indice dato. Il ricalcolo è una rete di
+    /// sicurezza: se per qualunque motivo i due array divergessero, si torna
+    /// al comportamento di prima invece di leggere l'indice sbagliato.
+    private func puntoArrivo(_ indice: Int, _ poi: Poi) -> CLLocation {
+        indice < puntiArrivo.count ? puntiArrivo[indice] : poi.coordinate
+    }
 
     /// Radar + tappe itinerario, senza duplicati (la tappa vince: porta
     /// isFromItinerary=true e la priorità che ne consegue).
@@ -188,6 +315,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     /// Itinerario manuale: port di syncManualSelection (tappe con priorità).
     func syncManualSelection(poisJson: String) {
+        workQueue.async { self.syncManualSelectionConfinato(poisJson: poisJson) }
+    }
+
+    private func syncManualSelectionConfinato(poisJson: String) {
         guard let data = poisJson.data(using: .utf8),
               var pois = try? JSONDecoder().decode([Poi].self, from: data) else { return }
         for i in pois.indices { pois[i].isFromItinerary = true }
@@ -195,12 +326,58 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // Selezione vuota = clear: le tappe escono e resta il solo radar.
         let radarOnly = currentPois.filter { !$0.isFromItinerary }
         itineraryPois = pois
-        currentPois = mergedPois(radarOnly)
-        refreshMonitoredRegions(around: locationManager.location)
+        impostaPoiCorrenti(mergedPois(radarOnly))
+        // Posizione dalla copia confinata, non da locationManager.location
+        // (main-only): fuori dal main quella lettura era già una corsa.
+        refreshMonitoredRegions(around: ultimaPosizioneNota)
         updateStatus("Audioguida attiva", "\(pois.count) tappe itinerario caricate")
         // initialTrigger: se l'utente parte già dentro il raggio della prima
         // tappa, il teaser parte subito.
-        if let loc = locationManager.location { evaluateTriggers(at: loc) }
+        if let loc = ultimaPosizioneNota { evaluateTriggers(at: loc) }
+    }
+
+    /// Fine del giro (locationService.unsyncTappeGiroFromNative → plugin
+    /// clearManualSelection). Prima non esisteva: `syncManualSelection` FONDE e
+    /// non sostituisce, quindi le tappe di un itinerario già chiuso restavano
+    /// monitorate — con priorità sul radar — fino allo stop del servizio.
+    /// Port di ItaintaBackgroundPoiPlugin.kt::clearManualSelection.
+    func clearManualSelection() {
+        workQueue.async { self.clearManualSelectionConfinato() }
+    }
+
+    private func clearManualSelectionConfinato() {
+        guard !itineraryPois.isEmpty else { return }
+        itineraryPois = []
+        // Le tappe escono anche dal set monitorato: resta il solo radar.
+        impostaPoiCorrenti(currentPois.filter { !$0.isFromItinerary })
+        refreshMonitoredRegions(around: ultimaPosizioneNota)
+        updateStatus("Audioguida attiva", "\(currentPois.count) luoghi monitorati")
+    }
+
+    /// L'utente ha chiuso il banner di quel POI: per il servizio è come se ne
+    /// fosse uscito. Lo stato EXITED porta con sé il cooldown già usato dal
+    /// resto della macchina a stati (approachRetriggerCooldownMs, 30 min), che
+    /// vale sia per l'avviso sia per l'arrivo: non è un "mai più", passata la
+    /// mezz'ora il POI torna annunciabile. Senza questo, al fix successivo il
+    /// banner appena chiuso tornava su.
+    /// Port di ItaintaBackgroundPoiPlugin.kt::markPoiExited.
+    func markPoiExited(poiId: String) {
+        let id = poiId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        // CHIUDERE IL BANNER VUOL DIRE «NON MI INTERESSA», NON «RIPETIMELO PIU'
+        // TARDI» (23/08/2026, parità con ItaintaBackgroundPoiPlugin.kt): prima
+        // di tutto si TACE su questo POI. Lasciar finire la frase quando
+        // l'utente ha appena chiuso il banner è il contrario di quello che ha
+        // chiesto. `stopSpeaking(poiId:)` è per-POI: toglie dalla coda gli
+        // elementi di questo luogo e ferma la voce solo se sta parlando LUI —
+        // la guida di un altro POI in riproduzione non viene toccata.
+        SpeechQueue.shared.stopSpeaking(poiId: id)
+        workQueue.async {
+            self.store.setTriggerState(id, .exited)
+            // Anche il gate di bussola dimentica i rinvii pendenti del POI:
+            // altrimenti un rinvio scaduto potrebbe farlo riparlare.
+            BearingGate.shared.azzera(poiId: id)
+        }
     }
 
     private func startActiveMonitoring() {
@@ -214,21 +391,24 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // Gating sensori anti-teletrasporto GPS (fail-safe, vedi MotionActivityGate)
         MotionActivityGate.shared.start()
         registerNotificationCategories()
+        // guideMode è stato confinato nella workQueue: si fotografa QUI e si
+        // passa al main come costante, invece di leggerlo da un'altra coda.
+        let isDriving = guideMode == "driving"
         DispatchQueue.main.async {
             // In auto serve la qualità di fix massima: "Best" in macchina
             // produce spesso 50-100 m di accuratezza (vetri, velocità) e i
             // trigger scattano tardi o vengono scartati dal filtro fail-closed.
             // BestForNavigation è il profilo che Apple riserva ai navigatori.
-            self.locationManager.desiredAccuracy = self.guideMode == "driving"
+            self.locationManager.desiredAccuracy = isDriving
                 ? kCLLocationAccuracyBestForNavigation : kCLLocationAccuracyBest
             // A piedi il cerchio di arrivo è 30 m: con un filtro di 10 m il
             // trigger può arrivare 7 s dopo l'ingresso (1,4 m/s). 5 m dimezza
             // la latenza; il GPS è comunque acceso di continuo, il filtro
             // regola solo la frequenza dei callback.
-            self.locationManager.distanceFilter = self.guideMode == "driving" ? 10 : 5
+            self.locationManager.distanceFilter = isDriving ? 10 : 5
             // activityType: iOS ottimizza il duty-cycle del GPS in base all'attività
             // (in auto tollera pause in coda, a piedi calibra diversamente).
-            self.locationManager.activityType = self.guideMode == "driving" ? .automotiveNavigation : .fitness
+            self.locationManager.activityType = isDriving ? .automotiveNavigation : .fitness
             self.locationManager.allowsBackgroundLocationUpdates = true
             self.locationManager.pausesLocationUpdatesAutomatically = false
             if #available(iOS 11.0, *) {
@@ -250,22 +430,35 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
         guard prefs.bool(forKey: "isServiceActive") else { return }
-        if !isRunning { restartFromPrefsIfActive() }
-        workQueue.async { self.handleLocation(location) }
+        // `isRunning` è stato confinato: il controllo e l'eventuale ripartenza
+        // avvengono sulla workQueue, che è seriale — quindi il restart precede
+        // sempre l'handleLocation di questo stesso fix, come prima.
+        workQueue.async {
+            if !self.isRunning { self.restartFromPrefsIfActiveConfinato() }
+            self.handleLocation(location)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
         // Sentinella o regione POI: assicurano il rilancio dell'app; la
         // valutazione vera avviene sul fix corrente.
         guard prefs.bool(forKey: "isServiceActive") else { return }
-        if !isRunning { restartFromPrefsIfActive() }
-        if let loc = manager.location { workQueue.async { self.handleLocation(loc) } }
+        // manager.location si legge QUI (siamo sul thread del delegate),
+        // non dentro la workQueue.
+        guard let loc = manager.location else { return }
+        workQueue.async {
+            if !self.isRunning { self.restartFromPrefsIfActiveConfinato() }
+            self.handleLocation(loc)
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
         guard prefs.bool(forKey: "isServiceActive") else { return }
-        if !isRunning { restartFromPrefsIfActive() }
-        if let loc = manager.location { workQueue.async { self.handleLocation(loc) } }
+        guard let loc = manager.location else { return }
+        workQueue.async {
+            if !self.isRunning { self.restartFromPrefsIfActiveConfinato() }
+            self.handleLocation(loc)
+        }
     }
 
     /// Revoca del permesso posizione a runtime (Impostazioni → Posizione → Mai):
@@ -275,10 +468,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// di start esistente (start / restartFromPrefsIfActive) gestisce la ripartenza.
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        guard status == .denied || status == .restricted, isRunning else { return }
-        isRunning = false
-        locationManager.stopUpdatingLocation()
-        updateStatus("Audioguida in pausa", "⚠️ Permesso posizione revocato: riattivalo dalle Impostazioni per usare l'audioguida")
+        guard status == .denied || status == .restricted else { return }
+        workQueue.async {
+            guard self.isRunning else { return }
+            self.isRunning = false
+            DispatchQueue.main.async { self.locationManager.stopUpdatingLocation() }
+            // Manager a riposo: anche la bussola si spegne (vedi BearingGate).
+            BearingGate.shared.spegniBussola()
+            self.updateStatus("Audioguida in pausa", "⚠️ Permesso posizione revocato: riattivalo dalle Impostazioni per usare l'audioguida")
+        }
     }
 
     private func handleLocation(_ location: CLLocation) {
@@ -299,6 +497,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             )
             return
         }
+        // Copia confinata: la usano syncManualSelection/clearManualSelection al
+        // posto di locationManager.location (main-only).
+        ultimaPosizioneNota = location
         if lastQueryLocation == nil && currentPois.isEmpty {
             updateStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
         }
@@ -311,8 +512,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         if RoadSnap.shared.shouldRefresh(location) { RoadSnap.shared.refresh(location) }
         let evalLoc = RoadSnap.shared.snap(location, isDriving: guideMode == "driving") ?? location
         evaluateTriggers(at: evalLoc)
-        applyLocationTierForProximity(location)
-        updateDistanceNotification(location)
+        // Tiering GPS e distanze in tempo reale: una passata sola, sulla
+        // posizione REALE (non quella snappata), come prima.
+        aggiornaProssimitaEDistanze(location)
     }
 
     // MARK: - Cambio piedi⇄auto autonomo (isteresi, port 1:1)
@@ -347,23 +549,57 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // (niente multipath) e con batteria/calore molto più bassi. Nel dubbio
     // (POI non ancora caricati) resta ad alta precisione: il caso peggiore è
     // "risparmia meno", mai "manca un trigger".
-    private func applyLocationTierForProximity(_ location: CLLocation) {
+    /// UNA SOLA PASSATA sul radar per due cose che chiedevano la stessa
+    /// misura: il tiering del GPS (c'è un POI nella finestra di attenzione?)
+    /// e le distanze in tempo reale (qual è il più vicino, e chi è in
+    /// avvicinamento?). Erano due cicli su `currentPois` uno dietro l'altro,
+    /// sullo STESSO fix e sugli STESSI punti — il più vicino veniva calcolato
+    /// due volte. Soglie, ordine delle operazioni ed eventi restano identici:
+    /// il tier si applica prima, come quando erano due funzioni.
+    private func aggiornaProssimitaEDistanze(_ location: CLLocation) {
         let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
         let armWindow = alertRad * 3.0 + 150.0 // margine per ri-armare in tempo
-        let armed: Bool
-        if lastQueryLocation == nil {
-            armed = true                 // POI non ancora noti → sicuro
-        } else if currentPois.isEmpty {
-            armed = false                // zona senza POI → risparmia
-        } else {
-            var nearest = Double.greatestFiniteMagnitude
-            for p in currentPois {
-                let d = location.distance(from: p.coordinate)
-                if d < nearest { nearest = d; if nearest <= armWindow { break } }
-            }
-            armed = nearest <= armWindow
+
+        guard !currentPois.isEmpty else {
+            // POI non ancora noti → alta precisione (sicuro); radar già
+            // interrogato e zona vuota → posizione economica. Nessuna
+            // distanza da dichiarare, come prima.
+            applyLocationTier(armed: lastQueryLocation == nil)
+            return
         }
-        applyLocationTier(armed: armed)
+
+        let states = store.allTriggerStates()
+        var closestPoi: Poi?
+        var closestDist = Double.greatestFiniteMagnitude
+        var approaching: [[String: Any]] = []
+
+        for (indice, poi) in currentPois.enumerated() {
+            let dist = location.distance(from: puntoArrivo(indice, poi))
+            if dist < closestDist { closestDist = dist; closestPoi = poi }
+            if states[poi.id]?.state == .approachFired && dist <= alertRad * 2 {
+                approaching.append([
+                    "poiId": poi.id, "name": poi.nome,
+                    "distance": Int(dist.rounded()),
+                    "lat": poi.lat, "lon": poi.lon
+                ])
+            }
+        }
+
+        // Nel dubbio (POI non ancora caricati) resta ad alta precisione: il
+        // caso peggiore è "risparmia meno", mai "manca un trigger".
+        applyLocationTier(armed: lastQueryLocation == nil || closestDist <= armWindow)
+
+        if !approaching.isEmpty {
+            sendEvent("wip-poi-distance-update", json: ["entries": approaching])
+        }
+
+        if let poi = closestPoi {
+            let distRounded = Int((closestDist / 10).rounded() * 10)
+            let statusText = closestDist < 150
+                ? "Prossimo: \(poi.nome) (\(distRounded)m)"
+                : "\(currentPois.count) luoghi monitorati"
+            updateStatus("Audioguida attiva", statusText)
+        }
     }
 
     private func applyLocationTier(armed: Bool) {
@@ -423,14 +659,20 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                         location.horizontalAccuracy > 0 && location.horizontalAccuracy <= 100
                     self.store.insertPois(pois)
                     // Le tappe itinerario restano sempre nel set monitorato
-                    self.currentPois = self.mergedPois(pois)
+                    self.impostaPoiCorrenti(self.mergedPois(pois))
                     self.refreshMonitoredRegions(around: location)
 
-                    // Bonifica stati incoerenti dopo falsi trigger (teleport GPS)
+                    // Bonifica stati incoerenti dopo falsi trigger (teleport GPS).
+                    // Gli stati si leggono in UNA volta: `getTriggerState` per
+                    // POI erano fino a 120 salti sulla coda dello store, uno
+                    // per POI, per rispondere sempre dallo stesso dizionario.
                     let cleanupAlertRad = self.guideMode == "driving" ? self.alertRadiusCar : self.alertRadiusWalk
-                    for p in pois where self.store.getTriggerState(p.id) != nil {
-                        if location.distance(from: p.coordinate) > cleanupAlertRad * 3 {
-                            self.store.deleteTriggerState(p.id)
+                    let statiPersistiti = self.store.allTriggerStates()
+                    if !statiPersistiti.isEmpty {
+                        for p in pois where statiPersistiti[p.id] != nil {
+                            if location.distance(from: p.coordinate) > cleanupAlertRad * 3 {
+                                self.store.deleteTriggerState(p.id)
+                            }
                         }
                     }
 
@@ -490,7 +732,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         lastQueryLocation = location
         lastFetchFailedAt = 0
         store.insertPois(pois)
-        currentPois = mergedPois(pois)
+        impostaPoiCorrenti(mergedPois(pois))
         refreshMonitoredRegions(around: location)
         updateStatus("Audioguida attiva (offline)", "\(pois.count) luoghi dal pacchetto offline")
         sendEvent("poisDownloaded", data1: Self.poisToJsonString(pois))
@@ -514,33 +756,72 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // MARK: - Regioni monitorate (assicurazione di rilancio)
 
     private func refreshMonitoredRegions(around location: CLLocation?) {
-        let byId = Dictionary(uniqueKeysWithValues: currentPois.map { ($0.id, $0) })
-        let windowInput = currentPois.map { poi in
-            SlidingWindowLogic.WindowPoi(
+        // Punti d'arrivo dall'array già calcolato (vedi `puntiArrivo`): una
+        // sola passata per l'indice e per le distanze della finestra.
+        var byId: [String: (poi: Poi, punto: CLLocation)] = [:]
+        byId.reserveCapacity(currentPois.count)
+        var windowInput: [SlidingWindowLogic.WindowPoi] = []
+        windowInput.reserveCapacity(currentPois.count)
+        for (indice, poi) in currentPois.enumerated() {
+            let punto = puntoArrivo(indice, poi)
+            byId[poi.id] = (poi, punto)
+            windowInput.append(SlidingWindowLogic.WindowPoi(
                 id: poi.id, isGem: poi.isGem,
-                distanceM: location.map { $0.distance(from: poi.coordinate) } ?? 0
-            )
+                distanceM: location.map { $0.distance(from: punto) } ?? 0
+            ))
         }
         let targetIds = SlidingWindowLogic.selectWindow(windowInput, maxPois: SlidingWindowLogic.maxMonitoredRegions)
+        // guideMode fotografato sulla workQueue (stato confinato): il blocco
+        // sul main lavora su una costante.
+        let isDriving = guideMode == "driving"
+        // Raggio della regione = alert calibrato sul perimetro del POI
+        // (max con la modalità): il footprint di edifici grandi allarga
+        // anche l'assicurazione di rilancio. Cresce solo, mai riduce.
+        // Calcolato QUI: effectiveRadii legge alertRadiusWalk/Car, stato
+        // confinato nella workQueue.
+        var regioniDaMonitorare: [CLCircularRegion] = []
+        for id in targetIds {
+            guard let voce = byId[id] else { continue }
+            let (regionAlert, _) = effectiveRadii(for: voce.poi, isDriving: isDriving)
+            let region = CLCircularRegion(
+                center: voce.punto.coordinate,
+                radius: regionAlert,
+                identifier: voce.poi.id
+            )
+            region.notifyOnEntry = true
+            region.notifyOnExit = true
+            regioniDaMonitorare.append(region)
+        }
 
         DispatchQueue.main.async {
+            // DIFF, non "tutte giù e tutte su". Ogni start/stopMonitoring è
+            // una transazione col daemon di sistema, e la finestra scorrevole
+            // in cammino cambia due o tre region su venti: disiscriverle e
+            // riscriverle tutte a ogni refresh era venti volte il lavoro
+            // necessario, con in mezzo una manciata di secondi in cui i POI
+            // rimasti uguali non erano monitorati da nessuno.
+            var desiderate: [String: CLCircularRegion] = [:]
+            desiderate.reserveCapacity(regioniDaMonitorare.count)
+            for r in regioniDaMonitorare { desiderate[r.identifier] = r }
+            var giaAttive = Set<String>()
             for region in self.locationManager.monitoredRegions {
-                self.locationManager.stopMonitoring(for: region)
+                // La sentinella si riscrive comunque qui sotto (il centro
+                // segue il fix): fuori dal diff.
+                if region.identifier == SlidingWindowLogic.sentinelId { continue }
+                guard let voluta = desiderate[region.identifier] else {
+                    self.locationManager.stopMonitoring(for: region)
+                    continue
+                }
+                if let circolare = region as? CLCircularRegion,
+                   Self.stessaRegione(circolare, voluta) {
+                    giaAttive.insert(region.identifier) // invariata: non si tocca
+                } else {
+                    // Stesso POI, cerchio diverso (raggi di modalità cambiati):
+                    // va sostituita.
+                    self.locationManager.stopMonitoring(for: region)
+                }
             }
-            let isDriving = self.guideMode == "driving"
-            for id in targetIds {
-                guard let poi = byId[id] else { continue }
-                // Raggio della regione = alert calibrato sul perimetro del POI
-                // (max con la modalità): il footprint di edifici grandi allarga
-                // anche l'assicurazione di rilancio. Cresce solo, mai riduce.
-                let (regionAlert, _) = self.effectiveRadii(for: poi, isDriving: isDriving)
-                let region = CLCircularRegion(
-                    center: poi.coordinate.coordinate,
-                    radius: regionAlert,
-                    identifier: poi.id
-                )
-                region.notifyOnEntry = true
-                region.notifyOnExit = true
+            for region in regioniDaMonitorare where !giaAttive.contains(region.identifier) {
                 self.locationManager.startMonitoring(for: region)
             }
             if let loc = location {
@@ -552,8 +833,28 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 sentinel.notifyOnEntry = false
                 sentinel.notifyOnExit = true
                 self.locationManager.startMonitoring(for: sentinel)
+            } else {
+                // Senza posizione non c'è una sentinella da riscrivere: si
+                // toglie quella vecchia, com'era prima del diff (la vecchia
+                // versione le disiscriveva tutte all'inizio).
+                for region in self.locationManager.monitoredRegions
+                where region.identifier == SlidingWindowLogic.sentinelId {
+                    self.locationManager.stopMonitoring(for: region)
+                }
             }
         }
+    }
+
+    /// Due region sono la stessa cosa per il daemon? Centro (a ~1 cm),
+    /// raggio (a mezzo metro) e le due bandiere di notifica. Serve solo al
+    /// diff qui sopra: nel dubbio si risponde "diversa" e la region viene
+    /// riscritta, cioè il comportamento di prima.
+    private static func stessaRegione(_ a: CLCircularRegion, _ b: CLCircularRegion) -> Bool {
+        abs(a.radius - b.radius) < 0.5 &&
+        abs(a.center.latitude - b.center.latitude) < 1e-7 &&
+        abs(a.center.longitude - b.center.longitude) < 1e-7 &&
+        a.notifyOnEntry == b.notifyOnEntry &&
+        a.notifyOnExit == b.notifyOnExit
     }
 
     // MARK: - Trigger (port della macchina a stati del receiver)
@@ -569,27 +870,24 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// REALE invece della stringa fissa "circa 150m".
     private var lastFixLocation: CLLocation?
 
-    /// Raggi operativi per un POI: max(raggio di modalità, raggio da footprint
-    /// OSM) SOLO se il POI ha un ingresso reale (entrance). I default 50/150 di
-    /// un POI non processato sono indistinguibili da raggi calibrati, quindi il
-    /// footprint entra in gioco solo con entranceLat/Lon valorizzati. Oggi sono
-    /// valorizzati solo per i POI online: /api/area/bundle (pacchetti offline)
-    /// non li restituisce ancora, quindi OfflinePoi.toPoi() li passa nil finché
-    /// il server non li aggiunge (vedi commento in PoiModels.swift) — nessuna
-    /// modifica qui necessaria per quel giorno, questo gate basta già. Il max
-    /// non riduce MAI i default di modalità: una piazza ottiene un raggio
-    /// grande, una statua resta stretta. Mirror di radiiForTransport (guideSettings.ts).
+    /// Raggi operativi per un POI. I raggi calibrati sul perimetro (footprint
+    /// OSM) contano SOLO se il POI ha un ingresso reale (entrance): i default
+    /// 50/150 di un POI non processato sono indistinguibili da una misura.
+    /// Quando ci sono, VINCONO sul default di modalità (in auto solo
+    /// allargando); quando non ci sono, il raggio dipende dalla fiducia nel
+    /// punto. Mirror di radiiForTransport (guideSettings.ts).
+    /// (23/08/2026) Il calcolo vive ora in PoiRadii.effettivi (PoiModels.swift),
+    /// UNA sola funzione condivisa da registrazione delle region e valutazione
+    /// predittiva, che oltre ai raggi calibrati applica la SCALA DI FIDUCIA DEL
+    /// PUNTO (perimetro / ingresso / indirizzo / centroide). Qui restano solo i
+    /// raggi di modalità, che sono la preferenza dell'utente.
     private func effectiveRadii(for poi: Poi, isDriving: Bool) -> (alert: Double, arrival: Double) {
-        var alert = isDriving ? alertRadiusCar : alertRadiusWalk
-        var arrival = isDriving ? arrivalRadiusCar : arrivalRadiusWalk
-        let hasEntrance = poi.entranceLat != nil && poi.entranceLon != nil
-        let fpAlert = Double(poi.alertRadius ?? 0)
-        let fpArrival = Double(poi.arrivalRadius ?? 0)
-        if hasEntrance && (fpAlert > 0 || fpArrival > 0) {
-            if fpAlert > 0 { alert = max(alert, fpAlert) }
-            if fpArrival > 0 { arrival = max(arrival, fpArrival) }
-        }
-        return (alert, arrival)
+        PoiRadii.effettivi(
+            poi: poi,
+            isDriving: isDriving,
+            baseAlert: isDriving ? alertRadiusCar : alertRadiusWalk,
+            baseArrival: isDriving ? arrivalRadiusCar : arrivalRadiusWalk
+        )
     }
 
     // Helper senza force-unwrap per il ramo EXITED→pending della finestra
@@ -617,6 +915,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
         struct Candidate {
             let poi: Poi
+            /// Punto d'arrivo del POI, letto UNA volta per fix (vedi
+            /// `puntiArrivo`): prima ogni ramo qui sotto rileggeva
+            /// `poi.coordinate`, che è una proprietà calcolata.
+            let punto: CLLocation
             let dist: Double
         }
 
@@ -628,19 +930,66 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // (APPROACH/ARRIVED/PASSED) restano sempre in lista, anche oltre i 5
         // o oltre la finestra: devono poter chiudere la loro macchina a stati
         // (uscita dall'isteresi, superamento).
-        let sortedAll = currentPois
-            .filter { PoiCategories.isActive(poi: $0, selected: selectedCategories) }
+        //
+        // (23/08/2026) PRE-FILTRO A RIQUADRO prima di misurare. La passata
+        // costosa non era il predittore ma proprio questa: distanza dal
+        // perimetro su TUTTI i POI del radar e poi un ordinamento di mille
+        // candidati, per tenerne cinque. Ora si scartano prima, con due
+        // sottrazioni in gradi, i POI che non possono in alcun modo
+        // rientrare nella finestra; il perimetro e l'ordinamento lavorano
+        // sulle poche decine che restano. Il riquadro è DELIBERATAMENTE
+        // largo: si prende il limite superiore del raggio di avviso di quel
+        // POI (il calibrato dal DB, oppure il doppio del raggio di modalità —
+        // il massimo che PoiRadii possa restituire), lo si moltiplica per i
+        // 3× della finestra predittiva e si aggiunge un 10%. Chi passa il
+        // riquadro viene misurato esattamente come prima, quindi nessun
+        // trigger cambia momento.
+        //
+        // Due eccezioni, entrambe necessarie: i POI CON PERIMETRO non si
+        // filtrano (il muro di un parco può essere a 20 m mentre il centroide
+        // è a un chilometro) e quelli con la macchina a stati ACCESA nemmeno
+        // (devono poter chiudere il loro ciclo, ovunque siano).
+        let activeStates = store.allTriggerStates() // una lettura sola, non una per POI
+        let baseAlert = isDriving ? alertRadiusCar : alertRadiusWalk
+        let latFix = location.coordinate.latitude
+        let lonFix = location.coordinate.longitude
+        let metriPerGradoLat = 111_320.0
+        let metriPerGradoLon = max(1.0, 111_320.0 * cos(latFix * .pi / 180))
+
+        var esaminati: [Candidate] = []
+        esaminati.reserveCapacity(32)
+        for (indice, poi) in currentPois.enumerated() {
+            guard PoiCategories.isActive(poi: poi, selected: selectedCategories) else { continue }
+            let statoAcceso: Bool
+            if let st = activeStates[poi.id]?.state {
+                statoAcceso = (st == .approachFired || st == .arrivedFired || st == .passed)
+            } else {
+                statoAcceso = false
+            }
+            let haPerimetro = poi.footprint?.isEmpty == false
+            let punto = puntoArrivo(indice, poi)
+            if !haPerimetro && !statoAcceso {
+                let raggioMassimo = max(baseAlert * 2, Double(poi.alertRadius ?? 0))
+                let soglia = raggioMassimo * 3 * 1.1
+                if abs(punto.coordinate.latitude - latFix) * metriPerGradoLat > soglia { continue }
+                if abs(punto.coordinate.longitude - lonFix) * metriPerGradoLon > soglia { continue }
+            }
             // La distanza che ordina è la MINORE fra ingresso e bordo del
             // perimetro: a 30 m dal muro di tre chiese vince quella di cui si
             // sfiora il muro, non quella col portone più vicino (parità Android).
-            .map { poi -> Candidate in
-                let dIngresso = location.distance(from: poi.coordinate)
-                let dMuro = PoiFootprints.distanzaDalPerimetro(
+            // Senza perimetro la distanza dal muro è per definizione infinita:
+            // non serve chiamare la funzione per farselo dire (sono 4 POI su 5).
+            let dIngresso = location.distance(from: punto)
+            let dMuro = haPerimetro
+                ? PoiFootprints.distanzaDalPerimetro(
                     poiId: poi.id, footprint: poi.footprint,
-                    lat: location.coordinate.latitude, lon: location.coordinate.longitude,
+                    lat: latFix, lon: lonFix,
                     entro: PoiFootprints.triggerCarM)
-                return Candidate(poi: poi, dist: min(dIngresso, dMuro))
-            }
+                : Double.infinity
+            esaminati.append(Candidate(poi: poi, punto: punto, dist: min(dIngresso, dMuro)))
+        }
+
+        let sortedAll = esaminati
             .sorted {
                 if $0.poi.isFromItinerary != $1.poi.isFromItinerary { return $0.poi.isFromItinerary }
                 if $0.poi.isGem != $1.poi.isGem { return $0.poi.isGem }
@@ -654,7 +1003,6 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
         var candidates = Array(nearby.prefix(5))
         let keptIds = Set(candidates.map { $0.poi.id })
-        let activeStates = store.allTriggerStates() // una lettura sola, non una per POI
         for c in sortedAll where !keptIds.contains(c.poi.id) {
             if let st = activeStates[c.poi.id]?.state,
                st == .approachFired || st == .arrivedFired || st == .passed {
@@ -706,8 +1054,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // c'è ingresso, coordinate == lat/lon → comportamento identico.
                 let passPred = PredictiveTrigger.evaluate(
                     location: location,
-                    poiLat: c.poi.coordinate.coordinate.latitude,
-                    poiLon: c.poi.coordinate.coordinate.longitude,
+                    poiLat: c.punto.coordinate.latitude,
+                    poiLon: c.punto.coordinate.longitude,
                     radiusM: alertRad, isDriving: isDriving
                 )
                 if PredictiveTrigger.hasPassed(
@@ -800,7 +1148,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     (state == .passed && age < arrivalRetriggerTtlMs && c.dist > arrivalRad) ||
                     (state == .exited && age < arrivalAfterExitCooldownMs)
                 if !blockedArrival {
-                    handleArrival(poi: c.poi)
+                    // 🧭 GATE DI BUSSOLA (solo sull'ARRIVO). Se il POI è ormai
+                    // alle spalle, il racconto non si butta via: si RIMANDA —
+                    // niente stato, niente cooldown, niente evento, si riprova
+                    // al fix successivo (e dopo 90 s parla comunque, vedi
+                    // BearingGate). L'AVVISO più sotto NON è gated: prepara
+                    // teaser e MP3, e deve continuare a scattare.
+                    // Le tappe dell'itinerario sono ESCLUSE: le ha scelte
+                    // l'utente, e vanno raccontate anche arrivandoci di spalle.
+                    let esitoGate: BearingGate.EsitoGate = c.poi.isFromItinerary
+                        ? .ignoraGate
+                        : BearingGate.shared.valuta(
+                            poi: c.poi, location: location,
+                            dentroPerimetro: dentroPerimetro, distanzaM: c.dist
+                        )
+                    if esitoGate != .rimanda {
+                        handleArrival(poi: c.poi)
+                    }
                 }
             // Finestra allargata a 3× il raggio: il predittore deve poter
             // annunciare PRIMA dell'ingresso nel cerchio — è lì che si
@@ -814,8 +1178,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                 // Ingresso invece del centroide (allineato ad Android).
                 let pred = PredictiveTrigger.evaluate(
                     location: location,
-                    poiLat: c.poi.coordinate.coordinate.latitude,
-                    poiLon: c.poi.coordinate.coordinate.longitude,
+                    poiLat: c.punto.coordinate.latitude,
+                    poiLon: c.punto.coordinate.longitude,
                     radiusM: alertRad,
                     isDriving: isDriving
                 )
@@ -981,6 +1345,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     private func handleArrival(poi initialPoi: Poi) {
         var poi = initialPoi
+        // Il POI ha parlato: il gate dimentica i suoi rinvii (specifica, punto 7).
+        BearingGate.shared.azzera(poiId: poi.id)
         store.setTriggerState(poi.id, .arrivedFired)
         sendPoiEvent("poiArrived", poi: poi)
 
@@ -1273,46 +1639,15 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - Distanze in tempo reale (port di updateDistanceNotification)
-
-    private func updateDistanceNotification(_ location: CLLocation) {
-        guard !currentPois.isEmpty else { return }
-        var closestPoi: Poi?
-        var closestDist = Double.greatestFiniteMagnitude
-        var approaching: [[String: Any]] = []
-
-        let states = store.allTriggerStates()
-        let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
-
-        for poi in currentPois {
-            let dist = location.distance(from: poi.coordinate)
-            if dist < closestDist { closestDist = dist; closestPoi = poi }
-            if states[poi.id]?.state == .approachFired && dist <= alertRad * 2 {
-                approaching.append([
-                    "poiId": poi.id, "name": poi.nome,
-                    "distance": Int(dist.rounded()),
-                    "lat": poi.lat, "lon": poi.lon
-                ])
-            }
-        }
-
-        if !approaching.isEmpty {
-            sendEvent("wip-poi-distance-update", json: ["entries": approaching])
-        }
-
-        if let poi = closestPoi {
-            let distRounded = Int((closestDist / 10).rounded() * 10)
-            let statusText = closestDist < 150
-                ? "Prossimo: \(poi.nome) (\(distRounded)m)"
-                : "\(currentPois.count) luoghi monitorati"
-            updateStatus("Audioguida attiva", statusText)
-        }
-    }
-
     // MARK: - Teaser radar e notifiche
 
     private func showRadarTeaserNotifications(pois: [Poi], location: CLLocation) {
-        var notified = Set(prefs.stringArray(forKey: "radarTeaserNotified") ?? [])
+        // (23/08/2026) Lista ORDINATA, non più un Set: serve l'ordine per lo
+        // sfratto. Senza tetto questa chiave di UserDefaults cresceva per
+        // tutta la durata del viaggio (si azzera solo allo stop del servizio),
+        // e viene letta e riscritta a ogni refresh del radar.
+        var ordineNotificati = prefs.stringArray(forKey: "radarTeaserNotified") ?? []
+        var notified = Set(ordineNotificati)
         let alertRad = guideMode == "driving" ? alertRadiusCar : alertRadiusWalk
         // Orizzonte utile: il fetch arriva a 5-10 km, ma a piedi un teaser per
         // un POI a 4 km è rumore. 1,2 km ≈ un quarto d'ora di cammino.
@@ -1327,11 +1662,17 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             .prefix(2)
 
         for (poi, dist) in candidates {
-            notified.insert(poi.id)
+            if notified.insert(poi.id).inserted { ordineNotificati.append(poi.id) }
             showTeaserNotification(poi: poi, distanceM: Int(dist))
         }
         if !candidates.isEmpty {
-            prefs.set(Array(notified), forKey: "radarTeaserNotified")
+            // Tetto FIFO: oltre i 500 escono i più vecchi. Un POI notificato
+            // 500 luoghi fa può tornare annunciabile, ed è la risposta giusta:
+            // a quel punto è un altro viaggio.
+            if ordineNotificati.count > 500 {
+                ordineNotificati.removeFirst(ordineNotificati.count - 500)
+            }
+            prefs.set(ordineNotificati, forKey: "radarTeaserNotified")
         }
     }
 
@@ -1399,17 +1740,21 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// all'arrivo, NIENTE al superamento. Il silenzio è informazione: un
     /// suono di "hai superato" sarebbe solo rumore.
     private func vibrate(arrival: Bool = false) {
-        if #available(iOS 13.0, *) {
-            let generator = UIImpactFeedbackGenerator(style: arrival ? .medium : .light)
-            generator.prepare()
-            generator.impactOccurred()
-            if arrival {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
-                    generator.impactOccurred()
+        // I feedback generator sono UIKit: vanno costruiti e usati sul main.
+        // I chiamanti (handleApproach, speakAndNotify) girano sulla workQueue.
+        DispatchQueue.main.async {
+            if #available(iOS 13.0, *) {
+                let generator = UIImpactFeedbackGenerator(style: arrival ? .medium : .light)
+                generator.prepare()
+                generator.impactOccurred()
+                if arrival {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                        generator.impactOccurred()
+                    }
                 }
+            } else {
+                AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
             }
-        } else {
-            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
         }
     }
 
@@ -1680,10 +2025,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         return "[]"
     }
 
+    /// Lettura NON bloccante dello stato di primo piano (vedi
+    /// installaOsservatoriCicloDiVita). La versione precedente faceva
+    /// `DispatchQueue.main.sync` quando chiamata fuori dal main — cioè sempre,
+    /// perché tutti i chiamanti stanno sulla workQueue: inversione di priorità
+    /// a ogni trigger e stallo se il main aspettava a sua volta la workQueue.
     static func isAppInForeground() -> Bool {
-        if Thread.isMainThread {
-            return UIApplication.shared.applicationState == .active
-        }
-        return DispatchQueue.main.sync { UIApplication.shared.applicationState == .active }
+        foregroundLock.lock()
+        defer { foregroundLock.unlock() }
+        return appInForegroundFlag
     }
 }

@@ -18,6 +18,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     /// submit lancia in silenzio senza effetto).
     static let offlineRefreshTaskId = "com.itaintasca.app.offline-refresh"
 
+    /// UN SOLO gestore pacchetti per tutta la vita del processo.
+    /// (23/08/2026) Prima ogni risveglio del BGTask ne costruiva uno nuovo, e
+    /// ognuno porta con sé una `URLSession` mai invalidata: una URLSession
+    /// trattiene sé stessa finché non la si invalida, quindi ogni refresh
+    /// lasciava dietro una sessione viva con le sue connessioni e i suoi
+    /// thread. Riusarne una sola è più semplice che invalidarla ogni volta —
+    /// e non c'è stato da azzerare fra un refresh e l'altro.
+    private static let packageManager = WipPackageDownloadManager()
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         UNUserNotificationCenter.current().delegate = self
 
@@ -166,7 +175,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // il refresh si fermerebbe silenziosamente al primo problema.
         scheduleOfflineRefresh()
 
-        let manager = WipPackageDownloadManager()
+        let manager = Self.packageManager
         var finished = false
         // expirationHandler e la completion di syncAllPackages possono
         // arrivare da thread diversi: entrambe toccano `finished` e
