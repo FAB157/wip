@@ -31,7 +31,7 @@ import {
 import L from "leaflet";
 import { createCachedTileLayer } from "../lib/offlineTiles";
 import MarkerClusterGroup from "react-leaflet-cluster";
-import { Search, Crosshair, Loader2, Info, Layers, X, MapPin, Headphones, WifiOff } from "lucide-react";
+import { Search, Crosshair, Loader2, Info, Layers, X, MapPin, Headphones, WifiOff, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 
 import { setCachedPoiDetails, getCachedPoiDetails, getCachedCityName } from "../lib/poiCache";
@@ -635,6 +635,12 @@ import PoiRadarPanel from "./PoiRadarPanel";
 /** L'atlante dei beni vincolati carica solo da questo zoom (quartiere). */
 const BENI_CULTURALI_MIN_ZOOM = 13;
 
+// CARTO ha smesso di servire le tile anonime senza chiave (26/08/2026,
+// watermark "API KEY REQUIRED" su tutta la mappa): la chiave gratuita
+// (5M richieste/mese, uso commerciale ammesso) va in coda all'URL come
+// parametro `key`, non come token nel path.
+const CARTO_TILE_URL = `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${import.meta.env.VITE_CARTO_API_KEY || ''}`;
+
 function MapArea({
   selectedCategories,
   onSelectPoi,
@@ -802,6 +808,131 @@ function MapArea({
 
   const [nearbyPois, setNearbyPois] = useState<Poi[]>([]);
   const [showNearbyList, setShowNearbyList] = useState(false);
+
+  // ── "Tutto nel raggio" (27/08/2026): a differenza di Trova Vicino (solo
+  // le categorie con chip accesa, 1 km fisso), questa interroga la RPC
+  // nearby_everything — TUTTE le fonti (shared_pois, utility_pois/neve,
+  // beni_culturali, percorsi), raggio scelto dall'utente, raggruppate per
+  // categoria con un tetto per gruppo deciso nel database. Vedi migration
+  // 20260827120000_nearby_everything.sql per il perché di quattro strategie
+  // di filtro diverse (non tutte le fonti hanno un indice spaziale).
+  interface EverythingItem {
+    id: string; name: string; lat: number; lon: number;
+    category: string; sub_category: string | null; image_url: string | null;
+    distanza_m: number; fonte: string; group_key: string; group_count: number;
+  }
+  const [showEverythingPanel, setShowEverythingPanel] = useState(false);
+  const [everythingRadius, setEverythingRadius] = useState(15000);
+  const [everythingLoading, setEverythingLoading] = useState(false);
+  const [everythingGroups, setEverythingGroups] = useState<{ key: string; count: number; items: EverythingItem[] }[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  const fetchEverythingNearby = useCallback(async (radiusM: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    let centerPoint: { lat: number; lng: number };
+    try {
+      // Il centro della mappa, non la posizione utente: "cosa c'è QUI",
+      // coerente con Trova Vicino che usa lo stesso criterio.
+      centerPoint = map.getCenter();
+    } catch {
+      return;
+    }
+    setEverythingLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('nearby_everything', {
+        p_lat: centerPoint.lat,
+        p_lon: centerPoint.lng,
+        p_radius_m: radiusM,
+        p_per_group_limit: 50,
+      });
+      if (error) {
+        console.warn('[nearby_everything]', error.message);
+        setEverythingGroups([]);
+        return;
+      }
+      const rows = (data || []) as EverythingItem[];
+      const byKey = new Map<string, EverythingItem[]>();
+      for (const row of rows) {
+        if (!byKey.has(row.group_key)) byKey.set(row.group_key, []);
+        byKey.get(row.group_key)!.push(row);
+      }
+      const groups = Array.from(byKey.entries())
+        .map(([key, items]) => ({ key, count: items[0]?.group_count || items.length, items }))
+        .sort((a, b) => b.count - a.count);
+      setEverythingGroups(groups);
+    } catch (e) {
+      console.warn('[nearby_everything] fetch error', e);
+      setEverythingGroups([]);
+    } finally {
+      setEverythingLoading(false);
+    }
+  }, []);
+
+  const handleOpenEverythingPanel = useCallback(() => {
+    setShowEverythingPanel(true);
+    setExpandedGroups(new Set());
+    void fetchEverythingNearby(everythingRadius);
+  }, [everythingRadius, fetchEverythingNearby]);
+
+  const handleChangeEverythingRadius = useCallback((radiusM: number) => {
+    setEverythingRadius(radiusM);
+    setExpandedGroups(new Set());
+    void fetchEverythingNearby(radiusM);
+  }, [fetchEverythingNearby]);
+
+  const toggleEverythingGroup = useCallback((key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  /** Etichetta + emoji per un group_key: le categorie note vengono dal
+   * dizionario condiviso (CATEGORY_EMOJIS/mapConstants), le fonti senza
+   * voce lì (neve, fontanelle, i quattro tipi di percorso) hanno un
+   * fallback locale; tutto il resto prettifica la chiave grezza. */
+  const EVERYTHING_GROUP_FALLBACK: Record<string, { emoji: string; label: string }> = {
+    neve: { emoji: '❄️', label: getTranslation('everything_group_neve', language) },
+    fontanelle: { emoji: '🚰', label: getTranslation('everything_group_fontanelle', language) },
+    beni_culturali: { emoji: '🏺', label: getTranslation('beni_culturali', language) },
+    percorsi_cai: { emoji: '🥾', label: getTranslation('everything_group_percorsi_cai', language) },
+    percorsi_osm: { emoji: '🥾', label: getTranslation('everything_group_percorsi_osm', language) },
+    percorsi_pdipr: { emoji: '🥾', label: getTranslation('everything_group_percorsi_pdipr', language) },
+    percorsi_gusto: { emoji: '🍷', label: getTranslation('everything_group_percorsi_gusto', language) },
+  };
+  const everythingGroupInfo = (key: string): { emoji: string; label: string } => {
+    if (EVERYTHING_GROUP_FALLBACK[key]) return EVERYTHING_GROUP_FALLBACK[key];
+    const emoji = (CATEGORY_EMOJIS as any)[key] || '📍';
+    const label = key.replace(/^percorsi_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    return { emoji, label };
+  };
+
+  /** Apre un elemento della lista "Tutto nel raggio": stesso effetto di
+   * focusPoiOnMap, ma l'oggetto arriva dalla RPC (forma diversa da Poi),
+   * quindi qui si costruisce l'oggetto minimo che il popup/scheda si
+   * aspetta invece di forzare un cast. */
+  const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null }) => {
+    setShowEverythingPanel(false);
+    const poi = {
+      id: item.id,
+      name: item.name,
+      lat: item.lat,
+      lon: item.lon,
+      category: item.category,
+      subCategory: item.sub_category || undefined,
+    } as unknown as Poi;
+    if (mapRef.current) {
+      centerMapOnPoi(poi, 18);
+    } else {
+      setCenter([item.lat, item.lon]);
+      setMapZoom(18);
+    }
+    if (onCenterChange) onCenterChange([item.lat, item.lon]);
+    setActivePopupId(poi.id);
+    setActivePoi(poi);
+  };
   const [isLoadingPois, setIsLoadingPois] = useState(false);
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [fetchErrors, setFetchErrors] = useState<Record<string, string>>({});
@@ -2702,7 +2833,9 @@ function MapArea({
    * anche quando li si apre da questa chip, e se sono già in mappa come POI
    * non vengono raddoppiati — il merge a valle li scarta per id.
    *
-   * Zoom minimo alto: a scala regionale sarebbero decine di migliaia di pin.
+   * Visibile a qualsiasi zoom come le altre categorie (26/08/2026): a scala
+   * larga un campione con tetto e griglia (fetchBeniCulturaliInBounds), non
+   * tutti gli 1,78 M — lo stesso principio di monumenti/musei/gemme sopra.
    */
   const fetchBeniCulturaliInBounds = async (
     south: number, west: number, north: number, east: number,
@@ -2878,18 +3011,31 @@ function MapArea({
 
     const zoom = mapRef.current?.getZoom() || 13;
     if (zoom < 8) {
+      // (27/08/2026) TUTTE LE CHIP INSIEME, NON UNA DOPO L'ALTRA.
+      // Qui sotto c'erano SETTE interrogazioni in fila, ognuna che aspettava
+      // la precedente: community, tematici, gemme, localita', natura, le
+      // quattro macro-categorie e i beni vincolati. Con piu' chip accese si
+      // sommavano sette andate e ritorno, e le ultime della fila — famiglie e
+      // beni — comparivano molto dopo le prime. Ora partono tutte insieme e
+      // ognuna si disegna appena arriva: si paga solo la piu' lenta invece
+      // della somma.
+      const compiti: Array<Promise<void>> = [];
+      /** Aggiunge i POI arrivati, senza toccare quelli gia' disegnati. */
+      const unisci = (arrivati: Poi[], sovrascrivi = false) => {
+        if (!arrivati.length || fetchSeq !== fetchSeqRef.current) return;
+        setPois(prev => {
+          const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
+          arrivati.forEach(p => { if (sovrascrivi || !m.has(String(p.id))) m.set(String(p.id), p); });
+          return Array.from(m.values());
+        });
+      };
+
       // A zoom lontani si evita il carico pesante, MA i pin community
       // restano visibili (richiesta esplicita: si vedono anche da lontano).
       if (activeCategories.includes('community') && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        const farCommunity = await fetchCommunityPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
-        if (farCommunity.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            farCommunity.forEach(p => m.set(String(p.id), p));
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchCommunityPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast())
+          .then(r => unisci(r, true)));   // community sovrascrive, come prima
       }
       // Stessa eccezione per i verticali tematici: sono cataloghi curati e
       // radi (una città termale, un set, un parco del cielo stellato ogni
@@ -2970,7 +3116,14 @@ function MapArea({
       const macroFarAttivi = macroFarMap.filter(m => activeCategories.includes(m.macro));
       if (macroFarAttivi.length > 0 && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        for (const { macro, tipi, limite } of macroFarAttivi) {
+        // (27/08/2026) IN PARALLELO, non in fila. Prima erano quattro `await`
+        // uno dopo l'altro, e `famiglie` era l'ULTIMA: aspettava che
+        // `monumenti` — sessanta tipi diversi con tetto 600, la piu' pesante
+        // delle quattro — avesse finito. Da qui la lentezza segnalata dal
+        // committente: le famiglie non erano lente, erano in coda.
+        // Ogni risposta si scrive appena arriva, quindi la piu' veloce compare
+        // per prima invece che per ultima.
+        await Promise.all(macroFarAttivi.map(async ({ macro, tipi, limite }) => {
           const extra = await fetchTassonomiaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), tipi, macro, limite);
           if (extra.length > 0 && fetchSeq === fetchSeqRef.current) {
             setPois(prev => {
@@ -2979,16 +3132,21 @@ function MapArea({
               return Array.from(m.values());
             });
           }
-        }
+        }));
       }
-      // Beni vincolati di fascia A anche a scala di paese: sono pochi e
-      // sono i grandi monumenti, quelli che a quella scala si cercano.
+      // Beni vincolati anche a scala di paese/continente (26/08/2026,
+      // richiesta esplicita: "come tutte le altre categorie, a qualsiasi
+      // zoom"). Prima sotto zoom 8 caricava SOLO fascia A: la chip trattava
+      // l'atlante in modo diverso dalle altre nove categorie che già
+      // mostrano un campione a ogni scala (vedi macroFarMap sopra). Ora
+      // nessun filtro di fascia: un campione rappresentativo come tutte le
+      // altre, non solo i "grandi monumenti".
       if (activeCategories.includes('beni_culturali') && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
         // Griglia 3×3 (23/08/2026): con un paese intero a schermo una sola
         // query da 300 tornava solo i beni della zona piu' fitta — l'Olanda
         // mostrava i suoi, la Francia accanto restava vuota.
-        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), ['A'], 300, 3);
+        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), null, 600, 3);
         if (beniA.length > 0 && fetchSeq === fetchSeqRef.current) {
           setPois(prev => {
             const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
@@ -3032,8 +3190,10 @@ function MapArea({
         // gia' accesa, i suoi bounds contengono la vista di adesso e la cache
         // diceva "gia' caricato": i beni non comparivano MAI finche' non si
         // usciva dall'area. La cache deve ricordare se i beni li ha presi.
-        // Livello di dettaglio dei beni: 0 nessuno, 1 fascia A, 2 A+B, 3 tutte.
-        // Se adesso serve piu' dettaglio di quello in cache, si rifa' la fetch.
+        // Livello di dettaglio dei beni: 0 nessuno, 1/2/3 = quanti punti si
+        // caricano per zona (26/08/2026: non più filtro di fascia, solo
+        // tetto — vedi fetchBeniCulturaliInBounds). Se ora serve un tetto
+        // più alto di quello in cache, si rifa' la fetch.
         const beniLivelloOra = !activeCategories.includes('beni_culturali') ? 0 : zoom >= BENI_CULTURALI_MIN_ZOOM ? 3 : zoom >= 10 ? 2 : 1;
         const beniMancanoInCache = beniLivelloOra > (lastFetchedStateRef.current.beniLivello || 0);
 
@@ -3308,14 +3468,20 @@ function MapArea({
           { macro: 'utilita', tipi: UTILITA_TYPES, limite: 400 },
           { macro: 'famiglie', tipi: FAMIGLIE_TYPES, limite: 300 },
         ];
-        for (const { macro, tipi, limite } of macroLargaMap) {
-          if (!activeCategories.includes(macro)) continue;
-          const extra = await fetchTassonomiaPoisInBounds(south, west, north, east, tipi, macro, limite);
-          if (extra.length > 0) {
-            const visti = new Set(extra.map(p => String(p.id)));
-            dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(extra);
-            console.log(`[MapArea] +${extra.length} ${macro} (fetch bbox dedicato, vista > 25 km)`);
-          }
+        // (27/08/2026) IN PARALLELO, non in fila: erano quattro interrogazioni
+        // una dopo l'altra e `famiglie` era l'ultima, dietro `monumenti` che
+        // e' la piu' pesante (sessanta tipi, tetto 600). Con quattro chip
+        // accese si sommavano quattro tempi di andata e ritorno invece di
+        // pagare solo il piu' lento.
+        const attivi = macroLargaMap.filter(m => activeCategories.includes(m.macro));
+        const risposte = await Promise.all(attivi.map(({ macro, tipi, limite }) =>
+          fetchTassonomiaPoisInBounds(south, west, north, east, tipi, macro, limite)
+            .then(extra => ({ macro, extra }))));
+        for (const { macro, extra } of risposte) {
+          if (!extra.length) continue;
+          const visti = new Set(extra.map(p => String(p.id)));
+          dbPois = dbPois.filter(p => !visti.has(String(p.id))).concat(extra);
+          console.log(`[MapArea] +${extra.length} ${macro} (fetch bbox dedicato, vista > 25 km)`);
         }
       }
 
@@ -3345,16 +3511,17 @@ function MapArea({
       }
 
       // Atlante dei beni vincolati: tabella a parte, quindi fetch a parte.
-      // A ogni scala la sua fascia (22/08/2026): prima partiva solo da zoom 13
-      // e con la Toscana intera la chip non mostrava niente. Ora: regione
-      // (zoom < 10) solo fascia A; citta' (10-12) A e B; quartiere (13+) tutto.
+      // Nessun filtro di fascia a nessuno zoom (26/08/2026): prima sotto
+      // zoom 13 mostrava solo A, poi A+B — trattando l'atlante diversamente
+      // dalle altre categorie, che a scala larga mostrano un campione senza
+      // discriminare per "importanza". Qui resta solo il tetto di punti, che
+      // cresce con lo zoom (più vicino, più densità reale nella vista).
       if (activeCategories.includes('beni_culturali')) {
-        const fasce = zoom >= BENI_CULTURALI_MIN_ZOOM ? null : zoom >= 10 ? ['A', 'B'] : ['A'];
         // Sotto zoom 10 la vista e' una regione o un paese: griglia 3×3, cosi'
         // il tetto si divide fra le celle e ogni zona porta i suoi beni.
         const beniExtra = await fetchBeniCulturaliInBounds(
-          south, west, north, east, fasce,
-          zoom >= BENI_CULTURALI_MIN_ZOOM ? 400 : 300,
+          south, west, north, east, null,
+          zoom >= BENI_CULTURALI_MIN_ZOOM ? 400 : 600,
           zoom < 10 ? 3 : 1,
         );
         if (beniExtra.length > 0) {
@@ -4973,7 +5140,7 @@ function MapArea({
         >
           <CachedTiles
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+            url={CARTO_TILE_URL}
           />
           <MapController center={center} zoom={mapZoom} />
           <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={stopFollowMode} />
@@ -5132,15 +5299,6 @@ function MapArea({
 
       {/* ── Allarme ZTL: banner rosso ben visibile + disclaimer copertura ── */}
       <div className="absolute top-[calc(2.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-[1200] w-[calc(100%-4rem)] max-w-[420px] flex flex-col items-center gap-2 pointer-events-none">
-        {/* Beni culturali accesi ma troppo lontani: l'atlante carica da zoom 13.
-            Senza questa riga la chip sembrava rotta (segnalato 22/08/2026). */}
-        {selectedCategories.includes('beni_culturali') && zoomCorrente < BENI_CULTURALI_MIN_ZOOM && (
-          <div className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-xl rounded-full shadow px-3 py-1.5 text-[11px] font-bold text-[#1e3a8a] dark:text-white">
-            🏛️ {zoomCorrente >= 10
-              ? getTranslation('mp_beni_fascia_ab', language)
-              : getTranslation('mp_beni_fascia_a', language)}
-          </div>
-        )}
         <AnimatePresence>
           {ztlBanner && (
             <motion.div
@@ -5706,6 +5864,120 @@ function MapArea({
             </motion.div>
           </Fragment>
         )}
+
+        {showEverythingPanel && (
+          <Fragment key="everything-wrapper">
+            <motion.div
+              key="everything-overlay"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowEverythingPanel(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[1001]"
+            />
+            <motion.div
+              key="everything-panel"
+              initial={{ y: "100%", opacity: 0.5, scale: 0.98 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: "100%", opacity: 0, scale: 0.98 }}
+              transition={{ type: "spring", stiffness: 300, damping: 30 }}
+              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[70dvh] md:max-h-[65dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[1002] flex flex-col overflow-hidden"
+            >
+              <div className="px-6 py-5 border-b border-black/5 dark:border-white/5 sticky top-0 z-10">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-black text-[#1e3a8a] tracking-tight leading-none">
+                    {getTranslation("everything_nearby_title", language)}
+                  </h2>
+                  <button
+                    onClick={() => setShowEverythingPanel(false)}
+                    className="p-2 bg-secondary/5 hover:bg-secondary/10 text-secondary rounded-full transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                {/* Selettore raggio: rifà la fetch a ogni cambio, così la
+                    lista/i conteggi restano coerenti col raggio mostrato. */}
+                <div className="flex items-center gap-2 mt-3">
+                  {/* Tetto a 25 km (27/08/2026): misurato dal vivo, 50 km su
+                      un'area densa va sempre in timeout anche coi 20s
+                      concessi alla RPC — 25 km è già a 10s, il limite
+                      pratico per un tap-e-aspetta. Vedi nota nella
+                      migration nearby_everything. */}
+                  {[10000, 15000, 25000].map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => handleChangeEverythingRadius(r)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wide border transition-colors ${everythingRadius === r ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]' : 'bg-white/50 dark:bg-white/5 text-[#1e3a8a] dark:text-white border-black/5 dark:border-white/10 hover:border-[#1e3a8a]/30'}`}
+                    >
+                      {r / 1000} km
+                    </button>
+                  ))}
+                  {everythingLoading && (
+                    <Loader2 className="w-4 h-4 animate-spin text-[#1e3a8a]/60 ml-1" />
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pt-3 px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] space-y-2 custom-scrollbar min-h-[300px] overscroll-none select-none touch-pan-y">
+                {!everythingLoading && everythingGroups.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-center opacity-60">
+                    <MapPin className="w-12 h-12 mb-4 text-[#1e3a8a]/50" />
+                    <p className="font-bold text-sm px-10 text-[#1e3a8a]">
+                      {getTranslation('everything_nearby_empty', language)}
+                    </p>
+                  </div>
+                ) : (
+                  everythingGroups.map((group) => {
+                    const info = everythingGroupInfo(group.key);
+                    const expanded = expandedGroups.has(group.key);
+                    return (
+                      <div key={group.key} className="rounded-2xl bg-white/50 dark:bg-white/5 border border-black/5 dark:border-white/5 overflow-hidden">
+                        <button
+                          onClick={() => toggleEverythingGroup(group.key)}
+                          className="w-full flex items-center gap-3 p-3 hover:bg-white/60 dark:hover:bg-white/10 transition-colors"
+                        >
+                          <div className={`w-10 h-10 rounded-xl ${(CATEGORY_COLORS as any)[group.key] || "bg-[#fdfbf7]"} flex items-center justify-center text-lg shadow-sm shrink-0`}>
+                            {info.emoji}
+                          </div>
+                          <span className="flex-1 text-left font-black text-[#1e3a8a] dark:text-white text-sm">
+                            {info.label}
+                          </span>
+                          <span className="text-[10px] font-black text-white bg-[#1e3a8a] rounded-full px-2 py-1 shrink-0">
+                            {group.count}
+                          </span>
+                          <ChevronDown className={`w-4 h-4 text-[#1e3a8a]/60 shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                        </button>
+                        {expanded && (
+                          <div className="px-2 pb-2 space-y-1.5">
+                            {group.items.map((item) => (
+                              <button
+                                key={item.id}
+                                onClick={() => openEverythingItem(item)}
+                                className="w-full flex items-center gap-3 p-2.5 bg-white/60 dark:bg-white/5 hover:bg-white/90 dark:hover:bg-white/15 rounded-xl transition-all text-left"
+                              >
+                                <span className="flex-1 font-bold text-[#1e3a8a] dark:text-white text-xs line-clamp-1">
+                                  {item.name}
+                                </span>
+                                <span className="text-[10px] font-black text-secondary bg-secondary/5 px-2 py-1 rounded-md shrink-0">
+                                  {item.distanza_m >= 1000 ? `${(item.distanza_m / 1000).toFixed(1)} km` : `${Math.round(item.distanza_m)} m`}
+                                </span>
+                              </button>
+                            ))}
+                            {group.count > group.items.length && (
+                              <p className="text-[10px] text-center text-[#1e3a8a]/50 font-bold pt-1">
+                                +{group.count - group.items.length}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </motion.div>
+          </Fragment>
+        )}
       </AnimatePresence>
 
       <div
@@ -5743,6 +6015,21 @@ function MapArea({
                 }).length
               }
             </span>
+          </motion.button>
+        )}
+
+        {!showNearbyList && !showEverythingPanel && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={handleOpenEverythingPanel}
+            title={getTranslation('everything_nearby_title', language)}
+            className="px-3 py-2.5 bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-[1.5rem] font-black text-[11px] shadow-sm hover:bg-white/90 dark:hover:bg-white/20 transition-all flex items-center justify-center gap-1.5 shrink-0 border border-[#1e3a8a]/10"
+          >
+            <span className="text-sm leading-none">🧭</span>
+            <span className="uppercase tracking-[0.1em] hidden sm:inline">{getTranslation('everything_nearby_button', language)}</span>
           </motion.button>
         )}
 

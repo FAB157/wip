@@ -2876,6 +2876,37 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Все",
     ZH: "全部"
   , DE: "Alle"},
+  // ── "Tutto nel raggio" (27/08/2026): pannello nearby_everything ──────────
+  everything_nearby_title: {
+    IT: "Tutto nel raggio", EN: "Everything nearby", FR: "Tout dans le rayon",
+    ES: "Todo en el radio", DE: "Alles im Umkreis", RU: "Всё поблизости", ZH: "周边全部",
+  },
+  everything_nearby_button: {
+    IT: "TUTTO", EN: "ALL", FR: "TOUT", ES: "TODO", DE: "ALLES", RU: "ВСЁ", ZH: "全部",
+  },
+  everything_nearby_empty: {
+    IT: "Niente entro questo raggio", EN: "Nothing within this radius", FR: "Rien dans ce rayon",
+    ES: "Nada en este radio", DE: "Nichts in diesem Umkreis", RU: "Ничего в этом радиусе", ZH: "此范围内没有内容",
+  },
+  everything_group_neve: {
+    IT: "Neve", EN: "Snow", FR: "Neige", ES: "Nieve", DE: "Schnee", RU: "Снег", ZH: "雪",
+  },
+  everything_group_fontanelle: {
+    IT: "Fontanelle", EN: "Water fountains", FR: "Fontaines", ES: "Fuentes", DE: "Trinkbrunnen", RU: "Питьевые фонтаны", ZH: "饮水点",
+  },
+  everything_group_percorsi_cai: {
+    IT: "Sentieri CAI", EN: "CAI trails", FR: "Sentiers CAI", ES: "Senderos CAI", DE: "CAI-Wanderwege", RU: "Тропы CAI", ZH: "CAI步道",
+  },
+  everything_group_percorsi_osm: {
+    IT: "Sentieri", EN: "Trails", FR: "Sentiers", ES: "Senderos", DE: "Wanderwege", RU: "Тропы", ZH: "步道",
+  },
+  everything_group_percorsi_pdipr: {
+    IT: "Cammini", EN: "Walking routes", FR: "Chemins", ES: "Caminos", DE: "Pilgerwege", RU: "Маршруты", ZH: "朝圣路线",
+  },
+  everything_group_percorsi_gusto: {
+    IT: "Strade del Gusto", EN: "Food & Wine routes", FR: "Routes gourmandes", ES: "Rutas gastronómicas",
+    DE: "Genussstraßen", RU: "Гастрономические маршруты", ZH: "美食美酒之路",
+  },
   total_estimated_trip: {
     IT: "Totale Stimato Viaggio",
     EN: "Total Estimated Trip",
