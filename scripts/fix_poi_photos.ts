@@ -17,6 +17,7 @@
  *   npx tsx scripts/fix_poi_photos.ts                 # simulazione, 200 POI
  *   npx tsx scripts/fix_poi_photos.ts --apply         # scrive sul database
  *   npx tsx scripts/fix_poi_photos.ts --near=44.079,10.098,15 --apply
+ *   npx tsx scripts/fix_poi_photos.ts --category=natura,parchi --apply
  *   npx tsx scripts/fix_poi_photos.ts --probe="44.0793,10.0977,Duomo di Carrara"
  */
 import dotenv from 'dotenv';
@@ -46,6 +47,9 @@ const APPLY = hasFlag('--apply');
 const PROCESS_ALL = hasFlag('--all');
 const LIMIT = parseInt(getArg('limit', '200'), 10);
 const CITY_FILTER = getArg('city', '');
+/** `--category=natura,parchi`: limita ai valori di `shared_pois.category`. */
+const CATEGORY_FILTER = getArg('category', '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 /** `--near=lat,lon,km`: limita l'elaborazione a una zona. */
 const NEAR = (() => {
   const raw = getArg('near', '');
@@ -56,6 +60,23 @@ const NEAR = (() => {
 })();
 /** Pausa tra POI: le API Wikimedia sono gratuite, non abusiamone. */
 const DELAY_MS = parseInt(getArg('delay', '350'), 10);
+/**
+ * `--after-id=ID`: pagina la selezione per cursore invece di ripescare
+ * sempre la stessa prima fetta (26/08/2026 — senza questo, un lotto grande
+ * girato più volte via pm2 restart ripeteva la STESSA pagina fisica di
+ * `LIMIT` righe: senza ORDER BY, PostgREST torna un ordine stabile finché
+ * la tabella non cambia abbastanza, quindi restart dopo restart si
+ * ricontrollavano gli stessi candidati "senza foto sicura" invece di
+ * avanzare sul resto del lotto).
+ *
+ * Prima si usava `--offset` (`.range()`): un OFFSET in Postgres deve
+ * SCANSIONARE e scartare tutte le righe precedenti a ogni pagina, quindi il
+ * costo cresce con la posizione — a offset 3000, su ~27k righe filtrate per
+ * 25 valori di categoria, andava già in statement timeout. Un cursore per
+ * `id` (`WHERE id > lastId ORDER BY id LIMIT N`) usa l'indice della chiave
+ * primaria e non degrada mai, qualunque sia la posizione nel lotto.
+ */
+const AFTER_ID = getArg('after-id', '');
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -125,7 +146,7 @@ async function main() {
 
   console.log('🖼️  Verifica foto POI — fonti ufficiali (Wikipedia · Wikidata · Wikimedia Commons)');
   console.log(`   modalità: ${APPLY ? 'SCRITTURA sul database' : 'SIMULAZIONE (usa --apply per salvare)'}`);
-  console.log(`   limite: ${LIMIT} POI${CITY_FILTER ? ` · città: ${CITY_FILTER}` : ''}${NEAR ? ` · zona: ${NEAR.lat},${NEAR.lon} (${NEAR.km}km)` : ''}`);
+  console.log(`   limite: ${LIMIT} POI${AFTER_ID ? ` · dopo id: ${AFTER_ID}` : ''}${CITY_FILTER ? ` · città: ${CITY_FILTER}` : ''}${NEAR ? ` · zona: ${NEAR.lat},${NEAR.lon} (${NEAR.km}km)` : ''}`);
   console.log(`   selezione: ${PROCESS_ALL ? 'tutti i POI' : 'solo POI con foto generica o assente'}\n`);
 
   // La colonna `city` non esiste su tutti gli ambienti: se manca si ripiega
@@ -136,10 +157,21 @@ async function main() {
       .select(withCity ? 'id,name,lat,lon,image_url,photo_url,city' : 'id,name,lat,lon,image_url,photo_url')
       .not('name', 'is', null)
       .not('lat', 'is', null)
+      .limit(LIMIT);
+    if (CATEGORY_FILTER.length) {
+      // Ordine per `id` (chiave primaria, sempre indicizzata): niente
+      // statement timeout come un ORDER BY su is_gem in una categoria enorme
+      // (natura generico: ~265k righe — stesso incidente già visto
+      // sull'atlante beni culturali). Cursore --after-id invece di OFFSET
+      // (vedi nota sopra): un `id > cursore` usa l'indice della PK e non
+      // degrada con la posizione nel lotto.
+      q = q.in('category', CATEGORY_FILTER).order('id', { ascending: true });
+      if (AFTER_ID) q = q.gt('id', AFTER_ID);
+    } else {
       // Prima le gemme: sono i POI in evidenza, quelli in cui una foto
       // generica si nota di più.
-      .order('is_gem', { ascending: false })
-      .limit(LIMIT);
+      q = q.order('is_gem', { ascending: false });
+    }
     if (withCity && CITY_FILTER) q = q.ilike('city', `%${CITY_FILTER}%`);
     if (NEAR) {
       // Riquadro attorno al punto indicato: 1° di latitudine ≈ 111 km.
@@ -167,7 +199,14 @@ async function main() {
     ? rows
     : rows.filter(p => isGenericPhoto(p.image_url || p.photo_url));
 
-  console.log(`Trovati ${rows.length} POI, ${candidates.length} da verificare.\n`);
+  console.log(`Trovati ${rows.length} POI, ${candidates.length} da verificare.`);
+  // Cursore per la pagina successiva (--after-id): l'id dell'ultima riga
+  // della pagina INTERA, non solo dei candidati — altrimenti una pagina
+  // senza candidati (tutti già a posto) farebbe ripetere l'intera fetta.
+  if (CATEGORY_FILTER.length && rows.length > 0) {
+    console.log(`ULTIMO_ID: ${rows[rows.length - 1].id}`);
+  }
+  console.log('');
 
   const stats = { replaced: 0, kept: 0, alreadyOfficial: 0, noCoords: 0 };
   const changes: { name: string; from: string; to: string; source: string }[] = [];
