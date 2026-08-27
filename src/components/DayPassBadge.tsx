@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getDayPassState, DayPassState, DAY_PASS_UPDATED_EVENT } from '../services/dayPassService';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 /**
  * Badge compatto "🎫 N" accanto al tasto cuffie: guide rimaste del Day Pass.
@@ -31,7 +32,7 @@ export default function DayPassBadge() {
   return (
     <div
       className="h-8 px-2.5 bg-blue-900/90 text-white rounded-full flex items-center gap-1 shadow-lg border border-white/20 text-xs font-black shrink-0"
-      title={`Day Pass attivo: ${Math.max(0, pass.cap - pass.used)} guide rimaste`}
+      title={getTranslation('gr_dp_badge_title', linguaCorrente()).replace('{n}', String(Math.max(0, pass.cap - pass.used)))}
     >
       🎫 {Math.max(0, pass.cap - pass.used)}
     </div>

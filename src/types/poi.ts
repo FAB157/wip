@@ -86,6 +86,11 @@ export interface Poi {
   id: string;
   osm_id: string | null;
   name: string;
+  /** Traduzione/traslitterazione del nome per lingua (es. {"it": "..."}),
+   * popolata da /api/poi/enrich SOLO quando `name` è in script non latino.
+   * `name` originale non si tocca mai (matching OSM/Wikipedia dipende da
+   * quello) — usare src/lib/poiDisplay.ts::displayName() per il rendering. */
+  name_translated?: Record<string, string> | null;
   lat: number;
   lon: number;
   category: PoiCategory | null;
@@ -108,6 +113,7 @@ export interface NearbyPoi {
   id: string;
   osm_id: string | null;
   name: string;
+  name_translated?: Record<string, string> | null;
   lat: number;
   lon: number;
   category: PoiCategory | null;
@@ -122,6 +128,12 @@ export interface NearbyPoi {
   distance_meters: number;
   photo_url?: string;
   image_url?: string;
+  /** «Foto: Nome (CC BY-SA 4.0) via Wikimedia Commons». Va MOSTRATA accanto
+   *  all'immagine: su CC BY-SA e' la condizione che rende lecito usarla, e WIP
+   *  vende crediti. Dalla RPC arriva dal 25/08/2026 (migration
+   *  20260825140000_nearby_pois_attribuzione.sql); sui POI scritti prima e'
+   *  nulla, e in quel caso la riga di credito semplicemente non compare. */
+  image_attribution?: string | null;
 }
 
 /** Output di get_geofence_pois(): POI con raggi effettivi gia' risolti. */

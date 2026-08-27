@@ -14,6 +14,7 @@ interface PricingProps {
 }
 
 export default function Pricing({ userSession, language }: PricingProps) {
+  const t = (key: string) => getTranslation(key, language);
   const [loading, setLoading] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState<any>(null); // { name, price, priceId, credits }
   const [balance, setBalance] = useState(0);
@@ -31,21 +32,21 @@ export default function Pricing({ userSession, language }: PricingProps) {
       credits: 500,
       price: '4,99€',
       priceCents: 499,
-      description: 'Perfetto per un weekend intenso alla scoperta di una città.',
+      description: t('vr_b_pr_city_desc'),
       icon: <Zap className="w-6 h-6 text-amber-500" />,
-      features: ['500 Crediti', 'Senza scadenza', 'Tutti i servizi inclusi'],
+      features: [t('vr_b_pr_500'), t('vr_b_pr_no_expiry'), t('vr_b_pr_all_services')],
       productId: 'prod_UsVL0BLyvlsUpQ'
     },
     {
       id: 'pack_vacanza',
-      name: 'Vacanza 1 Settimana',
+      name: t('vr_b_shop_week_title'),
       credits: 1100,
       price: '9,99€',
       priceCents: 999,
       popular: true,
-      description: 'Ideale per una settimana di esplorazione senza pensieri.',
+      description: t('vr_b_pr_vac_desc'),
       icon: <Headphones className="w-6 h-6 text-blue-500" />,
-      features: ['1100 Crediti (10% Bonus)', 'Senza scadenza', 'Assistenza prioritaria'],
+      features: [t('vr_b_pr_bonus10'), t('vr_b_pr_no_expiry'), t('vr_b_pr_priority')],
       productId: 'prod_UsVNo4maZozOjK'
     },
     {
@@ -54,9 +55,9 @@ export default function Pricing({ userSession, language }: PricingProps) {
       credits: 2500,
       price: '19,99€',
       priceCents: 1999,
-      description: 'La scelta definitiva per viaggiatori seriali e piccoli gruppi.',
+      description: t('vr_b_pr_tour_desc'),
       icon: <Map className="w-6 h-6 text-emerald-500" />,
-      features: ['2500 Crediti (25% Bonus)', 'Senza scadenza', 'Accesso a tutte le funzioni Pro'],
+      features: [t('vr_b_pr_bonus25'), t('vr_b_pr_no_expiry'), t('vr_b_pr_pro_access')],
       productId: 'prod_UsVOR6EmravnIE'
     }
   ];
@@ -76,7 +77,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
     }
     
     if ((window as any).Capacitor && (window as any).Capacitor.isNativePlatform()) {
-      notify(getTranslation("premium_error", language) + ": Gli acquisti in-app tramite Google Play saranno disponibili a breve. Per ora, visita il nostro sito web per gestire l'abbonamento.");
+      notify(getTranslation("premium_error", language) + ": " + t('vr_b_pr_native_iap'));
       return;
     }
 
@@ -107,7 +108,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
       }
     } catch (err: any) {
       console.error(err);
-      notify('Errore durante l\'apertura del checkout: ' + err.message);
+      notify(t('vr_b_pr_checkout_err') + err.message);
     } finally {
       setLoading(null);
     }
@@ -116,9 +117,9 @@ export default function Pricing({ userSession, language }: PricingProps) {
   return (
     <div className="py-8 px-4 flex flex-col items-center">
       <div className="text-center mb-10">
-        <h2 className="text-3xl font-black text-primary mb-2 uppercase tracking-tight">Ricarica Crediti</h2>
+        <h2 className="text-3xl font-black text-primary mb-2 uppercase tracking-tight">{t('vr_b_recharge_credits')}</h2>
         <p className="text-sm max-w-md text-gray-500 font-medium">
-          Scegli il pacchetto più adatto alla tua curiosità. I crediti non scadono mai.
+          {t('vr_b_pr_sub')}
         </p>
       </div>
 
@@ -132,7 +133,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
           >
             {pack.popular && (
               <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-primary text-white text-[10px] font-black uppercase tracking-widest px-4 py-1.5 rounded-full shadow-lg">
-                Consigliato
+                {t('vr_b_pr_recommended')}
               </div>
             )}
 
@@ -142,7 +143,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
               </div>
               <div className="text-right">
                 <div className="text-2xl font-black text-primary leading-none">{pack.price}</div>
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">Acquisto Singolo</div>
+                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">{t('vr_b_pr_single')}</div>
               </div>
             </div>
 
@@ -175,7 +176,7 @@ export default function Pricing({ userSession, language }: PricingProps) {
                   : 'bg-gray-900 text-white hover:bg-gray-800'
               } ${loading === pack.productId ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              {loading === pack.productId ? 'Attendere...' : 'Acquista'}
+              {loading === pack.productId ? t('vr_b_pr_wait') : t('vr_b_pr_buy')}
             </button>
           </div>
         ))}
@@ -200,24 +201,24 @@ export default function Pricing({ userSession, language }: PricingProps) {
             <Coins className="w-8 h-8" />
           </div>
           <div>
-            <h4 className="font-black text-white text-xl uppercase tracking-wider">Listino Servizi AI</h4>
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Trasparenza totale sui tuoi consumi</p>
+            <h4 className="font-black text-white text-xl uppercase tracking-wider">{t('vr_b_pr_list_title')}</h4>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">{t('vr_b_pr_list_sub')}</p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 relative z-10">
-          <ServicePriceItem icon={<MessageSquare className="w-4 h-4" />} name="Wip - Esperto Viaggi" price="3" unit="10 msg" />
-          <ServicePriceItem icon={<Info className="w-4 h-4" />} name="Dettagli POI" price="5" unit="per luogo" />
-          <ServicePriceItem icon={<Camera className="w-4 h-4" />} name="Vision AI" price="5" unit="per scansione" />
-          <ServicePriceItem icon={<Map className="w-4 h-4" />} name="Itinerario AI" price="10" unit="al giorno" />
-          <ServicePriceItem icon={<Headphones className="w-4 h-4" />} name="Audioguida" price="15" unit="per luogo" />
-          <ServicePriceItem icon={<Volume2 className="w-4 h-4" />} name="Podcast AI" price="15" unit="al giorno" />
-          <ServicePriceItem icon={<BookOpen className="w-4 h-4" />} name="Guida PDF" price="20" unit="al giorno" />
+          <ServicePriceItem icon={<MessageSquare className="w-4 h-4" />} name={t('vr_b_svc_chat')} price="3" unit={t('vr_b_unit_10msg')} />
+          <ServicePriceItem icon={<Info className="w-4 h-4" />} name={t('vr_b_svc_poi')} price="5" unit={t('vr_b_unit_per_place')} />
+          <ServicePriceItem icon={<Camera className="w-4 h-4" />} name="Vision AI" price="5" unit={t('vr_b_unit_per_scan')} />
+          <ServicePriceItem icon={<Map className="w-4 h-4" />} name={t('vr_b_svc_iti')} price="10" unit={t('vr_b_unit_per_day')} />
+          <ServicePriceItem icon={<Headphones className="w-4 h-4" />} name={t('vr_b_svc_audio')} price="15" unit={t('vr_b_unit_per_place')} />
+          <ServicePriceItem icon={<Volume2 className="w-4 h-4" />} name={t('vr_b_svc_podcast')} price="15" unit={t('vr_b_unit_per_day')} />
+          <ServicePriceItem icon={<BookOpen className="w-4 h-4" />} name={t('vr_b_svc_pdf')} price="20" unit={t('vr_b_unit_per_day')} />
         </div>
 
         <div className="mt-8 pt-6 border-t border-white/5 text-center">
           <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
-            I crediti non scadono mai • Utilizzo e Consigli sono sempre gratuiti
+            {t('vr_b_pr_footer')}
           </p>
         </div>
       </div>

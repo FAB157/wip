@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AlertTriangle, ShoppingCart, X } from 'lucide-react';
 import { getWalletBalance, WalletBalance } from '../lib/pricing';
 import { supabase } from '../lib/supabase';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 import ShopScreen from './ShopScreen';
 import FreeFeaturesModal from './FreeFeaturesModal';
 
@@ -50,6 +51,10 @@ export default function ZeroCreditsBanner({ userId }: ZeroCreditsBannerProps) {
 
   if (!balance || balance.total > 0 || isDismissed) return null;
 
+  // Banner montato fuori dall'albero con la prop language: la lingua arriva
+  // dalla stessa chiave localStorage che App.tsx aggiorna a ogni cambio.
+  const lingua = linguaCorrente();
+
   return (
     <>
       <div className="fixed inset-x-0 top-0 z-[9999] p-4 pointer-events-none flex justify-center">
@@ -63,8 +68,8 @@ export default function ZeroCreditsBanner({ userId }: ZeroCreditsBannerProps) {
               <AlertTriangle className="w-5 h-5 text-amber-500" />
             </div>
             <div>
-              <h3 className="font-bold text-xs uppercase tracking-wide">Crediti Esauriti</h3>
-              <p className="text-[10px] text-slate-300 font-medium">Funzioni AI sospese.</p>
+              <h3 className="font-bold text-xs uppercase tracking-wide">{getTranslation('vr_b_zc_title', lingua)}</h3>
+              <p className="text-[10px] text-slate-300 font-medium">{getTranslation('vr_b_zc_sub', lingua)}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -72,7 +77,7 @@ export default function ZeroCreditsBanner({ userId }: ZeroCreditsBannerProps) {
               onClick={() => setIsFreeFeaturesOpen(true)}
               className="text-[10px] underline text-slate-400 hover:text-white"
             >
-              Cosa posso fare gratis?
+              {getTranslation('vr_b_zc_free', lingua)}
             </button>
             <button
               onClick={() => setIsShopOpen(true)}
@@ -81,7 +86,7 @@ export default function ZeroCreditsBanner({ userId }: ZeroCreditsBannerProps) {
               <ShoppingCart className="w-3 h-3" /> Shop
             </button>
             <button onClick={() => setIsDismissed(true)} className="p-1 text-slate-400 hover:text-white transition-colors rounded-full hover:bg-white/10">
-              <span className="sr-only">Chiudi</span>
+              <span className="sr-only">{getTranslation('close', lingua)}</span>
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
@@ -99,7 +104,9 @@ export default function ZeroCreditsBanner({ userId }: ZeroCreditsBannerProps) {
           >
             <ShopScreen
               userId={userId}
-              language="it"
+              // BUG FIX: la lingua era cablata a "it" — ora è quella vera
+              // della UI (stessa chiave localStorage scritta da App.tsx).
+              language={lingua}
               onClose={() => setIsShopOpen(false)}
             />
           </motion.div>

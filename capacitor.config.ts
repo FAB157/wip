@@ -20,19 +20,16 @@ const config: CapacitorConfig = {
     CapacitorHttp: {
       enabled: true
     },
-    SplashScreen: {
-      launchShowDuration: 2500,
-      launchAutoHide: true,
-      backgroundColor: "#1e3a8a",
-      androidSplashResourceName: "splash",
-      androidScaleType: "CENTER_CROP",
-      showSpinner: true,
-      androidSpinnerStyle: "large",
-      iosSpinnerStyle: "small",
-      spinnerColor: "#ffffff",
-      splashFullScreen: true,
-      splashImmersive: true,
-    },
+    // (22/08/2026) Qui c'era un blocco SplashScreen con launchShowDuration:
+    // 2500. Era INERTE: @capacitor/splash-screen non è installato (non è in
+    // package.json, non è in capacitor.settings.gradle né nel Podfile), quindi
+    // nessun plugin leggeva quella configurazione e l'app non ha mai aspettato
+    // 2,5 s all'avvio. Lo splash che si vede è quello nativo del tema
+    // (AppTheme.NoActionBarLaunch su Android, LaunchScreen su iOS), che sparisce
+    // appena la WebView è pronta.
+    // NON installare @capacitor/splash-screen "per far funzionare la config":
+    // aggiungerebbe un ritardo di avvio che oggi non esiste, oltre a un plugin
+    // in più nelle app.
   },
 };
 

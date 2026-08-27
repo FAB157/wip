@@ -188,7 +188,7 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
           </div>
           <h3 className="text-2xl font-black mb-2">{getTranslation("wip_working", language as any) || "Elaborazione in corso..."}</h3>
           <p className="text-white/70 font-medium">
-            Sto preparando un piccolo quiz su {destination} per ingannare l'attesa.
+            {getTranslation("vr_b_lq_preparing", language as any).replace('{dest}', destination)}
           </p>
           <Loader2 className="w-6 h-6 mt-6 text-primary animate-spin" />
         </motion.div>
@@ -199,18 +199,18 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
           className="bg-white/10 backdrop-blur-md border border-white/20 p-8 rounded-[2rem] text-center max-w-sm w-full relative z-10"
         >
           <Trophy className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
-          <h2 className="text-2xl font-black mb-2">Quiz Completato!</h2>
-          <p className="text-lg mb-6">Hai risposto esattamente a {correctCount.current} domande su {questions.length}.</p>
-          
+          <h2 className="text-2xl font-black mb-2">{getTranslation("vr_b_lq_done", language as any)}</h2>
+          <p className="text-lg mb-6">{getTranslation("vr_b_lq_score", language as any).replace('{n}', String(correctCount.current)).replace('{t}', String(questions.length))}</p>
+
           <div className="bg-primary/20 p-4 rounded-xl mb-4">
              <p className="font-bold flex items-center justify-center gap-2">
                <Sparkles className="w-5 h-5 text-yellow-400" />
-               Vinti: {correctCount.current} Crediti e {correctCount.current * 20} XP
+               {getTranslation("vr_b_lq_won", language as any).replace('{c}', String(correctCount.current)).replace('{xp}', String(correctCount.current * 20))}
              </p>
           </div>
-          
+
           <p className="text-white/60 text-sm mt-4 italic animate-pulse">
-            Ancora pochi istanti... sto ultimando i ritocchi finali.
+            {getTranslation("vr_b_lq_final", language as any)}
           </p>
         </motion.div>
       ) : (
@@ -220,11 +220,11 @@ export default function LoadingQuiz({ destination, quizLength = 5, userId, langu
           <div className="flex justify-between items-center mb-6">
             <div className="bg-primary/20 text-primary px-4 py-1 rounded-full text-sm font-bold flex items-center gap-2 backdrop-blur-md">
               <Brain className="w-4 h-4" />
-              Domanda {currentIdx + 1} di {questions.length}
+              {getTranslation("vr_b_lq_question", language as any).replace('{i}', String(currentIdx + 1)).replace('{t}', String(questions.length))}
             </div>
             <div className="bg-white/10 px-4 py-1 rounded-full text-sm font-bold flex items-center gap-2 backdrop-blur-md">
               <Sparkles className="w-4 h-4 text-yellow-400" />
-              Punti: {correctCount.current * 20}
+              {getTranslation("vr_b_lq_points", language as any)} {correctCount.current * 20}
             </div>
           </div>
           

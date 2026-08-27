@@ -14,7 +14,7 @@ export default function PoiExtraDetails({ poi, language }: PoiExtraDetailsProps)
   return (
     <div className="mb-6 bg-white p-5 rounded-[2rem] border border-amber-100/50 shadow-sm">
       <h4 className="text-[10px] font-black uppercase text-[#1e3a8a] mb-4">
-        Dettagli dell'Opera
+        {getTranslation("sk_dettagli_opera", language)}
       </h4>
       <div className="space-y-4">
         {poi.description && (

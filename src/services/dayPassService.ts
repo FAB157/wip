@@ -20,6 +20,7 @@ import {
   CREDITS_UPDATED_EVENT,
 } from '../lib/pricing';
 import { isNativeOfflineSupported } from './offlinePackageService';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
 
@@ -80,7 +81,7 @@ export async function getDayPassState(): Promise<DayPassState> {
 export async function activateDayPass(): Promise<DayPassState> {
   const { data: userData } = await supabase.auth.getUser();
   const userId = userData?.user?.id;
-  if (!userId) throw new Error('Accedi per attivare il Day Pass.');
+  if (!userId) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
 
   // ATTIVAZIONE ATOMICA VIA RPC: l'INSERT diretto su user_passes è stato
   // rimosso (permetteva un pass gratis con cap arbitrario). activate_day_pass
@@ -90,11 +91,11 @@ export async function activateDayPass(): Promise<DayPassState> {
   if (rpcError) {
     const m = rpcError.message || '';
     if (m.includes('insufficient_credits')) {
-      throw new Error(`Crediti insufficienti: il Day Pass costa ${DAY_PASS_COST} crediti.`);
+      throw new Error(getTranslation('gr_dp_crediti_insufficienti', linguaCorrente()).replace('{n}', String(DAY_PASS_COST)));
     }
-    if (m.includes('pass_already_active')) throw new Error('Hai già un Day Pass attivo.');
-    if (m.includes('login_required')) throw new Error('Accedi per attivare il Day Pass.');
-    throw new Error('Attivazione non riuscita. Riprova.');
+    if (m.includes('pass_already_active')) throw new Error(getTranslation('gr_dp_gia_attivo', linguaCorrente()));
+    if (m.includes('login_required')) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
+    throw new Error(getTranslation('gr_dp_fallita_riprova', linguaCorrente()));
   }
   const expiresAtMs = passRow?.expires_at ? new Date(passRow.expires_at).getTime() : Date.now() + 24 * 60 * 60 * 1000;
   notifyCreditsChanged({ userId });

@@ -7,7 +7,7 @@ import React, { useMemo, useState } from 'react';
 import { CloudRain, Loader2, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 
 // Deve restare allineato alle costanti RAIN_GUARANTEE_* in server.ts
 // (/api/rain-guarantee/claim): qui serve solo per il testo esplicativo.
@@ -26,8 +26,12 @@ type ClaimResult = {
   message: string;
 };
 
+const DATE_LOCALE: Record<string, string> = {
+  IT: 'it-IT', EN: 'en-GB', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
+};
+
 export default function RainGuaranteeCard({ itinerary, language }: RainGuaranteeCardProps) {
-  const isItalian = language === 'IT';
+  const t = (key: string) => getTranslation(key, language);
   const [open, setOpen] = useState(false);
   const [selectedDay, setSelectedDay] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -55,11 +59,11 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
   const destName: string = itinerary?.dati_itinerario?.destinazione
     || itinerary?.dati_itinerario?.destination
     || String(itinerary?.titolo || '').split(':')[0].trim()
-    || (isItalian ? 'destinazione' : 'destination');
+    || t('vr_b_rg_dest_fallback');
 
   const fmtDay = (iso: string) => {
     try {
-      return new Date(`${iso}T12:00:00`).toLocaleDateString(isItalian ? 'it-IT' : 'en-GB', { day: '2-digit', month: '2-digit' });
+      return new Date(`${iso}T12:00:00`).toLocaleDateString(DATE_LOCALE[language] || 'en-GB', { day: '2-digit', month: '2-digit' });
     } catch { return iso; }
   };
 
@@ -71,7 +75,7 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) {
-        setResult({ kind: 'error', message: isItalian ? 'Accedi per usare la garanzia pioggia.' : 'Sign in to use the rain guarantee.' });
+        setResult({ kind: 'error', message: t('vr_b_rg_login') });
         return;
       }
       const res = await fetch(getApiUrl('/api/rain-guarantee/claim'), {
@@ -81,45 +85,39 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
       });
       const data = await res.json().catch(() => ({}));
       const w = data?.weather;
-      const wTxt = w ? `${w.mm} mm ${isItalian ? 'in' : 'over'} ${w.ore} ${isItalian ? 'ore' : 'hours'}` : '';
+      const wTxt = w ? t('vr_b_rg_wtxt').replace('{mm}', String(w.mm)).replace('{h}', String(w.ore)) : '';
 
       if (res.ok && data?.refunded) {
         // Il wallet è cambiato: stesso evento usato dal resto dell'app.
         window.dispatchEvent(new CustomEvent('wip-credits-updated'));
         setResult({
           kind: 'ok',
-          message: isItalian
-            ? `Confermato: ${wTxt} il ${fmtDay(day)}. Ti abbiamo restituito ${data.credits} crediti ✅`
-            : `Confirmed: ${wTxt} on ${fmtDay(day)}. We refunded ${data.credits} credits ✅`
+          message: t('vr_b_rg_ok').replace('{w}', wTxt).replace('{d}', fmtDay(day)).replace('{c}', String(data.credits))
         });
       } else if (data?.reason === 'pioggia_insufficiente') {
         setResult({
           kind: 'no',
-          message: isItalian
-            ? `Il ${fmtDay(day)} a ${destName}: ${wTxt} — niente rimborso, ma buon viaggio! ☀️`
-            : `On ${fmtDay(day)} in ${destName}: ${wTxt} — no refund, enjoy your trip! ☀️`
+          message: t('vr_b_rg_no').replace('{d}', fmtDay(day)).replace('{dest}', destName).replace('{w}', wTxt)
         });
       } else if (data?.reason === 'dati_meteo_non_ancora_disponibili') {
         setResult({
           kind: 'pending',
-          message: isItalian
-            ? `I dati meteo del ${fmtDay(day)} non sono ancora consolidati: riprova tra un paio di giorni.`
-            : `Weather data for ${fmtDay(day)} is not consolidated yet: try again in a couple of days.`
+          message: t('vr_b_rg_pending').replace('{d}', fmtDay(day))
         });
       } else if (data?.reason === 'gia_richiesto') {
-        setResult({ kind: 'no', message: isItalian ? 'Garanzia già richiesta per questo giorno.' : 'Guarantee already claimed for this day.' });
+        setResult({ kind: 'no', message: t('vr_b_rg_already') });
       } else if (data?.reason === 'limite_garanzia_raggiunto') {
         setResult({
           kind: 'no',
-          message: isItalian ? 'Hai già ricevuto il rimborso per tutti i giorni di questo itinerario.' : 'You already received refunds for every day of this itinerary.'
+          message: t('vr_b_rg_limit')
         });
       } else if (res.status === 401) {
-        setResult({ kind: 'error', message: isItalian ? 'Accedi per usare la garanzia pioggia.' : 'Sign in to use the rain guarantee.' });
+        setResult({ kind: 'error', message: t('vr_b_rg_login') });
       } else {
-        setResult({ kind: 'error', message: isItalian ? 'Verifica non riuscita, riprova più tardi.' : 'Check failed, please retry later.' });
+        setResult({ kind: 'error', message: t('vr_b_rg_fail') });
       }
     } catch {
-      setResult({ kind: 'error', message: isItalian ? 'Connessione assente: riprova quando sei online.' : 'No connection: retry when online.' });
+      setResult({ kind: 'error', message: t('vr_b_rg_offline') });
     } finally {
       setLoading(false);
     }
@@ -131,9 +129,9 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
       <button
         onClick={() => { setResult(null); setSelectedDay(eligibleDays[0]); setOpen(true); }}
         className="self-start text-[10px] font-black uppercase tracking-widest text-sky-600 hover:text-sky-800 transition-colors flex items-center gap-1"
-        title={isItalian ? 'Garanzia pioggia inclusa in ogni itinerario' : 'Rain guarantee included with every itinerary'}
+        title={t('vr_b_rg_link_title')}
       >
-        🌧 {isItalian ? 'È piovuto? Garanzia pioggia' : 'Did it rain? Rain guarantee'}
+        🌧 {t('vr_b_rg_link')}
       </button>
 
       {open && (
@@ -146,7 +144,7 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
               onClick={() => setOpen(false)}
               disabled={loading}
               className="absolute top-4 right-4 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors"
-              aria-label={isItalian ? 'Chiudi' : 'Close'}
+              aria-label={t('close')}
             >
               <X className="w-4 h-4" />
             </button>
@@ -156,21 +154,22 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
                 <CloudRain className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="font-black text-gray-900 text-lg leading-tight">{isItalian ? 'Garanzia pioggia' : 'Rain guarantee'}</h3>
+                <h3 className="font-black text-gray-900 text-lg leading-tight">{t('vr_b_rg_title')}</h3>
                 <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-                  {isItalian ? 'Inclusa in ogni itinerario' : 'Included with every itinerary'}
+                  {t('vr_b_rg_included')}
                 </p>
               </div>
             </div>
 
             <p className="text-xs text-gray-600 leading-relaxed mb-4">
-              {isItalian
-                ? `Se nel giorno del viaggio è piovuto quasi tutto il giorno — almeno ${RAIN_MIN_HOURS} ore di pioggia o ${RAIN_MIN_MM} mm — ti restituiamo i crediti di quel giorno. La verifica è automatica sui dati meteo reali di ${destName}: niente scontrini, niente moduli.`
-                : `If it rained almost all day on your trip day — at least ${RAIN_MIN_HOURS} hours of rain or ${RAIN_MIN_MM} mm — we refund that day's credits. Verification is automatic against real weather data for ${destName}: no receipts, no forms.`}
+              {t('vr_b_rg_expl')
+                .replace('{h}', String(RAIN_MIN_HOURS))
+                .replace('{mm}', String(RAIN_MIN_MM))
+                .replace('{dest}', destName)}
             </p>
 
             <label className="block text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">
-              {isItalian ? 'Che giorno è piovuto?' : 'Which day did it rain?'}
+              {t('vr_b_rg_which_day')}
             </label>
             <div className="flex flex-wrap gap-2 mb-5">
               {eligibleDays.map((d) => (
@@ -206,14 +205,12 @@ export default function RainGuaranteeCard({ itinerary, language }: RainGuarantee
               className="w-full py-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white rounded-2xl font-black text-[11px] uppercase tracking-widest transition-colors flex items-center justify-center gap-2"
             >
               {loading
-                ? (<><Loader2 className="w-4 h-4 animate-spin" /> {isItalian ? 'Controllo il meteo…' : 'Checking the weather…'}</>)
-                : (isItalian ? 'Verifica e richiedi il rimborso' : 'Verify and claim refund')}
+                ? (<><Loader2 className="w-4 h-4 animate-spin" /> {t('vr_b_rg_checking')}</>)
+                : t('vr_b_rg_claim')}
             </button>
 
             <p className="mt-3 text-[10px] text-gray-400 leading-relaxed text-center">
-              {isItalian
-                ? `Valida per i giorni degli ultimi ${RAIN_WINDOW_DAYS} giorni, una volta per giorno di itinerario. Fonte meteo: Open-Meteo.`
-                : `Valid for days within the last ${RAIN_WINDOW_DAYS} days, once per itinerary day. Weather source: Open-Meteo.`}
+              {t('vr_b_rg_valid').replace('{n}', String(RAIN_WINDOW_DAYS))}
             </p>
           </div>
         </div>

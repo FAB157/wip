@@ -11,6 +11,7 @@ import { useNetworkStatus } from "../hooks/useNetworkStatus";
 import PoiContactButtons from './PoiContactButtons';
 import PoiTicketsButtons from './PoiTicketsButtons';
 import PoiGallery from './PoiGallery';
+import AttribuzioneFoto from './AttribuzioneFoto';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
@@ -64,6 +65,7 @@ import {
 } from "../lib/poiCache";
 import { Language, getTranslation } from "../lib/i18n";
 import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from "../lib/poiTaxonomy";
+import { displayName } from "../lib/poiDisplay";
 import {
   CATEGORY_COLORS,
   CATEGORY_EMOJIS,
@@ -201,6 +203,15 @@ export default function PoiDetailSheet({
   const [showNearbyList, setShowNearbyList] = useState(false);
   const [showNavChoice, setShowNavChoice] = useState(false);
 
+  // La UI e' in italiano? Decide due cose (23/08/2026):
+  // - la scorciatoia "il POI arriva gia' descritto" vale solo in IT (i campi
+  //   di shared_pois sono in italiano: un utente EN deve passare dal server,
+  //   che glieli traduce cache-first);
+  // - la cache di sessione della scheda si chiave per LINGUA, altrimenti chi
+  //   cambia lingua rilegge i testi della precedente per 30 minuti.
+  const linguaIt = String(language || 'IT').toUpperCase() === 'IT';
+  const chiaveScheda = (id: any) => linguaIt ? String(id) : `${id}::${String(language).toUpperCase()}`;
+
   // Error Reporting State
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportType, setReportType] = useState('Informazioni errate');
@@ -213,6 +224,19 @@ export default function PoiDetailSheet({
   // cache poi_audioguides per (poi, lingua, personaggio+registro), zero migration.
   const [guideRegister, setGuideRegister] = useState<'standard' | 'breve' | 'bambini' | 'duetto'>('standard');
   const charKeyFor = (mode: "nicky" | "dante") => guideRegister === 'standard' ? mode : `${mode}_${guideRegister}`;
+
+  // Il personaggio DI DEFAULT e' sempre quello scelto nel setup (guideMode,
+  // letto da wip_guide_character): la scheda non si smonta mai — `poi &&` sta
+  // dentro il render — quindi senza questo riallineamento il valore iniziale
+  // restava quello del primo mount, e la scelta fatta su un POI si trascinava
+  // su tutti gli altri. Il selettore Nicky/Dante nella sezione audioguida resta
+  // la deroga per il singolo POI; il registro (breve/bimbi/duetto) torna a
+  // «standard» ad ogni nuovo POI per lo stesso motivo.
+  useEffect(() => {
+    if (!poi?.id) return;
+    setLocalGuideMode(guideMode);
+    setGuideRegister('standard');
+  }, [poi?.id, guideMode]);
   const creditConfirm = useCreditConfirmation();
   const hasAutoPlayedRef = useRef<string | null>(null);
 
@@ -228,18 +252,28 @@ export default function PoiDetailSheet({
   //    ancora la colonna: mini-fetch di riserva alla prima apertura. Se non
   //    c'è indirizzo (né in colonna né nel batch) la riga non si mostra.
   const [poiAddress, setPoiAddress] = useState<string | null>((poi as any)?.address || null);
+  // DA DOVE VIENE L'INDIRIZZO. Dal 23/08/2026 la colonna `address` ospita
+  // anche `address_source='strada_vicina'`: la strada con nome piu' vicina al
+  // POI, che dice da dove ci si arriva ma NON e' l'indirizzo del luogo (una
+  // pieve in mezzo ai campi non sta al civico di quella provinciale).
+  // Mostrarla come indirizzo sarebbe una piccola bugia ripetuta 615.000
+  // volte: si scrive "vicino a Via X" e si dice la verita'.
+  const [addressSource, setAddressSource] = useState<string | null>((poi as any)?.address_source || null);
+  const indirizzoEStradaVicina = addressSource === 'strada_vicina';
   useEffect(() => {
     let alive = true;
     setPoiAddress((poi as any)?.address || null);
+    setAddressSource((poi as any)?.address_source || null);
     if (!poi?.id || (poi as any)?.address) return;
     supabase
       .from('shared_pois')
-      .select('address, city')
+      .select('address, city, address_source')
       .eq('id', String(poi.id))
       .maybeSingle()
       .then(({ data }) => {
         if (alive && data?.address) {
           setPoiAddress(data.city ? `${data.address}, ${data.city}` : data.address);
+          setAddressSource((data as any)?.address_source || null);
         }
       }, () => { /* best-effort: nessun indirizzo, nessuna riga */ });
     return () => { alive = false; };
@@ -341,10 +375,10 @@ export default function PoiDetailSheet({
   }, [poi?.id]);
 
   const loadingPhrases = [
-    "Sto consultando gli archivi storici...",
-    "Sto cercando segreti e curiosità...",
-    "Sto elaborando l'audioguida immersiva...",
-    "Quasi pronto per svelarti tutto..."
+    getTranslation('sk_loading_archivi', language),
+    getTranslation('sk_loading_segreti', language),
+    getTranslation('sk_loading_elabora', language),
+    getTranslation('sk_loading_quasi', language)
   ];
 
   useEffect(() => {
@@ -479,10 +513,10 @@ export default function PoiDetailSheet({
       setShowReportModal(false);
       setReportType('Informazioni errate');
       setReportDetails('');
-      notify('Segnalazione inviata con successo. Grazie per il tuo aiuto!', 'success');
+      notify(getTranslation('sk_segnalazione_inviata', language), 'success');
     } catch (e) {
       console.error('Errore invio segnalazione:', e);
-      notify('Si è verificato un errore durante l\'invio della segnalazione.');
+      notify(getTranslation('sk_segnalazione_errore_invio', language));
     } finally {
       setIsReporting(false);
     }
@@ -719,7 +753,7 @@ export default function PoiDetailSheet({
             }
           }
 
-          setCachedPoiDetails(poi.id, {
+          setCachedPoiDetails(chiaveScheda(poi.id), {
             wikiData: cachedWiki,
             tripData: cachedTrip,
             parkingData: cachedParking,
@@ -736,14 +770,18 @@ export default function PoiDetailSheet({
       // 2. Se non abbiamo l'audio in cache, ma il POI ha già una descrizione arricchita nel DB principale
       const isAlreadyEnriched = poi.description_long || (poi.description && poi.description.length > 80) || (poi.description_ai && poi.description_ai.length > 80);
 
-      if (isAlreadyEnriched) {
+      // La scorciatoia vale SOLO in italiano: i campi del POI sono in
+      // italiano, e per le altre lingue si prosegue fino a /api/poi/details
+      // che li restituisce tradotti (23/08/2026). Il testo qui sotto resta
+      // comunque visibile subito come segnaposto.
+      if (isAlreadyEnriched && linguaIt) {
         console.log("[DetailSheet] Initializing from pre-loaded POI details:", poi.name);
         const desc = poi.description_long || poi.description_ai || poi.description || "";
 
         const wikiPayload = {
           extract: desc,
           thumbnail: poi.image_url || (poi as any).photo_url || undefined,
-          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         };
 
@@ -759,7 +797,7 @@ export default function PoiDetailSheet({
         setTripData(tripPayload);
         // setDisplayedText(desc); // Removed to allow typewriter effect to run
 
-        setCachedPoiDetails(poi.id, {
+        setCachedPoiDetails(chiaveScheda(poi.id), {
           wikiData: wikiPayload,
           tripData: tripPayload,
           generatedText: null
@@ -772,13 +810,13 @@ export default function PoiDetailSheet({
         setWikiData({
           extract: shortDesc,
           thumbnail: poi.image_url || (poi as any).photo_url || undefined,
-          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+          description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         });
         // setDisplayedText(shortDesc); // Removed to allow typewriter effect to run
       }
 
-      const cached = getCachedPoiDetails(poi.id);
+      const cached = getCachedPoiDetails(chiaveScheda(poi.id));
       if (cached) {
         if (cached.wikiData) setWikiData(cached.wikiData);
         // Compatibilità con i dati arricchiti da PoiPopupContent (groqData format)
@@ -786,7 +824,7 @@ export default function PoiDetailSheet({
            setWikiData({
               extract: cached.descriptionLong || cached.description || cached.audioScript || "",
               thumbnail: cached.imageUrl || cached.image_url || poi.image_url || (poi as any).photo_url || undefined,
-              description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+              description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
               pageUrl: "#"
            });
            setDisplayedText(cached.descriptionLong || cached.description || cached.audioScript || "");
@@ -823,7 +861,7 @@ export default function PoiDetailSheet({
                  if (data.cachedOfflineData.generatedText) setGeneratedText(data.cachedOfflineData.generatedText);
               }
            } else {
-             setWikiData({ extract: "Apri l'app quando sei online per visualizzare queste informazioni." });
+             setWikiData({ extract: getTranslation('sk_offline_apri_online', language) });
            }
          } catch(e) {}
          setIsLoading(false);
@@ -853,7 +891,7 @@ export default function PoiDetailSheet({
             console.warn(`[PoiDetailSheet] Enrichment for ${poiIdStr} already in flight. Waiting for it...`);
             await inFlight.catch(() => {});
             if (!active) return;
-            const cachedNow = getCachedPoiDetails(poi.id);
+            const cachedNow = getCachedPoiDetails(chiaveScheda(poi.id));
             if (cachedNow) {
               if (cachedNow.wikiData) setWikiData(cachedNow.wikiData);
               if (cachedNow.tripData) setTripData(cachedNow.tripData);
@@ -871,7 +909,10 @@ export default function PoiDetailSheet({
             // ── STEP 0: Leggi i dati pre-arricchiti dal DB (Wikipedia/Wikidata/WikiVoyage/Wikimedia) ──
             // Se il POI è già arricchito → usiamo quei dati reali, senza chiamare AI.
             try {
-              const detailsRes = await fetchWithTimeout(`/api/poi/details?id=${encodeURIComponent(poiIdStr)}`, {}, 10000);
+              // lang: il server traduce (una volta, cache-first) i campi
+              // descrittivi nella lingua della UI — prima la scheda arrivava
+              // in italiano per tutti (23/08/2026).
+              const detailsRes = await fetchWithTimeout(`/api/poi/details?id=${encodeURIComponent(poiIdStr)}&lang=${String(language || 'IT').toLowerCase()}`, {}, 15000);
               if (detailsRes.ok) {
                 const dbData = await detailsRes.json();
 
@@ -921,7 +962,7 @@ export default function PoiDetailSheet({
                   const wikiPayload = {
                     extract: finalDesc,
                     thumbnail: dbData.image_url || dbData.photo_url || poi.image_url || undefined,
-                    description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+                    description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
                     pageUrl: techData.wikipedia_url || techData.wikivoyage_url || '#',
                   };
                   const tripPayload = { address: '', phone, website, tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
@@ -934,7 +975,7 @@ export default function PoiDetailSheet({
                     setTripData(tripPayload);
                     if (hasTechData) setTechnicalData(techPayload);
                     if (storedAudioScript) setGeneratedText(storedAudioScript);
-                    setCachedPoiDetails(poi.id, { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
+                    setCachedPoiDetails(chiaveScheda(poi.id), { wikiData: wikiPayload, tripData: tripPayload, generatedText: storedAudioScript, technicalData: hasTechData ? techPayload : undefined });
                     setIsLoading(false);
                   }
                   return; // ✅ Dati DB trovati
@@ -1013,9 +1054,14 @@ export default function PoiDetailSheet({
                 if (!enrichRes.ok) {
                   if (enrichRes.status === 403) {
                     const errData = await enrichRes.json().catch(() => null);
-                    throw new Error(errData?.message || "Questo luogo non ha superato la curatela storica.");
+                    // Il flag `curatela` mantiene il riconoscimento del rifiuto
+                    // anche col messaggio tradotto (il vecchio match testuale
+                    // "curatela" resta per i messaggi del server).
+                    const curErr: any = new Error(errData?.message || getTranslation('sk_curatela_non_superata', language));
+                    curErr.curatela = true;
+                    throw curErr;
                   }
-                  throw new Error("Errore durante l'arricchimento del POI");
+                  throw new Error(getTranslation('sk_errore_arricchimento', language));
                 }
 
                 if (active) {
@@ -1025,7 +1071,7 @@ export default function PoiDetailSheet({
                   currentPageUrl = enriched.pageUrl || currentPageUrl;
                 }
               } catch (fastErr: any) {
-                if (fastErr?.message?.includes("curatela")) throw fastErr;
+                if (fastErr?.curatela || fastErr?.message?.includes("curatela")) throw fastErr;
                 console.warn("[PoiDetailSheet] Fast enrich skip:", fastErr?.message);
               }
             }
@@ -1047,7 +1093,7 @@ export default function PoiDetailSheet({
             }
 
             if (active) {
-              const categoryLabel = poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo";
+              const categoryLabel = poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language);
               
               const wikiPayload = {
                 extract: currentExtract,
@@ -1207,7 +1253,7 @@ export default function PoiDetailSheet({
                     };
                     setTripData(tripPayload);
 
-                    setCachedPoiDetails(poi.id, {
+                    setCachedPoiDetails(chiaveScheda(poi.id), {
                       wikiData: wikiPayload,
                       tripData: tripPayload,
                       audioScript: finalEnriched.audio_script || null,
@@ -1240,7 +1286,7 @@ export default function PoiDetailSheet({
                     if (prev?.extract && prev.extract.length > 30) return prev;
                     return {
                       ...(prev || {}),
-                      extract: fastExtract || poi.description || `${poi.name || "Questo luogo"} è un punto di interesse registrato sulla mappa. I dettagli approfonditi non sono al momento disponibili: riprova tra qualche istante.`,
+                      extract: fastExtract || poi.description || getTranslation('sk_poi_registrato_riprova', language).replace('{name}', poi.name || getTranslation('sk_questo_luogo', language)),
                     };
                   });
                 }
@@ -1264,12 +1310,12 @@ export default function PoiDetailSheet({
           } catch (e: any) {
             console.error("Centralized enrichment call failed:", e);
             if (active) {
-              const isRejected = e.message?.includes("curatela") || e.message?.includes("rejected") || e.message?.includes("escluso") || e.message?.includes("non approvato");
+              const isRejected = e.curatela || e.message?.includes("curatela") || e.message?.includes("rejected") || e.message?.includes("escluso") || e.message?.includes("non approvato");
               setWikiData({
-                extract: isRejected 
-                  ? "Questo luogo non presenta rilevanza storica o paesaggistica certificata ed è stato escluso dalla guida Elite."
-                  : `${poi.name || "Questo luogo"} è un punto di interesse registrato sulla mappa.`,
-                description: isRejected ? "Non Approvato" : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+                extract: isRejected
+                  ? getTranslation('sk_non_rilevante', language)
+                  : getTranslation('sk_poi_registrato', language).replace('{name}', poi.name || getTranslation('sk_questo_luogo', language)),
+                description: isRejected ? getTranslation('sk_non_approvato', language) : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
                 thumbnail: undefined
               });
               setTripData({
@@ -1534,18 +1580,18 @@ export default function PoiDetailSheet({
         }
         return true;
       } else {
-        setGeneratedText(wikiData?.extract || "Descrizione non disponibile.");
+        setGeneratedText(wikiData?.extract || getTranslation('sk_descrizione_non_disponibile', language));
         return false; // nessun testo generato
       }
     } catch (error: any) {
       console.error("Regeneration error:", error);
       if (autoPlay) {
         // Azione esplicita dell'utente: avvisiamo
-        notify("Si è verificato un errore durante la rigenerazione. Riprova tra qualche istante.");
+        notify(getTranslation('sk_rigenerazione_errore', language));
       } else {
         // Auto-rigenerazione in background: fallback elegante sul testo della
         // scheda, così il blocco audioguida non resta mai in caricamento.
-        setGeneratedText(prev => prev || wikiData?.extract || "Descrizione non disponibile al momento.");
+        setGeneratedText(prev => prev || wikiData?.extract || getTranslation('sk_descrizione_non_disponibile_momento', language));
       }
       return false;
     } finally {
@@ -1588,7 +1634,7 @@ export default function PoiDetailSheet({
 
   const handleSaveOfflineAudio = async () => {
     // Offline audio save handled globally if needed
-    notify("Funzione offline aggiornata per gestione globale.");
+    notify(getTranslation('sk_offline_globale', language));
   };
 
   const skipTime = (amount: number) => {
@@ -1840,7 +1886,7 @@ export default function PoiDetailSheet({
       if (p) {
         const types = p.types || [];
         let specificType =
-          (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo");
+          (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
 
         if (poi.category === "locali") {
           if (types.includes("restaurant")) specificType = "Ristorante";
@@ -1866,7 +1912,7 @@ export default function PoiDetailSheet({
         } else {
           // Attrazioni / Cultura
           if (types.includes("church") || types.includes("place_of_worship"))
-            specificType = "Chiesa / Luogo di Culto";
+            specificType = getTranslation('sk_chiesa_luogo_culto', language);
           if (types.includes("museum")) specificType = "Museo";
           if (types.includes("art_gallery")) specificType = "Galleria d'Arte";
           if (types.includes("tourist_attraction"))
@@ -1927,7 +1973,7 @@ export default function PoiDetailSheet({
             uniqueTypes.length > 0
               ? (uniqueTypes as string[]).join(" e ")
               : specificType;
-          const defaultStart = `Questo locale si posiziona come ${typeStr.toLowerCase()} nel cuore della zona.`;
+          const defaultStart = getTranslation('sk_locale_posiziona_zona', language).replace('{type}', typeStr.toLowerCase());
           baseDesc = baseDesc || defaultStart;
 
           const revTexts = reviews
@@ -1971,7 +2017,7 @@ export default function PoiDetailSheet({
             revTexts.some((r: string) => r.toLowerCase().includes(a)),
           );
           if (foundCibi.length > 0)
-            baseDesc += ` Tra le specialità più apprezzate spiccano: ${foundCibi.join(", ")}.`;
+            baseDesc += " " + getTranslation('sk_specialita_spiccano', language).replace('{list}', foundCibi.join(", "));
 
           if (
             p.rating &&
@@ -2121,7 +2167,7 @@ export default function PoiDetailSheet({
             let baseDesc = detailsData.description || "";
             if (poi.category === "locali") {
               const typeStr = description;
-              const defaultStart = `Questo locale si posiziona come ${typeStr.toLowerCase()} nel cuore di ${detailsData.address_obj?.city || "questa zona"}.`;
+              const defaultStart = getTranslation('sk_locale_posiziona_citta', language).replace('{type}', typeStr.toLowerCase()).replace('{city}', detailsData.address_obj?.city || getTranslation('sk_questa_zona', language));
               baseDesc = baseDesc || defaultStart;
 
               const revTexts = reviews.map((r: any) => r.text).filter(Boolean);
@@ -2163,7 +2209,7 @@ export default function PoiDetailSheet({
                 revTexts.some((r: string) => r.toLowerCase().includes(a)),
               );
               if (foundCibi.length > 0)
-                baseDesc += ` Tra le specialità apprezzate: ${foundCibi.join(", ")}.`;
+                baseDesc += " " + getTranslation('sk_specialita_apprezzate', language).replace('{list}', foundCibi.join(", "));
 
               if (
                 detailsData.rating &&
@@ -2176,7 +2222,7 @@ export default function PoiDetailSheet({
               if (!baseDesc && reviews.length > 0) {
                 baseDesc = `Recensione in evidenza: "${reviews[0].text}"`;
               } else if (!baseDesc) {
-                baseDesc = `${poi.name || "Questo locale"} è una meta apprezzata a ${detailsData.address_obj?.city || "destinazione"}.`;
+                baseDesc = getTranslation('sk_meta_apprezzata', language).replace('{name}', poi.name || getTranslation('sk_questo_locale', language)).replace('{city}', detailsData.address_obj?.city || getTranslation('sk_destinazione', language));
               }
             }
             extract = baseDesc;
@@ -2227,10 +2273,10 @@ export default function PoiDetailSheet({
       }
 
       if (!loaded) {
-        extract = `${poi.name || "Questo locale"} offre ottime specialità in zona. Al momento non abbiamo dettagli estesi da nessuna fonte online.`;
+        extract = getTranslation('sk_offre_specialita', language).replace('{name}', poi.name || getTranslation('sk_questo_locale', language));
         if (description === "Punto di interesse" || !description) {
           description =
-            (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo");
+            (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
         }
       }
 
@@ -2245,14 +2291,14 @@ export default function PoiDetailSheet({
         description:
           description !== "Punto di interesse" && description
             ? description
-            : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Luogo")) : "Luogo"),
+            : (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
         thumbnail,
         pageUrl,
       });
     } catch (error) {
       console.error("Fetch chain error:", error);
       setWikiData({
-        extract: `${poi.name || "Questo locale"} offre ottime specialità. Si è verificato un errore durante il caricamento dei dettagli.`,
+        extract: getTranslation('sk_offre_specialita_errore', language).replace('{name}', poi.name || getTranslation('sk_questo_locale', language)),
         description: "Ristorante/Locale",
         thumbnail: thumbnail,
       });
@@ -2355,7 +2401,7 @@ export default function PoiDetailSheet({
               title.toLowerCase().includes("statua");
 
             if (isPerson && isMonument) {
-              extract = `Questo monumento è dedicato a ${pageTitle}, ${description}. Situato a ${cityName || "questa località"}, commemora la figura di ${pageTitle}. ${extract.substring(0, 200)}...`;
+              extract = `${getTranslation('sk_monumento_dedicato', language).replace(/\{name\}/g, pageTitle).replace('{desc}', description).replace('{city}', cityName || getTranslation('sk_questa_localita', language))} ${extract.substring(0, 200)}...`;
             }
 
             setWikiData({
@@ -2363,16 +2409,16 @@ export default function PoiDetailSheet({
               thumbnail,
               description:
                 description ||
-                (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : "Luogo")) : "Luogo"),
+                (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
               pageUrl,
             });
-            setCachedPoiDetails(poiItem.id, {
+            setCachedPoiDetails(chiaveScheda(poiItem.id), {
               wikiData: {
                 extract,
                 thumbnail,
                 description:
                   description ||
-                  (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : "Luogo")) : "Luogo"),
+                  (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
                 pageUrl,
               },
             });
@@ -2465,7 +2511,7 @@ export default function PoiDetailSheet({
 
       // Default fallback
       if (!extract) {
-        extract = `${title || "Questo luogo"} è ${poiItem.name ? "un punto di interesse" : "una meta interessante"}.`;
+        extract = getTranslation(poiItem.name ? 'sk_e_punto_interesse' : 'sk_e_meta_interessante', language).replace('{name}', title || getTranslation('sk_questo_luogo', language));
       }
 
       // If generic description, enrich with subcategory specific details if available
@@ -2483,10 +2529,10 @@ export default function PoiDetailSheet({
 
       let finalDescription =
         description ||
-        (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : "Luogo")) : "Luogo");
+        (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
       if (finalDescription === "Punto di interesse") {
         finalDescription =
-          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : "Luogo")) : "Luogo");
+          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language));
       }
 
       setWikiData({
@@ -2496,7 +2542,7 @@ export default function PoiDetailSheet({
         pageUrl,
       });
 
-      setCachedPoiDetails(poiItem.id, {
+      setCachedPoiDetails(chiaveScheda(poiItem.id), {
         wikiData: {
           extract,
           thumbnail,
@@ -2545,9 +2591,9 @@ export default function PoiDetailSheet({
     } catch (error) {
       console.error("All fetch APIs failed:", error);
       setWikiData({
-        extract: `${title || "Questo luogo"} è un punto di interesse registrato sulla mappa, ma purtroppo si è verificato un errore nel caricamento dei dettagli.`,
+        extract: getTranslation('sk_poi_registrato_errore', language).replace('{name}', title || getTranslation('sk_questo_luogo', language)),
         description:
-          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : "Luogo")) : "Luogo"),
+          (poiItem.category ? ((poiItem.category ? (poiItem.category.charAt(0).toUpperCase() + poiItem.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
         thumbnail: undefined,
       });
     } finally {
@@ -2593,24 +2639,31 @@ export default function PoiDetailSheet({
             <div className="w-full h-full rounded-2xl overflow-hidden relative group">
               <AttractionImage
                 src={poi?.image_url || poi?.photo_url || wikiData?.thumbnail}
-                alt={poi.name || "Attrazione"}
+                alt={poi.name || getTranslation('sk_attrazione', language)}
                 category={poi.category}
                 className="w-full h-full"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent pointer-events-none" />
+              {/* Il credito dell'autore (CC BY-SA lo impone) va DOPO la
+                  sfumatura, non dentro AttractionImage: la sfumatura e' un
+                  fratello disegnato dopo, e messo sotto il testo diventava
+                  illeggibile. Arriva da /api/poi/details, che lo legge da
+                  shared_pois — la RPC della mappa ha la lista di colonne fissa
+                  e non lo porta. */}
+              <AttribuzioneFoto testo={(poi as any)?.image_attribution || (wikiData as any)?.attribution || null} />
 
               <div className="absolute top-4 right-4 flex gap-2">
                 <button
                   onClick={openChatWithWip}
                   className="p-2.5 bg-blue-600/80 backdrop-blur-md rounded-full text-white hover:bg-blue-700 transition-all shadow-lg active:scale-90"
-                  title="Chat con Wip"
-                  aria-label="Chat con Wip"
+                  title={getTranslation('sk_chat_con_wip', language)}
+                  aria-label={getTranslation('sk_chat_con_wip', language)}
                 >
                   <MessageSquare className="w-5 h-5" />
                 </button>
                 <button
                   onClick={onToggleSave}
-                  aria-label={isSaved ? 'Rimuovi dai preferiti' : 'Salva nei preferiti'}
+                  aria-label={isSaved ? getTranslation('sk_rimuovi_preferiti', language) : getTranslation('sk_salva_preferiti', language)}
                   aria-pressed={isSaved}
                   className={`p-2.5 backdrop-blur-md rounded-full transition-all shadow-lg active:scale-90 ${
                     isSaved
@@ -2624,7 +2677,7 @@ export default function PoiDetailSheet({
                 </button>
                 <button
                   onClick={onClose}
-                  aria-label="Chiudi"
+                  aria-label={getTranslation('sk_chiudi', language)}
                   className="p-2.5 bg-black/30 backdrop-blur-md rounded-full text-white hover:bg-black/50 transition-colors shadow-lg"
                 >
                   <X className="w-5 h-5" />
@@ -2648,7 +2701,7 @@ export default function PoiDetailSheet({
                   {wikiData?.description ? `• ${wikiData.description}` : ""}
                 </p>
                 <h1 className="text-2xl font-black text-white leading-tight drop-shadow-lg">
-                  {poi.name}
+                  {displayName(poi, language)}
                 </h1>
                 {/* Doppia appartenenza: POI turistico E bene vincolato di un
                     registro nazionale. Tiene la sua scheda e la sua audioguida,
@@ -2690,7 +2743,7 @@ export default function PoiDetailSheet({
                 onClick={() => {
                   // Verso la porta; senza porta, il civico dell'indirizzo
                   // appena mostrato (la via principale). Vedi puntoArrivoSuStrada.
-                  void puntoArrivoSuStrada({ ...(poi as any), address: poiAddress }).then((a) => {
+                  void puntoArrivoSuStrada({ ...(poi as any), address: poiAddress, address_source: addressSource }).then((a) => {
                     const q = encodeURIComponent(`${a.lat},${a.lon}`);
                     window.open(`https://www.google.com/maps/dir/?api=1&destination=${q}`, '_blank');
                   });
@@ -2699,7 +2752,9 @@ export default function PoiDetailSheet({
               >
                 <MapPin className="w-4 h-4 text-primary/60 shrink-0" />
                 <span className="text-sm font-bold text-primary/80 group-hover:text-primary transition-colors leading-snug">
-                  {poiAddress}
+                  {indirizzoEStradaVicina
+                    ? `${getTranslation('indirizzo_vicino_a', language)} ${poiAddress}`
+                    : poiAddress}
                 </span>
               </button>
             )}
@@ -2821,11 +2876,10 @@ export default function PoiDetailSheet({
                 </div>
                 <div>
                   <h4 className="text-[13px] font-black text-orange-900 uppercase tracking-tighter">
-                    Senza Glutine Disponibile
+                    {getTranslation('sk_senza_glutine_disponibile', language)}
                   </h4>
                   <p className="text-[11px] font-black text-orange-700/60 leading-tight">
-                    Abbiamo rilevato che questo locale offre opzioni per
-                    celiaci.
+                    {getTranslation('sk_senza_glutine_frase', language)}
                   </p>
                 </div>
               </motion.div>
@@ -2836,19 +2890,19 @@ export default function PoiDetailSheet({
               <div className="mb-6 bg-rose-50/50 p-4 rounded-[2rem] border border-rose-100/50">
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-[10px] font-black text-rose-600 uppercase tracking-widest px-2 py-0.5 bg-rose-100 rounded-md">
-                    Esplora per tipo
+                    {getTranslation('sk_esplora_per_tipo', language)}
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {[
-                    { id: "pizzeria", label: "Pizzerie", emoji: "🍕" },
-                    { id: "pesce", label: "Ristoranti di Pesce", emoji: "🐟" },
+                    { id: "pizzeria", label: getTranslation('sk_pizzerie', language), emoji: "🍕" },
+                    { id: "pesce", label: getTranslation('sk_ristoranti_pesce', language), emoji: "🐟" },
                     {
                       id: "vegetariano",
-                      label: "Vegetariano & Bio",
+                      label: getTranslation('sk_vegetariano_bio', language),
                       emoji: "🌿",
                     },
-                    { id: "bar", label: "Bar & Caffè", emoji: "☕" },
+                    { id: "bar", label: getTranslation('sk_bar_caffe', language), emoji: "☕" },
                   ].map((f) => (
                     <button
                       key={f.id}
@@ -2880,7 +2934,7 @@ export default function PoiDetailSheet({
                       }`}
                     />
                     <span className="text-xs font-bold text-blue-900 uppercase tracking-tight">
-                      Stato Disponibilità
+                      {getTranslation('sk_stato_disponibilita', language)}
                     </span>
                   </div>
                   <span
@@ -2893,28 +2947,28 @@ export default function PoiDetailSheet({
                     }`}
                   >
                     {parkingData?.availability === "Alta"
-                      ? "ALTA"
+                      ? getTranslation('sk_alta', language)
                       : parkingData?.availability === "Media"
-                        ? "MEDIA"
-                        : "LIMITATA"}
+                        ? getTranslation('sk_media', language)
+                        : getTranslation('sk_limitata', language)}
                   </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-white/60 p-2 rounded-xl">
                     <p className="text-[9px] font-bold text-blue-400 uppercase">
-                      Tariffa
+                      {getTranslation('sk_tariffa', language)}
                     </p>
                     <p className="text-xs font-black text-blue-900">
-                      {parkingData?.fee || "Variabile"}
+                      {parkingData?.fee || getTranslation('sk_variabile', language)}
                     </p>
                   </div>
                   <div className="bg-white/60 p-2 rounded-xl">
                     <p className="text-[9px] font-bold text-blue-400 uppercase">
-                      Tipo
+                      {getTranslation('sk_tipo', language)}
                     </p>
                     <p className="text-xs font-black text-blue-900">
-                      {parkingData?.type || "Standard"}
+                      {parkingData?.type || getTranslation('sk_standard', language)}
                     </p>
                   </div>
                 </div>
@@ -2957,7 +3011,7 @@ export default function PoiDetailSheet({
             <div className="grid grid-cols-2 gap-3 mb-6">
               <ActionButton
                 icon={<MessageSquare className="w-4 h-4" />}
-                label="Chiedi a WIP"
+                label={getTranslation('sk_chiedi_a_wip', language)}
                 onClick={openChatWithWip}
               />
               <ActionButton
@@ -3064,8 +3118,8 @@ export default function PoiDetailSheet({
                   ) : (
                     <div className="relative">
                        {displayedText || (
-                         isLoading ? (language === 'IT' ? "Caricamento dettagli..." : getTranslation("loading_dots", language))
-                         : isStreaming ? (language === 'IT' ? "Caricamento informazioni..." : getTranslation("loading_dots", language))
+                         isLoading ? getTranslation("sk_caricamento_dettagli", language)
+                         : isStreaming ? getTranslation("sk_caricamento_informazioni", language)
                          // Fine caricamento senza testo: mostra la descrizione
                          // disponibile, MAI una scritta di caricamento eterna.
                          : (wikiData?.extract || poi?.description || getTranslation("no_description", language))
@@ -3162,7 +3216,7 @@ export default function PoiDetailSheet({
                 className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-orange-500 transition-colors"
               >
                 <Flag className="w-3.5 h-3.5" />
-                Hai notato un errore in questo luogo? Segnalalo
+                {getTranslation('sk_notato_errore', language)}
               </button>
             </div>
 
@@ -3173,31 +3227,31 @@ export default function PoiDetailSheet({
               <div className="mb-6 flex items-center justify-center gap-4">
                 <button
                   onClick={async () => {
-                    if (!window.confirm('Segnalare questo contenuto della community come inappropriato o offensivo? La segnalazione è anonima e verrà esaminata dalla moderazione.')) return;
+                    if (!window.confirm(getTranslation('sk_confirm_segnala_contenuto', language))) return;
                     const { reportCommunityContent } = await import('../lib/communityModeration');
                     const r = await reportCommunityContent(String(poi.id), 'inappropriate');
                     notify(r.ok
-                      ? (r.hidden ? 'Contenuto segnalato e sospeso in attesa di revisione. Grazie!' : 'Segnalazione inviata alla moderazione. Grazie!')
-                      : 'Impossibile inviare la segnalazione: accedi e riprova.', r.ok ? 'success' : undefined);
+                      ? (r.hidden ? getTranslation('sk_contenuto_sospeso', language) : getTranslation('sk_segnalazione_moderazione', language))
+                      : getTranslation('sk_segnalazione_impossibile', language), r.ok ? 'success' : undefined);
                   }}
                   className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-red-500 transition-colors"
                 >
                   <Flag className="w-3 h-3" />
-                  Segnala contenuto
+                  {getTranslation('sk_segnala_contenuto', language)}
                 </button>
                 <span className="text-slate-300">·</span>
                 <button
                   onClick={async () => {
-                    if (!window.confirm("Bloccare l'autore di questo contenuto? Non vedrai più i suoi contenuti community sulla mappa.")) return;
+                    if (!window.confirm(getTranslation('sk_confirm_blocca_autore', language))) return;
                     const { blockCommunityAuthor } = await import('../lib/communityModeration');
                     const ok = await blockCommunityAuthor(String(poi.id));
-                    notify(ok ? 'Autore bloccato: i suoi contenuti non ti verranno più mostrati.' : 'Impossibile bloccare: accedi e riprova.', ok ? 'success' : undefined);
+                    notify(ok ? getTranslation('sk_autore_bloccato', language) : getTranslation('sk_blocco_impossibile', language), ok ? 'success' : undefined);
                     if (ok) onClose();
                   }}
                   className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 hover:text-red-500 transition-colors"
                 >
                   <ShieldCheck className="w-3 h-3" />
-                  Blocca autore
+                  {getTranslation('sk_blocca_autore', language)}
                 </button>
               </div>
             )}
@@ -3243,9 +3297,7 @@ export default function PoiDetailSheet({
         const { data: sessionData } = await supabase.auth.getSession();
         const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
         const creditiInsufficienti = () => {
-          notify(language === 'IT'
-            ? "Crediti insufficienti per l'audioguida."
-            : "Not enough credits for the audioguide.");
+          notify(getTranslation('sk_crediti_insufficienti_audio', language));
           openCreditShop();
         };
         // Utente non-IT senza testo già generato: dopo il pagamento la guida
@@ -3266,9 +3318,7 @@ export default function PoiDetailSheet({
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
-            notify(language === 'IT'
-              ? "Non è stato possibile generare l'audioguida. I crediti ti sono stati restituiti."
-              : "Could not generate the audioguide. Your credits have been refunded.");
+            notify(getTranslation('sk_audioguida_non_generata', language));
           }
           return;
         }
@@ -3299,9 +3349,7 @@ export default function PoiDetailSheet({
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(e => console.error('[Audioguida] Rimborso fallito:', e));
-            notify(language === 'IT'
-              ? "Non è stato possibile riprodurre l'audioguida. I crediti ti sono stati restituiti."
-              : "Could not play the audioguide. Your credits have been refunded.");
+            notify(getTranslation('sk_audioguida_non_riprodotta', language));
           } else {
             notify(getTranslation('riproduzione_fallita', language));
           }
@@ -3313,7 +3361,7 @@ export default function PoiDetailSheet({
       }}
       cost={PRICING_LIST.audio_guide}
       currentBalance={currentBalance}
-      serviceName="Audioguida POI"
+      serviceName={getTranslation('sk_audioguida_poi', language)}
       language={language}
     />
 
@@ -3361,35 +3409,37 @@ export default function PoiDetailSheet({
         >
           <div className="flex items-center gap-3 mb-4 text-orange-600">
             <AlertTriangle className="w-6 h-6" />
-            <h3 className="text-lg font-black">Segnala un problema</h3>
+            <h3 className="text-lg font-black">{getTranslation('sk_segnala_problema', language)}</h3>
           </div>
-          
+
           <p className="text-sm text-slate-600 mb-4">
-            Aiutaci a migliorare la mappa segnalando eventuali inesattezze per <strong>{poi?.name}</strong>.
+            {getTranslation('sk_report_intro', language).split('{name}')[0]}<strong>{poi?.name}</strong>{getTranslation('sk_report_intro', language).split('{name}')[1] || ''}
           </p>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Tipo di errore</label>
-              <select 
+              <label className="block text-xs font-bold text-slate-700 mb-1">{getTranslation('sk_tipo_errore', language)}</label>
+              {/* Il value resta il testo ITALIANO (viene inviato al server e
+                  letto dall'admin): all'utente si mostra l'etichetta tradotta. */}
+              <select
                 value={reportType}
                 onChange={(e) => setReportType(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-medium focus:ring-2 focus:ring-orange-500/20"
               >
-                <option>Informazioni errate (es. nome, indirizzo)</option>
-                <option>Il luogo non esiste più / Chiuso definitivamente</option>
-                <option>Posizione errata sulla mappa</option>
-                <option>Immagine non appropriata</option>
-                <option>Altro problema</option>
+                <option value="Informazioni errate (es. nome, indirizzo)">{getTranslation('sk_report_opt_info', language)}</option>
+                <option value="Il luogo non esiste più / Chiuso definitivamente">{getTranslation('sk_report_opt_chiuso', language)}</option>
+                <option value="Posizione errata sulla mappa">{getTranslation('sk_report_opt_posizione', language)}</option>
+                <option value="Immagine non appropriata">{getTranslation('sk_report_opt_immagine', language)}</option>
+                <option value="Altro problema">{getTranslation('sk_report_opt_altro', language)}</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Dettagli (opzionale)</label>
-              <textarea 
+              <label className="block text-xs font-bold text-slate-700 mb-1">{getTranslation('sk_dettagli_opzionale', language)}</label>
+              <textarea
                 value={reportDetails}
                 onChange={(e) => setReportDetails(e.target.value)}
-                placeholder="Aggiungi qualche dettaglio per aiutarci..."
+                placeholder={getTranslation('sk_report_placeholder', language)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-orange-500/20 h-24 resize-none"
               />
             </div>
@@ -3401,7 +3451,7 @@ export default function PoiDetailSheet({
               className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition-colors"
               disabled={isReporting}
             >
-              Annulla
+              {getTranslation('sk_annulla', language)}
             </button>
             <button 
               onClick={handleReportSubmit}
@@ -3409,7 +3459,7 @@ export default function PoiDetailSheet({
               disabled={isReporting}
             >
               {isReporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Flag className="w-4 h-4" />}
-              Invia Report
+              {getTranslation('sk_invia_report', language)}
             </button>
           </div>
         </motion.div>

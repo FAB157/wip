@@ -4,6 +4,7 @@ import { Compass, X, MapPin, CameraOff, Loader2 } from 'lucide-react';
 import { calculateDistance, calculateBearing, lowPassFilter } from '../lib/arMath';
 import { supabase } from '../lib/supabase';
 import { locationService } from '../services/locationService';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface AROverlayProps {
   onClose: () => void;
@@ -11,6 +12,9 @@ interface AROverlayProps {
 }
 
 export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
+  // Nessuna prop `language`: si legge la stessa chiave localStorage di App.tsx.
+  const lingua = linguaCorrente();
+  const t = (k: string) => getTranslation(k, lingua);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [streamActive, setStreamActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -194,7 +198,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
         }
       } catch (err: any) {
         console.error("Errore fotocamera AR:", err);
-        setCameraError(err.message || "Impossibile accedere alla fotocamera");
+        setCameraError(err.message || t('vr_a_ar_camera_denied'));
         setIsLoading(false);
         setStreamActive(false);
       }
@@ -330,13 +334,13 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4 border border-red-500/20">
               <CameraOff className="w-8 h-8 text-red-500" />
             </div>
-            <h3 className="text-secondary font-black text-xl mb-2">Errore Fotocamera</h3>
-            <p className="text-secondary/60 text-sm font-medium mb-6">Non è stato possibile accedere alla fotocamera. Verifica i permessi nelle impostazioni del dispositivo.</p>
+            <h3 className="text-secondary font-black text-xl mb-2">{t('vr_a_ar_camera_error_title')}</h3>
+            <p className="text-secondary/60 text-sm font-medium mb-6">{t('vr_a_ar_camera_error_desc')}</p>
             <button
               onClick={onClose}
               className="px-8 py-3 bg-surface/10 text-secondary font-black text-sm rounded-2xl hover:bg-surface/20 transition-colors"
             >
-              Torna indietro
+              {t('vr_a_ar_back')}
             </button>
           </div>
         )}
@@ -346,7 +350,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       {isLoading && !cameraError && (
         <div className="absolute inset-0 z-40 bg-black flex flex-col items-center justify-center">
           <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
-          <p className="text-white/60 text-xs font-black uppercase tracking-widest">Inizializzazione Radar...</p>
+          <p className="text-white/60 text-xs font-black uppercase tracking-widest">{t('vr_a_ar_init')}</p>
         </div>
       )}
 
@@ -358,7 +362,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             Radar AR
           </h2>
           <p className="text-xs text-white/80 font-medium">
-            Bussola: {Math.round(heading)}° | POI: {pois.length}
+            {t('vr_a_ar_compass')}: {Math.round(heading)}° | POI: {pois.length}
           </p>
         </div>
         <button onClick={onClose} className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white">
@@ -379,19 +383,19 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
               <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Compass className="w-8 h-8 text-blue-600" />
               </div>
-              <h3 className="text-xl font-black mb-2">Attiva la Bussola</h3>
-              <p className="text-sm text-gray-500 mb-6 font-medium">Per vedere i monumenti intorno a te, abbiamo bisogno dell'accesso ai sensori di movimento.</p>
+              <h3 className="text-xl font-black mb-2">{t('vr_a_ar_enable_compass')}</h3>
+              <p className="text-sm text-gray-500 mb-6 font-medium">{t('vr_a_ar_compass_desc')}</p>
               <button 
                 onClick={requestOrientationPermission}
                 className="w-full py-4 bg-blue-600 text-white rounded-xl font-black shadow-lg"
               >
-                Consenti
+                {t('vr_a_ar_allow')}
               </button>
               <button
                 onClick={() => { setNeedsIosPermission(false); setPermissionsGranted(true); }}
                 className="w-full py-3 mt-2 text-gray-500 text-sm font-bold"
               >
-                Salta (mostra tutti i POI)
+                {t('vr_a_ar_skip')}
               </button>
             </div>
           </motion.div>
@@ -409,7 +413,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
           >
             <div className="bg-black/60 backdrop-blur-md rounded-full px-4 py-2 flex items-center gap-2">
               <Loader2 className="w-4 h-4 text-white animate-spin" />
-              <span className="text-white text-xs font-bold">Caricamento POI vicini...</span>
+              <span className="text-white text-xs font-bold">{t('vr_a_ar_loading_pois')}</span>
             </div>
           </motion.div>
         )}
@@ -426,7 +430,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
           >
             <div className="bg-black/60 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-3 mx-6">
               <MapPin className="w-5 h-5 text-amber-400 shrink-0" />
-              <span className="text-white text-xs font-bold">Nessun punto di interesse trovato nel raggio di 5 km</span>
+              <span className="text-white text-xs font-bold">{t('vr_a_ar_no_pois')}</span>
             </div>
           </motion.div>
         )}

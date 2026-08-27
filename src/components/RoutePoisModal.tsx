@@ -4,6 +4,7 @@ import { getTranslation, Language } from '../lib/i18n';
 import { getApiUrl } from '../lib/api';
 import { haversineMeters } from '../lib/geo';
 import { notify } from '../lib/toast';
+import { locationService } from '../services/locationService';
 
 // Oltre questa distanza in linea d'aria il tragitto a piedi è irrealistico
 // per la maggior parte degli utenti: prima si procedeva silenziosamente
@@ -53,7 +54,6 @@ export default function RoutePoisModal({
   const abortRef = useRef<AbortController | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
-  const isIt = language === 'IT';
   const origin = originMode === 'gps' ? gpsCoords : (customCoords ? { lat: customCoords.lat, lon: customCoords.lon } : null);
 
   // Acquisizione GPS all'apertura (se non fornita a monte dal chiamante)
@@ -61,10 +61,19 @@ export default function RoutePoisModal({
     if (!isOpen) return;
     setGpsError(false);
     if (startCoords) { setGpsCoords(startCoords); return; }
-    if (!navigator.geolocation) { setGpsError(true); return; }
+    // L'ultimo fix del servizio (con l'audioguida accesa c'e' quasi sempre):
+    // il radar manda startCoords null, e senza questo seme il modale restava
+    // senza origine finche' getCurrentPosition non rispondeva — e al chiuso,
+    // con un timeout, "Salta" avviava una navigazione senza partenza
+    // (toast "Attiva il GPS" e nessun percorso, 23/08/2026).
+    const ultimo = locationService.getLastLocation();
+    if (ultimo && Number.isFinite(ultimo.latitude) && Number.isFinite(ultimo.longitude)) {
+      setGpsCoords({ lat: ultimo.latitude, lon: ultimo.longitude });
+    }
+    if (!navigator.geolocation) { if (!ultimo) setGpsError(true); return; }
     navigator.geolocation.getCurrentPosition(
       (pos) => setGpsCoords({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-      () => setGpsError(true),
+      () => { if (!ultimo) setGpsError(true); },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
     );
   }, [isOpen, startCoords]);
@@ -116,9 +125,7 @@ export default function RoutePoisModal({
     if (straightLineM > LONG_WALK_WARNING_M) {
       const km = (straightLineM / 1000).toFixed(1);
       notify(
-        isIt
-          ? `Il percorso è di oltre ${km} km in linea d'aria: potrebbe richiedere molto tempo a piedi.`
-          : `The route is over ${km} km in a straight line: it may take a long time on foot.`,
+        getTranslation('gr_percorso_lungo', language).replace('{km}', km),
         'info',
       );
     }
@@ -209,13 +216,13 @@ export default function RoutePoisModal({
           <div>
             <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
               WIP Nav
-              <button onClick={() => setShowExplainer(v => !v)} className="p-1 text-gray-400 hover:text-primary" aria-label="Info">
+              <button onClick={() => setShowExplainer(v => !v)} className="p-1 text-gray-400 hover:text-primary" aria-label={getTranslation('gr_info', language)}>
                 <Info className="w-4 h-4" />
               </button>
             </h2>
             <p className="text-sm text-gray-500 mt-1">{getTranslation('rp_to', language)}: {destinationName}</p>
           </div>
-          <button onClick={onClose} aria-label="Chiudi" className="p-2 bg-white dark:bg-gray-800 rounded-full hover:bg-gray-100 shadow-sm">
+          <button onClick={onClose} aria-label={getTranslation('gr_chiudi', language)} className="p-2 bg-white dark:bg-gray-800 rounded-full hover:bg-gray-100 shadow-sm">
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
@@ -225,14 +232,10 @@ export default function RoutePoisModal({
           {showExplainer && (
             <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 rounded-2xl text-xs text-indigo-900 dark:text-indigo-200 leading-relaxed space-y-2">
               <p>
-                {isIt
-                  ? 'WIP Nav è il navigatore integrato dell\'app: ti guida in tempo reale lungo i percorsi dell\'itinerario con indicazioni vocali, e lungo la strada fa partire da sole le audioguide dei luoghi geofenzati che scegli qui sotto — senza uscire dall\'app.'
-                  : 'WIP Nav is the app\'s built-in navigator: it guides you in real time along your itinerary with voice directions, and automatically plays the audio guides of the geofenced places you select below — without leaving the app.'}
+                {getTranslation('gr_wipnav_cose_1', language)}
               </p>
               <p>
-                {isIt
-                  ? 'A differenza di Google Maps (navigatore stradale generalista punto-punto basato sul traffico), WIP Nav è ottimizzato per il turismo di prossimità: ascolto contestuale delle tracce audio e scoperta dei punti di interesse curati lungo il tracciato.'
-                  : 'Unlike Google Maps (a general-purpose point-to-point road navigator built around traffic), WIP Nav is optimized for proximity tourism: contextual audio playback and discovery of curated points of interest along your route.'}
+                {getTranslation('gr_wipnav_cose_2', language)}
               </p>
             </div>
           )}
@@ -370,7 +373,10 @@ export default function RoutePoisModal({
         <div className="p-6 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 flex space-x-3">
           <button
             onClick={() => onStartNavigation([], origin)}
-            className="w-1/3 py-4 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold active:scale-[0.98] transition-transform"
+            // Senza origine anche "Salta" avviava una navigazione impossibile
+            // (il tasto principale era gia' disabilitato, questo no).
+            disabled={!origin}
+            className="w-1/3 py-4 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-bold active:scale-[0.98] transition-transform disabled:opacity-50"
           >
             {getTranslation('skip', language)}
           </button>

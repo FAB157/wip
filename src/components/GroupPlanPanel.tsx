@@ -8,7 +8,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import { supabase } from '../lib/supabase';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 
 // ── Pianificazione di gruppo (ondata 7) ────────────────────────────────────
 // L'organizzatore crea una stanza (PIN a 6 cifre, vive in api_cache lato
@@ -57,14 +57,19 @@ interface GroupPlanPanelProps {
   onBack: () => void;
 }
 
+// `label` è una CHIAVE i18n (vr_a_int_*): si traduce al momento del render.
 const INTEREST_OPTIONS: { id: string; label: string; icon: LucideIcon }[] = [
-  { id: 'arte', label: 'Arte', icon: Palette },
-  { id: 'gastronomia', label: 'Gastronomia', icon: UtensilsCrossed },
-  { id: 'natura', label: 'Natura', icon: Trees },
-  { id: 'avventura', label: 'Avventura', icon: Mountain },
-  { id: 'shopping', label: 'Shopping', icon: ShoppingBag },
-  { id: 'fotografia', label: 'Fotografia', icon: Camera },
+  { id: 'arte', label: 'vr_a_int_arte', icon: Palette },
+  { id: 'gastronomia', label: 'vr_a_int_gastronomia', icon: UtensilsCrossed },
+  { id: 'natura', label: 'vr_a_int_natura', icon: Trees },
+  { id: 'avventura', label: 'vr_a_int_avventura', icon: Mountain },
+  { id: 'shopping', label: 'vr_a_int_shopping', icon: ShoppingBag },
+  { id: 'fotografia', label: 'vr_a_int_fotografia', icon: Camera },
 ];
+
+// Etichette tradotte dei valori dati (budget/ritmo) mostrati nelle righe voti.
+const BUDGET_KEY: Record<string, string> = { economico: 'vr_a_gp_budget_eco', standard: 'vr_a_gp_std', lusso: 'vr_a_gp_budget_lux' };
+const RITMO_KEY: Record<string, string> = { rilassato: 'vr_a_gp_pace_relax', standard: 'vr_a_gp_std', intenso: 'vr_a_gp_pace_intense' };
 
 const BUDGET_ORDER = ['economico', 'standard', 'lusso'] as const;
 
@@ -119,6 +124,7 @@ function getMemberId(): string {
 }
 
 export default function GroupPlanPanel({ language, defaultDestination, defaultDays, notify, onApplyGroup, onBack }: GroupPlanPanelProps) {
+  const t = (k: string) => getTranslation(k, language);
   type View = 'home' | 'create' | 'room' | 'join' | 'vote' | 'voted';
   const [view, setView] = useState<View>('home');
   const [busy, setBusy] = useState(false);
@@ -144,14 +150,14 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       const res = await fetch(getApiUrl(`/api/group-plan/${pin}`));
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        if (res.status === 410) notify('Questa stanza è scaduta (dura 7 giorni).');
-        else if (res.status === 404) notify('Stanza non trovata: controlla il PIN.');
-        else notify(data?.error || 'Errore nel recupero della stanza.');
+        if (res.status === 410) notify(t('vr_a_gp_expired'));
+        else if (res.status === 404) notify(t('vr_a_gp_not_found'));
+        else notify(data?.error || t('vr_a_gp_fetch_err'));
         return null;
       }
       return data as GroupSession;
     } catch {
-      notify('Rete non raggiungibile: riprova.');
+      notify(t('vr_a_gp_net_err'));
       return null;
     }
   };
@@ -193,10 +199,10 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
 
   const handleCreate = async () => {
     if (busy) return;
-    if (!destination.trim()) { notify('Indica la destinazione del viaggio.'); return; }
+    if (!destination.trim()) { notify(t('vr_a_gp_need_dest')); return; }
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
-    if (!token) { notify('Accedi con il tuo account per creare un viaggio di gruppo.'); return; }
+    if (!token) { notify(t('vr_a_gp_need_login')); return; }
     setBusy(true);
     try {
       const res = await fetch(getApiUrl('/api/group-plan/create'), {
@@ -205,14 +211,14 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
         body: JSON.stringify({ destination: destination.trim(), days, mese, organizerName: organizerName.trim() }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.pin) throw new Error(data?.error || 'Creazione stanza fallita');
+      if (!res.ok || !data?.pin) throw new Error(data?.error || t('vr_a_gp_create_fail'));
       try { localStorage.setItem('wip_group_plan_created', JSON.stringify({ pin: data.pin, expiresAt: data.expiresAt })); } catch { /* ok */ }
       const s = await fetchSession(data.pin);
       setSession(s || { pin: data.pin, destination: destination.trim(), days, mese, organizerName, expiresAt: data.expiresAt, members: [] });
       setView('room');
-      notify('Stanza creata! Condividi il PIN con i tuoi compagni di viaggio.', 'success');
+      notify(t('vr_a_gp_created'), 'success');
     } catch (e: any) {
-      notify(e?.message || 'Creazione stanza fallita');
+      notify(e?.message || t('vr_a_gp_create_fail'));
     } finally {
       setBusy(false);
     }
@@ -221,19 +227,19 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
   const handleShare = async () => {
     if (!session) return;
     const url = `https://wip.guide/?groupplan=${session.pin}`;
-    const text = `Stiamo organizzando un viaggio a ${session.destination} con WIP! Apri il link e vota le tue preferenze (PIN ${session.pin}):`;
+    const text = `${t('vr_a_gp_share_1')} ${session.destination} ${t('vr_a_gp_share_2')} ${session.pin}):`;
     try {
-      if (navigator.share) await navigator.share({ title: 'Viaggio di gruppo WIP', text, url });
+      if (navigator.share) await navigator.share({ title: t('vr_a_gp_share_title'), text, url });
       else {
         await navigator.clipboard.writeText(`${text} ${url}`);
-        notify('Link copiato negli appunti!', 'success');
+        notify(t('vr_a_gp_link_copied'), 'success');
       }
     } catch { /* condivisione annullata */ }
   };
 
   const handleJoin = async () => {
     if (busy) return;
-    if (!/^\d{6}$/.test(pinInput)) { notify('Il PIN è di 6 cifre.'); return; }
+    if (!/^\d{6}$/.test(pinInput)) { notify(t('vr_a_gp_pin6')); return; }
     setBusy(true);
     try {
       const s = await fetchSession(pinInput);
@@ -245,8 +251,8 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
 
   const handleVote = async () => {
     if (busy || !session) return;
-    if (!voteName.trim()) { notify('Scrivi il tuo nome: il gruppo deve sapere chi ha votato cosa.'); return; }
-    if (voteInterests.length === 0) { notify('Scegli almeno un interesse.'); return; }
+    if (!voteName.trim()) { notify(t('vr_a_gp_need_name')); return; }
+    if (voteInterests.length === 0) { notify(t('vr_a_gp_need_interest')); return; }
     setBusy(true);
     try {
       const body = JSON.stringify({
@@ -269,13 +275,13 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
         res = await fetch(getApiUrl('/api/group-plan/vote'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
       }
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Invio del voto fallito');
+      if (!res.ok) throw new Error(data?.error || t('vr_a_gp_vote_fail'));
       const s = await fetchSession(session.pin);
       if (s) setSession(s);
       setView('voted');
-      notify('Preferenze inviate al gruppo!', 'success');
+      notify(t('vr_a_gp_vote_sent'), 'success');
     } catch (e: any) {
-      notify(e?.message || 'Invio del voto fallito');
+      notify(e?.message || t('vr_a_gp_vote_fail'));
     } finally {
       setBusy(false);
     }
@@ -296,7 +302,7 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       className="space-y-4 pt-4"
     >
       <button type="button" onClick={view === 'home' ? onBack : () => setView('home')} className="flex items-center gap-1.5 text-xs font-black text-primary/60 hover:text-primary px-1">
-        <ArrowLeft className="w-4 h-4" /> Indietro
+        <ArrowLeft className="w-4 h-4" /> {t('vr_a_gp_back')}
       </button>
 
       <div className="flex items-center gap-3 px-1">
@@ -304,8 +310,8 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
           <Users className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="text-lg font-black text-primary leading-tight">Viaggio di gruppo</h2>
-          <p className="text-[11px] font-bold text-gray-400">Ognuno vota le sue preferenze, WIP le fonde in un itinerario.</p>
+          <h2 className="text-lg font-black text-primary leading-tight">{t('vr_a_gp_title')}</h2>
+          <p className="text-[11px] font-bold text-gray-400">{t('vr_a_gp_subtitle')}</p>
         </div>
       </div>
 
@@ -313,13 +319,13 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
         <div className="space-y-3">
           <button type="button" onClick={() => setView('create')} className={`${card} w-full text-left hover:border-primary/30 transition-all active:scale-[0.98]`}>
             <div className="mb-1"><Building2 className="w-6 h-6 text-primary" /></div>
-            <div className="text-sm font-black text-primary">Crea una stanza</div>
-            <div className="text-[11px] font-bold text-gray-400 mt-0.5">Scegli la destinazione, ottieni un PIN da condividere in chat e raccogli i voti degli amici.</div>
+            <div className="text-sm font-black text-primary">{t('vr_a_gp_create_room')}</div>
+            <div className="text-[11px] font-bold text-gray-400 mt-0.5">{t('vr_a_gp_create_room_desc')}</div>
           </button>
           <button type="button" onClick={() => setView('join')} className={`${card} w-full text-left hover:border-primary/30 transition-all active:scale-[0.98]`}>
             <div className="mb-1"><Ticket className="w-6 h-6 text-primary" /></div>
-            <div className="text-sm font-black text-primary">Ho un PIN</div>
-            <div className="text-[11px] font-bold text-gray-400 mt-0.5">Un amico ti ha invitato? Inserisci il PIN a 6 cifre e vota le tue preferenze — non serve un account.</div>
+            <div className="text-sm font-black text-primary">{t('vr_a_gp_have_pin')}</div>
+            <div className="text-[11px] font-bold text-gray-400 mt-0.5">{t('vr_a_gp_have_pin_desc')}</div>
           </button>
         </div>
       )}
@@ -327,43 +333,43 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       {view === 'create' && (
         <div className={`${card} space-y-4`}>
           <div className="space-y-2">
-            <label className={label}>Destinazione</label>
-            <input className={input} placeholder="Es: Firenze" value={destination} onChange={e => setDestination(e.target.value)} />
+            <label className={label}>{t('vr_a_gp_dest_label')}</label>
+            <input className={input} placeholder={t('vr_a_gp_dest_ph')} value={destination} onChange={e => setDestination(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <label className={label}>Giorni</label>
+              <label className={label}>{t('vr_a_gp_days_label')}</label>
               <input className={input} type="number" min={1} max={30} value={days} onChange={e => setDays(Math.min(30, Math.max(1, parseInt(e.target.value) || 1)))} />
             </div>
             <div className="space-y-2">
-              <label className={label}>Mese (opzionale)</label>
-              <input className={input} placeholder="Es: Settembre" value={mese} onChange={e => setMese(e.target.value)} />
+              <label className={label}>{t('vr_a_gp_month_label')}</label>
+              <input className={input} placeholder={t('vr_a_gp_month_ph')} value={mese} onChange={e => setMese(e.target.value)} />
             </div>
           </div>
           <div className="space-y-2">
-            <label className={label}>Il tuo nome</label>
-            <input className={input} placeholder="Es: Fabrizio" value={organizerName} onChange={e => setOrganizerName(e.target.value)} />
+            <label className={label}>{t('vr_a_gp_your_name')}</label>
+            <input className={input} placeholder={t('vr_a_gp_name_ph')} value={organizerName} onChange={e => setOrganizerName(e.target.value)} />
           </div>
           <button type="button" onClick={handleCreate} disabled={busy} className="w-full py-3.5 bg-primary text-white font-black text-sm rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Crea la stanza'}
+            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : t('vr_a_gp_create_btn')}
           </button>
-          <p className="text-[10px] font-bold text-gray-400 text-center">La stanza resta aperta 7 giorni. La generazione finale costa come un itinerario normale.</p>
+          <p className="text-[10px] font-bold text-gray-400 text-center">{t('vr_a_gp_room_note')}</p>
         </div>
       )}
 
       {view === 'room' && session && (
         <div className="space-y-3">
           <div className={`${card} text-center`}>
-            <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">PIN della stanza · {session.destination} · {session.days} {session.days === 1 ? 'giorno' : 'giorni'}</p>
+            <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">{t('vr_a_gp_room_pin')} · {session.destination} · {session.days} {session.days === 1 ? t('vr_a_gp_day') : t('vr_a_gp_days_pl')}</p>
             <p className="text-4xl font-black text-primary tracking-[0.3em] mb-3">{session.pin}</p>
             <div className="flex gap-2">
               <button type="button" onClick={handleShare} className="flex-1 flex items-center justify-center gap-2 py-3 bg-primary text-white font-black text-xs rounded-2xl active:scale-95 transition-all">
-                <Share2 className="w-4 h-4" /> Invita il gruppo
+                <Share2 className="w-4 h-4" /> {t('vr_a_gp_invite')}
               </button>
               <button
                 type="button"
-                onClick={async () => { const s = await fetchSession(session.pin); if (s) { setSession(s); notify('Stanza aggiornata.', 'info'); } }}
-                aria-label="Aggiorna"
+                onClick={async () => { const s = await fetchSession(session.pin); if (s) { setSession(s); notify(t('vr_a_gp_refreshed'), 'info'); } }}
+                aria-label={t('vr_a_gp_refresh')}
                 className="min-w-[44px] flex items-center justify-center bg-primary/10 text-primary rounded-2xl active:scale-95 transition-all"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -372,19 +378,19 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
           </div>
 
           <div className={card}>
-            <p className="text-xs font-black text-primary mb-3">Voti arrivati: {session.members.length}</p>
+            <p className="text-xs font-black text-primary mb-3">{t('vr_a_gp_votes_in')} {session.members.length}</p>
             {session.members.length === 0 ? (
-              <p className="text-[11px] font-bold text-gray-400">Ancora nessun voto: condividi il link, la lista si aggiorna da sola.</p>
+              <p className="text-[11px] font-bold text-gray-400">{t('vr_a_gp_no_votes')}</p>
             ) : (
               <div className="space-y-2">
                 {session.members.map((m, i) => (
                   <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-xl px-3 py-2">
                     <Check className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-xs font-black text-on-surface">{m.name} <span className="font-bold text-gray-400">· {m.budget} · {m.ritmo}</span></p>
+                      <p className="text-xs font-black text-on-surface">{m.name} <span className="font-bold text-gray-400">· {BUDGET_KEY[m.budget] ? t(BUDGET_KEY[m.budget]) : m.budget} · {RITMO_KEY[m.ritmo] ? t(RITMO_KEY[m.ritmo]) : m.ritmo}</span></p>
                       <p className="text-[10px] font-bold text-gray-400 break-words">
-                        {(m.interests || []).map(id => INTEREST_OPTIONS.find(o => o.id === id)?.label || id).join(' · ')}
-                        {m.mustSee ? ` · vuole: ${m.mustSee}` : ''}{m.noGo ? ` · evita: ${m.noGo}` : ''}
+                        {(m.interests || []).map(id => { const k = INTEREST_OPTIONS.find(o => o.id === id)?.label; return k ? t(k) : id; }).join(' · ')}
+                        {m.mustSee ? ` · ${t('vr_a_gp_wants')} ${m.mustSee}` : ''}{m.noGo ? ` · ${t('vr_a_gp_avoids')} ${m.noGo}` : ''}
                       </p>
                     </div>
                   </div>
@@ -395,14 +401,14 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
 
           {merged && (
             <div className={`${card} border-primary/20`}>
-              <p className="text-xs font-black text-primary mb-2 flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5" /> Fusione del gruppo</p>
+              <p className="text-xs font-black text-primary mb-2 flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5" /> {t('vr_a_gp_merge_title')}</p>
               <p className="text-[11px] font-bold text-gray-500 leading-relaxed mb-3">
-                Interessi più votati: <b>{merged.interests.map(id => INTEREST_OPTIONS.find(o => o.id === id)?.label || id).join(', ') || '—'}</b> · budget <b>{merged.budget}</b> · ritmo <b>{merged.ritmo}</b>
+                {t('vr_a_gp_top_interests')} <b>{merged.interests.map(id => { const k = INTEREST_OPTIONS.find(o => o.id === id)?.label; return k ? t(k) : id; }).join(', ') || '—'}</b> · {t('vr_a_gp_budget')} <b>{BUDGET_KEY[merged.budget] ? t(BUDGET_KEY[merged.budget]) : merged.budget}</b> · {t('vr_a_gp_pace')} <b>{RITMO_KEY[merged.ritmo] ? t(RITMO_KEY[merged.ritmo]) : merged.ritmo}</b>
               </p>
               <button type="button" onClick={() => onApplyGroup(merged)} className="w-full py-3.5 bg-primary text-white font-black text-sm rounded-2xl shadow-lg active:scale-95 transition-all">
-                Applica al form e genera →
+                {t('vr_a_gp_apply')}
               </button>
-              <p className="text-[10px] font-bold text-gray-400 text-center mt-2">Controlli tutto prima di pagare: la fusione pre-compila solo il form.</p>
+              <p className="text-[10px] font-bold text-gray-400 text-center mt-2">{t('vr_a_gp_apply_note')}</p>
             </div>
           )}
         </div>
@@ -411,7 +417,7 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       {view === 'join' && (
         <div className={`${card} space-y-4`}>
           <div className="space-y-2">
-            <label className={label}>PIN della stanza</label>
+            <label className={label}>{t('vr_a_gp_room_pin')}</label>
             <input
               className={`${input} text-center text-2xl tracking-[0.4em] font-black`}
               inputMode="numeric"
@@ -422,7 +428,7 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
             />
           </div>
           <button type="button" onClick={handleJoin} disabled={busy} className="w-full py-3.5 bg-primary text-white font-black text-sm rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Entra nella stanza'}
+            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : t('vr_a_gp_enter')}
           </button>
         </div>
       )}
@@ -430,14 +436,14 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       {view === 'vote' && session && (
         <div className={`${card} space-y-4`}>
           <p className="text-xs font-black text-primary">
-            {session.organizerName} sta organizzando: <span className="text-secondary">{session.destination}</span> · {session.days} {session.days === 1 ? 'giorno' : 'giorni'}{session.mese ? ` · ${session.mese}` : ''}
+            {session.organizerName} {t('vr_a_gp_organizing')} <span className="text-secondary">{session.destination}</span> · {session.days} {session.days === 1 ? t('vr_a_gp_day') : t('vr_a_gp_days_pl')}{session.mese ? ` · ${session.mese}` : ''}
           </p>
           <div className="space-y-2">
-            <label className={label}>Il tuo nome</label>
-            <input className={input} placeholder="Es: Giulia" value={voteName} onChange={e => setVoteName(e.target.value)} />
+            <label className={label}>{t('vr_a_gp_your_name')}</label>
+            <input className={input} placeholder={t('vr_a_gp_name_ph2')} value={voteName} onChange={e => setVoteName(e.target.value)} />
           </div>
           <div className="space-y-2">
-            <label className={label}>Cosa ti interessa?</label>
+            <label className={label}>{t('vr_a_gp_interests_label')}</label>
             <div className="flex flex-wrap gap-2">
               {INTEREST_OPTIONS.map(opt => (
                 <button
@@ -447,39 +453,39 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
                   aria-pressed={voteInterests.includes(opt.id)}
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-all active:scale-95 ${voteInterests.includes(opt.id) ? 'bg-primary text-white shadow' : 'bg-gray-50 text-gray-500 border border-outline-variant/20'}`}
                 >
-                  <opt.icon className="w-3.5 h-3.5" /> {opt.label}
+                  <opt.icon className="w-3.5 h-3.5" /> {t(opt.label)}
                 </button>
               ))}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <label className={label}>Budget</label>
+              <label className={label}>{t('vr_a_gp_budget_label')}</label>
               <select className={input} value={voteBudget} onChange={e => setVoteBudget(e.target.value as any)}>
-                <option value="economico">Economico</option>
-                <option value="standard">Standard</option>
-                <option value="lusso">Lusso</option>
+                <option value="economico">{t('vr_a_gp_budget_eco')}</option>
+                <option value="standard">{t('vr_a_gp_std')}</option>
+                <option value="lusso">{t('vr_a_gp_budget_lux')}</option>
               </select>
             </div>
             <div className="space-y-2">
-              <label className={label}>Ritmo</label>
+              <label className={label}>{t('vr_a_gp_pace_label')}</label>
               <select className={input} value={voteRitmo} onChange={e => setVoteRitmo(e.target.value as any)}>
-                <option value="rilassato">Rilassato</option>
-                <option value="standard">Standard</option>
-                <option value="intenso">Intenso</option>
+                <option value="rilassato">{t('vr_a_gp_pace_relax')}</option>
+                <option value="standard">{t('vr_a_gp_std')}</option>
+                <option value="intenso">{t('vr_a_gp_pace_intense')}</option>
               </select>
             </div>
           </div>
           <div className="space-y-2">
-            <label className={label}>Da vedere assolutamente (opzionale)</label>
-            <input className={input} placeholder="Es: gli Uffizi, il mercato centrale" value={voteMustSee} onChange={e => setVoteMustSee(e.target.value)} />
+            <label className={label}>{t('vr_a_gp_mustsee_label')}</label>
+            <input className={input} placeholder={t('vr_a_gp_mustsee_ph')} value={voteMustSee} onChange={e => setVoteMustSee(e.target.value)} />
           </div>
           <div className="space-y-2">
-            <label className={label}>Da evitare (opzionale)</label>
-            <input className={input} placeholder="Es: musei lunghi, troppa camminata" value={voteNoGo} onChange={e => setVoteNoGo(e.target.value)} />
+            <label className={label}>{t('vr_a_gp_nogo_label')}</label>
+            <input className={input} placeholder={t('vr_a_gp_nogo_ph')} value={voteNoGo} onChange={e => setVoteNoGo(e.target.value)} />
           </div>
           <button type="button" onClick={handleVote} disabled={busy} className="w-full py-3.5 bg-primary text-white font-black text-sm rounded-2xl shadow-lg active:scale-95 transition-all disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Invia le mie preferenze'}
+            {busy ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : t('vr_a_gp_send_prefs')}
           </button>
         </div>
       )}
@@ -487,12 +493,12 @@ export default function GroupPlanPanel({ language, defaultDestination, defaultDa
       {view === 'voted' && session && (
         <div className={`${card} text-center space-y-3`}>
           <div className="flex justify-center"><PartyPopper className="w-9 h-9 text-primary" /></div>
-          <p className="text-sm font-black text-primary">Preferenze inviate!</p>
+          <p className="text-sm font-black text-primary">{t('vr_a_gp_prefs_sent')}</p>
           <p className="text-[11px] font-bold text-gray-400">
-            Hanno votato in {session.members.length}. Quando tutti hanno votato, {session.organizerName} fonde le preferenze e genera l'itinerario di gruppo.
+            {t('vr_a_gp_voted_count')} {session.members.length}. {t('vr_a_gp_voted_when')} {session.organizerName} {t('vr_a_gp_voted_merge')}
           </p>
           <button type="button" onClick={() => setView('vote')} className="w-full py-3 bg-primary/10 text-primary font-black text-xs rounded-2xl active:scale-95 transition-all">
-            Modifica il mio voto
+            {t('vr_a_gp_edit_vote')}
           </button>
         </div>
       )}

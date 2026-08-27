@@ -300,8 +300,7 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
   const timeLabel = (iso?: string) =>
     iso ? new Date(iso).toLocaleTimeString(DATE_LOCALE[language] || 'it-IT', { hour: '2-digit', minute: '2-digit' }) : '';
 
-  // Tooltip del cestino: nessuna chiave vis_* dedicata nella spec → IT con fallback EN.
-  const deleteLabel = language === 'IT' ? 'Cancella dal tuo album' : 'Delete from your album';
+  const deleteLabel = t('vr_b_vis_delete_album');
 
   /** Cestino sovrapposto alla card (solo album personale). */
   const renderTrash = (c: any) => (
@@ -508,20 +507,15 @@ export default function MyVisionTab({ language }: MyVisionTabProps) {
 
   /**
    * Statistica personale e anonima del mese: nessun nome, nessuna classifica
-   * con altri utenti. Testo IT fisso con fallback EN (per scelta: niente
-   * chiavi i18n per nomi/classifiche).
+   * con altri utenti.
    */
   const renderStats = () => {
     if (!stats || (stats.my_published === 0 && !stats.my_rank)) return null;
     const n = stats.my_published;
-    const isIt = language === 'IT';
-    const published = isIt
-      ? `Questo mese: ${n} ${n === 1 ? 'foto pubblicata' : 'foto pubblicate'}`
-      : `This month: ${n} ${n === 1 ? 'photo published' : 'photos published'}`;
+    const published = t(n === 1 ? 'vr_b_vis_month_one' : 'vr_b_vis_month_many').replace('{n}', String(n));
     const rank = stats.my_rank && stats.total_contributors > 0
-      ? (isIt
-          ? ` · sei ${stats.my_rank}° su ${stats.total_contributors} ${stats.total_contributors === 1 ? 'scopritore' : 'scopritori'}`
-          : ` · you rank #${stats.my_rank} of ${stats.total_contributors} ${stats.total_contributors === 1 ? 'discoverer' : 'discoverers'}`)
+      ? t(stats.total_contributors === 1 ? 'vr_b_vis_rank_one' : 'vr_b_vis_rank_many')
+          .replace('{r}', String(stats.my_rank)).replace('{t}', String(stats.total_contributors))
       : '';
     return (
       <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1.5 px-1">

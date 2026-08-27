@@ -8,7 +8,7 @@ import { ensurePoiDetails } from '../services/enrichmentService';
 import { azureVoiceName } from '../services/ttsService';
 import { getApiUrl } from '../lib/api';
 import LoadingQuiz from './LoadingQuiz';
-import { getTranslation } from '../lib/i18n';
+import { getTranslation, type Language } from '../lib/i18n';
 
 interface PredictiveBundleModalProps {
   isOpen: boolean;
@@ -25,6 +25,9 @@ interface PredictiveBundleModalProps {
 export default function PredictiveBundleModal({
   isOpen, city, lat, lon, pois, onClose, language, guideMode, userSession
 }: PredictiveBundleModalProps) {
+  // Prop `language` a volte minuscola: normalizzata per i dizionari i18n.
+  const lang = String(language || 'IT').toUpperCase() as Language;
+  const t = (key: string) => getTranslation(key, lang);
   const session = userSession;
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: pois.length, status: '' });
@@ -82,7 +85,7 @@ export default function PredictiveBundleModal({
     const success = await consumeCredits(session.user.id, cost);
     if (!success) {
       setDownloading(false);
-      notify("Crediti insufficienti. Ricarica il tuo portafoglio.");
+      notify(t('vr_b_pb_no_credits'));
       return;
     }
 
@@ -102,7 +105,7 @@ export default function PredictiveBundleModal({
       // 3. Processa e scarica ogni POI
       for (let i = 0; i < pois.length; i++) {
         const poi = pois[i];
-        setProgress({ current: i, total: pois.length, status: `Analizzo ${poi.name}...` });
+        setProgress({ current: i, total: pois.length, status: t('vr_b_pb_status_analyze').replace('{name}', poi.name) });
 
         // A. Assicurati che sia arricchito (testo presente)
         const details = await ensurePoiDetails({
@@ -122,7 +125,7 @@ export default function PredictiveBundleModal({
         // direttamente con il file audio.
         let audioBlobUrl: string | null = null;
         if (!audioUrl && details?.summary) {
-          setProgress({ current: i, total: pois.length, status: `Generazione voce Premium per ${poi.name}...` });
+          setProgress({ current: i, total: pois.length, status: t('vr_b_pb_status_voice').replace('{name}', poi.name) });
           try {
             // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
             // corrompeva il corpo binario (MP3 → 0 byte nel bundle offline).
@@ -143,7 +146,7 @@ export default function PredictiveBundleModal({
         // salvato non veniva mai ritrovato.
         const source = audioBlobUrl || audioUrl;
         if (source) {
-          setProgress({ current: i, total: pois.length, status: `Download MP3 di ${poi.name}...` });
+          setProgress({ current: i, total: pois.length, status: t('vr_b_pb_status_mp3').replace('{name}', poi.name) });
           try {
             await saveOfflineAudio(source, `${poi.id}_${guideMode}`);
             downloadedCount++;
@@ -156,7 +159,7 @@ export default function PredictiveBundleModal({
       if (downloadedCount === 0) {
         // Nessun audio scaricato = servizio non erogato: crediti indietro
         await refundCredits(session.user.id, cost).catch(e => console.error('[Bundle] Rimborso fallito:', e));
-        notify("Non è stato possibile scaricare le audioguide. I crediti ti sono stati restituiti.");
+        notify(t('vr_b_pb_none_refund'));
         return;
       }
 
@@ -169,9 +172,9 @@ export default function PredictiveBundleModal({
       console.error("Errore download bundle:", e);
       if (downloadedCount === 0) {
         await refundCredits(session.user.id, cost).catch(err => console.error('[Bundle] Rimborso fallito:', err));
-        notify("Si è verificato un errore durante il download. I crediti ti sono stati restituiti.");
+        notify(t('vr_b_pb_err_refund'));
       } else {
-        notify("Download interrotto: alcune audioguide potrebbero mancare.");
+        notify(t('vr_b_pb_partial'));
       }
     } finally {
       setDownloading(false);
@@ -204,7 +207,7 @@ export default function PredictiveBundleModal({
             </div>
             {/* Progress Bar in basso */}
             <div className="bg-white p-6 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] z-10">
-              <h3 className="text-sm font-black text-primary mb-2 uppercase tracking-wider text-center">Download in corso</h3>
+              <h3 className="text-sm font-black text-primary mb-2 uppercase tracking-wider text-center">{t('vr_b_pb_downloading')}</h3>
               <p className="text-xs text-gray-500 font-bold text-center mb-4 truncate">{progress.status}</p>
               <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
                 <motion.div 
@@ -222,8 +225,8 @@ export default function PredictiveBundleModal({
             <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-6">
               <CheckCircle2 className="w-10 h-10 text-emerald-500" />
             </div>
-            <h2 className="text-2xl font-black text-gray-900 mb-2">Bundle Pronto!</h2>
-            <p className="text-gray-500 font-medium">Ora puoi esplorare {city} anche senza connessione internet. Le voci Premium sono state salvate nel tuo telefono.</p>
+            <h2 className="text-2xl font-black text-gray-900 mb-2">{t('vr_b_pb_ready')}</h2>
+            <p className="text-gray-500 font-medium">{t('vr_b_pb_ready_desc').replace('{city}', city)}</p>
           </div>
         ) : (
           <>
@@ -232,26 +235,26 @@ export default function PredictiveBundleModal({
               <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md relative z-10">
                 <MapPin className="w-8 h-8 text-white" />
               </div>
-              <h2 className="text-2xl font-black mb-1 relative z-10">Benvenuto a {city}!</h2>
-              <p className="text-sm text-indigo-100 font-medium relative z-10">Abbiamo trovato {pois.length} Gemme Culturali intorno a te.</p>
+              <h2 className="text-2xl font-black mb-1 relative z-10">{t('vr_b_pb_welcome').replace('{city}', city)}</h2>
+              <p className="text-sm text-indigo-100 font-medium relative z-10">{t('vr_b_pb_found').replace('{n}', String(pois.length))}</p>
             </div>
 
             <div className="p-6">
               <p className="text-sm text-gray-600 mb-6 text-center">
-                Spesso i siti storici hanno poca ricezione. Scarica subito il pacchetto offline completo (Testi + Voci Neurali Premium) per non perderti nulla.
+                {t('vr_b_pb_pitch')}
               </p>
 
               <div className="bg-amber-50 rounded-2xl p-4 border border-amber-200 mb-6 flex items-center justify-between">
                 <div>
-                  <h4 className="font-black text-amber-900 text-sm">Sconto Bundle Regionale (50%)</h4>
-                  <p className="text-xs text-amber-700 font-medium">Invece di {pois.length * (PRICING_LIST.audio_guide + PRICING_LIST.poi_detail)} crediti singolarmente.</p>
+                  <h4 className="font-black text-amber-900 text-sm">{t('vr_b_pb_discount')}</h4>
+                  <p className="text-xs text-amber-700 font-medium">{t('vr_b_pb_instead').replace('{n}', String(pois.length * (PRICING_LIST.audio_guide + PRICING_LIST.poi_detail)))}</p>
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-black text-amber-600 flex items-center gap-1">
                     <Zap className="w-5 h-5 fill-current" />
                     {cost}
                   </div>
-                  <div className="text-[10px] font-black uppercase tracking-wider text-amber-500">Crediti</div>
+                  <div className="text-[10px] font-black uppercase tracking-wider text-amber-500">{t('vr_b_credits_cap')}</div>
                 </div>
               </div>
 
@@ -260,7 +263,7 @@ export default function PredictiveBundleModal({
                   onClick={onClose}
                   className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-xl font-black text-sm hover:bg-gray-200 transition-colors"
                 >
-                  No, grazie
+                  {t('vr_b_pb_no_thanks')}
                 </button>
                 <button
                   onClick={startDownload}
@@ -268,7 +271,7 @@ export default function PredictiveBundleModal({
                   className="flex-[2] py-4 bg-primary text-white rounded-xl font-black text-sm shadow-lg shadow-primary/30 hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60 disabled:scale-100"
                 >
                   <Download className="w-4 h-4" />
-                  Scarica {pois.length} Audioguide
+                  {t('vr_b_pb_download_n').replace('{n}', String(pois.length))}
                 </button>
               </div>
             </div>

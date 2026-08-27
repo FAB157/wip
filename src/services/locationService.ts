@@ -10,11 +10,12 @@ import type { GeofencePoi } from '../types/poi';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
 import { radiiForTransport, resolveTransportMode, resetTransportHysteresis, getTransportPreference, markPlayed, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
+import { isBearingGateEnabled } from '../lib/geofencing/bearingGate';
 // La mappa voci Azure vive in UN posto solo (ttsService.azureVoiceName): qui
 // c'era una copia identica che prima o poi sarebbe divergita. L'import e'
 // circolare (ttsService importa locationService) ma sicuro: nessuno dei due
 // usa l'altro al caricamento del modulo, solo dentro le funzioni.
-import { azureVoiceName } from './ttsService';
+import { azureVoiceName, pickVoice } from './ttsService';
 import { VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
 
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -476,6 +477,11 @@ class LocationService {
 
   public setMegaphone(enabled: boolean) {
     this.audioState.isMegaphone = enabled;
+    if (enabled) {
+      this.initAudioContext(); // aggancia il grafo solo ora che serve davvero
+    } else if (!this.isDirectionalAudioEnabled()) {
+      this.disconnectAudioGraph(); // torna a playbackRate nativo, pulito
+    }
     this.updateAudioFilters();
     // Su nativo l'audio passa dall'ExoPlayer del foreground service, non dal
     // tag <audio> della WebView: l'effetto va applicato lì (Equalizer/audiofx).
@@ -487,6 +493,15 @@ class LocationService {
 
   private initAudioContext() {
     if (typeof window === 'undefined') return;
+    // Il grafo WebAudio (MediaElementSource → filtri → destination) serve
+    // SOLO per megafono e pan direzionale. Agganciarlo sempre, anche a
+    // riposo, forza ogni riproduzione a passare per un
+    // MediaElementAudioSourceNode: con playbackRate ≠ 1 alcuni motori
+    // Chromium introducono artefatti di resampling nel grafo (parole
+    // saltate/tagliate a 1.5x-2x, osservato 26/08/2026). Nel caso comune
+    // (nessun megafono, nessun direzionale) l'<audio> resta "nudo" e usa il
+    // playbackRate nativo del browser, pulito a qualsiasi velocità.
+    if (!this.audioState.isMegaphone && !this.isDirectionalAudioEnabled()) return;
     try {
       if (!this.audioCtx) {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -534,6 +549,16 @@ class LocationService {
     } catch (e) {
       console.error("[LocationService] AudioContext init failed", e);
     }
+  }
+
+  /** Scollega il grafo WebAudio (torna a playbackRate nativo sull'<audio>).
+   * La MediaElementSource resta nella WeakMap `mediaSources`: è riusabile,
+   * createMediaElementSource è chiamabile una sola volta per elemento. */
+  private disconnectAudioGraph() {
+    if (!this.audioNodes) return;
+    try { this.audioNodes.source.disconnect(); } catch { /* già scollegata */ }
+    this.audioNodes = null;
+    this.audioNodesElement = null;
   }
 
   private updateAudioFilters() {
@@ -638,6 +663,7 @@ class LocationService {
 
   private startDirectionalUpdates() {
     if (typeof window === 'undefined') return;
+    this.initAudioContext(); // aggancia il grafo (pan) solo ora che serve
     if (!this.orientationListener) {
       this.orientationListener = (e: DeviceOrientationEvent) => {
         const wk = (e as any).webkitCompassHeading; // iOS: già gradi bussola
@@ -674,6 +700,43 @@ class LocationService {
         this.audioNodes.panner.pan.setTargetAtTime(0, this.audioCtx.currentTime, 0.2);
       }
     } catch { /* ignore */ }
+    if (!this.audioState.isMegaphone) {
+      this.disconnectAudioGraph(); // torna a playbackRate nativo, pulito
+    }
+  }
+
+  /**
+   * 🧭 Heading bussola condiviso (gradi da nord, orario) o null se il sensore
+   * tace. Esposto per il gate di bussola (`src/lib/geofencing/bearingGate.ts`):
+   * il listener deviceorientation è UNO SOLO, quello del pan audio spaziale —
+   * registrarne un secondo costa batteria e non aggiunge nulla.
+   */
+  public getDeviceHeading(): number | null {
+    return this.deviceHeading;
+  }
+
+  /**
+   * Registra il listener bussola se non c'è già, SENZA avviare il timer del pan
+   * audio. Serve al gate di bussola quando l'audio direzionale è spento: da
+   * fermo il `course` del GPS è rumore, l'unica direzione affidabile è questa.
+   * Nessun permesso richiesto qui (su iOS va chiesto dentro un gesto utente):
+   * se il sensore tace, il gate resta fail-open e si parla comunque.
+   */
+  public ensureCompassListener(): void {
+    if (typeof window === 'undefined') return;
+    if (this.orientationListener) return;
+    this.orientationListener = (e: DeviceOrientationEvent) => {
+      const wk = (e as any).webkitCompassHeading; // iOS: già gradi bussola
+      if (typeof wk === 'number' && Number.isFinite(wk)) {
+        this.deviceHeading = wk;
+      } else if (typeof e.alpha === 'number' && Number.isFinite(e.alpha)) {
+        this.deviceHeading = (360 - e.alpha) % 360;
+      }
+    };
+    try {
+      window.addEventListener('deviceorientationabsolute' as any, this.orientationListener as any);
+      window.addEventListener('deviceorientation', this.orientationListener as any);
+    } catch { /* sensori assenti: il gate va fail-open */ }
   }
 
   /** Bearing geografico (gradi da nord, orario) dal punto 1 al punto 2. */
@@ -934,10 +997,22 @@ class LocationService {
 
       if (!lat || !lon) {
         try {
-          const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true });
+          // NON bloccare l'avvio in attesa di un fix perfetto (23/08/2026).
+          // Qui serve solo un SEME: il servizio nativo, appena parte, prende
+          // la posizione da se' con la sua cadenza. Prima la chiamata era
+          // `enableHighAccuracy: true` SENZA timeout: al chiuso, o con vista
+          // del cielo scarsa, la promise non si risolveva mai e l'await non
+          // tornava — il servizio non partiva affatto e l'utente vedeva «tocco
+          // le cuffie e non succede niente». Ora: posizione grossolana, anche
+          // vecchia di un minuto, e comunque non piu' di 3 secondi di attesa.
+          const pos = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: false,
+            timeout: 3000,
+            maximumAge: 60000,
+          });
           lat = pos.coords.latitude;
           lon = pos.coords.longitude;
-        } catch (e) { }
+        } catch (e) { /* niente seme: il nativo parte lo stesso e si arrangia */ }
       }
 
       // Default = quello del setup GeoControl (monumenti/musei/chiese attivi);
@@ -993,6 +1068,12 @@ class LocationService {
         // velocità GPS: a schermo spento la WebView è congelata e il rilancio
         // JS al cambio di modalità (vedi handlePosition) non può avvenire.
         transportPref: getTransportPreference(),
+        // GATE DI BUSSOLA (23/08/2026): «racconta solo cio' che hai davanti».
+        // Il plugin lo persiste gia' nelle prefs (Plugin.kt / Plugin.swift) e
+        // il nativo lo legge, ma NESSUNO glielo mandava: l'interruttore non
+        // aveva alcun effetto a schermo spento — cioe' nell'unico caso per cui
+        // esiste, visto che sul web il POI dietro le spalle si vede comunque.
+        bearingGate: isBearingGateEnabled(),
         alertRadiusWalk: radiiForTransport('walk').alert,
         arrivalRadiusWalk: radiiForTransport('walk').trigger,
         alertRadiusCar: radiiForTransport('car').alert,
@@ -1389,7 +1470,7 @@ class LocationService {
       console.error("[LocationService] Generazione audio TTS fallita:", e);
       // Degradazione: se c'è un testo da leggere non falliamo mai in silenzio.
       // Web Speech (voce di sistema, lingua corrente) legge il testo già pronto.
-      const spoken = this.speakWithWebSpeech(text);
+      const spoken = this.speakWithWebSpeech(text, character || this.guideMode);
       if (spoken) {
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
           detail: { textToSpeak: text, poiName }
@@ -1407,7 +1488,7 @@ class LocationService {
    * Fallback degradato quando /api/tts/smart è irraggiungibile (offline, TTS
    * server giù): Web Speech API con la lingua corrente dell'app.
    */
-  private speakWithWebSpeech(text: string): boolean {
+  private speakWithWebSpeech(text: string, character?: 'nicky' | 'dante'): boolean {
     if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return false;
     try {
       const u = new SpeechSynthesisUtterance(text);
@@ -1417,6 +1498,13 @@ class LocationService {
         de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN',
       };
       u.lang = localeMap[prefix] || `${prefix}-${prefix.toUpperCase()}`;
+      // Il ripiego deve avere lo STESSO genere della voce Azure che sostituisce:
+      // Nicky femminile, Dante maschile. Prima si impostava solo `u.lang` e il
+      // motore sceglieva la sua voce di default (quasi sempre femminile): con
+      // Dante selezionato, appena il TTS neurale non rispondeva, l'audioguida
+      // cambiava sesso a metà visita.
+      const v = pickVoice(prefix, character || this.guideMode);
+      if (v) u.voice = v;
       u.rate = this.audioState.playbackSpeed || 1;
       const finish = () => {
         // Se nel frattempo è partita un'altra traccia, non toccare lo stato.

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Ticket } from 'lucide-react';
 import { notify } from '../lib/toast';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 import {
   getDayPassState,
   activateDayPass,
@@ -18,6 +19,7 @@ import {
 export default function DayPassCard({ compact = false }: { compact?: boolean }) {
   const [dayPass, setDayPass] = useState<DayPassState | null>(null);
   const [activating, setActivating] = useState(false);
+  const tr = (k: string) => getTranslation(k, linguaCorrente());
 
   const refresh = () => {
     getDayPassState().then(setDayPass).catch(() => {});
@@ -31,17 +33,17 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
 
   const handleActivate = async () => {
     if (!confirm(
-      `Attivare il WIP Day Pass?\n\n${DAY_PASS_COST} crediti — per 24 ore l'audioguida completa ` +
-      `parte da sola quando ti avvicini a un luogo (fino a ${DAY_PASS_CAP} guide), anche offline e a schermo spento. ` +
-      'Metti le cuffie e basta.'
+      tr('gr_dp_confirm')
+        .replace('{costo}', String(DAY_PASS_COST))
+        .replace('{cap}', String(DAY_PASS_CAP))
     )) return;
     setActivating(true);
     try {
       const state = await activateDayPass();
       setDayPass(state);
-      notify('Day Pass attivo! Per 24 ore non devi fare più nulla: solo attivare le cuffie.', 'success');
+      notify(tr('gr_dp_attivo_notify'), 'success');
     } catch (e: any) {
-      notify(e?.message || 'Attivazione non riuscita.');
+      notify(e?.message || tr('gr_dp_attivazione_fallita'));
     } finally {
       setActivating(false);
     }
@@ -56,13 +58,13 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
             <h3 className="font-bold">WIP Day Pass</h3>
             {dayPass?.active ? (
               <p className="text-sm text-blue-100 mt-0.5">
-                Attivo — {Math.max(0, dayPass.cap - dayPass.used)} guide rimaste,
-                scade alle {new Date(dayPass.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {tr('gr_dp_stato_attivo')
+                  .replace('{n}', String(Math.max(0, dayPass.cap - dayPass.used)))
+                  .replace('{ora}', new Date(dayPass.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))}
               </p>
             ) : (
               <p className="text-sm text-blue-100 mt-0.5">
-                24 ore hands-free: avviso, teaser e audioguida completa automatici
-                (fino a {DAY_PASS_CAP} guide), anche offline e a schermo spento.
+                {tr('gr_dp_pitch').replace('{cap}', String(DAY_PASS_CAP))}
               </p>
             )}
           </div>
@@ -73,7 +75,7 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
             disabled={activating}
             className="bg-white text-blue-900 font-bold px-4 py-2 rounded-xl shrink-0 hover:bg-blue-50 disabled:opacity-50"
           >
-            {activating ? <Loader2 className="w-5 h-5 animate-spin" /> : `${DAY_PASS_COST} crediti`}
+            {activating ? <Loader2 className="w-5 h-5 animate-spin" /> : tr('gr_dp_crediti').replace('{n}', String(DAY_PASS_COST))}
           </button>
         )}
       </div>

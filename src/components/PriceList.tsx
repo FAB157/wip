@@ -5,7 +5,7 @@ import {
   Headphones, Volume2, BookOpen, ShieldCheck, Zap,
   Ticket, RefreshCw
 } from 'lucide-react';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP } from '../lib/pricing';
 
 interface PriceListProps {
@@ -15,7 +15,7 @@ interface PriceListProps {
 }
 
 export default function PriceList({ language, onOpenShop }: PriceListProps) {
-  const isItalian = language === 'IT';
+  const t = (key: string) => getTranslation(key, language);
 
   return (
     <div className="space-y-6 pb-20">
@@ -25,8 +25,8 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             <Coins className="w-8 h-8" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-gray-900">{isItalian ? "Listino Servizi" : "Service Prices"}</h2>
-            <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">{isItalian ? "Trasparenza totale sui consumi" : "Full transparency on usage"}</p>
+            <h2 className="text-2xl font-black text-gray-900">{t('vr_b_pl_title')}</h2>
+            <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">{t('vr_b_pl_sub')}</p>
           </div>
         </div>
 
@@ -35,80 +35,76 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
               al primo cambio di listino */}
           <PriceItem
             icon={<MessageSquare className="w-5 h-5" />}
-            name="Wip - Esperto Viaggi"
+            name={t('vr_b_svc_chat')}
             price={String(PRICING_LIST.chat_session)}
-            unit="10 messaggi"
-            desc={isItalian ? "Ogni itinerario include 10 messaggi gratis; poi 3 crediti ogni 10 messaggi. Nelle schede dei luoghi la chat parte dal pacchetto a crediti." : "Every itinerary includes 10 free messages; then 3 credits per 10 messages. In place sheets the chat starts from the credit pack."}
+            unit={t('vr_b_unit_10messages')}
+            desc={t('vr_b_pl_chat_desc')}
           />
           <PriceItem
             icon={<Info className="w-5 h-5" />}
-            name="Dettagli POI"
+            name={t('vr_b_svc_poi')}
             price={String(PRICING_LIST.poi_detail)}
-            unit="per luogo"
-            desc={isItalian ? "Arricchimento dettagliato di un monumento con dati storici e curiosità." : "Detailed enrichment of a monument with historical data and trivia."}
+            unit={t('vr_b_unit_per_place')}
+            desc={t('vr_b_pl_poi_desc')}
           />
           <PriceItem
             icon={<Camera className="w-5 h-5" />}
             name="Vision AI"
             price={String(PRICING_LIST.photo_search)}
-            unit="per scansione"
-            desc={isItalian ? "Riconoscimento istantaneo di monumenti tramite la fotocamera." : "Instant recognition of monuments via camera."}
+            unit={t('vr_b_unit_per_scan')}
+            desc={t('vr_b_pl_vision_desc')}
           />
           <PriceItem
             icon={<Map className="w-5 h-5" />}
-            name="Itinerario AI"
+            name={t('vr_b_svc_iti')}
             price={String(PRICING_LIST.itinerary_daily)}
-            unit="al giorno"
-            desc={isItalian
-              ? "Creazione di un percorso su misura ottimizzato per i tuoi interessi. Garanzia pioggia inclusa in ogni itinerario: se piove quasi tutto il giorno, i crediti di quel giorno tornano indietro."
-              : "Creation of a tailored route optimized for your interests. Rain guarantee included with every itinerary: if it rains almost all day, that day's credits come back."}
+            unit={t('vr_b_unit_per_day')}
+            desc={t('vr_b_pl_iti_desc')}
           />
           <PriceItem
             icon={<Headphones className="w-5 h-5" />}
-            name="Audioguida"
+            name={t('vr_b_svc_audio')}
             price={String(PRICING_LIST.audio_guide)}
-            unit="per luogo"
-            desc={isItalian ? "Narrazione vocale immersiva (Nicky o Dante) del punto di interesse." : "Immersive voice narration (Nicky or Dante) of the POI."}
+            unit={t('vr_b_unit_per_place')}
+            desc={t('vr_b_pl_audio_desc')}
           />
           <PriceItem
             icon={<Ticket className="w-5 h-5" />}
             name="WIP Day Pass"
             price={String(PRICING_LIST.day_pass)}
-            unit={isItalian ? "24 ore" : "24 hours"}
-            desc={isItalian ? `24 ore hands-free: avvisi, teaser e audioguide automatiche, fino a ${DAY_PASS_GUIDE_CAP} guide. Mappe offline incluse.` : `24 hours hands-free: alerts, teasers and automatic audio guides, up to ${DAY_PASS_GUIDE_CAP} guides. Offline maps included.`}
+            unit={t('vr_b_unit_24h')}
+            desc={t('vr_b_pl_daypass_desc').replace('{cap}', String(DAY_PASS_GUIDE_CAP))}
           />
           <PriceItem
             icon={<RefreshCw className="w-5 h-5" />}
-            name={isItalian ? "Sostituzione tappa" : "Replace stop"}
+            name={t('vr_b_pl_replace_name')}
             price={String(PRICING_LIST.replace_stop)}
-            unit={isItalian ? "per tappa" : "per stop"}
-            desc={isItalian ? "Sostituisci una singola tappa dell'itinerario con un'alternativa suggerita dall'AI." : "Replace a single itinerary stop with an AI-suggested alternative."}
+            unit={t('vr_b_pl_replace_unit')}
+            desc={t('vr_b_pl_replace_desc')}
           />
           <PriceItem
             icon={<Volume2 className="w-5 h-5" />}
-            name="Podcast AI"
+            name={t('vr_b_svc_podcast')}
             price={String(PRICING_LIST.podcast_daily)}
-            unit="al giorno"
-            desc={isItalian ? "Sintesi vocale completa di tutto il tuo itinerario giornaliero." : "Full voice summary of your entire daily itinerary."}
+            unit={t('vr_b_unit_per_day')}
+            desc={t('vr_b_pl_podcast_desc')}
           />
           <PriceItem
             icon={<BookOpen className="w-5 h-5" />}
-            name="Guida PDF"
+            name={t('vr_b_svc_pdf')}
             price={String(PRICING_LIST.premium_guide_daily)}
-            unit="al giorno"
-            desc={isItalian ? "Generazione di una guida editoriale in alta qualità scaricabile." : "Generation of a high-quality downloadable editorial guide."}
+            unit={t('vr_b_unit_per_day')}
+            desc={t('vr_b_pl_pdf_desc')}
           />
         </div>
 
         <div className="mt-8 p-6 bg-emerald-50 rounded-3xl border border-emerald-100">
           <div className="flex items-center gap-3 mb-2">
             <Zap className="w-5 h-5 text-emerald-600" />
-            <h4 className="font-black text-emerald-900 text-sm uppercase tracking-wider">{isItalian ? "Servizi Gratuiti" : "Free Services"}</h4>
+            <h4 className="font-black text-emerald-900 text-sm uppercase tracking-wider">{t('vr_b_pl_free_title')}</h4>
           </div>
           <p className="text-xs text-emerald-800/70 font-medium leading-relaxed">
-            {isItalian
-              ? "La visualizzazione della mappa, la navigazione GPS e i suggerimenti di utilità (farmacie, fontanelle, parcheggi) sono sempre gratuiti e illimitati."
-              : "Map viewing, GPS navigation, and utility suggestions (pharmacies, water fountains, parking) are always free and unlimited."}
+            {t('vr_b_pl_free_desc')}
           </p>
         </div>
 
@@ -117,13 +113,13 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             onClick={onOpenShop}
             className="mt-6 w-full py-4 bg-amber-500 hover:bg-amber-600 text-slate-900 rounded-2xl font-black text-sm uppercase tracking-widest transition-colors shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2"
           >
-            <Coins className="w-5 h-5" /> {isItalian ? "Ricarica Crediti" : "Top Up Credits"}
+            <Coins className="w-5 h-5" /> {t('vr_b_recharge_credits')}
           </button>
         )}
 
         <footer className="mt-8 pt-6 border-t border-gray-100 text-center">
           <div className="flex items-center justify-center gap-2 text-[10px] font-black text-gray-600 uppercase tracking-[0.2em]">
-            <ShieldCheck className="w-3 h-3" /> {isItalian ? "Crediti protetti e senza scadenza" : "Credits protected & never expire"}
+            <ShieldCheck className="w-3 h-3" /> {t('vr_b_pl_footer')}
           </div>
         </footer>
       </div>

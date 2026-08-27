@@ -13,6 +13,9 @@ import { getCachedPoiDetails, setCachedPoiDetails } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
 import { Language, getTranslation } from "../lib/i18n";
 import { getApiUrl } from '../lib/api';
+import { fotoPrincipale } from '../lib/fotoUrl';
+import { displayName } from '../lib/poiDisplay';
+import AttribuzioneFoto from './AttribuzioneFoto';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { datiBeneCulturale, chiaveTematica, etichettaTipoTematico } from '../lib/poiTaxonomy';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
@@ -20,6 +23,9 @@ import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
 import { getTranslatedPoiName } from '../lib/poiNameI18n';
 import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
+import { traduciVoci, tradotto } from '../lib/atlanteI18n';
+import { apriScheda } from '../lib/apriScheda';
+import { fotoDaWikidata } from '../lib/wikidataFoto';
 import { tourService, MAX_TAPPE } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
 
@@ -30,6 +36,8 @@ interface PoiPopupContentProps {
   setMarkers?: any;
   /** Dieci Tappe: col radar acceso la scheda offre "Aggiungi al giro". */
   modalitaGiro?: boolean;
+  /** Chiude il popup dalla X della card (vedi la card dell'atlante). */
+  onClose?: () => void;
 }
 
 /**
@@ -79,10 +87,10 @@ function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
       >
         <Footprints className="w-4 h-4" />
         {giaNelGiro || alVolo === 'fatto'
-          ? 'Nel giro'
-          : alVolo === 'busy' ? 'Rifaccio il percorso…'
-          : alVolo === 'no' ? 'Giro pieno (dieci tappe)'
-          : 'Aggiungi al giro in corso'}
+          ? getTranslation('gr_nel_giro', language)
+          : alVolo === 'busy' ? getTranslation('gr_rifaccio_percorso', language)
+          : alVolo === 'no' ? getTranslation('gr_giro_pieno_dieci', language)
+          : getTranslation('gr_aggiungi_giro_in_corso', language)}
       </button>
     );
   }
@@ -142,7 +150,7 @@ function isHeritageAtlasPoi(poi: any): boolean {
   return poi?.isHeritageAtlas === true;
 }
 
-export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro }: PoiPopupContentProps) {
+export default function PoiPopupContent({ poi, onGuideClick, language, setMarkers, modalitaGiro, onClose }: PoiPopupContentProps) {
   const [data, setData] = useState<any>(getCachedPoiDetails(poi.id));
   const [loading, setLoading] = useState(!getCachedPoiDetails(poi.id));
   const [expanded, setExpanded] = useState(false);
@@ -158,6 +166,50 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // ripartiva da zero a ogni aggiornamento della descrizione (dato immediato →
   // DB → Groq): il testo si svuotava e si riscriveva più volte e il popup
   // cambiava altezza di continuo — era una delle cause dello sfarfallio.
+  // ── ATLANTE: tipologia e descrizione nella lingua di chi legge ────────
+  // Il registro nazionale parla la sua lingua ("battistero", "Grade II listed
+  // building"): si traduce la voce breve, mai il nome del bene. Best-effort,
+  // con cache locale: se non torna niente resta l'originale.
+  const [atlanteTradotto, setAtlanteTradotto] = useState<Record<string, string>>({});
+  const atlanteVoci = isHeritageAtlasPoi(poi)
+    ? [poi.description, (poi as any).subCategory].filter((v: any) => typeof v === 'string' && v.trim().length >= 2) as string[]
+    : [];
+  const atlanteChiave = atlanteVoci.join('|');
+  useEffect(() => {
+    if (!atlanteChiave) { setAtlanteTradotto({}); return; }
+    let vivo = true;
+    // Quel che sappiamo gia' si mostra subito, senza attendere la rete.
+    const subito: Record<string, string> = {};
+    for (const v of atlanteChiave.split('|')) { const t = tradotto(language, v); if (t) subito[v] = t; }
+    setAtlanteTradotto(subito);
+    traduciVoci(language, atlanteChiave.split('|'))
+      .then(m => { if (vivo) setAtlanteTradotto(m); })
+      .catch(() => { /* originale */ });
+    return () => { vivo = false; };
+  }, [atlanteChiave, language]);
+
+  // Foto del bene di atlante (P18 da Wikidata, l'unica fonte legittima: la
+  // tabella beni_culturali non ha colonna immagine). Best-effort, cache-first
+  // in wikidataFoto.ts: se manca il riferimento o Wikidata non ha foto, la
+  // card resta senza — mai una ricerca per nome (regola foto del progetto).
+  // PRIMA LA FOTO CHE ABBIAMO GIA' IN CASA (25/08/2026). Dal 24/08 la tabella
+  // `beni_culturali` HA la colonna immagine, e ci sono dentro: le foto libere
+  // di Wikimedia Commons e le 101.171 del Catalogo generale dei beni
+  // culturali. Questa card pero' continuava a interrogare Wikidata a ogni
+  // apertura e a ignorare `image_url`: le foto scritte non si vedevano.
+  // Ordine: quella salvata sul bene → altrimenti Wikidata, che resta la
+  // riserva per i beni senza immagine propria.
+  const fotoSalvata = isHeritageAtlasPoi(poi) ? ((poi as any).image_url || null) : null;
+  const [beneFoto, setBeneFoto] = useState<string | null>(fotoSalvata);
+  const beneWikidataRef = isHeritageAtlasPoi(poi) ? ((poi as any).wikidata || null) : null;
+  useEffect(() => {
+    setBeneFoto(fotoSalvata);
+    if (fotoSalvata || !beneWikidataRef) return;
+    let vivo = true;
+    fotoDaWikidata(beneWikidataRef).then(url => { if (vivo) setBeneFoto(url); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [beneWikidataRef, fotoSalvata]);
+
   const typedOnceRef = useRef(false);
   useEffect(() => {
     const textToType = data?.description;
@@ -182,7 +234,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
   // Se l'URL della foto cambia (dato immediato → DB → Wikipedia), l'errore
   // della foto precedente non deve nascondere anche quella nuova.
-  const heroSrc = data?.imageUrl || poi.image_url || poi.photo_url || null;
+  // La foto chiesta della dimensione che serve, non da 800 px per un riquadro
+  // alto 160 (24/08/2026): su Wikimedia costa da tre a sette volte meno byte,
+  // ed e' il grosso del tempo che passava fra il tocco sul pin e la foto.
+  const heroSrc = fotoPrincipale(data?.imageUrl || poi.image_url || poi.photo_url || null);
   useEffect(() => { setImgError(false); }, [heroSrc]);
 
   const { toggleFavorite, isFavorite: checkFavorite } = useFavorites();
@@ -212,9 +267,20 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
   // ── Fetch dati ─────────────────────────────────────────────────────
   // Logica: CACHE-FIRST → Supabase shared_pois → Groq on-the-fly
+  // Lingua UI: i testi del POI vengono chiesti tradotti al server e la cache
+  // di sessione si chiave per lingua (23/08/2026 — prima il popup restava in
+  // italiano per tutti). In IT la chiave resta l'id nudo, condiviso con la scheda.
+  const linguaUi = String(language || 'IT').toLowerCase().slice(0, 2);
+  const chiavePopup = (id: any) => linguaUi === 'it' ? String(id) : `${id}::${linguaUi.toUpperCase()}`;
+  /** Teaser nella lingua della UI, se la RPC lo porta (teaser_text_*). */
+  const teaserUi = (p: any): string | null => {
+    const v = p?.[`teaser_text_${linguaUi}`] || (linguaUi !== 'it' ? p?.teaser_text_en : null) || p?.teaser_text_it;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  };
+
   useEffect(() => {
     // Se già in cache, mostra subito senza re-fetch
-    const cached = getCachedPoiDetails(String(poi.id));
+    const cached = getCachedPoiDetails(chiavePopup(poi.id));
     if (cached) { setData(cached); setLoading(false); return; }
 
     let isMounted = true;
@@ -225,10 +291,17 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       // ── STEP 0: Mostra SUBITO foto+desc già presenti nel POI object ──
       // (dai campi che shared_pois ritorna via RPC o discovery)
       const immediateImage = poi.image_url || poi.photo_url || null;
-      const immediateDesc = poi.description_short || poi.description_ai || poi.description || null;
+      // Fuori dall'italiano il teaser per-lingua (gia' sul filo della RPC)
+      // batte i campi description_* di shared_pois, che sono in italiano.
+      const immediateDesc = (linguaUi !== 'it' && teaserUi(poi))
+        || poi.description_short || poi.description_ai || poi.description || null;
 
       const baseData: any = {
         imageUrl: immediateImage,
+        // Il credito dell'autore. Dalla RPC della mappa non arriva (lista di
+        // colonne fissa), quindi qui e' quasi sempre nullo e si riempie allo
+        // step 1 con la risposta di /api/poi/details.
+        image_attribution: (poi as any).image_attribution || null,
         description: immediateDesc || "",
         descriptionLong: poi.description_long || poi.full_description || "",
         fullDescription: poi.full_description || "",
@@ -245,9 +318,11 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       // Mostra subito i dati iniziali (anche vuoti)
       if (isMounted) { setData({ ...baseData }); setLoading(false); }
 
-      // Se ha già tutto (img + desc lunga), cachea e stop
-      if (immediateImage && immediateDesc && (poi.description_long || poi.full_description)) {
-        setCachedPoiDetails(String(poi.id), baseData);
+      // Se ha già tutto (img + desc lunga), cachea e stop — ma SOLO in
+      // italiano: nelle altre lingue la descrizione lunga del POI e' quella
+      // italiana e serve il passaggio dal server che la traduce.
+      if (linguaUi === 'it' && immediateImage && immediateDesc && (poi.description_long || poi.full_description)) {
+        setCachedPoiDetails(chiavePopup(poi.id), baseData);
         return;
       }
 
@@ -263,7 +338,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           description: poi.description || baseData.description || "",
           tags: ["patrimonio"],
         };
-        if (isMounted) { setData(atlData); setLoading(false); setCachedPoiDetails(String(poi.id), atlData); }
+        if (isMounted) { setData(atlData); setLoading(false); setCachedPoiDetails(chiavePopup(poi.id), atlData); }
         return;
       }
 
@@ -274,7 +349,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           description: baseData.description || `${poi.name || "Servizio"} disponibile${cityName ? " a " + cityName : ""}.`,
           tags: ["servizi"],
         };
-        if (isMounted) { setData(utilData); setLoading(false); setCachedPoiDetails(String(poi.id), utilData); }
+        if (isMounted) { setData(utilData); setLoading(false); setCachedPoiDetails(chiavePopup(poi.id), utilData); }
         return;
       }
 
@@ -282,7 +357,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
         // ── STEP 1: Cerca in shared_pois via /api/poi/details ──────────
         if (poi.id) {
           const dbRes = await fetch(
-            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}`)
+            getApiUrl(`/api/poi/details?id=${encodeURIComponent(String(poi.id))}&lat=${poi.lat}&lon=${poi.lon}&lang=${linguaUi}`)
           ).catch(() => null);
 
           if (dbRes?.ok) {
@@ -293,6 +368,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             if (hasDesc || hasImg) {
               const enriched: any = {
                 imageUrl: dbData.image_url || dbData.photo_url || immediateImage || null,
+                image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
                 description: dbData.description_short || dbData.description_ai || immediateDesc || "",
                 descriptionLong: dbData.description_long || dbData.full_description || "",
                 fullDescription: dbData.full_description || "",
@@ -309,7 +385,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 website: dbData.practical_info?.match(/Web: ([^\s|]+)/)?.[1] || null,
                 isGroqEnriched: false,
               };
-              if (isMounted) { setData(enriched); setCachedPoiDetails(String(poi.id), enriched); }
+              if (isMounted) { setData(enriched); setCachedPoiDetails(chiavePopup(poi.id), enriched); }
               // Se ha dati nel DB, stop — CACHE FIRST: non usiamo Groq se abbiamo già qualcosa
               if (hasDesc) return;
             }
@@ -592,7 +668,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
         onClick={(e) => e.stopPropagation()}
       >
         <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
-          {poi.name}
+          {displayName(poi, language)}
         </p>
         <button
           onClick={navigaAPiedi}
@@ -643,21 +719,66 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // Niente audioguida e niente bottone "scopri": è un bene vincolato che non
   // risulta visitabile, e prometterne una guida sarebbe scorretto.
   if (isHeritageAtlasPoi(poi)) {
-    const tipologia = poi.description || (poi as any).subCategory || "";
+    const tipologiaOrig = poi.description || (poi as any).subCategory || "";
+    const tipologia = atlanteTradotto[tipologiaOrig] || tipologiaOrig;
     return (
-      <div className="w-[280px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col">
-        <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
-          <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
-        </div>
+      // LARGHEZZA PIENA, NIENTE MARGINE NEGATIVO (23/08/2026). Il popup di
+      // Leaflet e' largo 290 (minWidth=maxWidth in MapArea) e la card era
+      // 280 con -m-3: sporgeva a sinistra e lasciava scoperta a destra una
+      // striscia del fondo bianco del wrapper — lo "sfondo sdoppiato".
+      <div className="w-full overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col">
+        {/* FOTO (24/08/2026): quando il bene ha un'immagine collegata su
+            Wikidata (P18) la si mostra come le altre due varianti di card —
+            prima la card dell'atlante non aveva MAI una foto, nemmeno
+            quando esisteva. Senza foto resta la sola maniglia di prima. */}
+        {beneFoto ? (
+          <div className="relative h-32 w-full flex-shrink-0 overflow-hidden bg-gray-100">
+            <img src={beneFoto} alt={poi.name} loading="eager" decoding="async" className="w-full h-full object-cover" onError={() => setBeneFoto(null)} />
+            <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+            {/* IL CREDITO E' PARTE DELLA FOTO, non un ornamento: le immagini
+                di Commons sono quasi tutte CC BY-SA, che l'uso commerciale lo
+                permette solo citando l'autore, e quelle del Catalogo generale
+                vanno attribuite al Ministero. Senza questa riga non si possono
+                mostrare. */}
+            <AttribuzioneFoto testo={(poi as any).imageAttribution} posizione="sopra" />
+            {onClose && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+                aria-label={getTranslation("close", language)}
+                className="absolute right-2 top-2 w-8 h-8 flex items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-md hover:bg-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+        ) : (
+          // La maniglia era `absolute` e coi suoi 18 px copriva il badge
+          // "bene culturale tutelato" (senza foto la card non ha nulla sopra
+          // cui appoggiarsi). Ora sta NEL FLUSSO e porta a destra una X che
+          // chiude davvero: prima la maniglia sembrava una tendina ma era
+          // pointer-events-none, quindi tirarla non faceva nulla.
+          <div className="relative w-full flex items-center justify-center py-2 border-b border-gray-100">
+            <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
+            {onClose && (
+              <button
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+                aria-label={getTranslation("close", language)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-gray-500 hover:text-gray-800 hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+        )}
 
-        <div className="px-4 pt-5 pb-4 flex flex-col">
+        <div className="px-4 pt-3 pb-4 flex flex-col">
           <div className="flex items-center gap-1.5 mb-2">
             <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
               🏺 {getTranslation("beni_culturali_tutelato", language)}
             </span>
           </div>
 
-          <h3 className="font-bold text-[15px] text-gray-900 leading-tight mb-1">{poi.name}</h3>
+          <h3 className="font-bold text-[15px] text-gray-900 leading-tight mb-1">{displayName(poi, language)}</h3>
 
           {tipologia && (
             <p className="text-[12px] text-gray-600 line-clamp-2 mb-2 capitalize">{tipologia}</p>
@@ -667,33 +788,96 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             <p className="text-[11px] text-gray-500 leading-snug mb-3">📍 {(poi as any).address}</p>
           )}
 
+          {/* POSIZIONE APPROSSIMATA. Il catalogo ministeriale da' indirizzo e
+              comune ma non le coordinate: per i beni senza un indirizzo
+              riconoscibile il punto e' il centro del paese, non il bene. Va
+              detto, altrimenti il pin promette una precisione che non ha. */}
+          {(poi as any).posizioneApprossimata && (
+            <p className="text-[10px] text-amber-700 bg-amber-50 rounded-lg px-2 py-1.5 leading-snug mb-3">
+              ⚠️ {getTranslation("beni_culturali_posizione_approssimata", language)}
+            </p>
+          )}
+
           <p className="text-[10px] text-gray-400 italic leading-snug mb-3">
             {getTranslation("beni_culturali_no_guida", language)}
           </p>
 
-          <button
-            onClick={handleNavigate}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
-            style={{ background: "linear-gradient(135deg, #78716c, #000)" }}
-          >
-            <Navigation className="w-4 h-4" /> Naviga
-          </button>
-          {sceltaNav}
+          {/* NIENTE NAVIGAZIONE SUI PUNTI APPROSSIMATI (23/08/2026, regola
+              concordata con la sessione che ha geocodificato i beni): un
+              centroide di comune non e' una posizione, e "portami li'" ti
+              porterebbe in piazza del paese promettendoti il bene. La scheda
+              resta — dice che il bene esiste e in quale comune — ma il tasto
+              non c'e', perche' un tasto che mente e' peggio di un tasto che
+              manca. Chi ha un indirizzo lo vede scritto qui sopra. */}
+          {!(poi as any).posizioneApprossimata && (
+            <>
+              <button
+                onClick={handleNavigate}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
+                style={{ background: "linear-gradient(135deg, #78716c, #000)" }}
+              >
+                <Navigation className="w-4 h-4" /> {getTranslation('navigate', language)}
+              </button>
+              {sceltaNav}
+            </>
+          )}
+
+          {/* LA SCHEDA UFFICIALE. Per i beni italiani il catalogo del
+              Ministero ha la fotografia, ma con licenza non commerciale: non
+              possiamo mostrarla, possiamo portarci. Per i polacchi la foto non
+              c'e' proprio e zabytek.pl e' l'unica fonte. Si apre in una scheda
+              DENTRO l'app (Chrome Custom Tab / SFSafariViewController): il
+              browser di sistema manderebbe l'app in secondo piano e con lei
+              l'audioguida in ascolto. Entrambi i cataloghi vietano l'iframe
+              (X-Frame-Options), quindi un riquadro interno non e' possibile. */}
+          {(poi as any).catalogUrl && (
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void apriScheda((poi as any).catalogUrl); }}
+              className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-sm border transition-all active:scale-95 ${
+                (poi as any).posizioneApprossimata
+                  ? 'text-white shadow-md border-transparent'
+                  : 'mt-2 bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+              }`}
+              style={(poi as any).posizioneApprossimata ? { background: 'linear-gradient(135deg, #78716c, #000)' } : undefined}
+            >
+              <ExternalLink className="w-4 h-4" /> {getTranslation('beni_culturali_scheda_ufficiale', language)}
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
   if (isUtility) {
+    // Stessa correzione della card atlante: 280 px dentro un popup da 290
+    // lasciavano scoperta a destra una striscia del fondo bianco.
     return (
-      <div className="w-[280px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
+      <div className="w-full overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
         <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
           <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
         </div>
+        {/* Unica X del popup (24/08/2026): la X nativa di Leaflet è disattivata
+            in MapArea (closeButton={false}), la maniglia sopra è decorativa
+            (pointer-events-none) — questo bottone sta fuori da quel blocco e
+            riabilita il tocco solo su di sé. */}
+        {onClose && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+            aria-label={getTranslation("close", language)}
+            className="absolute right-2 top-2 z-[60] w-8 h-8 flex items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-md hover:bg-white transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
 
+        {/* `eager` + priorita' alta, NON `lazy` (24/08/2026): questa foto e' il
+            soggetto di un pannello appena aperto dall'utente, ma con
+            `loading="lazy"` il browser ne rimandava il caricamento, perche' al
+            momento del montaggio il popup non risulta ancora in viewport. Era
+            attesa pura, prima ancora della rete. */}
         <div className="relative h-36 w-full flex-shrink-0 overflow-hidden bg-gray-100">
           {data?.imageUrl && !imgError ? (
-            <img src={data.imageUrl} alt={poi.name} loading="lazy" decoding="async" className="w-full h-full object-cover" onError={() => setImgError(true)} />
+            <img src={fotoPrincipale(data.imageUrl) || undefined} alt={poi.name} loading="eager" fetchPriority="high" decoding="async" className="w-full h-full object-cover" onError={() => setImgError(true)} />
           ) : (
             <div className={`w-full h-full bg-gradient-to-br ${catGrad} flex items-center justify-center`}>
               <span className="text-4xl opacity-80">{catEmoji}</span>
@@ -704,7 +888,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
         <div className="p-4 flex-1 flex flex-col">
           <div className="flex items-start gap-2 mb-2">
             <div className="mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: catHex }} />
-            <h3 className="font-bold text-[15px] text-gray-900 leading-tight">{poi.name}</h3>
+            <h3 className="font-bold text-[15px] text-gray-900 leading-tight">{displayName(poi, language)}</h3>
           </div>
           <p className="text-[12px] text-gray-600 line-clamp-3 mb-4">
             {data?.description || poi.description || `${getTranslation(poi.category, language)}`}
@@ -715,7 +899,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             className="mt-auto w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-white font-bold text-sm shadow-md transition-all active:scale-95"
             style={{ background: `linear-gradient(135deg, ${catHex}, #000)` }}
           >
-            <Navigation className="w-4 h-4" /> Naviga
+            <Navigation className="w-4 h-4" /> {getTranslation('navigate', language)}
           </button>
           {sceltaNav}
         </div>
@@ -729,6 +913,16 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
       <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
         <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
       </div>
+      {/* Unica X del popup (24/08/2026): vedi commento nella card utility. */}
+      {onClose && (
+        <button
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+          aria-label={getTranslation("close", language)}
+          className="absolute right-2 top-2 z-[60] w-8 h-8 flex items-center justify-center rounded-full bg-white/90 text-gray-700 shadow-md hover:bg-white transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      )}
 
       {/* ── HERO IMAGE ── */}
       {/* La foto del pin (poi.image_url) va mostrata SUBITO, anche mentre il
@@ -743,11 +937,19 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                 <img
                   src={heroImage}
                   alt={poi.name}
+                  loading="eager"
+                  fetchPriority="high"
+                  decoding="async"
                   className="w-full h-full object-cover"
                   onError={() => setImgError(true)}
                 />
                 {/* Gradient overlay */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent pointer-events-none" />
+                {/* Il credito dell'autore, DOPO la sfumatura per restare
+                    leggibile. CC BY-SA — la licenza della gran parte delle
+                    nostre foto — consente l'uso commerciale solo citando chi
+                    ha scattato. Se manca il dato la riga non compare. */}
+                <AttribuzioneFoto testo={data?.image_attribution || (poi as any)?.image_attribution || null} />
               </>
             );
           }
@@ -832,10 +1034,14 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
             <h3 className="font-bold text-[15px] text-gray-900 leading-tight break-words">
               {poi.name}
             </h3>
-            {/* Traduzione del nome nella lingua UI (stile "— St. Vitalis Square") */}
-            {nameTranslation && (
+            {/* Traduzione del nome nella lingua UI (stile "— St. Vitalis Square").
+                Priorità: Wikidata/Wikipedia (nameTranslation, più autorevole,
+                richiede un riferimento sul POI) → traduzione AI salvata da
+                /api/poi/enrich (poi.name_translated, copre anche i POI senza
+                wikidata/wikipedia, la maggioranza — vedi src/lib/poiNameI18n.ts). */}
+            {(nameTranslation || displayName(poi, language) !== poi.name) && (
               <p className="text-[11px] italic text-gray-400 leading-tight break-words mt-0.5">
-                {nameTranslation}
+                {nameTranslation || displayName(poi, language)}
               </p>
             )}
             {data?.subtext && (

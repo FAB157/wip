@@ -1,37 +1,41 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Map, Compass, Brain, Users, Sparkles, CheckCircle2 } from 'lucide-react';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface FreeFeaturesModalProps {
   onClose: () => void;
 }
 
 export default function FreeFeaturesModal({ onClose }: FreeFeaturesModalProps) {
+  // Nessuna prop `language`: si legge la stessa chiave localStorage di App.tsx.
+  const lingua = linguaCorrente();
+  const t = (k: string) => getTranslation(k, lingua);
   const freeFeatures = [
     {
       icon: <Map className="w-6 h-6 text-emerald-500" />,
-      title: "Mappa 3D Interattiva",
-      description: "Esplora liberamente la mappa in 3D, scopri tutti i punti di interesse (POI) e naviga per la città senza alcun costo."
+      title: t('vr_a_ff_f1_t'),
+      description: t('vr_a_ff_f1_d')
     },
     {
       icon: <Compass className="w-6 h-6 text-blue-500" />,
-      title: "Lettura Info Monumenti",
-      description: "Clicca su qualsiasi attrazione sulla mappa per leggere la sua storia, gli orari, le recensioni e i dettagli gratuitamente."
+      title: t('vr_a_ff_f2_t'),
+      description: t('vr_a_ff_f2_d')
     },
     {
       icon: <Brain className="w-6 h-6 text-purple-500" />,
-      title: "Quiz e Premi",
-      description: "Partecipa ai quiz culturali gratuiti durante i caricamenti o esplorando la mappa per guadagnare Crediti ed XP reali!"
+      title: t('vr_a_ff_f3_t'),
+      description: t('vr_a_ff_f3_d')
     },
     {
       icon: <Users className="w-6 h-6 text-amber-500" />,
-      title: "Eventi e Condivisione",
-      description: "Scopri gli eventi locali e salva i tuoi posti preferiti senza spendere un centesimo."
+      title: t('vr_a_ff_f4_t'),
+      description: t('vr_a_ff_f4_d')
     },
     {
       icon: <Map className="w-6 h-6 text-orange-500" />,
-      title: "Mappe Offline (Mondiali)",
-      description: "Scarica intere città e i loro POI nel raggio di 100km per navigare ed esplorare anche senza internet (inclusi i dati mondiali)."
+      title: t('vr_a_ff_f5_t'),
+      description: t('vr_a_ff_f5_d')
     }
   ];
 
@@ -52,9 +56,9 @@ export default function FreeFeaturesModal({ onClose }: FreeFeaturesModalProps) {
           <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center mx-auto mb-3 backdrop-blur-md">
             <Sparkles className="w-8 h-8 text-emerald-100" />
           </div>
-          <h2 className="text-2xl font-black mb-2">Cosa puoi fare Gratis?</h2>
+          <h2 className="text-2xl font-black mb-2">{t('vr_a_ff_title')}</h2>
           <p className="text-emerald-50 text-sm">
-            ItaInta offre tantissime funzionalità gratuite per esplorare. I crediti servono solo per le funzioni Premium avanzate.
+            {t('vr_a_ff_intro')}
           </p>
         </div>
 
@@ -82,7 +86,7 @@ export default function FreeFeaturesModal({ onClose }: FreeFeaturesModalProps) {
             onClick={onClose}
             className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-700 transition-colors"
           >
-            Ho capito, continua a esplorare
+            {t('vr_a_ff_ok')}
           </button>
         </div>
       </motion.div>

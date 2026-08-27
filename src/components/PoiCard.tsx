@@ -10,6 +10,8 @@ import { getTranslation } from "../lib/i18n";
 import NavChoiceSheet from "./NavChoiceSheet";
 import { Play, Navigation, Sparkles, Loader2, X } from 'lucide-react';
 import { ensurePoiDetails } from '../services/enrichmentService';
+import { fotoPrincipale } from '../lib/fotoUrl';
+import AttribuzioneFoto from './AttribuzioneFoto';
 import {
   getOrCreateAudioguideText,
   askMore,
@@ -41,6 +43,8 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
 
   const [summary, setSummary] = useState<string | null>(null);
   const [image, setImage] = useState<string | null>(null);
+  const [fotoRotta, setFotoRotta] = useState(false);
+  const [attribuzione, setAttribuzione] = useState<string | null>(null);
   const [loadingCard, setLoadingCard] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [showNavChoice, setShowNavChoice] = useState(false);   // 🚶 WIP Nav / 🚗 Maps
@@ -64,6 +68,9 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
       if (!alive) return;
       setSummary(d?.summary ?? d?.wiki_extract ?? null);
       setImage(d?.images?.[0]?.url ?? null);
+      // Il credito dell'autore, se l'arricchimento lo porta: CC BY-SA lo
+      // impone, e la scheda mostra la foto quanto le altre.
+      setAttribuzione((d as any)?.images?.[0]?.attribution ?? (d as any)?.image_attribution ?? null);
       setLoadingCard(false);
     });
     return () => {
@@ -121,9 +128,23 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
 
   return (
     <div className="bg-[#fcfaf8] rounded-2xl shadow-xl overflow-hidden w-full max-w-md border border-outline-variant">
-      {image && (
-        <div className="h-40 w-full overflow-hidden bg-[#f8f5f0]">
-          <img src={image} alt={poi.name} className="h-full w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1522083111811-0985223abac3?auto=format&fit=crop&q=80&w=400'; }} />
+      {/* Se la foto vera non si carica NON si mette una foto di repertorio al
+          suo posto (corretto 24/08/2026): qui c'era un fallback a un'immagine
+          Unsplash, cioe' la fotografia di un altro luogo mostrata come se
+          fosse questo. E' la regola non negoziabile del progetto — nessuna
+          foto e' meglio della foto sbagliata — e il riquadro semplicemente
+          sparisce. Larghezza su misura: 480 px per un riquadro alto 160. */}
+      {image && !fotoRotta && (
+        <div className="relative h-40 w-full overflow-hidden bg-[#f8f5f0]">
+          <AttribuzioneFoto testo={attribuzione} />
+          <img
+            src={fotoPrincipale(image) || undefined}
+            alt={poi.name}
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+            onError={() => setFotoRotta(true)}
+          />
         </div>
       )}
 

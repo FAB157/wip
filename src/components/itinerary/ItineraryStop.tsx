@@ -188,9 +188,7 @@ export default function ItineraryStop({
             con il treno, nessuna colpa. */}
         {transferCarG != null && transferTrainG != null && (
           <div className="mb-2 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 w-fit">
-            🍃 {formatCo2(transferCarG)} CO₂ {language === 'IT'
-              ? `in auto — in treno sarebbero ~${formatCo2(transferTrainG)}`
-              : `by car — by train it would be ~${formatCo2(transferTrainG)}`}
+            🍃 {formatCo2(transferCarG)} CO₂ {getTranslation('vr_b_is_co2', language).replace('{t}', `~${formatCo2(transferTrainG)}`)}
           </div>
         )}
 
@@ -261,9 +259,7 @@ export default function ItineraryStop({
                             }
                           }));
                         }}
-                        title={language === 'IT'
-                          ? 'WIP Nav: il navigatore integrato dell\'app — ti guida lungo il percorso e fa partire da sole le audioguide dei luoghi che incontri (a differenza di Google Maps, pensato solo per portarti a destinazione).'
-                          : 'WIP Nav: the app\'s built-in navigator — it guides you along the route and auto-plays the audio guides of places you pass (unlike Google Maps, which only gets you to your destination).'}
+                        title={getTranslation('vr_b_is_wipnav_tip', language)}
                         className="flex items-center gap-2 text-[10px] font-black uppercase text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-2 rounded-xl border border-indigo-100 transition-colors"
                       >
                         <Navigation className="w-3.5 h-3.5" />

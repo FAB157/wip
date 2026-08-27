@@ -1,9 +1,32 @@
+import { createWakeLockController } from '../../hooks/useWakeLock';
+
 export class DockingDetector {
   private docked: boolean = false;
   private onDockChangeCallback?: (docked: boolean) => void;
+  // Wake lock con la sentinella conservata: prima si chiamava request('screen')
+  // buttando via il risultato e non c'era un solo release() nel file, così lo
+  // schermo restava acceso a vuoto anche a telefono sganciato o con l'app in
+  // background (e il lock veniva ri-chiesto a ogni avvio leggendo localStorage).
+  private wakeLock = createWakeLockController('Audio/WakeLock');
 
   constructor() {
+    this.registraAscolti();
     this.restoreManualState();
+  }
+
+  /**
+   * Ri-valuta il wake lock quando la guida si accende o si spegne: senza questi
+   * ascolti il lock resterebbe fermo allo stato del momento dell'avvio (era
+   * proprio così che finiva chiesto a ogni caricamento leggendo localStorage).
+   */
+  private registraAscolti() {
+    if (typeof window === 'undefined') return;
+    const rivaluta = () => { void this.aggiornaWakeLock(); };
+    window.addEventListener('audioguide-status', rivaluta);
+    window.addEventListener('wip-settings-updated', rivaluta);
+    window.addEventListener('storage', (e) => {
+      if (e.key === 'wip_audioguide_active') rivaluta();
+    });
   }
 
   public async startDetection(): Promise<void> {
@@ -76,18 +99,26 @@ export class DockingDetector {
   private async applyDockingBehaviors(docked: boolean) {
     if (docked) {
       console.log('[Audio] Telefono agganciato: attivo modalità Cruscotto/Driving');
-      // Tenta WakeLock per tenere schermo acceso
-      if ('wakeLock' in navigator) {
-        try {
-          await (navigator as any).wakeLock.request('screen');
-          console.log('[Audio] WakeLock attivato');
-        } catch (e) {
-          console.warn('WakeLock request failed', e);
-        }
-      }
     } else {
       console.log('[Audio] Telefono sganciato: disattivo modalità Cruscotto');
     }
+    await this.aggiornaWakeLock();
+  }
+
+  /** La guida in corso è l'altra condizione che giustifica lo schermo acceso. */
+  private guidaAttiva(): boolean {
+    try { return localStorage.getItem('wip_audioguide_active') === 'true'; } catch { return false; }
+  }
+
+  /**
+   * Lo schermo resta acceso SOLO se il telefono è agganciato e la guida è
+   * accesa. Fuori da questa condizione si rilascia: sganciato o guida spenta
+   * significava, prima, schermo acceso a vuoto fino al timeout di sistema.
+   * Il rilascio in background lo fa già il controller su visibilitychange.
+   */
+  private async aggiornaWakeLock() {
+    if (this.docked && this.guidaAttiva()) await this.wakeLock.enable();
+    else await this.wakeLock.disable();
   }
 
   public onDockChange(callback: (docked: boolean) => void): void {

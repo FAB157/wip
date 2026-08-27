@@ -1182,7 +1182,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             onPoiClick={(poi) => {
               // Passa il POI al parent (App.tsx) che aprirà la scheda.
               // Formattiamo il dato come se fosse stato riconosciuto
-              onRecognize({ ...poi, riconosciuto: true, spiegazione_audio: poi.summary || poi.description_long || "Esplora questo punto di interesse in AR!" });
+              onRecognize({ ...poi, riconosciuto: true, spiegazione_audio: poi.summary || poi.description_long || getTranslation('vr_b_ar_explore', language) });
             }} 
           />
         )}

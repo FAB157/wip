@@ -6,6 +6,8 @@
  * 'wip-poi-trigger' e 'audioguide-status'); chi legge: ProfileScreen.
  */
 
+import { getTranslation, linguaCorrente, type Language } from './i18n';
+
 const STORE_KEY = 'wip_notification_center';
 const MAX_ENTRIES = 100;
 
@@ -80,15 +82,15 @@ export const markAllRead = (): void => {
 /** Conteggio non lette per il badge della campanella. */
 export const unreadCount = (): number => readStore().filter(i => !i.letta).length;
 
-/** "adesso" / "5 min fa" / "2 h fa" / "3 g fa" / data breve. */
-export const formatRelativeTime = (ts: number): string => {
+/** "adesso" / "5 min fa" / "2 h fa" / "3 g fa" / data breve — nella lingua UI. */
+export const formatRelativeTime = (ts: number, lang: Language = linguaCorrente()): string => {
   const diff = Date.now() - ts;
-  if (diff < 60_000) return 'adesso';
+  if (diff < 60_000) return getTranslation('pf_time_adesso', lang);
   const min = Math.floor(diff / 60_000);
-  if (min < 60) return `${min} min fa`;
+  if (min < 60) return getTranslation('pf_time_min', lang).replace('{n}', String(min));
   const ore = Math.floor(min / 60);
-  if (ore < 24) return `${ore} h fa`;
+  if (ore < 24) return getTranslation('pf_time_h', lang).replace('{n}', String(ore));
   const giorni = Math.floor(ore / 24);
-  if (giorni < 7) return `${giorni} g fa`;
-  return new Date(ts).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+  if (giorni < 7) return getTranslation('pf_time_g', lang).replace('{n}', String(giorni));
+  return new Date(ts).toLocaleDateString(getTranslation('pf_locale', lang), { day: '2-digit', month: 'short' });
 };

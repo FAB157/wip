@@ -3044,28 +3044,15 @@ function MapArea({
       const farTematici = categorieTematicheAttive(activeCategories);
       if (farTematici.length > 0 && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        const temPois = await fetchTematiciPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), farTematici);
-        if (temPois.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            temPois.forEach(p => m.set(String(p.id), p));
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchTematiciPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), farTematici)
+          .then(r => unisci(r, true)));
       }
       // Gemme anche a scala di paese (23/08/2026): sono poche, sono i
       // luoghi che a quella scala si cercano, e il cluster le raggruppa.
       // Prima sotto zoom 8 la chip Gemme non caricava niente.
       if (activeCategories.includes('gemme') && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        const gemmeFar = await fetchGemmePoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
-        if (gemmeFar.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            gemmeFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchGemmePoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()).then(r => unisci(r)));
       }
       // Località anche a scala di paese/continente: stesso motivo di Gemme,
       // e il caso d'uso principale — "cosa c'è di bello in Toscana" — è
@@ -3074,14 +3061,7 @@ function MapArea({
         const b = bounds.pad(0.2);
         // zoom < 8 qui dentro: vista di continente/mondo, griglia 4×4 così
         // ogni zona ha la sua quota (vedi nota sopra fetchLocalitaPoisInBounds).
-        const localitaFar = await fetchLocalitaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), 500);
-        if (localitaFar.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            localitaFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchLocalitaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), 500).then(r => unisci(r)));
       }
       // NATURA anche a scala di paese/continente (24/08/2026): mancava del
       // tutto sotto zoom 8, mentre community/tematici/gemme avevano gia'
@@ -3089,14 +3069,7 @@ function MapArea({
       // Natura restava vuota anche dopo il fix del bucket generico.
       if (activeCategories.includes('natura') && bounds && typeof bounds.getSouth === 'function') {
         const b = bounds.pad(0.2);
-        const naturaFar = await fetchNaturaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
-        if (naturaFar.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            naturaFar.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchNaturaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast()).then(r => unisci(r)));
       }
       // MONUMENTI/CHIESE/MUSEI/PANORAMI, LOCALI, UTILITA, FAMIGLIE anche a
       // scala di paese/continente (24/08/2026, richiesta esplicita: "tutte
@@ -3123,16 +3096,10 @@ function MapArea({
         // committente: le famiglie non erano lente, erano in coda.
         // Ogni risposta si scrive appena arriva, quindi la piu' veloce compare
         // per prima invece che per ultima.
-        await Promise.all(macroFarAttivi.map(async ({ macro, tipi, limite }) => {
-          const extra = await fetchTassonomiaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), tipi, macro, limite);
-          if (extra.length > 0 && fetchSeq === fetchSeqRef.current) {
-            setPois(prev => {
-              const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-              extra.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
-              return Array.from(m.values());
-            });
-          }
-        }));
+        for (const { macro, tipi, limite } of macroFarAttivi) {
+          compiti.push(fetchTassonomiaPoisInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), tipi, macro, limite)
+            .then(r => unisci(r)));
+        }
       }
       // Beni vincolati anche a scala di paese/continente (26/08/2026,
       // richiesta esplicita: "come tutte le altre categorie, a qualsiasi
@@ -3146,15 +3113,14 @@ function MapArea({
         // Griglia 3×3 (23/08/2026): con un paese intero a schermo una sola
         // query da 300 tornava solo i beni della zona piu' fitta — l'Olanda
         // mostrava i suoi, la Francia accanto restava vuota.
-        const beniA = await fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), null, 600, 3);
-        if (beniA.length > 0 && fetchSeq === fetchSeqRef.current) {
-          setPois(prev => {
-            const m = new Map<string, Poi>(prev.map(p => [String(p.id), p]));
-            beniA.forEach(p => { if (!m.has(String(p.id))) m.set(String(p.id), p); });
-            return Array.from(m.values());
-          });
-        }
+        compiti.push(fetchBeniCulturaliInBounds(b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), null, 600, 3)
+          .then(r => unisci(r)));
       }
+      // Si aspetta la FINE DI TUTTE solo per spegnere la rotellina: i pin sono
+      // gia' comparsi mano a mano, ognuno appena la sua interrogazione e'
+      // tornata. `allSettled` e non `all`: se una chip fallisce, le altre
+      // devono restare sulla mappa invece di sparire tutte insieme.
+      await Promise.allSettled(compiti);
       setIsLoadingPois(false);
       return;
     }

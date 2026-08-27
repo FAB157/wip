@@ -49,7 +49,7 @@ export function subCategoryToFilterId(subCat?: string | null): string {
  * percorsi che finivano su `return true`: chiese e musei restavano sulla mappa
  * anche da deselezionati.
  */
-export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community", "beni_culturali", "tematiche"] as const;
+export const MACRO_CATEGORIES = ["gemme", "monumenti", "locali", "utilita", "famiglie", "community", "beni_culturali", "tematiche", "localita"] as const;
 
 /**
  * VERTICALI TEMATICI (21/08/2026) — le otto chiavi della macro 🧭 "Tematici".
@@ -179,8 +179,8 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   tematiche: [...TEMATICI_KEYS],
 };
 
-const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
-const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gallery"];
+export const CHIESE_TYPES = ["church", "chiesa", "chiese", "place_of_worship", "cathedral", "cattedrale", "chapel", "cappella", "basilica", "monastery", "monastero", "abbey", "abbazia", "shrine", "santuario"];
+export const MUSEI_TYPES = ["museum", "musei", "museo", "gallery", "galleria", "art_gallery"];
 // "natura" e i tipi naturali specifici mancavano: un POI con category
 // 'natura' (o 'beach', 'waterfall'…) usciva da resolvePoiTaxonomy con
 // macro null, e il filtro della mappa scarta tutto ciò che non ha una
@@ -223,15 +223,20 @@ export function famigliaNatura(value: string): (typeof NATURA_FAMIGLIE)[number] 
   if (PARCHI_TYPES.includes(value)) return "parchi";
   return null;
 }
-const PANORAMI_TYPES = [
+// "natura" NON sta piu' qui (24/08/2026): un POI con category/baseCategory
+// letteralmente 'natura' (il bucket generico che il DB usa per ~255.000
+// righe, famiglia vera in poi_type) veniva riconosciuto QUI, prima ancora
+// che il ramo dedicato piu' sotto (rawNatura) potesse leggere poi_type —
+// finiva sempre sotto Monumenti→Panorami e la chip Natura non mostrava
+// MAI nulla. I sentieri restano: non hanno una famiglia naturale precisa.
+export const PANORAMI_TYPES = [
   "viewpoint", "panorami", "panorama", "lighthouse", "faro", "scenic_road", "aerialway",
-  // Generici e percorsi: non hanno una famiglia precisa e restano qui.
-  "natura", "sentiero", "sentieri", "hiking", "trail", "cammino", "via_ferrata",
+  "sentiero", "sentieri", "hiking", "trail", "cammino", "via_ferrata",
 ];
-const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
-const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
-const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
-const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
+export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
+export const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
+export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
+export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
 
 /**
  * ENOGASTRONOMIA — dal `poi_type` importato da OSM al sub-chip.
@@ -306,6 +311,13 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // culturale, perché molti di questi beni sono chiese o castelli e finirebbero
   // sotto "monumenti", comparendo anche a chip atlante spenta.
   if (raw === "beni_culturali") return { macro: "beni_culturali", subId: "" };
+
+  // LOCALITÀ TURISTICHE (24/08/2026): borghi e villaggi che sono meta di per
+  // sé — Riomaggiore, Volterra, Colonnata — non un monumento dentro una
+  // città. Macro a sé come beni_culturali/tematiche, risolta PRIMA della
+  // logica culturale per lo stesso motivo: molte hanno un centro storico che
+  // altrimenti li farebbe classificare "monumenti".
+  if (raw === "localita") return { macro: "localita", subId: "" };
 
   // VERTICALI TEMATICI. Vanno risolti PRIMA della logica culturale per lo
   // stesso motivo dei beni vincolati: una casa museo, un cimitero monumentale

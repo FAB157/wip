@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { useSwipeable } from 'react-swipeable';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -37,7 +37,7 @@ interface OnboardingProps {
 
 type Traduzione = { tag: string; titolo: string; evidenza: string; testo: string; prove: string[] };
 
-const COPIA: Record<'IT' | 'EN', Traduzione[]> = {
+const COPIA: Partial<Record<Language, Traduzione[]>> = {
   IT: [
     {
       tag: 'Audioguide automatiche',
@@ -70,6 +70,86 @@ const COPIA: Record<'IT' | 'EN', Traduzione[]> = {
       prove: ['Reads art and monuments', 'Museum Pass · 4 unlimited hours', 'Your photo earns you credits'],
     },
   ],
+  FR: [
+    {
+      tag: 'Audioguides automatiques',
+      titolo: 'Explorez comme un',
+      evidenza: 'local',
+      testo: 'Vous marchez, et quand vous passez devant quelque chose qui vaut le détour, la voix démarre toute seule. Rien à chercher, rien à toucher : le téléphone peut rester dans la poche.',
+      prove: ['Fonctionne écran éteint', 'Aussi en voiture', '7 langues'],
+    },
+    {
+      tag: 'Caméra et communauté',
+      titolo: 'Visez — et s’il manque,',
+      evidenza: 'ajoutez-le',
+      testo: 'Un palais sans plaque ou un tableau sans légende : pointez la caméra et WIP vous raconte. Et si un lieu manque sur la carte, photographiez-le : une fois approuvé, il devient un lieu WIP pour tous, et vous gagnez des crédits.',
+      prove: ['Reconnaît œuvres et monuments', 'Pass Musée · 4 h illimitées', 'Votre photo vous récompense'],
+    },
+  ],
+  ES: [
+    {
+      tag: 'Audioguías automáticas',
+      titolo: 'Explora como un',
+      evidenza: 'local',
+      testo: 'Caminas, y cuando pasas junto a algo que merece la pena, la voz empieza sola. Nada que buscar, nada que tocar: el teléfono puede quedarse en el bolsillo.',
+      prove: ['Funciona con la pantalla apagada', 'También en coche', '7 idiomas'],
+    },
+    {
+      tag: 'Cámara y comunidad',
+      titolo: 'Enfoca — y si falta,',
+      evidenza: 'añádelo tú',
+      testo: 'Un palacio sin placa o un cuadro sin cartela: apunta la cámara y WIP te lo cuenta. Y si un lugar no está en el mapa, fotografíalo: una vez aprobado se convierte en un lugar WIP para todos, y tú ganas créditos.',
+      prove: ['Reconoce obras y monumentos', 'Pase Museo · 4 horas ilimitadas', 'Tu foto te premia'],
+    },
+  ],
+  DE: [
+    {
+      tag: 'Automatische Audioguides',
+      titolo: 'Erkunde wie ein',
+      evidenza: 'Local',
+      testo: 'Du gehst, und wenn du an etwas Sehenswertem vorbeikommst, startet die Stimme von selbst. Nichts suchen, nichts antippen: Das Telefon kann in der Tasche bleiben.',
+      prove: ['Funktioniert bei ausgeschaltetem Bildschirm', 'Auch im Auto', '7 Sprachen'],
+    },
+    {
+      tag: 'Kamera und Community',
+      titolo: 'Anvisieren — und wenn’s fehlt,',
+      evidenza: 'füge es hinzu',
+      testo: 'Ein Palast ohne Tafel oder ein Bild ohne Beschriftung: Richte die Kamera darauf und WIP erzählt dir die Geschichte. Und fehlt ein Ort auf der Karte, fotografiere ihn: Nach der Freigabe wird er ein WIP-Ort für alle, und du bekommst Credits.',
+      prove: ['Erkennt Kunstwerke und Denkmäler', 'Museumspass · 4 Stunden unbegrenzt', 'Dein Foto belohnt dich'],
+    },
+  ],
+  RU: [
+    {
+      tag: 'Автоматические аудиогиды',
+      titolo: 'Исследуй как',
+      evidenza: 'местный',
+      testo: 'Вы идёте, и когда проходите мимо чего-то стоящего, голос включается сам. Ничего не искать, ничего не нажимать: телефон может оставаться в кармане.',
+      prove: ['Работает при выключенном экране', 'И в машине', '7 языков'],
+    },
+    {
+      tag: 'Камера и сообщество',
+      titolo: 'Наведи камеру — а если места нет,',
+      evidenza: 'добавь его',
+      testo: 'Дворец без таблички или картина без подписи: наведите камеру, и WIP всё расскажет. А если места нет на карте — сфотографируйте его: после одобрения оно станет местом WIP для всех, а вам вернутся кредиты.',
+      prove: ['Распознаёт произведения и памятники', 'Музейный пасс · 4 часа без лимита', 'Ваше фото приносит кредиты'],
+    },
+  ],
+  ZH: [
+    {
+      tag: '自动语音导览',
+      titolo: '像当地人一样',
+      evidenza: '探索',
+      testo: '你走着走着，经过值得一听的地方时，讲解会自动响起。无需搜索、无需点击：手机可以一直放在口袋里。',
+      prove: ['熄屏也能用', '开车也可以', '7种语言'],
+    },
+    {
+      tag: '相机与社区',
+      titolo: '拍一下——如果地图上没有',
+      evidenza: '就由你来添加',
+      testo: '没有铭牌的建筑或没有说明的画作：对准相机，WIP 就会为你讲解。如果某个地点不在地图上，拍下它：审核通过后它将成为所有人的 WIP 地点，你还能获得积分。',
+      prove: ['识别艺术品和古迹', '博物馆通票 · 4小时无限次', '你的照片为你赢取积分'],
+    },
+  ],
 };
 
 /**
@@ -81,7 +161,7 @@ const COPIA: Record<'IT' | 'EN', Traduzione[]> = {
  * schede che si aprono solo se le cerchi. Una griglia finale le nomina tutte in
  * dieci secondi di lettura, e chi vuole approfondire le ritrova nell'app.
  */
-const TUTTO: Record<'IT' | 'EN', { titolo: string; sottotitolo: string; voci: [string, string][] }> = {
+const TUTTO: Partial<Record<Language, { titolo: string; sottotitolo: string; voci: [string, string][] }>> = {
   IT: {
     titolo: 'E poi c’e’ tutto il resto',
     sottotitolo: 'Compreso nell’app. I dettagli nel manuale, in Profilo → Impostazioni.',
@@ -128,6 +208,121 @@ const TUTTO: Record<'IT' | 'EN', { titolo: string; sottotitolo: string; voci: [s
       ['📅', 'Itinerary exported to your phone calendar'],
     ],
   },
+  FR: {
+    titolo: 'Et puis il y a tout le reste',
+    sottotitolo: 'Inclus dans l’app. Les détails dans le manuel, sous Profil → Réglages.',
+    voci: [
+      ['🗺️', 'Itinéraires sur mesure jour par jour, avec toujours une version gratuite'],
+      ['🎫', 'Day Pass : 24 h mains libres, jusqu’à 40 audioguides'],
+      ['🏛️', 'Pass Musée : 4 h de reconnaissances illimitées, pensé pour l’intérieur'],
+      ['📴', 'Cartes et audioguides hors ligne, téléchargés gratuitement avant de partir'],
+      ['💳', 'Des crédits qui n’expirent jamais : pas d’abonnement, pas de renouvellement'],
+      ['🧭', 'Navigateur piéton avec la voix qui raconte en chemin'],
+      ['🎧', 'Podcasts et guides PDF à emporter'],
+      ['💬', 'Chat avec un guide qui sait où vous êtes'],
+      ['🎟️', 'Billets et visites réservables, coupe-file'],
+      ['🗓️', 'Événements et concerts les jours où vous y êtes'],
+      ['🏺', 'Atlas du patrimoine protégé et des musées du monde entier'],
+      ['🥾', 'Chemins historiques avec étapes et lieux où dormir'],
+      ['⚓', 'Escapades depuis le port ou l’aéroport pour les escales de 4, 6 ou 8 h'],
+      ['🌧️', 'Garantie pluie : crédits remboursés si la météo gâche la journée'],
+      ['👥', 'Plans de groupe partagés avec un code'],
+      ['🌱', 'Empreinte CO₂ et pas parcourus'],
+      ['📅', 'Itinéraire exportable dans le calendrier du téléphone'],
+    ],
+  },
+  ES: {
+    titolo: 'Y luego está todo lo demás',
+    sottotitolo: 'Incluido en la app. Los detalles en el manual, en Perfil → Ajustes.',
+    voci: [
+      ['🗺️', 'Itinerarios a medida día a día, siempre con una versión gratuita'],
+      ['🎫', 'Day Pass: 24 horas manos libres, hasta 40 audioguías'],
+      ['🏛️', 'Pase Museo: 4 horas de reconocimientos ilimitados, pensado para interiores'],
+      ['📴', 'Mapas y audioguías offline, descargados gratis antes de salir'],
+      ['💳', 'Créditos que no caducan: sin suscripción, sin renovación'],
+      ['🧭', 'Navegador a pie con la voz que narra por el camino'],
+      ['🎧', 'Podcasts y guías en PDF para llevar'],
+      ['💬', 'Chat con un guía que sabe dónde estás'],
+      ['🎟️', 'Entradas y visitas reservables, sin colas'],
+      ['🗓️', 'Eventos y conciertos en los días en que estás allí'],
+      ['🏺', 'Atlas del patrimonio protegido y museos de todo el mundo'],
+      ['🥾', 'Caminos históricos con etapas y lugares donde dormir'],
+      ['⚓', 'Escapadas desde puerto y aeropuerto para paradas de 4, 6 u 8 horas'],
+      ['🌧️', 'Garantía de lluvia: créditos de vuelta si el tiempo arruina el día'],
+      ['👥', 'Planes de grupo compartidos con un código'],
+      ['🌱', 'Huella de CO₂ y pasos caminados'],
+      ['📅', 'Itinerario exportable al calendario del teléfono'],
+    ],
+  },
+  DE: {
+    titolo: 'Und dann der ganze Rest',
+    sottotitolo: 'In der App enthalten. Details im Handbuch unter Profil → Einstellungen.',
+    voci: [
+      ['🗺️', 'Maßgeschneiderte Tag-für-Tag-Routen, immer mit einer Gratis-Version'],
+      ['🎫', 'Day Pass: 24 Stunden freihändig, bis zu 40 Audioguides'],
+      ['🏛️', 'Museumspass: 4 Stunden unbegrenzte Erkennungen, für drinnen gedacht'],
+      ['📴', 'Offline-Karten und -Audioguides, vor der Reise gratis geladen'],
+      ['💳', 'Credits, die nie verfallen: kein Abo, keine Verlängerung'],
+      ['🧭', 'Fußgänger-Navi mit der Stimme, die unterwegs erzählt'],
+      ['🎧', 'Podcasts und PDF-Guides zum Mitnehmen'],
+      ['💬', 'Chat mit einem Guide, der weiß, wo du bist'],
+      ['🎟️', 'Buchbare Tickets und Touren, ohne Anstehen'],
+      ['🗓️', 'Events und Konzerte an den Tagen, an denen du da bist'],
+      ['🏺', 'Atlas der denkmalgeschützten Orte und Museen weltweit'],
+      ['🥾', 'Historische Wege mit Etappen und Übernachtungsplätzen'],
+      ['⚓', 'Ausflüge ab Hafen und Flughafen für Stopps von 4, 6 oder 8 Stunden'],
+      ['🌧️', 'Regen-Garantie: Credits zurück, wenn das Wetter den Tag verdirbt'],
+      ['👥', 'Geteilte Gruppenpläne mit einem Code'],
+      ['🌱', 'CO₂-Fußabdruck und gelaufene Schritte'],
+      ['📅', 'Route exportierbar in den Handy-Kalender'],
+    ],
+  },
+  RU: {
+    titolo: 'А ещё — всё остальное',
+    sottotitolo: 'Включено в приложение. Подробности в руководстве: Профиль → Настройки.',
+    voci: [
+      ['🗺️', 'Маршруты под вас на каждый день, всегда с бесплатным вариантом'],
+      ['🎫', 'Day Pass: 24 часа без рук, до 40 аудиогидов'],
+      ['🏛️', 'Музейный пасс: 4 часа распознаваний без лимита, создан для помещений'],
+      ['📴', 'Офлайн-карты и аудиогиды, скачанные бесплатно перед поездкой'],
+      ['💳', 'Кредиты не сгорают: без подписки и продлений'],
+      ['🧭', 'Пешеходный навигатор с голосом, который рассказывает по пути'],
+      ['🎧', 'Подкасты и PDF-гиды с собой'],
+      ['💬', 'Чат с гидом, который знает, где вы'],
+      ['🎟️', 'Билеты и экскурсии без очереди'],
+      ['🗓️', 'События и концерты в дни вашего визита'],
+      ['🏺', 'Атлас охраняемого наследия и музеев всего мира'],
+      ['🥾', 'Исторические пути с этапами и местами для ночлега'],
+      ['⚓', 'Вылазки из порта и аэропорта на стоянки 4, 6 или 8 часов'],
+      ['🌧️', 'Гарантия дождя: кредиты вернутся, если погода испортит день'],
+      ['👥', 'Групповые планы по общему коду'],
+      ['🌱', 'След CO₂ и пройденные шаги'],
+      ['📅', 'Маршрут экспортируется в календарь телефона'],
+    ],
+  },
+  ZH: {
+    titolo: '还有更多精彩',
+    sottotitolo: '全部包含在应用中。详情见手册：个人资料 → 设置。',
+    voci: [
+      ['🗺️', '按天定制的行程，总有免费版本'],
+      ['🎫', 'Day Pass：24小时解放双手，最多40段语音导览'],
+      ['🏛️', '博物馆通票：4小时无限次识别，专为室内设计'],
+      ['📴', '离线地图和语音导览，出发前免费下载'],
+      ['💳', '积分永不过期：无订阅、无续费'],
+      ['🧭', '步行导航，一路语音讲解'],
+      ['🎧', '播客和 PDF 指南随身携带'],
+      ['💬', '与知道你位置的向导聊天'],
+      ['🎟️', '可预订的免排队门票和游览'],
+      ['🗓️', '你在当地那几天的活动和音乐会'],
+      ['🏺', '全球受保护文化遗产与博物馆图集'],
+      ['🥾', '历史古道：分段路线和住宿地点'],
+      ['⚓', '港口和机场的4、6或8小时快闪行程'],
+      ['🌧️', '下雨保障：天气毁了行程就退积分'],
+      ['👥', '用代码共享的小组计划'],
+      ['🌱', '碳足迹和步数统计'],
+      ['📅', '行程可导出到手机日历'],
+    ],
+  },
 };
 
 /** Un colore per schermata: e' cosi' che si vede di essere andati avanti. */
@@ -139,15 +334,21 @@ const ACCENTI = [
 
 const ICONE = [Headphones, Camera, LayoutGrid];
 
-export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, language = 'IT' }) => {
+export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
+  const { onComplete } = props;
+  // Annotato esplicitamente: con la destrutturazione a default ("language =
+  // 'IT'") tsc inferiva `string` invece di `Language` per la prop opzionale
+  // (24/08/2026, sotto React.FC<OnboardingProps>).
+  const language: Language = props.language || 'IT';
   const [indice, setIndice] = useState(0);
   const menoMovimento = useReducedMotion();
 
-  // Le altre lingue ricadono sull'inglese, com'era prima: aggiungerne una qui
-  // significa solo aggiungere una chiave a COPIA.
-  const lingua = language === 'IT' ? 'IT' : 'EN';
-  const slides = COPIA[lingua];
-  const tutto = TUTTO[lingua];
+  // Tutte e 7 le lingue hanno la loro copia; una lingua eventualmente
+  // mancante ricade sull'inglese, com'era prima.
+  const lingua: Language = COPIA[language] ? language : 'EN';
+  const slides = COPIA[lingua]!;
+  const tutto = TUTTO[lingua]!;
+  const t = (k: string) => getTranslation(k, language);
   // Il riepilogo e' una schermata in piu' in coda, con un impaginato suo.
   const totale = slides.length + 1;
   const eRiepilogo = indice === slides.length;
@@ -190,7 +391,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, lang
     <div
       className="fixed inset-0 z-[100] flex flex-col bg-[#07090e] text-white select-none overflow-hidden"
       role="dialog"
-      aria-label={language === 'IT' ? 'Presentazione di WIP' : 'WIP introduction'}
+      aria-label={t('vr_a_ob_dialog')}
       {...gesti}
     >
       {/* L'alone cambia colore insieme alla schermata: e' il segnale di
@@ -220,7 +421,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, lang
           onClick={onComplete}
           className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45 hover:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 rounded-lg px-3 py-2 transition-colors"
         >
-          {language === 'IT' ? 'Salta' : 'Skip'}
+          {t('vr_a_ob_skip')}
         </button>
       </header>
 
@@ -356,7 +557,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, lang
             onClick={indietro}
             disabled={indice === 0}
             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-white/70 transition-all hover:bg-white/5 hover:text-white disabled:pointer-events-none disabled:opacity-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
-            aria-label={language === 'IT' ? 'Schermata precedente' : 'Previous'}
+            aria-label={t('vr_a_ob_prev')}
           >
             <ArrowLeft className="h-4 w-4" strokeWidth={2.5} />
           </button>
@@ -371,12 +572,12 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = ({ onComplete, lang
           >
             {ultima ? (
               <>
-                {language === 'IT' ? 'Inizia a esplorare' : 'Start exploring'}
+                {t('vr_a_ob_start')}
                 <Check className="h-4 w-4" strokeWidth={3} />
               </>
             ) : (
               <>
-                {language === 'IT' ? 'Avanti' : 'Next'}
+                {t('vr_a_ob_next')}
                 <ArrowRight className="h-4 w-4" strokeWidth={3} />
               </>
             )}

@@ -233,6 +233,20 @@ export default function App() {
   const [poiAutoPlay, setPoiAutoPlay] = useState(false);
   const [nearbyPoisForSelected, setNearbyPoisForSelected] = useState<any[]>([]);
   const [subFilters, setSubFilters] = useState<string[]>([]);
+  // Dalla barra di ricerca (23/08/2026): "spiagge toscana" accende la macro
+  // Natura con la sotto-chip Spiagge; "terme" accende Terme. Le altre chip
+  // restano come sono: si aggiunge, non si sostituisce.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (!d.macro) return;
+      setSelectedCategories(prev => (prev.includes(d.macro) ? prev : [...prev, d.macro]));
+      if (d.sub) setSubFilters(prev => (prev.includes(d.sub) ? prev : [...prev, d.sub]));
+      setActiveTab('map');
+    };
+    window.addEventListener('wip-set-category', h);
+    return () => window.removeEventListener('wip-set-category', h);
+  }, []);
   const [visionText, setVisionText] = useState<string>("");
 
   // --- 5. Game & Admin ---
@@ -1197,10 +1211,16 @@ export default function App() {
               // Il listener vive in PlanScreen, che e' montato lazy al primo
               // accesso alla tab: chi parte dalla mappa senza averla mai aperta
               // trovava zero listener e l'evento si perdeva in silenzio
-              // (verificato il 22/08/2026). Quindi: si va sulla tab Plan — e'
-              // li' che stanno percorso e istruzioni — e si ridispatcha finche'
-              // il listener non marca detail.handled, per 12 secondi al massimo
-              // (il chunk lazy deve ancora arrivare).
+              // (verificato il 22/08/2026). Quindi: si MONTA la tab Plan senza
+              // attivarla e si ridispatcha finche' il listener non marca
+              // detail.handled, per 12 secondi al massimo (il chunk lazy deve
+              // ancora arrivare).
+              // Si RESTA sulla mappa (23/08/2026): prima si saltava sulla tab
+              // Piano, dove senza un itinerario generato non c'e' nessuna
+              // mappa — l'overlay partiva ma il percorso non si vedeva da
+              // nessuna parte. Il tracciato lo disegna MapArea (NavRouteLayer,
+              // evento 'wip-nav-route') e l'overlay e' un portal fixed, quindi
+              // compare sopra qualsiasi tab.
               if (routeModalConfig.endCoords) {
                 const detail: any = {
                   endCoords: routeModalConfig.endCoords,
@@ -1210,7 +1230,8 @@ export default function App() {
                   pois,
                   handled: false,
                 };
-                setActiveTab("plan");
+                setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
+                setActiveTab("map");
                 let tentativi = 0;
                 const spara = () => {
                   window.dispatchEvent(new CustomEvent('wip-internal-nav-start', { detail }));

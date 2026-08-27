@@ -140,7 +140,11 @@ export default defineConfig(({mode}) => {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        '@capacitor-community/background-geolocation': path.resolve(__dirname, 'src/stubs/background-geolocation.ts'),
+        // (22/08/2026) Tolto l'alias verso src/stubs/background-geolocation.ts:
+        // nessun file di src/ importa più @capacitor-community/background-geolocation
+        // (l'unico consumatore era src/lib/capacitor/backgroundService.ts, esportato
+        // e mai importato da nessuno). Il lavoro in background lo fa il servizio
+        // nativo Kotlin/Swift, non quel plugin.
       },
     },
     server: {

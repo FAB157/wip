@@ -280,9 +280,17 @@ function onFix(e: Event): void {
 
 /** "Sulla tua strada: Palazzo X. Prima frase della descrizione." */
 function testoIncontro(poi: any): string {
-  const lang = linguaUi().toUpperCase() as Language;
+  const l = linguaUi();
+  const lang = l.toUpperCase() as Language;
   const nome = poi.name || poi.nome || '';
-  const breve = poi.description_short || poi.descrizione_breve || poi.short_description || poi.description || '';
+  // NELLA LINGUA DELL'UTENTE (23/08/2026): description_short e` italiana per
+  // tutti — la voce EN leggeva frasi italiane. Il teaser per-lingua viaggia
+  // gia` nella RPC nearby_pois (teaser_text_*): fuori dall'italiano vince lui;
+  // senza teaser, meglio il solo nome che una frase nella lingua sbagliata.
+  const teaserLingua = poi[`teaser_text_${l}`];
+  const breve = l === 'it'
+    ? (poi.teaser_text_it || poi.description_short || poi.descrizione_breve || poi.short_description || poi.description || '')
+    : (typeof teaserLingua === 'string' && teaserLingua.trim() ? teaserLingua : (poi.teaser_text_en || ''));
   const testa = `${getTranslation('tour_incontro', lang)}: ${nome}.`;
   return breve ? `${testa} ${primaFrase(String(breve), 160)}` : testa;
 }

@@ -23,10 +23,15 @@ export const WIKI_UA = 'WIP-WorldInPocket/1.0 (https://wip.guide; support@wip.gu
 export const GEO_RADIUS_M = 300;
 /** Somiglianza minima (Jaccard) fra nome del POI e titolo della pagina. */
 export const MIN_NAME_SCORE = 0.34;
-/** Soglia ridotta quando la pagina è praticamente sullo stesso punto. */
-const MIN_NAME_SCORE_CLOSE = 0.15;
-/** Distanza entro cui due nomi diversi indicano quasi sempre lo stesso luogo. */
-const SAME_SPOT_M = 25;
+// La soglia ridotta per "stesso punto" (rimossa il 26/08/2026) assumeva un
+// POI puntiforme: entro 25m da un monumento è quasi sempre lo stesso posto
+// con un nome diverso. Ma per un oggetto ESTESO come una strada o un
+// sentiero, "entro 25m" è quasi garantito per QUALSIASI edificio che vi si
+// affaccia — verificato in produzione: "10th Street" (Boise) ha preso la
+// facciata dell'Idanha Hotel, un altro edificio sulla via accanto, perché
+// share nulla col nome tranne la vicinanza. Meglio perdere qualche match
+// legittimo (un monumento con nome diverso ma stesso punto) che continuare
+// a produrre foto del posto sbagliato: unica soglia, sempre.
 
 const STOPWORDS = new Set([
   'il', 'lo', 'la', 'i', 'gli', 'le', 'di', 'del', 'della', 'dello', 'dei', 'degli', 'delle',
@@ -70,10 +75,9 @@ export function nameSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : common / union;
 }
 
-/** Nome compatibile, oppure praticamente lo stesso punto sulla mappa. */
-export function isAcceptableMatch(score: number, distanceM: number): boolean {
-  if (score >= MIN_NAME_SCORE) return true;
-  return distanceM <= SAME_SPOT_M && score >= MIN_NAME_SCORE_CLOSE;
+/** Nome compatibile — unica soglia, vedi nota sopra su perché non ce n'è una ridotta per distanza. */
+export function isAcceptableMatch(score: number, _distanceM: number): boolean {
+  return score >= MIN_NAME_SCORE;
 }
 
 async function getJson(url: string, timeoutMs = 9000): Promise<any | null> {
@@ -300,9 +304,15 @@ export async function fetchCommonsNearby(lat: number, lon: number, name: string)
     `https://commons.wikimedia.org/w/api.php?action=query&list=geosearch` +
     `&gscoord=${lat}|${lon}&gsradius=150&gslimit=25&gsnamespace=6&format=json&origin=*`
   );
+  // Lo score va calcolato sul soggetto del file, non sul nome del file: "File:"
+  // e l'estensione (.jpg, .png…) sono rumore strutturale che, sui nomi corti
+  // (2 token), diluisce lo Jaccard sotto soglia anche quando il file è quello
+  // giusto — verificato su "Fuentes Georginas" vs "File:Fuentes Georginas hot
+  // springs 01.jpg": 0.33 (sotto soglia) senza pulizia, 0.5 (sopra) con.
+  const titoloSoggetto = (t: string) => t.replace(/^File:/i, '').replace(/\.[a-z0-9]{2,4}$/i, '');
   const ordered = (data?.query?.geosearch || [])
     .filter((h: any) => !looksLikeBadFile(h.title))
-    .map((h: any) => ({ ...h, score: nameSimilarity(name, h.title) }))
+    .map((h: any) => ({ ...h, score: nameSimilarity(name, titoloSoggetto(h.title)) }))
     .filter((h: any) => h.score >= MIN_NAME_SCORE)
     .sort((a: any, b: any) => (b.score - a.score) || (a.dist - b.dist));
 

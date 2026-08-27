@@ -4,8 +4,12 @@ import { Radio, Users, CheckCircle, Copy, AlertTriangle, ArrowRight, Gift } from
 import { Capacitor } from '@capacitor/core';
 import { useLiveTour } from '../hooks/useLiveTour';
 import { supabase } from '../lib/supabase';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 export default function LiveTourPanel() {
+  // Nessuna prop `language`: si legge la stessa chiave localStorage di App.tsx.
+  const lingua = linguaCorrente();
+  const t = (k: string) => getTranslation(k, lingua);
   // Il broadcast del leader e il canale realtime vivono dentro useLiveTour a
   // livello di modulo: il tour resta attivo anche uscendo da questo tab.
   const { activeSession, isLeader, participantCount, loading, error, createSession, joinSession, leaveSession } = useLiveTour();
@@ -52,17 +56,17 @@ export default function LiveTourPanel() {
             <Radio className="w-8 h-8 animate-pulse" />
           </div>
           <h2 className="text-xl font-black text-gray-900 mb-1">
-            {isLeader ? "Sei il Leader del Tour" : "Sei connesso al Tour"}
+            {isLeader ? t('vr_a_lt_leader_title') : t('vr_a_lt_follower_title')}
           </h2>
           <p className="text-sm font-bold text-gray-500 max-w-xs mb-6">
-            {isLeader 
-              ? "Tutti quelli connessi al tuo PIN ascolteranno gratuitamente l'audio quando sbloccherai un punto."
-              : "Tieni il telefono acceso. Quando il leader sbloccherà un luogo, l'audio partirà in automatico qui!"}
+            {isLeader
+              ? t('vr_a_lt_leader_desc')
+              : t('vr_a_lt_follower_desc')}
           </p>
 
           <div className="bg-gray-50 p-4 rounded-2xl w-full flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">PIN del Gruppo</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">{t('vr_a_lt_group_pin')}</p>
               <p className="text-3xl font-black tracking-[0.2em] text-gray-900">{activeSession.pin}</p>
             </div>
             <button
@@ -78,14 +82,14 @@ export default function LiveTourPanel() {
             <Users className="w-4 h-4" />
             <span className="text-xs font-black uppercase tracking-wider" aria-live="polite">
               {participantCount <= 1
-                ? 'Solo tu connesso — condividi il PIN!'
-                : `${participantCount} partecipanti connessi`}
+                ? t('vr_a_lt_only_you')
+                : `${participantCount} ${t('vr_a_lt_participants')}`}
             </span>
           </div>
 
           {isLeader && (
             <p className="mt-3 text-[11px] font-bold text-gray-500 max-w-xs">
-              Puoi navigare liberamente nell'app: il tour resta attivo e ogni audioguida che avvii arriva a tutto il gruppo.
+              {t('vr_a_lt_leader_note')}
             </p>
           )}
 
@@ -93,7 +97,7 @@ export default function LiveTourPanel() {
             onClick={leaveSession}
             className="mt-6 px-6 py-3 bg-red-50 text-red-600 font-black text-xs uppercase tracking-widest rounded-full hover:bg-red-100 transition-colors"
           >
-            {isLeader ? "Termina Sessione" : "Abbandona Gruppo"}
+            {isLeader ? t('vr_a_lt_end_session') : t('vr_a_lt_leave_group')}
           </button>
         </div>
       </motion.div>
@@ -111,7 +115,7 @@ export default function LiveTourPanel() {
           <Users className="w-6 h-6" /> Live Tour
         </h2>
         <p className="text-sm font-medium opacity-90 mb-8 max-w-sm">
-          Esplora la città in gruppo! Il Leader fa da guida e paga, mentre gli amici ascoltano sincronizzati in modo completamente gratuito.
+          {t('vr_a_lt_intro')}
         </p>
 
         {/* Errore visibile: prima un PIN sbagliato non dava alcun feedback */}
@@ -124,20 +128,20 @@ export default function LiveTourPanel() {
 
         <div className="space-y-4">
           <div className="bg-white/10 p-5 rounded-3xl backdrop-blur-md">
-            <h3 className="font-black text-sm mb-1 uppercase tracking-widest">Sei la Guida?</h3>
-            <p className="text-xs opacity-80 mb-4">Crea una sessione e condividi il codice con i tuoi amici.</p>
+            <h3 className="font-black text-sm mb-1 uppercase tracking-widest">{t('vr_a_lt_are_guide')}</h3>
+            <p className="text-xs opacity-80 mb-4">{t('vr_a_lt_create_desc')}</p>
             <button 
               onClick={createSession}
               disabled={loading}
               className="w-full py-3 bg-white text-blue-600 font-black text-xs uppercase tracking-widest rounded-xl hover:bg-gray-50 disabled:opacity-50"
             >
-              {loading ? 'Creazione...' : 'Crea Sessione Live'}
+              {loading ? t('vr_a_lt_creating') : t('vr_a_lt_create_btn')}
             </button>
           </div>
 
           <div className="bg-black/20 p-5 rounded-3xl backdrop-blur-md">
-            <h3 className="font-black text-sm mb-1 uppercase tracking-widest">Sei un Follower?</h3>
-            <p className="text-xs opacity-80 mb-4">Inserisci il PIN fornito dalla tua guida per unirti.</p>
+            <h3 className="font-black text-sm mb-1 uppercase tracking-widest">{t('vr_a_lt_are_follower')}</h3>
+            <p className="text-xs opacity-80 mb-4">{t('vr_a_lt_join_desc')}</p>
             <div className="flex gap-2">
               <input 
                 type="text" 
@@ -165,9 +169,9 @@ export default function LiveTourPanel() {
             <Gift className="w-5 h-5 text-amber-600" />
           </div>
           <div>
-            <h4 className="font-black text-amber-900 text-sm">Partecipi come Ospite?</h4>
+            <h4 className="font-black text-amber-900 text-sm">{t('vr_a_lt_guest_title')}</h4>
             <p className="text-xs font-bold text-amber-700/80 mt-1">
-              Puoi ascoltare il tour gratis, ma se ti registri gratuitamente riceverai subito <strong>100 crediti in regalo</strong> per i tuoi futuri viaggi!
+              {t('vr_a_lt_guest_pre')} <strong>{t('vr_a_lt_guest_credits')}</strong> {t('vr_a_lt_guest_post')}
             </p>
           </div>
         </div>

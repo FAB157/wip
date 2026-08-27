@@ -1,11 +1,16 @@
 import React from 'react';
 import { Landmark, Camera, Utensils, Map, Church, Compass } from 'lucide-react';
+import { fotoPrincipale } from '../lib/fotoUrl';
+import AttribuzioneFoto from './AttribuzioneFoto';
 
 interface AttractionImageProps {
   src?: string;
   alt: string;
   category: string;
   className?: string;
+  /** «Foto: Nome (CC BY-SA 4.0) via Wikimedia Commons» — obbligatoria quando
+   *  c'e': senza il credito quelle immagini non sono utilizzabili. */
+  attribuzione?: string | null;
 }
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -28,20 +33,16 @@ const CATEGORY_GRADIENTS: Record<string, string> = {
   default: "bg-gradient-to-br from-emerald-600/20 to-[#1e3a8a]/40"
 };
 
-const FALLBACK_IMAGES: Record<string, string> = {
-  monumenti: "https://images.unsplash.com/photo-1564507592333-c60657eea523?auto=format&fit=crop&q=80&w=400",
-  chiese: "https://images.unsplash.com/photo-1548625361-ec85381a179f?auto=format&fit=crop&q=80&w=400",
-  musei: "https://images.unsplash.com/photo-1582555172866-f73bb12a2ab3?auto=format&fit=crop&q=80&w=400",
-  panorami: "https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?auto=format&fit=crop&q=80&w=400",
-  locali: "https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&q=80&w=400",
-  utilita: "https://images.unsplash.com/photo-1573101823912-70b04bc540f2?auto=format&fit=crop&q=80&w=400",
-  default: "https://images.unsplash.com/photo-1522083111811-0985223abac3?auto=format&fit=crop&q=80&w=400"
-};
+// RIMOSSA (24/08/2026) la tabella FALLBACK_IMAGES: sette foto Unsplash, una
+// per categoria, da mostrare quando quella vera non si carica. Era gia' codice
+// morto — il componente ripiega, giustamente, sulla sfumatura con l'icona —
+// ma restava pronta da ricollegare, ed e' esattamente cio' che la regola non
+// negoziabile del progetto vieta: la fotografia di un altro luogo mostrata
+// come se fosse questo. Nessuna foto e' meglio della foto sbagliata.
 
-export default function AttractionImage({ src, alt, category, className = "" }: AttractionImageProps) {
+export default function AttractionImage({ src, alt, category, className = "", attribuzione }: AttractionImageProps) {
   const [error, setError] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
-  const [fallbackError, setFallbackError] = React.useState(false);
 
   // Normalize category
   const cat = (category || 'default').toLowerCase();
@@ -53,7 +54,6 @@ export default function AttractionImage({ src, alt, category, className = "" }: 
   else if (cat.includes('parco') || cat.includes('natura') || cat.includes('giardin') || cat === 'panorami') normCat = 'panorami';
   else if (cat === 'utilita' || cat === 'utilità') normCat = 'utilita';
 
-  const getFallbackImage = () => FALLBACK_IMAGES[normCat] || FALLBACK_IMAGES.default;
   const getGradientClass = () => CATEGORY_GRADIENTS[normCat] || CATEGORY_GRADIENTS.default;
   const getIcon = () => CATEGORY_ICONS[normCat] || CATEGORY_ICONS.default;
 
@@ -90,16 +90,25 @@ export default function AttractionImage({ src, alt, category, className = "" }: 
         </div>
       )}
       
+      {/* Stessa larghezza del popup del pin (fotoPrincipale, 24/08/2026):
+          e' la STESSA foto, e chiedendola con lo stesso indirizzo la copertina
+          della scheda esce dalla cache del browser invece di riscaricarsi.
+          `eager`: questa immagine e' il primo elemento della scheda che
+          l'utente ha appena aperto, non c'e' niente da rimandare. */}
       <img
-        src={src}
+        src={fotoPrincipale(src) || undefined}
         alt={alt}
-        loading="lazy"
+        loading="eager"
+        fetchPriority="high"
         decoding="async"
         className={`w-full h-full object-cover transition-opacity duration-500 ${loading ? 'opacity-0' : 'opacity-100'}`}
         onError={() => setError(true)}
         onLoad={() => setLoading(false)}
         referrerPolicy="no-referrer"
       />
+      {/* Il credito compare solo a foto caricata: se l'immagine non arriva non
+          c'e' nulla da attribuire, e la riga sospesa nel vuoto confonderebbe. */}
+      {!loading && <AttribuzioneFoto testo={attribuzione} />}
     </div>
   );
 }

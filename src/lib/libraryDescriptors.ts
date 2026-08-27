@@ -45,6 +45,11 @@ import { EXTRA_WORLD_ZONES, EXTRA_THEME_PLACES } from './libraryDescriptorsExtra
 // doppioni fra i due (stesso taken-set/nomiEsistenti) — vedi i due punti
 // di fusione più sotto.
 import { EXTRA_WORLD_ZONES_2, EXTRA_THEME_PLACES_2 } from './libraryDescriptorsExtra2';
+// Le 20 città più visitate al mondo (23/08/2026): quartieri reali delle 19
+// coperte, + Pattaya (l'unica delle 20 senza itinerario di livello città).
+// Vedi il commento in testa al file per il conto e per l'esclusione di
+// Mecca. Solo dati, nessun import — stessa regola delle altre "Extra".
+import { MEGACITY_DISTRICTS, MEGACITY_TOP_LEVEL_EXTRA, type MegacityDistrict } from './libraryMostVisitedCities';
 import { TASTE_ROUTES, tasteRouteContext } from './wineRoutesCatalog';
 import { TASTE_ZONES, type TasteZone } from './tasteZonesWorld';
 import { PERCORSI_SACRI, percorsoSacroContext } from './sacredRoutesCatalog';
@@ -1897,7 +1902,7 @@ export function worldZoneDescriptors(): LibraryDescriptor[] {
   // taken-set: chi arriva prima nell'ordine dello spread vince, i doppioni
   // fra i lotti si scartano da soli.
   const taken = new Set(ZONE_CITIES.map(z => slugify(z.city)));
-  for (const z of [...WORLD_ZONES, ...EXTRA_WORLD_ZONES, ...EXTRA_WORLD_ZONES_2]) {
+  for (const z of [...WORLD_ZONES, ...EXTRA_WORLD_ZONES, ...EXTRA_WORLD_ZONES_2, ...MEGACITY_TOP_LEVEL_EXTRA]) {
     const key = slugify(z.c);
     if (taken.has(key)) continue;
     taken.add(key);
@@ -1925,6 +1930,61 @@ export function worldZoneDescriptors(): LibraryDescriptor[] {
           brief,
           ...(a.id === BOOKABLE_ANGLE.id ? { contextHints: { bookable: true } } : {}),
           // Taglio gastronomico: produttori e cantine reali dal nostro DB.
+          ...(a.id === 'gastronomica' ? { contextHints: { osmGusto: true, osmWinery: true } } : {}),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 5-ter) QUARTIERI DELLE 20 CITTÀ PIÙ VISITATE AL MONDO (23/08/2026,
+//    MEGACITY_DISTRICTS in libraryMostVisitedCities.ts). Stessa forma di
+//    zoneDescriptors/worldZoneDescriptors: STESSI 8 angoli (PORT_ZONE_
+//    ANGLES, gratis ed esperienze compresi), stesso schema JSON, stessa
+//    verifica anti-invenzione lato server. Unica differenza editoriale:
+//    1-2 giorni invece di 1-2-3, perché un quartiere è più piccolo di
+//    una città intera — un terzo giorno sarebbe riempitivo.
+//    Le coordinate sono quelle del QUARTIERE, non del centro città:
+//    un itinerario "dentro Montmartre" ancorato al centroide di Parigi
+//    produrrebbe tappe fuori zona.
+// ─────────────────────────────────────────────────────────────────────
+
+const DISTRICT_DAYS = [1, 2] as const;
+
+export function megacityDistrictDescriptors(): LibraryDescriptor[] {
+  const out: LibraryDescriptor[] = [];
+  const seenSlug = new Set<string>();
+  for (const r of MEGACITY_DISTRICTS as MegacityDistrict[]) {
+    const cityKey = slugify(r.city);
+    const distKey = slugify(r.district);
+    for (const d of DISTRICT_DAYS) {
+      for (const a of PORT_ZONE_ANGLES) {
+        const slug = `zone-${cityKey}-${distKey}-${d}g-${a.id}`;
+        if (seenSlug.has(slug)) continue; // difesa: due quartieri non devono mai slugificare uguale
+        seenSlug.add(slug);
+        const brief = [
+          a.brief,
+          `CONTESTO QUARTIERE: ${r.district}, dentro ${r.city} (${r.country}) — ${r.note}.`,
+          `Questo itinerario resta DENTRO ${r.district} e nelle sue immediate vicinanze: non è un giro di tutta ${r.city}, è la lettura approfondita di UNA sua parte. Se il taglio scelto porterebbe fuori da qui, scegli una tappa diversa ma resta nel quartiere.`,
+          `Durata: ${d} ${d === 1 ? 'giorno' : 'giorni'}. ${
+            d === 1
+              ? 'Un giorno: il meglio del quartiere, senza correre e senza uscirne.'
+              : 'Due giorni: il primo per orientarsi e vedere i punti noti, il secondo per scendere più a fondo nello stesso quartiere.'
+          }`,
+        ].join('\n');
+        out.push({
+          slug,
+          kind: 'zone',
+          title: `${r.district} (${r.city}) in ${d} ${d === 1 ? 'giorno' : 'giorni'} — ${a.label}`,
+          city: `${r.district}, ${r.city}`,
+          country: r.country,
+          coords: { lat: r.lat, lon: r.lon },
+          days: d,
+          angle: a.id,
+          brief,
+          ...(a.id === BOOKABLE_ANGLE.id ? { contextHints: { bookable: true } } : {}),
           ...(a.id === 'gastronomica' ? { contextHints: { osmGusto: true, osmWinery: true } } : {}),
         });
       }
@@ -3381,6 +3441,7 @@ export function getAllDescriptors(): LibraryDescriptor[] {
       ...mediaSeedDescriptors(FASHION_SEED),
       ...zoneDescriptors(),
       ...worldZoneDescriptors(),
+      ...megacityDistrictDescriptors(),
     ];
   }
   return _all;
@@ -3530,6 +3591,29 @@ export function getPriorityDescriptors(): LibraryDescriptor[] {
     const key = slugify(z.c);
     for (const combo of [`2g-classica`, `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`, `3g-classica`]) {
       push(`zone-${key}-${combo}`);
+    }
+  }
+
+  // 2-ter-bis) I QUARTIERI DELLE 20 CITTÀ PIÙ VISITATE AL MONDO
+  //    (23/08/2026, MEGACITY_DISTRICTS). Prima Pattaya a livello città
+  //    (l'unica delle 20 senza copertura città-intera già in catalogo),
+  //    poi per ogni quartiere il giorno 1 con TUTTI gli 8 angoli — la
+  //    coppia gratis/esperienze inclusa fin dal primo giro — poi il
+  //    giorno 2 nello stesso ordine. Senza questo blocco 3.360
+  //    descrittori nuovi cadrebbero in fondo al blocco 5, dietro a
+  //    ~14.000 voci: mesi di semina prima che arrivasse il loro turno.
+  // Pattaya è kind:'zone' via worldZoneDescriptors → slug `zone-pattaya-...`
+  // (non ha giorno 1: MEGACITY_TOP_LEVEL_EXTRA/worldZoneDescriptors usa
+  // WORLD_ZONE_DAYS = [2, 3], come ogni altra zona mondiale).
+  for (const combo of ['2g-classica', `2g-${FREE_ANGLE.id}`, `2g-${BOOKABLE_ANGLE.id}`, '3g-classica']) {
+    push(`zone-pattaya-${combo}`);
+  }
+  for (const d of [1, 2]) {
+    for (const r of MEGACITY_DISTRICTS as MegacityDistrict[]) {
+      const key = `${slugify(r.city)}-${slugify(r.district)}`;
+      for (const a of PORT_ZONE_ANGLES) {
+        push(`zone-${key}-${d}g-${a.id}`);
+      }
     }
   }
 

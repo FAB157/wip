@@ -2,7 +2,7 @@ import { X, Navigation, Trash2, MapPin, ChevronDown, ChevronUp, GripVertical } f
 import { motion, AnimatePresence, Reorder } from "motion/react";
 import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
-import { Language } from "../lib/i18n";
+import { Language, getTranslation } from "../lib/i18n";
 import { tourService, MAX_TAPPE } from "../services/tourService";
 import { getGuideCharacter } from "../lib/guideSettings";
 import { useBozzaGiro } from "../lib/tour/useGiro";
@@ -45,10 +45,11 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   const lungoLaStrada = bozza.lungoLaStrada.filter(p => !tourService.bozzaHa(p.id));
   const [creando, setCreando] = useState(false);
   const [errore, setErrore] = useState<string | null>(null);
+  const tr = (k: string) => getTranslation(k, language);
 
   const scegli = (poi: any) => {
     setErrore(null);
-    if (!tourService.bozzaAlterna(poi)) setErrore('Giro pieno: dieci tappe al massimo.');
+    if (!tourService.bozzaAlterna(poi)) setErrore(tr('gr_giro_pieno'));
   };
 
   const creaGiro = async () => {
@@ -64,26 +65,26 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
     } catch (e: any) {
       const m = String(e?.message || '');
       setErrore(m.startsWith('PASS_RICHIESTO')
-        ? 'Il giro a piu` tappe e` incluso nel Day Pass. Attivalo dal profilo per usarlo.'
-        : m || 'Giro non riuscito.');
+        ? tr('gr_pass_richiesto')
+        : m || tr('gr_giro_non_riuscito'));
     } finally { setCreando(false); }
   };
 
   // La riga sotto il conteggio: prima diceva sempre la stessa frase; ora dice
   // il giro che ne esce — km e minuti — appena il server ha risposto.
-  const passRichiesto = (errore || '').startsWith('Il giro a piu') || bozza.errore === 'PASS_RICHIESTO';
+  const passRichiesto = errore === tr('gr_pass_richiesto') || bozza.errore === 'PASS_RICHIESTO';
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
   const rigaAnteprima = errore
     ? errore
     : bozza.calcolando
-      ? 'Calcolo il percorso…'
+      ? tr('gr_calcolo_percorso')
       : bozza.errore === 'PASS_RICHIESTO'
-        ? 'Anteprima del percorso col Day Pass: le tappe restano scelte.'
+        ? tr('gr_anteprima_pass')
         : bozza.errore === 'POSIZIONE'
-          ? 'Serve la posizione per disegnare il percorso da dove sei.'
+          ? tr('gr_serve_posizione')
           : bozza.metri > 0
-            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} min a piedi · ${bozza.anello ? 'ad anello da dove sei' : 'da dove sei all’ultima tappa'}`
-            : 'WIP Nav mette le tappe nell’ordine che fa camminare meno';
+            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa')}`
+            : tr('gr_wipnav_ordina');
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
   const uniquePois = useMemo(() => {
@@ -140,9 +141,9 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             {isCollapsed ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
           </div>
           <div>
-            <h2 className="text-lg font-black text-[#1e3a8a] tracking-tight leading-none">Radar Audioguida</h2>
+            <h2 className="text-lg font-black text-[#1e3a8a] tracking-tight leading-none">{tr('gr_radar_titolo')}</h2>
             <p className="text-[9px] font-bold text-[#1e3a8a]/60 uppercase tracking-widest mt-1">
-              {uniquePois.length} luoghi monitorati
+              {tr('gr_luoghi_monitorati').replace('{n}', String(uniquePois.length))}
             </p>
           </div>
         </div>
@@ -161,8 +162,8 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         <div className="px-4 py-3 border-b border-black/5 bg-blue-50/70 flex items-center gap-3">
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-black text-[#1e3a8a] leading-tight">
-              {scelte.length} {scelte.length === 1 ? 'tappa scelta' : 'tappe scelte'}
-              {scelte.length >= MAX_TAPPE && <span className="font-bold text-[#1e3a8a]/50"> · massimo</span>}
+              {scelte.length} {scelte.length === 1 ? tr('gr_tappa_scelta') : tr('gr_tappe_scelte')}
+              {scelte.length >= MAX_TAPPE && <span className="font-bold text-[#1e3a8a]/50"> · {tr('gr_massimo')}</span>}
             </p>
             <p className="text-[10px] text-[#1e3a8a]/60 leading-snug">
               {rigaAnteprima}
@@ -172,7 +173,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             onClick={(e) => { e.stopPropagation(); tourService.bozzaSvuota(); setErrore(null); }}
             className="px-3 py-2 rounded-xl text-[11px] font-bold text-[#1e3a8a]/60 hover:bg-black/5 transition-colors shrink-0"
           >
-            Annulla
+            {tr('gr_annulla')}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); creaGiro(); }}
@@ -180,10 +181,10 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             className="px-4 py-2.5 rounded-xl bg-[#1e3a8a] text-white text-[12px] font-black shadow-md hover:bg-blue-800 transition-colors active:scale-95 disabled:opacity-60 shrink-0"
           >
             {creando
-              ? 'Calcolo…'
+              ? tr('gr_calcolo')
               : (bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length)
-                ? `Crea il giro (${bozza.tappeNelTempo})`
-                : 'Crea il giro'}
+                ? tr('gr_crea_giro_n').replace('{n}', String(bozza.tappeNelTempo))
+                : tr('gr_crea_giro')}
           </button>
         </div>
       )}
@@ -194,7 +195,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       {!isCollapsed && passRichiesto && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-amber-50 flex items-center gap-3">
           <p className="flex-1 text-[11px] text-amber-800 leading-snug">
-            Il giro a più tappe e l’ascolto fluido — avviso, teaser e audioguida da soli — sono inclusi nel Day Pass.
+            {tr('gr_daypass_incluso')}
           </p>
           <button
             onClick={(e) => {
@@ -205,7 +206,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             }}
             className="px-3 py-2 rounded-xl bg-[#1e3a8a] text-white text-[11px] font-black shadow-md hover:bg-blue-800 active:scale-95 shrink-0"
           >
-            Attiva il Day Pass
+            {tr('gr_attiva_daypass')}
           </button>
         </div>
       )}
@@ -218,7 +219,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       {!isCollapsed && scelte.length > 0 && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-white/70 space-y-2">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">Tempo che hai</span>
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">{tr('gr_tempo_che_hai')}</span>
             {TEMPI.map(({ min, label }) => (
               <button
                 key={label}
@@ -229,15 +230,15 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                     : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
                 }`}
               >
-                {label}
+                {min == null ? tr('gr_tempo_tutto') : label}
               </button>
             ))}
           </div>
           {/* Ad anello o aperto. Era sempre ad anello: chi dorme dall'altra
               parte della citta` non vuole tornare al punto di partenza. */}
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">Arrivo</span>
-            {[{ v: true, label: '🔁 Torno da dove parto' }, { v: false, label: '🏁 Finisco all’ultima tappa' }].map(({ v, label }) => (
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">{tr('gr_arrivo')}</span>
+            {[{ v: true, label: tr('gr_torno_da_dove_parto') }, { v: false, label: tr('gr_finisco_ultima') }].map(({ v, label }) => (
               <button
                 key={String(v)}
                 onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaAnello(v); }}
@@ -253,7 +254,10 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           </div>
           {bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length && (
             <p className="text-[10px] text-amber-700 leading-snug">
-              Nel tempo che hai ci {bozza.tappeNelTempo === 1 ? 'sta 1 tappa' : `stanno ${bozza.tappeNelTempo} tappe`} su {scelte.length}: le altre restano fuori dal giro.
+              {(bozza.tappeNelTempo === 1
+                ? tr('gr_tempo_ci_sta_1')
+                : tr('gr_tempo_ci_stanno_n').replace('{n}', String(bozza.tappeNelTempo))
+              ).replace('{m}', String(scelte.length))}
             </p>
           )}
 
@@ -261,14 +265,14 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             <>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50">
-                  Ordine del giro · trascina per cambiarlo
+                  {tr('gr_ordine_trascina')}
                 </span>
                 {bozza.ordineManuale && (
                   <button
                     onClick={(e) => { e.stopPropagation(); tourService.bozzaOrdineAutomatico(); }}
                     className="text-[10px] font-bold text-blue-600 hover:underline"
                   >
-                    Riordina per me
+                    {tr('gr_riordina_per_me')}
                   </button>
                 )}
               </div>
@@ -291,10 +295,10 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                         fuori ? 'border border-dashed border-slate-400 text-slate-400' : 'bg-[#1e3a8a] text-white'
                       }`}>{i + 1}</span>
                       <span className="flex-1 min-w-0 text-[12px] font-bold text-[#1e3a8a] truncate">{t.nome}</span>
-                      {fuori && <span className="text-[9px] font-bold uppercase text-slate-400 shrink-0">fuori tempo</span>}
+                      {fuori && <span className="text-[9px] font-bold uppercase text-slate-400 shrink-0">{tr('gr_fuori_tempo')}</span>}
                       <button
                         onClick={(e) => { e.stopPropagation(); tourService.bozzaTogli(t.id); }}
-                        title="Togli dal giro"
+                        title={tr('gr_togli_dal_giro')}
                         className="w-6 h-6 rounded-full bg-red-50 text-red-500 hover:bg-red-500 hover:text-white flex items-center justify-center shrink-0 transition-colors"
                       >
                         <X className="w-3 h-3" />
@@ -317,9 +321,11 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         <div className="px-4 py-2.5 border-b border-black/5 bg-emerald-50/60">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-800/70">
-              Lungo la strada · {lungoLaStrada.length} {lungoLaStrada.length === 1 ? 'posto' : 'posti'} che il giro sfiora
+              {lungoLaStrada.length === 1
+                ? tr('gr_lungo_strada_1')
+                : tr('gr_lungo_strada_n').replace('{n}', String(lungoLaStrada.length))}
             </span>
-            {bozza.cercandoLungoStrada && <span className="text-[10px] text-emerald-800/50">cerco…</span>}
+            {bozza.cercandoLungoStrada && <span className="text-[10px] text-emerald-800/50">{tr('gr_cerco')}</span>}
           </div>
           <div className="space-y-1 max-h-44 overflow-y-auto custom-scrollbar">
             {lungoLaStrada.slice(0, 12).map((p) => (
@@ -328,13 +334,15 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                 <div className="flex-1 min-w-0">
                   <p className="text-[12px] font-bold text-[#1e3a8a] truncate">{p.name}</p>
                   <p className="text-[9px] text-[#1e3a8a]/50 tabular-nums">
-                    a {p.distanza_dal_percorso} m dal percorso · km {(p.metri_lungo / 1000).toFixed(1)}
+                    {tr('gr_dal_percorso')
+                      .replace('{n}', String(p.distanza_dal_percorso))
+                      .replace('{x}', (p.metri_lungo / 1000).toFixed(1))}
                   </p>
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); scegli(p); }}
                   disabled={scelte.length >= MAX_TAPPE}
-                  title="Aggiungi al giro"
+                  title={tr('gr_aggiungi_al_giro')}
                   className="w-7 h-7 rounded-lg bg-emerald-600 text-white text-[15px] font-black flex items-center justify-center shrink-0 hover:bg-emerald-700 active:scale-95 disabled:bg-black/10 disabled:text-black/20"
                 >
                   +
@@ -344,7 +352,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           </div>
           {lungoLaStrada.length > 12 && (
             <p className="text-[9px] text-[#1e3a8a]/50 mt-1">
-              e altri {lungoLaStrada.length - 12}: li sentirai passando, se sono a meno di 40 m.
+              {tr('gr_altri_passando').replace('{n}', String(lungoLaStrada.length - 12))}
             </p>
           )}
         </div>
@@ -356,7 +364,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           {uniquePois.length === 0 ? (
             <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center py-16 text-center opacity-40">
               <MapPin className="w-10 h-10 mb-3" />
-              <p className="font-bold text-xs px-10 text-primary">Nessun POI attivo. Muoviti per trovarne di nuovi o controlla il Setup.</p>
+              <p className="font-bold text-xs px-10 text-primary">{tr('gr_nessun_poi')}</p>
             </motion.div>
           ) : (
             uniquePois.map((poi, idx) => {
@@ -397,7 +405,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                         <button
                           onClick={(e) => { e.stopPropagation(); scegli(poi); }}
                           disabled={pieno}
-                          title={dentro ? 'Togli dal giro' : 'Aggiungi al giro'}
+                          title={dentro ? tr('gr_togli_dal_giro') : tr('gr_aggiungi_al_giro')}
                           className={`w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black transition-all ${
                             dentro
                               ? 'bg-blue-600 text-white'

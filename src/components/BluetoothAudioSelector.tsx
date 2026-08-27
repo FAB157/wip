@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { audioOutputManager } from '../lib/audio/audioOutputManager';
 import { dockingDetector } from '../lib/audio/dockingDetector';
 import { Smartphone, Speaker, Car, Bluetooth, Settings, Loader2 } from 'lucide-react';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 export function BluetoothAudioSelector() {
+  const t = (key: string) => getTranslation(key, linguaCorrente());
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [currentDevice, setCurrentDevice] = useState<string>('default');
   const [autoDetect, setAutoDetect] = useState(true);
@@ -69,17 +71,17 @@ export function BluetoothAudioSelector() {
         <div className="w-10 h-10 rounded-full bg-[#1e3a8a]/5 flex items-center justify-center text-[#1e3a8a]">
           <Settings className="w-5 h-5" />
         </div>
-        <h3 className="text-xl font-black text-[#1e3a8a]">Audio & Auto</h3>
+        <h3 className="text-xl font-black text-[#1e3a8a]">{t('vr_b_bt_title')}</h3>
       </div>
 
       <div className="space-y-3">
         <label className="text-[11px] font-black text-on-surface-variant uppercase tracking-widest pl-1">
-          Dispositivo di Uscita
+          {t('vr_b_bt_output')}
         </label>
         <div className="space-y-2">
           {devices.length === 0 ? (
             <div className="p-4 bg-surface rounded-2xl text-sm font-bold text-on-surface-variant opacity-70">
-              Nessun dispositivo rilevato (o permessi mancanti).
+              {t('vr_b_bt_none')}
             </div>
           ) : (
             devices.map((device) => (
@@ -97,11 +99,11 @@ export function BluetoothAudioSelector() {
                 </div>
                 <div className="flex-1 text-left">
                   <p className="font-bold text-sm truncate">
-                    {device.label || 'Altoparlante predefinito'}
+                    {device.label || t('vr_b_bt_default')}
                   </p>
                   {currentDevice === device.deviceId && (
                     <p className="text-[10px] font-black uppercase text-secondary tracking-widest mt-0.5">
-                      Attivo
+                      {t('vr_b_bt_active')}
                     </p>
                   )}
                 </div>
@@ -114,9 +116,9 @@ export function BluetoothAudioSelector() {
       <div className="space-y-4 pt-2">
         <label className="flex items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant/10 cursor-pointer hover:bg-on-surface/5 transition-colors">
           <div>
-            <p className="font-bold text-sm text-[#1e3a8a]">Auto-connetti Bluetooth</p>
+            <p className="font-bold text-sm text-[#1e3a8a]">{t('vr_b_bt_auto')}</p>
             <p className="text-xs font-semibold text-on-surface-variant/70 mt-1">
-              Passa all'audio dell'auto automaticamente
+              {t('vr_b_bt_auto_sub')}
             </p>
           </div>
           <div className={`w-12 h-7 rounded-full flex items-center px-1 transition-colors ${autoDetect ? 'bg-emerald-500' : 'bg-outline-variant/30'}`}>
@@ -126,9 +128,9 @@ export function BluetoothAudioSelector() {
 
         <label className="flex items-center justify-between p-4 bg-surface rounded-2xl border border-outline-variant/10 cursor-pointer hover:bg-on-surface/5 transition-colors">
           <div>
-            <p className="font-bold text-sm text-[#1e3a8a]">Modalità Docking Auto</p>
+            <p className="font-bold text-sm text-[#1e3a8a]">{t('vr_b_bt_dock')}</p>
             <p className="text-xs font-semibold text-on-surface-variant/70 mt-1">
-              Schermo sempre acceso, font grandi
+              {t('vr_b_bt_dock_sub')}
             </p>
           </div>
           <div className={`w-12 h-7 rounded-full flex items-center px-1 transition-colors ${isDocked ? 'bg-emerald-500' : 'bg-outline-variant/30'}`}>

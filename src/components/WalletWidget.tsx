@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { getWalletBalance, WalletBalance } from '../lib/pricing';
 import { supabase } from '../lib/supabase';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface WalletWidgetProps {
   userId: string;
@@ -53,17 +54,17 @@ export default function WalletWidget({ userId }: WalletWidgetProps) {
       
       {expanded && (
         <div className="absolute top-full mt-2 right-0 bg-white border border-slate-200 shadow-lg rounded-xl p-3 z-50 w-48 text-sm">
-          <div className="font-bold text-slate-800 mb-2 border-b pb-1">Il tuo Portafoglio</div>
+          <div className="font-bold text-slate-800 mb-2 border-b pb-1">{getTranslation('vr_b_ww_title', linguaCorrente())}</div>
           <div className="flex justify-between text-amber-600 mb-1">
-            <span>Crediti Vinti:</span>
+            <span>{getTranslation('vr_b_ww_earned', linguaCorrente())}</span>
             <span className="font-bold">{balance.earned}</span>
           </div>
           <div className="flex justify-between text-blue-600">
-            <span>Crediti Acquistati:</span>
+            <span>{getTranslation('vr_b_ww_purchased', linguaCorrente())}</span>
             <span className="font-bold">{balance.purchased}</span>
           </div>
           <div className="mt-3 text-[10px] text-slate-500 text-center leading-tight">
-            I crediti vinti giocando vengono consumati sempre per primi.
+            {getTranslation('vr_b_ww_note', linguaCorrente())}
           </div>
         </div>
       )}

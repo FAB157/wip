@@ -127,23 +127,77 @@ export function unlockSpeech(): void {
   }
 }
 
-function pickVoice(lang: string, character: GuideCharacter = 'nicky'): SpeechSynthesisVoice | null {
+// Nomi propri delle voci di sistema per genere, nelle sette lingue dell'app.
+// Servono perché fuori da Android il nome NON dice il sesso: su iOS/macOS si
+// chiamano "Alice", "Thomas", "Milena"; su Windows/Edge "Microsoft Elsa —
+// Italian (Italy)". La sola euristica «contiene female/male» funzionava solo
+// su Android (dove il nome è tipo `it-it-x-kda#female_1-local`) e altrove
+// lasciava passare la prima voce disponibile: Dante parlava con voce di donna.
+const VOCI_FEMMINILI = [
+  // Windows / Edge
+  'elsa', 'isabella', 'jenny', 'aria', 'michelle', 'ana', 'zira', 'denise', 'eloise',
+  'katja', 'amala', 'hedda', 'elvira', 'helena', 'laura', 'svetlana', 'dariya', 'irina',
+  'xiaoxiao', 'xiaoyi', 'huihui', 'yaoyao',
+  // iOS / macOS
+  'alice', 'federica', 'samantha', 'karen', 'moira', 'tessa', 'victoria', 'allison',
+  'amelie', 'amélie', 'audrey', 'aurelie', 'marie', 'anna', 'petra', 'monica', 'mónica',
+  'paulina', 'marisol', 'soledad', 'milena', 'katya', 'ting-ting', 'tingting', 'sinji', 'sin-ji', 'meijia',
+];
+const VOCI_MASCHILI = [
+  // Windows / Edge
+  'diego', 'cosimo', 'giuseppe', 'guy', 'eric', 'christopher', 'roger', 'steffan', 'david', 'mark',
+  'henri', 'paul', 'claude', 'conrad', 'killian', 'stefan', 'bernd', 'alvaro', 'álvaro', 'pablo',
+  'dmitry', 'pavel', 'yunxi', 'yunjian', 'yunyang', 'kangkang',
+  // iOS / macOS
+  'luca', 'alex', 'daniel', 'fred', 'aaron', 'arthur', 'oliver', 'rishi', 'thomas', 'nicolas',
+  'markus', 'yannick', 'martin', 'jorge', 'juan', 'carlos', 'yuri', 'li-mu', 'limu', 'liangliang',
+];
+
+function nomeIndicaFemmina(name: string): boolean {
+  // Android: `it-it-x-kda#female_1-local`. Il controllo su '#female'/'#male'
+  // viene PRIMA di 'female'/'male' perché "female" contiene "male".
+  if (name.includes('#female') || name.includes('femmina') || name.includes('femenina')) return true;
+  if (name.includes('#male')) return false;
+  if (VOCI_FEMMINILI.some(n => name.includes(n))) return true;
+  if (VOCI_MASCHILI.some(n => name.includes(n))) return false;
+  if (/\bfemale\b|\bwoman\b|\bgirl\b/.test(name)) return true;
+  return false;
+}
+function nomeIndicaMaschio(name: string): boolean {
+  if (name.includes('#male')) return true;
+  if (name.includes('#female')) return false;
+  if (VOCI_MASCHILI.some(n => name.includes(n))) return true;
+  if (VOCI_FEMMINILI.some(n => name.includes(n))) return false;
+  if (/\bmale\b|\bman\b|\bboy\b|maschile/.test(name)) return true;
+  return false;
+}
+
+/**
+ * Voce di SISTEMA per lingua + personaggio: sempre nella lingua dell'utente e
+ * col genere del personaggio (Nicky = femminile, Dante = maschile). È il
+ * ripiego quando l'MP3 neurale non arriva (offline, TTS server giù): deve
+ * suonare come la voce Azure che sostituisce, non come "la prima che c'è".
+ */
+export function pickVoice(lang: string, character: GuideCharacter = 'nicky'): SpeechSynthesisVoice | null {
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
   const prefix = (lang || 'it').toLowerCase().slice(0, 2);
   const voices = window.speechSynthesis.getVoices();
-  const langVoices = voices.filter(v => v.lang.toLowerCase().startsWith(prefix));
+  const langVoices = voices.filter(v => (v.lang || '').toLowerCase().startsWith(prefix));
   if (langVoices.length === 0) return null;
 
-  const isFemale = character === 'nicky';
-  const genderMatch = langVoices.find(v => {
-    const name = v.name.toLowerCase();
-    if (isFemale) return name.includes('female') || name.includes('woman') || name.includes('girl') || name.includes('elsa') || name.includes('jenny');
-    return name.includes('male') || name.includes('man') || name.includes('boy') || name.includes('diego') || name.includes('guy') || name.includes('luca');
-  });
+  const cercaFemmina = character === 'nicky';
+  const combacia = (v: SpeechSynthesisVoice) => {
+    const name = (v.name || '').toLowerCase();
+    return cercaFemmina ? nomeIndicaFemmina(name) : nomeIndicaMaschio(name);
+  };
 
+  // A parità di genere si preferisce la voce LOCALE: funziona anche offline,
+  // che è esattamente il caso in cui questo ripiego entra in scena.
+  const perGenere = langVoices.filter(combacia);
   return (
-    genderMatch ||
-    langVoices.find((v) => v.localService) ||
+    perGenere.find(v => v.localService) ||
+    perGenere[0] ||
+    langVoices.find(v => v.localService) ||
     langVoices[0] ||
     null
   );

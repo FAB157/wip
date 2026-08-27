@@ -25,7 +25,7 @@ import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import { postForAudioBlob } from '../lib/audioFetch';
 import { getGuideCharacter } from '../lib/guideSettings';
-import { getTranslation, type Language } from '../lib/i18n';
+import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine,
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
@@ -103,6 +103,13 @@ export interface VistaGiro {
   metriTotali: number;
   metriRimanenti: number;
   nomeTappa: string | null;
+  /** La tappa DOPO questa, nell'ordine di cammino ("poi: Battistero"). */
+  nomeProssima: string | null;
+  /** Metri in linea d'aria dalla posizione nota alla porta della tappa. */
+  metriAllaTappa: number | null;
+  /** Coordinate della tappa corrente: il banner ci chiede il meteo. */
+  tappaLat: number | null;
+  tappaLon: number | null;
   istruzione: string | null;
   metriAllaSvolta: number | null;
   /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
@@ -222,7 +229,7 @@ function livelloIngresso(p: any): LivelloIngresso {
 export function tappaDaPoi(p: any): TappaGiro {
   return {
     id: p.id ?? p.poiId,
-    nome: p.name || p.nome || 'Tappa',
+    nome: p.name || p.nome || getTranslation('tour_tappa', linguaCorrente()),
     lat: Number(p.lat), lon: Number(p.lon),
     categoria: p.category || p.poiType || p.baseCategory || null,
     citta: p.city || p.citta || null,
@@ -238,7 +245,7 @@ class TourService {
   private giro: GiroInCorso | null = null;
   private stato: StatoCorrente = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: 0 };
   private coda = new CodaVoci();
-  private ascoltatori = new Set<(v: VistaGiro) => void>();
+  private ascoltatori = new Set<(v: VistaGiro | null) => void>();
   private pausaManuale = false;
   private proposta: PropostaSostituta | null = null;
 
@@ -1046,6 +1053,19 @@ class TourService {
       metriTotali: this.giro.metri,
       metriRimanenti: Math.round(restanti),
       nomeTappa: t?.nome ?? null,
+      // "poi: X" — la tappa successiva nell'ordine di cammino, se c'e'.
+      nomeProssima: (() => {
+        const j = this.giro!.ordine[this.stato.tappaCorrente + 1];
+        return j == null ? null : (this.giro!.tappe[j]?.nome ?? null);
+      })(),
+      // Verso la PORTA della tappa, dalla posizione nota (linea d'aria).
+      metriAllaTappa: (() => {
+        if (!t || !this.ultimaPosizione) return null;
+        const p = t.ingresso ?? { lat: t.lat, lon: t.lon };
+        return Math.round(metri(this.ultimaPosizione, p));
+      })(),
+      tappaLat: t ? (t.ingresso?.lat ?? t.lat) : null,
+      tappaLon: t ? (t.ingresso?.lon ?? t.lon) : null,
       istruzione: this.navAttuale.istruzione,
       metriAllaSvolta: this.navAttuale.metri,
       suAttraversamento: this.navAttuale.attraversamento,
@@ -1062,7 +1082,7 @@ class TourService {
   eTappaDelGiro(id: string | number): boolean { return !!this.giro?.tappe.some(t => String(t.id) === String(id)); }
   volumeGuidaAbbassato() { return VOLUME_ABBASSATO; }
 
-  ascolta(fn: (v: VistaGiro) => void) { this.ascoltatori.add(fn); return () => { this.ascoltatori.delete(fn); }; }
+  ascolta(fn: (v: VistaGiro | null) => void) { this.ascoltatori.add(fn); return () => { this.ascoltatori.delete(fn); }; }
 
   // ── CANDIDATI: i POI attorno, per sostitute e incontri ───────────────────
 
@@ -1230,7 +1250,7 @@ class TourService {
     let link: string | null = null;
     try {
       const { error } = await supabase.from('shared_itinerary_cache').upsert({
-        id: piano.id, destination: piano.destinazione || 'Giro a piedi', days: 1, dati_itinerario: piano, created_at: adesso,
+        id: piano.id, destination: piano.destinazione || getTranslation('tour_giro_a_piedi', (this.lingua || 'it').toUpperCase() as Language), days: 1, dati_itinerario: piano, created_at: adesso,
       }, { onConflict: 'id' });
       if (!error) link = `https://wip.guide/?giro=${encodeURIComponent(piano.id)}`;
     } catch { /* vedi sopra */ }
@@ -1299,8 +1319,11 @@ class TourService {
   }
 
   private avvisa() {
+    // Anche il `null` va detto (23/08/2026): dopo termina() la vista e` null e
+    // prima non si avvisava nessuno — TourRouteLayer e il banner restavano
+    // con l'ultimo giro disegnato finche' qualcos'altro non li ridisegnava.
     const v = this.vista();
-    if (v) for (const fn of this.ascoltatori) { try { fn(v); } catch {} }
+    for (const fn of this.ascoltatori) { try { fn(v); } catch {} }
   }
 
   private avvisaBozza() {

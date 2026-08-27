@@ -26,12 +26,15 @@
 // COSTANTI SPECULARI: la simulazione server-side del canarino notturno
 // (server.ts, regione canary, simulateGeofenceTriggers) replica questa
 // stessa matematica — se cambi una costante qui, cambiala anche lì.
-// - accuracy > 50 m → fix scartato
-// - avvicinamento richiesto (distanza in diminuzione tra due fix)
+// - accuracy > 50 m → fix scartato (SOGLIA_ACCURATEZZA_TRIGGER_M, guideSettings)
+// - avvicinamento richiesto (distanza in diminuzione tra due fix) OPPURE
+//   passaggio previsto dal CPA entro l'anticipo (predittore.ts: 22 s a piedi,
+//   14 s in auto; corridoio 35/70 m) — i due rami convivono, vedi sotto
 // - hasPassed: 40 METRI oltre il punto di massimo avvicinamento (CPA),
 //   MAI soglie in secondi (memoria di progetto trigger pedonali)
-// - raggio di ingresso: eff_geofence_radius del POI, altrimenti default
-//   per categoria (50 m base)
+// - raggio di ingresso: geofence_radius GREZZO del POI quando è calibrato sul
+//   perimetro (ingresso presente), altrimenti lo slider dell'utente più i
+//   default per categoria (50 m base)
 // - cooldown per-POI 24 h (localStorage 'wip_web_trigger_history' +
 //   wip_played_pois con timestamp), come il nativo
 // - throttle globale: max 1 trigger ogni 90 s
@@ -41,20 +44,37 @@
 import { Capacitor } from '@capacitor/core';
 import { isFeatureEnabled } from '../featureFlags';
 import { reportTrigger } from './telemetry';
-import { caricaPerimetri, distanzaDalPerimetro } from './footprints';
+import { caricaPerimetri, distanzaDalPerimetro, perimetroNoto } from './footprints';
 import { locationService } from '../../services/locationService';
 import { tourService } from '../../services/tourService';
-import { radiiForTransport, resolveTransportMode, isPlayed, isCategoryAllowed, PLAYED_COOLDOWN_MS, type TransportMode } from '../guideSettings';
-import { puntoArrivo } from '../puntoArrivo';
+import { radiiForTransport, resolveTransportMode, isPlayed, isCategoryAllowed, PLAYED_COOLDOWN_MS,
+  fiduciaPunto, fattoreFiducia, applicaFiducia, SOGLIA_ACCURATEZZA_TRIGGER_M,
+  type LivelloFiducia, type TransportMode } from '../guideSettings';
+import { valutaPredizione, stabilizzaFix, azzeraFiltro, type FixPredittore } from './predittore';
+import { puntoArrivoSincrono, puntoStradaInCache, precaricaPuntoStrada, collegaGrafoStrade } from '../puntoArrivo';
+import * as roadSnap from '../roadSnap';
 import { getRoadIndex, refreshRoadTile, shouldRefreshRoads } from '../roadSnap';
+import { valutaGate, azzeraGate } from './bearingGate';
 
 // ── Costanti (SPECULARI al canary server) ─────────────────────────
-const ACCURACY_MAX_M = 50;          // fix con accuracy peggiore → scartato
+// Soglia UNICA per decidere, condivisa con il predittore e il gate di bussola:
+// vive in guideSettings.ts (SOGLIA_ACCURATEZZA_TRIGGER_M) proprio perche' era
+// scritta a mano in tre file e nulla impediva a uno dei tre di divergere. La
+// soglia larga da 100 m dei nativi NON e' la stessa cosa e non va unificata:
+// serve a decidere «sono nei paraggi» (registrare geofence, scaricare POI), non
+// a far partire un racconto. Vedi il commento sulle due soglie in guideSettings.
+const ACCURACY_MAX_M = SOGLIA_ACCURATEZZA_TRIGGER_M; // fix peggiore → scartato
 const HAS_PASSED_M = 40;            // metri oltre il CPA = POI superato
 // In auto 40 m sono un secondo e mezzo: fra un fix e l'altro il POI risulta
 // "superato" prima ancora di essere stato valutato (22/08/2026).
 const HAS_PASSED_CAR_M = 150;
 const DEFAULT_TRIGGER_RADIUS_M = 50;
+// Il solo limite inferiore rimasto (23/08/2026, prima era 25 m = metà del
+// default). Non è una scelta di prodotto ma di fisica: in città un fix GPS ha
+// 5-15 m di errore, e un cerchio più stretto di 10 m non lo si "entra", lo si
+// sorteggia. Sopra i 10 m lo slider dell'utente comanda davvero, fino al suo
+// minimo di 15 m (DISTANCE_CONFIG.walkTrigger).
+const MIN_TRIGGER_RADIUS_M = 10;
 // A quanti metri DAL BORDO del perimetro parte la guida, quando il POI ha il
 // poligono (decisione del 22/08/2026: "a 30 metri dal perimetro, non quando
 // si e' dentro"). In auto 30 m sono un secondo a 50 km/h: la frase inizierebbe
@@ -70,8 +90,10 @@ const APPROACH_EPSILON_M = 0.5;     // isteresi minima per "in diminuzione"
 const GEM_BONUS_M = 30;             // arbitraggio: le gemme "valgono" 30 m
 const PREMIUM_BONUS_M = 20;
 
-// Raggi di ingresso di default per categoria quando il POI non porta
-// eff_geofence_radius (allineati ai fallback di poiRepository/nativo).
+// Raggi di ingresso di default per categoria quando il POI non porta un
+// geofence_radius calibrato (allineati ai fallback di poiRepository/nativo).
+// Valgono SOLO per i POI non calibrati: su un POI misurato sul perimetro
+// sarebbero una stima che corregge una misura. Vedi triggerRadiusFor.
 const CATEGORY_RADIUS_M: Record<string, number> = {
   musei: 40, museum: 40, gallery: 40,
   panorami: 80, viewpoint: 80, park: 80,
@@ -109,20 +131,83 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
  * gemme. Fino al 22/08/2026 qui c'erano 50 m fissi per tutti (40 musei, 80
  * panorami): gli slider del setup e il modo auto non esistevano sul web, e a
  * 90 km/h un cerchio di 50 m si salta intero fra due fix.
+ *
+ * 23/08/2026 — VIA IL PAVIMENTO DEI 50 METRI. `eff_geofence_radius` esce dalla
+ * RPC come `coalesce(geofence_radius, 50)`: un POI mai calibrato arrivava qui
+ * con un 50 finto, e il `Math.max(r, eff)` lo trasformava in un pavimento. Lo
+ * slider "arrivo a piedi" (min 15 m, default 30) non poteva scendere sotto i
+ * 50 m: verso il basso era inerte. Ora si legge il raggio GREZZO
+ * (`poi.geofence_radius`, nullo quando non c'e' calibrazione — migration
+ * 20260823140000) e si distinguono due mondi:
+ *
+ *   • POI CALIBRATO (ingresso + raggio dal perimetro reale): comanda la
+ *     misura. Niente default di categoria, niente bonus gemme, niente
+ *     pavimento — sono tutte stime, e una stima non corregge una misura.
+ *   • POI NON CALIBRATO: comportamento di prima, cioe' lo slider dell'utente
+ *     allargato dai default di categoria e dal bonus gemme.
+ *
+ * `eff_*` non si legge piu': serviva solo come surrogato del grezzo, e il
+ * surrogato era il bug.
  */
-function triggerRadiusFor(poi: any, modo: TransportMode): number {
-  const footprint = {
-    geofenceRadius: Number(poi?.eff_geofence_radius) || Number(poi?.geofence_radius) || null,
-    alertRadius: Number(poi?.eff_alert_radius) || Number(poi?.alert_radius) || null,
-    hasEntrance: !!(Number(poi?.entrance_lat) && Number(poi?.entrance_lon)),
-  };
-  let r = radiiForTransport(modo, poi?.category, footprint).trigger;
-  const eff = Number(poi?.eff_geofence_radius);
-  if (Number.isFinite(eff) && eff > 0) r = Math.max(r, eff);
+function triggerRadiusFor(poi: any, modo: TransportMode, livello?: LivelloFiducia): number {
+  // SOLO i raggi grezzi: null = "mai calibrato". Vedi PoiFootprint in
+  // guideSettings.ts. poiRepository li normalizza anche quando la RPC sul DB
+  // e' ancora la versione vecchia che non li restituisce.
+  const rawTrigger = Number(poi?.geofence_radius) || 0;
+  const rawAlert = Number(poi?.alert_radius) || 0;
+  const hasEntrance = !!(Number(poi?.entrance_lat) && Number(poi?.entrance_lon));
+  const calibrato = hasEntrance && rawTrigger > 0;
+
+  const r = radiiForTransport(modo, poi?.category, {
+    geofenceRadius: rawTrigger || null,
+    alertRadius: rawAlert || null,
+    hasEntrance,
+  }).trigger;
+
+  // Il POI e' misurato: si rispetta la misura e ci si ferma qui. L'unico
+  // limite che resta e' fisico, non di prodotto: sotto i 10 m il rumore del
+  // GPS (5-15 m in citta') rende il cerchio un sorteggio.
+  if (calibrato) return Math.max(r, MIN_TRIGGER_RADIUS_M);
+
+  // POI senza calibrazione: default di categoria e bonus gemme come sempre.
+  let out = r;
   const cat = String(poi?.category || '').toLowerCase();
-  if (CATEGORY_RADIUS_M[cat]) r = Math.max(r, CATEGORY_RADIUS_M[cat]);
-  if (poi?.is_gem) r = Math.max(r, CATEGORY_RADIUS_M.gemme);
-  return Math.max(r, DEFAULT_TRIGGER_RADIUS_M * 0.5);
+  if (CATEGORY_RADIUS_M[cat]) out = Math.max(out, CATEGORY_RADIUS_M[cat]);
+  if (poi?.is_gem) out = Math.max(out, CATEGORY_RADIUS_M.gemme);
+
+  // 23/08/2026 — E ADESSO LA FIDUCIA NEL PUNTO. Un cerchio non e' fatto solo
+  // di raggio: e' fatto di raggio E di centro. Con un centro incerto (il
+  // baricentro di un poligono) il raggio di categoria non basta: il POI viene
+  // marcato «superato» e non parla MAI. Vedi fiduciaPunto/fattoreFiducia in
+  // guideSettings.ts per i numeri (×2 sul centroide puro — cioe' quando NON
+  // abbiamo un punto — e nessun allargamento quando un punto c'e', che sia il
+  // muro, il portone o l'indirizzo; tetti 80 m a piedi e 120 m in auto). Il
+  // bonus gemme resta dov'e': sta sotto i tetti e non viene mai stretto.
+  const liv = livello ?? fiduciaPunto(poi, {
+    haPerimetro: perimetroNoto(String(poi?.id ?? '')),
+    puntoIndirizzoPronto: !!puntoStradaInCache(poi),
+  });
+  out = applicaFiducia(out, fattoreFiducia(liv, modo), 'trigger');
+  return Math.max(out, MIN_TRIGGER_RADIUS_M);
+}
+
+/**
+ * Il raggio di AVVISO ("stai per arrivare"): stessa scala di fiducia del
+ * trigger, con i suoi tetti (250 m a piedi, 400 m in auto). Serve qui a una
+ * cosa sola: sapere quando un POI e' abbastanza vicino da meritare la
+ * geocodifica dell'indirizzo — l'unica chiamata di rete della catena, fatta
+ * una volta per POI e mai nel ciclo del trigger.
+ */
+function alertRadiusFor(poi: any, modo: TransportMode, livello: LivelloFiducia): number {
+  const rawTrigger = Number(poi?.geofence_radius) || 0;
+  const rawAlert = Number(poi?.alert_radius) || 0;
+  const hasEntrance = !!(Number(poi?.entrance_lat) && Number(poi?.entrance_lon));
+  const base = radiiForTransport(modo, poi?.category, {
+    geofenceRadius: rawTrigger || null,
+    alertRadius: rawAlert || null,
+    hasEntrance,
+  }).alert;
+  return applicaFiducia(base, fattoreFiducia(livello, modo), 'avviso');
 }
 
 // ── Cooldown per-POI persistente (condiviso tra sessioni PWA) ─────
@@ -261,6 +346,19 @@ function onLocationUpdate(e: Event): void {
     const modo = resolveTransportMode(Number.isFinite(speed) ? speed : null);
     const passatoM = modo === 'car' ? HAS_PASSED_CAR_M : HAS_PASSED_M;
 
+    // 🎚️ FILTRO SUL JITTER, PRIMA DI TUTTO IL RESTO (23/08/2026). Il CPA del
+    // predittore e' una derivata: si nutre della differenza fra due posizioni,
+    // e fra i palazzi un fix rimbalza di 10-30 m da un secondo all'altro. Il
+    // filtro e' un Kalman scalare per asse con passo di predizione lungo la
+    // rotta nota (niente ritardo su chi cammina) e un guard-rail a 10 m: se la
+    // stima filtrata si allontana di piu' dal fix grezzo, vince il grezzo e lo
+    // stato riparte. Vedi predittore.ts per il compromesso per esteso.
+    const stabile = stabilizzaFix({ lat, lon, speed, heading: Number(d.heading), accuracy });
+    if (Number.isFinite(stabile.lat) && Number.isFinite(stabile.lon)) {
+      lat = stabile.lat;
+      lon = stabile.lon;
+    }
+
     // SNAP SULLA STRADA, come il servizio nativo (ItaintaBackgroundPoiService
     // .kt:448-453 e BackgroundPoiManager.swift:311-312). roadSnap.ts esisteva
     // dal giorno uno ma nessuno lo importava: il web valutava i geofence col
@@ -274,7 +372,15 @@ function onLocationUpdate(e: Event): void {
     const snappato = getRoadIndex()?.snap(lat, lon, Number.isFinite(accuracy) ? accuracy : 20, modo === 'car' ? 'car' : 'walk');
     if (snappato) { lat = snappato.lat; lon = snappato.lon; }
 
-    interface Eligible { poi: any; id: string; dist: number }
+    // Il fix, nella forma che il predittore si aspetta. Costruito una volta
+    // per giro: la valutazione CPA e' per-POI, il fix no.
+    const fixPredittore: FixPredittore = {
+      lat, lon, speed, heading: Number(d.heading), accuracy,
+    };
+
+    /** Quale ramo ha reso eleggibile il POI: serve a leggere la telemetria in strada. */
+    type RamoTrigger = 'perimetro' | 'raggio' | 'predetto';
+    interface Eligible { poi: any; id: string; dist: number; arrivo: { lat: number; lon: number }; inside: boolean; ramo: RamoTrigger; motivo: string }
     const eligible: Eligible[] = [];
     const seenNear = new Set<string>();
 
@@ -299,10 +405,28 @@ function onLocationUpdate(e: Event): void {
       if (isPlayed(id)) { approachStates.delete(id); continue; }
       // La distanza dall'INGRESSO quando lo conosciamo (276.000 POI dal
       // 21/08), non dal centroide: su un edificio grande il trigger scattava
-      // dal lato sbagliato e il radar mostrava un'altra distanza.
-      const arrivo = puntoArrivo(poi);
+      // dal lato sbagliato e il radar mostrava un'altra distanza. Dal
+      // 23/08/2026 c'e' un gradino in piu': se l'indirizzo e' gia' stato
+      // geocodificato (e portato sulla carreggiata) si misura DA LI', cioe'
+      // dal punto sulla via giusta invece che dal baricentro dell'edificio.
+      const fiducia = fiduciaPunto(poi, {
+        haPerimetro: perimetroNoto(id),
+        puntoIndirizzoPronto: !!puntoStradaInCache(poi),
+      });
+      const arrivo = puntoArrivoSincrono(poi);
       const dist = haversineMeters(lat, lon, arrivo.lat, arrivo.lon);
-      const radius = triggerRadiusFor(poi, modo);
+      const radius = triggerRadiusFor(poi, modo, fiducia);
+
+      // GEOCODIFICA AL MOMENTO DELL'AVVISO, UNA VOLTA PER POI. Chiedere la
+      // strada dell'indirizzo costa una chiamata di rete: nel ciclo dei
+      // trigger (un giro per fix, decine di POI) sarebbe insostenibile. Qui
+      // si lancia solo quando il POI entra nel raggio d'avviso — dove restano
+      // secondi di margine prima del trigger — e non si aspetta: se al
+      // passaggio successivo il punto e' pronto sale a livello `indirizzo`,
+      // altrimenti si continua col centroide (e il suo raggio doppio).
+      if (fiducia === 'centroide' && dist <= alertRadiusFor(poi, modo, fiducia)) {
+        precaricaPuntoStrada(poi);
+      }
 
       // A 30 METRI DAL PERIMETRO (22/08/2026): quando il POI ha il poligono,
       // la misura che conta e' la distanza dal MURO — 0 dentro — e non il
@@ -333,6 +457,19 @@ function onLocationUpdate(e: Event): void {
       if (dist > st.minDist + passatoM) st.passed = true;
       if (dist < st.minDist) st.minDist = dist;
 
+      // 🎯 PREDIZIONE (23/08/2026): il POI e' pertinente anche se il PASSAGGIO
+      // e' previsto entro l'anticipo — 22 s a piedi, 14 s in auto, corridoio
+      // 35/70 m — e non solo se sei gia' dentro il cerchio. E' il ramo che i
+      // nativi hanno da sempre (PredictiveTrigger.kt/.swift) e che sul web
+      // mancava: qui si decideva con «la distanza e' calata di 0,5 m», che non
+      // anticipa nulla e non distingue chi arriva da chi passa nella via
+      // parallela. Il predittore SI AGGIUNGE, non sostituisce: fail-open per
+      // costruzione (fermo, senza rotta o con un fix impreciso torna alla
+      // regola radiale di prima), quindi non puo' togliere un trigger che oggi
+      // scatterebbe — puo' solo anticiparlo.
+      const predizione = valutaPredizione(fixPredittore, arrivo.lat, arrivo.lon, radius, modo, Date.now());
+      const predetto = predizione.haPredetto && predizione.decisione === 'scatta';
+
       // A 30 M DAL PERIMETRO (o dentro) batte tutto il resto.
       //
       // Le due condizioni che valgono per il cerchio — "ti stai avvicinando"
@@ -342,9 +479,17 @@ function onLocationUpdate(e: Event): void {
       // percorso, e il codice a raggi lo leggerebbe come "sta andando via".
       // Se sei a 30 m dal muro, ci sei: il cooldown di 24 ore basta a evitare
       // che parli due volte. Il cerchio resta per i POI senza perimetro.
-      if (alPerimetro || (dist <= radius && approaching && !st.passed)) {
+      const dentroRaggio = dist <= radius && approaching && !st.passed;
+      // ORDINE DEI RAMI, dal piu' certo al piu' inferito: perimetro (misurato),
+      // cerchio (com'e' sempre stato), predizione (inferita). Il `!st.passed`
+      // vale anche per la predizione: un POI gia' superato resta superato.
+      if (alPerimetro || dentroRaggio || (predetto && !st.passed)) {
         if (alPerimetro) st.passed = false;
-        eligible.push({ poi, id, dist: inside ? 0 : Math.min(dist, distPerimetro) });
+        const ramo: RamoTrigger = alPerimetro ? 'perimetro' : (dentroRaggio ? 'raggio' : 'predetto');
+        eligible.push({
+          poi, id, dist: inside ? 0 : Math.min(dist, distPerimetro), arrivo, inside, ramo,
+          motivo: ramo === 'predetto' ? predizione.motivo : ramo,
+        });
       }
       st.prevDist = dist;
     }
@@ -360,7 +505,7 @@ function onLocationUpdate(e: Event): void {
       if (isInCooldown(c.id) || (String(lastTrig.id) === c.id && now - lastTrig.ts < 60_000)) {
         if (!suppressedReported.has(c.id)) {
           suppressedReported.add(c.id);
-          reportTrigger('suppressed', { poiId: c.id, accuracy });
+          reportTrigger('suppressed', { poiId: c.id, accuracy, speed });
         }
         return false;
       }
@@ -368,24 +513,67 @@ function onLocationUpdate(e: Event): void {
     });
     if (ready.length === 0) return;
 
+    // 🧭 GATE DI BUSSOLA (23/08/2026). L'ultimo filtro prima di parlare: se il
+    // POI ce l'hai ALLE SPALLE il racconto non si butta via, si RIMANDA — non
+    // si marca come scattato, non si consuma il cooldown, non si tocca il
+    // throttle globale, e si riprova al fix successivo (se torni indietro o ti
+    // giri a guardarlo, parte allora).
+    //
+    // Il gate e' fail-open per costruzione: 'ignora-gate' in tutti i casi in
+    // cui non ha titolo per decidere. Qui si aggiungono le tre esenzioni che
+    // dipendono dal contesto del trigger e che il modulo non puo' conoscere:
+    //  • DENTRO IL PERIMETRO: sei nell'edificio, dove guardi non conta (il
+    //    modulo lo verifica anche da se' con dentroPerimetro, ma qui la misura
+    //    e' gia' in mano: `inside`);
+    //  • TAPPE DI UN GIRO/ITINERARIO: sono luoghi che l'utente HA SCELTO, non
+    //    incontri per strada — si raccontano comunque, anche di spalle. (I giri
+    //    "Dieci Tappe" non arrivano nemmeno fin qui: tourService.inCorso() esce
+    //    in cima. Questo copre l'itinerario manuale, isFromItinerary.)
+    // Il raggio d'arrivo stretto (25 m) e la scadenza del rinvio (90 s) sono
+    // gia' dentro valutaGate: un POI rimandato parla comunque dopo un minuto e
+    // mezzo, perche' un racconto tardivo vale piu' del silenzio.
+    const davanti = ready.filter(c => {
+      if (c.inside) return true;
+      if (c.poi?.isFromItinerary === true) return true;
+      const esito = valutaGate(
+        { id: c.id, lat: c.arrivo.lat, lon: c.arrivo.lon },
+        { latitude: lat, longitude: lon, speed: Number.isFinite(speed) ? speed : null,
+          heading: Number(d.heading), accuracy: Number.isFinite(accuracy) ? accuracy : null },
+        { distanzaMetri: c.dist },
+      );
+      return esito !== 'rimanda';
+    });
+    if (davanti.length === 0) {
+      // Tutti alle spalle: si riprova al prossimo fix. Vale la pena saperlo —
+      // e' l'unico caso in cui un POI predetto correttamente resta muto, e in
+      // strada serve poterlo distinguere da «non era eleggibile». 'skipped',
+      // una volta per POI a sessione come gli altri.
+      const c = ready[0];
+      if (!suppressedReported.has(`gate:${c.id}`)) {
+        suppressedReported.add(`gate:${c.id}`);
+        reportTrigger('skipped', { poiId: c.id, accuracy, speed });
+      }
+      return;
+    }
+
     // Throttle globale: mai più di un trigger ogni 90 s (i candidati restano
     // eleggibili ai fix successivi finché non superano il POI).
     if (now - lastGlobalFireTs < GLOBAL_THROTTLE_MS) {
-      const c = ready[0];
+      const c = davanti[0];
       if (!suppressedReported.has(`global:${c.id}`)) {
         suppressedReported.add(`global:${c.id}`);
-        reportTrigger('suppressed', { poiId: c.id, accuracy });
+        reportTrigger('suppressed', { poiId: c.id, accuracy, speed });
       }
       return;
     }
 
     // Arbitraggio: vince il più vicino, con bonus d'importanza gemme/premium.
-    ready.sort((a, b) => {
+    davanti.sort((a, b) => {
       const score = (c: Eligible) =>
         c.dist - (c.poi.is_gem ? GEM_BONUS_M : 0) - (c.poi.premium ? PREMIUM_BONUS_M : 0);
       return score(a) - score(b);
     });
-    const winner = ready[0];
+    const winner = davanti[0];
 
     lastGlobalFireTs = now;
     markFired(winner.id);
@@ -409,8 +597,21 @@ function onLocationUpdate(e: Event): void {
         fromForegroundWeb: true,
       },
     }));
-    reportTrigger('fired', { poiId: winner.id, accuracy });
-    console.log(`[ForegroundTriggers] 🎯 Trigger web: ${winner.poi.name || winner.id} a ${Math.round(winner.dist)} m`);
+    // Ha parlato: il POI esce dallo stato del gate (rinvii e isteresi
+    // ripartono da zero se un domani lo si reincontra).
+    azzeraGate(winner.id);
+    // Telemetria: `speed` va nel body insieme ad accuracy (il server aggrega
+    // per giorno). Il RAMO che ha fatto scattare il POI non entra nel payload
+    // — reportTrigger accetta solo poiId/accuracy/speed e non e' questo il
+    // posto per allargarlo — ma finisce nel log e in una variabile globale, che
+    // e' cio' che serve in strada col telefono collegato: si legge
+    // `__wipUltimoRamoTrigger` e si sa se il POI e' partito dal perimetro, dal
+    // cerchio o dalla predizione (con t_cpa/d_cpa nel motivo).
+    reportTrigger('fired', { poiId: winner.id, accuracy, speed });
+    (window as any).__wipUltimoRamoTrigger = {
+      id: winner.id, ramo: winner.ramo, motivo: winner.motivo, dist: Math.round(winner.dist), modo, ts: now,
+    };
+    console.log(`[ForegroundTriggers] 🎯 Trigger web (${winner.ramo}/${winner.motivo}): ${winner.poi.name || winner.id} a ${Math.round(winner.dist)} m`);
 
     // Pruning stati: via i POI non più tra i candidati vicini
     for (const key of Array.from(approachStates.keys())) {
@@ -429,6 +630,10 @@ export function startForegroundTriggers(): void {
   if (started || typeof window === 'undefined') return;
   try { if (Capacitor.isNativePlatform()) return; } catch { /* web puro */ }
   started = true;
+  // Il grafo strade serve anche a puntoArrivo (per posare il civico
+  // geocodificato sulla carreggiata): glielo si passa da qui, perche' un
+  // import statico in puntoArrivo creerebbe un ciclo con i moduli geofencing.
+  collegaGrafoStrade(roadSnap);
   window.addEventListener('pois-updated', onPoisUpdated);
   window.addEventListener('wip-location-update', boundOnLocationUpdate);
   console.log('[ForegroundTriggers] ✅ Trigger web foreground attivi (PWA/browser)');
@@ -450,6 +655,8 @@ export function stopForegroundTriggers(): void {
   window.removeEventListener('pois-updated', onPoisUpdated);
   window.removeEventListener('wip-location-update', boundOnLocationUpdate);
   approachStates.clear();
+  azzeraGate();   // niente rinvii ereditati dal giro precedente
+  azzeraFiltro(); // ne' una traccia GPS: al riavvio si riparte dal primo fix grezzo
   candidates = [];
   candidatesAt = 0;
   // Prima restavano: il throttle globale (un giro spento e riacceso partiva

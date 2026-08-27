@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Download, Trash2, MapPin, Search, Loader2, RefreshCw, Radar } from 'lucide-react';
 import { OfflineMapArea, saveOfflineMapArea, getOfflineMapAreasList, deleteOfflineMapArea } from '../lib/offlineStorage';
-import { prefetchTilesForArea, removeTilesForArea, planTilesForArea } from '../lib/offlineTiles';
+import { prefetchTilesForArea, removeTilesForArea, planTilesForArea, stimaDownloadArea } from '../lib/offlineTiles';
 import { getApiUrl } from '../lib/api';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
@@ -46,6 +46,23 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
   const [suggestions, setSuggestions] = useState<Array<{ id: string; description: string; lat: number; lon: number }>>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedPlace, setSelectedPlace] = useState<{ name: string; lat: number; lon: number } | null>(null);
+
+  /** Traduzione con segnaposto {nome}. */
+  const t = (key: string, vars?: Record<string, string | number>) => {
+    let s = getTranslation(key, language);
+    if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
+    return s;
+  };
+
+  // PESO DICHIARATO PRIMA DEL DOWNLOAD: la stima si aggiorna a ogni cambio di
+  // raggio/città, non dopo che i MB sono già stati consumati. Senza una città
+  // scelta si usa la latitudine 45° come riferimento (il numero di tessere
+  // dipende dal raggio e, in misura minore, dalla latitudine).
+  const stima = useMemo(
+    () => stimaDownloadArea(selectedPlace?.lat ?? 45, selectedPlace?.lon ?? 10, radiusKm),
+    [selectedPlace, radiusKm]
+  );
+
   useEffect(() => {
     loadAreas();
   }, []);
@@ -110,7 +127,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     const res = await fetch(getApiUrl(`/api/nominatim/search?q=${encodeURIComponent(query)}&format=json&limit=1`));
     const data = await res.json();
     if (!data || data.length === 0) {
-      throw new Error('Città non trovata. Riprova con un nome più preciso.');
+      throw new Error(t('pf_om_city_not_found'));
     }
     return {
       lat: parseFloat(data[0].lat),
@@ -122,8 +139,10 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
   /**
    * Storage: chiede la persistenza (evita che il browser spazzi via tile e
    * POI offline sotto pressione di spazio) e stima lo spazio richiesto
-   * (~tile × 30KB + 5MB di dati POI). Se supera quello disponibile, avvisa
-   * l'utente e chiede conferma. Ritorna false solo se l'utente annulla.
+   * (stimaDownloadArea: tile al peso medio REALE di 60 KB — la vecchia stima a
+   * 30 KB era 2-3 volte sotto il vero — più 5 MB di dati POI). Se supera quello
+   * disponibile, avvisa l'utente e chiede conferma. Ritorna false solo se
+   * l'utente annulla.
    */
   const ensureStorageForDownload = async (lat: number, lon: number): Promise<boolean> => {
     try {
@@ -139,15 +158,13 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
       if (navigator.storage.estimate) {
         const { usage = 0, quota = 0 } = await navigator.storage.estimate();
-        const tileCount = planTilesForArea(lat, lon, radiusKm).length;
-        const estimatedBytes = tileCount * 30 * 1024 + 5 * 1024 * 1024;
+        const estimatedBytes = stimaDownloadArea(lat, lon, radiusKm).byteAttesi;
         const available = quota - usage;
         if (quota > 0 && estimatedBytes > available) {
-          return confirm(
-            `Spazio quasi esaurito: il download richiede circa ${formatBytes(estimatedBytes)} ` +
-            `ma sul dispositivo ne restano ${formatBytes(Math.max(0, available))}. ` +
-            'Il download potrebbe risultare incompleto. Vuoi procedere comunque?'
-          );
+          return confirm(t('offl_storage_short', {
+            needed: formatBytes(estimatedBytes),
+            free: formatBytes(Math.max(0, available)),
+          }));
         }
       }
     } catch {
@@ -156,13 +173,23 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     return true;
   };
 
-  /** Scarica lo sfondo mappa (tile) dell'area nella cache del service worker:
-   *  senza questo la mappa offline restava un riquadro vuoto. */
+  /** I livelli di zoom saltati per stare nel tetto venivano scartati IN
+   *  SILENZIO: ora l'utente lo legge nel riepilogo finale. */
+  const avvisoLivelliSaltati = (lat: number, lon: number): string => {
+    const saltati = stimaDownloadArea(lat, lon, radiusKm).livelliSaltati;
+    if (saltati.length === 0) return '';
+    return `\n\n${t('offl_levels_skipped', { levels: saltati.join(', ') })}`;
+  };
+
+  /** Scarica lo sfondo mappa (tile) dell'area nella Cache API: senza questo la
+   *  mappa offline restava un riquadro vuoto. Le tile vengono poi rilette dal
+   *  layer di MapArea direttamente dalla Cache API (niente service worker: su
+   *  iOS non esiste). */
   const prefetchTiles = async (lat: number, lon: number) => {
-    setDownloadProgress('Scaricamento sfondo mappa...');
+    setDownloadProgress(t('pf_om_sfondo'));
     try {
       const result = await prefetchTilesForArea(lat, lon, radiusKm, (p) => {
-        setDownloadProgress(`Scaricamento sfondo mappa: ${p.done}/${p.total} tile...`);
+        setDownloadProgress(t('pf_om_sfondo_n', { n: p.done, x: p.total }));
       });
       return result;
     } catch (e) {
@@ -178,7 +205,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
    */
   const handleDownloadNative = async () => {
     setIsDownloading(true);
-    setDownloadProgress('Ricerca città...');
+    setDownloadProgress(t('pf_om_ricerca_citta'));
     let unsub: (() => void) | null = null;
     try {
       const city = await geocodeCity();
@@ -188,14 +215,10 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
       // Verifica voce TTS ORA, con la rete ancora viva: offline la voce di
       // sistema è l'unica sorgente audio.
-      setDownloadProgress('Verifica voce offline...');
+      setDownloadProgress(t('pf_om_verifica_voce'));
       const voice = await checkOfflineVoice(language);
       if (!voice.available || !voice.offlineVoice) {
-        const goInstall = confirm(
-          'La voce di sistema per la tua lingua non risulta installata per l\'uso offline. ' +
-          'Vuoi aprire le impostazioni per scaricarla ora (finché sei connesso)? ' +
-          'Puoi comunque proseguire: senza voce offline i luoghi verranno solo notificati.'
-        );
+        const goInstall = confirm(t('pf_om_voce_confirm'));
         if (goInstall) {
           await openTtsVoiceInstall();
           return; // l'utente rilancia il download dopo l'installazione
@@ -205,11 +228,11 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       const pkgId = makeOfflinePackageId(city.name, radiusKm);
       unsub = onPackageProgress(pkgId, (p) => {
         if (p.phase === 'downloading') {
-          setDownloadProgress(p.total > 0 ? `Scaricati ${p.done}/${p.total} luoghi...` : `Scaricati ${p.done} luoghi...`);
+          setDownloadProgress(p.total > 0 ? t('pf_om_scaricati_n', { n: p.done, x: p.total }) : t('pf_om_scaricati_only', { n: p.done }));
         }
       });
 
-      setDownloadProgress(`Download pacchetto ${city.name} (${radiusKm} km)...`);
+      setDownloadProgress(t('pf_om_download_pkg', { x: city.name, n: radiusKm }));
       const pkg = await downloadOfflinePackage({
         id: pkgId,
         name: `${city.name} (${radiusKm}km)`,
@@ -227,13 +250,12 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       setSearchCity('');
       setSelectedPlace(null);
       notify(
-        `Pacchetto "${pkg.name}" pronto: ${pkg.poiCount} luoghi (${formatBytes(pkg.sizeBytes)}).\n\n` +
-        'Offline l\'app userà la vista radar e la voce di sistema: download istantaneo e zero ingombro. ' +
-        'L\'audioguida parte da sola quando ti avvicini a un luogo, anche a schermo spento.'
+        t('pf_om_pkg_ready', { x: pkg.name, n: pkg.poiCount, y: formatBytes(pkg.sizeBytes) }) +
+        avvisoLivelliSaltati(city.lat, city.lon)
       );
     } catch (e: any) {
       console.error(e);
-      notify(e?.message || 'Errore durante il download del pacchetto');
+      notify(e?.message || t('pf_om_pkg_error'));
     } finally {
       unsub?.();
       setIsDownloading(false);
@@ -246,16 +268,16 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     try {
       const pkg = await syncOfflinePackage(id);
       await loadAreas();
-      notify(`Aggiornato: ${pkg.poiCount} luoghi nel pacchetto.`);
+      notify(t('pf_om_sync_ok', { n: pkg.poiCount }));
     } catch (e: any) {
-      notify(e?.message || 'Sincronizzazione fallita. Riprova quando sei online.');
+      notify(e?.message || t('pf_om_sync_fail'));
     } finally {
       setSyncingId(null);
     }
   };
 
   const handleDeletePackage = async (id: string) => {
-    if (confirm('Vuoi eliminare questo pacchetto offline dal dispositivo?')) {
+    if (confirm(t('pf_om_delete_pkg_confirm'))) {
       const pkg = packages.find(p => p.id === id);
       await deleteOfflinePackage(id);
       // Cleanup anche delle tile di sfondo (risparmiando quelle condivise
@@ -273,7 +295,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
   /** PERCORSO WEB/PWA: flusso Dexie storico (niente geofencing hardware). */
   const handleDownloadWeb = async () => {
     setIsDownloading(true);
-    setDownloadProgress('Ricerca città...');
+    setDownloadProgress(t('pf_om_ricerca_citta'));
 
     try {
       const city = await geocodeCity();
@@ -284,7 +306,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       // Persistenza storage + verifica spazio (l'utente può annullare qui).
       if (!(await ensureStorageForDownload(centerLat, centerLon))) return;
 
-      setDownloadProgress(`Scaricamento POI nel raggio di ${radiusKm}km da ${cityName}...`);
+      setDownloadProgress(t('pf_om_scarico_poi', { n: radiusKm, x: cityName }));
 
       // 2. Chiama l'Edge Function o usa rpc per trovare i POI (Supabase)
       let pois = [];
@@ -309,7 +331,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       // la RPC ritorna solo i campi base; per l'ascolto offline delle guide
       // servono anche i testi. Merge per id: i campi completi vincono.
       try {
-        setDownloadProgress('Scaricamento testi e audioguide della zona...');
+        setDownloadProgress(t('pf_om_scarico_testi'));
         const deltaLat = radiusKm / 111;
         const deltaLon = radiusKm / (111 * Math.cos(centerLat * (Math.PI / 180)) || 1);
         const { data: fullRows, error: fullErr } = await supabase
@@ -335,7 +357,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       const existingIds = new Set(poiList.map(p => p.id));
 
       // 3. Integrare Overpass API (per la copertura globale dove Supabase manca)
-      setDownloadProgress(`Integrazione mappa globale (potrebbe richiedere fino a 1 minuto)...`);
+      setDownloadProgress(t('pf_om_integrazione'));
       try {
         // Calcolo manuale bounding box per il raggio
         // Limita il raggio di Overpass a max 20km per evitare timeout su query immense (mentre da Supabase peschiamo tutto)
@@ -436,7 +458,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
             }));
 
           if (newPoisToInsert.length > 0) {
-            setDownloadProgress(`Salvataggio di ${newPoisToInsert.length} nuovi luoghi nel database globale...`);
+            setDownloadProgress(t('pf_om_salvataggio_nuovi', { n: newPoisToInsert.length }));
             await insertAutoPois(newPoisToInsert).catch(e => console.warn("Errore salvataggio auto POI:", e));
           }
         }
@@ -468,15 +490,16 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       setSearchCity('');
       setSelectedPlace(null);
       notify(
-        `Mappa di ${cityName} scaricata con successo!\n` +
-        `${downloadablePois.length} POI salvati offline` +
-        (tiles.total > 0 ? ` + ${tiles.done} tile di sfondo mappa.` : '.') +
-        `\n\nPer verificare: attiva la modalità aereo e riapri la mappa sulla zona di ${cityName} — sfondo e pin restano visibili.`
+        t('pf_om_web_ok_1', { x: cityName }) + '\n' +
+        t('pf_om_web_ok_2', { n: downloadablePois.length }) +
+        (tiles.total > 0 ? t('pf_om_web_ok_tiles', { n: tiles.done }) : '.') +
+        '\n\n' + t('pf_om_web_ok_check', { x: cityName }) +
+        avvisoLivelliSaltati(centerLat, centerLon)
       );
 
     } catch (e: any) {
       console.error(e);
-      notify(e.message || "Errore durante il download");
+      notify(e.message || t('pf_om_download_err'));
     } finally {
       setIsDownloading(false);
       setDownloadProgress('');
@@ -490,7 +513,7 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm("Vuoi eliminare questa mappa offline dal dispositivo?")) {
+    if (confirm(t('pf_om_delete_area_confirm'))) {
       const area = areas.find(a => a.id === id);
       await deleteOfflineMapArea(id);
       if (area?.center) {
@@ -506,17 +529,14 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
   return (
     <div className="p-6 bg-white rounded-3xl shadow-sm border border-gray-100">
-      <h2 className="text-xl font-bold text-gray-900 mb-2 font-display">Mappe Offline</h2>
+      <h2 className="text-xl font-bold text-gray-900 mb-2 font-display">{t('pf_mappe_offline_tab')}</h2>
       {isNative ? (
         <p className="text-gray-600 mb-6 text-sm">
-          Scarica il pacchetto di un'area (raggio {radiusKm} km): luoghi, teaser e audioguide complete in formato testo.
-          Offline l'app passa alla <strong>vista radar</strong> e alla <strong>voce di sistema</strong> — download istantaneo
-          e zero ingombro — e l'audioguida parte da sola quando ti avvicini a un luogo, anche a schermo spento.
-          Il download del pacchetto è gratuito; si paga solo l'ascolto delle audioguide.
+          {t('pf_om_desc_native', { n: radiusKm })}
         </p>
       ) : (
         <p className="text-gray-600 mb-6 text-sm">
-          Scarica i luoghi di una città (in tutto il mondo) per avere pin, informazioni di base e lo sfondo della mappa disponibili anche senza rete. Per verificare che funzioni: attiva la modalità aereo e riapri la mappa sulla zona scaricata.
+          {t('pf_om_desc_web')}
         </p>
       )}
 
@@ -529,13 +549,13 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
       {/* Sezione di Ricerca e Download */}
       <div className="bg-gray-50 rounded-2xl p-4 mb-8">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">Nuova Area</h3>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">{t('pf_om_nuova_area')}</h3>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Cerca una città nel mondo (es. Roma, Parigi, Tokyo)"
+              placeholder={t('pf_om_placeholder')}
               value={searchCity}
               onChange={(e) => { setSearchCity(e.target.value); setSelectedPlace(null); setShowSuggestions(true); }}
               onFocus={() => setShowSuggestions(true)}
@@ -576,8 +596,12 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
           </button>
         </div>
         <div className="flex items-center gap-2 mt-3">
-          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Raggio</span>
-          {[50, 100, 200].map(km => (
+          <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{t('pf_om_raggio')}</span>
+          {/* 120 km e non 200: /api/area/bundle CLAMPA il raggio dei POI a 120
+              (server.ts, `Math.min(..., 120)`). La chip "200 km" prometteva
+              un'area che il server non ha mai consegnato — si pianificavano
+              tile su 200 km e si scaricavano POI su 120. */}
+          {[50, 100, 120].map(km => (
             <button
               key={km}
               onClick={() => setRadiusKm(km)}
@@ -590,6 +614,20 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
             </button>
           ))}
         </div>
+        {/* Quanto pesa, PRIMA di scaricare (e non dopo). */}
+        {!isDownloading && (
+          <p className="text-xs text-gray-500 mt-3 leading-relaxed">
+            {t('offl_size_estimate', {
+              min: stima.mbMin,
+              max: stima.mbMax,
+              tiles: stima.tile,
+              radius: radiusKm,
+            })}
+            {!selectedPlace && <> {t('offl_size_pick_city')}</>}
+            <br />
+            {t('offl_zoom_note')}
+          </p>
+        )}
         {isDownloading && (
           <p className="text-sm text-blue-600 mt-3 animate-pulse flex items-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -601,11 +639,11 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       {/* Lista pacchetti nativi (Android) */}
       {isNative ? (
         <>
-          <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">Pacchetti Scaricati ({packages.length})</h3>
+          <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">{t('pf_om_pacchetti', { n: packages.length })}</h3>
           {packages.length === 0 ? (
             <div className="text-center p-8 bg-gray-50 rounded-2xl border border-gray-100 border-dashed">
               <Radar className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <p className="text-gray-500">Nessun pacchetto offline. Cerca una città e scarica l'area per usare l'audioguida senza rete.</p>
+              <p className="text-gray-500">{t('pf_om_no_pkg')}</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -618,17 +656,17 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
                   >
                     <h4 className="font-semibold text-gray-900">{pkg.name}</h4>
                     <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-gray-500">
-                      <span>{pkg.poiCount} luoghi</span>
+                      <span>{t('pf_om_luoghi', { n: pkg.poiCount })}</span>
                       <span>{formatBytes(pkg.sizeBytes)}</span>
-                      <span>{pkg.downloadedAt ? new Date(pkg.downloadedAt).toLocaleDateString() : ''}</span>
-                      {pkg.status === 'error' && <span className="text-red-500 font-medium">download incompleto</span>}
+                      <span>{pkg.downloadedAt ? new Date(pkg.downloadedAt).toLocaleDateString(t('pf_locale')) : ''}</span>
+                      {pkg.status === 'error' && <span className="text-red-500 font-medium">{t('pf_om_incompleto')}</span>}
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: pkg.centerLat, lon: pkg.centerLon, zoom: 13 } }))}
                       className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                      title="Apri sulla mappa (funziona anche offline)"
+                      title={t('pf_om_apri_mappa')}
                     >
                       <MapPin className="w-5 h-5" />
                     </button>
@@ -636,14 +674,14 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
                       onClick={() => handleSync(pkg.id)}
                       disabled={syncingId === pkg.id}
                       className="p-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors"
-                      title="Aggiorna (solo modifiche)"
+                      title={t('pf_om_aggiorna')}
                     >
                       {syncingId === pkg.id ? <Loader2 className="w-5 h-5 animate-spin" /> : <RefreshCw className="w-5 h-5" />}
                     </button>
                     <button
                       onClick={() => handleDeletePackage(pkg.id)}
                       className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Elimina dal dispositivo"
+                      title={t('pf_om_elimina_disp')}
                     >
                       <Trash2 className="w-5 h-5" />
                     </button>
@@ -656,11 +694,11 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
       ) : (
         <>
           {/* Lista Aree Scaricate (web/PWA) */}
-          <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">Aree Scaricate ({areas.length})</h3>
+          <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wider">{t('pf_om_aree', { n: areas.length })}</h3>
           {areas.length === 0 ? (
             <div className="text-center p-8 bg-gray-50 rounded-2xl border border-gray-100 border-dashed">
               <MapPin className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              <p className="text-gray-500">Nessuna mappa offline. Cerca una città per scaricare i POI nel raggio di 100km.</p>
+              <p className="text-gray-500">{t('pf_om_no_aree')}</p>
             </div>
           ) : (
             <div className="space-y-3">
@@ -673,22 +711,22 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
                   >
                     <h4 className="font-semibold text-gray-900">{area.name}</h4>
                     <div className="flex gap-4 mt-1 text-xs text-gray-500">
-                      <span>{area.poiCount} Pin salvati</span>
-                      <span>{new Date(area.date).toLocaleDateString()}</span>
+                      <span>{t('pf_om_pin', { n: area.poiCount })}</span>
+                      <span>{new Date(area.date).toLocaleDateString(t('pf_locale'))}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: area.center.lat, lon: area.center.lon, zoom: 13 } }))}
                       className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                      title="Apri sulla mappa (funziona anche offline)"
+                      title={t('pf_om_apri_mappa')}
                     >
                       <MapPin className="w-5 h-5" />
                     </button>
                     <button
                       onClick={() => handleDelete(area.id)}
                       className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Elimina dal dispositivo"
+                      title={t('pf_om_elimina_disp')}
                     >
                       <Trash2 className="w-5 h-5" />
                     </button>

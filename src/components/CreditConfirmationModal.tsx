@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Coins, X, Check, ShoppingCart, AlertCircle } from 'lucide-react';
-import { getTranslation } from '../lib/i18n';
+import { getTranslation, type Language } from '../lib/i18n';
 
 interface CreditConfirmationModalProps {
   isOpen: boolean;
@@ -25,7 +25,10 @@ export default function CreditConfirmationModal({
   language
 }: CreditConfirmationModalProps) {
   const hasEnough = currentBalance >= cost;
-  const isItalian = language === 'IT';
+  // La prop arriva sia maiuscola ('IT') sia minuscola ('it') a seconda del
+  // chiamante: si normalizza per i dizionari (che usano 'IT'…'ZH').
+  const lang = String(language || 'IT').toUpperCase() as Language;
+  const t = (key: string) => getTranslation(key, lang);
 
   return (
     <AnimatePresence>
@@ -54,17 +57,17 @@ export default function CreditConfirmationModal({
                 <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${
                   hasEnough ? 'text-amber-500' : 'text-red-400'
                 }`}>
-                  {hasEnough ? (isItalian ? 'Conferma Servizio' : 'Confirm Service') : (isItalian ? 'Crediti Insufficienti' : 'Low Credits')}
+                  {hasEnough ? t('vr_b_cb_confirm_service') : t('vr_b_ccm_low')}
                 </p>
                 <h4 className="text-sm font-bold text-white leading-tight truncate">
                   {cost > 0 ? (
-                    <>Stai usando <span className="text-amber-400">{cost} crediti</span> per {serviceName}</>
+                    <>{t('vr_b_cb_pre')} <span className="text-amber-400">{cost} {t('credits_word')}</span> {t('vr_b_cb_for')} {serviceName}</>
                   ) : (
-                    <>{isItalian ? 'Stai attivando' : 'You are activating'} <span className="text-amber-400">{serviceName}</span></>
+                    <>{t('vr_b_ccm_activating')} <span className="text-amber-400">{serviceName}</span></>
                   )}
                 </h4>
                 <div className="flex items-center gap-1.5 mt-1">
-                  <span className="text-[10px] font-bold text-white/50">Saldo attuale:</span>
+                  <span className="text-[10px] font-bold text-white/50">{t('vr_b_ccm_balance')}</span>
                   <span className={`text-[10px] font-black ${hasEnough ? 'text-emerald-400' : 'text-red-300'}`}>
                     🪙 {currentBalance}
                   </span>
@@ -89,13 +92,13 @@ export default function CreditConfirmationModal({
                     onClick={onClose}
                     className="flex-1 py-2.5 bg-white/5 hover:bg-white/10 text-white font-black text-[10px] uppercase tracking-wider rounded-xl transition-all"
                   >
-                    {isItalian ? 'Annulla' : 'Cancel'}
+                    {t('cancel')}
                   </button>
                   <button
                     onClick={onConfirm}
                     className="flex-[2] py-2.5 bg-amber-500 text-slate-900 font-black text-[10px] uppercase tracking-widest rounded-xl shadow-lg hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-1.5"
                   >
-                    <Check className="w-3.5 h-3.5" /> {isItalian ? 'Conferma' : 'Confirm'}
+                    <Check className="w-3.5 h-3.5" /> {t('vr_b_confirm')}
                   </button>
                 </>
               ) : (
@@ -103,7 +106,7 @@ export default function CreditConfirmationModal({
                   onClick={onBuyCredits}
                   className="w-full py-3 bg-white text-red-900 font-black text-[11px] uppercase tracking-widest rounded-xl shadow-lg hover:bg-gray-100 transition-all flex items-center justify-center gap-2"
                 >
-                  <ShoppingCart className="w-4 h-4" /> {isItalian ? 'Ricarica Crediti' : 'Buy Credits'}
+                  <ShoppingCart className="w-4 h-4" /> {t('vr_b_recharge_credits')}
                 </button>
               )}
             </div>

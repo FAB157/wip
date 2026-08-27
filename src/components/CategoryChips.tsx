@@ -41,13 +41,14 @@ export const COSA_CONTIENE: Record<string, string> = {
   gemme: "I luoghi che valgono la deviazione: monumenti, chiese, musei e panorami con l'audioguida — scelti, non tutti.",
   monumenti: "Tutto il patrimonio da visitare: monumenti, chiese, musei, panorami.",
   natura: "I luoghi naturali: spiagge e isole, vette e vulcani, cascate e laghi, grotte, parchi e riserve.",
+  localita: "Borghi e villaggi che sono meta di per sé — Riomaggiore, Volterra, Colonnata — con foto, descrizione e audioguida.",
   community: "Le foto dei viaggiatori approvate dalla redazione: luoghi che non stanno su nessuna guida.",
   esperienze: "Visite guidate, biglietti salta-fila e attività prenotabili di Viator, GetYourGuide e Tiqets, nella zona che stai guardando.",
   eventi: "Concerti, mostre e sagre in corso e nei prossimi giorni, con i biglietti dove esistono.",
   locali: "Dove mangiare: ristoranti, pizzerie, pesce, carne, sushi, vegetariano, senza glutine, bar e gelaterie.",
   utilita: "Quello che serve mentre giri: farmacie, ospedali, mercati, fontanelle, stazioni, metro, taxi, caselli.",
   famiglie: "Con i bambini: parchi giochi, parchi divertimenti, acquari e zoo.",
-  beni_culturali: "L'atlante dei beni vincolati nel mondo: scheda ridotta, niente audioguida. Compare solo a zoom alto.",
+  beni_culturali: "L'atlante dei beni vincolati nel mondo: scheda ridotta, niente audioguida.",
   tematiche: "Otto verticali con un catalogo vero: terme, set di film, cieli bui, street art, mercati, fioriture, case-museo, viaggio lento.",
 };
 
@@ -57,6 +58,11 @@ export const CATEGORIES: Category[] = [
   // NATURA (22/08/2026): spiagge, vette, acque, grotte, parchi. Era un pezzo
   // di Monumenti; il committente la vuole a se', selezionabile da «Altro».
   { id: "natura", label: "Natura", icon: <span className="text-sm">🌿</span> },
+  // LOCALITÀ TURISTICHE (24/08/2026): borghi e villaggi come Riomaggiore,
+  // Volterra, Colonnata — mete di per sé, non un monumento dentro una città.
+  // Mondiale, con foto/descrizione da Wikidata e audioguida (vedi
+  // scratch/importa-localita-mondo.mjs). Spenta di default come Natura.
+  { id: "localita", label: "Località", icon: <span className="text-sm">🏘️</span> },
   { id: "locali", label: "Locali", icon: <span className="text-sm">🍕</span> },
   { id: "utilita", label: "Utilità", icon: <span className="text-sm">🛠️</span> },
   { id: "famiglie", label: "Famiglie", icon: <span className="text-sm">🛝</span> },
@@ -322,7 +328,7 @@ export default function CategoryChips({
                     : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
               >
                 <Ticket className="w-3.5 h-3.5" />
-                <span className="whitespace-nowrap">Esperienze</span>
+                <span className="whitespace-nowrap">{getTranslation('vr_b_cc_experiences', language)}</span>
               </button>
             );
           }
@@ -384,7 +390,7 @@ export default function CategoryChips({
               : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
         >
           <span className="text-sm leading-none">{pannelloAperto ? '×' : '＋'}</span>
-          <span className="whitespace-nowrap">Altro</span>
+          <span className="whitespace-nowrap">{getTranslation('vr_b_cc_more', language)}</span>
         </button>
       </div>
 
@@ -429,7 +435,7 @@ export default function CategoryChips({
             className="px-3 pointer-events-auto overflow-hidden">
             <div className="rounded-2xl border border-outline-variant bg-[#fcfaf8]/95 backdrop-blur-md shadow-lg p-2 max-w-md">
               <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary/50">
-                Aggiungi alla barra
+                {getTranslation('vr_b_cc_add_to_bar', language)}
               </p>
               {EXTRA.map((id) => {
                 const cat = catById(id);
@@ -445,7 +451,7 @@ export default function CategoryChips({
                       </span>
                       <button
                         onClick={() => setInfoAperta(apertaInfo ? null : id)}
-                        aria-label={`Cosa contiene ${getTranslation(id, language)}`}
+                        aria-label={getTranslation('vr_b_cc_contains', language).replace('{name}', getTranslation(id, language))}
                         aria-expanded={apertaInfo}
                         className={`w-5 h-5 rounded-full border text-[10px] font-black shrink-0 transition-colors
                           ${apertaInfo ? 'bg-primary text-secondary border-primary' : 'border-outline-variant text-primary/60 hover:text-primary'}`}
@@ -454,7 +460,7 @@ export default function CategoryChips({
                         onClick={() => cambiaDalPannello(id)}
                         role="switch"
                         aria-checked={attiva}
-                        aria-label={`${attiva ? 'Togli' : 'Aggiungi'} ${getTranslation(id, language)}`}
+                        aria-label={`${attiva ? getTranslation('vr_b_cc_remove', language) : getTranslation('vr_b_cc_add', language)} ${getTranslation(id, language)}`}
                         className={`w-10 h-6 rounded-full border shrink-0 relative transition-colors
                           ${attiva ? 'bg-primary border-primary' : 'bg-black/5 border-outline-variant'}`}
                       >
@@ -477,11 +483,11 @@ export default function CategoryChips({
                   la × della chip «Altro» resta in cima, fuori dal pollice. */}
               <button
                 onClick={() => setPannelloAperto(false)}
-                aria-label={language === 'IT' ? 'Chiudi il pannello' : 'Close panel'}
+                aria-label={getTranslation('vr_b_cc_close_panel', language)}
                 className="mt-1 w-full flex items-center justify-center gap-1.5 py-2 rounded-xl text-[12px] font-bold text-primary/70 hover:text-primary hover:bg-black/5 transition-colors"
               >
                 <span className="text-base leading-none">×</span>
-                {language === 'IT' ? 'Chiudi' : 'Close'}
+                {getTranslation('close', language)}
               </button>
             </div>
           </motion.div>

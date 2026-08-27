@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Headphones, Map as MapIcon, Camera, TrendingUp, Stamp, Share2, ChevronDown, ChevronUp } from 'lucide-react';
 import { notify } from './../lib/toast';
-import type { Language } from '../lib/i18n';
+import { getTranslation, type Language } from '../lib/i18n';
 
 /**
  * Dashboard del viaggiatore + Passaporto WIP (ondata 5).
@@ -29,31 +29,34 @@ const localDayKey = (d: Date) =>
  * Comparazione simpatica generata client-side, soglie hardcoded.
  * Priorità ai km (il numero che colpisce), poi i piani saliti.
  */
-function healthComparison(kmToday: number, floors: number): string | null {
-  if (kmToday >= 42.2) return 'Oggi hai coperto una maratona intera! 🏅';
-  if (kmToday >= 21.1) return 'Come una mezza maratona!';
-  if (floors >= 96) return `≈ ${floors} piani = la Torre degli Asinelli ×3!`;
-  if (floors >= 32) return `≈ ${floors} piani = come salire la Torre degli Asinelli!`;
-  if (kmToday >= 10) return '10+ km a spasso: esploratore instancabile!';
-  if (kmToday >= 5) return 'Come attraversare Venezia da punta a punta!';
-  if (floors >= 19) return `≈ ${floors} piani = in cima alla Torre di Pisa!`;
-  if (kmToday >= 2) return 'Una bella passeggiata nel centro storico!';
-  if (kmToday >= 0.5) return 'Riscaldamento fatto: il prossimo POI ti aspetta!';
+function healthComparison(kmToday: number, floors: number, lang: Language): string | null {
+  const t = (k: string) => getTranslation(k, lang);
+  if (kmToday >= 42.2) return t('pf_td_hc_maratona');
+  if (kmToday >= 21.1) return t('pf_td_hc_mezza');
+  if (floors >= 96) return t('pf_td_hc_asinelli3').replace('{n}', String(floors));
+  if (floors >= 32) return t('pf_td_hc_asinelli').replace('{n}', String(floors));
+  if (kmToday >= 10) return t('pf_td_hc_10km');
+  if (kmToday >= 5) return t('pf_td_hc_venezia');
+  if (floors >= 19) return t('pf_td_hc_pisa').replace('{n}', String(floors));
+  if (kmToday >= 2) return t('pf_td_hc_centro');
+  if (kmToday >= 0.5) return t('pf_td_hc_warmup');
   return null;
 }
 
 // "Arte a Ravenna: Un Itinerario di 3 Giorni" → "Ravenna"
-function cityFromTitle(titolo: string): string {
+function cityFromTitle(titolo: string, lang: Language): string {
   const m = String(titolo || '').match(/\sa\s+([^:]{2,40}):/i);
   if (m) return m[1].trim();
   const short = String(titolo || '').split(':')[0].trim();
-  return short || 'Viaggio';
+  return short || getTranslation('pf_td_viaggio', lang);
 }
 
 const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-const MONTH_LABELS = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
 
 export default function TravelerDashboard({ language }: { language: Language }) {
+  // Traduzioni pf_td_* (traduzioni/profilo) + locale Intl per le date
+  const t = (key: string) => getTranslation(key, language);
+  const dateLocale = getTranslation('pf_locale', language);
   const [stats, setStats] = useState<Stats | null>(null);
   const [passportOpen, setPassportOpen] = useState(false);
   // Cache locale dei passi: null = non disponibile/errore → card nascosta.
@@ -140,7 +143,8 @@ export default function TravelerDashboard({ language }: { language: Language }) 
     const months: { key: string; label: string; count: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      months.push({ key: monthKey(d), label: MONTH_LABELS[d.getMonth()], count: 0 });
+      // Etichetta del mese nella lingua della UI (prima era l'array fisso IT)
+      months.push({ key: monthKey(d), label: d.toLocaleDateString(dateLocale, { month: 'short' }), count: 0 });
     }
     for (const e of stats?.listened || []) {
       const k = monthKey(new Date(e.listened_at));
@@ -150,17 +154,17 @@ export default function TravelerDashboard({ language }: { language: Language }) 
     const thisMonth = months[5]?.count || 0;
     const lastMonth = months[4]?.count || 0;
     return { months, thisMonth, lastMonth };
-  }, [stats]);
+  }, [stats, dateLocale]);
 
   // Passaporto: un timbro per destinazione, con la data della PRIMA visita
   const stamps = useMemo(() => {
     const map = new Map<string, string>();
-    for (const t of stats?.trips || []) {
-      const city = cityFromTitle(t.titolo);
-      if (!map.has(city)) map.set(city, t.created_at);
+    for (const trip of stats?.trips || []) {
+      const city = cityFromTitle(trip.titolo, language);
+      if (!map.has(city)) map.set(city, trip.created_at);
     }
     return [...map.entries()].map(([city, firstAt]) => ({ city, firstAt }));
-  }, [stats]);
+  }, [stats, language]);
 
   // «Il tuo anno in viaggio»: aggrega SOLO i dati già caricati sopra
   // (ascolti, itinerari, vision) filtrati sull'anno corrente. Nessuna
@@ -168,8 +172,8 @@ export default function TravelerDashboard({ language }: { language: Language }) 
   const yearStats = useMemo(() => {
     const year = new Date().getFullYear();
     const listens = (stats?.listened || []).filter(e => new Date(e.listened_at).getFullYear() === year);
-    const tripsYear = (stats?.trips || []).filter(t => new Date(t.created_at).getFullYear() === year);
-    const cities = new Set(tripsYear.map(t => cityFromTitle(t.titolo)));
+    const tripsYear = (stats?.trips || []).filter(trip => new Date(trip.created_at).getFullYear() === year);
+    const cities = new Set(tripsYear.map(trip => cityFromTitle(trip.titolo, language)));
     // POI più ascoltato dell'anno (conteggio per nome)
     const byName = new Map<string, number>();
     for (const e of listens) {
@@ -182,7 +186,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
       if (c > topCount) { topPoi = n; topCount = c; }
     }
     return { year, listens: listens.length, cities: cities.size, topPoi, topCount };
-  }, [stats]);
+  }, [stats, language]);
 
   // Vista «Salute del viaggio»: oggi + totale 7 giorni, dai dati nativi.
   // null = niente dati significativi → card non renderizzata.
@@ -196,8 +200,8 @@ export default function TravelerDashboard({ language }: { language: Language }) 
     const weekSteps = healthDays.reduce((s, d) => s + (Math.max(0, Math.round(Number(d?.steps) || 0))), 0);
     const weekKm = healthDays.reduce((s, d) => s + Math.max(0, Number(d?.distanceKm) || 0), 0);
     if (steps <= 0 && weekSteps <= 0) return null; // niente zeri in faccia
-    return { steps, km, floors, weekSteps, weekKm, comparison: healthComparison(km, floors) };
-  }, [healthDays]);
+    return { steps, km, floors, weekSteps, weekKm, comparison: healthComparison(km, floors, language) };
+  }, [healthDays, language]);
 
   /**
    * Condividi l'anno: genera via canvas un'immagine 1080×1350 brandizzata
@@ -227,7 +231,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.75)';
       ctx.font = '900 44px system-ui, sans-serif';
-      ctx.fillText('IL MIO ANNO IN VIAGGIO', W / 2, 170);
+      ctx.fillText(t('pf_td_canvas_titolo'), W / 2, 170);
 
       // Anno gigante
       ctx.fillStyle = '#fcd34d';
@@ -236,8 +240,8 @@ export default function TravelerDashboard({ language }: { language: Language }) 
 
       // Statistiche grandi
       const rows: Array<[string, string]> = [
-        [String(yearStats.listens), yearStats.listens === 1 ? 'luogo ascoltato' : 'luoghi ascoltati'],
-        [String(yearStats.cities), yearStats.cities === 1 ? 'città visitata' : 'città visitate'],
+        [String(yearStats.listens), yearStats.listens === 1 ? t('pf_td_luogo_ascoltato') : t('pf_td_luoghi_ascoltati')],
+        [String(yearStats.cities), yearStats.cities === 1 ? t('pf_td_citta_visitata') : t('pf_td_citta_visitate')],
       ];
       let y = 580;
       for (const [num, label] of rows) {
@@ -254,7 +258,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
       if (yearStats.topPoi) {
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
         ctx.font = '900 36px system-ui, sans-serif';
-        ctx.fillText('IL MIO LUOGO DEL CUORE', W / 2, y + 10);
+        ctx.fillText(t('pf_td_canvas_cuore'), W / 2, y + 10);
         ctx.fillStyle = '#fcd34d';
         ctx.font = '900 58px system-ui, sans-serif';
         const nome = yearStats.topPoi.length > 30 ? yearStats.topPoi.slice(0, 29) + '…' : yearStats.topPoi;
@@ -274,8 +278,8 @@ export default function TravelerDashboard({ language }: { language: Language }) 
       if (nav.share && (!nav.canShare || nav.canShare({ files: [file] }))) {
         await nav.share({
           files: [file],
-          title: `Il mio anno in viaggio ${yearStats.year}`,
-          text: `Il mio ${yearStats.year} con WIP · world in pocket`,
+          title: t('pf_td_share_title').replace('{n}', String(yearStats.year)),
+          text: t('pf_td_share_text').replace('{n}', String(yearStats.year)),
         });
       } else {
         // Fallback: download diretto del PNG
@@ -287,20 +291,20 @@ export default function TravelerDashboard({ language }: { language: Language }) 
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 5000);
-        notify('Immagine scaricata: condividila dove vuoi!');
+        notify(t('pf_td_img_scaricata'));
       }
     } catch (e: any) {
       // Condivisione annullata dall'utente: nessun errore da mostrare
-      if (e?.name !== 'AbortError') notify('Condivisione non riuscita.');
+      if (e?.name !== 'AbortError') notify(t('pf_td_share_fail'));
     }
   };
 
   const sharePassport = async () => {
-    const lines = stamps.map(st => `🛂 ${st.city} — prima visita ${new Date(st.firstAt).toLocaleDateString('it-IT')}`);
-    const text = `Il mio Passaporto WIP · ${stamps.length} ${stamps.length === 1 ? 'città' : 'città'}\n${lines.join('\n')}\n\nworld in pocket · wip.guide`;
+    const lines = stamps.map(st => `🛂 ${st.city} — ${t('pf_td_prima_visita').replace('{x}', new Date(st.firstAt).toLocaleDateString(dateLocale))}`);
+    const text = `${t('pf_td_passport_share_title')} · ${stamps.length} ${stamps.length === 1 ? t('pf_td_citta_1') : t('pf_td_citta_n')}\n${lines.join('\n')}\n\nworld in pocket · wip.guide`;
     try {
       if (navigator.share) await navigator.share({ text });
-      else { await navigator.clipboard.writeText(text); notify('Passaporto copiato negli appunti.'); }
+      else { await navigator.clipboard.writeText(text); notify(t('pf_td_passaporto_copiato')); }
     } catch { /* condivisione annullata */ }
   };
 
@@ -318,17 +322,17 @@ export default function TravelerDashboard({ language }: { language: Language }) 
         <div className="bg-white/10 rounded-2xl p-3 text-center backdrop-blur-sm">
           <Headphones className="w-4 h-4 mx-auto mb-1 opacity-70" />
           <div className="text-2xl font-black tabular-nums">{stats.listened.length}</div>
-          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">Luoghi ascoltati</div>
+          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">{t('pf_td_luoghi_ascoltati')}</div>
         </div>
         <div className="bg-white/10 rounded-2xl p-3 text-center backdrop-blur-sm">
           <MapIcon className="w-4 h-4 mx-auto mb-1 opacity-70" />
           <div className="text-2xl font-black tabular-nums">{stamps.length}</div>
-          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">Città nel passaporto</div>
+          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">{t('pf_td_citta_passaporto')}</div>
         </div>
         <div className="bg-white/10 rounded-2xl p-3 text-center backdrop-blur-sm">
           <Camera className="w-4 h-4 mx-auto mb-1 opacity-70" />
           <div className="text-2xl font-black tabular-nums">{stats.visionCount}</div>
-          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">Scatti Vision</div>
+          <div className="text-[9px] font-black uppercase tracking-widest opacity-60">{t('pf_td_scatti_vision')}</div>
         </div>
       </div>
 
@@ -337,15 +341,15 @@ export default function TravelerDashboard({ language }: { language: Language }) 
         <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-black uppercase tracking-widest opacity-60 flex items-center gap-1">
-              <TrendingUp className="w-3 h-3" /> Ascolti ultimi 6 mesi
+              <TrendingUp className="w-3 h-3" /> {t('pf_td_ascolti_6mesi')}
             </span>
             <span className={`text-[10px] font-black ${delta >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
-              {delta >= 0 ? '+' : ''}{delta} vs mese scorso
+              {delta >= 0 ? '+' : ''}{delta} {t('pf_td_vs_mese')}
             </span>
           </div>
           <div className="flex items-end justify-between gap-2 h-16">
             {trend.months.map(m => (
-              <div key={m.key} className="flex-1 flex flex-col items-center gap-1" title={`${m.count} ascolti`}>
+              <div key={m.key} className="flex-1 flex flex-col items-center gap-1" title={t('pf_td_n_ascolti').replace('{n}', String(m.count))}>
                 <div
                   className={`w-full rounded-t-md ${m.key === trend.months[5].key ? 'bg-amber-300' : 'bg-white/40'}`}
                   style={{ height: `${m.count > 0 ? Math.max(12, (m.count / maxCount) * 100) : 6}%` }}
@@ -361,28 +365,30 @@ export default function TravelerDashboard({ language }: { language: Language }) 
       {healthView && (
         <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm space-y-2.5">
           <span className="text-[10px] font-black uppercase tracking-widest opacity-80">
-            👟 Salute del viaggio
+            {t('pf_td_salute')}
           </span>
           <div className={`grid ${healthView.floors > 0 ? 'grid-cols-3' : 'grid-cols-2'} gap-2`}>
             <div className="bg-white/10 rounded-xl p-2.5 text-center">
-              <div className="text-xl font-black tabular-nums">{healthView.steps.toLocaleString('it-IT')}</div>
-              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">Passi oggi</div>
+              <div className="text-xl font-black tabular-nums">{healthView.steps.toLocaleString(dateLocale)}</div>
+              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">{t('pf_td_passi_oggi')}</div>
             </div>
             <div className="bg-white/10 rounded-xl p-2.5 text-center">
               <div className="text-xl font-black tabular-nums">{healthView.km.toFixed(healthView.km >= 10 ? 0 : 1)}</div>
-              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">Km oggi</div>
+              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">{t('pf_td_km_oggi')}</div>
             </div>
             {healthView.floors > 0 && (
               <div className="bg-white/10 rounded-xl p-2.5 text-center">
                 <div className="text-xl font-black tabular-nums">{healthView.floors}</div>
-                <div className="text-[8px] font-black uppercase tracking-widest opacity-60">Piani saliti</div>
+                <div className="text-[8px] font-black uppercase tracking-widest opacity-60">{t('pf_td_piani')}</div>
               </div>
             )}
           </div>
           <div className="bg-white/10 rounded-xl px-3 py-2 text-center">
-            <div className="text-[8px] font-black uppercase tracking-widest opacity-60">Ultimi 7 giorni</div>
+            <div className="text-[8px] font-black uppercase tracking-widest opacity-60">{t('pf_td_7giorni')}</div>
             <div className="text-xs font-black tabular-nums">
-              {healthView.weekSteps.toLocaleString('it-IT')} passi · {healthView.weekKm.toFixed(healthView.weekKm >= 10 ? 0 : 1)} km
+              {t('pf_td_passi_km')
+                .replace('{n}', healthView.weekSteps.toLocaleString(dateLocale))
+                .replace('{x}', healthView.weekKm.toFixed(healthView.weekKm >= 10 ? 0 : 1))}
             </div>
           </div>
           {healthView.comparison && (
@@ -398,28 +404,28 @@ export default function TravelerDashboard({ language }: { language: Language }) 
         <div className="bg-white/10 rounded-2xl p-3 backdrop-blur-sm space-y-2.5">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-black uppercase tracking-widest opacity-80">
-              ✨ Il tuo anno in viaggio · {yearStats.year}
+              {t('pf_td_anno_viaggio').replace('{n}', String(yearStats.year))}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-white/10 rounded-xl p-2.5 text-center">
               <div className="text-xl font-black tabular-nums">{yearStats.listens}</div>
               <div className="text-[8px] font-black uppercase tracking-widest opacity-60">
-                {yearStats.listens === 1 ? 'Luogo ascoltato' : 'Luoghi ascoltati'}
+                {yearStats.listens === 1 ? t('pf_td_luogo_ascoltato') : t('pf_td_luoghi_ascoltati')}
               </div>
             </div>
             <div className="bg-white/10 rounded-xl p-2.5 text-center">
               <div className="text-xl font-black tabular-nums">{yearStats.cities}</div>
               <div className="text-[8px] font-black uppercase tracking-widest opacity-60">
-                {yearStats.cities === 1 ? 'Città visitata' : 'Città visitate'}
+                {yearStats.cities === 1 ? t('pf_td_citta_visitata') : t('pf_td_citta_visitate')}
               </div>
             </div>
           </div>
           {yearStats.topPoi && (
             <div className="bg-white/10 rounded-xl px-3 py-2 text-center">
-              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">Il tuo luogo del cuore</div>
+              <div className="text-[8px] font-black uppercase tracking-widest opacity-60">{t('pf_td_luogo_cuore')}</div>
               <div className="text-xs font-black text-amber-300 leading-tight break-words">
-                {yearStats.topPoi}{yearStats.topCount > 1 ? ` · ${yearStats.topCount} ascolti` : ''}
+                {yearStats.topPoi}{yearStats.topCount > 1 ? ` · ${t('pf_td_n_ascolti').replace('{n}', String(yearStats.topCount))}` : ''}
               </div>
             </div>
           )}
@@ -427,7 +433,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
             onClick={shareYearCard}
             className="w-full flex items-center justify-center gap-2 py-2 bg-white/15 hover:bg-white/25 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors"
           >
-            <Share2 className="w-3.5 h-3.5" /> Condividi
+            <Share2 className="w-3.5 h-3.5" /> {t('pf_td_condividi')}
           </button>
         </div>
       )}
@@ -437,7 +443,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
         <div className="bg-white/10 rounded-2xl backdrop-blur-sm overflow-hidden">
           <button onClick={() => setPassportOpen(o => !o)} className="w-full flex items-center justify-between px-3 py-2.5">
             <span className="text-[10px] font-black uppercase tracking-widest opacity-80 flex items-center gap-1.5">
-              <Stamp className="w-3.5 h-3.5" /> Passaporto WIP · {stamps.length} {stamps.length === 1 ? 'timbro' : 'timbri'}
+              <Stamp className="w-3.5 h-3.5" /> {t('pf_td_passaporto')} · {stamps.length} {stamps.length === 1 ? t('pf_td_timbro') : t('pf_td_timbri')}
             </span>
             {passportOpen ? <ChevronUp className="w-4 h-4 opacity-60" /> : <ChevronDown className="w-4 h-4 opacity-60" />}
           </button>
@@ -450,10 +456,10 @@ export default function TravelerDashboard({ language }: { language: Language }) 
                     className="border-2 border-dashed border-white/40 rounded-xl p-2.5 text-center bg-white/5"
                     style={{ transform: `rotate(${(i % 3) - 1}deg)` }}
                   >
-                    <div className="text-[9px] font-black uppercase tracking-widest opacity-50">Visitato</div>
+                    <div className="text-[9px] font-black uppercase tracking-widest opacity-50">{t('pf_td_visitato')}</div>
                     <div className="text-sm font-black leading-tight break-words">{st.city}</div>
                     <div className="text-[9px] font-bold opacity-60 mt-0.5">
-                      {new Date(st.firstAt).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      {new Date(st.firstAt).toLocaleDateString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric' })}
                     </div>
                   </div>
                 ))}
@@ -462,7 +468,7 @@ export default function TravelerDashboard({ language }: { language: Language }) 
                 onClick={sharePassport}
                 className="w-full flex items-center justify-center gap-2 py-2 bg-white/15 hover:bg-white/25 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors"
               >
-                <Share2 className="w-3.5 h-3.5" /> Condividi il passaporto
+                <Share2 className="w-3.5 h-3.5" /> {t('pf_td_condividi_passaporto')}
               </button>
             </div>
           )}

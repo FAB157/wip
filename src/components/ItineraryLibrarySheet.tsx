@@ -17,6 +17,7 @@ import { X, Search, Loader2, ArrowLeft, Clock, MapPin, Sparkles, CheckCircle2, W
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getApiUrl } from '../lib/api';
+import { supabase } from '../lib/supabase';
 import { Language, getTranslation } from '../lib/i18n';
 import TravelInfo from './itinerary/TravelInfo';
 import BudgetTable from './itinerary/BudgetTable';
@@ -664,6 +665,21 @@ export default function ItineraryLibrarySheet({
     setGenError(null);
     setGenDestination(d?.city || d?.title || null);
     setQuizDismissed(false);
+    // La rotta richiede un utente loggato (server.ts: senza Bearer valido
+    // risponde 401 "login_required"): prima serviva anche senza login e
+    // ogni click generava a nostre spese senza controllo. Il token va preso
+    // QUI, non una volta sola all'avvio del componente, perché una sessione
+    // scaduta durante l'attesa va rilevata al prossimo giro del polling.
+    // Senza sessione si evita la chiamata (che fallirebbe comunque) e si
+    // mostra subito il messaggio giusto, invece della stringa grezza
+    // "login_required" che arrivava a video prima di questo fix.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess?.session?.access_token;
+    if (!token) {
+      setGenError(t('login_required'));
+      setGenDestination(null);
+      return;
+    }
     setGenState(prev => ({ ...prev, [key]: t('generating') }));
     const inizio = Date.now();
     try {
@@ -674,7 +690,7 @@ export default function ItineraryLibrarySheet({
         try {
           res = await fetch(getApiUrl('/api/library/request'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             // live:true → l'utente è qui in attesa: il server usa DeepSeek
             // (più affidabile di Agnes) invece del motore gratuito di semina.
             body: JSON.stringify({ descriptor: d, live: true, lang: language }),
@@ -694,6 +710,11 @@ export default function ItineraryLibrarySheet({
           continue;
         }
         const data = await res.json().catch(() => null);
+        if (res.status === 401) {
+          // Sessione scaduta a metà attesa: stesso messaggio dell'assenza
+          // di token iniziale, non la stringa grezza del server.
+          throw new Error(t('login_required'));
+        }
         if (res.status === 202 || data?.retryLater === true) {
           setGenState(prev => ({ ...prev, [key]: t('preparing') }));
           await sleep(Math.min(GEN_POLL_MS, Math.max(0, GEN_BUDGET_MS - (Date.now() - inizio))));
@@ -968,7 +989,16 @@ export default function ItineraryLibrarySheet({
                           <div key={t.id_tappa} className="bg-white border border-outline-variant/20 rounded-2xl p-3">
                             {dist && (
                               <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
-                                <MapPin className="w-2.5 h-2.5" /> {dist} {t('from_previous_stop')}
+                                {/* NON usare `t(...)` qui: il parametro della
+                                    map qui sopra si chiama `t` (la tappa) e
+                                    OSCURA la funzione di traduzione definita
+                                    nel componente. `t('from_previous_stop')`
+                                    chiamava l'oggetto tappa come funzione →
+                                    TypeError, e l'anteprima dell'itinerario
+                                    andava in crash dalla seconda tappa in poi
+                                    (5 [critical] "Y is not a function" in
+                                    system_errors solo oggi, 23/08/2026). */}
+                                <MapPin className="w-2.5 h-2.5" /> {dist} {getTranslation('lib_from_previous_stop', language)}
                               </div>
                             )}
                             <div className="flex items-start gap-2">

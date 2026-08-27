@@ -30,10 +30,10 @@ export default function PoiNearbyList({
       <div className="px-6 pt-5 pb-4 border-b border-amber-100/50 flex items-center justify-between sticky top-0 bg-[#f8f5f0] z-10">
         <div>
           <h2 className="text-xl font-black text-[#1e3a8a] tracking-tight leading-none">
-            Vicino a te
+            {getTranslation("sk_vicino_a_te", language)}
           </h2>
           <p className="text-[10px] font-bold text-[#1e3a8a] uppercase tracking-widest mt-1.5 opacity-60">
-            Attrazioni nei dintorni
+            {getTranslation("sk_attrazioni_dintorni", language)}
           </p>
         </div>
         <button
@@ -61,7 +61,7 @@ export default function PoiNearbyList({
             </div>
             <div className="flex-1 text-left">
               <h3 className="font-black text-[#1e3a8a] text-sm line-clamp-1 leading-tight group-hover:text-primary transition-colors">
-                {p.name || "Attrazione"}
+                {p.name || getTranslation("sk_attrazione", language)}
               </h3>
               <p className="text-[10px] font-extrabold text-[#1e3a8a] uppercase tracking-wider mt-0.5 opacity-60">
                 {p.category}

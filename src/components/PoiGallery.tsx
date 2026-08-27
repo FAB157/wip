@@ -2,12 +2,21 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
+import { fotoMiniatura, fotoPiena } from '../lib/fotoUrl';
 
 /**
  * Galleria community della scheda POI: le foto Vision approvate e accorpate
  * sul POI (images_json di shared_pois — sia POI community sia POI ufficiali
  * con foto allegate). Fetch on-demand all'apertura della scheda: i payload
  * della mappa non trasportano la galleria. Senza foto non rende nulla.
+ *
+ * NIENTE RIGA DI CREDITO QUI, e non e' una dimenticanza (25/08/2026). Queste
+ * sono le foto degli utenti, non quelle di Wikimedia Commons: l'obbligo di
+ * citare l'autore nasce da CC BY-SA e riguarda le immagini prese da Commons,
+ * che stanno in `image_url` e hanno la loro attribuzione. Qui vale la regola
+ * opposta, decisa per WIP Community: ANONIMATO TOTALE, nessun nome accanto
+ * agli scatti. Aggiungere un credito «per simmetria» la violerebbe.
  */
 export default function PoiGallery({ poiId }: { poiId: string }) {
   const [images, setImages] = useState<{ url: string }[]>([]);
@@ -44,7 +53,7 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
   return (
     <div className="my-3">
       <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-2">
-        📸 Scatti della community · {images.length}
+        📸 {getTranslation('vr_b_pg_title', linguaCorrente())} · {images.length}
       </p>
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
         {images.map((img, i) => (
@@ -53,12 +62,16 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
             type="button"
             onClick={() => setOpenIndex(i)}
             className="shrink-0 active:scale-95 transition-transform"
-            aria-label={`Apri la foto ${i + 1} di ${images.length}`}
+            aria-label={getTranslation('vr_b_pg_open', linguaCorrente()).replace('{i}', String(i + 1)).replace('{n}', String(images.length))}
           >
+            {/* Miniatura vera: 96×128 sullo schermo scaricavano l'immagine
+                intera (24/08/2026). Su Wikimedia sono ~30 KB invece di ~200,
+                e in una galleria da sei scatti la differenza e' un megabyte. */}
             <img
-              src={img.url}
+              src={fotoMiniatura(img.url) || undefined}
               alt=""
               loading="lazy"
+              decoding="async"
               className="h-24 w-32 object-cover rounded-xl border border-gray-100 shadow-sm"
             />
           </button>
@@ -79,7 +92,7 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
           >
             <button
               onClick={() => setOpenIndex(null)}
-              aria-label="Chiudi la galleria"
+              aria-label={getTranslation('vr_b_pg_close', linguaCorrente())}
               className="absolute top-4 right-4 p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md"
             >
               <X className="w-5 h-5" />
@@ -88,7 +101,7 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
             {images.length > 1 && (
               <button
                 onClick={(e) => { e.stopPropagation(); goTo(-1); }}
-                aria-label="Foto precedente"
+                aria-label={getTranslation('vr_b_pg_prev', linguaCorrente())}
                 className="absolute left-2 sm:left-4 p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md"
               >
                 <ChevronLeft className="w-6 h-6" />
@@ -99,7 +112,9 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
               key={openIndex}
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
-              src={images[openIndex].url}
+              /* A schermo intero serve la risoluzione piena della scheda: qui
+                 la foto si guarda, non si sbircia. */
+              src={fotoPiena(images[openIndex].url) || undefined}
               alt=""
               className="max-w-[92vw] max-h-[80vh] object-contain rounded-lg"
               onClick={(e) => e.stopPropagation()}
@@ -108,7 +123,7 @@ export default function PoiGallery({ poiId }: { poiId: string }) {
             {images.length > 1 && (
               <button
                 onClick={(e) => { e.stopPropagation(); goTo(1); }}
-                aria-label="Foto successiva"
+                aria-label={getTranslation('vr_b_pg_next', linguaCorrente())}
                 className="absolute right-2 sm:right-4 p-2.5 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md"
               >
                 <ChevronRight className="w-6 h-6" />

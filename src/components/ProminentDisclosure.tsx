@@ -15,6 +15,7 @@ interface ProminentDisclosureProps {
  * la raccolta della posizione in background.
  */
 export default function ProminentDisclosure({ isOpen, onAccept, onDecline, language }: ProminentDisclosureProps) {
+  const t = (key: string) => getTranslation(key, language);
   if (!isOpen) return null;
 
   return (
@@ -29,39 +30,33 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
         </div>
 
         <h2 className="text-2xl font-black text-primary text-center mb-4 leading-tight">
-          {language === 'IT' ? 'La tua posizione è preziosa' : 'Your position matters'}
+          {t('vr_b_pd_title')}
         </h2>
 
         <div className="space-y-4 mb-8">
            <p className="text-sm font-bold text-gray-600 text-center leading-relaxed">
-             {language === 'IT'
-               ? 'WIP raccoglie i dati sulla tua posizione per abilitare il commento audio automatico dei monumenti anche quando l\'app è chiusa o non in uso.'
-               : 'WIP collects location data to enable automatic audio commentary of monuments even when the app is closed or not in use.'
-             }
+             {t('vr_b_pd_body')}
            </p>
 
            <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
               <ul className="space-y-3">
                  <li className="flex items-start gap-3 text-xs font-bold text-blue-900/70">
                     <CheckCircle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                    <span>{language === 'IT' ? 'Audioguida automatica mentre cammini' : 'Automatic audio guide while walking'}</span>
+                    <span>{t('vr_b_pd_b1')}</span>
                  </li>
                  <li className="flex items-start gap-3 text-xs font-bold text-blue-900/70">
                     <CheckCircle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                    <span>{language === 'IT' ? 'Funziona a schermo spento' : 'Works with screen off'}</span>
+                    <span>{t('vr_b_pd_b2')}</span>
                  </li>
                  <li className="flex items-start gap-3 text-xs font-bold text-blue-900/70">
                     <CheckCircle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                    <span>{language === 'IT' ? 'Dati protetti e non condivisi' : 'Protected data, not shared'}</span>
+                    <span>{t('vr_b_pd_b3')}</span>
                  </li>
               </ul>
            </div>
 
            <p className="text-[10px] text-gray-500 font-bold text-center">
-             {language === 'IT'
-               ? 'Puoi disattivare questa funzione in qualsiasi momento dalle impostazioni.'
-               : 'You can disable this feature at any time from the settings.'
-             }
+             {t('vr_b_pd_note')}
            </p>
         </div>
 
@@ -70,13 +65,13 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
             onClick={onAccept}
             className="w-full py-4 bg-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest transition-all shadow-lg active:scale-95"
           >
-            {language === 'IT' ? 'ACCETTA E CONTINUA' : 'ACCEPT AND CONTINUE'}
+            {t('vr_b_pd_accept')}
           </button>
           <button
             onClick={onDecline}
             className="w-full py-3 text-gray-500 font-black text-xs uppercase tracking-widest hover:text-gray-600 transition-colors"
           >
-            {language === 'IT' ? 'Non ora' : 'Not now'}
+            {t('vr_b_pd_decline')}
           </button>
         </div>
       </motion.div>

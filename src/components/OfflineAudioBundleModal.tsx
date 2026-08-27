@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Headphones, Check, Shield } from 'lucide-react';
 import { PRICING_LIST } from '../lib/pricing';
+import { getTranslation, type Language } from '../lib/i18n';
 import DayPassCard from './DayPassCard';
 
 interface OfflineAudioBundleModalProps {
@@ -25,6 +26,9 @@ export default function OfflineAudioBundleModal({
   onSaveOfflineOnly,
   onDownloadAudioBundle
 }: OfflineAudioBundleModalProps) {
+  // Prop `language` a volte minuscola: normalizzata per i dizionari i18n.
+  const lang = String(language || 'IT').toUpperCase() as Language;
+  const t = (key: string) => getTranslation(key, lang);
   // Extract cultural POIs from the itinerary
   const culturalPois = React.useMemo(() => {
     if (!plan || !plan.giorni) return [];
@@ -109,7 +113,7 @@ export default function OfflineAudioBundleModal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={language === 'IT' ? 'Scarica per offline' : 'Download for offline'}
+        aria-label={t('vr_b_ob_title')}
         initial={{ scale: 0.95, opacity: 0, y: 20 }}
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.95, opacity: 0, y: 20 }}
@@ -120,9 +124,9 @@ export default function OfflineAudioBundleModal({
           <div className="w-16 h-16 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-md">
             <Download className="w-8 h-8 text-white" />
           </div>
-          <h2 className="text-2xl font-black mb-2">{language === 'IT' ? 'Scarica per Offline' : 'Download for Offline'}</h2>
+          <h2 className="text-2xl font-black mb-2">{t('vr_b_ob_title')}</h2>
           <p className="text-sm text-white/80 font-bold">
-            {language === 'IT' ? 'Porta le audioguide con te senza consumare giga in viaggio.' : 'Take audio guides with you without using data.'}
+            {t('vr_b_ob_sub')}
           </p>
         </div>
 
@@ -133,9 +137,7 @@ export default function OfflineAudioBundleModal({
           <div className="mb-6">
             <DayPassCard compact />
             <p className="text-[10px] font-bold text-gray-500 text-center mt-2">
-              {language === 'IT'
-                ? 'Con il Day Pass le audioguide delle prossime 24 ore sono incluse: il bundle qui sotto serve solo se vuoi i file audio permanenti.'
-                : 'With the Day Pass all audio guides for the next 24 hours are included: the bundle below is only for permanent audio files.'}
+              {t('vr_b_ob_daypass_note')}
             </p>
           </div>
 
@@ -144,14 +146,11 @@ export default function OfflineAudioBundleModal({
             <div className="flex items-center gap-3 mb-3">
               <Headphones className="w-5 h-5 text-amber-600" />
               <h3 className="font-black text-amber-800 text-sm">
-                {language === 'IT' ? 'Voce Selezionata' : 'Selected Voice'}
+                {t('vr_b_ob_voice')}
               </h3>
             </div>
             <p className="text-xs font-bold text-amber-700/80 mb-3 leading-snug">
-              {language === 'IT' 
-                ? `Stai per scaricare le audioguide raccontate da ${guideMode === 'nicky' ? 'Nicky (la Guida)' : 'Dante (l\'Esploratore)'}. Puoi cambiarla ora se preferisci.`
-                : `You are about to download audio guides narrated by ${guideMode === 'nicky' ? 'Nicky' : 'Dante'}. You can change it now if you prefer.`
-              }
+              {t('vr_b_ob_voice_desc').replace('{guide}', guideMode === 'nicky' ? 'Nicky' : 'Dante')}
             </p>
             <div className="flex bg-white rounded-xl overflow-hidden border border-amber-200/50 shadow-sm">
               <button 
@@ -170,7 +169,7 @@ export default function OfflineAudioBundleModal({
           </div>
 
           <h3 className="text-sm font-black text-primary mb-3">
-            {language === 'IT' ? 'Seleziona le tappe da scaricare:' : 'Select stops to download:'}
+            {t('vr_b_ob_select')}
           </h3>
           
           <div className="space-y-2">
@@ -185,7 +184,7 @@ export default function OfflineAudioBundleModal({
                 <div className="flex-1 min-w-0">
                   <h4 className="text-sm font-bold text-gray-800 truncate">{poi.name}</h4>
                   <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">
-                    {language === 'IT' ? 'Giorno' : 'Day'} {poi.giorno} • {poi.type}
+                    {t('vr_b_day')} {poi.giorno} • {poi.type}
                   </p>
                 </div>
                 <div className="text-xs font-black text-primary bg-white px-2 py-1 rounded-lg border border-indigo-100 shadow-sm shrink-0">
@@ -194,7 +193,7 @@ export default function OfflineAudioBundleModal({
               </label>
             ))}
             {culturalPois.length === 0 && (
-              <p className="text-xs text-gray-500 font-bold text-center py-4">Nessuna tappa culturale trovata in questo itinerario.</p>
+              <p className="text-xs text-gray-500 font-bold text-center py-4">{t('vr_b_ob_none')}</p>
             )}
           </div>
         </div>
@@ -204,13 +203,13 @@ export default function OfflineAudioBundleModal({
           <div className="flex justify-between items-end mb-4">
             <div>
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">
-                {language === 'IT' ? 'Totale Bundle' : 'Bundle Total'}
+                {t('vr_b_ob_total')}
               </p>
               <div className="text-2xl font-black text-primary flex items-baseline gap-1">
-                {totalCost} <span className="text-xs text-gray-500 font-bold">Crediti</span>
+                {totalCost} <span className="text-xs text-gray-500 font-bold">{t('vr_b_credits_cap')}</span>
               </div>
               <p className="text-[10px] font-bold text-gray-500 mt-0.5">
-                {language === 'IT' ? 'Audio permanente, tuo per sempre.' : 'Permanent audio, yours forever.'}
+                {t('vr_b_ob_perm')}
               </p>
             </div>
             <button
@@ -224,7 +223,7 @@ export default function OfflineAudioBundleModal({
               disabled={selectedPois.length === 0}
               className="bg-primary text-white px-6 py-3 rounded-xl font-black text-sm shadow-lg hover:bg-primary/90 transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {language === 'IT' ? 'Acquista & Scarica' : 'Buy & Download'}
+              {t('vr_b_ob_buy')}
             </button>
           </div>
           
@@ -235,11 +234,11 @@ export default function OfflineAudioBundleModal({
             }}
             className="w-full py-3 bg-white border-2 border-gray-200 text-gray-500 rounded-xl font-bold text-xs hover:bg-gray-50 hover:text-gray-700 transition-colors flex items-center justify-center gap-2"
           >
-            {language === 'IT' ? 'Salva solo il testo (Gratis)' : 'Save text only (Free)'}
+            {t('vr_b_ob_textonly')}
           </button>
         </div>
 
-        <button onClick={onClose} aria-label={language === 'IT' ? 'Chiudi' : 'Close'} className="absolute top-4 right-4 w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white backdrop-blur-md transition-colors">
+        <button onClick={onClose} aria-label={t('close')} className="absolute top-4 right-4 w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white backdrop-blur-md transition-colors">
           <X className="w-4 h-4" />
         </button>
       </motion.div>

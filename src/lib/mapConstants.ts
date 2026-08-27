@@ -48,6 +48,12 @@ export const CATEGORY_COLORS: Record<string, string> = {
   lighthouse:        "bg-[#0369a1]",
   aerialway:         "bg-[#0284c7]",
   winery:            "bg-[#7f1d1d]",
+  // LOCALITÀ TURISTICHE (24/08/2026): borghi e villaggi che sono meta di per
+  // sé — Riomaggiore, Volterra, Colonnata — non un monumento dentro una
+  // città. Terracotta: non è né il marrone dei monumenti né l'ambra delle
+  // famiglie, si riconosce a colpo d'occhio come "posto", non "luogo dentro
+  // un posto".
+  localita:          "bg-[#c2410c]",
   // Fase 2 — patrimonio costruito (toni caldi, coerenti col culturale),
   // musei tematici (viola come i musei), all'aperto (verdi), famiglie (ambra).
   square:            "bg-[#a16207]",
@@ -131,6 +137,7 @@ export const CATEGORY_HEX: Record<string, string> = {
   lighthouse:        "#0369a1",
   aerialway:         "#0284c7",
   winery:            "#7f1d1d",
+  localita:          "#c2410c",
   // NB: `fountain` è già definito più sopra in questo stesso dizionario.
   square: "#a16207", bridge: "#78716c", theatre: "#9d174d",
   opera_house: "#831843", palace: "#92400e", tower: "#78350f", skyscraper: "#475569",
@@ -203,6 +210,7 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   lighthouse: "🗼",
   aerialway: "🚡",
   winery: "🍷",
+  localita: "🏘️",
   square: "🏙️", bridge: "🌉", theatre: "🎭", opera_house: "🎼", palace: "👑",
   tower: "🗼", skyscraper: "🏙️", cemetery: "⚰️", library: "📚", windmill: "🌾",
   aqueduct: "🏛️", observatory: "🔭", stadium: "🏟️", monastery: "🕍",

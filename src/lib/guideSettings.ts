@@ -36,6 +36,32 @@ export const DISTANCE_CONFIG = {
 
 export type DistanceKey = keyof typeof DISTANCE_CONFIG;
 
+// =====================================================================
+// ACCURATEZZA DEL FIX: UNA SOLA SOGLIA PER DECIDERE, UNA PIU' LARGA PER
+// «SONO NEI PARAGGI» (23/08/2026)
+// =====================================================================
+// Fino a oggi il numero era scritto in tre posti: 50 m in foregroundTriggers
+// (ACCURACY_MAX_M), 50 m in bearingGate (ACCURATEZZA_MASSIMA_M), 50 m nel
+// predittore nativo (MAX_ACCURACY_FOR_PREDICTION_M) — e 100 m nel servizio
+// Android. Sembravano incoerenti; in realta' rispondono a due domande diverse,
+// e tenerle separate e' la correzione giusta:
+//
+//  • DECIDERE (questa soglia, 50 m): far partire un racconto, calcolare un
+//    CPA, stabilire se il POI e' davanti o dietro. Con ±80 m di errore la
+//    geometria dice il contrario del vero: meglio tacere e riprovare al fix
+//    successivo.
+//  • ESSERE NEI PARAGGI (SOGLIA_ACCURATEZZA_PARAGGI_M, 100 m): registrare i
+//    geofence di sistema, sapere in che citta' si e', decidere se vale la pena
+//    scaricare i POI. Qui un errore di 80 m non cambia la risposta, e alzare
+//    l'asticella significherebbe solo non registrare nulla in un centro
+//    storico. E' il valore che usa gia' ItaintaBackgroundPoiService.kt:1106.
+//
+// Chi decide usa la prima. Chi si orienta usa la seconda. Non vanno unificate.
+/** Fix peggiore di cosi' non fa scattare nulla e non alimenta il CPA. */
+export const SOGLIA_ACCURATEZZA_TRIGGER_M = 50;
+/** Soglia larga per le decisioni «di zona» (registrazione geofence, fetch POI). */
+export const SOGLIA_ACCURATEZZA_PARAGGI_M = 100;
+
 export interface GuideDistances {
   walkAlert: number;
   walkTrigger: number;
@@ -82,11 +108,21 @@ export function setDistance(key: DistanceKey, value: number): void {
  * Raggi operativi (alert/trigger) per la modalita' di trasporto corrente.
  * Include una logica di espansione del raggio per edifici grandi (Musei, Castelli, ecc.)
  */
-/** Raggi calibrati sul perimetro reale del POI (footprint OSM), quando presenti. */
+/**
+ * Raggi calibrati sul perimetro reale del POI (footprint OSM), quando presenti.
+ *
+ * ATTENZIONE AI DEFAULT TRAVESTITI DA MISURE. Fino al 23/08/2026 la RPC
+ * `get_geofence_pois` restituiva `coalesce(geofence_radius, 50)`: un POI mai
+ * calibrato arrivava al client con un 50 indistinguibile da un raggio vero.
+ * Qui devono entrare SOLO i valori GREZZI del DB (colonne `geofence_radius` /
+ * `alert_radius` della migration 20260823140000), che sono `null` quando la
+ * calibrazione non c'è. Passare un default significa spegnere lo slider
+ * dell'utente.
+ */
 export interface PoiFootprint {
-  /** Raggio di trigger/arrivo derivato dal perimetro (colonna geofence_radius). */
+  /** Raggio di trigger/arrivo derivato dal perimetro (colonna geofence_radius). GREZZO: null = mai calibrato. */
   geofenceRadius?: number | null;
-  /** Raggio di alert derivato dal perimetro (colonna alert_radius). */
+  /** Raggio di alert derivato dal perimetro (colonna alert_radius). GREZZO: null = mai calibrato. */
   alertRadius?: number | null;
   /** True se il POI è stato processato col footprint (entrance valorizzato). */
   hasEntrance?: boolean;
@@ -106,15 +142,31 @@ export function radiiForTransport(
     : { alert: d.walkAlert, trigger: d.walkTrigger };
 
   // RAGGI CALIBRATI SUL PERIMETRO REALE. Se il POI è stato processato col
-  // footprint OSM (entrance valorizzato → hasEntrance), usa i suoi raggi reali,
-  // EspAndendo (mai riducendo) i default di modalità: una piazza ottiene un
-  // raggio grande, una statua resta stretta. Sostituisce il bump forfettario.
-  // Gated su hasEntrance: i POI non processati sono IDENTICI a oggi (i valori
-  // 50/150 di default sono indistinguibili da raggi reali e non vanno usati).
+  // footprint OSM (entrance valorizzato → hasEntrance) E porta un raggio
+  // GREZZO dal DB, quel raggio VINCE: è misurato sul perimetro dell'edificio,
+  // una piazza lo ha grande e una statua lo ha stretto. I POI non calibrati
+  // (raggio null) restano alla preferenza dell'utente.
+  //
+  // Perché non è più un `Math.max` (23/08/2026). Il massimo faceva da
+  // PAVIMENTO: il trigger a piedi non poteva mai scendere sotto il default di
+  // modalità, e chi portava lo slider a 15 m non otteneva nulla — la guida
+  // partiva comunque a 30 m o più. Con un raggio calibrato il default di
+  // modalità non ha voce in capitolo: la misura batte la stima.
+  //
+  // ECCEZIONE, L'AUTO. A 50 km/h si percorrono 14 m al secondo: un raggio
+  // calibrato di 15 m attorno a una statua si attraversa fra due fix GPS e la
+  // guida non parte mai. In auto il raggio calibrato può solo ALLARGARE il
+  // trigger dell'utente (Math.max), mai stringerlo — è il comportamento di
+  // prima, e in auto era quello giusto. A piedi si cammina a 1,4 m/s e il
+  // raggio stretto è esattamente ciò che serve per non parlare da lontano.
+  //
+  // L'alert (l'avviso "stai per arrivare") resta un `Math.max` in entrambe le
+  // modalità: è un preavviso, accorciarlo non aggiunge precisione, toglie solo
+  // il tempo di reagire.
   const fpTrigger = Number(footprint?.geofenceRadius) || 0;
   const fpAlert = Number(footprint?.alertRadius) || 0;
   if (footprint?.hasEntrance && (fpTrigger > 0 || fpAlert > 0)) {
-    if (fpTrigger > 0) trigger = Math.max(trigger, fpTrigger);
+    if (fpTrigger > 0) trigger = mode === 'car' ? Math.max(trigger, fpTrigger) : fpTrigger;
     if (fpAlert > 0) alert = Math.max(alert, fpAlert);
     return { alert, trigger };
   }
@@ -134,6 +186,160 @@ export function radiiForTransport(
   }
 
   return { alert, trigger };
+}
+
+// =====================================================================
+// FIDUCIA NEL PUNTO: quanto sappiamo DOV'E' LA PORTA
+// =====================================================================
+// Fino al 23/08/2026 il raggio dipendeva solo da categoria e mezzo. Ma un
+// raggio e' un cerchio attorno a UN PUNTO, e quel punto puo' essere la porta
+// misurata oppure il baricentro di un poligono che nessuno ha mai visto. Sono
+// due cose diverse, e trattarle uguale produce i due difetti opposti:
+//   • raggio stretto su un centroide sbagliato → il POI non parla MAI (su un
+//     edificio lungo viene addirittura marcato «gia' superato»: e' il difetto
+//     peggiore misurato, il silenzio);
+//   • raggio largo su un ingresso noto → la guida attacca troppo presto, e in
+//     auto «troppo presto» sono dieci secondi di strada.
+//
+// LA DOMANDA GIUSTA E' «ABBIAMO UN PUNTO?», NON «L'INDIRIZZO HA IL CIVICO?»
+// (correzione del 23/08/2026). I punti della colonna `address_point_lat/lon`
+// (migration 20260823160000) NON vengono da un geocoder che interpreta una
+// stringa: vengono dalla CASA PIU' VICINA al POI nel dump Nominatim, cioe' da
+// una vicinanza MISURATA, a pochi metri. Valgono quindi anche senza numero
+// civico. Il civico conta solo quando si deve geocodificare una stringa dal
+// vivo, ed e' gia' gestito altrove: `puntoArrivo.ts:96` rifiuta gli indirizzi
+// senza cifre, perche' li' il geocoder tornerebbe il centro della via.
+//
+// Quattro livelli, in ordine di fiducia:
+//
+//  1. `perimetro`  il POI ha il footprint OSM: si misura dal MURO, non da un
+//                  punto. Nessun allargamento (fattore 1,0).
+//  2. `ingresso`   `entrance_lat/lon`: il punto E' la porta. Raggio base,
+//                  stretto (fattore 1,0). Se il DB porta un `geofence_radius`
+//                  calibrato, vince quello.
+//  3. `indirizzo`  C'E' UN PUNTO: `address_point_lat/lon` dalla colonna nuova,
+//                  oppure il punto geocodificato dal vivo (che esiste solo col
+//                  civico). QUEL PUNTO E' L'ARRIVO A TUTTI GLI EFFETTI — «Via
+//                  Roma 15»: il raggio parte da li', 30 m a piedi, e il
+//                  navigatore punta li'. Fattore 1,0, nessun allargamento,
+//                  esattamente come un ingresso.
+//                  Fino a stamattina questo livello si portava dietro un
+//                  «corridoio» di 50-90 m per l'incertezza sul civico: era
+//                  sbagliato due volte, perche' allargava il cerchio attorno a
+//                  un punto che invece e' buono, e perche' quel caso — la via
+//                  senza un punto — non e' questo livello, e' il prossimo.
+//  4. `centroide`  nessun punto: ne' porta, ne' facciata. Anche il POI di cui
+//                  conosciamo solo il NOME DELLA VIA finisce qui, e non in un
+//                  livello intermedio: senza un punto non c'e' niente su cui
+//                  centrare un cerchio, e un cerchio allargato attorno a un
+//                  punto inventato e' peggio di un cerchio onesto attorno al
+//                  baricentro. Raggio base ×2: meglio parlare un po' presto
+//                  che non parlare mai.
+//
+// TETTI, perche' in auto un raggio doppio significa parlare 10 secondi troppo
+// presto: trigger max 80 m a piedi / 120 m in auto; avviso max 250 m a piedi /
+// 400 m in auto. I bonus gemme/premium restano quelli di prima (stanno tutti
+// sotto i tetti).
+// =====================================================================
+
+export type LivelloFiducia = 'perimetro' | 'ingresso' | 'indirizzo' | 'centroide';
+
+export interface OpzioniFiducia {
+  /** Il perimetro del POI e' gia' in memoria (footprints.perimetroNoto). */
+  haPerimetro?: boolean;
+  /** Il punto dell'indirizzo e' gia' stato geocodificato (cache di puntoArrivo). */
+  puntoIndirizzoPronto?: boolean;
+}
+
+/** L'ingresso c'e' davvero? (0,0 e' il Golfo di Guinea, cioe' un campo vuoto). */
+function haIngresso(poi: any): boolean {
+  const lat = Number(poi?.entrance_lat ?? poi?.entranceLat);
+  const lon = Number(poi?.entrance_lon ?? poi?.entranceLon);
+  return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0);
+}
+
+/**
+ * Il POI porta gia' un PUNTO per il suo indirizzo? (`address_point_lat/lon`,
+ * migration 20260823160000). Non e' una stringa interpretata da un geocoder:
+ * e' la casa piu' vicina al POI nel dump Nominatim, misurata. Quando c'e', e'
+ * pronta subito e non costa una chiamata di rete.
+ * Come per l'ingresso, (0,0) e' un campo vuoto, non il Golfo di Guinea.
+ */
+export function puntoIndirizzo(poi: any): { lat: number; lon: number } | null {
+  try {
+    const lat = Number(poi?.address_point_lat ?? poi?.addressPointLat);
+    const lon = Number(poi?.address_point_lon ?? poi?.addressPointLon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (lat === 0 && lon === 0) return null;
+    return { lat, lon };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Quanto ci fidiamo del punto da cui misuriamo il raggio di questo POI.
+ * Puro: nessuna rete, nessun import — chi chiama passa in `opz` cio' che sa
+ * (perimetro caricato, indirizzo gia' geocodificato dal vivo).
+ */
+export function fiduciaPunto(poi: any, opz: OpzioniFiducia = {}): LivelloFiducia {
+  try {
+    if (opz.haPerimetro || poi?.has_footprint === true) return 'perimetro';
+    if (haIngresso(poi)) return 'ingresso';
+    // Un PUNTO, da qualunque delle due strade arrivi:
+    //  • `address_point_lat/lon` dal DB — gia' pronto, nessuna rete;
+    //  • la geocodifica dal vivo gia' andata a buon fine (cache di puntoArrivo),
+    //    che esiste solo per gli indirizzi col civico.
+    // Il solo NOME della via, senza punto, non basta: quello e' `centroide`.
+    if (puntoIndirizzo(poi) || opz.puntoIndirizzoPronto) return 'indirizzo';
+    return 'centroide';
+  } catch {
+    return 'centroide';
+  }
+}
+
+export interface FattoreFiducia {
+  /** Moltiplicatore del raggio di TRIGGER. */
+  fattore: number;
+  /** Moltiplicatore del raggio di AVVISO. */
+  fattoreAvviso: number;
+  tettoTrigger: number;
+  tettoAvviso: number;
+}
+
+/** Tetti: oltre questi non si va, qualunque sia la sfiducia nel punto. */
+export const TETTO_TRIGGER_M: Record<TransportMode, number> = { walk: 80, car: 120 };
+export const TETTO_AVVISO_M: Record<TransportMode, number> = { walk: 250, car: 400 };
+
+export function fattoreFiducia(livello: LivelloFiducia, modo: TransportMode): FattoreFiducia {
+  const tettoTrigger = TETTO_TRIGGER_M[modo] ?? TETTO_TRIGGER_M.walk;
+  const tettoAvviso = TETTO_AVVISO_M[modo] ?? TETTO_AVVISO_M.walk;
+  switch (livello) {
+    case 'perimetro':
+    case 'ingresso':
+    case 'indirizzo':
+      // Muro, porta o punto dell'indirizzo: in tutti e tre i casi si misura da
+      // qualcosa di reale, e allargare peggiorerebbe e basta. «Via Roma 15» e'
+      // un punto quanto lo e' un portone.
+      return { fattore: 1, fattoreAvviso: 1, tettoTrigger, tettoAvviso };
+    default:
+      // Centroide puro: nessun punto, ne' porta ne' facciata. Meglio presto che mai.
+      return { fattore: 2, fattoreAvviso: 2, tettoTrigger, tettoAvviso };
+  }
+}
+
+/**
+ * Applica la fiducia a un raggio base.
+ * REGOLA D'ORO: la fiducia puo' solo ALLARGARE. Il tetto non deve mai
+ * stringere cio' che l'utente ha scelto con gli slider (in auto il trigger
+ * arriva a 150 m di preferenza: il tetto di 120 e' un limite all'allargamento,
+ * non un massimo assoluto).
+ */
+export function applicaFiducia(raggioBase: number, f: FattoreFiducia, tipo: 'trigger' | 'avviso'): number {
+  const base = Number(raggioBase) || 0;
+  const molt = tipo === 'trigger' ? f.fattore : f.fattoreAvviso;
+  const tetto = tipo === 'trigger' ? f.tettoTrigger : f.tettoAvviso;
+  return Math.max(base, Math.min(base * molt, tetto));
 }
 
 // --- Categorie ammesse per il trigger audioguida -------------------------
@@ -178,6 +384,10 @@ export function isCategoryAllowed(
   if (SENZA_AUDIOGUIDA.has(cat)) return false;
 
   if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
+  // LOCALITÀ TURISTICHE (24/08/2026, richiesta esplicita "con audioguida"):
+  // Riomaggiore, Volterra, Colonnata raccontano il borgo, non un singolo
+  // monumento — merita la voce quanto una chiesa.
+  if (cat === 'localita') return activeSubcats.localita ?? true;
   // Monumenti: include il patrimonio costruito importato in fase 2 (piazze,
   // ponti, fontane, teatri, palazzi, torri, grattacieli, cimiteri monumentali,
   // biblioteche storiche, mulini, acquedotti, osservatori, stadi).
@@ -279,7 +489,7 @@ export const SENZA_AUDIOGUIDA: ReadonlySet<string> = new Set([
 export const CHIAVI_NATIVO_AUDIOGUIDA: ReadonlySet<string> = new Set([
   'gemme', 'monumenti', 'musei', 'panorami', 'chiese', 'consigli',
   'castelli', 'archeo', 'natura', 'spiagge', 'vette', 'acque', 'grotte', 'parchi',
-  'enogastronomia',
+  'enogastronomia', 'localita',
 ]);
 
 // --- Modalita' attivazione ---------------------------------------------

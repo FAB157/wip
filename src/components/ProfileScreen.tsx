@@ -20,7 +20,7 @@ import MyVisionTab from './MyVisionTab';
 import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
 import { getUserProfile, UserProfile } from '../lib/quotaManager';
 import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineStorage';
-import { Language, getTranslation, LANGUAGES } from '../lib/i18n';
+import { Language, getTranslation, LANGUAGES, linguaCorrente } from '../lib/i18n';
 import B2BPartner from './B2BPartner';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { list as listNotifications, markAllRead as markAllNotificationsRead, unreadCount as notificationsUnreadCount, formatRelativeTime, NOTIFICATION_CENTER_EVENT, WipNotification } from '../lib/notificationCenter';
@@ -138,6 +138,8 @@ const getCardIcon = (poi: any) => {
 
 export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRemovePoi, onClearItinerary, onSelectPoi, defaultLocation, setDefaultLocation, userSession, onSignOut, language, setLanguage }: ProfileScreenProps) {
   const [activeTab, setActiveTab] = useState<'diario' | 'myvision' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'b2b' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
+  // Locale Intl per date/orari nella lingua della UI (IT→it-IT, EN→en-US, …)
+  const dateLocale = getTranslation('pf_locale', language);
   // Vista griglia/lista condivisa con tutte le gallerie (My Vision, Diario…)
   const [galleryView, setGalleryView] = useGalleryView();
   const [savedPois, setSavedPois] = useState<any[]>([]);
@@ -351,9 +353,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         return;
       }
 
-      const confirmMsg = language === 'IT'
-        ? `⚠️ Attenzione: In modalità Automatica, ogni nuovo punto di interesse attivato scalerà automaticamente ${PRICING_LIST.audio_guide} crediti, anche a telefono bloccato. Vuoi procedere?`
-        : `⚠️ Warning: In Automatic mode, each new point of interest will automatically consume ${PRICING_LIST.audio_guide} credits, even when the phone is locked. Do you want to proceed?`;
+      const confirmMsg = getTranslation('pf_auto_mode_confirm', language)
+        .replace('{n}', String(PRICING_LIST.audio_guide));
 
       if (!window.confirm(confirmMsg)) return;
     }
@@ -387,7 +388,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       if (!Array.isArray(badges) || badges.length === 0) return;
       const items = badges.map((b: any, i: number) => ({
         id: Date.now() + i,
-        name: b?.name || 'Traguardo!',
+        name: b?.name || getTranslation('pf_traguardo', linguaCorrente()),
         icon: b?.icon || '🏆',
         description: b?.description
       }));
@@ -400,13 +401,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     return () => window.removeEventListener('wip-gamification-badge', onBadge);
   }, []);
 
+  // La parola di conferma è accettata sia in italiano ('elimina') sia nella
+  // lingua della UI (pf_delete_word), senza distinzione di maiuscole.
+  const isDeleteWordOk = (txt: string): boolean => {
+    const w = txt.trim().toLowerCase();
+    return w === 'elimina' || w === getTranslation('pf_delete_word', language).toLowerCase();
+  };
+
   const handleDeleteAccount = async () => {
-    if (deleteConfirmText.toLowerCase() !== 'elimina') return;
+    if (!isDeleteWordOk(deleteConfirmText)) return;
     setIsDeleting(true);
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
-      if (!token) throw new Error("Utente non trovato");
+      if (!token) throw new Error(getTranslation('pf_user_not_found', language));
 
       // getApiUrl: su Capacitor i path relativi puntano agli asset locali, non a Vercel.
       // L'identità viaggia nel Bearer token: il server cancella solo l'utente del token.
@@ -417,7 +425,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.error || "Errore durante l'eliminazione");
+        throw new Error(body?.error || getTranslation('pf_err_delete', language));
       }
 
       // Stessa pulizia del cambio account: senza, cronologia/preferiti/keychain
@@ -427,7 +435,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       if (onSignOut) onSignOut();
     } catch (e) {
       console.error(e);
-      notify("Errore durante l'eliminazione dell'account.");
+      notify(getTranslation('pf_err_delete_account', language));
     } finally {
       setIsDeleting(false);
       setShowDeleteModal(false);
@@ -443,7 +451,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     try {
       const { data: s } = await supabase.auth.getSession();
       const uid = s?.session?.user?.id;
-      if (!uid) throw new Error('Devi essere loggato per esportare i tuoi dati');
+      if (!uid) throw new Error(getTranslation('pf_export_login', language));
       // Ogni tabella è best-effort: se una non esiste o non è leggibile,
       // nell'archivio finisce l'errore al suo posto, mai un crash.
       const grab = async (table: string, filter?: (q: any) => any) => {
@@ -475,9 +483,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       a.download = `wip-dati-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      notify('Archivio dei tuoi dati scaricato.');
+      notify(getTranslation('pf_export_ok', language));
     } catch (e: any) {
-      notify(`Export non riuscito: ${e?.message || e}`);
+      notify(getTranslation('pf_export_fail', language).replace('{x}', String(e?.message || e)));
     } finally {
       setIsExporting(false);
     }
@@ -492,7 +500,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       giorno: g.giorno || i + 1,
       tappe: (g.tappe || []).map((t: any) => t.titolo_tappa || t.nome).filter(Boolean),
     })).filter((g: any) => g.tappe.length > 0);
-    if (giorni.length === 0) { notify('Questo itinerario non ha tappe da raccontare.'); return; }
+    if (giorni.length === 0) { notify(getTranslation('pf_story_no_stops', language)); return; }
     setStoryLoadingId(itineraryDb.id);
     try {
       const res = await fetch(getApiUrl('/api/trip-story'), {
@@ -502,9 +510,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.story) throw new Error(data?.error || 'generazione fallita');
-      setTripStory({ titolo: itineraryDb.titolo || 'Il nostro viaggio', story: data.story });
+      setTripStory({ titolo: itineraryDb.titolo || getTranslation('pf_nostro_viaggio', language), story: data.story });
     } catch (e: any) {
-      notify(`Racconto non riuscito: ${e?.message || 'riprova'}`);
+      notify(getTranslation('pf_story_fail', language).replace('{x}', e?.message || getTranslation('pf_riprova', language)));
     } finally {
       setStoryLoadingId(null);
     }
@@ -514,7 +522,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     const text = `${tripStory.titolo}\n\n${tripStory.story}\n\n— raccontato da WIP · wip.guide`;
     try {
       if (navigator.share) await navigator.share({ text });
-      else { await navigator.clipboard.writeText(text); notify('Racconto copiato negli appunti.'); }
+      else { await navigator.clipboard.writeText(text); notify(getTranslation('pf_story_copied', language)); }
     } catch { /* condivisione annullata */ }
   };
 
@@ -676,7 +684,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) {
-        setCouponMessage({ type: 'error', text: 'Accedi al tuo account per riscattare il voucher.' });
+        setCouponMessage({ type: 'error', text: getTranslation('pf_coupon_login', language) });
         return;
       }
       const res = await fetch(getApiUrl('/api/coupon/redeem'), {
@@ -686,20 +694,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       });
       const data = await res.json();
       if (!res.ok) {
-        setCouponMessage({ type: 'error', text: data?.error || 'Codice non valido, disattivato o esaurito.' });
+        setCouponMessage({ type: 'error', text: data?.error || getTranslation('pf_coupon_invalid', language) });
         return;
       }
 
       setCouponMessage({
         type: 'success',
-        text: `Voucher riscattato! Hai ricevuto ${data.credits} crediti omaggio 🎉`
+        text: getTranslation('pf_coupon_ok', language).replace('{n}', String(data.credits))
       });
       setCouponCode('');
       window.dispatchEvent(new CustomEvent('wip-credits-updated'));
       await loadProfileData();
     } catch (e: any) {
       console.error(e);
-      setCouponMessage({ type: 'error', text: 'Errore durante l\'attivazione: ' + e.message });
+      setCouponMessage({ type: 'error', text: getTranslation('pf_coupon_error', language).replace('{x}', String(e.message)) });
     } finally {
       setCouponLoading(false);
     }
@@ -753,8 +761,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     setAppLockEnabled(next);
     try { localStorage.setItem(APPLOCK_PREF_KEY, String(next)); } catch { /* storage */ }
     notify(next
-      ? 'Blocco app attivo: al prossimo avvio servirà impronta o FaceID.'
-      : 'Blocco app disattivato.');
+      ? getTranslation('pf_applock_on', language)
+      : getTranslation('pf_applock_off', language));
   };
 
   const handleToggleBiometric = async () => {
@@ -765,20 +773,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       // Disattivazione = rimozione immediata delle credenziali dal keystore
       await deleteBiometricCredentials?.().catch?.(() => {});
     } else {
-      notify('Sblocco biometrico attivo: verrà configurato al prossimo accesso con email e password.');
+      notify(getTranslation('pf_biometric_on', language));
     }
   };
 
   const handleChangePassword = async () => {
     const emailAddr = userSession?.user?.email;
     if (!emailAddr) return;
-    if (!secNewPw || secNewPw.length < 6) { notify('La nuova password deve avere almeno 6 caratteri.'); return; }
-    if (secNewPw !== secConfirmPw) { notify('Le password non coincidono.'); return; }
+    if (!secNewPw || secNewPw.length < 6) { notify(getTranslation('pf_pw_min', language)); return; }
+    if (secNewPw !== secConfirmPw) { notify(getTranslation('pf_pw_mismatch', language)); return; }
     setSecLoading(true);
     try {
       // Re-autenticazione: mai cambiare password senza verificare quella attuale
       const { error: verifyErr } = await supabase.auth.signInWithPassword({ email: emailAddr, password: secCurrentPw });
-      if (verifyErr) { notify('Password attuale non corretta.'); return; }
+      if (verifyErr) { notify(getTranslation('pf_pw_wrong', language)); return; }
       const { error } = await supabase.auth.updateUser({ password: secNewPw });
       if (error) throw error;
       // Aggiorna le credenziali biometriche, altrimenti lo sblocco con
@@ -787,9 +795,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         await saveBiometricCredentials(emailAddr, secNewPw).catch(() => {});
       }
       setSecCurrentPw(''); setSecNewPw(''); setSecConfirmPw('');
-      notify('Password aggiornata con successo', 'success');
+      notify(getTranslation('pf_pw_updated', language), 'success');
     } catch (e: any) {
-      notify(e?.message || 'Errore durante il cambio password.');
+      notify(e?.message || getTranslation('pf_pw_error', language));
     } finally {
       setSecLoading(false);
     }
@@ -827,18 +835,18 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       const response = await fetch(getApiUrl(
         `/api/geocode?q=${encodeURIComponent(citySearch.trim())}&limit=1&lang=${(language || 'IT').toLowerCase()}`
       ));
-      if (!response.ok) throw new Error("Errore nella ricerca");
+      if (!response.ok) throw new Error(getTranslation('pf_search_error', language));
       const data = await response.json();
       if (data && data.features && data.features.length > 0) {
         const feat = data.features[0];
         setDefaultLocation([feat.lat, feat.lon]);
-        notify(`Posizione aggiornata a: ${String(feat.description || '').split(',')[0]}`, 'success');
+        notify(getTranslation('pf_pos_updated', language).replace('{x}', String(feat.description || '').split(',')[0]), 'success');
       } else {
-        notify("Città non trovata.");
+        notify(getTranslation('pf_city_not_found', language));
       }
     } catch (e) {
       console.error(e);
-      notify("Errore durante la ricerca.");
+      notify(getTranslation('pf_search_error', language));
     } finally {
       setIsSearchingCity(false);
     }
@@ -889,11 +897,11 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     // fotocamera (5-10MB) in base64 supera la quota localStorage (~5MB) e
     // QuotaExceededError faceva sparire l'avatar al riavvio senza messaggi.
     if (!file.type.startsWith('image/')) {
-      notify('Seleziona un file immagine valido.');
+      notify(getTranslation('pf_img_invalid', language));
       return;
     }
     if (file.size > 1024 * 1024) {
-      notify('Immagine troppo grande (max 1 MB). Scegli una foto più piccola.');
+      notify(getTranslation('pf_img_too_big', language));
       return;
     }
     const reader = new FileReader();
@@ -903,7 +911,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         localStorage.setItem('userProfileAvatar', base64String);
         setUserAvatar(base64String);
       } catch {
-        notify('Impossibile salvare la foto: spazio locale esaurito.');
+        notify(getTranslation('pf_img_save_fail', language));
       }
     };
     reader.readAsDataURL(file);
@@ -962,7 +970,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         if (realXp >= lvl.xp_required && !claimedSet.has(`level_${lvl.id}`)) {
           setGamificationPopup({
             type: 'level',
-            title: `Livello ${lvl.title} Raggiunto!`,
+            title: getTranslation('pf_level_reached', language).replace('{x}', String(lvl.title)),
             icon: '🏆',
             // Migrazione 20260711: i premi sono CREDITI (reward_credits); le
             // vecchie colonne reward_vision/audio/itineraries non esistono più.
@@ -979,7 +987,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         if (visits >= challenge.threshold && !claimedSet.has(`challenge_${challenge.id}`)) {
           setGamificationPopup({
             type: 'challenge',
-            title: `Missione "${challenge.name}" Completata!`,
+            title: getTranslation('pf_mission_completed', language).replace('{x}', String(challenge.name)),
             icon: challenge.icon || '🎯',
             rewards: { credits: challenge.reward_credits || 0 },
             idToClaim: challenge.id
@@ -1086,7 +1094,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       }
     } catch (e: any) {
       console.error(e);
-      setError(e.message || "Errore di connessione a Supabase");
+      setError(e.message || getTranslation('pf_err_conn_supabase', language));
     } finally {
       setIsLoading(false);
     }
@@ -1155,7 +1163,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         console.warn(queryError);
         // Prima l'errore era solo in console e il ramo UI di errore del
         // Diario risultava irraggiungibile.
-        setError('Impossibile caricare i luoghi salvati dal cloud. Mostro solo quelli sul dispositivo.');
+        setError(getTranslation('pf_err_cloud_saved', language));
       }
     } catch (err: any) {
       console.error('Errore durante il recupero dei POI salvati', err);
@@ -1201,7 +1209,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         <button
           onClick={() => setNotifOpen(true)}
           className="absolute top-16 right-6 z-20 p-2.5 bg-white rounded-full border border-gray-100 shadow-sm text-primary hover:bg-gray-50 transition-colors"
-          aria-label="Apri il centro notifiche"
+          aria-label={getTranslation('pf_aria_open_notif', language)}
         >
           <Bell className="w-5 h-5" />
           {notifUnread > 0 && (
@@ -1243,14 +1251,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             <TabButton 
               active={activeTab === 'missioni'} 
               onClick={() => setActiveTab('missioni')} 
-              icon={<Award className="w-3.5 h-3.5" />} 
-              label="Missioni" 
+              icon={<Award className="w-3.5 h-3.5" />}
+              label={getTranslation('pf_missioni_tab', language)}
             />
             <TabButton 
               active={activeTab === 'livetour'} 
               onClick={() => setActiveTab('livetour')} 
-              icon={<Radio className="w-3.5 h-3.5" />} 
-              label="Tour di Gruppo" 
+              icon={<Radio className="w-3.5 h-3.5" />}
+              label={getTranslation('pf_tour_gruppo_tab', language)}
             />
             <TabButton 
               active={activeTab === 'cronologia'} 
@@ -1267,8 +1275,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             <TabButton 
               active={activeTab === 'offline'} 
               onClick={() => setActiveTab('offline')} 
-              icon={<Download className="w-3.5 h-3.5" />} 
-              label="Mappe Offline" 
+              icon={<Download className="w-3.5 h-3.5" />}
+              label={getTranslation('pf_mappe_offline_tab', language)}
             />
             <TabButton 
               active={activeTab === 'pricing'} 
@@ -1280,7 +1288,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               active={activeTab === 'listino'}
               onClick={() => setActiveTab('listino')}
               icon={<Coins className="w-3.5 h-3.5" />}
-              label="Listino"
+              label={getTranslation('pf_listino_tab', language)}
             />
             <TabButton 
               active={activeTab === 'b2b'} 
@@ -1292,13 +1300,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               active={activeTab === 'guida'}
               onClick={() => setActiveTab('guida')}
               icon={<Info className="w-3.5 h-3.5" />}
-              label="Guida"
+              label={getTranslation('pf_guida_tab', language)}
             />
             <TabButton
               active={activeTab === 'supporto'}
               onClick={() => setActiveTab('supporto')}
               icon={<LifeBuoy className="w-3.5 h-3.5" />}
-              label="Supporto"
+              label={getTranslation('pf_supporto_tab', language)}
             />
             <TabButton 
               active={activeTab === 'privacy'} 
@@ -1322,6 +1330,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
       {notifOpen && (
         <NotificationCenterPanel
           items={notifItems}
+          language={language}
           onClose={() => setNotifOpen(false)}
           onMarkAllRead={markAllNotificationsRead}
         />
@@ -1407,13 +1416,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   onClick={() => setItinerariSubTab('ai')}
                   className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'ai' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-600'}`}
                 >
-                  ITINERARI AI
+                  {getTranslation('pf_itin_ai_tab', language)}
                 </button>
                 <button
                   onClick={() => setItinerariSubTab('premium')}
                   className={`flex-1 py-2.5 text-[11px] font-black tracking-widest rounded-[14px] transition-all duration-300 ${itinerariSubTab === 'premium' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-600'}`}
                 >
-                  GUIDE PREMIUM
+                  {getTranslation('pf_guide_premium_tab', language)}
                 </button>
               </div>
 
@@ -1427,7 +1436,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 <EmptyState 
                   icon={MapIcon}
                   title={getTranslation("suggested_itineraries", language)}
-                  description="Qui appariranno i percorsi personalizzati creati per te dalla nostra Guida AI."
+                  description={getTranslation('pf_itin_empty_desc', language)}
                 />
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1436,13 +1445,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <div className="flex justify-between items-start">
                         <div className="flex flex-col gap-1.5">
                           <h4 className="font-black text-gray-900 text-xl leading-tight group-hover:text-primary transition-colors">
-                            {itineraryDb.titolo || "Il mio itinerario"}
+                            {itineraryDb.titolo || getTranslation('pf_my_itinerary', language)}
                           </h4>
                           <div className="flex items-center gap-2">
                             {(itineraryDb.dati_itinerario?.giorni?.length || 0) > 0 && (
                               <span className="text-[10px] bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full font-black uppercase tracking-widest flex items-center gap-1">
                                 <MapIcon className="w-3 h-3" />
-                                {itineraryDb.dati_itinerario.giorni.length} {itineraryDb.dati_itinerario.giorni.length === 1 ? 'Giorno' : 'Giorni'}
+                                {itineraryDb.dati_itinerario.giorni.length} {itineraryDb.dati_itinerario.giorni.length === 1 ? getTranslation('pf_giorno', language) : getTranslation('pf_giorni', language)}
                               </span>
                             )}
                             {itineraryDb.isOffline && (
@@ -1454,7 +1463,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         </div>
                       </div>
                       <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                         Creato il {new Date(itineraryDb.created_at || Date.now()).toLocaleDateString('it-IT')}
+                         {getTranslation('pf_creato_il', language).replace('{x}', new Date(itineraryDb.created_at || Date.now()).toLocaleDateString(dateLocale))}
                       </p>
                       {/* Garanzia pioggia: link discreto solo per gli itinerari
                           degli ultimi 7 giorni (il componente si nasconde da sé) */}
@@ -1467,16 +1476,16 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           onClick={() => generateTripStory(itineraryDb)}
                           disabled={storyLoadingId === itineraryDb.id}
                           className="px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-amber-100 transition-colors disabled:opacity-50"
-                          title="Il viaggio raccontato dall'AI a partire dalle tue tappe"
+                          title={getTranslation('pf_story_btn_title', language)}
                         >
-                          {storyLoadingId === itineraryDb.id ? 'Scrivo…' : '📖 Racconto'}
+                          {storyLoadingId === itineraryDb.id ? getTranslation('pf_scrivo', language) : getTranslation('pf_racconto_btn', language)}
                         </button>
                         {/* Export .ics riusa la stessa modalina di PlanScreen;
                             qui non c'è un mese di riferimento → default domani. */}
                         <CalendarExportButton
                           itinerary={itineraryDb.dati_itinerario}
                           fallbackTitle={itineraryDb.titolo}
-                          buttonLabel="📅 Calendario"
+                          buttonLabel={getTranslation('pf_calendario_btn', language)}
                           buttonClassName="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-colors"
                         />
                         {(() => {
@@ -1505,11 +1514,11 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                               rel="noopener noreferrer"
                               className="w-full text-center py-3.5 bg-gray-900 text-white font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] hover:bg-gray-800 active:scale-95 transition-all flex items-center justify-center gap-2"
                             >
-                              APRI IN MAPS <ChevronRight className="w-4 h-4" />
+                              {getTranslation('pf_apri_in_maps', language)} <ChevronRight className="w-4 h-4" />
                             </a>
                           ) : (
                             <span className="w-full text-center py-3.5 bg-gray-100 text-gray-400 font-black text-[11px] uppercase tracking-widest rounded-[1.25rem] flex items-center justify-center gap-2 cursor-not-allowed">
-                              Nessuna tappa disponibile
+                              {getTranslation('pf_no_tappe', language)}
                             </span>
                           );
                         })()}
@@ -1519,10 +1528,10 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               )) : (
                 savedPremiumGuides.length === 0 ? (
-                  <EmptyState 
+                  <EmptyState
                     icon={BookOpen}
-                    title="Guide Premium"
-                    description="Non hai ancora generato nessuna guida PDF in alta qualità."
+                    title={getTranslation('pf_guide_premium_title', language)}
+                    description={getTranslation('pf_guide_premium_empty', language)}
                   />
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1531,7 +1540,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         <div className="flex justify-between items-start">
                           <div className="flex flex-col gap-1.5">
                             <h4 className="font-black text-gray-900 text-lg leading-tight group-hover:text-primary transition-colors">
-                              {guide.content_data?.guida_titolo || "Guida Premium"}
+                              {guide.content_data?.guida_titolo || getTranslation('pf_guida_premium', language)}
                             </h4>
                             <span className="text-[9px] bg-amber-50 text-amber-700 self-start px-2.5 py-1 rounded-full font-black tracking-widest uppercase">
                               {guide.stile_guida || 'essential'}
@@ -1539,7 +1548,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           </div>
                         </div>
                         <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                           {new Date(guide.created_at || Date.now()).toLocaleDateString('it-IT')}
+                           {new Date(guide.created_at || Date.now()).toLocaleDateString(dateLocale)}
                         </p>
                         <div className="flex mt-auto pt-3">
                           <button
@@ -1548,7 +1557,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           >
                             {/* Etichetta onesta: questo bottone APRE il visualizzatore;
                                 il download PDF è dentro, in alto a destra. */}
-                            <BookOpen className="w-4 h-4" /> APRI GUIDA
+                            <BookOpen className="w-4 h-4" /> {getTranslation('pf_apri_guida', language)}
                           </button>
                         </div>
                       </div>
@@ -1577,7 +1586,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="bg-white rounded-[2rem] p-6 border border-gray-100 shadow-sm relative overflow-hidden">
                     {(() => {
                       // Determina il livello corrente e il prossimo
-                      let currentLvl = gamificationLevels[0] || { level: 1, title: 'Turista', xp_required: 0 };
+                      let currentLvl = gamificationLevels[0] || { level: 1, title: getTranslation('pf_lvl_turista', language), xp_required: 0 };
                       let nextLvl = null;
                       
                       for (let i = 0; i < gamificationLevels.length; i++) {
@@ -1605,12 +1614,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             </svg>
                             <div className="absolute inset-0 flex flex-col items-center justify-center">
                               <span className="text-3xl font-black text-gray-900">{currentLvl.level}</span>
-                              <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Livello</span>
+                              <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{getTranslation('pf_livello', language)}</span>
                             </div>
                           </div>
                           
                           <div className="flex-1 w-full text-center md:text-left">
-                            <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mb-1">Status Attuale</p>
+                            <p className="text-gray-500 text-[10px] font-black uppercase tracking-widest mb-1">{getTranslation('pf_status_attuale', language)}</p>
                             <h3 className="text-3xl font-black text-gray-900 mb-2">{currentLvl.title}</h3>
                             
                             <div className="flex flex-col gap-1">
@@ -1618,12 +1627,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                               {nextLvl && (
                                 <div className="flex flex-col items-center md:items-start gap-1">
                                   <p className="text-xs font-bold text-gray-500">
-                                    Mancano <span className="text-gray-900">{nextLvl.xp_required - userXP} XP</span> per {nextLvl.title}
+                                    {getTranslation('pf_mancano_xp', language)
+                                      .replace('{n}', String(nextLvl.xp_required - userXP))
+                                      .replace('{x}', String(nextLvl.title))}
                                   </p>
                                   {(nextLvl.reward_credits || 0) > 0 && (
                                     <div className="inline-flex items-center gap-1.5 bg-amber-50 text-amber-700 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest mt-1 border border-amber-200 shadow-sm">
                                       <Award className="w-3.5 h-3.5 text-amber-500" />
-                                      Premio livello: +{nextLvl.reward_credits} Crediti
+                                      {getTranslation('pf_premio_livello', language).replace('{n}', String(nextLvl.reward_credits))}
                                     </div>
                                   )}
                                 </div>
@@ -1639,7 +1650,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="space-y-3">
                     <h4 className="font-black text-gray-900 flex items-center gap-2">
                       <Gift className="w-5 h-5 text-[#D4AF37]" />
-                      Premi dei Livelli
+                      {getTranslation('pf_premi_livelli', language)}
                     </h4>
                     <div className="flex overflow-x-auto gap-3 pb-2 no-scrollbar px-1">
                       {gamificationLevels.map((lvl) => {
@@ -1654,15 +1665,15 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             </div>
                             <div>
                               <h5 className="font-black text-gray-900">{lvl.title}</h5>
-                              <p className="text-[10px] text-gray-500 uppercase font-black tracking-wider mb-2">{lvl.xp_required} XP Richiesti</p>
+                              <p className="text-[10px] text-gray-500 uppercase font-black tracking-wider mb-2">{getTranslation('pf_xp_richiesti', language).replace('{n}', String(lvl.xp_required))}</p>
                               
                               <div className="flex flex-wrap gap-1 text-[9px] font-black uppercase tracking-wider">
                                 {(lvl.reward_credits || 0) > 0 ? (
                                   <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded-lg border border-amber-200 shadow-sm flex items-center gap-1">
-                                    🏆 +{lvl.reward_credits} Crediti
+                                    🏆 {getTranslation('pf_piu_crediti', language).replace('{n}', String(lvl.reward_credits))}
                                   </span>
                                 ) : (
-                                  <span className="text-gray-500">Nessun premio</span>
+                                  <span className="text-gray-500">{getTranslation('pf_nessun_premio', language)}</span>
                                 )}
                               </div>
                             </div>
@@ -1676,38 +1687,38 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="bg-emerald-50 rounded-[2rem] p-6 border border-emerald-100 shadow-sm mt-6 mb-6">
                     <h4 className="font-black text-emerald-900 flex items-center gap-2 mb-4">
                       <CheckCircle className="w-5 h-5 text-emerald-500" />
-                      Wip è Gratis! Cosa puoi fare a costo zero?
+                      {getTranslation('pf_gratis_title', language)}
                     </h4>
                     <p className="text-xs font-bold text-emerald-800 mb-4 opacity-80 leading-relaxed">
-                      Wip ti offre un mondo di funzionalità totalmente gratuite. L'unica cosa che si paga con i Crediti è la **generazione intelligente dell'audio (Audioguida AI)** e l'assistente **Esperto Viaggi**. Tutto il resto è libero:
+                      {getTranslation('pf_gratis_desc', language)}
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
                         <MapIcon className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
-                          <h5 className="text-xs font-black text-gray-800 mb-0.5">Esplora la Mappa</h5>
-                          <p className="text-[10px] font-bold text-gray-500 leading-tight">Trova e scopri tutti i Punti di Interesse (POI) intorno a te senza alcun limite.</p>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_mappa', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_mappa_desc', language)}</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
                         <BookOpen className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
-                          <h5 className="text-xs font-black text-gray-800 mb-0.5">Informazioni e Storia</h5>
-                          <p className="text-[10px] font-bold text-gray-500 leading-tight">Leggi liberamente descrizioni, orari e curiosità testuali di ogni attrazione.</p>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_info', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_info_desc', language)}</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
                         <Compass className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
-                          <h5 className="text-xs font-black text-gray-800 mb-0.5">Navigatore Integrato</h5>
-                          <p className="text-[10px] font-bold text-gray-500 leading-tight">Fatti guidare a piedi o in auto verso il POI selezionato, come su Maps.</p>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_nav', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_nav_desc', language)}</p>
                         </div>
                       </div>
                       <div className="flex items-start gap-3 bg-white px-4 py-3 rounded-2xl shadow-sm border border-emerald-50/50">
                         <Headphones className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
                         <div>
-                          <h5 className="text-xs font-black text-gray-800 mb-0.5">Avvisi Geofencing (Cuffie)</h5>
-                          <p className="text-[10px] font-bold text-gray-500 leading-tight">Ricevi notifiche audio automatiche e gratuite ("A 150m c'è...") mentre cammini.</p>
+                          <h5 className="text-xs font-black text-gray-800 mb-0.5">{getTranslation('pf_gratis_geo', language)}</h5>
+                          <p className="text-[10px] font-bold text-gray-500 leading-tight">{getTranslation('pf_gratis_geo_desc', language)}</p>
                         </div>
                       </div>
                     </div>
@@ -1716,23 +1727,23 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   {/* Come ottenere Punti XP */}
                   <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-[2rem] p-6 border border-indigo-100 shadow-sm mt-6">
                     <h4 className="font-black text-indigo-900 flex items-center gap-2 mb-4">
-                      Come ottenere Punti XP
+                      {getTranslation('pf_come_xp', language)}
                     </h4>
                     {/* Solo le sorgenti XP realmente implementate (gamification.ts):
                         la vecchia tabella prometteva 6 voci di cui 4 inesistenti
                         e 2 con valori doppi rispetto al codice. */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">🎧 Ascolto Audioguida</span>
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_ascolto', language)}</span>
                         <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+10 XP</span>
                       </div>
                       <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">📸 Scansione Vision AI</span>
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_vision', language)}</span>
                         <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">+5 XP</span>
                       </div>
                       <div className="flex items-center justify-between bg-white px-4 py-3 rounded-2xl shadow-sm border border-indigo-50/50">
-                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">🎯 Trivia dei luoghi</span>
-                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">XP bonus</span>
+                        <span className="text-xs font-bold text-gray-700 flex items-center gap-2">{getTranslation('pf_xp_trivia', language)}</span>
+                        <span className="text-xs font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">{getTranslation('pf_xp_bonus', language)}</span>
                       </div>
                     </div>
                   </div>
@@ -1741,7 +1752,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="space-y-3">
                     <h4 className="font-black text-gray-900 flex items-center gap-2">
                       <Target className="w-5 h-5 text-gray-400" />
-                      Achievement Esplorativi
+                      {getTranslation('pf_achievement', language)}
                     </h4>
                     <div className="grid grid-cols-2 gap-3">
                       {gamificationChallenges.map(challenge => {
@@ -1758,7 +1769,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                               <div className="text-3xl mb-2">{challenge.icon}</div>
                               <h5 className="font-black text-gray-900 text-sm leading-tight mb-1 line-clamp-2">{challenge.name}</h5>
                               <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 line-clamp-2">
-                                Visita {challenge.threshold} luoghi ({challenge.category_trigger === 'all' ? 'Tutti' : (challenge.category_trigger || '').replace(/_/g, ' ')})
+                                {getTranslation('pf_visita_luoghi', language)
+                                  .replace('{n}', String(challenge.threshold))
+                                  .replace('{x}', challenge.category_trigger === 'all' ? getTranslation('pf_tutti', language) : (challenge.category_trigger || '').replace(/_/g, ' '))}
                               </p>
                             </div>
                             
@@ -1790,7 +1803,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                     {gamificationChallenges.length === 0 && (
                       <p className="text-xs text-gray-500 text-center py-6 font-medium">
-                        Non ci sono missioni attive al momento.
+                        {getTranslation('pf_no_missioni', language)}
                       </p>
                     )}
                   </div>
@@ -1834,8 +1847,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         // 'today_at' vale "Oggi alle " (stringa per un orario):
                         // come intestazione di gruppo serve solo "Oggi".
                         const dateStr = new Date(item.listened_at).toDateString() === new Date().toDateString()
-                          ? (language === 'IT' ? 'Oggi' : 'Today')
-                          : new Date(item.listened_at).toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' });
+                          ? getTranslation('pf_oggi', language)
+                          : new Date(item.listened_at).toLocaleDateString(dateLocale, { day: '2-digit', month: 'long', year: 'numeric' });
                         if (!acc[dateStr]) acc[dateStr] = [];
                         acc[dateStr].push(item);
                         return acc;
@@ -1868,12 +1881,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      if (confirm("Vuoi rimuovere questo ascolto dalla cronologia?")) {
+                                      if (confirm(getTranslation('pf_confirm_remove_listen', language))) {
                                         // Promise gestita: se la delete fallisce l'utente lo sa
                                         // e la lista viene ricaricata (prima la voce spariva
                                         // dalla UI ma restava nel DB).
                                         deleteListeningHistory(item.poi_id, currentUserId).catch(() => {
-                                          notify('Rimozione non riuscita, riprova.');
+                                          notify(getTranslation('pf_remove_fail', language));
                                           fetchListeningHistoryData();
                                         });
                                       }
@@ -1886,7 +1899,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                 <div className="absolute bottom-2 left-2 right-2 flex items-center gap-1">
                                   <span className="bg-white/90 backdrop-blur-md px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider text-gray-900 shadow-sm flex items-center gap-1 truncate max-w-[80%]">
                                     <span className="text-[10px]">{getCardIcon({ category: item.category })}</span>
-                                    {(item.category || 'luogo').replace(/_/g, ' ')}
+                                    {(item.category || getTranslation('pf_luogo', language)).replace(/_/g, ' ')}
                                   </span>
                                 </div>
                               </div>
@@ -1898,7 +1911,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                 <div className="flex items-center justify-between gap-2 mt-auto pt-2">
                                   <p className="text-[10px] font-bold text-gray-500 flex items-center gap-1">
                                     <Volume2 className="w-3 h-3" />
-                                    {new Date(item.listened_at).toLocaleTimeString('it-IT', {hour: '2-digit', minute:'2-digit'})}
+                                    {new Date(item.listened_at).toLocaleTimeString(dateLocale, {hour: '2-digit', minute:'2-digit'})}
                                   </p>
                                   {fullPoi ? (
                                     <button
@@ -1907,14 +1920,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                         handleRelisten(item, fullPoi);
                                       }}
                                       className="flex items-center gap-1 bg-primary text-white text-[9px] font-black uppercase tracking-wider px-2.5 py-1.5 rounded-full shadow-sm hover:bg-primary/90 active:scale-95 transition-all"
-                                      title={language === 'IT' ? 'Riascolta (già acquistato)' : 'Listen again (already purchased)'}
+                                      title={getTranslation('pf_riascolta_title', language)}
                                     >
                                       <Headphones className="w-3 h-3" />
-                                      {language === 'IT' ? 'Riascolta' : 'Replay'}
+                                      {getTranslation('pf_riascolta', language)}
                                     </button>
                                   ) : (
                                     <span className="text-[9px] font-bold text-gray-600 uppercase tracking-wider">
-                                      {language === 'IT' ? 'Non disponibile' : 'Unavailable'}
+                                      {getTranslation('pf_non_disponibile', language)}
                                     </span>
                                   )}
                                 </div>
@@ -1951,8 +1964,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <LifeBuoy className="w-8 h-8" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-black text-gray-900">Centro Assistenza</h2>
-                    <p className="text-sm font-bold text-gray-500">Siamo qui per aiutarti</p>
+                    <h2 className="text-2xl font-black text-gray-900">{getTranslation('pf_centro_assistenza', language)}</h2>
+                    <p className="text-sm font-bold text-gray-500">{getTranslation('pf_siamo_qui', language)}</p>
                   </div>
                 </div>
 
@@ -1962,8 +1975,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <Mail className="w-6 h-6" />
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-black text-gray-900">Email di Assistenza</h4>
-                      <p className="text-xs font-bold text-gray-500">Risposta entro 24 ore lavorative</p>
+                      <h4 className="font-black text-gray-900">{getTranslation('pf_email_assistenza', language)}</h4>
+                      <p className="text-xs font-bold text-gray-500">{getTranslation('pf_risposta_24h', language)}</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </a>
@@ -1992,8 +2005,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <MessageSquare className="w-6 h-6" />
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-black text-gray-900">Segnala un problema tecnico</h4>
-                      <p className="text-xs font-bold text-gray-500">Email precompilata con i dati diagnostici del dispositivo</p>
+                      <h4 className="font-black text-gray-900">{getTranslation('pf_segnala_problema', language)}</h4>
+                      <p className="text-xs font-bold text-gray-500">{getTranslation('pf_segnala_desc', language)}</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </button>
@@ -2008,8 +2021,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       <BookOpen className="w-6 h-6" />
                     </div>
                     <div className="flex-1">
-                      <h4 className="font-black text-gray-900">Manuale d'uso dell'app</h4>
-                      <p className="text-xs font-bold text-gray-500">Tutte le funzioni spiegate passo passo (anche in PDF)</p>
+                      <h4 className="font-black text-gray-900">{getTranslation('pf_manuale_uso', language)}</h4>
+                      <p className="text-xs font-bold text-gray-500">{getTranslation('pf_manuale_desc', language)}</p>
                     </div>
                     <ChevronRight className="w-5 h-5 text-gray-300" />
                   </button>
@@ -2017,7 +2030,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="p-6 bg-blue-600 rounded-3xl text-white shadow-lg shadow-blue-600/20">
                     <div className="flex items-center gap-3 mb-3">
                       <Info className="w-5 h-5" />
-                      <h4 className="font-black uppercase tracking-widest text-xs">Informazioni Legali</h4>
+                      <h4 className="font-black uppercase tracking-widest text-xs">{getTranslation('pf_info_legali', language)}</h4>
                     </div>
                     <p className="text-xs font-bold opacity-90 leading-relaxed mb-4">
                       ItaInta / WIP — World in Pocket<br/>
@@ -2027,7 +2040,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       className="text-[10px] font-black uppercase tracking-widest underline"
                       onClick={() => setActiveTab('privacy')}
                     >
-                      Privacy & Termini d'uso
+                      {getTranslation('pf_privacy_termini', language)}
                     </button>
                   </div>
                 </div>
@@ -2059,9 +2072,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <Compass className="w-5 h-5 animate-pulse" />
                   </div>
                   <div className="flex-1">
-                    <h4 className="font-black text-on-surface">Consumi e Costi</h4>
+                    <h4 className="font-black text-on-surface">{getTranslation('pf_consumi_costi', language)}</h4>
                     <p className="text-[11px] font-bold text-on-surface-variant opacity-75">
-                      Monitora i crediti consumati per ogni servizio a pagamento nel periodo di riferimento.
+                      {getTranslation('pf_consumi_desc', language)}
                     </p>
                   </div>
                 </div>
@@ -2070,14 +2083,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 <div className="grid grid-cols-2 gap-3 mb-6">
                   {/* Crediti Consumati */}
                   <div className="col-span-2 bg-blue-50/50 p-4 rounded-[2rem] border border-blue-100 shadow-sm">
-                    <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-800 mb-3 text-center">Crediti Consumati</h5>
+                    <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-800 mb-3 text-center">{getTranslation('pf_crediti_consumati', language)}</h5>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                       {/* Costi derivati da PRICING_LIST (unica fonte di verità):
                           i moltiplicatori a mano si desincronizzavano al primo
                           cambio di listino. Chat e Podcast non hanno ancora un
                           contatore in user_quotas: mostrati come non tracciati. */}
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/70">
-                        <span>Dettagli POI</span>
+                        <span>{getTranslation('pf_dettagli_poi', language)}</span>
                         <span className="font-black text-blue-600">{quotaCounters.poi_details_used * PRICING_LIST.poi_detail} 🪙</span>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/70">
@@ -2085,82 +2098,82 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         <span className="font-black text-blue-600">{quotaCounters.vision_used * PRICING_LIST.photo_search} 🪙</span>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/70">
-                        <span>Itinerario AI</span>
+                        <span>{getTranslation('pf_itinerario_ai', language)}</span>
                         <span className="font-black text-blue-600">{quotaCounters.itinerari_used * PRICING_LIST.itinerary_daily} 🪙</span>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/70">
-                        <span>Audioguida</span>
+                        <span>{getTranslation('pf_audioguida', language)}</span>
                         <span className="font-black text-blue-600">{quotaCounters.audioguide_used * PRICING_LIST.audio_guide} 🪙</span>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/70">
-                        <span>Guida PDF</span>
+                        <span>{getTranslation('pf_guida_pdf', language)}</span>
                         <span className="font-black text-blue-600">{quotaCounters.premium_guide_used * PRICING_LIST.premium_guide_daily} 🪙</span>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-blue-900/40">
-                        <span>Chat & Podcast</span>
-                        <span className="font-bold">non tracciati</span>
+                        <span>{getTranslation('pf_chat_podcast', language)}</span>
+                        <span className="font-bold">{getTranslation('pf_non_tracciati', language)}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Listino Rapido */}
                   <div className="col-span-2 bg-amber-50/50 p-4 rounded-[2rem] border border-amber-100 shadow-sm">
-                    <h5 className="text-[11px] font-black uppercase tracking-widest text-amber-800 mb-1 text-center">Listino Servizi AI</h5>
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-amber-900/60 text-center mb-4">Trasparenza totale sui tuoi consumi</p>
+                    <h5 className="text-[11px] font-black uppercase tracking-widest text-amber-800 mb-1 text-center">{getTranslation('pf_listino_ai', language)}</h5>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-amber-900/60 text-center mb-4">{getTranslation('pf_trasparenza', language)}</p>
                     <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Wip - Esperto Viaggi</span>
+                        <span>{getTranslation('pf_esperto_viaggi', language)}</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">3 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">10 msg</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_10_msg', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Dettagli POI</span>
+                        <span>{getTranslation('pf_dettagli_poi', language)}</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">per luogo</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
                         <span>Vision AI</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">5 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">per scansione</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_scansione', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Itinerario AI</span>
+                        <span>{getTranslation('pf_itinerario_ai', language)}</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">10 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">al giorno</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Audioguida</span>
+                        <span>{getTranslation('pf_audioguida', language)}</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">per luogo</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_per_luogo', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
                         <span>Podcast AI</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">15 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">al giorno</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] font-bold text-amber-900/70">
-                        <span>Guida PDF</span>
+                        <span>{getTranslation('pf_guida_pdf', language)}</span>
                         <div className="text-right leading-tight">
                           <span className="font-black text-amber-600 text-xs block">20 🪙</span>
-                          <span className="text-[8px] opacity-70 uppercase">al giorno</span>
+                          <span className="text-[8px] opacity-70 uppercase">{getTranslation('pf_al_giorno', language)}</span>
                         </div>
                       </div>
                     </div>
                     <div className="mt-4 pt-3 border-t border-amber-200/50 text-center">
                       <p className="text-[9px] font-black text-amber-800 uppercase tracking-widest">
-                        I crediti non scadono mai &bull; Utilizzo e Consigli sono sempre gratuiti
+                        {getTranslation('pf_crediti_non_scadono', language)}
                       </p>
                     </div>
                   </div>
@@ -2170,12 +2183,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 <div className="mt-6 pt-6 border-t border-gray-100">
                   <div className="flex items-center gap-2 mb-4">
                     <Award className="w-5 h-5 text-green-500" />
-                    <h4 className="font-black text-primary uppercase tracking-wider text-xs">Crediti Guadagnati con Gamification</h4>
+                    <h4 className="font-black text-primary uppercase tracking-wider text-xs">{getTranslation('pf_crediti_gamification', language)}</h4>
                   </div>
                   <div className="bg-green-50 p-4 rounded-3xl flex items-center justify-between border border-green-100 shadow-sm">
                     <div>
-                      <span className="text-[10px] font-black uppercase tracking-widest text-green-800 mb-1 block">Saldo Premi</span>
-                      <span className="text-xs font-bold text-green-700/70">Punti XP convertiti in vantaggi</span>
+                      <span className="text-[10px] font-black uppercase tracking-widest text-green-800 mb-1 block">{getTranslation('pf_saldo_premi', language)}</span>
+                      <span className="text-xs font-bold text-green-700/70">{getTranslation('pf_xp_convertiti', language)}</span>
                     </div>
                     <div className="text-right flex items-center gap-2 bg-white px-4 py-2 rounded-2xl shadow-sm border border-green-200">
                       <span className="text-2xl font-black text-green-600">{profile?.earned_credits || 0}</span>
@@ -2208,7 +2221,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                          syncProfileToCloud(e.target.value, userAvatar);
                       }}
                       className="w-full bg-[#f8f5f0] border-none rounded-xl p-3 text-sm font-bold text-on-surface focus:ring-2 focus:ring-[#1e3a8a]/20"
-                      placeholder="Il tuo nome"
+                      placeholder={getTranslation('pf_placeholder_nome', language)}
                     />
                   </div>
                   <div>
@@ -2223,7 +2236,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                            syncProfileToCloud(userName, e.target.value);
                         }}
                         className="flex-1 w-full bg-[#f8f5f0] border-none rounded-xl p-3 text-sm font-bold text-on-surface focus:ring-2 focus:ring-[#1e3a8a]/20"
-                        placeholder="es. 👤 o URL"
+                        placeholder={getTranslation('pf_placeholder_avatar', language)}
                       />
                       <label className="bg-primary/10 hover:bg-primary/20 text-primary px-4 rounded-xl flex items-center justify-center cursor-pointer font-bold text-sm transition-colors whitespace-nowrap">
                         {getTranslation("browse", language)}
@@ -2255,8 +2268,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <ShieldCheck className="w-5 h-5" />
                   </div>
                   <div>
-                    <h4 className="font-black text-on-surface">Sicurezza</h4>
-                    <p className="text-xs font-bold text-on-surface-variant opacity-70">Password e sblocco rapido</p>
+                    <h4 className="font-black text-on-surface">{getTranslation('pf_sicurezza', language)}</h4>
+                    <p className="text-xs font-bold text-on-surface-variant opacity-70">{getTranslation('pf_sicurezza_desc', language)}</p>
                   </div>
                 </div>
 
@@ -2265,14 +2278,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <div className="flex items-center gap-2">
                       <Fingerprint className="w-5 h-5 text-primary" />
                       <div>
-                        <p className="text-sm font-bold text-on-surface">Sblocco con impronta / volto</p>
-                        <p className="text-[10px] font-bold text-on-surface-variant/60">Accesso rapido senza reinserire la password</p>
+                        <p className="text-sm font-bold text-on-surface">{getTranslation('pf_sblocco_biometrico', language)}</p>
+                        <p className="text-[10px] font-bold text-on-surface-variant/60">{getTranslation('pf_sblocco_biometrico_desc', language)}</p>
                       </div>
                     </div>
                     <button
                       onClick={handleToggleBiometric}
                       className={`w-12 h-7 rounded-full transition-colors relative ${biometricEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
-                      aria-label="Attiva o disattiva lo sblocco biometrico"
+                      aria-label={getTranslation('pf_aria_toggle_biometric', language)}
                     >
                       <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${biometricEnabled ? 'left-[22px]' : 'left-0.5'}`} />
                     </button>
@@ -2284,14 +2297,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <div className="flex items-center gap-2">
                       <Lock className="w-5 h-5 text-primary" />
                       <div>
-                        <p className="text-sm font-bold text-on-surface">Blocco app all'avvio</p>
-                        <p className="text-[10px] font-bold text-on-surface-variant/60">Richiedi FaceID/impronta a ogni apertura, anche se resti collegato</p>
+                        <p className="text-sm font-bold text-on-surface">{getTranslation('pf_blocco_avvio', language)}</p>
+                        <p className="text-[10px] font-bold text-on-surface-variant/60">{getTranslation('pf_blocco_avvio_desc', language)}</p>
                       </div>
                     </div>
                     <button
                       onClick={handleToggleAppLock}
                       className={`w-12 h-7 rounded-full transition-colors relative ${appLockEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
-                      aria-label="Attiva o disattiva il blocco app biometrico"
+                      aria-label={getTranslation('pf_aria_toggle_applock', language)}
                     >
                       <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${appLockEnabled ? 'left-[22px]' : 'left-0.5'}`} />
                     </button>
@@ -2301,28 +2314,28 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 {isEmailProvider ? (
                   <div className="flex flex-col gap-3">
                     <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-primary/60 ml-1">
-                      <Lock className="w-3.5 h-3.5" /> Cambia password
+                      <Lock className="w-3.5 h-3.5" /> {getTranslation('pf_cambia_password', language)}
                     </div>
                     <input
                       type="password"
                       value={secCurrentPw}
                       onChange={(e) => setSecCurrentPw(e.target.value)}
                       className="w-full bg-[#f8f5f0] border-none rounded-xl p-3 text-sm font-bold text-on-surface focus:ring-2 focus:ring-[#1e3a8a]/20"
-                      placeholder="Password attuale"
+                      placeholder={getTranslation('pf_pw_attuale', language)}
                     />
                     <input
                       type="password"
                       value={secNewPw}
                       onChange={(e) => setSecNewPw(e.target.value)}
                       className="w-full bg-[#f8f5f0] border-none rounded-xl p-3 text-sm font-bold text-on-surface focus:ring-2 focus:ring-[#1e3a8a]/20"
-                      placeholder="Nuova password (min 6 caratteri)"
+                      placeholder={getTranslation('pf_pw_nuova', language)}
                     />
                     <input
                       type="password"
                       value={secConfirmPw}
                       onChange={(e) => setSecConfirmPw(e.target.value)}
                       className="w-full bg-[#f8f5f0] border-none rounded-xl p-3 text-sm font-bold text-on-surface focus:ring-2 focus:ring-[#1e3a8a]/20"
-                      placeholder="Conferma nuova password"
+                      placeholder={getTranslation('pf_pw_conferma', language)}
                     />
                     <button
                       onClick={handleChangePassword}
@@ -2330,12 +2343,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       className="bg-primary text-white font-bold py-3 rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                       {secLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                      Aggiorna password
+                      {getTranslation('pf_aggiorna_password', language)}
                     </button>
                   </div>
                 ) : (
                   <p className="text-xs font-bold text-on-surface-variant/70 bg-[#f8f5f0] rounded-xl p-3">
-                    Accedi con Google: la password si gestisce dal tuo account Google.
+                    {getTranslation('pf_google_pw', language)}
                   </p>
                 )}
               </div>
@@ -2390,8 +2403,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 <div className="flex flex-col gap-2 relative z-0">
                    <div className="bg-[#f8f5f0] p-3 rounded-2xl flex flex-col gap-2">
                       <div className="text-xs font-bold text-on-surface-variant flex flex-col">
-                        <span>Latitudine: {defaultLocation[0].toFixed(4)}</span>
-                        <span>Longitudine: {defaultLocation[1].toFixed(4)}</span>
+                        <span>{getTranslation('pf_latitudine', language)} {defaultLocation[0].toFixed(4)}</span>
+                        <span>{getTranslation('pf_longitudine', language)} {defaultLocation[1].toFixed(4)}</span>
                       </div>
                       
                       <div className="flex gap-2 mt-2">
@@ -2458,7 +2471,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       type="text" 
                       value={couponCode}
                       onChange={(e) => setCouponCode(e.target.value)}
-                      placeholder="es. CAV2026"
+                      placeholder={getTranslation('pf_placeholder_coupon', language)}
                       className="flex-1 bg-[#f8f5f0] border-none rounded-xl p-3 text-xs font-black uppercase tracking-widest placeholder:lowercase focus:ring-2 focus:ring-[#1e3a8a]/20"
                       disabled={couponLoading}
                     />
@@ -2503,7 +2516,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         className="w-8 h-8 rounded-full object-cover mb-2 border border-secondary shadow-sm"
                      />
                      <span className="text-[10px] font-black uppercase tracking-widest">Nicky</span>
-                     <span className="text-[9px] font-bold text-on-surface-variant/70 mt-1">Trendy & Fun</span>
+                     <span className="text-[9px] font-bold text-on-surface-variant/70 mt-1">{getTranslation('pf_nicky_style', language)}</span>
                    </button>
                    <button 
                      onClick={() => setGuideMode('dante')}
@@ -2515,7 +2528,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         className="w-8 h-8 rounded-full object-cover mb-2 border border-primary shadow-sm object-top"
                      />
                      <span className="text-[10px] font-black uppercase tracking-widest">Dante</span>
-                     <span className="text-[9px] font-bold text-on-surface-variant/70 mt-1">Guida Classica</span>
+                     <span className="text-[9px] font-bold text-on-surface-variant/70 mt-1">{getTranslation('pf_dante_style', language)}</span>
                    </button>
                 </div>
               </div>
@@ -2563,7 +2576,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     {activationMode === 'automatic' && (
                       <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl">
                         <p className="text-[10px] font-bold text-amber-800 leading-tight text-center">
-                          ⚠️ Attenzione: La modalità automatica scarica {PRICING_LIST.audio_guide} crediti ad ogni nuovo POI. L'ascolto automatico in background funziona correttamente solo sull'App nativa Android (non su browser web/PWA).
+                          {getTranslation('pf_auto_mode_banner', language).replace('{n}', String(PRICING_LIST.audio_guide))}
                         </p>
                       </div>
                     )}
@@ -2665,6 +2678,15 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     </div>
                   </div>
 
+                  {/* ANCORA per i controlli aggiuntivi della guida (23/08/2026).
+                      Qui si aggancia l'interruttore del gate di bussola
+                      («racconta solo ciò che hai davanti»), che vive in
+                      GeofenceAudioGuide.tsx: sta accanto agli altri parametri
+                      del geofencing perché è la stessa decisione — quando
+                      parlare — e non un'impostazione audio. Se il componente
+                      non è montato, questo div resta vuoto e non si vede. */}
+                  <div id="wip-guide-settings-extra" />
+
                   {/* Reset audioguide ascoltate (anti-ripetizione geofencing) */}
                   <div className="border-t border-primary/10 pt-4 flex flex-col sm:flex-row gap-3">
                     <button
@@ -2672,18 +2694,18 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-white border border-primary/15 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-primary shadow-sm hover:border-primary/30 transition-all"
                     >
                       <History size={15} />
-                      {playedResetMsg ? 'Fatto ✓' : 'Azzera Storico'}
+                      {playedResetMsg ? getTranslation('pf_fatto', language) : getTranslation('pf_azzera_storico', language)}
                     </button>
                     <button
                       onClick={() => setShowTtsTestPanel(v => !v)}
                       className="flex-1 flex items-center justify-center gap-2 rounded-2xl bg-primary border border-primary px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white shadow-sm hover:bg-primary/90 transition-all"
                     >
                       <Volume2 size={15} />
-                      Test Voce Azure
+                      {getTranslation('pf_test_voce_azure', language)}
                     </button>
                   </div>
                   <p className="text-[9px] text-primary/55 ml-2 leading-tight">
-                    Azzera la memoria dei POI gia' ascoltati oppure testa le voci Azure per ogni guida e lingua.
+                    {getTranslation('pf_azzera_desc', language)}
                   </p>
 
                   {/* Pannello test voci Azure: ogni combinazione guida × lingua chiama
@@ -2693,7 +2715,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     <div className="mt-3 bg-white border border-primary/15 rounded-2xl p-4 space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[10px] font-black uppercase tracking-widest text-primary/70">
-                          Voci neurali Azure
+                          {getTranslation('pf_voci_neurali', language)}
                         </span>
                         <button
                           onClick={runAllTtsVoiceTests}
@@ -2701,13 +2723,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                           className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-[9px] font-black uppercase tracking-widest text-white disabled:opacity-50"
                         >
                           {isTtsTestingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
-                          {isTtsTestingAll ? 'Test in corso…' : 'Testa tutte'}
+                          {isTtsTestingAll ? getTranslation('pf_test_in_corso', language) : getTranslation('pf_testa_tutte', language)}
                         </button>
                       </div>
                       {TTS_TEST_GUIDES.map(g => (
                         <div key={g}>
                           <p className="text-[9px] font-black uppercase tracking-widest text-primary/50 mb-1.5 ml-1">
-                            {g === 'nicky' ? 'Nicky (voce femminile)' : 'Dante (voce maschile)'}
+                            {g === 'nicky' ? getTranslation('pf_nicky_voce', language) : getTranslation('pf_dante_voce', language)}
                           </p>
                           <div className="flex flex-wrap gap-1.5">
                             {TTS_TEST_LANGS.map(l => {
@@ -2724,7 +2746,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                                   key={l}
                                   onClick={() => runTtsVoiceTest(l, g, true)}
                                   disabled={r?.status === 'pending'}
-                                  title={r?.message || `Prova ${l} · ${g}`}
+                                  title={r?.message || getTranslation('pf_prova_combo', language).replace('{n}', l).replace('{x}', g)}
                                   className={`px-2.5 py-1.5 rounded-xl border text-[10px] font-black tracking-wider flex items-center gap-1 transition-colors ${cls}`}
                                 >
                                   {l}
@@ -2746,7 +2768,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         </div>
                       )}
                       <p className="text-[8px] text-primary/45 leading-tight">
-                        Tocca una lingua per sentire la voce. Il test chiama direttamente Azure Speech: verde = sintesi riuscita, rosso = errore (chiave/region/voce).
+                        {getTranslation('pf_tts_note', language)}
                       </p>
                     </div>
                   )}
@@ -2755,7 +2777,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   <div className="border-t border-primary/10 pt-4">
                     <div className="flex items-center justify-between mb-3">
                       <label className="text-[10px] font-black uppercase tracking-widest text-primary/60 ml-2 block">
-                        Categorie Audioguida
+                        {getTranslation('pf_categorie_audioguida', language)}
                       </label>
                       <button
                         onClick={() => {
@@ -2768,7 +2790,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                         }}
                         className="text-[9px] font-black uppercase bg-primary/10 text-primary px-2 py-1 rounded-md active:scale-95 transition-transform"
                       >
-                        {CHIAVI_AUDIOGUIDA.every((k) => !!activeSubcats[k]) ? "Deseleziona Tutti" : "Seleziona Tutti"}
+                        {CHIAVI_AUDIOGUIDA.every((k) => !!activeSubcats[k]) ? getTranslation('pf_deseleziona_tutti', language) : getTranslation('pf_seleziona_tutti', language)}
                       </button>
                     </div>
 
@@ -2794,14 +2816,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                      </div>
 
                      <div className="space-y-2 bg-[#f8f5f0] p-3 rounded-2xl border border-outline-variant/5">
-                        <SubcatItem label="Monumenti & Castelli" isChecked={!!activeSubcats.monumenti} onToggle={() => toggleSubcat('monumenti')} />
-                        <SubcatItem label="Musei & Gallerie" isChecked={!!activeSubcats.musei} onToggle={() => toggleSubcat('musei')} />
-                        <SubcatItem label="Panorami & Belvedere" isChecked={!!activeSubcats.panorami} onToggle={() => toggleSubcat('panorami')} />
-                        <SubcatItem label="Natura: spiagge, vette, acque, grotte, parchi" isChecked={!!activeSubcats.natura} onToggle={() => toggleSubcat('natura')} />
-                        <SubcatItem label="Chiese & Luoghi di Culto" isChecked={!!activeSubcats.chiese} onToggle={() => toggleSubcat('chiese')} />
+                        <SubcatItem label={getTranslation('pf_cat_monumenti', language)} isChecked={!!activeSubcats.monumenti} onToggle={() => toggleSubcat('monumenti')} />
+                        <SubcatItem label={getTranslation('pf_cat_musei', language)} isChecked={!!activeSubcats.musei} onToggle={() => toggleSubcat('musei')} />
+                        <SubcatItem label={getTranslation('pf_cat_panorami', language)} isChecked={!!activeSubcats.panorami} onToggle={() => toggleSubcat('panorami')} />
+                        <SubcatItem label={getTranslation('pf_cat_natura', language)} isChecked={!!activeSubcats.natura} onToggle={() => toggleSubcat('natura')} />
+                        <SubcatItem label={getTranslation('pf_cat_chiese', language)} isChecked={!!activeSubcats.chiese} onToggle={() => toggleSubcat('chiese')} />
                         <div className="border-t border-primary/10 mt-2 pt-2">
-                           <SubcatItem label="Consigli & Info (Gratuiti)" isChecked={!!activeSubcats.consigli} onToggle={() => toggleSubcat('consigli')} />
-                           <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">Questi POI speciali non consumano il credito delle audioguide.</p>
+                           <SubcatItem label={getTranslation('pf_cat_consigli', language)} isChecked={!!activeSubcats.consigli} onToggle={() => toggleSubcat('consigli')} />
+                           <p className="text-[9px] text-primary/50 leading-tight mt-1 ml-1">{getTranslation('pf_consigli_note', language)}</p>
                         </div>
                         {/* La lista si ferma qui. WIP Community e i verticali
                             tematici (terme, cinema, cieli, murales, mercati,
@@ -2812,7 +2834,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                             a una fermata di treno sarebbe rumore, non guida.
                             Il gate e' in guideSettings.isCategoryAllowed. */}
                         <p className="text-[9px] text-primary/40 leading-tight mt-2 ml-1">
-                          WIP Community e i verticali tematici si esplorano dalla mappa: non hanno audioguida automatica.
+                          {getTranslation('pf_community_note', language)}
                         </p>
                      </div>
                   </div>
@@ -2825,9 +2847,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     onClick={handleExportData}
                     disabled={isExporting}
                     className="px-6 py-3 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shrink-0 w-full shadow-sm disabled:opacity-50"
-                    title="Scarica un archivio JSON con profilo, itinerari, preferiti, movimenti crediti e vision card (GDPR)"
+                    title={getTranslation('pf_export_title', language)}
                   >
-                    {isExporting ? 'Preparo l\'archivio…' : '📦 Esporta i tuoi dati'}
+                    {isExporting ? getTranslation('pf_preparo_archivio', language) : getTranslation('pf_esporta_dati', language)}
                   </button>
                   <button
                     onClick={async () => {
@@ -2846,7 +2868,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     onClick={() => setShowDeleteModal(true)}
                     className="px-6 py-3 bg-red-600 text-white hover:bg-red-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shrink-0 w-full shadow-sm"
                   >
-                    Elimina Account
+                    {getTranslation('pf_elimina_account', language)}
                   </button>
                 </div>
               )}
@@ -2933,18 +2955,18 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             <div className="text-6xl mb-4 relative z-10 animate-bounce">{gamificationPopup.icon}</div>
             <h2 className="text-2xl font-black text-primary mb-2">{gamificationPopup.title}</h2>
             <p className="text-sm font-bold text-gray-500 mb-6">
-              Hai completato l'obiettivo! Ecco i tuoi premi bonus (senza scadenza).
+              {getTranslation('pf_popup_reward_desc', language)}
             </p>
 
             <div className="flex justify-center gap-3 mb-8">
               {(gamificationPopup.rewards.credits || 0) > 0 ? (
                 <div className="bg-amber-50 text-amber-700 px-5 py-3 rounded-xl text-xs font-black flex flex-col items-center border border-amber-200">
                   <span className="text-2xl">+{gamificationPopup.rewards.credits} 🪙</span>
-                  <span className="uppercase text-[9px] opacity-70 mt-1">Crediti bonus</span>
+                  <span className="uppercase text-[9px] opacity-70 mt-1">{getTranslation('pf_crediti_bonus', language)}</span>
                 </div>
               ) : (
                 <div className="bg-gray-50 text-gray-500 px-3 py-2 rounded-xl text-xs font-black">
-                  Nessun premio materiale, ma tanta gloria!
+                  {getTranslation('pf_no_material_prize', language)}
                 </div>
               )}
             </div>
@@ -2962,21 +2984,21 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   // ricomparire a ogni apertura del tab.
                   const { data: sessionData } = await supabase.auth.getSession();
                   const token = sessionData?.session?.access_token;
-                  if (!token) throw new Error('Accedi per riscattare i premi.');
+                  if (!token) throw new Error(getTranslation('pf_claim_login', language));
                   const res = await fetch(getApiUrl('/api/gamification/claim'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                     body: JSON.stringify({ type: popupData.type, id: popupData.idToClaim })
                   });
                   const data = await res.json();
-                  if (!res.ok) throw new Error(data?.error || 'Riscatto non riuscito');
+                  if (!res.ok) throw new Error(data?.error || getTranslation('pf_claim_fail_short', language));
 
                   setGamificationPopup(null);
                   window.dispatchEvent(new CustomEvent('wip-credits-updated'));
                   await fetchQuotaCounters();
                 } catch (e: any) {
                   console.error("Error claiming reward:", e);
-                  notify(e?.message || 'Riscatto non riuscito, riprova.');
+                  notify(e?.message || getTranslation('pf_claim_fail', language));
                 } finally {
                   setIsClaiming(false);
                 }
@@ -2984,7 +3006,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               disabled={isClaiming}
               className="w-full py-4 bg-gradient-to-r from-[#1e3a8a] to-blue-600 hover:opacity-90 disabled:opacity-50 text-white rounded-2xl font-black text-sm uppercase tracking-widest transition-all shadow-xl shadow-blue-900/20 flex items-center justify-center gap-2"
             >
-              {isClaiming ? <Loader2 className="w-5 h-5 animate-spin" /> : 'RISCATTA PREMI'}
+              {isClaiming ? <Loader2 className="w-5 h-5 animate-spin" /> : getTranslation('pf_riscatta_premi', language)}
             </button>
           </motion.div>
         </div>
@@ -2995,7 +3017,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
         <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-4xl h-[90vh] rounded-[2rem] shadow-2xl flex flex-col overflow-hidden relative">
             <div className="p-4 bg-primary text-white flex justify-between items-center z-10 shrink-0 shadow-lg">
-              <h3 className="font-black text-lg">Guida Premium</h3>
+              <h3 className="font-black text-lg">{getTranslation('pf_guida_premium', language)}</h3>
               <div className="flex items-center gap-3">
                 <button
                   onClick={async () => {
@@ -3010,7 +3032,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                     } catch (e) {
                       console.error("PDF Download failed", e);
                       // Prima falliva in silenzio (specie su Android WebView)
-                      notify('Generazione PDF non riuscita su questo dispositivo. Puoi leggere la guida qui nel visualizzatore.');
+                      notify(getTranslation('pf_pdf_fail', language));
                     } finally {
                       const container = document.getElementById('premium-guide-viewer-container');
                       if (container) container.style.overflow = 'auto';
@@ -3021,7 +3043,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   className="bg-white/20 hover:bg-white/30 text-white p-2 rounded-xl transition-colors flex items-center gap-2"
                 >
                   {isPdfLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-                  <span className="text-sm font-black hidden sm:inline">SCARICA PDF</span>
+                  <span className="text-sm font-black hidden sm:inline">{getTranslation('pf_scarica_pdf', language)}</span>
                 </button>
                 <button
                   onClick={() => setGuideToRender(null)}
@@ -3056,20 +3078,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
             <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <Trash2 className="w-8 h-8 text-red-600" />
             </div>
-            <h2 className="text-2xl font-black text-center text-gray-900 mb-2">Sei sicuro?</h2>
+            <h2 className="text-2xl font-black text-center text-gray-900 mb-2">{getTranslation('pf_sei_sicuro', language)}</h2>
             <p className="text-sm text-gray-500 text-center font-bold mb-6">
-              Questa azione è irreversibile. Tutti i tuoi dati, crediti e progressi verranno eliminati definitivamente.
+              {getTranslation('pf_delete_desc', language)}
             </p>
             <div className="mb-6">
               <label className="text-xs font-black text-gray-500 uppercase tracking-widest mb-2 block text-center">
-                Scrivi "elimina" per confermare
+                {getTranslation('pf_scrivi_elimina', language).replace('{x}', getTranslation('pf_delete_word', language))}
               </label>
-              <input 
+              <input
                 type="text"
                 value={deleteConfirmText}
                 onChange={(e) => setDeleteConfirmText(e.target.value)}
                 className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-center font-black text-gray-900 focus:outline-none focus:border-red-500 transition-colors"
-                placeholder="elimina"
+                placeholder={getTranslation('pf_delete_word', language)}
               />
             </div>
             <div className="flex gap-3">
@@ -3080,14 +3102,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 }}
                 className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-colors"
               >
-                Annulla
+                {getTranslation('pf_annulla', language)}
               </button>
-              <button 
+              <button
                 onClick={handleDeleteAccount}
-                disabled={deleteConfirmText.toLowerCase() !== 'elimina' || isDeleting}
+                disabled={!isDeleteWordOk(deleteConfirmText) || isDeleting}
                 className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black text-xs uppercase tracking-widest hover:bg-red-700 disabled:opacity-50 transition-colors flex justify-center items-center gap-2"
               >
-                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Conferma'}
+                {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : getTranslation('pf_conferma', language)}
               </button>
             </div>
           </motion.div>
@@ -3109,7 +3131,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               onClick={shareTripStory}
               className="w-full py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest"
             >
-              Condividi il racconto
+              {getTranslation('pf_condividi_racconto', language)}
             </button>
           </div>
         </div>
@@ -3155,6 +3177,8 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
 }
 
 function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; onClick?: () => void; key?: any }) {
+  // Componente senza prop language: la lingua UI arriva da localStorage
+  const lingua = linguaCorrente();
   return (
     <motion.div 
       layout
@@ -3185,12 +3209,12 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
         <div className="flex items-center gap-2 mb-2">
           {getCardIcon(poi)}
           <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">
-            {poi.category || 'Monumento'}
+            {poi.category || getTranslation('pf_monumento', lingua)}
           </span>
         </div>
         <h4 className="font-black text-gray-900 text-lg leading-tight mb-2">{poi.name}</h4>
         <p className="text-xs text-gray-500 font-medium leading-relaxed line-clamp-2">
-          {poi.description || 'Nessuna descrizione disponibile per questo luogo.'}
+          {poi.description || getTranslation('pf_no_desc', lingua)}
         </p>
       </div>
     </motion.div>
@@ -3202,14 +3226,15 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
  * delle notifiche registrate da lib/notificationCenter (più recente in alto,
  * orario relativo) + "Segna tutte come lette".
  */
-function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
+function NotificationCenterPanel({ items, language, onClose, onMarkAllRead }: {
   items: WipNotification[];
+  language: Language;
   onClose: () => void;
   onMarkAllRead: () => void;
 }) {
   const unread = items.filter(i => !i.letta).length;
   return (
-    <div className="fixed inset-0 z-[400]" role="dialog" aria-label="Centro notifiche">
+    <div className="fixed inset-0 z-[400]" role="dialog" aria-label={getTranslation('pf_centro_notifiche', language)}>
       {/* Backdrop: chiude al tocco */}
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <motion.div
@@ -3219,12 +3244,12 @@ function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <h4 className="font-black text-primary text-sm flex items-center gap-2">
-            <Bell className="w-4 h-4" /> Notifiche
+            <Bell className="w-4 h-4" /> {getTranslation('pf_notifiche', language)}
             {unread > 0 && (
               <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full">{unread}</span>
             )}
           </h4>
-          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400" aria-label="Chiudi">
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 text-gray-400" aria-label={getTranslation('pf_chiudi', language)}>
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -3233,8 +3258,8 @@ function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
           {items.length === 0 ? (
             <div className="py-12 px-6 text-center">
               <Bell className="w-8 h-8 mx-auto text-gray-200 mb-2" />
-              <p className="text-xs font-bold text-gray-400">Nessuna notifica per ora.</p>
-              <p className="text-[10px] text-gray-300 mt-1">Qui trovi i luoghi incontrati e gli avvisi dell'audioguida.</p>
+              <p className="text-xs font-bold text-gray-400">{getTranslation('pf_no_notifiche', language)}</p>
+              <p className="text-[10px] text-gray-300 mt-1">{getTranslation('pf_notif_desc', language)}</p>
             </div>
           ) : (
             items.map(n => (
@@ -3244,7 +3269,7 @@ function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
                   {!n.letta && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0 mt-1" />}
                 </div>
                 {n.corpo && <p className="text-[11px] font-bold text-gray-500 leading-snug mt-0.5">{n.corpo}</p>}
-                <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">{formatRelativeTime(n.ts)}</p>
+                <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-1">{formatRelativeTime(n.ts, language)}</p>
               </div>
             ))
           )}
@@ -3256,7 +3281,7 @@ function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
             disabled={unread === 0}
             className="m-3 py-2.5 rounded-2xl bg-primary/10 text-primary text-[11px] font-black uppercase tracking-widest hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Segna tutte come lette
+            {getTranslation('pf_segna_lette', language)}
           </button>
         )}
       </motion.div>
@@ -3270,6 +3295,9 @@ function NotificationCenterPanel({ items, onClose, onMarkAllRead }: {
  * per user_id). Collassabile, caricamento pigro alla prima apertura.
  */
 function CreditMovementsSection({ userId }: { userId?: string }) {
+  // Componente senza prop language: la lingua UI arriva da localStorage
+  const lingua = linguaCorrente();
+  const dateLocale = getTranslation('pf_locale', lingua);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -3309,13 +3337,13 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
   const txLabel = (t: any): string => {
     const amount = Number(t.amount) || 0;
     switch (String(t.type || '').toLowerCase()) {
-      case 'consume': return 'Utilizzo servizio';
-      case 'purchase': return 'Ricarica crediti';
-      case 'refund': return 'Rimborso';
-      case 'bonus': return 'Bonus / Missione';
-      case 'admin_credit': return 'Rettifica assistenza (accredito)';
-      case 'admin_debit': return 'Rettifica assistenza (addebito)';
-      default: return amount >= 0 ? 'Accredito' : 'Addebito';
+      case 'consume': return getTranslation('pf_tx_consume', lingua);
+      case 'purchase': return getTranslation('pf_tx_purchase', lingua);
+      case 'refund': return getTranslation('pf_tx_refund', lingua);
+      case 'bonus': return getTranslation('pf_tx_bonus', lingua);
+      case 'admin_credit': return getTranslation('pf_tx_admin_credit', lingua);
+      case 'admin_debit': return getTranslation('pf_tx_admin_debit', lingua);
+      default: return amount >= 0 ? getTranslation('pf_tx_accredito', lingua) : getTranslation('pf_tx_addebito', lingua);
     }
   };
 
@@ -3338,8 +3366,8 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
             <Coins className="w-5 h-5" />
           </div>
           <div className="text-left">
-            <h4 className="font-black text-on-surface">💳 Movimenti crediti</h4>
-            <p className="text-xs font-bold text-on-surface-variant opacity-70">Ultimi 50 movimenti del tuo saldo</p>
+            <h4 className="font-black text-on-surface">{getTranslation('pf_movimenti_crediti', lingua)}</h4>
+            <p className="text-xs font-bold text-on-surface-variant opacity-70">{getTranslation('pf_movimenti_desc', lingua)}</p>
           </div>
         </div>
         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -3348,20 +3376,25 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
       {open && (
         <div className="px-6 pb-6">
           {!isLogged ? (
-            <p className="text-xs font-bold text-gray-400 text-center py-4">Accedi per vedere lo storico dei tuoi crediti.</p>
+            <p className="text-xs font-bold text-gray-400 text-center py-4">{getTranslation('pf_movimenti_login', lingua)}</p>
           ) : loading ? (
             <div className="flex items-center justify-center py-6 text-primary">
               <Loader2 className="w-5 h-5 animate-spin" />
             </div>
           ) : unavailable ? (
-            <p className="text-xs font-bold text-gray-400 text-center py-4">Storico non disponibile al momento.</p>
+            <p className="text-xs font-bold text-gray-400 text-center py-4">{getTranslation('pf_movimenti_unavailable', lingua)}</p>
           ) : rows.length === 0 ? (
-            <p className="text-xs font-bold text-gray-400 text-center py-4">Nessun movimento registrato finora.</p>
+            <p className="text-xs font-bold text-gray-400 text-center py-4">{getTranslation('pf_movimenti_empty', lingua)}</p>
           ) : (
             <>
               {/* Filtro semplice */}
               <div className="flex gap-1.5 mb-3 flex-wrap">
-                {([['tutti', 'Tutti'], ['spese', 'Spese'], ['ricariche', 'Ricariche'], ['rimborsi', 'Rimborsi']] as const).map(([key, label]) => (
+                {([
+                  ['tutti', getTranslation('pf_tutti', lingua)],
+                  ['spese', getTranslation('pf_filtro_spese', lingua)],
+                  ['ricariche', getTranslation('pf_filtro_ricariche', lingua)],
+                  ['rimborsi', getTranslation('pf_filtro_rimborsi', lingua)],
+                ] as const).map(([key, label]) => (
                   <button
                     key={key}
                     onClick={() => setFilter(key)}
@@ -3375,7 +3408,7 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
               </div>
 
               {visible.length === 0 ? (
-                <p className="text-xs font-bold text-gray-400 text-center py-4">Nessun movimento per questo filtro.</p>
+                <p className="text-xs font-bold text-gray-400 text-center py-4">{getTranslation('pf_movimenti_filtro_empty', lingua)}</p>
               ) : (
                 <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
                   {visible.map((t: any) => {
@@ -3388,7 +3421,7 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
                             <p className="text-[10px] font-bold text-gray-400 truncate">{t.description}</p>
                           )}
                           <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mt-0.5">
-                            {t.created_at ? new Date(t.created_at).toLocaleString('it-IT', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                            {t.created_at ? new Date(t.created_at).toLocaleString(dateLocale, { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
                           </p>
                         </div>
                         <span className={`shrink-0 text-sm font-black tabular-nums ${amount >= 0 ? 'text-emerald-600' : 'text-red-500'}`}>
@@ -3412,6 +3445,8 @@ function CreditMovementsSection({ userId }: { userId?: string }) {
  * matching sui POI WIP (lib/importGoogleMaps) → preferiti via lib/favorites.
  */
 function GoogleMapsImportSection() {
+  // Componente senza prop language: la lingua UI arriva da localStorage
+  const lingua = linguaCorrente();
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [report, setReport] = useState<ImportReport | null>(null);
@@ -3428,7 +3463,7 @@ function GoogleMapsImportSection() {
       const text = await file.text();
       const places = parseImportFile(file.name, text);
       if (places.length === 0) {
-        notify('Nessun luogo riconosciuto nel file. Servono il CSV "Luoghi salvati" di Google Takeout o un GeoJSON.');
+        notify(getTranslation('pf_import_none', lingua));
         return;
       }
       setBusy(true);
@@ -3436,11 +3471,11 @@ function GoogleMapsImportSection() {
       const result = await importPlacesAsFavorites(places, (done, total) => setProgress({ done, total }));
       setReport(result);
       if (result.imported.length > 0) {
-        notify(`Importati ${result.imported.length} luoghi nei preferiti!`);
+        notify(getTranslation('pf_import_ok', lingua).replace('{n}', String(result.imported.length)));
       }
     } catch (err) {
       console.error('[GoogleMapsImport] Import fallito:', err);
-      notify("Errore durante l'import del file.");
+      notify(getTranslation('pf_import_error', lingua));
     } finally {
       setBusy(false);
       setProgress(null);
@@ -3454,17 +3489,15 @@ function GoogleMapsImportSection() {
           <MapPin className="w-5 h-5" />
         </div>
         <div>
-          <h4 className="font-black text-on-surface">📥 Importa da Google Maps</h4>
+          <h4 className="font-black text-on-surface">{getTranslation('pf_import_title', lingua)}</h4>
           <p className="text-xs font-bold text-on-surface-variant opacity-70">
-            I tuoi luoghi salvati diventano preferiti WIP
+            {getTranslation('pf_import_sub', lingua)}
           </p>
         </div>
       </div>
 
       <p className="text-[11px] font-bold text-gray-500 leading-snug mb-3">
-        Esporta i "Luoghi salvati" da Google Takeout (CSV) o un file GeoJSON e caricalo qui:
-        cerchiamo ogni luogo tra i POI WIP (entro ~150 m) e lo aggiungiamo ai preferiti.
-        Massimo {MAX_IMPORT_ENTRIES} voci per import.
+        {getTranslation('pf_import_desc', lingua).replace('{n}', String(MAX_IMPORT_ENTRIES))}
       </p>
 
       {busy && progress ? (
@@ -3476,12 +3509,12 @@ function GoogleMapsImportSection() {
             />
           </div>
           <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 text-center">
-            Ricerca luoghi… {progress.done}/{progress.total}
+            {getTranslation('pf_import_progress', lingua).replace('{n}', String(progress.done)).replace('{x}', String(progress.total))}
           </p>
         </div>
       ) : (
         <label className="w-full flex items-center justify-center gap-2 py-3 bg-primary/10 hover:bg-primary/20 text-primary rounded-2xl cursor-pointer font-black text-[11px] uppercase tracking-widest transition-colors">
-          <Download className="w-4 h-4" /> Scegli il file (CSV o GeoJSON)
+          <Download className="w-4 h-4" /> {getTranslation('pf_import_scegli', lingua)}
           <input type="file" accept=".csv,.json,.geojson,text/csv,application/json" className="hidden" onChange={handleFile} />
         </label>
       )}
@@ -3489,11 +3522,16 @@ function GoogleMapsImportSection() {
       {report && (
         <div className="mt-4 bg-[#f8f5f0] rounded-2xl p-4">
           <p className="text-xs font-black text-gray-900 text-center">
-            ✅ {report.imported.length} importati · ⏭ {report.already.length} già preferiti · ❓ {report.notFound.length} non trovati
+            {getTranslation('pf_import_report', lingua)
+              .replace('{n}', String(report.imported.length))
+              .replace('{x}', String(report.already.length))
+              .replace('{y}', String(report.notFound.length))}
           </p>
           {report.skipped > 0 && (
             <p className="text-[10px] font-bold text-gray-400 text-center mt-1">
-              {report.skipped} voci oltre il limite di {MAX_IMPORT_ENTRIES} sono state ignorate.
+              {getTranslation('pf_import_skipped', lingua)
+                .replace('{n}', String(report.skipped))
+                .replace('{x}', String(MAX_IMPORT_ENTRIES))}
             </p>
           )}
           {report.notFound.length > 0 && (
@@ -3503,7 +3541,7 @@ function GoogleMapsImportSection() {
                 className="w-full text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-gray-700 flex items-center justify-center gap-1"
               >
                 {showNotFound ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                Vedi i non trovati
+                {getTranslation('pf_import_vedi_non_trovati', lingua)}
               </button>
               {showNotFound && (
                 <ul className="mt-2 max-h-40 overflow-y-auto space-y-1">
@@ -3533,6 +3571,8 @@ function EsimSection() {
   // ai fornitori" (segnalazione del 22/08/2026). La freccia resta per chi la
   // vuole richiudere.
   const [open, setOpen] = useState(true);
+  // Componente senza prop language: la lingua UI arriva da localStorage
+  const lingua = linguaCorrente();
 
   // URL affiliato da env (deve restare sui domini in whitelist di /api/out),
   // altrimenti fallback al sito pubblico del provider.
@@ -3540,21 +3580,21 @@ function EsimSection() {
     {
       name: 'Airalo',
       logo: '🅰️',
-      desc: 'eSIM dati per 200+ paesi, si attiva in 2 minuti',
+      desc: getTranslation('pf_esim_airalo', lingua),
       affUrl: import.meta.env.VITE_ESIM_AFF_AIRALO || '',
       fallbackUrl: 'https://www.airalo.com/',
     },
     {
       name: 'Holafly',
       logo: '🅷',
-      desc: 'Dati illimitati in molti paesi, niente sorprese in bolletta',
+      desc: getTranslation('pf_esim_holafly', lingua),
       affUrl: import.meta.env.VITE_ESIM_AFF_HOLAFLY || '',
       fallbackUrl: 'https://esim.holafly.com/',
     },
     {
       name: 'Saily',
       logo: '🆂',
-      desc: 'eSIM economica dei creatori di NordVPN, piani da pochi euro',
+      desc: getTranslation('pf_esim_saily', lingua),
       affUrl: import.meta.env.VITE_ESIM_AFF_SAILY || '',
       fallbackUrl: 'https://saily.com/',
     },
@@ -3572,8 +3612,8 @@ function EsimSection() {
             <Globe className="w-5 h-5" />
           </div>
           <div className="text-left">
-            <h4 className="font-black text-on-surface">🌐 Internet in viaggio (eSIM)</h4>
-            <p className="text-xs font-bold text-on-surface-variant opacity-70">Dati all'estero senza cambiare SIM</p>
+            <h4 className="font-black text-on-surface">{getTranslation('pf_esim_title', lingua)}</h4>
+            <p className="text-xs font-bold text-on-surface-variant opacity-70">{getTranslation('pf_esim_sub', lingua)}</p>
           </div>
         </div>
         {open ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -3594,13 +3634,13 @@ function EsimSection() {
                 rel="noopener noreferrer"
                 className="shrink-0 px-3 py-2 rounded-xl bg-primary text-white text-[10px] font-black uppercase tracking-widest hover:opacity-90 transition-opacity"
               >
-                Vedi le offerte
+                {getTranslation('pf_esim_offerte', lingua)}
               </a>
             </div>
           ))}
           {hasAffiliate && (
             <p className="text-[10px] font-bold text-gray-400 text-center pt-1">
-              Link con affiliazione: sostieni WIP senza costi extra.
+              {getTranslation('pf_esim_aff', lingua)}
             </p>
           )}
         </div>

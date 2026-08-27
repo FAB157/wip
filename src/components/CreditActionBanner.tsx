@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Coins, X, Check, Zap } from 'lucide-react';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface CreditActionBannerProps {
   cost: number;
@@ -33,9 +34,9 @@ export default function CreditActionBanner({ cost, serviceName, onConfirm, onCan
             </div>
 
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-0.5">Conferma Servizio</p>
+              <p className="text-[10px] font-black uppercase tracking-widest text-amber-500 mb-0.5">{getTranslation('vr_b_cb_confirm_service', linguaCorrente())}</p>
               <h4 className="text-sm font-bold truncate leading-tight">
-                Stai usando <span className="text-amber-400">{cost} crediti</span> per {serviceName}
+                {getTranslation('vr_b_cb_pre', linguaCorrente())} <span className="text-amber-400">{cost} {getTranslation('credits_word', linguaCorrente())}</span> {getTranslation('vr_b_cb_for', linguaCorrente())} {serviceName}
               </h4>
             </div>
 

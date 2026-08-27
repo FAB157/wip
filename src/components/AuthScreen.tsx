@@ -2,12 +2,17 @@ import React, { useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { motion } from 'motion/react';
 import { Compass, Mail, Lock, LogIn, UserPlus, AlertCircle } from 'lucide-react';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface AuthScreenProps {
   onSuccess: () => void;
 }
 
 export default function AuthScreen({ onSuccess }: AuthScreenProps) {
+  // Nessuna prop `language`: la lingua arriva dalla chiave localStorage
+  // scritta da App.tsx (fallback IT).
+  const lingua = linguaCorrente();
+  const t = (k: string) => getTranslation(k, lingua);
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -27,12 +32,12 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (!data.session && data.user) {
-          throw new Error('Registrazione avvenuta! Controlla la tua email per confermare l\'account.');
+          throw new Error(t('vr_a_auth_signup_done'));
         }
       }
       onSuccess();
     } catch (err: any) {
-      setError(err.message || err.toString() || 'Errore di autenticazione');
+      setError(err.message || err.toString() || t('vr_a_err_auth_generic'));
     } finally {
       setLoading(false);
     }
@@ -53,7 +58,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             Italia in Tasca
           </h1>
           <p className="text-sm font-bold text-on-surface-variant opacity-70">
-            {isLogin ? 'Accedi al tuo account esploratore' : 'Crea il tuo profilo esploratore'}
+            {isLogin ? t('vr_a_auth_login_sub') : t('vr_a_auth_signup_sub')}
           </p>
         </div>
 
@@ -72,7 +77,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 type="email" 
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="La tua email" 
+                placeholder={t('vr_a_auth_email_ph')}
                 className="w-full bg-surface-variant pl-10 pr-4 py-3 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-secondary text-on-surface"
                 required
               />
@@ -84,7 +89,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 type="password" 
                 value={password}
                 onChange={e => setPassword(e.target.value)}
-                placeholder="Password" 
+                placeholder={t('vr_a_login_password_label')}
                 className="w-full bg-surface-variant pl-10 pr-4 py-3 border-none rounded-2xl text-sm font-bold focus:ring-2 focus:ring-secondary text-on-surface"
                 required
               />
@@ -96,10 +101,10 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             disabled={loading}
             className="w-full bg-primary hover:opacity-90 disabled:opacity-50 text-secondary border border-secondary/30 rounded-2xl py-3.5 font-black text-sm uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-md shadow-primary/20"
           >
-            {loading ? 'Caricamento...' : isLogin ? (
-              <><LogIn className="w-4 h-4" /> Entra</>
+            {loading ? t('vr_a_auth_loading') : isLogin ? (
+              <><LogIn className="w-4 h-4" /> {t('vr_a_auth_enter')}</>
             ) : (
-              <><UserPlus className="w-4 h-4" /> Registrati</>
+              <><UserPlus className="w-4 h-4" /> {t('vr_a_login_register')}</>
             )}
           </button>
         </form>
@@ -110,7 +115,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             onClick={() => setIsLogin(!isLogin)}
             className="text-xs font-bold text-secondary hover:underline"
           >
-            {isLogin ? 'Non hai un account? Registrati ora' : 'Hai già un account? Accedi'}
+            {isLogin ? t('vr_a_auth_no_account_cta') : t('vr_a_auth_have_account_cta')}
           </button>
         </div>
       </motion.div>

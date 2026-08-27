@@ -1,12 +1,59 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
-import { Download, AlertTriangle, X, MapPinOff } from 'lucide-react';
+import { Download, AlertTriangle, X, MapPinOff, Compass } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
 import { isCategoryAllowed, isPlayed } from '../lib/guideSettings';
+import { isBearingGateEnabled, setBearingGateEnabled } from '../lib/geofencing/bearingGate';
 import { useFeatureFlag } from '../lib/featureFlags';
+
+/**
+ * ANCORA DEL PANNELLO GUIDA. L'interruttore del gate di bussola appartiene
+ * al pannello GeoControl (ProfileScreen), insieme a modalita' di attivazione
+ * e distanze. Vive qui perche' qui vive tutta la logica del geofencing web:
+ * il pannello deve solo lasciare un `<div id="wip-guide-settings-extra" />`
+ * (oppure importare direttamente `InterruttoreGateBussola`), e il controllo
+ * ci si infila da solo. Nessuna delle due cose e' obbligatoria: senza ancora
+ * il gate resta acceso col suo default, e non si rompe niente.
+ */
+const ANCORA_IMPOSTAZIONI = 'wip-guide-settings-extra';
+
+/**
+ * Interruttore utente del gate di bussola («racconta solo cio' che hai
+ * davanti»). Scrive `wip_bearing_gate`, la chiave che bearingGate.ts legge da
+ * se': niente stato condiviso, niente eventi da propagare.
+ */
+export function InterruttoreGateBussola({ language }: { language: Language }) {
+  const [attivo, setAttivo] = useState<boolean>(() => isBearingGateEnabled());
+  const cambia = (v: boolean) => { setAttivo(v); setBearingGateEnabled(v); };
+  return (
+    <div className="bg-[#f8f5f0] p-4 rounded-2xl">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={attivo}
+        onClick={() => cambia(!attivo)}
+        className="w-full flex items-center gap-3 text-left"
+      >
+        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors ${attivo ? 'bg-primary text-white' : 'bg-white text-primary/40'}`}>
+          <Compass className="w-4 h-4" />
+        </div>
+        <span className="flex-1 text-[11px] font-black uppercase tracking-wider text-primary leading-tight">
+          {getTranslation('bearing_gate_label', language)}
+        </span>
+        <span className={`w-11 h-6 rounded-full p-0.5 shrink-0 transition-colors ${attivo ? 'bg-primary' : 'bg-gray-300'}`}>
+          <span className={`block w-5 h-5 bg-white rounded-full shadow transition-transform ${attivo ? 'translate-x-5' : ''}`} />
+        </span>
+      </button>
+      <p className="text-[10px] font-bold text-on-surface-variant opacity-70 leading-tight mt-2">
+        {getTranslation('bearing_gate_desc', language)}
+      </p>
+    </div>
+  );
+}
 
 /** Tetto al prefetch dei testi in avvicinamento: 3 al minuto. */
 const PREFETCH_MAX_PER_MIN = 3;
@@ -81,7 +128,7 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       if (msg) window.dispatchEvent(new CustomEvent('audioguide-status', { detail: msg }));
     };
     const handleLiveEnded = (e: any) => {
-      const msg = e?.detail?.message || 'Il tour di gruppo è terminato.';
+      const msg = e?.detail?.message || getTranslation('gr_tour_gruppo_finito', language);
       window.dispatchEvent(new CustomEvent('audioguide-status', { detail: msg }));
     };
     window.addEventListener('wip-live-audio', handleLiveAudio);
@@ -134,12 +181,12 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
       // Banner di stato via canale toast condiviso (ToastHost, role="status"/
       // aria-live): prima era un <div> costruito a mano con document.createElement,
       // fuori dal flusso React e invisibile agli screen reader.
-      notify(`✅ ${count} POI caricati nel radar. Ora puoi spegnere il display!`, 'success', 5000);
+      notify(getTranslation('gr_poi_caricati', language).replace('{n}', String(count)), 'success', 5000);
     };
     
     window.addEventListener("pois-loaded", handlePoisLoaded);
     return () => window.removeEventListener("pois-loaded", handlePoisLoaded);
-  }, [isActive]);
+  }, [isActive, language]);
 
   // Deep Link Autoplay: quando l'app viene aperta dal geofencing nativo
   // con itainta://poi/{id}, il sistema invia 'deep-link-poi' dal MainActivity
@@ -366,7 +413,33 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
   const [dismissedPwaBanner, setDismissedPwaBanner] = useState(false);
   const isPwa = !Capacitor.isNativePlatform();
 
+  // L'interruttore del gate di bussola si aggancia al pannello GeoControl
+  // quando questo compare (l'utente apre il profilo) e si stacca quando
+  // sparisce. L'osservatore guarda solo le comparse/sparizioni di nodi e fa
+  // una getElementById per frame al massimo (coalescenza con rAF): in un'app
+  // con la mappa aperta le mutazioni sono continue, e senza il freno sarebbe
+  // una ricerca per ogni tile spostata.
+  const [ancora, setAncora] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let pendente = 0;
+    const guarda = () => {
+      pendente = 0;
+      const el = document.getElementById(ANCORA_IMPOSTAZIONI);
+      setAncora(prev => (prev === el ? prev : el));
+    };
+    guarda();
+    const obs = new MutationObserver(() => {
+      if (pendente) return;
+      pendente = requestAnimationFrame(guarda);
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    return () => { obs.disconnect(); if (pendente) cancelAnimationFrame(pendente); };
+  }, []);
+
   return (
+    <>
+      {ancora && createPortal(<InterruttoreGateBussola language={language} />, ancora)}
     <AnimatePresence>
       {(isActive && isPwa && posizioneNegata) && (
         <motion.div
@@ -432,5 +505,6 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
         </motion.div>
       )}
     </AnimatePresence>
+    </>
   );
 }

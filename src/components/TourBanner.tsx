@@ -54,6 +54,30 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
     return () => clearTimeout(t);
   }, [avviso]);
 
+  // ☔ Pioggia in arrivo (23/08/2026): rainProb del meteo MET (massimo delle
+  // prossime 3 ore) sul punto della tappa corrente. Ogni 15 minuti, solo con
+  // un giro in corso; sotto il 50% non si dice niente — un banner che grida
+  // "20% di pioggia" e' rumore.
+  const [pioggiaProb, setPioggiaProb] = useState<number | null>(null);
+  const tLat = v?.tappaLat, tLon = v?.tappaLon;
+  useEffect(() => {
+    if (tLat == null || tLon == null) { setPioggiaProb(null); return; }
+    let vivo = true;
+    const carica = async () => {
+      try {
+        const { getApiUrl } = await import('../lib/api');
+        const r = await fetch(getApiUrl(`/api/meteo/punto?lat=${tLat.toFixed(3)}&lon=${tLon.toFixed(3)}`));
+        if (!r.ok || !vivo) return;
+        const d = await r.json();
+        if (vivo) setPioggiaProb(Number.isFinite(Number(d?.rainProb)) ? Number(d.rainProb) : null);
+      } catch { /* senza meteo il giro va avanti uguale */ }
+    };
+    carica();
+    const t = setInterval(carica, 15 * 60_000);
+    return () => { vivo = false; clearInterval(t); };
+    // Riagganciato alla TAPPA (non alla posizione): cambia poche volte a giro.
+  }, [tLat != null && tLon != null ? `${tLat.toFixed(3)},${tLon.toFixed(3)}` : 'niente']);
+
   if (!v) return null;
 
   const percentuale = v.metriTotali > 0
@@ -71,7 +95,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
       setSalvato({ id: r.id, link: r.link });
       setAvviso(t('tour_salvato'));
     } catch (e: any) {
-      setAvviso(String(e?.message || 'Salvataggio non riuscito'));
+      setAvviso(String(e?.message || t('gr_salvataggio_fallito')));
     } finally { setSalvando(false); }
   };
 
@@ -82,7 +106,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
     let link = salvato?.link;
     if (!link) {
       try { const r = await tourService.salvaComeItinerario(); setSalvato({ id: r.id, link: r.link }); link = r.link; }
-      catch (e: any) { setAvviso(String(e?.message || 'Condivisione non riuscita')); return; }
+      catch (e: any) { setAvviso(String(e?.message || t('gr_condivisione_fallita'))); return; }
     }
     // Senza cache condivisa non c'e' un link che apra qualcosa: si dice, non
     // si finge.
@@ -170,7 +194,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 }}
                 className="mt-1 text-[11px] font-black text-[#1e3a8a] underline underline-offset-2"
               >
-                Nuovo giro da qui →
+                {t('gr_nuovo_giro_da_qui')}
               </button>
             </div>
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -206,13 +230,38 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               </p>
               <p className="text-[14px] font-bold text-gray-900 truncate">
                 {v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
+                {/* Metri alla PORTA della tappa (linea d'aria): il dato che
+                    manca all'istruzione, che parla solo della svolta. */}
+                {!v.inPausa && v.metriAllaTappa != null && v.metriAllaTappa > 25 && (
+                  <span className="text-[11px] font-bold text-blue-600 tabular-nums"> · {distanza(v.metriAllaTappa)}</span>
+                )}
               </p>
+              {/* Dopo questa, dove si va: una riga piccola che orienta senza
+                  aprire la mappa. E la pioggia, solo quando e' probabile. */}
+              {!v.inPausa && (v.nomeProssima || (pioggiaProb != null && pioggiaProb >= 50)) && (
+                <p className="text-[10px] text-gray-400 truncate">
+                  {v.nomeProssima ? `${t('gr_poi_prossima')}: ${v.nomeProssima}` : ''}
+                  {v.nomeProssima && pioggiaProb != null && pioggiaProb >= 50 ? ' · ' : ''}
+                  {pioggiaProb != null && pioggiaProb >= 50 && (
+                    <span className="text-sky-600 font-bold">☔ {t('gr_pioggia_probabile').replace('{n}', String(Math.round(pioggiaProb)))}</span>
+                  )}
+                </p>
+              )}
               <p className="text-[11px] text-gray-500 tabular-nums">
                 {avviso ? avviso : (
                   <>
                     {distanza(v.metriRimanenti)} {t('tour_mancanti')}
                     <span className="text-gray-300"> · </span>
                     {distanza(v.metriTotali)} {t('tour_totali')}
+                    {/* Ora d'arrivo (23/08/2026): cammino a 4 km/h sui metri
+                        rimanenti. Stima onesta: non conta le soste d'ascolto,
+                        e infatti dice "~". */}
+                    {v.metriRimanenti > 0 && !v.inPausa && (
+                      <>
+                        <span className="text-gray-300"> · </span>
+                        {t('gr_arrivo_eta')} ~{new Date(Date.now() + (v.metriRimanenti / 66.7) * 60000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                      </>
+                    )}
                   </>
                 )}
               </p>

@@ -22,6 +22,9 @@ interface PlanMapProps {
 // Colors per day (polyline)
 const DAY_COLORS = ['#1e3a8a', '#e17b3c', '#2563eb', '#9333ea', '#db2777', '#0891b2'];
 
+// CARTO richiede la chiave gratuita dal 26/08/2026 (stessa nota di MapArea.tsx).
+const CARTO_TILE_URL = `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${import.meta.env.VITE_CARTO_API_KEY || ''}`;
+
 // Color + emoji based on stop type
 function getMarkerStyle(tipo: string): { bg: string; border: string; emoji: string } {
   const t = (tipo || '').toLowerCase();
@@ -189,7 +192,7 @@ function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAud
             service worker) copre anche la mappa dell'itinerario. */}
         <TileLayer
           attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          url={CARTO_TILE_URL}
         />
         {bounds && <ChangeView bounds={bounds} />}
 

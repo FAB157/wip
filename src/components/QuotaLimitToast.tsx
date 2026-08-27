@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { AlertTriangle, X, Zap, Clock } from 'lucide-react';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 interface QuotaLimitToastProps {
   feature: string;
@@ -8,16 +9,21 @@ interface QuotaLimitToastProps {
   autoDismissMs?: number;
 }
 
-const FEATURE_LABELS: Record<string, { label: string; icon: string }> = {
-  itinerary:     { label: 'Itinerari AI',       icon: '🗺️' },
-  audio_guide:   { label: 'Audioguide',          icon: '🎧' },
-  poi_detail:    { label: 'Dettagli Monumenti',  icon: '🏛️' },
-  photo_search:  { label: 'Ricerca per Foto',    icon: '📸' },
-  premium_guide: { label: 'Guide Premium PDF',   icon: '📖' },
+// Chiavi i18n al posto delle etichette fisse: tradotte al render.
+const FEATURE_LABELS: Record<string, { labelKey: string; icon: string }> = {
+  itinerary:     { labelKey: 'vr_b_ql_itinerary', icon: '🗺️' },
+  audio_guide:   { labelKey: 'vr_b_ql_audio',     icon: '🎧' },
+  poi_detail:    { labelKey: 'vr_b_ql_poi',       icon: '🏛️' },
+  photo_search:  { labelKey: 'vr_b_ql_photo',     icon: '📸' },
+  premium_guide: { labelKey: 'vr_b_ql_pdf',       icon: '📖' },
 };
 
 export default function QuotaLimitToast({ feature, onClose, onUpgrade, autoDismissMs = 6000 }: QuotaLimitToastProps) {
-  const info = FEATURE_LABELS[feature] || { label: feature, icon: '⚡' };
+  const lingua = linguaCorrente();
+  const known = FEATURE_LABELS[feature];
+  const info = known
+    ? { label: getTranslation(known.labelKey, lingua), icon: known.icon }
+    : { label: feature, icon: '⚡' };
 
   useEffect(() => {
     const timer = setTimeout(onClose, autoDismissMs);
@@ -49,11 +55,11 @@ export default function QuotaLimitToast({ feature, onClose, onUpgrade, autoDismi
           {/* Text */}
           <div className="flex-1 min-w-0">
             <p className="font-black text-[13px] text-[#1e3a8a] leading-snug">
-              Limite {info.label} raggiunto
+              {getTranslation('vr_b_ql_limit', lingua).replace('{label}', info.label)}
             </p>
             <p className="text-[11px] text-gray-500 font-medium mt-0.5 leading-snug flex items-center gap-1">
               <Clock className="w-3 h-3 inline-block flex-shrink-0" />
-              Crediti ripristinati domani alle 00:00
+              {getTranslation('vr_b_ql_reset', lingua)}
             </p>
 
             {onUpgrade && (
@@ -62,7 +68,7 @@ export default function QuotaLimitToast({ feature, onClose, onUpgrade, autoDismi
                 className="mt-2.5 flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-500 to-rose-500 text-white rounded-lg text-[11px] font-black uppercase tracking-wider shadow-sm hover:opacity-90 transition-opacity"
               >
                 <Zap className="w-3 h-3" />
-                Passa a Premium — crediti illimitati
+                {getTranslation('vr_b_ql_upgrade', lingua)}
               </button>
             )}
           </div>
@@ -71,7 +77,7 @@ export default function QuotaLimitToast({ feature, onClose, onUpgrade, autoDismi
           <button
             onClick={onClose}
             className="w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center transition-colors flex-shrink-0"
-            aria-label="Chiudi"
+            aria-label={getTranslation('close', lingua)}
           >
             <X className="w-4 h-4 text-gray-400" />
           </button>

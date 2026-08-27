@@ -27,9 +27,22 @@ interface PoiAudioPlayerProps {
   onRegenerate: () => void;
 }
 
+// Ritratti dei due narratori. Sono personaggi, non luoghi: qui l'immagine
+// generica è ammessa (la regola sulle foto vere vale per i POI e le guide di
+// un posto). Restano comunque due fetch remote per scheda — se un giorno si
+// vuole togliere la dipendenza da Unsplash, sono questi due valori.
+const AVATAR_NICKY = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&h=100&fit=crop";
+const AVATAR_DANTE = "/Portrait_de_Dante.jpg";
+
 // Lingue del riconoscimento vocale per «Chiedi mentre ascolti»
 const SPEECH_LANGS: Record<string, string> = {
   IT: 'it-IT', EN: 'en-US', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
+};
+
+// Nome della lingua UI per il prompt di /api/regenerate: la risposta della
+// guida deve arrivare nella lingua dell'utente, non in italiano.
+const LANG_NAMES: Record<string, string> = {
+  IT: 'italiano', EN: 'inglese', FR: 'francese', ES: 'spagnolo', DE: 'tedesco', RU: 'russo', ZH: 'cinese semplificato',
 };
 
 // ── Riprendi da dove eri (ondata 3) ──────────────────────────────────────
@@ -93,8 +106,8 @@ export default function PoiAudioPlayer({
   const displayText: string = isLoading || isRegenerating
     ? ''
     : (localGuideMode === "nicky"
-        ? (generatedText || poi?.audioScript || (wikiData?.extract ? `Ciao! Sono Nicky. Ecco cosa c'è da sapere: ${wikiData.extract}` : "Ciao! Sono Nicky!"))
-        : (generatedText || poi?.audioScript || wikiData?.extract || "Descrizione non disponibile."));
+        ? (generatedText || poi?.audioScript || (wikiData?.extract ? getTranslation('sk_nicky_intro', language).replace('{text}', wikiData.extract) : getTranslation('sk_nicky_ciao', language)))
+        : (generatedText || poi?.audioScript || wikiData?.extract || getTranslation('sk_descrizione_non_disponibile', language)));
 
   // Frasi + posizione cumulativa in caratteri: senza timestamp reali del TTS
   // la sincronia è proporzionale (tempo/durata ≈ caratteri letti). Non è
@@ -206,7 +219,7 @@ export default function PoiAudioPlayer({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: `${displayText}\n\nDOMANDA DEL VISITATORE mentre ascolta la guida (rispondi SOLO e direttamente a questa domanda, massimo 120 parole): "${q}"`,
+          text: `${displayText}\n\nDOMANDA DEL VISITATORE mentre ascolta la guida (rispondi SOLO e direttamente a questa domanda, massimo 120 parole): "${q}"\n\nRispondi in ${LANG_NAMES[String(language)] || 'italiano'}.`,
           poiName: poi?.name,
           mode: localGuideMode,
           previousText: displayText || undefined,
@@ -220,9 +233,9 @@ export default function PoiAudioPlayer({
       setAskAnswer(answer);
       // La risposta viene letta con la voce del personaggio; id dedicato per
       // non sporcare la posizione salvata dell'audioguida principale.
-      locationService.playAudio(answer, `${poi?.name} — risposta`, poi?.category, `${String(poi?.id)}_ask`, localGuideMode);
+      locationService.playAudio(answer, getTranslation('sk_risposta_suffisso', language).replace('{name}', String(poi?.name || '')), poi?.category, `${String(poi?.id)}_ask`, localGuideMode);
     } catch {
-      setAskAnswer('Non sono riuscito a rispondere ora: riprova tra qualche istante.');
+      setAskAnswer(getTranslation('sk_risposta_errore', language));
     } finally {
       setAskBusy(false);
     }
@@ -296,86 +309,104 @@ export default function PoiAudioPlayer({
         }),
       }).catch(() => { /* rotta assente/offline: nessun rumore */ });
     } catch { /* ignore */ }
-    notify('Grazie! Il tuo feedback migliora i trigger per tutti.', 'success');
+    notify(getTranslation('sk_feedback_grazie', language), 'success');
   };
+
+  // ── Chi parla ──────────────────────────────────────────────────────────
+  // Tre scelte, non due assi incrociati (24/08/2026). Prima c'erano «Voce»
+  // (Nicky/Dante) e «Versione» (standard/breve/bimbi/duetto): due file di chip
+  // che si contendevano la stessa striscia di schermo, e il duetto — che NON è
+  // una versione del testo ma un terzo modo di raccontare, a due voci — stava
+  // nella fila sbagliata. Breve e Bimbi sono usciti dall'interfaccia; il tipo
+  // GuideRegister li conserva perché restano nelle chiavi di cache già scritte.
+  const isDuetto = guideRegister === 'duetto';
+  const nomeNarratore = isDuetto ? 'Nicky & Dante' : (localGuideMode === 'nicky' ? 'Nicky' : 'Dante');
+  const scegliVoce = (v: 'nicky' | 'dante' | 'duetto') => {
+    if (v === 'duetto') { setGuideRegister('duetto'); return; }
+    setLocalGuideMode(v);
+    // Tornando a una voce sola si esce dal duetto (e da qualunque registro
+    // vecchio rimasto in sessione), altrimenti si chiederebbe un dialogo a un
+    // solo narratore.
+    if (guideRegister !== 'standard') setGuideRegister('standard');
+  };
+  const VOCI: [('nicky' | 'dante' | 'duetto'), string, boolean][] = [
+    ['nicky', 'Nicky', !isDuetto && localGuideMode === 'nicky'],
+    ['dante', 'Dante', !isDuetto && localGuideMode === 'dante'],
+    ['duetto', getTranslation('sk_duetto', language), isDuetto],
+  ];
 
   return (
     <div className="relative bg-white rounded-[2rem] p-6 mb-8 border border-secondary shadow-xl shadow-secondary/5 overflow-hidden">
       <div className="absolute -top-24 -right-24 w-48 h-48 bg-secondary/10 blur-[80px] rounded-full" />
 
       <div className="relative z-10">
-        {/* flex-wrap + min-w-0/truncate: un nome POI lungo spingeva CHIEDI e
-            MEGAPHONE fuori dalla larghezza visibile (fuoribordo, non
-            cliccabili). Ora il titolo si tronca e i bottoni, se non c'entrano
-            in riga, vanno a capo invece di uscire dallo schermo. */}
-        <div className="flex flex-wrap justify-between items-start gap-3 mb-6">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-3 bg-background p-1 rounded-full w-fit">
-              <button
-                onClick={() => setLocalGuideMode("nicky")}
-                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${
-                  localGuideMode === "nicky" ? "bg-secondary text-white shadow-md" : "text-primary/60"
-                }`}
-              >
-                Nicky
-              </button>
-              <button
-                onClick={() => setLocalGuideMode("dante")}
-                className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider transition-all ${
-                  localGuideMode === "dante" ? "bg-primary text-white shadow-md" : "text-primary/60"
-                }`}
-              >
-                Dante
-              </button>
-            </div>
-
-            {/* Registro (ondata 4): versione standard, breve (~40s), per
-                bambini o duetto 🎭 (dialogo Nicky & Dante a due voci) —
-                generata on-demand e cachata per registro */}
-            <div className="flex items-center flex-wrap gap-1.5 mb-3 bg-background p-1 rounded-full w-fit">
-              {([['standard', 'Standard'], ['breve', '⚡ Breve'], ['bambini', '🧒 Bimbi'], ['duetto', '🎭 Duetto']] as [GuideRegister, string][]).map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setGuideRegister(key)}
-                  disabled={isLoading || isRegenerating}
-                  className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider transition-all disabled:opacity-50 ${
-                    guideRegister === key ? "bg-primary text-white shadow-md" : "text-primary/50 hover:text-primary"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <h3 className="text-xl font-black text-primary flex items-center gap-3 min-w-0">
-              <img
-                src={localGuideMode === "nicky" ? "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=100&h=100&fit=crop" : "/Portrait_de_Dante.jpg"}
-                className={`w-8 h-8 rounded-full object-cover border-2 shadow-sm shrink-0 ${localGuideMode === "nicky" ? "border-secondary" : "border-primary"} bg-white object-top`}
-                alt={localGuideMode}
-              />
-              <span className="truncate">
-                {localGuideMode === "nicky" ? `Nicky: ${poi.name} Vibes` : `Dante: ${poi.name}`}
+        {/* Intestazione: chi parla a sinistra, i due comandi a destra.
+            I comandi stanno in una RIGA PROPRIA rispetto alle chip della voce:
+            prima erano nella stessa riga di flex, e su schermo stretto le chip
+            (larghezza fissa, `w-fit`) sfuggivano dalla colonna che si
+            restringeva e finivano SOTTO i bottoni — CHIEDI copriva «Dante» e
+            lo rendeva non cliccabile (visto su iPhone, 24/08/2026). */}
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 mb-4">
+          <h3 className="text-xl font-black text-primary flex items-center gap-3 min-w-0">
+            {isDuetto ? (
+              <span className="flex shrink-0 -space-x-2">
+                <img src={AVATAR_NICKY} alt="Nicky" className="w-8 h-8 rounded-full object-cover object-top border-2 border-secondary shadow-sm bg-white" />
+                <img src={AVATAR_DANTE} alt="Dante" className="w-8 h-8 rounded-full object-cover object-top border-2 border-primary shadow-sm bg-white" />
               </span>
-            </h3>
-          </div>
-          <div className="flex gap-2 items-center shrink-0">
+            ) : (
+              <img
+                src={localGuideMode === 'nicky' ? AVATAR_NICKY : AVATAR_DANTE}
+                className={`w-8 h-8 rounded-full object-cover border-2 shadow-sm shrink-0 ${localGuideMode === 'nicky' ? 'border-secondary' : 'border-primary'} bg-white object-top`}
+                alt={nomeNarratore}
+              />
+            )}
+            {/* Niente `truncate` e niente nome del POI qui dentro: il titolo
+                era «Nicky: <nome del POI> Vibes» e su schermo stretto si
+                riduceva a «N.» — il narratore spariva proprio dove serviva
+                dire chi sta parlando. Il nome del luogo è già in cima alla
+                scheda, non va ripetuto. */}
+            <span>{nomeNarratore}</span>
+          </h3>
+          <div className="flex gap-2 items-center">
             <button
               onClick={openAsk}
               disabled={isLoading || isRegenerating || !displayText}
               className="px-3 py-2 rounded-xl text-xs font-black transition-colors flex items-center gap-1.5 bg-primary text-white shadow-sm disabled:opacity-50"
-              title="Metti in pausa e fai una domanda sul luogo: risponde la guida"
+              title={getTranslation('sk_chiedi_title', language)}
             >
               <Mic className="w-4 h-4" />
-              CHIEDI
+              {getTranslation('sk_chiedi', language)}
             </button>
             <button
               onClick={() => locationService.setMegaphone(!audioState.isMegaphone)}
               className={`px-3 py-2 rounded-xl text-xs font-black transition-colors flex items-center gap-1.5 ${audioState.isMegaphone ? "bg-secondary text-white shadow-sm" : "bg-surface-warm/60 hover:bg-surface-warm"}`}
             >
               <Megaphone className="w-4 h-4" />
-              MEGAFONO
+              {getTranslation('sk_megafono', language)}
             </button>
           </div>
+        </div>
+
+        {/* VOCE — una sola fila, tre scelte. `max-w-full` + `flex-wrap`: se
+            non c'entrano, vanno a capo dentro la loro pillola invece di
+            uscire dal riquadro. */}
+        <p className="text-[9px] font-black uppercase tracking-wider text-primary/40 mb-1">{getTranslation('sk_voce', language)}</p>
+        <div className="flex items-center flex-wrap gap-1 mb-6 bg-background p-1 rounded-2xl w-fit max-w-full">
+          {VOCI.map(([key, label, attiva]) => (
+            <button
+              key={key}
+              onClick={() => scegliVoce(key)}
+              disabled={isLoading || isRegenerating}
+              aria-pressed={attiva}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50 ${
+                attiva
+                  ? (key === 'nicky' ? 'bg-secondary text-white shadow-md' : 'bg-primary text-white shadow-md')
+                  : 'text-primary/60 hover:text-primary'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* ⏱ Feedback trigger: barra leggera a un tap, una volta sola e
@@ -390,29 +421,29 @@ export default function PoiAudioPlayer({
               className="flex items-center flex-wrap gap-1.5 mb-4 bg-surface-warm/60 border border-secondary/20 rounded-2xl px-3 py-2"
             >
               <span className="text-[10px] font-black text-primary/70 uppercase tracking-wide mr-1">
-                Com'era il momento dell'audioguida?
+                {getTranslation('sk_feedback_momento', language)}
               </span>
               <button
                 onClick={() => sendTriggerFeedback('ok')}
                 className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 hover:bg-emerald-200 transition-colors"
               >
-                ⏱ Momento giusto
+                {getTranslation('sk_momento_giusto', language)}
               </button>
               <button
                 onClick={() => sendTriggerFeedback('early')}
                 className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
               >
-                ⏰ Troppo presto
+                {getTranslation('sk_troppo_presto', language)}
               </button>
               <button
                 onClick={() => sendTriggerFeedback('wrong')}
                 className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-700 hover:bg-red-200 transition-colors"
               >
-                📍 Non ero qui
+                {getTranslation('sk_non_ero_qui', language)}
               </button>
               <button
                 onClick={() => setFeedbackReq(null)}
-                aria-label="Chiudi la richiesta di feedback"
+                aria-label={getTranslation('sk_chiudi_feedback', language)}
                 className="ml-auto p-1 text-primary/40 hover:text-primary/70 transition-colors"
               >
                 <X className="w-3.5 h-3.5" />
@@ -473,7 +504,7 @@ export default function PoiAudioPlayer({
             className="w-full mb-4 flex items-center justify-center gap-2 px-4 py-2.5 bg-secondary/10 hover:bg-secondary/20 text-primary rounded-xl text-xs font-black transition-colors"
           >
             <History className="w-4 h-4" />
-            Riprendi da {formatTime(savedPos.t)}
+            {getTranslation('sk_riprendi_da', language).replace('{time}', formatTime(savedPos.t))}
           </button>
         )}
 
@@ -489,7 +520,7 @@ export default function PoiAudioPlayer({
             <span>{isCurrentPoi ? formatTime(audioState.currentTime) : "00:00"}</span>
             <span className="flex items-center gap-2">
               {!isCurrentPoi && savedPos && savedPos.t > 20 && (
-                <span className="text-primary/50 font-bold normal-case">eri a {formatTime(savedPos.t)}</span>
+                <span className="text-primary/50 font-bold normal-case">{getTranslation('sk_eri_a', language).replace('{time}', formatTime(savedPos.t))}</span>
               )}
               {isCurrentPoi && audioState.duration ? formatTime(audioState.duration) : "00:00"}
             </span>
@@ -498,7 +529,7 @@ export default function PoiAudioPlayer({
 
         <div className="flex items-center justify-center gap-2 mb-4 text-primary/70 bg-primary/5 py-2 px-4 rounded-xl border border-primary/10">
           <Headphones className="w-4 h-4 shrink-0" />
-          <span className="text-[10px] font-bold uppercase tracking-wide text-center">Usa le cuffie per un'esperienza ottimale</span>
+          <span className="text-[10px] font-bold uppercase tracking-wide text-center">{getTranslation('sk_usa_cuffie', language)}</span>
         </div>
 
         {/* Preferenze audio persistenti: 🎧 pan direzionale verso il POI (web,
@@ -508,22 +539,22 @@ export default function PoiAudioPlayer({
           <button
             onClick={toggleDirectional}
             aria-pressed={directionalOn}
-            title="In cuffia l'audio arriva dalla direzione del luogo (serve la bussola del telefono)"
+            title={getTranslation('sk_audio_direzionale_title', language)}
             className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-colors ${
               directionalOn ? "bg-secondary text-white shadow-sm" : "bg-surface-warm/60 text-primary/60 hover:bg-surface-warm"
             }`}
           >
-            🎧 Audio direzionale{directionalOn ? " · ON" : ""}
+            {getTranslation('sk_audio_direzionale', language)}{directionalOn ? " · ON" : ""}
           </button>
           <button
             onClick={toggleSilent}
             aria-pressed={silentOn}
-            title="Ai trigger automatici niente voce: vibrazione e testo da leggere, con play manuale"
+            title={getTranslation('sk_silenziosa_title', language)}
             className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wide transition-colors ${
               silentOn ? "bg-primary text-white shadow-sm" : "bg-surface-warm/60 text-primary/60 hover:bg-surface-warm"
             }`}
           >
-            🤫 Modalità silenziosa{silentOn ? " · ON" : ""}
+            {getTranslation('sk_silenziosa', language)}{silentOn ? " · ON" : ""}
           </button>
         </div>
 
@@ -556,7 +587,7 @@ export default function PoiAudioPlayer({
               destra era piccolo e fuori dalla zona dei comandi di ascolto. */}
           <button
             onClick={handleSpeedToggle}
-            aria-label={`Velocità di riproduzione: ${audioState.playbackSpeed}x`}
+            aria-label={getTranslation('sk_velocita_aria', language).replace('{n}', String(audioState.playbackSpeed))}
             className="text-primary hover:text-secondary flex flex-col items-center gap-1"
           >
             <div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-black transition-all active:scale-95 ${
@@ -564,14 +595,14 @@ export default function PoiAudioPlayer({
             }`}>
               {audioState.playbackSpeed}x
             </div>
-            <span className="text-[9px] font-bold uppercase">Velocità</span>
+            <span className="text-[9px] font-bold uppercase">{getTranslation('sk_velocita', language)}</span>
           </button>
 
           {/* Sleep timer: off → 10' → 20' → 30' → off. Allo scadere l'audio
               si ferma da solo (standard dei player, comodo in hotel la sera). */}
           <button
             onClick={cycleSleep}
-            aria-label={sleepMin ? `Sleep timer attivo: ${sleepMin} minuti` : 'Sleep timer spento'}
+            aria-label={sleepMin ? getTranslation('sk_sleep_attivo', language).replace('{n}', String(sleepMin)) : getTranslation('sk_sleep_spento', language)}
             className="text-primary hover:text-secondary flex flex-col items-center gap-1"
           >
             <div className={`w-12 h-12 rounded-full flex items-center justify-center transition-all active:scale-95 ${
@@ -579,7 +610,7 @@ export default function PoiAudioPlayer({
             }`}>
               {sleepMin ? <span className="text-xs font-black">{sleepMin}'</span> : <Moon className="w-6 h-6" />}
             </div>
-            <span className="text-[9px] font-bold uppercase">Sleep</span>
+            <span className="text-[9px] font-bold uppercase">{getTranslation('sk_sleep', language)}</span>
           </button>
         </div>
 
@@ -625,7 +656,7 @@ export default function PoiAudioPlayer({
             >
               <div className="flex items-center justify-between">
                 <h4 className="font-black text-primary text-sm">
-                  Chiedi a {localGuideMode === 'nicky' ? 'Nicky' : 'Dante'} su {poi?.name}
+                  {getTranslation('sk_chiedi_a_su', language).replace('{guide}', localGuideMode === 'nicky' ? 'Nicky' : 'Dante').replace('{name}', String(poi?.name || ''))}
                 </h4>
                 <button onClick={() => setAskOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-4 h-4" /></button>
               </div>
@@ -635,7 +666,7 @@ export default function PoiAudioPlayer({
                   value={askQuestion}
                   onChange={e => setAskQuestion(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') doAsk(); }}
-                  placeholder={listening ? 'Ti ascolto…' : 'Es. In che anno è stato costruito?'}
+                  placeholder={listening ? getTranslation('sk_ti_ascolto', language) : getTranslation('sk_es_domanda', language)}
                   className="flex-1 bg-surface-warm border border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-800"
                 />
                 {speechSupported && (
@@ -643,7 +674,7 @@ export default function PoiAudioPlayer({
                     onClick={startListening}
                     disabled={listening}
                     className={`p-2.5 rounded-xl transition-colors ${listening ? 'bg-red-500 text-white animate-pulse' : 'bg-primary text-white'}`}
-                    title="Fai la domanda a voce"
+                    title={getTranslation('sk_domanda_voce', language)}
                   >
                     <Mic className="w-4 h-4" />
                   </button>
@@ -652,7 +683,7 @@ export default function PoiAudioPlayer({
                   onClick={doAsk}
                   disabled={askBusy || askQuestion.trim().length < 3}
                   className="p-2.5 rounded-xl bg-secondary text-white disabled:opacity-50"
-                  title="Invia la domanda"
+                  title={getTranslation('sk_invia_domanda', language)}
                 >
                   {askBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
@@ -664,7 +695,7 @@ export default function PoiAudioPlayer({
                 </div>
               )}
               <p className="text-[10px] text-gray-500">
-                La risposta viene anche letta a voce. L'audioguida resta in pausa: al ritorno trovi il tasto «Riprendi».
+                {getTranslation('sk_risposta_letta', language)}
               </p>
             </div>
           </motion.div>

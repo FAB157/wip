@@ -74,6 +74,18 @@ const ROUTE_FAIL_PHRASES: Record<string, string> = {
   zh: '无法计算路线，请重试。',
 };
 
+// Frase d'arrivo di riserva ({name} = nome del POI), quando il router non ne
+// fornisce una propria nell'ultimo step.
+const ARRIVE_PHRASES: Record<string, string> = {
+  it: 'Sei arrivato a {name}',
+  en: 'You have arrived at {name}',
+  fr: 'Vous êtes arrivé à {name}',
+  es: 'Has llegado a {name}',
+  de: 'Du hast {name} erreicht',
+  ru: 'Вы прибыли: {name}',
+  zh: '您已到达{name}',
+};
+
 // Proiezione punto→segmento (frame equirettangolare locale), identica a
 // roadSnap.projectToSeg (non esportata da quel modulo). Distanza in metri DAL
 // SEGMENTO (non dal vertice) + punto proiettato. Geometria in [lat, lon].
@@ -188,7 +200,20 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
   // Precalcola, per ogni vertice della polilinea, i metri che restano da lì
   // alla destinazione: distanza residua = remaining[vertice più vicino].
-  const setRoute = (route: WalkingRoute) => {
+  // La mappa principale (MapArea → NavRouteLayer) disegna il tracciato da
+  // questo evento: lo stato `routeGeometry` arriva solo a PlanMap, che esiste
+  // soltanto dentro un itinerario generato. Chi partiva dal radar o dal
+  // popup non vedeva nessuna linea (23/08/2026).
+  const emitRoute = (geometry: [number, number][], fit: boolean) => {
+    try {
+      const t = targetRef.current;
+      window.dispatchEvent(new CustomEvent('wip-nav-route', {
+        detail: { geometry, fit, destination: t ? { lat: t.lat, lon: t.lon, name: t.poiName } : null },
+      }));
+    } catch { /* SSR/test */ }
+  };
+
+  const setRoute = (route: WalkingRoute, fit = false) => {
     routeRef.current = route;
     routeTotalRef.current = Math.max(route.distance, 1);
     const g = route.geometry;
@@ -213,6 +238,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     });
 
     setRouteGeometry(g);
+    emitRoute(g, fit);
   };
 
   // Punto più vicino sul TRACCIATO (proiezione sul segmento, non sul vertice):
@@ -336,6 +362,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     setEtaSeconds(null);
     setProgress(null);
     setRouteGeometry([]);
+    emitRoute([], false);
   }, []);
 
   const repeatInstruction = useCallback(() => {
@@ -388,7 +415,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         notify(ROUTE_FAIL_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ROUTE_FAIL_PHRASES.en);
         return;
       }
-      setRoute(route);
+      setRoute(route, true);
       setState('navigating');
       const first = route.steps[0];
       setCurrentInstruction(first?.instruction ?? null);
@@ -465,7 +492,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           releaseWakeLock();
           const arriveStep = r.steps[r.steps.length - 1];
           const arrivePhrase = arriveStep?.instruction ||
-            (language.toLowerCase().startsWith('it') ? `Sei arrivato a ${t.poiName || ''}` : `You arrived`);
+            (ARRIVE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || ARRIVE_PHRASES.en)
+              .replace('{name}', t.poiName || '').trim();
           // Su nativo l'annuncio entra nella coda TTS dei teaser marcato come
           // 'arrival' col poiId: così il teaser del POI parte SUBITO DOPO senza
           // sovrapporsi (unica coda), e solo allora scatta la logica normale
@@ -530,6 +558,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     unsubRef.current?.();
     unsubRef.current = null;
     releaseWakeLock();
+    emitRoute([], false);
   }, []);
 
   return {

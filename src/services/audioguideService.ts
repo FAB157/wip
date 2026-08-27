@@ -18,6 +18,22 @@ import type { GuideCharacter } from '../types/poi';
 /** Numero massimo di livelli "Chiedi di piu'" (poi bottone grigio). */
 export const MAX_ASK_MORE_LEVEL = 3;
 
+// Euristica economica (nessuna chiamata AI) gemella di quella server-side
+// (server.ts::sembraItaliano) — un'audioguida IT cachata in inglese per
+// errore (fonte Wikipedia inglese, fast-mode) restava sbagliata per sempre:
+// il client la trovava in cache e la restituiva subito, senza mai passare
+// dal server che l'avrebbe corretta. Dubbio/pareggio -> considerata
+// italiana (fail-safe, non tocca).
+function sembraItaliano(testo: string): boolean {
+  const t = ` ${String(testo || '').toLowerCase()} `;
+  const itWords = [' il ', ' la ', ' di ', ' che ', ' non ', ' con ', ' una ', ' del ', ' della ', ' sono ', ' è ', ' anche ', ' nel ', ' per '];
+  const enWords = [' the ', ' and ', ' of ', ' is ', ' was ', ' with ', ' this ', ' that ', ' from ', ' were ', ' its ', ' which '];
+  let itScore = 0, enScore = 0;
+  for (const w of itWords) if (t.includes(w)) itScore++;
+  for (const w of enWords) if (t.includes(w)) enScore++;
+  return itScore >= enScore;
+}
+
 const LEVEL_FOCUS: Record<number, string> = {
   1: 'dettagli storici approfonditi',
   2: 'curiosita\' e aneddoti nascosti',
@@ -80,7 +96,8 @@ export async function getOrCreateAudioguideText(
   //    (`language`) resta invariato per le chiamate HTTP piu' sotto.
   const languageDb = language.toUpperCase();
   const cached = await getAudioguide(poi.id, languageDb, character);
-  if (cached?.audio_text) {
+  const cacheSospetta = languageDb === 'IT' && cached?.audio_text && cached.audio_text.trim().length >= 30 && !sembraItaliano(cached.audio_text);
+  if (cached?.audio_text && !cacheSospetta) {
     if (incrementPlay) await incrementAudioguidePlay(cached.id);
     return cached.audio_text;
   }

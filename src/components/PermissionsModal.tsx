@@ -3,7 +3,7 @@ import { MapPin, Bell, ShieldCheck, BatteryCharging, CheckCircle2, Settings } fr
 import { Geolocation } from '@capacitor/geolocation';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { Capacitor, registerPlugin } from '@capacitor/core';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 import ProminentDisclosure from './ProminentDisclosure';
 
 interface PermissionsModalProps {
@@ -215,7 +215,8 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
 
   if (!isVisible) return null;
 
-  const isItalian = language === 'IT';
+  // Traduzione nella lingua della UI (7 lingue, chiavi pf_pm_* in traduzioni/profilo)
+  const tr = (key: string) => getTranslation(key, language);
 
   return (
     <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-xl flex items-center justify-center p-4">
@@ -230,16 +231,16 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
             {step === 3 && <BatteryCharging className="w-10 h-10" />}
           </div>
           <h2 className="text-2xl font-black text-secondary mb-2 tracking-tight">
-            {step === 0 && (isItalian ? "I Tuoi Super-Poteri" : "Your Super-Powers")}
-            {step === 1 && (isItalian ? "Dove ti trovi?" : "Where are you?")}
-            {step === 2 && (isItalian ? "Rimani Aggiornato" : "Stay Updated")}
-            {step === 3 && (isItalian ? "Telefono in Tasca" : "Pocket Mode")}
+            {step === 0 && tr('pf_pm_titolo0')}
+            {step === 1 && tr('pf_pm_titolo1')}
+            {step === 2 && tr('pf_pm_titolo2')}
+            {step === 3 && tr('pf_pm_titolo3')}
           </h2>
           <p className="text-sm text-secondary/70 leading-relaxed font-medium h-16">
-            {step === 0 && (isItalian ? "Per trasformare il tuo telefono in una guida turistica magica, dobbiamo attivare 3 funzioni essenziali." : "To turn your phone into a magical tour guide, we need to activate 3 essential features.")}
-            {step === 1 && (isItalian ? "WIP raccoglie i dati sulla posizione per attivare le audioguide quando ti avvicini a un monumento, anche quando l'app è chiusa o non in uso." : "WIP collects location data to enable audio guides when you approach a monument, even when the app is closed or not in use.")}
-            {step === 2 && (isItalian ? "Ti avviseremo quando un'audioguida può partire o quando ci sono novità." : "We'll notify you when an audio guide can start or when there's news.")}
-            {step === 3 && (isItalian ? "Finito! Potrai impostare la batteria senza restrizioni dalle impostazioni Android." : "Done! You can set battery unrestricted mode from Android settings.")}
+            {step === 0 && tr('pf_pm_desc0')}
+            {step === 1 && tr('pf_pm_desc1')}
+            {step === 2 && tr('pf_pm_desc2')}
+            {step === 3 && tr('pf_pm_desc3')}
           </p>
         </div>
 
@@ -261,19 +262,19 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
                 <div className="w-10 h-10 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
                   <MapPin className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{isItalian ? "GPS Sempre Attivo" : "Always-on GPS"}</div>
+                <div className="text-sm font-bold text-secondary">{tr('pf_pm_gps')}</div>
               </div>
               <div className="flex items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
                   <Bell className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{isItalian ? "Notifiche Push" : "Push Notifications"}</div>
+                <div className="text-sm font-bold text-secondary">{tr('pf_pm_notifiche')}</div>
               </div>
               <div className="flex items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
                 <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
                   <BatteryCharging className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{isItalian ? "Risparmio Energetico" : "Battery Saving"}</div>
+                <div className="text-sm font-bold text-secondary">{tr('pf_pm_batteria')}</div>
               </div>
             </div>
           </div>
@@ -285,16 +286,14 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
           {locationDenied && step === 1 && (
             <div className="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left">
               <p className="text-sm font-bold text-secondary/90 leading-relaxed mb-3">
-                {isItalian
-                  ? "Senza il permesso di posizione le audioguide automatiche non possono partire. Abilitalo dalle impostazioni del telefono (Posizione → Consenti sempre)."
-                  : "Without location permission, automatic audio guides can't start. Enable it from your phone settings (Location → Allow all the time)."}
+                {tr('pf_pm_denied')}
               </p>
               <button
                 onClick={openAppSettings}
                 className="w-full bg-white/10 text-secondary font-bold py-3 rounded-xl border border-white/10 active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 <Settings className="w-4 h-4" />
-                {isItalian ? "Apri Impostazioni" : "Open Settings"}
+                {tr('pf_pm_apri_impostazioni')}
               </button>
             </div>
           )}
@@ -304,8 +303,8 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
             className="w-full bg-primary text-white font-black py-4 text-lg rounded-2xl shadow-lg shadow-primary/30 active:scale-95 transition-all flex justify-center items-center gap-2"
           >
             {locationDenied && step === 1
-              ? (isItalian ? "Continua" : "Continue")
-              : (step === 0 ? (isItalian ? "Iniziamo!" : "Let's Go!") : (step === 3 ? (isItalian ? "Concludi" : "Finish") : (isItalian ? "Consenti" : "Allow")))}
+              ? tr('pf_pm_continua')
+              : (step === 0 ? tr('pf_pm_iniziamo') : (step === 3 ? tr('pf_pm_concludi') : tr('pf_pm_consenti')))}
             {step > 0 && <CheckCircle2 className="w-5 h-5" />}
           </button>
 
@@ -320,7 +319,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
             onClick={finishOnboarding}
             className="w-full text-center mt-4 text-xs font-bold text-secondary/40 py-2 active:text-secondary/80 transition-colors"
           >
-            {isItalian ? "Salta per ora (Non consigliato)" : "Skip for now (Not recommended)"}
+            {tr('pf_pm_salta')}
           </button>
         </div>
       </div>

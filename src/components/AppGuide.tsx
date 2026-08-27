@@ -10,7 +10,7 @@ import {
   History, Bookmark, User, ShoppingCart, Trash2,
   ChevronDown, Ticket, WifiOff, KeyRound, Users
 } from 'lucide-react';
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS } from '../lib/pricing';
 
 interface AppGuideProps {
@@ -126,6 +126,12 @@ export default function AppGuide({ language }: AppGuideProps) {
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<string | null>('intro');
   const isItalian = language === 'IT';
+  const t = (k: string) => getTranslation(k, language);
+  // I CORPI delle sezioni sono ancora in italiano: quando la UI non è in IT
+  // il manuale lo dichiara con una riga tradotta in testa. In IT la riga non
+  // esiste (getTranslation con stringa vuota ricadrebbe sull'inglese, quindi
+  // il caso IT si gestisce qui).
+  const soloItaliano = isItalian ? '' : t('vr_a_guide_only_it');
 
   const toggleSection = (section: string) => {
     setOpenSection(openSection === section ? null : section);
@@ -223,7 +229,7 @@ export default function AppGuide({ language }: AppGuideProps) {
   const sections: GuideSection[] = [
     {
       id: 'intro',
-      title: isItalian ? "Introduzione e Sistema Crediti" : "Introduction & Credit System",
+      title: t('vr_a_guide_sec_intro'),
       icon: BookOpen,
       content: (
         <>
@@ -250,7 +256,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'account',
-      title: isItalian ? "Account, Accesso e Sicurezza" : "Account, Login & Security",
+      title: t('vr_a_guide_sec_account'),
       icon: KeyRound,
       content: (
         <>
@@ -272,7 +278,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'navbar',
-      title: isItalian ? "Barra di Navigazione Inferiore" : "Bottom Navigation Bar",
+      title: t('vr_a_guide_sec_navbar'),
       icon: Smartphone,
       content: (
         <ul className="mb-2">
@@ -286,7 +292,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'map',
-      title: isItalian ? "Schermata Mappa (Il Radar)" : "Map Screen (The Radar)",
+      title: t('vr_a_guide_sec_map'),
       icon: Map,
       content: (
         <>
@@ -309,7 +315,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'geocontrol',
-      title: isItalian ? "Audioguida Automatica (GeoControl)" : "Automatic Audio Guide (GeoControl)",
+      title: t('vr_a_guide_sec_geocontrol'),
       icon: Headphones,
       content: (
         <>
@@ -329,7 +335,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'daypass',
-      title: isItalian ? `WIP Day Pass (24 ore)` : `WIP Day Pass (24 hours)`,
+      title: t('vr_a_guide_sec_daypass'),
       icon: Ticket,
       content: (
         <>
@@ -346,7 +352,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'offline',
-      title: isItalian ? "Modalità Offline (Pacchetti Area)" : "Offline Mode (Area Packages)",
+      title: t('vr_a_guide_sec_offline'),
       icon: WifiOff,
       content: (
         <>
@@ -369,7 +375,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'plan',
-      title: isItalian ? "Schermata Pianifica (Itinerari AI)" : "Plan Screen (AI Itineraries)",
+      title: t('vr_a_guide_sec_plan'),
       icon: Compass,
       content: (
         <>
@@ -386,7 +392,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'library',
-      title: isItalian ? "Libreria Itinerari (già pronti, gratis)" : "Itinerary Library (ready-made, free)",
+      title: t('vr_a_guide_sec_library'),
       icon: Bookmark,
       content: (
         <>
@@ -402,7 +408,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'wipnav',
-      title: isItalian ? "WIP Nav (navigatore a piedi)" : "WIP Nav (walking navigator)",
+      title: t('vr_a_guide_sec_wipnav'),
       icon: Navigation,
       content: (
         <>
@@ -419,7 +425,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'trails',
-      title: isItalian ? "Cammini e Fughe da Porto/Aeroporto" : "Trails and Port/Airport Escapes",
+      title: t('vr_a_guide_sec_trails'),
       icon: Compass,
       content: (
         <>
@@ -436,7 +442,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'events',
-      title: isItalian ? "Eventi, Biglietti ed Esperienze" : "Events, Tickets and Experiences",
+      title: t('vr_a_guide_sec_events'),
       icon: Star,
       content: (
         <>
@@ -452,7 +458,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'rain',
-      title: isItalian ? "Garanzia Pioggia" : "Rain Guarantee",
+      title: t('vr_a_guide_sec_rain'),
       icon: ShieldCheck,
       content: (
         <>
@@ -468,7 +474,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'dashboard',
-      title: isItalian ? "Passaporto, CO₂ e Calendario" : "Passport, CO₂ and Calendar",
+      title: t('vr_a_guide_sec_dashboard'),
       icon: Target,
       content: (
         <>
@@ -485,7 +491,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'chat',
-      title: isItalian ? "Chat con WIP (l'Esperto di Viaggi)" : "Chat with WIP (Travel Expert)",
+      title: t('vr_a_guide_sec_chat'),
       icon: MessageSquare,
       content: (
         <>
@@ -500,7 +506,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'vision',
-      title: isItalian ? "Vision (Fotocamera)" : "Vision (Camera)",
+      title: t('vr_a_guide_sec_vision'),
       icon: Camera,
       content: (
         <>
@@ -519,7 +525,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'community',
-      title: isItalian ? "WIP Community (proponi un luogo)" : "WIP Community (suggest a place)",
+      title: t('vr_a_guide_sec_community'),
       icon: Users,
       content: (
         <>
@@ -544,7 +550,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'journal',
-      title: isItalian ? "Diario di Viaggio" : "Travel Journal",
+      title: t('vr_a_guide_sec_journal'),
       icon: History,
       content: (
         <>
@@ -558,7 +564,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'livetour',
-      title: isItalian ? "Tour di Gruppo (Live Tour)" : "Group Tour (Live Tour)",
+      title: t('vr_a_guide_sec_livetour'),
       icon: Navigation,
       content: (
         <P>Per visite in compagnia: un capogruppo guida il tour e i partecipanti sentono le stesse audioguide, sincronizzati. Si crea/si entra con un codice dalla schermata dedicata nel Profilo.</P>
@@ -566,7 +572,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'missions',
-      title: isItalian ? "Missioni, Livelli & Punti XP" : "Missions, Levels & XP",
+      title: t('vr_a_guide_sec_missions'),
       icon: Award,
       content: (
         <>
@@ -577,7 +583,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'credits',
-      title: isItalian ? "Crediti, WIP Shop & Voucher" : "Credits, WIP Shop & Vouchers",
+      title: t('vr_a_guide_sec_credits'),
       icon: ShoppingCart,
       content: (
         <ul className="mb-2">
@@ -591,7 +597,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'settings',
-      title: isItalian ? "Impostazioni — voce per voce" : "Settings — item by item",
+      title: t('vr_a_guide_sec_settings'),
       icon: Settings,
       content: (
         <ul className="mb-2">
@@ -609,7 +615,7 @@ export default function AppGuide({ language }: AppGuideProps) {
     },
     {
       id: 'support',
-      title: isItalian ? "Assistenza, Contatti & Privacy" : "Support, Contacts & Privacy",
+      title: t('vr_a_guide_sec_support'),
       icon: LifeBuoy,
       content: (
         <>
@@ -652,8 +658,8 @@ export default function AppGuide({ language }: AppGuideProps) {
       {/* Header */}
       <div className="flex justify-between items-center mb-4">
         <div>
-          <h2 className="text-2xl font-black text-gray-900">{isItalian ? "Manuale d'Uso Dettagliato" : "Detailed User Manual"}</h2>
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{isItalian ? "Tutte le funzioni e i tasti spiegati" : "All features and buttons explained"}</p>
+          <h2 className="text-2xl font-black text-gray-900">{t('vr_a_guide_title')}</h2>
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-widest">{t('vr_a_guide_subtitle')}</p>
         </div>
         <button
           onClick={handleExportPDF}
@@ -668,6 +674,13 @@ export default function AppGuide({ language }: AppGuideProps) {
       {exportMsg && (
         <div className="text-xs font-bold text-primary bg-primary/5 border border-primary/10 rounded-xl px-3 py-2">
           {exportMsg}
+        </div>
+      )}
+
+      {/* Manuale ancora in italiano: avviso tradotto quando la UI non è IT */}
+      {soloItaliano && (
+        <div className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+          {soloItaliano}
         </div>
       )}
 
@@ -702,16 +715,22 @@ export default function AppGuide({ language }: AppGuideProps) {
               WIP — World in Pocket
             </div>
             <h1 style={{ fontSize: 26, fontWeight: 900, color: '#1e3a8a', margin: '0 0 4px 0', lineHeight: 1.15 }}>
-              {isItalian ? "Manuale d'Uso Dettagliato" : "Detailed User Manual"}
+              {t('vr_a_guide_title')}
             </h1>
             <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
-              {isItalian ? "Tutte le funzioni e i tasti spiegati" : "All features and buttons explained"}
+              {t('vr_a_guide_subtitle')}
               {' · '}
               {new Date().toLocaleDateString(isItalian ? 'it-IT' : 'en-GB')}
             </div>
           </div>
           <img src="/logo.jpg" alt="World in Pocket" style={{ width: 72, height: 72, objectFit: 'contain', borderRadius: 12, flexShrink: 0 }} />
         </div>
+
+        {soloItaliano && (
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '6px 10px', marginBottom: 16 }}>
+            {soloItaliano}
+          </div>
+        )}
 
         {/* Tutte le sezioni, sempre espanse */}
         {sections.map((s, i) => (

@@ -408,6 +408,18 @@ async function getGeofencePoisFromDexie(
         // radiiForTransport, questi valgono solo come fallback coerente.
         eff_alert_radius: 150,
         eff_geofence_radius: 50,
+        // I RAGGI GREZZI, come li da' la RPC dal 23/08/2026: null quando il
+        // POI non e' mai stato calibrato sul perimetro. E' la differenza che
+        // permette al client di NON trattare 50 come un raggio reale e di
+        // rispettare lo slider dell'utente anche sotto i 50 m.
+        alert_radius: Number(p.alert_radius) > 0 ? Number(p.alert_radius) : null,
+        geofence_radius: Number(p.geofence_radius) > 0 ? Number(p.geofence_radius) : null,
+        // Ingresso e indirizzo dal pacchetto offline, quando ci sono: senza
+        // questi puntoArrivo() ricadrebbe sul centroide anche a bundle scaricato.
+        entrance_lat: p.entrance_lat ?? null,
+        entrance_lon: p.entrance_lon ?? null,
+        address: p.address ?? null,
+        address_source: p.address_source ?? null,
         alert_enabled: true,
         audio_enabled: true,
         distance_meters: haversineMeters(lat, lon, p.lat, p.lon),
@@ -452,7 +464,34 @@ export async function getGeofencePois(
       if (error) throw new Error(error.message);
       return data;
     });
-    return (data ?? []) as GeofencePoi[];
+    // NORMALIZZAZIONE DELLE COLONNE NUOVE (migration 20260823140000).
+    // Finche' quella migration non e' applicata la RPC non le restituisce
+    // affatto: qui diventano esplicitamente `null`, cosi' i consumatori
+    // (foregroundTriggers.triggerRadiusFor, puntoArrivo, puntoArrivoSuStrada)
+    // vedono sempre lo stesso oggetto e non devono sapere quale versione
+    // della funzione SQL c'e' sul DB.
+    //
+    // Il numero grezzo NON viene mai sostituito da un default: `null` qui
+    // significa "questo POI non e' mai stato calibrato sul perimetro", ed e'
+    // l'informazione che permette allo slider dell'utente di scendere sotto
+    // i 50 m. eff_* restano quelli della RPC (col coalesce) per i chiamanti
+    // che li leggono da sempre.
+    const num = (v: any): number | null => (Number(v) > 0 ? Number(v) : null);
+    const str = (v: any): string | null => {
+      const s = String(v ?? '').trim();
+      return s ? s : null;
+    };
+    const coord = (v: any): number | null => (Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null);
+    return ((data ?? []) as any[]).map((p) => ({
+      ...p,
+      entrance_lat: coord(p?.entrance_lat),
+      entrance_lon: coord(p?.entrance_lon),
+      address: str(p?.address),
+      address_source: str(p?.address_source),
+      city: str(p?.city),
+      alert_radius: num(p?.alert_radius),
+      geofence_radius: num(p?.geofence_radius),
+    })) as GeofencePoi[];
   } catch (error: any) {
     console.warn('[poiRepository] get_geofence_pois (circuit breaker):', error.message);
     // RPC fallita (rete zombie, circuit breaker aperto): ultima spiaggia Dexie.

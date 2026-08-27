@@ -4,7 +4,7 @@ import { ShoppingCart, Coins, ShieldCheck, Ticket } from 'lucide-react';
 import { getWalletBalance, WalletBalance } from '../lib/pricing';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
-import { getTranslation } from '../lib/i18n';
+import { getTranslation, type Language } from '../lib/i18n';
 import { Capacitor } from '@capacitor/core';
 import { Purchases } from '@revenuecat/purchases-capacitor';
 import { loadStripe } from '@stripe/stripe-js';
@@ -19,6 +19,10 @@ interface ShopScreenProps {
 }
 
 export default function ShopScreen({ userId, language, onClose }: ShopScreenProps) {
+  // La prop arriva maiuscola ('IT') dai più, ma qualche chiamante storico
+  // passava 'it' minuscolo: si normalizza per i dizionari i18n.
+  const lang = String(language || 'IT').toUpperCase() as Language;
+  const t = (key: string) => getTranslation(key, lang);
   const [balance, setBalance] = useState<WalletBalance | null>(null);
   const [loading, setLoading] = useState(false);
   const [voucherCode, setVoucherCode] = useState('');
@@ -42,9 +46,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     // condiviso "mock-user-id" (o a nessuno): soldi veri persi. Meglio
     // chiedere il login prima di incassare.
     if (!userId || userId === 'mock-user-id') {
-      notify(language === 'EN'
-        ? 'Please sign in to your account before purchasing credits.'
-        : 'Accedi al tuo account prima di acquistare crediti.');
+      notify(t('vr_b_shop_login_before_buy'));
       return;
     }
     setLoading(true);
@@ -58,7 +60,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
 
         const offerings = await Purchases.getOfferings();
         if (!offerings.current) {
-          notify("Nessun pacchetto disponibile al momento. Riprova più tardi.");
+          notify(t('vr_b_shop_no_packages'));
           setLoading(false);
           return;
         }
@@ -74,14 +76,14 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
         );
         
         if (!pkgToBuy) {
-          notify(`Prodotto ${priceId} non trovato nello store. Configurazione Google Play mancante?`);
+          notify(t('vr_b_shop_product_not_found').replace('{id}', priceId));
           setLoading(false);
           return;
         }
 
         await Purchases.purchasePackage({ aPackage: pkgToBuy });
         
-        notify("Acquisto completato con successo! I crediti verranno aggiornati a breve.");
+        notify(t('vr_b_shop_purchase_ok'));
         
         // Polling leggero per aggiornare la UI quando il webhook accreditato i crediti
         setTimeout(() => fetchBalance(), 3000);
@@ -90,7 +92,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       } catch (e: any) {
         if (!e.userCancelled) {
           console.error('RevenueCat Error:', e);
-          notify("Errore durante l'acquisto: " + e.message);
+          notify(t('vr_b_shop_purchase_err') + e.message);
         }
       } finally {
         setLoading(false);
@@ -125,7 +127,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       } catch (e) {
         console.error('Stripe Error:', e);
         setLoading(false);
-        notify("Errore durante la creazione del pagamento Stripe.");
+        notify(t('vr_b_shop_stripe_err'));
       }
     }
   };
@@ -142,7 +144,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
       if (!token) {
-        notify('Accedi al tuo account per riscattare il voucher.');
+        notify(t('vr_b_shop_login_redeem'));
         return;
       }
       const res = await fetch(getApiUrl('/api/coupon/redeem'), {
@@ -153,12 +155,14 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Riscatto non riuscito.');
 
-      notify(`Voucher${data.structureName ? ` ${data.structureName}` : ''} riscattato! Hai ricevuto ${data.credits} crediti omaggio.`);
+      notify(t('vr_b_shop_voucher_ok')
+        .replace('{name}', data.structureName ? ` ${data.structureName}` : '')
+        .replace('{credits}', String(data.credits)));
       setVoucherCode('');
       await fetchBalance();
     } catch (e: any) {
       console.error(e);
-      notify(e?.message || "Errore durante il riscatto del voucher.");
+      notify(e?.message || t('vr_b_shop_voucher_err'));
     } finally {
       setLoading(false);
     }
@@ -187,32 +191,32 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 pb-[calc(9rem+env(safe-area-inset-bottom))]">
         <div className="mb-6 bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
           <div className="relative z-10">
-            <h2 className="text-2xl font-black mb-1">Ricarica il tuo viaggio</h2>
+            <h2 className="text-2xl font-black mb-1">{t('vr_b_shop_recharge_title')}</h2>
             <p className="text-amber-100 text-sm mb-2">
-              I crediti ti permettono di sbloccare audioguide, generare itinerari su misura e scansionare monumenti con l'AI.
+              {t('vr_b_shop_recharge_sub')}
             </p>
             <button 
               onClick={() => setIsFreeFeaturesOpen(true)}
               className="text-xs font-bold text-white/90 underline underline-offset-2 hover:text-white"
             >
-              Cosa posso fare gratis invece?
+              {t('vr_b_shop_free_q')}
             </button>
           </div>
           <Coins className="absolute -right-4 -bottom-4 w-32 h-32 text-white/20" />
         </div>
 
         <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 tracking-wider">
-          Pacchetti Crediti
+          {t('vr_b_shop_packs')}
         </h3>
 
         <div className="flex flex-col gap-3">
           <motion.div whileTap={{ scale: 0.98 }} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <h4 className="font-black text-lg text-slate-800 leading-tight">City-Break</h4>
-              <p className="text-xs text-slate-400 mb-1.5">Perfetto per un weekend in città</p>
+              <p className="text-xs text-slate-400 mb-1.5">{t('vr_b_shop_citybreak_sub')}</p>
               <p className="text-slate-600 text-sm flex items-center gap-1.5">
                 <Coins className="w-4 h-4 text-amber-500" />
-                <span className="font-bold">500 Crediti</span>
+                <span className="font-bold">500 {t('vr_b_credits_cap')}</span>
               </p>
             </div>
             <button onClick={() => buyPackage(500, 0, 'package_500')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
@@ -226,12 +230,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
             </div>
             <Coins className="absolute -right-5 -bottom-6 w-24 h-24 text-white/10 pointer-events-none" />
             <div className="relative min-w-0">
-              <h4 className="font-black text-lg text-white leading-tight">Vacanza 1 Settimana</h4>
-              <p className="text-xs text-blue-200 mb-1.5">Il più scelto dai viaggiatori</p>
+              <h4 className="font-black text-lg text-white leading-tight">{t('vr_b_shop_week_title')}</h4>
+              <p className="text-xs text-blue-200 mb-1.5">{t('vr_b_shop_week_sub')}</p>
               <div className="text-blue-100 text-sm flex items-center gap-1.5">
                 <Coins className="w-4 h-4 text-amber-400" />
                 <span className="line-through opacity-60 text-xs">1000</span>
-                <span className="font-black text-white">1100 Crediti</span>
+                <span className="font-black text-white">1100 {t('vr_b_credits_cap')}</span>
               </div>
             </div>
             <button onClick={() => buyPackage(1000, 100, 'package_1100')} disabled={loading} className="relative shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl shadow-md active:scale-95 transition disabled:opacity-50">
@@ -245,12 +249,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
             </div>
             <div className="min-w-0">
               <h4 className="font-black text-lg text-slate-800 leading-tight">Tour Operator</h4>
-              <p className="text-xs text-slate-400 mb-1.5">Il massimo risparmio per lunghi viaggi</p>
+              <p className="text-xs text-slate-400 mb-1.5">{t('vr_b_shop_tour_sub')}</p>
               <div className="text-slate-600 text-sm flex items-center gap-1.5">
                 <Coins className="w-4 h-4 text-amber-500" />
                 <span className="line-through opacity-50 text-xs">2000</span>
                 {/* Allineato al prodotto reale su Google Play/RevenueCat: package_2600 */}
-                <span className="font-black text-amber-600">2600 Crediti</span>
+                <span className="font-black text-amber-600">2600 {t('vr_b_credits_cap')}</span>
               </div>
             </div>
             <button onClick={() => buyPackage(2000, 600, 'package_2600')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
@@ -260,7 +264,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
         </div>
 
         <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 mt-6 tracking-wider">
-          Riscatta Voucher Hotel
+          {t('vr_b_shop_voucher_head')}
         </h3>
         <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
           <div className="flex items-center gap-3 p-4 pb-3">
@@ -268,16 +272,16 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
               <Ticket className="w-5 h-5 text-[#1e3a8a]" />
             </div>
             <div className="min-w-0">
-              <h4 className="font-black text-slate-800 leading-tight">Ospite di una struttura partner?</h4>
+              <h4 className="font-black text-slate-800 leading-tight">{t('vr_b_shop_partner_q')}</h4>
               <p className="text-xs text-slate-500 mt-0.5">
-                Inserisci il codice ricevuto dal tuo hotel: i crediti omaggio arrivano subito sul tuo saldo.
+                {t('vr_b_shop_partner_sub')}
               </p>
             </div>
           </div>
           <div className="px-4 pb-4 flex gap-2">
             <input
               type="text"
-              placeholder="Inserisci codice voucher"
+              placeholder={t('vr_b_shop_voucher_ph')}
               className="flex-1 min-w-0 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-[#1e3a8a] focus:bg-white transition-colors font-bold uppercase tracking-widest text-slate-800 placeholder:normal-case placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400"
               value={voucherCode}
               onChange={(e) => setVoucherCode(e.target.value)}
@@ -287,13 +291,13 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
               disabled={loading || !voucherCode.trim()}
               className="shrink-0 bg-[#1e3a8a] text-white font-bold px-5 py-3 rounded-xl hover:bg-blue-900 active:scale-95 transition disabled:opacity-40"
             >
-              Riscatta
+              {t('vr_b_shop_redeem')}
             </button>
           </div>
         </div>
 
         <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">
-          <ShieldCheck className="w-4 h-4" /> Pagamenti sicuri criptati
+          <ShieldCheck className="w-4 h-4" /> {t('vr_b_shop_secure')}
         </div>
       </div>
       

@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase';
 import { UserProfile } from '../lib/quotaManager';
 import { User, Crown, Loader2, Camera, Coins, TrendingUp, Gift } from 'lucide-react';
 
-import { Language } from '../lib/i18n';
+import { Language, getTranslation } from '../lib/i18n';
 
 interface UserProfileSummaryProps {
   session: any;
@@ -151,7 +151,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
                 <div className="flex items-center gap-1 bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-100 shadow-sm">
                   <Coins className="w-3 h-3" />
                   <span className="text-[11px] font-black uppercase tracking-tight">
-                    {(profile?.purchased_credits || 0) + (profile?.earned_credits || 0)} Crediti
+                    {(profile?.purchased_credits || 0) + (profile?.earned_credits || 0)} {getTranslation('vr_b_credits_cap', language)}
                   </span>
                 </div>
                 <span className="text-[10px] font-bold text-gray-500 truncate max-w-[150px]">{currentUserEmail}</span>
@@ -168,7 +168,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
               <div className="flex justify-between items-center mb-2">
                 <div className="flex items-center gap-1.5">
                   <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">Progresso XP</span>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">{getTranslation('vr_b_ups_xp', language)}</span>
                 </div>
                 <span className="text-[10px] font-black text-gray-900">
                   {profile?.xp_points || 0} <span className="text-gray-500">/ {nextLevel ? nextLevel.xp_required : (profile?.xp_points || 0)} XP</span>
@@ -186,7 +186,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
 
               {nextLevel && (
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-[9px] font-bold text-gray-500">Obiettivo: {nextLevel.title}</span>
+                  <span className="text-[9px] font-bold text-gray-500">{getTranslation('vr_b_ups_goal', language)} {nextLevel.title}</span>
                   {nextLevel.reward_credits > 0 && (
                     <span className="flex items-center gap-1 bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-black uppercase border border-amber-200">
                       🏆 {nextLevel.reward_credits} 🪙
@@ -214,7 +214,7 @@ export default function UserProfileSummary({ session, userName, userAvatar, lang
                 onClick={onOpenFreeFeatures}
                 className="flex-1 bg-gradient-to-br from-emerald-50 to-teal-50 rounded-[1.5rem] p-4 border border-emerald-100 shadow-sm flex flex-col justify-center items-center hover:border-emerald-200 transition-all"
               >
-                <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1 leading-none text-center">App Gratuita</span>
+                <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mb-1 leading-none text-center">{getTranslation('vr_b_ups_free_app', language)}</span>
                 <Gift className="w-5 h-5 text-emerald-500 mt-1" />
               </button>
             )}
