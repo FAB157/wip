@@ -199,7 +199,7 @@ function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAud
             suffisso retina {r}): così il prefetch offline (offlineTiles.ts /
             service worker) copre anche la mappa dell'itinerario. */}
         <TileLayer
-          attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
           key={cartoUrl}
           url={cartoUrl}
         />

@@ -56,7 +56,9 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Velocità scelta dall'utente: va riapplicata a ogni resume perché
     /// AVPlayer riparte sempre a rate 1.0 con play().
     private var desiredRate: Float = 1.0
-    private var currentTitle = "Italia in Tasca"
+    // Nome del prodotto: WIP (World in Pocket). "Italia in Tasca" era il nome
+    // storico e compariva nel Now Playing / schermata di blocco.
+    private var currentTitle = "WIP"
     private var currentSubtitle = "Audioguida"
     private var remoteCommandsConfigured = false
     /// Spegnimento differito della sessione audio quando si resta in pausa
@@ -154,7 +156,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("URL is required")
             return
         }
-        currentTitle = call.getString("title") ?? "Italia in Tasca"
+        currentTitle = call.getString("title") ?? "WIP"
         currentSubtitle = call.getString("subtitle") ?? "Audioguida"
 
         // Filesystem.getUri restituisce file:///…; le tracce remote sono https.

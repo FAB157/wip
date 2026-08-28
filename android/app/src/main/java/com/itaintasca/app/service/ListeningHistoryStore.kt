@@ -54,6 +54,16 @@ object HistoryScope {
  *  - migrazione una tantum: la vecchia chiave globale passa sotto l'utente
  *    corrente alla prima lettura e viene cancellata.
  *
+ * (29/08/2026) POSSESSO. «Chi acquista un'audioguida non la paga mai piu':
+ * quel POI e' suo, in tutte le lingue e con tutti i personaggi.» Il registro
+ * vero e' `user_poi_purchases`, che solo il server scrive dopo un addebito
+ * riuscito; lo storico ascolti qui sopra NON e' piu' la fonte di verita' (e'
+ * scrivibile dal client e "ascoltato" non vuol dire "pagato"). Questo store
+ * ne tiene un mirror per utente — `owned_poi_ids_<userId>` — perche' il
+ * trigger in background deve decidere a schermo spento e senza rete. Lo
+ * storico resta come RIPIEGO, mai come prova contraria: se il mirror nuovo
+ * non e' ancora sceso, un POI nello storico si riascolta gratis lo stesso.
+ *
  * Stesse chiavi prefs del port iOS (ListeningHistoryStore in
  * WipSupabaseClient.swift): tenere allineati (anche il suffisso utente).
  */
@@ -66,12 +76,25 @@ object ListeningHistoryStore {
     const val PREF_PENDING = "listened_pending_sync"
     const val PREF_USER_ID = "wip_user_id"
     const val PREF_ACCESS_TOKEN = "wip_supabase_token"
+    /**
+     * POSSESSO (29/08/2026). Prefisso del mirror di `user_poi_purchases`:
+     * la chiave reale e' `owned_poi_ids_<userId>`. NON si riusa quella dello
+     * storico: lo storico dice "ascoltato" (scrivibile dal client, e da ieri
+     * non e' piu' una prova di acquisto), questa dice "e' suo per sempre".
+     */
+    const val PREF_OWNED_IDS = "owned_poi_ids"
+    /** Ultima sync del possesso, per utente: `owned_sync_at_<userId>` (ms). */
+    const val PREF_OWNED_SYNC_AT = "owned_sync_at"
+    /** Il registro si rilegge al massimo ogni 6 ore (o se il mirror e' vuoto). */
+    private const val OWNED_SYNC_EVERY_MS = 6L * 60 * 60 * 1000
 
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun idsKey(userId: String) = "${PREF_LISTENED_IDS}_$userId"
     private fun pendingKey(userId: String) = "${PREF_PENDING}_$userId"
+    private fun ownedKey(userId: String) = "${PREF_OWNED_IDS}_$userId"
+    private fun ownedSyncAtKey(userId: String) = "${PREF_OWNED_SYNC_AT}_$userId"
 
     /** Utente corrente dallo store cifrato; "" se nessuno e' loggato. */
     private fun currentUserId(context: Context): String = try {
@@ -85,11 +108,18 @@ object ListeningHistoryStore {
     @Volatile private var cacheUserId: String? = null
     @Volatile private var cacheIds: Set<String> = emptySet()
 
+    // Stessa cosa per il POSSESSO (owned_poi_ids_<userId>): letto a ogni
+    // trigger, quindi mai dalle prefs due volte di fila.
+    @Volatile private var ownedCacheUserId: String? = null
+    @Volatile private var ownedCacheIds: Set<String> = emptySet()
+
     /** Da chiamare al logout (clearUserContext) e al cambio utente. */
     fun clearMemory() {
         synchronized(this) {
             cacheUserId = null
             cacheIds = emptySet()
+            ownedCacheUserId = null
+            ownedCacheIds = emptySet()
         }
     }
 
@@ -141,12 +171,66 @@ object ListeningHistoryStore {
         }
     }
 
-    /** Mirror locale, vale anche offline. In dubbio (o senza utente): NON acquistato. */
+    /** Id POSSEDUTI dell'utente indicato (mirror di user_poi_purchases). */
+    private fun ownedFor(context: Context, userId: String): Set<String> {
+        if (userId.isBlank()) return emptySet()
+        synchronized(this) {
+            if (ownedCacheUserId == userId) return ownedCacheIds
+            val ids = (prefs(context).getStringSet(ownedKey(userId), emptySet()) ?: emptySet()).toSet()
+            ownedCacheUserId = userId
+            ownedCacheIds = ids
+            return ids
+        }
+    }
+
+    /**
+     * Aggiunge un POI al mirror del possesso: da chiamare SOLO dopo un
+     * addebito a crediti chiesto esplicitamente dall'utente (mai per il Day
+     * Pass, che e' accesso a tempo e non possesso, e mai per un'anteprima
+     * 402). Il registro vero resta `user_poi_purchases` sul server: questo e'
+     * l'anticipo locale, perche' il riascolto offline subito dopo l'acquisto
+     * deve essere gratis anche senza rete.
+     */
+    fun markOwned(context: Context, poiId: String) {
+        if (poiId.isBlank()) return
+        val appContext = context.applicationContext
+        val userId = currentUserId(appContext)
+        if (userId.isBlank()) return
+        try {
+            synchronized(this) {
+                val p = prefs(appContext)
+                val ids = (p.getStringSet(ownedKey(userId), emptySet()) ?: emptySet()).toMutableSet()
+                if (!ids.add(poiId)) return
+                p.edit().putStringSet(ownedKey(userId), ids).apply()
+                ownedCacheUserId = userId
+                ownedCacheIds = ids.toSet()
+            }
+            Log.d(TAG, "Possesso locale: $poiId e' ora dell'utente")
+        } catch (e: Exception) {
+            Log.w(TAG, "markOwned fallita: ${e.message}")
+        }
+    }
+
+    /**
+     * DIRITTO A RIASCOLTARE GRATIS (29/08/2026).
+     *
+     * Ordine: prima il mirror del POSSESSO (`owned_poi_ids_<userId>`, copia
+     * di user_poi_purchases, la fonte di verita' anche per il server); se il
+     * POI non c'e', si ripiega sul vecchio mirror degli ascolti. Il ripiego
+     * NON e' pigrizia: il backfill ha importato nel registro gli acquisti
+     * storici, ma un telefono appena aggiornato e offline puo' non aver
+     * ancora scaricato il mirror nuovo — e fra "fargli ripagare un POI che e'
+     * suo" e "regalargli un riascolto" si sceglie sempre il secondo.
+     *
+     * Nessuna rete qui: si legge solo dalle prefs, il trigger deve restare
+     * istantaneo. Senza utente: false (fail-closed), come prima.
+     */
     fun isAlreadyPurchased(context: Context, poiId: String): Boolean = try {
         if (poiId.isBlank()) false
         else {
             val userId = currentUserId(context)
-            userId.isNotBlank() && idsFor(context, userId).contains(poiId)
+            userId.isNotBlank() &&
+                (ownedFor(context, userId).contains(poiId) || idsFor(context, userId).contains(poiId))
         }
     } catch (_: Exception) {
         false
@@ -227,6 +311,28 @@ object ListeningHistoryStore {
         } catch (e: Exception) {
             Log.w(TAG, "syncFromCloud failed: ${e.message}")
         }
+        // POSSESSO: giro a parte, con il SUO tetto di tempo. Accodarlo dentro
+        // quello dello storico voleva dire che una rete lenta consumava i 20 s
+        // in due chiamate e ne moriva una delle due, a caso; cosi' invece ne
+        // fallisce al massimo una, e l'altra fa comunque il suo lavoro. Resta
+        // dentro lo stesso mutex: mai due giri di rete in parallelo.
+        try {
+            HistoryScope.mutex.withLock {
+                withTimeout(HistoryScope.CALL_TIMEOUT_MS) { syncOwnershipEntryLocked(appContext) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "syncOwnership failed: ${e.message}")
+        }
+    }
+
+    /** Legge identita' e stato rete, poi delega a syncOwnershipLocked. */
+    private suspend fun syncOwnershipEntryLocked(appContext: Context) {
+        if (!com.itaintasca.app.offline.ConnectivityMonitor.isOnline(appContext)) return
+        val securePrefs = SecurePrefs.get(appContext)
+        val userId = securePrefs.getString(PREF_USER_ID, "") ?: ""
+        if (userId.isBlank()) return
+        val token = securePrefs.getString(PREF_ACCESS_TOKEN, "") ?: ""
+        syncOwnershipLocked(appContext, userId, token)
     }
 
     private suspend fun syncFromCloudLocked(appContext: Context) {
@@ -249,6 +355,53 @@ object ListeningHistoryStore {
         }
         Log.d(TAG, "Mirror synced: ${cloudIds.size} listened POIs from cloud (utente $userId)")
         flushPendingLocked(appContext)
+    }
+
+    /**
+     * Scarica il registro `user_poi_purchases` e lo specchia in
+     * `owned_poi_ids_<userId>`. Va chiamata sotto HistoryScope.mutex.
+     *
+     * Frequenza: al massimo una volta ogni 6 ore, tranne quando il mirror e'
+     * vuoto (primo avvio dopo l'aggiornamento: li' serve subito, altrimenti
+     * il possesso resterebbe appeso al solo ripiego sullo storico).
+     *
+     * UNIONE, mai sostituzione: il server e' l'unico che scrive il registro,
+     * ma gli id segnati da markOwned dopo un addebito OFFLINE non sono ancora
+     * arrivati lassu' (la riconciliazione la fa il JS quando torna la rete).
+     * Sostituire vorrebbe dire far sparire un acquisto appena fatto e farlo
+     * ripagare: il possesso non si toglie mai da qui.
+     *
+     * FAIL-SAFE: se la lettura fallisce (rete, 401, RLS) non si tocca niente
+     * e non si aggiorna il timestamp: si riproverA' al giro dopo, e nel
+     * frattempo vale il mirror che c'e'. Mai svuotarlo su un errore.
+     */
+    private suspend fun syncOwnershipLocked(appContext: Context, userId: String, token: String) {
+        try {
+            if (userId.isBlank() || token.isBlank()) return
+            val p = prefs(appContext)
+            val locali = (p.getStringSet(ownedKey(userId), emptySet()) ?: emptySet())
+            val ultimaSync = p.getLong(ownedSyncAtKey(userId), 0L)
+            val scaduta = System.currentTimeMillis() - ultimaSync > OWNED_SYNC_EVERY_MS
+            if (!scaduta && locali.isNotEmpty()) return
+            val cloudIds = SupabaseClient(appContext).fetchOwnedPoiIds(userId, token)
+            if (cloudIds == null) {
+                Log.w(TAG, "Possesso: lettura di user_poi_purchases fallita, resta il mirror locale")
+                return
+            }
+            synchronized(this) {
+                val aggiornati = (p.getStringSet(ownedKey(userId), emptySet()) ?: emptySet()).toMutableSet()
+                aggiornati.addAll(cloudIds)
+                p.edit()
+                    .putStringSet(ownedKey(userId), aggiornati)
+                    .putLong(ownedSyncAtKey(userId), System.currentTimeMillis())
+                    .apply()
+                ownedCacheUserId = userId
+                ownedCacheIds = aggiornati.toSet()
+            }
+            Log.d(TAG, "Possesso: ${cloudIds.size} POI dal registro (utente $userId)")
+        } catch (e: Exception) {
+            Log.w(TAG, "syncOwnership fallita: ${e.message}")
+        }
     }
 
     /**

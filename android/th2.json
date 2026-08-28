@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Access Denied</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f3f4f6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 50px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #e53e3e;
+        }
+        p {
+            font-size: 16px;
+        }
+        a {
+            color: #3182ce;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Access Denied</h1>
+        <p>Your request has been blocked by our security systems.</p>
+        <p>If you believe this is a mistake, please contact our support team with the following details:</p>
+        <p><strong>Ray ID:</strong> a2d8866a58eb0e73</p>
+        <p><strong>IP Address:</strong> 79.42.202.49</p>
+        <a href="/">Return to Homepage</a>
+    </div>
+</body>
+</html>

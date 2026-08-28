@@ -1,6 +1,6 @@
 // "Map as MapIcon": il nome nudo oscurava la Map NATIVA di JS in tutto il
 // modulo → "new Map()" (historyPoiDetails) esplodeva con "is not a constructor".
-import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Building2, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins, Bell } from 'lucide-react';
+import { Radio, Trash2, User, History, Landmark, Check, CheckCircle, Settings, Volume2, Globe, Heart, BookOpen, Map as MapIcon, Clock, Loader2, MapPin, Search, Gift, ShieldCheck, Ticket, Church, Utensils, Trees, Compass, ChevronDown, ChevronRight, Award, Crown, Star, Target, Headphones, Camera, Info, LifeBuoy, Mail, MessageSquare, Coins, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { ReactNode, useState, useEffect, lazy, Suspense } from 'react';
 import { useSwipeable } from 'react-swipeable';
@@ -21,7 +21,6 @@ import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
 import { getUserProfile, UserProfile } from '../lib/quotaManager';
 import { getOfflineItinerariesList, getOfflineItinerary } from '../lib/offlineStorage';
 import { Language, getTranslation, LANGUAGES, linguaCorrente } from '../lib/i18n';
-import B2BPartner from './B2BPartner';
 import { FAVORITES_EVENT } from '../lib/favorites';
 import { list as listNotifications, markAllRead as markAllNotificationsRead, unreadCount as notificationsUnreadCount, formatRelativeTime, NOTIFICATION_CENTER_EVENT, WipNotification } from '../lib/notificationCenter';
 import { parseImportFile, importPlacesAsFavorites, ImportReport, MAX_IMPORT_ENTRIES } from '../lib/importGoogleMaps';
@@ -138,7 +137,7 @@ const getCardIcon = (poi: any) => {
 };
 
 export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRemovePoi, onClearItinerary, onSelectPoi, defaultLocation, setDefaultLocation, userSession, onSignOut, language, setLanguage }: ProfileScreenProps) {
-  const [activeTab, setActiveTab] = useState<'diario' | 'myvision' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'b2b' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
+  const [activeTab, setActiveTab] = useState<'diario' | 'myvision' | 'itinerari' | 'livetour' | 'cronologia' | 'impostazioni' | 'pricing' | 'admin' | 'missioni' | 'privacy' | 'offline' | 'listino' | 'guida' | 'supporto'>('diario');
   // Locale Intl per date/orari nella lingua della UI (IT→it-IT, EN→en-US, …)
   const dateLocale = getTranslation('pf_locale', language);
   // Vista griglia/lista condivisa con tutte le gallerie (My Vision, Diario…)
@@ -730,8 +729,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   };
 
   const TABS = profile?.is_admin
-    ? (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy', 'admin'] as const)
-    : (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'b2b', 'guida', 'supporto', 'privacy'] as const);
+    ? (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy', 'admin'] as const)
+    : (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy'] as const);
 
   const handleSwipe = (e: any, direction: 'left' | 'right') => {
     if (e.event && e.event.target) {
@@ -887,12 +886,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     }
     loadProfileData();
 
-    // Check URL params to auto-open specific tabs (pricing, b2b)
+    // Check URL params to auto-open specific tabs (pricing, pin)
     const params = new URLSearchParams(window.location.search);
     if (params.get('pin')) {
       setActiveTab('livetour');
-    } else if (params.get('b2b') === 'true' || params.get('b2bsuccess') === 'true' || params.get('b2bcanceled') === 'true') {
-      setActiveTab('b2b');
+    // (28/08/2026) I vecchi deep link ?b2b/?b2bsuccess/?b2bcanceled non hanno
+    // piu' una destinazione: la sezione Hotel/Partner e' stata rimossa
+    // (vendita di voucher-crediti: Apple 3.1.1 e Play Payments). Cadono sul
+    // diario come qualunque parametro sconosciuto.
     } else if (params.get('pricing') === 'true') {
       setActiveTab('pricing');
     } else {
@@ -1305,12 +1306,6 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               onClick={() => setActiveTab('listino')}
               icon={<Coins className="w-3.5 h-3.5" />}
               label={getTranslation('pf_listino_tab', language)}
-            />
-            <TabButton 
-              active={activeTab === 'b2b'} 
-              onClick={() => setActiveTab('b2b')} 
-              icon={<Building2 className="w-3.5 h-3.5" />} 
-              label={getTranslation("hotel_tab", language)} 
             />
             <TabButton
               active={activeTab === 'guida'}
@@ -2961,18 +2956,6 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
 
           {activeTab === 'listino' && (
              <PriceList language={language} onOpenShop={() => setActiveTab('pricing')} />
-          )}
-
-          {activeTab === 'b2b' && (
-            <motion.div
-              key="b2b"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-6"
-            >
-              <B2BPartner userSession={userSession} language={language} />
-            </motion.div>
           )}
 
           {activeTab === 'admin' && profile?.is_admin && (

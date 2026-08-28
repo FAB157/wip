@@ -1,0 +1,91 @@
+ M android/app/src/main/java/com/itaintasca/app/db/OfflineDao.kt
+ M android/app/src/main/java/com/itaintasca/app/db/PoiDatabase.kt
+ M android/app/src/main/java/com/itaintasca/app/db/PoiEntity.kt
+ M android/app/src/main/java/com/itaintasca/app/db/TriggerStateEntity.kt
+ M android/app/src/main/java/com/itaintasca/app/geofence/GeofenceBroadcastReceiver.kt
+ M android/app/src/main/java/com/itaintasca/app/geofence/GeofenceManager.kt
+ M android/app/src/main/java/com/itaintasca/app/offline/PackageDownloadManager.kt
+ M android/app/src/main/java/com/itaintasca/app/service/AudioPrefetchManager.kt
+ M android/app/src/main/java/com/itaintasca/app/service/ItaintaBackgroundPoiService.kt
+ M android/app/src/main/java/com/itaintasca/app/service/SupabaseClient.kt
+ M index.html
+ M ios/App/App/BackgroundPoiManager.swift
+ M ios/App/App/ItaintaBackgroundPoiPlugin.swift
+ M ios/App/App/PoiModels.swift
+ M ios/App/App/PoiStore.swift
+ M ios/App/App/WipPackageDownloadManager.swift
+ M ios/App/App/WipSupabaseClient.swift
+ M server.ts
+ M src/App.tsx
+ M src/components/AdminApiStats.tsx
+ M src/components/AdminDiagnostics.tsx
+ M src/components/AdminPanel.tsx
+ M src/components/AdminSystemErrors.tsx
+ M src/components/AdminVisionCommunity.tsx
+ M src/components/ApproachBanner.tsx
+ M src/components/CameraScreen.tsx
+ M src/components/ErrorBoundary.tsx
+ M src/components/EventsScreen.tsx
+ M src/components/GeofenceAudioGuide.tsx
+ M src/components/LoginScreen.tsx
+ M src/components/MapArea.tsx
+ M src/components/NavigatorPanel.tsx
+ M src/components/OfflineAudioBundleModal.tsx
+ M src/components/OfflineMapsTab.tsx
+ M src/components/PermissionsModal.tsx
+ M src/components/PlanMap.tsx
+ M src/components/PlanScreen.tsx
+ M src/components/PoiDetailSheet.tsx
+ M src/components/PredictiveBundleModal.tsx
+ M src/components/ProfileScreen.tsx
+ M src/components/RoutePoisModal.tsx
+ M src/components/ShopScreen.tsx
+ M src/components/VisionCardSheet.tsx
+ M src/components/VisionCommentModal.tsx
+ M src/components/itinerary/ItineraryStop.tsx
+ M src/components/poi/PoiAudioPlayer.tsx
+ M src/hooks/useGeofencing.ts
+ M src/hooks/useWalkingNavigation.ts
+ M src/lib/AudioQueueManager.ts
+ M src/lib/circuitBreaker.ts
+ M src/lib/db.ts
+ M src/lib/directionalGuide.ts
+ M src/lib/errorLogger.ts
+ M src/lib/geofencing/SmartGeofenceManager.ts
+ M src/lib/geofencing/index.ts
+ M src/lib/geofencing/predictive.ts
+ M src/lib/geofencing/routeEngine.ts
+ M src/lib/geofencing/useSmartGeofence.ts
+ M src/lib/guideSettings.ts
+ M src/lib/i18n.ts
+ M src/lib/navigator/NavigatorEngine.ts
+ M src/lib/navigator/useNavigator.ts
+ M src/lib/offlineStorage.ts
+ M src/lib/poiCategories.ts
+ M src/main.tsx
+ M src/services/audioguideService.ts
+ M src/services/enrichmentService.ts
+ M src/services/osrmService.ts
+ M src/services/poiDiscovery.ts
+ M src/services/poiRepository.ts
+ M src/services/ttsService.ts
+ M supabase/functions/auto-enrich-poi/index.ts
+ M supabase/functions/generate-poi-audio/index.ts
+ M supabase/functions/generate-poi-data/index.ts
+ M supabase/functions/manager-poi/index.ts
+ M supabase/functions/stripe-webhook/index.ts
+ M vercel.json
+ M vite.config.ts
+?? android/.git-status-out.txt
+?? scripts/offline_routing/debug_duckdb.py
+?? src/components/AdminPoiMapEditor.tsx
+?? src/components/GroupPlanPanel.tsx
+?? src/components/PremiumGuideAudiobook.tsx
+?? src/components/TravelerDashboard.tsx
+?? src/components/admin/UserManageModal.tsx
+?? src/lib/featureFlags.ts
+?? src/lib/seasonalTemplates.ts
+?? supabase/migrations/20260812150000_generic_name_add_placeholders.sql
+?? supabase/migrations/20260813100000_rls_content_rewards_daypass_hardening.sql
+?? supabase/migrations/20260813110000_poi_visibility_offline_canonical.sql
+?? supabase/migrations/20260813120000_spatial_indexes_cleanup.sql

@@ -1,0 +1,23 @@
+/* Traduzione inglese delle NS*UsageDescription dell'Info.plist.
+   Senza questo file un revisore Apple in lingua inglese vedrebbe i prompt di
+   sistema in italiano (motivo di rigetto 5.1.1). Le chiavi devono restare
+   identiche a quelle dell'Info.plist. */
+
+"NSLocationWhenInUseUsageDescription" = "Your location is used to show points of interest on the map and to work out the route to nearby landmarks.";
+
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "WIP needs your location at all times to detect nearby landmarks and Gems while you walk or drive, playing the audio guide even when the phone is in your pocket or the app is closed. Your location is never used for advertising.";
+
+"NSLocationAlwaysUsageDescription" = "Continuous access to your location lets the audio guide start on its own while you explore the city, even with the screen off.";
+
+"NSFaceIDUsageDescription" = "Face ID is used to protect your profile and your premium content.";
+
+"NSCameraUsageDescription" = "The camera is used by the Vision feature, which recognises the landmark you point it at.";
+
+"NSMicrophoneUsageDescription" = "The microphone is used to dictate your questions to the AI guide while you listen to an audio guide.";
+
+/* Purpose key passata a requestTemporaryFullAccuracyAuthorization: iOS cerca
+   la traduzione con la chiave del dizionario (se non la trova usa il valore
+   italiano dell'Info.plist, quindi la riga e' innocua in ogni caso). */
+"Audioguida" = "Precise location is needed to recognise the landmark in front of you.";
+
+"NSMotionUsageDescription" = "Motion data (still, walking, in a vehicle) is used only to avoid false audio-guide alerts when the GPS signal jumps while you are standing still. It is never shared and never used for advertising.";

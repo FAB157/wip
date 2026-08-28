@@ -162,7 +162,7 @@ public class WipBackgroundAudioPlugin extends Plugin {
     @PluginMethod
     public void play(PluginCall call) {
         String url = call.getString("url");
-        String title = call.getString("title", "Italia in Tasca");
+        String title = call.getString("title", "WIP");
         String subtitle = call.getString("subtitle", "Audioguida");
 
         if (url == null || url.isEmpty()) {

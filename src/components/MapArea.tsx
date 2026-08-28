@@ -5549,7 +5549,7 @@ function MapArea({
           ref={mapRef}
         >
           <CachedTiles
-            attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
             url={cartoUrl}
           />
           <MapController center={center} zoom={mapZoom} />

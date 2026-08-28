@@ -624,7 +624,8 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li><Mail className="w-3.5 h-3.5 inline" /> <strong>Email assistenza</strong>: <a href="mailto:support@wip.guide" className="text-primary font-bold underline">support@wip.guide</a> — rispondiamo entro 48 ore lavorative.</Li>
             <Li><strong>Segnala un problema tecnico</strong>: da Profilo → Supporto, il tasto dedicato prepara un'email con i dati del dispositivo già compilati.</Li>
             <Li><strong>Segnala un errore su un luogo</strong>: dalla scheda del POI (informazioni errate, luogo chiuso, foto sbagliata).</Li>
-            <Li><strong>Strutture e partner (B2B)</strong>: sezione Partner nel Profilo per hotel, guide e attività che vogliono offrire WIP ai propri ospiti.</Li>
+            {/* (28/08/2026) Tolta la voce «Strutture e partner (B2B)»: la sezione
+                Hotel/Partner non esiste piu' in nessuna piattaforma. */}
           </ul>
           <H>Privacy in breve</H>
           <P>La posizione serve solo a farti da guida (anche in background, se lo autorizzi) e non viene venduta a terzi. I dati del profilo sono protetti da Supabase con crittografia; i pagamenti passano da Stripe/Google Play e non vediamo mai la tua carta. L'informativa completa è in Profilo → Privacy, dove trovi anche i tuoi diritti GDPR (accesso, rettifica, cancellazione).</P>

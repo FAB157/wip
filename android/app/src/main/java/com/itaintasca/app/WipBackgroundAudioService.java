@@ -80,7 +80,9 @@ public class WipBackgroundAudioService extends Service {
     // true = la pausa l'ha chiesta la voce nativa (teaser/arrivo), non
     // l'utente: solo in quel caso si riprende da soli a voce finita.
     private static volatile boolean pausedByNativeVoice = false;
-    private String currentTitle = "Italia in Tasca";
+    // Il prodotto si chiama WIP (World in Pocket): "Italia in Tasca" era il nome
+    // storico e finiva in chiaro nella notifica media / schermata di blocco.
+    private String currentTitle = "WIP";
     private String currentSubtitle = "Audioguida";
 
     // Effetto "megafono": banda vocale stretta (700-3500Hz) + volume spinto.
@@ -346,7 +348,7 @@ public class WipBackgroundAudioService extends Service {
     public void play(String url, String title, String subtitle) {
         try {
             ensurePlayer();
-            currentTitle = title != null ? title : "Italia in Tasca";
+            currentTitle = title != null ? title : "WIP";
             currentSubtitle = subtitle != null ? subtitle : "Audioguida";
 
             // (AUD-01) Il JS avvia una guida: la voce nativa (teaser/arrivo)

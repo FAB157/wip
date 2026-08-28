@@ -192,6 +192,13 @@ object ArrivalWorker {
             if (fullText.isNullOrBlank() && mp3File == null && online) {
                 val audioguideToken = com.itaintasca.app.service.SecurePrefs.get(appContext)
                     .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+                // POSSESSO (29/08/2026): qui NON si scrive il mirror
+                // `owned_poi_ids_<userId>`. Il servizio non chiede mai
+                // l'addebito (`charge:true` non parte da qui): si arriva a
+                // questa riga solo con `alreadyPurchased || passActive`,
+                // quindi un 200 vuol dire "gia' suo" oppure "Day Pass" — e il
+                // pass e' accesso a tempo, non possesso. Segnarlo qui
+                // regalerebbe per sempre ogni POI sentito col pass.
                 when (val esito = SupabaseClient(appContext).fetchAudioguide(p.poiId, p.lang, p.guideVoice, audioguideToken)) {
                     is SupabaseClient.AudioguideResult.Testo -> fullText = esito.text
                     is SupabaseClient.AudioguideResult.Anteprima -> anteprima = esito.preview

@@ -388,6 +388,55 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
     }
 
     /**
+     * POSSESSO (29/08/2026) — «un'audioguida acquistata non si ripaga mai».
+     *
+     * Il registro vero e' `user_poi_purchases`, scritto SOLO dal service role
+     * (il server, dopo un addebito riuscito): il client non puo' falsificarlo,
+     * mentre `user_listening_history` e' scrivibile dall'utente e da ieri non
+     * coincide piu' col possesso (il server decide il diritto leggendo questa
+     * tabella). Le RLS consentono la SELECT al proprietario, quindi qui basta
+     * il token utente; con la sola anon key la tabella torna vuota, e una
+     * lista vuota NON deve mai essere scambiata per "non possiede nulla":
+     * per questo senza token si esce subito con null (= richiesta fallita, il
+     * mirror locale resta com'e' e nessuno si vede far ripagare un POI).
+     *
+     * null = richiesta fallita/non attendibile; lista = possesso certo.
+     */
+    suspend fun fetchOwnedPoiIds(
+        userId: String,
+        accessToken: String?
+    ): List<String>? = withContext(Dispatchers.IO) {
+        if (userId.isBlank() || accessToken.isNullOrBlank()) return@withContext null
+        try {
+            val url = "${BuildConfig.SUPABASE_URL}/rest/v1/user_poi_purchases" +
+                "?user_id=eq.$userId&select=poi_id"
+            val request = Request.Builder()
+                .url(url)
+                .get()
+                .addHeader("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                .addHeader("Authorization", "Bearer $accessToken")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    checkUnauthorized(response.code, accessToken)
+                    Log.w(TAG, "fetchOwnedPoiIds: HTTP ${response.code}")
+                    return@withContext null
+                }
+                val arr = JSONArray(response.body?.string() ?: "[]")
+                val ids = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val id = arr.optJSONObject(i)?.optString("poi_id")
+                    if (!id.isNullOrBlank()) ids.add(id)
+                }
+                ids
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchOwnedPoiIds failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Insert/update best-effort della riga di storico, stessa logica del web
      * (lib/listeningHistory.ts): se esiste aggiorna listened_at, altrimenti
      * insert. Ritorna true solo se il server ha accettato.

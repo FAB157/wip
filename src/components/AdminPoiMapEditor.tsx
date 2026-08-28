@@ -193,7 +193,7 @@ export default function AdminPoiMapEditor() {
         {/* Mappa */}
         <div className="lg:col-span-2 relative rounded-2xl overflow-hidden border border-gray-200" style={{ height: 520 }}>
           <MapContainer center={[44.07, 10.1]} zoom={14} style={{ height: '100%', width: '100%' }}>
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap" />
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
             <ViewportLoader onViewport={loadViewport} />
             <FlyTo target={flyTarget} />
             {pois.map(p => (

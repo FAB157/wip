@@ -15,6 +15,7 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import com.itaintasca.app.geofence.BearingGate
+import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.service.ItaintaBackgroundPoiService
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -108,10 +109,13 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     // Prominent disclosure richiesta dalla policy Play sulla
                     // posizione in background: deve dire COSA si raccoglie,
                     // PERCHÉ, e che avviene anche ad app chiusa.
+                    // (28/08/2026) Testo nella lingua scelta dall'utente
+                    // (NotificationStrings legge le prefs "language", non la
+                    // locale di sistema): era italiano fisso per tutto il mondo.
                     AlertDialog.Builder(context)
-                        .setTitle("Posizione in background")
-                        .setMessage("WIP raccoglie i dati della tua posizione in background per riprodurre automaticamente le audioguide quando ti avvicini a un punto di interesse, anche quando l'app è chiusa o non in uso (schermo spento o telefono in tasca). La posizione non viene usata per pubblicità. Per attivare la funzione vai su Impostazioni → Permessi → Posizione e scegli 'Consenti sempre'.")
-                        .setPositiveButton("Vai alle Impostazioni") { _, _ ->
+                        .setTitle(NotificationStrings.get(context, "bg_disclosure_title"))
+                        .setMessage(NotificationStrings.get(context, "bg_disclosure_text"))
+                        .setPositiveButton(NotificationStrings.get(context, "bg_disclosure_settings")) { _, _ ->
                             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                                 data = Uri.fromParts("package", context.packageName, null)
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -121,7 +125,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                             ret.put("status", "requesting_background_location")
                             call.resolve(ret)
                         }
-                        .setNegativeButton("Non ora") { dialog, _ ->
+                        // Nessuna richiesta di permesso qui: rifiutare deve
+                        // restare rifiutare (il consenso non cambia logica).
+                        .setNegativeButton(NotificationStrings.get(context, "bg_disclosure_later")) { dialog, _ ->
                             dialog.dismiss()
                             val ret = JSObject()
                             ret.put("status", "denied_background_location")
@@ -804,7 +810,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      * Identità utente per lo storico ascolti nativo: il JS la spinge a ogni
      * sessione online (dayPassService.reconcileOfflineBilling). Il token
      * serve per le RLS su user_listening_history; se scade, insert e sync
-     * restano best-effort. Alla ricezione sincronizza subito il mirror.
+     * restano best-effort. Alla ricezione sincronizza subito il mirror —
+     * ascolti E possesso (`user_poi_purchases`, al massimo ogni 6 ore): e'
+     * l'unico momento certo in cui il nativo ha in mano un token fresco.
      */
     @PluginMethod
     fun setUserContext(call: PluginCall) {
@@ -836,8 +844,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
 
     /**
      * (SEC-02) LOGOUT: via userId e access token dallo store cifrato e il
-     * mirror in memoria dello storico ascolti. Le chiavi per utente su disco
-     * (`listened_poi_ids_<userId>`) restano: sono gia' isolate per account e
+     * mirror in memoria dello storico ascolti e del possesso. Le chiavi per
+     * utente su disco (`listened_poi_ids_<userId>`, `owned_poi_ids_<userId>`)
+     * restano: sono gia' isolate per account e
      * tornano utili se lo stesso utente rientra. Da chiamare dal JS insieme a
      * supabase.auth.signOut(). Mai un reject: il logout deve sempre finire.
      */
@@ -1017,6 +1026,15 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     db.offlineDao().insertSpend(
                         com.itaintasca.app.db.OfflineSpendEntity(poiId = poiId, credits = cost, ts = nowMs)
                     )
+                    // ACQUISTO (29/08/2026): «chi paga un'audioguida non la
+                    // paga mai piu'». Qui — e solo qui, nel nativo — l'utente
+                    // ha davvero chiesto l'addebito a crediti, quindi il POI
+                    // entra subito nel mirror del possesso e il riascolto
+                    // offline successivo e' gratis, senza aspettare che la
+                    // riconciliazione scriva user_poi_purchases sul server.
+                    // Il Day Pass (ramo sopra) NON ci entra: e' accesso a
+                    // tempo, non possesso.
+                    com.itaintasca.app.service.ListeningHistoryStore.markOwned(context, poiId)
                     ret.put("mode", "per_listen")
                     ret.put("charged", cost)
                 }

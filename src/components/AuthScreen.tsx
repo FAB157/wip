@@ -55,7 +55,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
             <Compass className="w-8 h-8" />
           </div>
           <h1 className="text-2xl font-black text-on-surface tracking-tight">
-            Italia in Tasca
+            WIP
           </h1>
           <p className="text-sm font-bold text-on-surface-variant opacity-70">
             {isLogin ? t('vr_a_auth_login_sub') : t('vr_a_auth_signup_sub')}

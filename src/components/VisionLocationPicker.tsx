@@ -153,9 +153,11 @@ export default function VisionLocationPicker({ devicePosition, language, onPick 
             zoom={zoom}
             className="absolute inset-0 w-full h-full z-0"
             zoomControl={true}
-            attributionControl={false}
+            attributionControl={true}
           >
+            {/* Attribuzione ODbL obbligatoria: le tile sono OpenStreetMap. */}
             <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               subdomains="abc"
               maxZoom={19}
