@@ -121,7 +121,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// Sul main (i chiamanti di SpeechQueue già ci stanno; si rientra
     /// comunque in modo sicuro).
     func pauseForSpeech() {
-        let esegui = {
+        let esegui: () -> Void = {
             guard let player = self.player, player.rate > 0 else { return }
             player.pause()
             self.isPausedForSpeech = true
@@ -134,7 +134,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// SpeechQueue ha finito: si riprende SOLO se la pausa era nostra e
     /// nessuno nel frattempo ha fermato o sostituito il player.
     func resumeAfterSpeechIfNeeded() {
-        let esegui = {
+        let esegui: () -> Void = {
             guard self.isPausedForSpeech, let player = self.player else { return }
             self.isPausedForSpeech = false
             self.riproduzioneVoluta = true

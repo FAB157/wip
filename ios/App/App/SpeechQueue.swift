@@ -350,13 +350,17 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// ripresa, il sistema interpola da lì.
     private func pubblicaNowPlaying(rate: Float) {
         guard let player = audioPlayer else { return }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+        // Annotazione esplicita: un dizionario letterale eterogeneo assegnato
+        // direttamente a `nowPlayingInfo` ([String: Any]?) costringe il type
+        // checker a un lavoro inutile e fragile.
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: nowPlayingTitle,
             MPMediaItemPropertyArtist: "WIP · Audioguida",
             MPMediaItemPropertyPlaybackDuration: player.duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
             MPNowPlayingInfoPropertyPlaybackRate: rate
         ]
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
     /// C'è un MP3 della guida caricato in questa coda (in riproduzione o in

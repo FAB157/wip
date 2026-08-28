@@ -12,7 +12,8 @@ import UIKit
  * (28/08/2026, ITI-06) Allineato ad Android su quattro punti che qui
  * mancavano del tutto:
  *  1. CHECKPOINT: il download pieno persiste il cursore keyset a ogni pagina
- *     (OfflinePackage.pendingCursor*/pendingRunStartedAt) e il tentativo
+ *     (OfflinePackage.pendingCursorUpdated, pendingCursorId,
+ *     pendingRunStartedAt) e il tentativo
  *     successivo riparte da lì invece che da pagina 1. Solo il download pieno,
  *     mai il delta: un cursore dell'era delta ripreso da un download pieno
  *     saltava in silenzio tutti i POI più vecchi.
@@ -140,7 +141,8 @@ final class WipPackageDownloadManager {
         // Timbro del run: i due tronconi dello stesso download devono portare
         // lo stesso timbro, altrimenti la potatura finale butterebbe la prima
         // metà.
-        let runStartedAt: TimeInterval = (isResume ? existing?.pendingRunStartedAt : nil) ?? nowMs()
+        let timbroCheckpoint: TimeInterval? = isResume ? existing?.pendingRunStartedAt : nil
+        let runStartedAt: TimeInterval = timbroCheckpoint ?? nowMs()
 
         if let errore = ensureStorageBudget(newPackageId: id) {
             // Lo stato del pacchetto (se esisteva) resta com'era: non si è
