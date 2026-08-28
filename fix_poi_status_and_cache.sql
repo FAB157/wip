@@ -30,7 +30,7 @@ BEGIN
             url := 'https://qfxxhzkkrkvbuekfknhh.supabase.co/functions/v1/manager-poi',
             headers := jsonb_build_object(
               'Content-Type', 'application/json',
-              'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTEwMzU4NywiZXhwIjoyMDk0Njc5NTg3fQ.Q0QT3F2w8RlT88a7fY-wO2Mo2r26KeuA2ejZyYJ2d4Y'
+              'Authorization', 'Bearer <<SUPABASE_SERVICE_ROLE_KEY>>'
             ),
             body := jsonb_build_object(
                 'action', 'enrich-now',
