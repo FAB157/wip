@@ -452,9 +452,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     }
 
     /// Fine del giro (locationService.unsyncTappeGiroFromNative → plugin
-    /// clearManualSelection). Prima non esisteva: `syncManualSelection` FONDE e
-    /// non sostituisce, quindi le tappe di un itinerario già chiuso restavano
-    /// monitorate — con priorità sul radar — fino allo stop del servizio.
+    /// clearManualSelection). Prima non esisteva: `syncManualSelection`
+    /// SOSTITUISCE la selezione, ma a fine giro il JS non manda nessuna lista,
+    /// quindi le tappe di un itinerario già chiuso restavano monitorate — con
+    /// priorità sul radar, dentro le 20 region — fino allo stop del servizio.
     /// Port di ItaintaBackgroundPoiPlugin.kt::clearManualSelection.
     func clearManualSelection() {
         workQueue.async { self.clearManualSelectionConfinato() }

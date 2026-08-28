@@ -141,7 +141,7 @@ object CategoryMap {
             "palace_hotel", "hotel_5_stelle", "ristorante_stellato", "chiave_michelin",
             "resort_esclusivo", "marina_yacht", "club_esclusivo", "treno_lusso_storico",
             "isola_privata", "stazione_sci_lusso", "ryokan_lusso",
-            "noleggio_yacht", "jet_privato"),
+            "noleggio_yacht", "jet_privato", "casino_lusso"),
         "consigli" to setOf("information", "tourism_information", "office", "consigli"),
         // Gemme: chiave del toggle web (useGeofencing.ts). Nel prodotto sono
         // "sempre attive", ma esposta per parità di mappa.

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useCallback, useEffect, useRef, lazy, Suspense } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { getGuideCharacter, setGuideCharacter, isCategoryAllowed } from "./lib/guideSettings";
 import { getBlockedCommunityPoiIds, refreshBlockedCommunityPois } from "./lib/communityModeration";
 import { motion, AnimatePresence } from "motion/react";
@@ -25,7 +25,7 @@ import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl, invalidaTokenCache } from "./lib/api";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
-import { Headphones, MapPin, Loader2 } from "lucide-react";
+import { Headphones, MapPin, Loader2, Navigation2 } from "lucide-react";
 import { Language, getTranslation } from "./lib/i18n";
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
@@ -42,6 +42,8 @@ import VisionCardSheet from "./components/VisionCardSheet";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
+import NavChoiceSheet from "./components/NavChoiceSheet";
+import { useVistaGiro } from "./lib/tour/useGiro";
 import { tourService } from "./services/tourService";
 import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
@@ -152,7 +154,14 @@ export default function App() {
   // a meta` percorso non deve far perdere il giro (e l'audio gia` scaricato).
   const [giroInCorso, setGiroInCorso] = useState(false);
   useEffect(() => {
+    // Prima di riprendere si dice al servizio se la guida e` accesa: con la
+    // guida spenta il giro si ricarica in memoria ma resta fermo e invisibile
+    // (niente rete, niente geofence nativi) finche` non la si riaccende.
+    try { tourService.sospendi(localStorage.getItem('wip_audioguide_active') !== 'true'); } catch { /* si resta attivi */ }
     setGiroInCorso(!!tourService.riprendi() || tourService.inCorso());
+    // La bozza sopravvive al riavvio ma il suo percorso no (dipende da dove si
+    // e` adesso): senza questa riga resterebbe disegnata in linea d'aria.
+    tourService.anteprimaSeManca();
     // Il driver che da` il GPS al giro: senza, il giro si disegna ma non
     // sente dove sei. Idempotente, resta in ascolto per tutta la sessione.
     avviaGiroDriver();
@@ -190,6 +199,23 @@ export default function App() {
   // Dieci Tappe: i POI del radar sono i candidati per la sostituta di una
   // tappa tolta e per gli incontri lungo la strada.
   useEffect(() => { tourService.impostaCandidati(radarPois); }, [radarPois]);
+  // GUIDA SPENTA = GIRO SOSPESO (28/08/2026). Togliere la guida non chiude il
+  // giro: lo mette in pausa e lo nasconde — percorso, pin numerati, cruscotto
+  // e tasto "Naviga" spariscono dalla mappa, ma tappe, tappe fatte, ordine e
+  // scelta d'arrivo restano intatti (anche su localStorage) e tornano identici
+  // riaccendendo. Chiudere davvero il giro si fa con la X rossa del cruscotto.
+  useEffect(() => { tourService.sospendi(!isAudioGuideActive); }, [isAudioGuideActive]);
+  // Il tasto "Naviga" della mappa (28/08/2026). La vista del giro e` gia`
+  // null quando il giro e` sospeso o non c'e`: basta escludere il giro finito.
+  const vistaGiro = useVistaGiro();
+  const [navTappa, setNavTappa] = useState<any | null>(null);
+  const tappaDaNavigare = useMemo(() => {
+    if (!vistaGiro || vistaGiro.stato === 'FINITO') return null;
+    const t = tourService.tappaAttuale();
+    if (!t) return null;
+    // Il POI vero (con il suo id): NavChoiceSheet cerca la porta da li`.
+    return { id: t.id, name: t.nome, lat: t.lat, lon: t.lon, entrance_lat: t.ingresso?.lat, entrance_lon: t.ingresso?.lon };
+  }, [vistaGiro]);
 
   // Località predefinita del profilo. Prima era una costante con un setter
   // vuoto: "Usa posizione attuale" e la ricerca città confermavano ma non
@@ -1092,20 +1118,45 @@ export default function App() {
                   <MapPin className="w-5 h-5 text-white" />
                 </motion.div>
               )}
-              <motion.button
-                whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleToggleRadar}
-                className={`w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all ${
-                  isFollowingItinerary
-                    ? 'bg-rose-600 text-white ring-4 ring-rose-600/30'
-                    : isRadarMode
-                      ? 'bg-blue-600 text-white ring-4 ring-blue-600/30 animate-pulse'
-                      : 'bg-white/90 text-blue-600 border border-blue-100'
-                }`}
-              >
-                <Headphones className="w-6 h-6" />
-              </motion.button>
+              {/* Cuffie sopra, "Naviga" sotto: una colonna sola, allineata a
+                  destra. Il tasto d'avvio della navigazione sta SULLA MAPPA e
+                  non nel cruscotto perche' e' li` che si guarda camminando. */}
+              <div className="flex flex-col items-end gap-2">
+                <motion.button
+                  whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleToggleRadar}
+                  className={`w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all ${
+                    isFollowingItinerary
+                      ? 'bg-rose-600 text-white ring-4 ring-rose-600/30'
+                      : isRadarMode
+                        ? 'bg-blue-600 text-white ring-4 ring-blue-600/30 animate-pulse'
+                        : 'bg-white/90 text-blue-600 border border-blue-100'
+                  }`}
+                >
+                  <Headphones className="w-6 h-6" />
+                </motion.button>
+                {/* Solo con un giro CREATO e ancora da camminare: non in
+                    bozza (non c'e' una tappa corrente) e non a giro finito. */}
+                {tappaDaNavigare && (
+                  <motion.button
+                    initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    onClick={() => setNavTappa(tappaDaNavigare)}
+                    title={getTranslation('tour_naviga', language)}
+                    aria-label={getTranslation('tour_naviga', language)}
+                    className="w-12 h-12 rounded-full shadow-2xl bg-emerald-600 text-white ring-4 ring-emerald-600/25 flex items-center justify-center transition-all"
+                  >
+                    <Navigation2 className="w-6 h-6" />
+                  </motion.button>
+                )}
+              </div>
             </div>
           )}
+
+          {/* La stessa doppia scelta di tutto il resto dell'app: 🚶 WIP Nav o
+              🚗 Google Maps / Mappe, verso la PORTA della tappa corrente. Il
+              driver vocale del giro continua per conto suo: qui non si calcola
+              un secondo percorso, si consegna la destinazione. */}
+          <NavChoiceSheet poi={navTappa} language={language} onClose={() => setNavTappa(null)} />
 
           <AnimatePresence>
             {isRadarMode && activeTab === "map" && (

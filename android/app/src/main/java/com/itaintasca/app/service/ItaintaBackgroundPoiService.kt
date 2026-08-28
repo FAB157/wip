@@ -52,6 +52,12 @@ class ItaintaBackgroundPoiService : Service() {
         const val NOTIF_ID = 4004
         const val ACTION_STOP = "com.itaintasca.app.STOP"
         const val ACTION_SYNC_SELECTION = "com.itaintasca.app.SYNC_SELECTION"
+        // (28/08/2026) FINE DEL GIRO: via le tappe d'itinerario, il servizio
+        // resta acceso col solo radar. Serve un'azione distinta da
+        // ACTION_SYNC_SELECTION con lista vuota perche' quella, se il radar in
+        // memoria e' vuoto, non ri-registra niente e i recinti delle tappe
+        // restano quelli gia' consegnati al sistema.
+        const val ACTION_CLEAR_SELECTION = "com.itaintasca.app.CLEAR_SELECTION"
         // (MAP-04) Dal receiver su GEOFENCE_NOT_AVAILABLE: azzera i recinti
         // in memoria e forza la ri-registrazione completa al prossimo fix.
         const val ACTION_REFRESH_GEOFENCES = "com.itaintasca.app.REFRESH_GEOFENCES"
@@ -344,7 +350,9 @@ class ItaintaBackgroundPoiService : Service() {
         // (obbligo di promozione), ma qui si salva solo la selezione, si
         // toglie la notifica e ci si spegne. Il plugin, da parte sua, non
         // avvia piu' il servizio in questo caso: salva le prefs e basta.
-        if (intent?.action == ACTION_SYNC_SELECTION && !isReallyActive) {
+        // ACTION_CLEAR_SELECTION arriva senza extra "poisJson": cade su "[]",
+        // che qui vuol dire esattamente «togli le tappe dalle prefs».
+        if ((intent?.action == ACTION_SYNC_SELECTION || intent?.action == ACTION_CLEAR_SELECTION) && !isReallyActive) {
             val jsonPois = intent.getStringExtra("poisJson") ?: "[]"
             try {
                 val type = object : com.google.gson.reflect.TypeToken<List<PoiEntity>>() {}.type
@@ -398,6 +406,32 @@ class ItaintaBackgroundPoiService : Service() {
             geofenceManager.removeAllGeofences()
             lastQueryLocation = null
             if (locationCallback == null) startActiveMonitoring()
+            return START_STICKY
+        }
+
+        // (28/08/2026) FINE DEL GIRO «Dieci Tappe»: le tappe escono dal
+        // geofencing e il loro posto nella finestra scorrevole (100 recinti in
+        // tutto) torna ai POI del radar. Il servizio NON si spegne: l'audioguida
+        // puo' benissimo restare accesa dopo la fine del giro.
+        // Si azzerano i recinti e lastQueryLocation come in ACTION_REFRESH_GEOFENCES,
+        // cosi' il prossimo fix rifa' fetch + registrazione completa dal solo radar:
+        // una ri-registrazione "differenziale" col radar in memoria non basterebbe
+        // (se currentPois e' vuoto non registrerebbe nulla e i recinti delle tappe
+        // resterebbero consegnati al sistema).
+        if (intent?.action == ACTION_CLEAR_SELECTION) {
+            Log.d(TAG, "Fine giro: tolgo le tappe itinerario dal geofencing")
+            // restoreSettingsFromPrefs PRIMA della pulizia: ripristina anche le
+            // tappe da prefs (restoreItineraryFromPrefs), che subito dopo
+            // vengono buttate insieme a quelle in memoria.
+            if (selectedCategories.isEmpty() && currentPois.isEmpty()) restoreSettingsFromPrefs(prefs)
+            itineraryPois = emptyList()
+            prefs.edit { remove(PREF_ITINERARY_POIS) }
+            currentPois = currentPois.filter { !it.isFromItinerary }
+            RadarState.updatePois(currentPois)
+            geofenceManager.removeAllGeofences()
+            lastQueryLocation = null
+            if (locationCallback == null) startActiveMonitoring()
+            updateNotificationAndStatus("Audioguida attiva", "Giro concluso: resta il radar")
             return START_STICKY
         }
 

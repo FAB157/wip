@@ -3,7 +3,7 @@ import { motion, AnimatePresence, Reorder } from "motion/react";
 import { useState, useMemo } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language, getTranslation } from "../lib/i18n";
-import { tourService, MAX_TAPPE } from "../services/tourService";
+import { tourService, MAX_TAPPE, metri as metriFra } from "../services/tourService";
 import { getGuideCharacter } from "../lib/guideSettings";
 import { useBozzaGiro } from "../lib/tour/useGiro";
 
@@ -74,6 +74,30 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   // il giro che ne esce — km e minuti — appena il server ha risposto.
   const passRichiesto = errore === tr('gr_pass_richiesto') || bozza.errore === 'PASS_RICHIESTO';
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+  // PERCORSO APERTO: dove si finisce, DETTO PRIMA (28/08/2026). Il giro aperto
+  // ottimizza una cosa sola — camminare il meno possibile per fare tutte le
+  // tappe — e il capolinea puo` quindi restare a chilometri da dove si e`
+  // partiti. E` un esito voluto, non un problema: si dice e basta, senza
+  // allarmi e senza colori d'allerta, per non scoprirlo da stanchi.
+  const distanzaDalRientro = (() => {
+    if (bozza.anello || !bozza.partenza || sequenza.length === 0) return null;
+    const ultima = sequenza[sequenza.length - 1];
+    const p = ultima.ingresso ?? { lat: ultima.lat, lon: ultima.lon };
+    const d = metriFra({ lat: bozza.partenza.lat, lon: bozza.partenza.lon }, p);
+    // Sotto i 300 m «finisci a 120 m dalla partenza» e` rumore.
+    return d >= 300 ? d : null;
+  })();
+  /**
+   * QUANDO SPIEGA UN GUASTO, SI DEVE LEGGERE (28/08/2026). La riga sotto il
+   * conteggio nasce come informazione di servizio (km · minuti · anello) e
+   * quello stile — 10px al 60% — le va bene. Ma la stessa riga porta anche
+   * l'unico messaggio che dice PERCHE' il percorso non c'e`: il Day Pass
+   * mancante, la posizione assente, la rete. Un utente ha creato un giro e ha
+   * visto una retta grigia senza capire il motivo, che li` sotto c'era. Come
+   * errore la riga passa a 12px e pieno contrasto; come informazione resta
+   * com'era.
+   */
+  const anteprimaEErrore = !!errore || (!bozza.calcolando && !!bozza.errore);
   const rigaAnteprima = errore
     ? errore
     : bozza.calcolando
@@ -83,7 +107,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         : bozza.errore === 'POSIZIONE'
           ? tr('gr_serve_posizione')
           : bozza.metri > 0
-            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa')}`
+            ? `${distanza(bozza.metri)} · ${bozza.minutiCammino} ${tr('gr_min_a_piedi')} · ${bozza.anello ? tr('gr_anello_da_dove_sei') : tr('gr_fino_ultima_tappa')}${distanzaDalRientro != null ? ` · ${tr('gr_finisci_a_distanza').replace('{d}', distanza(distanzaDalRientro))}` : ''}`
             : tr('gr_wipnav_ordina');
 
   // 1. Deduplicazione rigorosa basata su nome o coordinate molto vicine
@@ -173,7 +197,9 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
               {scelte.length} {scelte.length === 1 ? tr('gr_tappa_scelta') : tr('gr_tappe_scelte')}
               {scelte.length >= MAX_TAPPE && <span className="font-bold text-[#1e3a8a]/50"> · {tr('gr_massimo')}</span>}
             </p>
-            <p className="text-[10px] text-[#1e3a8a]/60 leading-snug">
+            <p className={anteprimaEErrore
+              ? 'text-[12px] font-bold text-amber-800 leading-snug'
+              : 'text-[10px] text-[#1e3a8a]/60 leading-snug'}>
               {rigaAnteprima}
             </p>
           </div>
@@ -246,19 +272,38 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
               parte della citta` non vuole tornare al punto di partenza. */}
           <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
             <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
-            {[{ v: true, label: tr('gr_torno_da_dove_parto') }, { v: false, label: tr('gr_finisco_ultima') }].map(({ v, label }) => (
-              <button
-                key={String(v)}
-                onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaAnello(v); }}
-                className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
-                  bozza.anello === v
-                    ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
-                    : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            {/* TRE possibilita`, non due (28/08/2026). L'anello ha DUE mete
+                diverse appena il giro viene ricalcolato per strada: il punto
+                da cui si e` partiti (l'auto, l'albergo) o quello da cui si
+                riparte adesso. Tre chip affiancate invece di un'opzione
+                annidata sotto la prima: la riga scorre gia` in orizzontale, e
+                una scelta che si vede tutta si capisce senza aprirla. */}
+            {([
+              { k: 'originale', anello: true, rientro: 'originale' as const, label: tr('gr_torno_da_dove_parto') },
+              { k: 'corrente', anello: true, rientro: 'corrente' as const, label: tr('gr_torno_dove_sono') },
+              { k: 'aperto', anello: false, rientro: null, label: tr('gr_finisco_ultima') },
+            ]).map(({ k, anello, rientro, label }) => {
+              const scelta = anello ? bozza.anello && bozza.rientro === rientro : !bozza.anello;
+              return (
+                <button
+                  key={k}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    // Prima la meta`, poi l'anello: cosi` l'unico ricalcolo che
+                    // parte e` quello di `bozzaImpostaAnello`.
+                    if (rientro) tourService.impostaRientro(rientro);
+                    tourService.bozzaImpostaAnello(anello);
+                  }}
+                  className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
+                    scelta
+                      ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
+                      : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
+                  }`}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
           {bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length && (
             <p className="text-[10px] text-amber-700 leading-snug">

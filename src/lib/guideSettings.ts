@@ -475,7 +475,7 @@ export function isCategoryAllowed(
        'palace_hotel', 'hotel_5_stelle', 'ristorante_stellato', 'chiave_michelin',
        'resort_esclusivo', 'marina_yacht', 'club_esclusivo', 'treno_lusso_storico',
        'isola_privata', 'stazione_sci_lusso', 'ryokan_lusso',
-       'noleggio_yacht', 'jet_privato',
+       'noleggio_yacht', 'jet_privato', 'casino_lusso',
       ].includes(cat)) return activeSubcats.lusso ?? false;
   // I verticali tematici (terme, cinema, cieli, street_art, mercati,
   // fioriture, memoria, lento) stavano qui con `activeSubcats[cat] ?? false`

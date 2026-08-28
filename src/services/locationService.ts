@@ -1039,11 +1039,12 @@ class LocationService {
   }
 
   /**
-   * Fine del giro: le tappe non devono restare geofence prioritari. Il plugin
-   * nativo oggi NON ha un metodo per togliere una selezione manuale
-   * (syncManualSelection fonde, non sostituisce): si prova un
-   * `clearManualSelection` se la build lo espone, altrimenti resta un TODO
-   * nativo e si lascia traccia in console.
+   * Fine del giro: le tappe non devono restare geofence prioritari. Dal
+   * 28/08/2026 il plugin nativo espone `clearManualSelection` (Kotlin e Swift):
+   * svuota le tappe d'itinerario e rifa' la finestra dei recinti col solo
+   * radar, senza spegnere il servizio. La guardia `typeof` resta per le build
+   * native gia' installate che il metodo non ce l'hanno: li' non succede nulla
+   * e le tappe se ne vanno al prossimo riavvio del servizio.
    */
   public unsyncTappeGiroFromNative() {
     if (!ItaintaBackgroundPoiPlugin) return;
@@ -1051,11 +1052,8 @@ class LocationService {
       try {
         if (typeof ItaintaBackgroundPoiPlugin.clearManualSelection === 'function') {
           await ItaintaBackgroundPoiPlugin.clearManualSelection();
-          return;
         }
-      } catch { /* metodo assente nella build: si passa al warn */ }
-      // TODO(nativo): aggiungere clearManualSelection al plugin Kotlin/Swift.
-      console.warn('[LocationService] clearManualSelection non disponibile: le tappe del giro restano nel geofencing nativo fino al prossimo riavvio del servizio');
+      } catch { /* best-effort: la fine del giro non deve mai fallire per questo */ }
     })();
   }
 

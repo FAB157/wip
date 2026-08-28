@@ -236,8 +236,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
      * Fine del giro (locationService.unsyncTappeGiroFromNative). Il JS lo
      * chiamava già con guardia `typeof`, ma il metodo non esisteva: le tappe
      * di un itinerario chiuso restavano monitorate — e prioritarie sul radar —
-     * fino allo stop del servizio. `syncManualSelection` non basta: FONDE con
-     * quanto c'è, non sostituisce.
+     * fino allo stop del servizio. `syncManualSelection` SOSTITUISCE la
+     * selezione (non fonde), ma il JS a fine giro non manda nessuna lista: senza
+     * un metodo dedicato non c'era modo di dire «adesso non ce ne sono più».
      * Port di ItaintaBackgroundPoiPlugin.kt::clearManualSelection.
      * Sempre resolve: il JS non deve restare appeso alla fine di un giro.
      */

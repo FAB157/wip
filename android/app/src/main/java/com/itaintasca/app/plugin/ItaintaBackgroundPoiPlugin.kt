@@ -347,13 +347,17 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      * chiamata cadeva nel warn e le tappe di un giro finito restavano
      * registrate come geofence prioritari fino al riavvio del servizio.
      *
-     * Non serve un'azione nuova nel servizio: ACTION_SYNC_SELECTION con una
-     * lista VUOTA fa gia' esattamente questo (svuota itineraryPois, toglie la
-     * pref delle tappe e ri-registra i geofence con il solo radar). Qui si
-     * aggiunge la cancellazione della pref anche lato plugin, per il caso in
-     * cui il processo del servizio non sia vivo: senza, al prossimo avvio a
-     * freddo restoreItineraryFromPrefs rimetterebbe in gioco le tappe di un
-     * giro gia' chiuso.
+     * (28/08/2026) Si usa ACTION_CLEAR_SELECTION, non ACTION_SYNC_SELECTION con
+     * lista vuota: quest'ultima ri-registra i recinti solo se in memoria c'e'
+     * gia' del radar, quindi in una zona appena caricata (o subito dopo un
+     * riavvio del processo) i recinti delle tappe restavano consegnati al
+     * sistema. L'azione dedicata azzera i recinti e lastQueryLocation, cosi' il
+     * fix successivo ri-registra dal solo radar. Il servizio resta acceso.
+     *
+     * La pref viene ripulita anche qui, per il caso in cui il processo del
+     * servizio non sia vivo: senza, al prossimo avvio a freddo
+     * restoreItineraryFromPrefs rimetterebbe in gioco le tappe di un giro
+     * gia' chiuso.
      */
     @PluginMethod
     fun clearManualSelection(call: PluginCall) {
@@ -374,8 +378,7 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 .getBoolean("isServiceActive", false)
             if (attivo) {
                 val intent = Intent(context, ItaintaBackgroundPoiService::class.java).apply {
-                    action = ItaintaBackgroundPoiService.ACTION_SYNC_SELECTION
-                    putExtra("poisJson", "[]")
+                    action = ItaintaBackgroundPoiService.ACTION_CLEAR_SELECTION
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)

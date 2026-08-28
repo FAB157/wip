@@ -445,7 +445,7 @@ enum PoiCategories {
                   "palace_hotel", "hotel_5_stelle", "ristorante_stellato", "chiave_michelin",
                   "resort_esclusivo", "marina_yacht", "club_esclusivo", "treno_lusso_storico",
                   "isola_privata", "stazione_sci_lusso", "ryokan_lusso",
-                  "noleggio_yacht", "jet_privato"],
+                  "noleggio_yacht", "jet_privato", "casino_lusso"],
         "consigli": ["information", "tourism_information", "office", "consigli"],
         // Gemme: chiave presente per completezza (passano comunque via isGem).
         "gemme": ["gemme"],

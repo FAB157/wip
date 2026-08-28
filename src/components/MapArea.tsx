@@ -723,6 +723,8 @@ function escapeHtml(s: string): string {
 }
 
 import PoiPopupContent from "./PoiPopupContent";
+import { tourService, MAX_TAPPE } from "../services/tourService";
+import { useBozzaGiro, useVistaGiro } from "../lib/tour/useGiro";
 import TourRouteLayer from "./TourRouteLayer";
 import NavRouteLayer from "./NavRouteLayer";
 import PoiRadarPanel from "./PoiRadarPanel";
@@ -1132,15 +1134,50 @@ function MapArea({
   // follow-me (ricrearla farebbe ripartire i listener della mappa).
   const followModeRef = useRef(false);
   useEffect(() => { followModeRef.current = followMode; }, [followMode]);
+
+  /**
+   * IL MIRINO SEGUE CHI CAMMINA (28/08/2026).
+   *
+   * Con un giro in corso la mappa resta centrata sulla posizione: durante il
+   * giro la mappa E` la funzione, e ricentrarla a mano a ogni isolato non e`
+   * un compito da dare a chi cammina guardando la strada. Si accende il
+   * follow-me che esiste gia` (stesso `panTo`, stesso percorso di `moveend`
+   * con la soglia dei 100 m: nessuna scrittura e nessuna geocodifica in piu`).
+   * Guardare avanti resta possibile — un trascinamento sospende il follow, e
+   * dopo dieci secondi di mano ferma torna da solo, come nei navigatori.
+   */
+  const RIPRESA_FOLLOW_MS = 10_000;
+  const [giroAttivoMappa, setGiroAttivoMappa] = useState(() => {
+    const v = tourService.vista();
+    return !!v && v.stato !== 'FINITO';
+  });
+  useEffect(() => tourService.ascolta((v) => setGiroAttivoMappa(!!v && v.stato !== 'FINITO')), []);
+  const giroAttivoRef = useRef(giroAttivoMappa);
+  useEffect(() => { giroAttivoRef.current = giroAttivoMappa; }, [giroAttivoMappa]);
+  const ripresaFollowRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Il follow era gia` acceso dall'utente prima del giro? Allora resta acceso dopo. */
+  const followPrimaDelGiroRef = useRef(false);
+  /** Accuratezza dell'ultimo fix: non si insegue un punto a 500 m di errore. */
+  const accuratezzaFixRef = useRef<number | null>(null);
   const [userHeading, setUserHeading] = useState<number | null>(null);
   const [mapRotation, setMapRotation] = useState(0);
   const compassListenerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
 
   // Stop follow mode & compass when user manually pans the map
-  const stopFollowMode = useCallback(() => {
+  const stopFollowMode = useCallback((perGesto = false) => {
     // L'utente ha messo mano alla mappa: il volo automatico al primo fix
     // non deve più rubargli la vista.
     userDraggedRef.current = true;
+    if (ripresaFollowRef.current) { clearTimeout(ripresaFollowRef.current); ripresaFollowRef.current = null; }
+    // Durante il giro il trascinamento SOSPENDE il follow, non lo spegne:
+    // guardare avanti sul percorso è normale, e riprendere a mano no. Il
+    // tocco esplicito sulla bussola o sul mirino resta invece definitivo.
+    if (perGesto && giroAttivoRef.current) {
+      ripresaFollowRef.current = setTimeout(() => {
+        ripresaFollowRef.current = null;
+        if (giroAttivoRef.current) setFollowMode(true);
+      }, RIPRESA_FOLLOW_MS);
+    }
     if (followMode) {
       setFollowMode(false);
       // Stop compass
@@ -1177,6 +1214,8 @@ function MapArea({
   // Sincronizza la posizione dell'utente con il locationService centrale
   useEffect(() => {
     const unsub = locationService.subscribe((loc) => {
+      const acc = Number((loc as any)?.accuracy);
+      accuratezzaFixRef.current = Number.isFinite(acc) ? acc : null;
       setUserLocation([loc.latitude, loc.longitude]);
       if (!flewToGpsRef.current && !userDraggedRef.current && shouldFlyToGpsOnFirstFix()
           && Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude)) {
@@ -1190,14 +1229,34 @@ function MapArea({
     return unsub;
   }, []);
 
-  // Handle follow mode panning reactively when userLocation changes
+  // Handle follow mode panning reactively when userLocation changes.
+  // Solo il CENTRO: lo zoom resta quello scelto dall'utente — riportarlo a un
+  // valore fisso a ogni fix sarebbe insopportabile mentre si guarda la mappa.
   useEffect(() => {
-    if (followMode && userLocation && mapRef.current) {
-      try {
-        mapRef.current.panTo(userLocation, { animate: true, duration: 0.5 });
-      } catch (e) {}
-    }
+    if (!followMode || !userLocation || !mapRef.current) return;
+    const [la, lo] = userLocation;
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return;
+    // Un fix con 500 m di errore non è una posizione: non ci si insegue dietro.
+    const acc = accuratezzaFixRef.current;
+    if (acc != null && Number.isFinite(acc) && acc > 100) return;
+    try {
+      mapRef.current.panTo(userLocation, { animate: true, duration: 0.5 });
+    } catch (e) {}
   }, [userLocation, followMode]);
+
+  // Giro in corso → il mirino segue. Giro finito o terminato → si torna al
+  // comportamento di prima: se il follow lo aveva acceso l'utente resta acceso.
+  useEffect(() => {
+    if (giroAttivoMappa) {
+      followPrimaDelGiroRef.current = followModeRef.current;
+      if (!followModeRef.current) setFollowMode(true);
+      return;
+    }
+    if (ripresaFollowRef.current) { clearTimeout(ripresaFollowRef.current); ripresaFollowRef.current = null; }
+    if (!followPrimaDelGiroRef.current && followModeRef.current) setFollowMode(false);
+  }, [giroAttivoMappa]);
+
+  useEffect(() => () => { if (ripresaFollowRef.current) clearTimeout(ripresaFollowRef.current); }, []);
 
   const mapRef = useRef<L.Map | null>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -4967,7 +5026,18 @@ function MapArea({
   // ricrearle a ogni render (evita il churn di setIcon su centinaia di marker)
   const iconCacheRef = useRef<Map<string, L.DivIcon>>(new Map());
 
-  const createPoiIcon = (poi: Poi) => {
+  /**
+   * DIECI TAPPE — il "+" verde sul pin (28/08/2026).
+   *
+   * La X rossa per TOGLIERE una tappa sta gia` sul pin numerato del giro
+   * (TourRouteLayer). Per AGGIUNGERE, invece, bisognava aprire la scheda: due
+   * gesti diversi per due azioni simmetriche. Qui il pallino verde col "+" —
+   * stesso verde, stessa forma e stessa dimensione (22 px) di quello dei
+   * posti "lungo la strada" — compare in alto a DESTRA del pin (il posto e`
+   * libero: `subLeftBadge` sta in alto a sinistra, `subRightBadge` in basso a
+   * destra) e un tocco mette il POI nella bozza o nel giro in corso.
+   */
+  const createPoiIcon = (poi: Poi, conPiu = false) => {
     const isGem = !!(poi.is_gem || poi.category === "gemme");
     const pinSize = isGem ? 46 : 34;
     const effectiveCat = poi.baseCategory || poi.category;
@@ -5056,6 +5126,7 @@ function MapArea({
             <text x="17" y="21" text-anchor="middle" font-size="14" font-family="system-ui,sans-serif">${emoji}</text>
         </svg>
         ${subLeftBadge ? `<div style="position:absolute;top:-4px;left:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid #e5e7eb;display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subLeftBadge}</div>` : ""}
+        ${conPiu ? `<div class="wip-poi-piu" title="${getTranslation('tour_aggiungi', language).replace(/"/g, '&quot;')}" style="position:absolute;top:-9px;right:-9px;width:22px;height:22px;border-radius:50%;background:#ffffff;border:2px solid #059669;color:#059669;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;line-height:1;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;z-index:11;">+</div>` : ""}
         ${subRightBadge ? `<div style="position:absolute;bottom:6px;right:-8px;min-width:18px;height:18px;background:#fff;border-radius:9px;border:1.5px solid ${isGem ? '#fbbf24' : '#e5e7eb'};display:flex;align-items:center;justify-content:center;font-size:9px;box-shadow:0 1px 4px rgba(0,0,0,.25);z-index:10;">${subRightBadge}</div>` : ""}
       </div>
     `;
@@ -5070,17 +5141,20 @@ function MapArea({
   };
 
   // Restituisce l'icona dalla cache (identità stabile tra i render) o la crea una sola volta
-  const getPoiIcon = (poi: Poi) => {
+  const getPoiIcon = (poi: Poi, conPiu = false) => {
     // `poi.category` fa parte della chiave: nei verticali tematici la
     // baseCategory è 'tematiche' per tutti e otto, ed è la categoria vera
     // (terme, cinema…) a decidere colore ed emoji del pin.
     // `posizioneApprossimata` fa parte della chiave: senza, il primo pin
     // disegnato deciderebbe l'aspetto di tutti i beni della stessa categoria
     // e i punti al centro del comune sembrerebbero precisi.
-    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}`;
+    // `conPiu` fa parte della chiave: senza, il primo pin disegnato deciderebbe
+    // per tutti e il "+" verde non comparirebbe (o non sparirebbe entrando nel
+    // giro). E` un solo bit: la cache resta efficace.
+    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
-      icon = createPoiIcon(poi);
+      icon = createPoiIcon(poi, conPiu);
       iconCacheRef.current.set(cacheKey, icon);
     }
     return icon;
@@ -5159,6 +5233,33 @@ function MapArea({
   // posizione vive in una cache per (id, lat, lon): stessa identità finché
   // il POI non si sposta davvero, quindi setLatLng non viene mai chiamata.
   const positionCacheRef = useRef<Map<string, [number, number]>>(new Map());
+
+  // DIECI TAPPE: chi e` gia` dentro (bozza o giro) non porta il "+".
+  const bozzaGiro = useBozzaGiro();
+  const vistaGiroMappa = useVistaGiro();
+  const idsNelGiro = useMemo(() => {
+    const s = new Set<string>();
+    for (const t of bozzaGiro.tappe) s.add(String(t.id));
+    const g = tourService.datiGiro();
+    if (g) for (const t of g.tappe) if (!t.esclusa) s.add(String(t.id));
+    return s;
+    // `vistaGiroMappa` e` la dipendenza che dice "il giro e` cambiato".
+  }, [bozzaGiro, vistaGiroMappa]);
+  /** Dieci tappe vive e non se ne aggiungono altre: il "+" sparisce da tutti. */
+  const giroPieno = useMemo(() => {
+    const g = tourService.datiGiro();
+    if (g && tourService.inCorso()) return g.tappe.filter((t) => !t.esclusa).length >= MAX_TAPPE;
+    return bozzaGiro.tappe.length >= MAX_TAPPE;
+  }, [bozzaGiro, vistaGiroMappa]);
+  /** Il "+" ha senso solo con il radar/giro acceso: altrove e` rumore sul pin. */
+  const mostraPiuSuiPin = !!isRadarMode && !giroPieno && !tourService.eSospeso();
+
+  /** Un tocco sul "+" del pin: alla bozza, o al giro se e` gia` partito. */
+  const aggiungiAlGiroDaPin = useCallback((poi: any) => {
+    if (tourService.inCorso()) { void tourService.aggiungiTappaAlVolo(poi); return; }
+    tourService.bozzaAlterna(poi);
+  }, []);
+
   const markerData = useMemo(
     () => {
       const cache = positionCacheRef.current;
@@ -5177,7 +5278,8 @@ function MapArea({
           alive.add(k);
           let position = cache.get(k);
           if (!position) { position = [poi.lat, poi.lon]; cache.set(k, position); }
-          return { poi, position, icon: getPoiIcon(poi) };
+          const conPiu = mostraPiuSuiPin && !idsNelGiro.has(String(poi.id));
+          return { poi, position, icon: getPoiIcon(poi, conPiu) };
         });
       // Niente accumulo infinito: via le tuple dei POI non più in vista.
       if (cache.size > data.length * 2 + 200) {
@@ -5185,7 +5287,7 @@ function MapArea({
       }
       return data;
     },
-    [visiblePois],
+    [visiblePois, mostraPiuSuiPin, idsNelGiro],
   );
 
   // Memoizza gli elementi Marker: vengono ricostruiti SOLO quando cambia la
@@ -5253,7 +5355,16 @@ function MapArea({
           position={position}
           icon={icon}
           eventHandlers={{
-            click: () => {
+            click: (e: any) => {
+              // Il "+" verde e` dentro il marker: Leaflet da` un evento solo
+              // per tutto il pin, quindi si guarda che cosa e` stato toccato
+              // (stessa tecnica della X sulle tappe, TourRouteLayer).
+              const el = e?.originalEvent?.target as HTMLElement | null | undefined;
+              if (el?.closest?.('.wip-poi-piu')) {
+                L.DomEvent.stopPropagation(e.originalEvent);
+                aggiungiAlGiroDaPin(poi);
+                return;
+              }
               setActivePopupId(poi.id);
               setActivePoi(poi);
               centerMapOnPoi(poi);
@@ -5261,7 +5372,7 @@ function MapArea({
           }}
         />
       )),
-    [markerData, indoorMode],
+    [markerData, indoorMode, aggiungiAlGiroDaPin],
   );
 
   // I marker divisi per categoria: un gruppo per categoria vuol dire un
@@ -5442,7 +5553,7 @@ function MapArea({
             url={cartoUrl}
           />
           <MapController center={center} zoom={mapZoom} />
-          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={stopFollowMode} isFollowing={() => followModeRef.current} />
+          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={() => stopFollowMode(true)} isFollowing={() => followModeRef.current} />
 
           {userLocation &&
             typeof userLocation[0] === "number" &&
@@ -6022,7 +6133,7 @@ function MapArea({
               className={`w-12 h-12 bg-white/60 dark:bg-black/60 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
               title={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°`}
               aria-label={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°. ${getTranslation('a11y_esci_follow', language)}`}
-              onClick={stopFollowMode}
+              onClick={() => stopFollowMode()}
             >
               <svg
                 viewBox="0 0 40 40"

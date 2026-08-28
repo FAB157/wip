@@ -3,6 +3,68 @@ import type { Language } from '../i18n';
 // Chiavi della bonifica lingua 24/08/2026 — area: radar/giro/nav/day pass
 // (PoiRadarPanel, TourBanner, RoutePoisModal, DayPass*, dayPassService…).
 export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
+  // ── Giro in corso: il tasto d'avvio della navigazione sulla mappa ──
+  tour_naviga: {
+    IT: 'Naviga verso la tappa',
+    EN: 'Navigate to the stop',
+    FR: "Naviguer vers l'étape",
+    ES: 'Navegar hasta la parada',
+    DE: 'Zur Station navigieren',
+    RU: 'Проложить маршрут к точке',
+    ZH: '导航到该站点',
+  },
+  // Ad anello, dopo l'ultima tappa: la meta` e` il punto di partenza.
+  tour_ritorno_partenza: {
+    IT: 'Ritorno al punto di partenza',
+    EN: 'Back to the starting point',
+    FR: 'Retour au point de départ',
+    ES: 'Vuelta al punto de partida',
+    DE: 'Zurück zum Startpunkt',
+    RU: 'Возвращение к точке старта',
+    ZH: '返回出发点',
+  },
+  // La pillola sulla linea d'aria di ripiego: dice che NON e` un percorso.
+  gr_linea_stimata: {
+    IT: 'tracciato stimato',
+    EN: 'estimated line',
+    FR: 'tracé estimé',
+    ES: 'trazado estimado',
+    DE: 'geschätzte Linie',
+    RU: 'приблизительная линия',
+    ZH: '估算路线',
+  },
+  gr_linea_stimata_pass: {
+    IT: 'tracciato stimato · serve il Day Pass',
+    EN: 'estimated line · Day Pass required',
+    FR: 'tracé estimé · Day Pass requis',
+    ES: 'trazado estimado · se necesita el Day Pass',
+    DE: 'geschätzte Linie · Day Pass nötig',
+    RU: 'приблизительная линия · нужен Day Pass',
+    ZH: '估算路线 · 需要 Day Pass',
+  },
+  /**
+   * La terza chip di «Arrivo»: anello che si chiude dove ci si trova adesso
+   * invece che sul punto di partenza. La differenza si vede solo dopo un
+   * ricalcolo per strada, ed e` per quello che esiste.
+   */
+  gr_torno_dove_sono: {
+    IT: 'Torno dove mi trovo',
+    EN: 'Loop from where I am',
+    FR: "Boucle depuis l'endroit où je suis",
+    ES: 'Vuelvo a donde estoy',
+    DE: 'Rundweg von meinem Standort',
+    RU: 'Возврат туда, где я сейчас',
+    ZH: '回到我当前位置',
+  },
+  gr_finisci_a_distanza: {
+    IT: 'finisci a {d} dal punto di partenza',
+    EN: 'you finish {d} from your starting point',
+    FR: 'vous terminez à {d} du point de départ',
+    ES: 'terminas a {d} del punto de partida',
+    DE: 'du endest {d} vom Startpunkt entfernt',
+    RU: 'финиш в {d} от точки старта',
+    ZH: '终点距出发点 {d}',
+  },
   // ── PoiRadarPanel ──
   gr_tempo_tutto: { IT: 'Tutto', EN: 'All', FR: 'Tout', ES: 'Todo', DE: 'Alles', RU: 'Всё', ZH: '全部' },
   gr_giro_pieno: {

@@ -16,10 +16,10 @@
  * dalla bozza cambia l'anteprima, toglierla dal giro lo ricalcola da dove si
  * e`. Stesso gesto, stesso posto — la gente impara una cosa sola.
  */
-import { Polyline, Marker } from 'react-leaflet';
+import { Polyline, Marker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { useEffect, useState } from 'react';
-import { tourService, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
+import { tourService, MAX_TAPPE, metri as metriFra, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
 import { getTranslation, type Language } from '../lib/i18n';
 
 /** La lingua della UI (App.tsx la scrive in wip_language): il layer non riceve props. */
@@ -104,6 +104,137 @@ function iconaLungoStrada(): L.DivIcon {
   return icona;
 }
 
+/**
+ * LE FRECCE DI DIREZIONE (28/08/2026).
+ *
+ * I puntini blu dicono «di qua si passa», non «da che parte si va»: su una
+ * strada che il giro percorre due volte, o a un bivio, il tracciato da solo
+ * non basta. Le frecce si mettono SOLO sul percorso vero (mai sulla linea
+ * d'aria di ripiego, che una direzione non ce l'ha) e ruotano INSIEME alla
+ * mappa: indicano un verso geografico, quindi — a differenza dei pin, che
+ * compensano con `rotate(calc(-1 * var(--map-rotation)))` per restare dritti
+ * — qui la contro-rotazione sarebbe l'errore.
+ */
+const PASSO_FRECCE_M: Record<'fitto' | 'largo' | 'radissimo', number> = { fitto: 150, largo: 200, radissimo: 350 };
+/** Oltre questo numero le frecce diventano coriandoli e costano ridisegni. */
+const MAX_FRECCE = 40;
+
+/** Rotta (gradi, 0 = nord) fra due punti [lat, lon]. */
+function rotta(a: [number, number], b: [number, number]): number {
+  const rad = Math.PI / 180;
+  const dLon = (b[1] - a[1]) * rad;
+  const y = Math.sin(dLon) * Math.cos(b[0] * rad);
+  const x = Math.cos(a[0] * rad) * Math.sin(b[0] * rad) - Math.sin(a[0] * rad) * Math.cos(b[0] * rad) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+/**
+ * Un punto ogni `passo` metri di percorso, con il verso del tratto su cui
+ * cade. La distanza e` quella di `tourService.metri` — l'helper che gia` usa
+ * tutto il giro, non una terza formula.
+ */
+function frecceLungo(punti: [number, number][], passo: number): { pos: [number, number]; angolo: number }[] {
+  const out: { pos: [number, number]; angolo: number }[] = [];
+  if (!Array.isArray(punti) || punti.length < 2 || passo <= 0) return out;
+  let acc = 0;
+  for (let i = 1; i < punti.length && out.length < MAX_FRECCE; i++) {
+    const a = punti[i - 1], c = punti[i];
+    if (!a || !c) continue;
+    acc += metriFra({ lat: a[0], lon: a[1] }, { lat: c[0], lon: c[1] });
+    if (acc < passo) continue;
+    acc = 0;
+    out.push({ pos: c, angolo: rotta(a, c) });
+  }
+  return out;
+}
+
+/** Le icone si riusano a scatti di 5°: un giro lungo non deve creare 40 DivIcon nuove a ogni fix. */
+const cacheFrecce = new Map<number, L.DivIcon>();
+function iconaFreccia(angolo: number): L.DivIcon {
+  const a = (Math.round(angolo / 5) * 5) % 360;
+  let icona = cacheFrecce.get(a);
+  if (!icona) {
+    icona = L.divIcon({
+      className: 'wip-freccia-giro',
+      // Nessuna `var(--map-rotation)` qui: vedi il commento sopra.
+      html: `<div style="width:16px;height:16px;transform:rotate(${a}deg);">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M8 1.4 L13.6 13.4 L8 10.4 L2.4 13.4 Z"
+            fill="${BLU}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg></div>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
+    cacheFrecce.set(a, icona);
+  }
+  return icona;
+}
+
+/**
+ * Il passo delle frecce secondo lo zoom. Sotto il 14 (livello citta`) niente:
+ * a quella scala duecento metri sono pochi pixel e la linea sparirebbe sotto
+ * le frecce.
+ */
+function passoPerZoom(zoom: number): number | null {
+  if (zoom >= 17) return PASSO_FRECCE_M.fitto;
+  if (zoom >= 15) return PASSO_FRECCE_M.largo;
+  if (zoom >= 14) return PASSO_FRECCE_M.radissimo;
+  return null;
+}
+
+/** Lo zoom corrente. Si aggiorna solo a `zoomend`: niente ridisegni durante il pan. */
+function useZoomMappa(): number {
+  const map = useMap();
+  const [zoom, setZoom] = useState<number>(() => { try { return map.getZoom(); } catch { return 15; } });
+  useMapEvents({ zoomend: () => { try { setZoom(map.getZoom()); } catch { /* mappa non pronta */ } } });
+  return zoom;
+}
+
+/** Le frecce come marker: non interattive, sotto i pin delle tappe. */
+function Frecce({ punti, zoom, chiave }: { punti: [number, number][]; zoom: number; chiave: string }) {
+  const passo = passoPerZoom(zoom);
+  if (passo == null) return null;
+  return (
+    <>
+      {frecceLungo(punti, passo).map((f, i) => (
+        <Marker
+          key={`${chiave}-freccia-${i}`}
+          position={f.pos}
+          icon={iconaFreccia(f.angolo)}
+          interactive={false}
+          keyboard={false}
+          zIndexOffset={100}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * LA LINEA DI RIPIEGO SI DICHIARA ANCHE SULLA MAPPA (28/08/2026).
+ *
+ * Il pannello del radar spiega gia` perche' il percorso non c'e` (Day Pass,
+ * posizione, rete), ma il pannello si chiude e si riduce: chi guarda solo la
+ * mappa vedeva una retta grigia fra due monumenti e poteva prenderla per un
+ * percorso. Una pillola piccola e grigia sul centro della linea, non un
+ * allarme: dice cos'e`, non urla che qualcosa e` rotto.
+ */
+function iconaPillola(testo: string): L.DivIcon {
+  return L.divIcon({
+    className: 'wip-linea-stimata',
+    html: `<div style="
+      transform:translate(-50%,-50%);display:inline-block;white-space:nowrap;
+      padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.95);
+      border:1px solid #cbd5e1;color:#475569;
+      font-size:11px;font-weight:700;line-height:1.2;
+      font-family:system-ui,-apple-system,sans-serif;
+      box-shadow:0 1px 4px rgba(0,0,0,.18);
+    ">${testo.replace(/</g, '&lt;')}</div>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
+  });
+}
+
 /** Il tocco e` sulla X o sul numero? Leaflet da` un solo evento per tutto il marker. */
 function toccoSullaX(e: any): boolean {
   const el = e?.originalEvent?.target as HTMLElement | null | undefined;
@@ -125,8 +256,15 @@ export default function TourRouteLayer() {
   const [b, setB] = useState<BozzaGiro>(tourService.bozza());
   useEffect(() => tourService.ascolta(setV), []);
   useEffect(() => tourService.ascoltaBozza(setB), []);
+  // Prima di ogni `return`: gli hook non ammettono uscite anticipate.
+  const zoom = useZoomMappa();
 
   const giro = tourService.datiGiro();
+
+  // GUIDA SPENTA: la mappa torna pulita — niente percorso, niente pin
+  // numerati, niente "+" verdi. Il giro e la bozza restano interi in memoria
+  // (vedi tourService.sospendi) e ricompaiono riaccendendo la guida.
+  if (tourService.eSospeso()) return null;
 
   // ── IL GIRO IN CORSO ─────────────────────────────────────────────────────
   if (giro && v) {
@@ -139,6 +277,16 @@ export default function TourRouteLayer() {
 
     const escludi = (t: TappaGiro) => conPosizione((p) => { tourService.escludi(t.id, p); });
 
+    // AGGIUNGERE A GIRO IN CORSO (28/08/2026). Fino a oggi il "+" verde
+    // esisteva solo in BOZZA: una volta partiti si poteva soltanto TOGLIERE
+    // una tappa. Ma il giro si cammina, e camminando si incontra: il posto in
+    // cui si scopre un luogo e` la strada, non il pannello prima di partire.
+    // Stesso puntino, stesso gesto della bozza; il ricalcolo riparte da dove
+    // si e` (aggiungiTappaAlVolo), non da capo.
+    const vive = giro.tappe.filter((t) => !t.esclusa).length;
+    const aggiungibili = vive >= MAX_TAPPE ? [] : tourService.candidatiLungoIlPercorso(80)
+      .filter(({ poi }) => Number.isFinite(Number(poi?.lat)) && Number.isFinite(Number(poi?.lon)));
+
     return (
       <>
         {/* Due tracciati sovrapposti: uno spesso e chiaro sotto per staccare dal
@@ -148,6 +296,9 @@ export default function TourRouteLayer() {
           <>
             <Polyline positions={punti} pathOptions={{ color: '#ffffff', weight: 9, opacity: 0.85, lineCap: 'round' }} />
             <Polyline positions={punti} pathOptions={{ color: BLU, weight: 5, opacity: 0.95, dashArray: '1 11', lineCap: 'round' }} />
+            {/* Il verso di marcia: i puntini dicono dove si passa, le frecce
+                da che parte si va. */}
+            <Frecce punti={punti} zoom={zoom} chiave={`giro-${giro.id}`} />
           </>
         )}
 
@@ -162,6 +313,18 @@ export default function TourRouteLayer() {
             />
           );
         })}
+
+        {/* I posti lungo la strada, a giro gia` partito: un tocco li aggiunge
+            e il percorso si rifa` da dove si e`. */}
+        {aggiungibili.map(({ poi, id }) => (
+          <Marker
+            key={`giro-lungo-${id}`}
+            position={[Number(poi.lat), Number(poi.lon)]}
+            icon={iconaLungoStrada()}
+            zIndexOffset={300}
+            eventHandlers={{ click: () => { void tourService.aggiungiTappaAlVolo(poi); } }}
+          />
+        ))}
 
         {tappeInOrdine.map(({ t, posizione }) => {
           if (!t || t.esclusa) return null;
@@ -201,12 +364,24 @@ export default function TourRouteLayer() {
   // le tappe dice comunque "questo e` il giro che stai componendo" — e` un
   // disegno onesto: tratteggiato e grigio, non spacciato per percorso.
   const puntoDi = (t: TappaGiro) => t.ingresso ?? { lat: t.lat, lon: t.lon };
+  // Il ritorno alla partenza si disegna SOLO ad anello (corretto 28/08/2026):
+  // prima si chiudeva sempre, e chi aveva scelto «finisco all'ultima tappa»
+  // vedeva comunque un anello — la linea diceva il contrario della scelta.
   const dritta: [number, number][] = [
     ...(b.partenza ? [[b.partenza.lat, b.partenza.lon] as [number, number]] : []),
     ...sequenza.map((t) => { const p = puntoDi(t); return [p.lat, p.lon] as [number, number]; }),
-    ...(b.partenza ? [[b.partenza.lat, b.partenza.lon] as [number, number]] : []),
+    ...(b.partenza && b.anello ? [[b.partenza.lat, b.partenza.lon] as [number, number]] : []),
   ];
   const percorso = b.geometria.length > 1 ? b.geometria : null;
+
+  // Perche' la linea e` dritta, in due parole, sulla mappa. Mentre il calcolo
+  // e` in corso non si dice niente: fra un attimo arriva il percorso vero.
+  const motivoDritta = percorso || b.calcolando
+    ? null
+    : b.errore === 'PASS_RICHIESTO'
+      ? tr('gr_linea_stimata_pass')
+      : tr('gr_linea_stimata');
+  const centroDritta: [number, number] | null = dritta.length > 1 ? dritta[Math.floor(dritta.length / 2)] : null;
 
   return (
     <>
@@ -214,9 +389,24 @@ export default function TourRouteLayer() {
         <>
           <Polyline positions={percorso} pathOptions={{ color: '#ffffff', weight: 9, opacity: 0.8, lineCap: 'round' }} />
           <Polyline positions={percorso} pathOptions={{ color: BLU, weight: 5, opacity: b.calcolando ? 0.45 : 0.9, dashArray: '1 11', lineCap: 'round' }} />
+          <Frecce punti={percorso as [number, number][]} zoom={zoom} chiave="bozza" />
         </>
       ) : dritta.length > 1 ? (
-        <Polyline positions={dritta} pathOptions={{ color: '#64748b', weight: 3, opacity: 0.7, dashArray: '6 8', lineCap: 'round' }} />
+        <>
+          <Polyline positions={dritta} pathOptions={{ color: '#64748b', weight: 3, opacity: 0.7, dashArray: '6 8', lineCap: 'round' }} />
+          {/* Nessuna freccia qui: una retta fra due monumenti non ha un verso
+              di marcia da mostrare, e disegnarne uno sarebbe una bugia. */}
+          {motivoDritta && centroDritta && (
+            <Marker
+              key="linea-stimata"
+              position={centroDritta}
+              icon={iconaPillola(motivoDritta)}
+              interactive={false}
+              keyboard={false}
+              zIndexOffset={200}
+            />
+          )}
+        </>
       ) : null}
 
       {/* I posti lungo la strada: oltre la finestra del radar non hanno un

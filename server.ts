@@ -19612,28 +19612,53 @@ ${testo}`;
    * sempre all'ottimo — la distanza in linea d'aria non e' quella stradale, ma
    * per DECIDERE L'ORDINE (non per misurare) sbaglia pochissimo.
    */
-  const ordinaTappe = (partenza: number[], tappe: number[][], anello: boolean): number[] => {
+  const ordinaTappe = (partenza: number[], tappe: number[][], anello: boolean, matrice?: number[][] | null, rientro?: number[] | null): number[] => {
     const n = tappe.length;
-    if (n <= 2) return tappe.map((_, i) => i);
+    // Dove si chiude l'anello: la partenza, o il punto di rientro se il
+    // client ne ha passato uno diverso (giro ricalcolato a meta` strada che
+    // deve comunque tornare all'albergo). Nella matrice il rientro e` il
+    // punto in coda, quindi indice n+1.
+    const fine = rientro || partenza;
+    const iFine = rientro ? n + 1 : 0;
+    // IL COSTO FRA DUE PUNTI. Indice 0 = partenza, i+1 = tappe[i].
+    // Con la matrice di OSRM Table (28/08/2026) e' il CAMMINO VERO in secondi:
+    // un POI a 200 m in linea d'aria ma dall'altra parte di un fiume senza
+    // ponte e' a venti minuti, e ordinare in linea d'aria lo trattava come il
+    // piu' vicino producendo avanti-e-indietro. Senza matrice si torna alla
+    // linea d'aria, che per DECIDERE (non per misurare) resta una buona
+    // approssimazione dove non ci sono ostacoli.
+    const pt = (k: number) => (k === 0 ? partenza : (k === n + 1 ? fine : tappe[k - 1]));
+    const costo = (a: number, b: number): number => {
+      const m = matrice?.[a]?.[b];
+      return Number.isFinite(m as number) ? (m as number) : distanzaMetri(pt(a), pt(b));
+    };
+    // Con UNA sola tappa non c'e' niente da ordinare. Con DUE si': fino al
+    // 28/08/2026 qui c'era `n <= 2` e le due tappe uscivano nell'ordine in cui
+    // l'utente le aveva spuntate — che su un percorso APERTO (si finisce
+    // all'ultima tappa) e' esattamente l'ordine sbagliato meta' delle volte.
+    // Il vicino piu' prossimo qui sotto e' gia' ottimo per due punti.
+    if (n <= 1) return tappe.map((_, i) => i);
 
     // Vicino piu' prossimo: un ordine di partenza decente in O(n²).
     const rimaste = new Set(tappe.map((_, i) => i));
     const ordine: number[] = [];
-    let corrente = partenza;
+    let corrente = 0;
     while (rimaste.size) {
       let best = -1, bestD = Infinity;
       for (const i of rimaste) {
-        const d = distanzaMetri(corrente, tappe[i]);
+        const d = costo(corrente, i + 1);
         if (d < bestD) { bestD = d; best = i; }
       }
-      ordine.push(best); rimaste.delete(best); corrente = tappe[best];
+      ordine.push(best); rimaste.delete(best); corrente = best + 1;
     }
 
     // 2-opt: si prova a scambiare ogni coppia di archi e si tiene se accorcia.
+    // Ad ANELLO si conta anche il ritorno alla partenza; a percorso APERTO no,
+    // perche' li' la fine e' l'ultima tappa e il ritorno non si cammina.
     const lunghezza = (o: number[]) => {
-      let tot = distanzaMetri(partenza, tappe[o[0]]);
-      for (let i = 0; i < o.length - 1; i++) tot += distanzaMetri(tappe[o[i]], tappe[o[i + 1]]);
-      if (anello) tot += distanzaMetri(tappe[o[o.length - 1]], partenza);
+      let tot = costo(0, o[0] + 1);
+      for (let i = 0; i < o.length - 1; i++) tot += costo(o[i] + 1, o[i + 1] + 1);
+      if (anello) tot += costo(o[o.length - 1] + 1, iFine);
       return tot;
     };
     let migliorato = true, giri = 0;
@@ -19647,6 +19672,66 @@ ${testo}`;
       }
     }
     return ordine;
+  };
+
+  /**
+   * LA MATRICE DEL CAMMINO VERO (28/08/2026).
+   *
+   * Fino a oggi l'ordine delle tappe si decideva sulla LINEA D'ARIA. Le
+   * tratte, invece, sono sempre state instradate davvero: il percorso
+   * disegnato era giusto, era la SEQUENZA a essere sbagliata. E sbagliava
+   * esattamente dove fa piu' male — un fiume senza ponte, una ferrovia, un
+   * dislivello: duecento metri in linea d'aria che a piedi sono due
+   * chilometri. Il giro ci passava davanti due volte.
+   *
+   * Una sola chiamata al servizio Table di OSRM (la stessa istanza pedonale
+   * che gia' calcola le tratte) da' la matrice N×N dei tempi fra tutti i
+   * punti: al massimo 11×11, perche' il tetto e' dieci tappe piu' la
+   * partenza. Si ordina sui TEMPI e non sui metri — a piedi una salita lunga
+   * uguale costa di piu', e il tempo e' quello che l'utente sente.
+   *
+   * PRUDENZA. E' un'istanza pubblica gratuita: una chiamata per ricalcolo, in
+   * cache sui punti arrotondati, cinque secondi di attesa e poi si lascia
+   * perdere. Le celle non instradabili (isole, punti fuori dalla rete) non
+   * buttano via la matrice: si tappano con la linea d'aria maggiorata del 30%,
+   * il rapporto tipico fra strada pedonale e volo d'uccello. Se pero' i buchi
+   * sono tanti (oltre il 30% delle celle) la matrice non e' affidabile e si
+   * torna interamente alla linea d'aria, che almeno e' coerente con se' stessa.
+   */
+  const tableCache = new Map<string, { ts: number; m: number[][] | null }>();
+  const matriceOsrmTable = async (punti: number[][]): Promise<number[][] | null> => {
+    const coords = punti.map(p => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(';');
+    const c = tableCache.get(coords);
+    if (c && Date.now() - c.ts < ROUTE_TTL) return c.m;
+
+    let m: number[][] | null = null;
+    try {
+      const r = await axios.get(
+        `https://routing.openstreetmap.de/routed-foot/table/v1/foot/${coords}`,
+        { params: { annotations: 'duration,distance' }, timeout: 5000 });
+      const d = r.data;
+      const ok = (x: any) => Array.isArray(x) && x.length === punti.length && x.every((riga: any) => Array.isArray(riga) && riga.length === punti.length);
+      // I tempi se ci sono, i metri altrimenti: due unita' diverse, ma la
+      // matrice si usa solo per CONFRONTARE, quindi basta che sia omogenea.
+      const usaDurate = ok(d?.durations);
+      const grezza: any[][] | null = usaDurate ? d.durations : (ok(d?.distances) ? d.distances : null);
+      if (grezza) {
+        let buchi = 0;
+        m = grezza.map((riga, i) => riga.map((v, j) => {
+          if (i === j) return 0;
+          const n = Number(v);
+          if (Number.isFinite(n)) return n;
+          buchi++;
+          const aria = distanzaMetri(punti[i], punti[j]) * 1.3;
+          return usaDurate ? aria / 1.35 : aria;   // 1,35 m/s = passo medio
+        }));
+        if (buchi > punti.length * punti.length * 0.3) m = null;
+      }
+    } catch { /* 429, timeout, istanza giu': si torna alla linea d'aria */ }
+
+    tableCache.set(coords, { ts: Date.now(), m });
+    if (tableCache.size > 400) tableCache.delete(tableCache.keys().next().value);
+    return m;
   };
 
   /**
@@ -19673,7 +19758,19 @@ ${testo}`;
     const coords = punti.map(p => `${p[0]},${p[1]}`).join(';');
     const r = await axios.get(
       `https://routing.openstreetmap.de/routed-foot/trip/v1/foot/${coords}`,
-      { params: { source: 'first', destination: 'last', roundtrip: false, overview: 'false' }, timeout: 4000 });
+      // `destination: 'any'` E NON `'last'` (corretto il 28/08/2026).
+      // Con `destination: 'last'` OSRM e' OBBLIGATO a finire sull'ULTIMO PUNTO
+      // PASSATO — cioe' sull'ultima tappa che l'utente ha spuntato, non su
+      // quella che rende il giro piu' corto. Risultato: «finisco all'ultima
+      // tappa» produceva un ordine assurdo (avanti e indietro per la citta'
+      // pur di tenere in fondo la tappa scelta per ultima), mentre «torno da
+      // dove parto» funzionava bene perche' l'anello non passa mai di qui
+      // (vedi il `return null` sopra). Con `'any'` la partenza resta fissa
+      // (`source: 'first'`) e la FINE la sceglie l'ottimizzatore: e' proprio
+      // il significato di «finisco all'ultima tappa». La combinazione
+      // roundtrip=false + source=first + destination=any e' supportata da
+      // OSRM (non lo e' solo source=any + destination=any).
+      { params: { source: 'first', destination: 'any', roundtrip: false, overview: 'false' }, timeout: 4000 });
     const w = r.data?.waypoints;
     if (!Array.isArray(w) || w.length !== punti.length) return null;
     // waypoint_index dice la posizione nel giro; l'indice 0 e' la partenza.
@@ -19728,14 +19825,48 @@ ${testo}`;
       // /api/route/foot); e` il GIRO A PIU' TAPPE a essere premium. La soglia
       // e` due tappe: sotto, e' una navigazione normale.
       const numeroTappe = String(req.params.coords || '').split(';').length - 1;
+
+      /**
+       * L'ANTEPRIMA E` GRATIS, IL NAVIGATORE NO (28/08/2026).
+       *
+       * Prima di oggi bastavano due tappe perche' la rotta rispondesse 402:
+       * chi non aveva il Day Pass non vedeva nemmeno il percorso disegnato,
+       * e sceglieva le tappe guardando una retta grigia. Decisione
+       * dell'utente: far VEDERE il giro e` il miglior motivo per comprarlo.
+       *
+       * Con `?anteprima=true` si ottengono geometria, metri, minuti e ordine
+       * — cioe' tutto quello che serve a decidere — ma NON le istruzioni
+       * passo-passo: `steps` esce vuoto in ogni leg. Le istruzioni SONO il
+       * navigatore, ed e' il navigatore che si paga insieme alle audioguide.
+       *
+       * Gratis vuol dire SENZA PASS, non senza login (audit SEC-01): il
+       * Bearer resta obbligatorio e vale il tetto per utente, altrimenti
+       * questa diventerebbe un'API di routing pedonale anonima a nostre
+       * spese — ordinare dieci tappe costa una chiamata alla matrice OSRM e
+       * fino a undici chiamate di instradamento verso terzi.
+       */
+      const anteprima = String(req.query.anteprima || '') === 'true' || String(req.query.modo || '') === 'anteprima';
+
       if (numeroTappe > 1) {
-        const pass = await passValido(req);
-        if (!pass.ok) {
-          return res.status(402).json({
-            code: 'PassRichiesto',
-            message: 'il giro a piu` tappe richiede il Day Pass attivo',
-            motivo: pass.motivo,
-          });
+        if (anteprima) {
+          let uid: string | null = null;
+          try { uid = await verifyUserToken(req); } catch { uid = null; }
+          if (!uid) return res.status(401).json({ error: 'auth_required' });
+          (req as any).userId = uid;
+          const attesa = await limiteCostosoSuperato(req);
+          if (attesa !== null) {
+            res.setHeader('Retry-After', String(attesa));
+            return res.status(429).json({ error: 'rate_limited', retry_after_seconds: attesa });
+          }
+        } else {
+          const pass = await passValido(req);
+          if (!pass.ok) {
+            return res.status(402).json({
+              code: 'PassRichiesto',
+              message: 'il giro a piu` tappe richiede il Day Pass attivo',
+              motivo: pass.motivo,
+            });
+          }
         }
       }
       const punti = String(req.params.coords || '').split(';')
@@ -19752,7 +19883,28 @@ ${testo}`;
       const partenza = punti[0];
       const tappe = punti.slice(1);
 
-      const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine}`;
+      /**
+       * DOVE SI CHIUDE L'ANELLO (28/08/2026). Di norma sul punto da cui si e`
+       * chiesta la rotta. Ma un giro ricalcolato a meta` strada riparte da
+       * dove si e` ADESSO, e chi ha detto «torno da dove parto» intendeva
+       * l'auto o l'albergo, non il marciapiede del ricalcolo: il client puo`
+       * quindi passare `rientro=lon,lat` e l'anello si chiude li`.
+       * Ignorato a percorso aperto.
+       */
+      const puntoRientro: number[] | null = (() => {
+        if (!anello) return null;
+        const p = String(req.query.rientro || '').split(',').map(Number);
+        if (p.length !== 2 || !p.every(Number.isFinite)) return null;
+        // Uguale alla partenza: non e` un caso diverso, si evita di sporcare
+        // la chiave di cache e di allungare la matrice per niente.
+        return distanzaMetri(p, partenza) < 30 ? null : p;
+      })();
+
+      // `anteprima` NELLA CHIAVE: le due risposte differiscono per le
+      // istruzioni passo-passo, ed e` esattamente la differenza che si paga.
+      // Senza, una risposta senza `steps` finirebbe servita a chi ha il pass
+      // (o, peggio, quella completa a chi non ce l'ha).
+      const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine};${anteprima ? 'ant' : 'full'}${puntoRientro ? `;r${puntoRientro[0].toFixed(4)},${puntoRientro[1].toFixed(4)}` : ''}`;
       const c = req.query.senza ? null : tourCache.get(chiave);
       if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
 
@@ -19766,19 +19918,37 @@ ${testo}`;
       let ordine: number[] = tappe.map((_, i) => i);
       let fonteOrdine = 'richiesto';
       if (vuoleOrdine && tappe.length > 1) {
-        if (!saltate.has('fossgis-osrm')) {
+        // 1. LA MATRICE STRADALE, per ENTRAMBE le modalita'. E' la scelta
+        //    migliore perche' e' l'unica che sa che fra due punti vicini in
+        //    linea d'aria puo' esserci un fiume: decide sui tempi di cammino
+        //    veri. Anello e percorso aperto usano lo stesso 2-opt, che gia'
+        //    distingue i due casi (il ritorno alla partenza si conta solo ad
+        //    anello, e a percorso aperto nessuna tappa e' vincolata a fare da
+        //    capolinea: lo sceglie l'ottimizzazione).
+        // Quando l'anello si chiude altrove, il punto di rientro entra nella
+        // matrice come ultimo punto: senza, l'ordine sarebbe ottimizzato per
+        // tornare dove NON si torna.
+        if (!saltate.has('osrm-table')) {
+          const m = await matriceOsrmTable(puntoRientro ? [...punti, puntoRientro] : punti);
+          if (m) { ordine = ordinaTappe(partenza, tappe, anello, m, puntoRientro); fonteOrdine = 'osrm-table'; }
+        }
+        // 2. Riserva per il solo percorso APERTO: il servizio Trip di OSRM,
+        //    con la fine LIBERA (destination: 'any').
+        if (fonteOrdine === 'richiesto' && !saltate.has('fossgis-osrm')) {
           try {
             const o = await ordineDaOsrmTrip(punti, anello);
             if (o) { ordine = o; fonteOrdine = 'osrm-trip'; }
           } catch { /* si scende alla riserva locale */ }
         }
-        if (fonteOrdine === 'richiesto') { ordine = ordinaTappe(partenza, tappe, anello); fonteOrdine = 'locale-2opt'; }
+        // 3. Ultima riserva: linea d'aria. Non e' il cammino vero, ma e'
+        //    coerente con se' stessa e non fa mai cadere il giro.
+        if (fonteOrdine === 'richiesto') { ordine = ordinaTappe(partenza, tappe, anello, null, puntoRientro); fonteOrdine = 'locale-2opt'; }
       }
 
       // ── 2. le tratte, una per volta, con la catena a cinque ────────────
       // Tratta per tratta e non in un colpo solo: cosi' una tratta che fallisce
       // non porta giu' tutto il giro, e ogni tratta ha le sue cinque riserve.
-      const sequenza = [partenza, ...ordine.map(i => tappe[i]), ...(anello ? [partenza] : [])];
+      const sequenza = [partenza, ...ordine.map(i => tappe[i]), ...(anello ? [puntoRientro || partenza] : [])];
       const problemi: string[] = [];
 
       // IN PARALLELO, non in fila. Le tratte sono indipendenti: calcolarle una
@@ -19820,7 +19990,11 @@ ${testo}`;
           legs: tratte.map((t: any, i: number) => ({
             distance: t.distance || 0,
             duration: t.duration || 0,
-            steps: t.legs?.[0]?.steps || [],
+            // IN ANTEPRIMA LE ISTRUZIONI NON CI SONO (vedi il commento in
+            // testa alla rotta): distanza, durata e geometria bastano a
+            // decidere il giro; "gira a destra fra 80 metri" e` il navigatore,
+            // e il navigatore sta nel Day Pass.
+            steps: anteprima ? [] : (t.legs?.[0]?.steps || []),
             wip_tappa: i,
             wip_fonte: t.wip_fonte,
             ...(t.irraggiungibile ? { wip_irraggiungibile: true } : {}),
@@ -19837,6 +20011,9 @@ ${testo}`;
           metri_totali: Math.round(metri),
           minuti_cammino: Math.round(secondi / 60),
           problemi,
+          // Il client sa se sta guardando un'anteprima (niente istruzioni) o
+          // il giro vero: cosi` non deve dedurlo dai `steps` vuoti.
+          anteprima,
         },
       };
 
