@@ -43,7 +43,7 @@ import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
 import NavChoiceSheet from "./components/NavChoiceSheet";
-import { useVistaGiro } from "./lib/tour/useGiro";
+import { useVistaGiro, useBozzaGiro } from "./lib/tour/useGiro";
 import { tourService } from "./services/tourService";
 import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
@@ -160,7 +160,16 @@ export default function App() {
   if (!mountedTabs.has(activeTab)) {
     setMountedTabs(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
   }
-  const [isRadarMode, setIsRadarMode] = useState(false);
+  // IL RADAR RIPARTE DA DOV'ERA (28/08/2026, collaudo: «se si chiude l'app
+  // il percorso del radar deve rimanere in memoria»). Il giro e la bozza si
+  // salvavano gia`; a sparire era il PANNELLO, chiuso a ogni riavvio, e con
+  // lui la lista. Aperto o chiuso si ricorda come la bozza.
+  const [isRadarMode, setIsRadarMode] = useState<boolean>(() => {
+    try { return localStorage.getItem('wip_radar_aperto') === 'true'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('wip_radar_aperto', isRadarMode ? 'true' : 'false'); } catch { /* storage bloccato */ }
+  }, [isRadarMode]);
   // "Nuovo giro da qui" dal banner a giro finito (22/08/2026): riapre il radar.
   useEffect(() => {
     const h = () => { setActiveTab('map'); setIsRadarMode(true); };
@@ -209,7 +218,23 @@ export default function App() {
     setGuideCharacter(mode);
     setGuideModeState(mode);
   }, []);
-  const [radarPois, setRadarPois] = useState<any[]>([]);
+  // L'ultima lista del radar si tiene (28/08/2026): riaperta l'app diceva
+  // «0 luoghi» finche` il servizio nativo non rimandava i POI, e la bozza
+  // ripescata non aveva niente intorno. Si mostra subito la lista di prima;
+  // la prima lettura vera la sostituisce.
+  const [radarPois, setRadarPois] = useState<any[]>(() => {
+    try { const s = JSON.parse(localStorage.getItem('wip_radar_pois') || '[]'); return Array.isArray(s) ? s.slice(0, 150) : []; } catch { return []; }
+  });
+  useEffect(() => {
+    try {
+      const snella = radarPois.slice(0, 150).map((p: any) => ({
+        id: p.id ?? p.poiId, name: p.name || p.nome, lat: p.lat, lon: p.lon,
+        category: p.category, poiType: p.poiType, is_gem: p.is_gem, isGem: p.isGem, city: p.city,
+        entrance_lat: p.entrance_lat, entrance_lon: p.entrance_lon,
+      }));
+      localStorage.setItem('wip_radar_pois', JSON.stringify(snella));
+    } catch { /* storage pieno o bloccato */ }
+  }, [radarPois]);
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [itinerary, setItinerary] = useState<any[]>([]);
   const [activePlan, setActivePlan] = useState<any | null>(null);
@@ -226,12 +251,69 @@ export default function App() {
   // null quando il giro e` sospeso o non c'e`: basta escludere il giro finito.
   const vistaGiro = useVistaGiro();
   const [navTappa, setNavTappa] = useState<any | null>(null);
+  // AVVIA IL GIRO DALLA MAPPA (28/08/2026, collaudo: «ci deve essere un tasto
+  // per iniziare la navigazione di tutto il tour»). Il navigatore del giro
+  // intero E` il giro: appena creato, il driver legge le svolte tratta per
+  // tratta fino all'ultima tappa (giroDriver). Ma «Crea il giro» stava solo
+  // dentro il pannello, e chi guarda la mappa con le tappe spuntate non
+  // trovava da dove partire. Stesso avvio del pannello, un tasto in piu`.
+  const bozzaGiro = useBozzaGiro();
+  const [avviandoGiro, setAvviandoGiro] = useState(false);
+  const avviaGiroDaMappa = useCallback(async () => {
+    if (avviandoGiro) return;
+    setAvviandoGiro(true);
+    const L = linguaCorrente();
+    try {
+      await tourService.avviaDaBozza();
+      tourService.prescarica(undefined, String(L).toLowerCase(), getGuideCharacter()).catch(() => {});
+      window.dispatchEvent(new CustomEvent('wip-giro-avviato'));
+      setIsRadarMode(false);
+    } catch (e: any) {
+      const m = String(e?.message || '');
+      notify(m.startsWith('PASS_RICHIESTO') ? getTranslation('gr_pass_richiesto', L) : (m || getTranslation('gr_giro_non_riuscito', L)));
+      // Col pannello aperto si legge il perche` (pass, posizione) e si riprova.
+      setIsRadarMode(true);
+    } finally { setAvviandoGiro(false); }
+  }, [avviandoGiro]);
   const tappaDaNavigare = useMemo(() => {
     if (!vistaGiro || vistaGiro.stato === 'FINITO') return null;
     const t = tourService.tappaAttuale();
     if (!t) return null;
     // Il POI vero (con il suo id): NavChoiceSheet cerca la porta da li`.
     return { id: t.id, name: t.nome, lat: t.lat, lon: t.lon, entrance_lat: t.ingresso?.lat, entrance_lon: t.ingresso?.lon };
+  }, [vistaGiro]);
+  // IL BANNER ANCHE A DISPLAY SPENTO (28/08/2026, collaudo: «se il display e`
+  // spento ci deve essere lo stesso banner anche li`»). Il tasto Naviga sta
+  // sulla mappa, ma chi cammina col telefono in tasca non la vede. A ogni
+  // cambio di tappa si posta una notifica locale con la tappa corrente: sulla
+  // lock screen fa da cruscotto, e toccarla riapre l'app. Stesso id delle
+  // istruzioni di svolta, cosi` si sostituiscono invece di accumularsi. Sul
+  // web la funzione non fa nulla.
+  // Il contenuto e` LO STESSO del cruscotto in app (committente: «uguale a
+  // quello che si apre nell'app»): tappa n/N con i metri alla porta; la
+  // svolta da fare e a quanti metri; i metri mancanti, l'ora d'arrivo e la
+  // tappa dopo. Si riposta solo quando cambia qualcosa che si legge — la
+  // tappa, la svolta, i metri a scatti di 50 — non a ogni fix GPS.
+  const firmaBannerRef = useRef<string>('');
+  useEffect(() => {
+    if (!vistaGiro || vistaGiro.stato === 'FINITO' || vistaGiro.inPausa || !vistaGiro.nomeTappa) return;
+    const L = linguaCorrente();
+    const dist = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+    const n = Math.min(vistaGiro.tappeFatte + 1, vistaGiro.tappeTotali);
+    const allaPorta = vistaGiro.metriAllaTappa != null && vistaGiro.metriAllaTappa > 25 ? ` · ${dist(vistaGiro.metriAllaTappa)}` : '';
+    const titolo = `${getTranslation('tour_tappa', L)} ${n}/${vistaGiro.tappeTotali}: ${vistaGiro.nomeTappa}${allaPorta}`;
+    const righe: string[] = [];
+    if (vistaGiro.istruzione) {
+      righe.push(`${vistaGiro.istruzione}${vistaGiro.metriAllaSvolta != null ? ` · ${dist(vistaGiro.metriAllaSvolta)}` : ''}`);
+    }
+    const eta = vistaGiro.metriRimanenti > 0
+      ? ` · ${getTranslation('gr_arrivo_eta', L)} ~${new Date(Date.now() + (vistaGiro.metriRimanenti / 66.7) * 60000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
+      : '';
+    righe.push(`${dist(vistaGiro.metriRimanenti)} ${getTranslation('tour_mancanti', L)}${eta}${vistaGiro.nomeProssima ? ` · ${getTranslation('gr_poi_prossima', L)}: ${vistaGiro.nomeProssima}` : ''}`);
+    const firma = `${n}|${vistaGiro.nomeTappa}|${vistaGiro.istruzione || ''}|${Math.round((vistaGiro.metriAllaSvolta ?? -1) / 50)}|${Math.round(vistaGiro.metriRimanenti / 100)}`;
+    if (firma === firmaBannerRef.current) return;
+    firmaBannerRef.current = firma;
+    locationService.sendLocalNotification(titolo, righe.join('\n')).catch(() => {});
   }, [vistaGiro]);
 
   // Località predefinita del profilo. Prima era una costante con un setter
@@ -405,10 +487,11 @@ export default function App() {
   // 401 {error:'auth_required'} dal server (audioguide, enrich, tts…).
   //
   // Da quando esiste la MODALITÀ OSPITE (28/08/2026) questo evento ha due
-  // significati: "la sessione è scaduta" (c'era un utente) oppure "questa
-  // azione richiede un account" (ospite). In entrambi i casi si prova prima un
-  // refresh e, se non torna nessuna sessione, si APRE IL MODALE DI LOGIN — non
-  // si butta più l'utente fuori dall'app, che ora è navigabile senza account.
+  // vuol dire che la SESSIONE È SCADUTA mentre si usava l'app (l'accesso è
+  // obbligatorio, quindi un 401 non può venire da un ospite). Si prova prima
+  // un refresh silenzioso e, se non torna nessuna sessione, si riapre il
+  // login: `setSession(null)` da solo riporterebbe al gate d'avvio buttando
+  // via quello che si stava facendo.
   // Cooldown di 30 s: una schermata può generare più 401 di fila e non deve
   // sparare una raffica di toast e di modali.
   useEffect(() => {
@@ -424,7 +507,7 @@ export default function App() {
           setSession(null);
           if (Date.now() - ultimoInvito > 30_000) {
             ultimoInvito = Date.now();
-            notify(getTranslation('guest_azione_richiede_account', language));
+            notify(getTranslation('auth_sessione_scaduta', language));
             setShowLogin(true);
           }
         }
@@ -1101,7 +1184,13 @@ export default function App() {
     let obj: Record<string, boolean> = {};
     try { obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { obj = {}; }
     MAP_FILTER_KEYS.forEach(k => { obj[k] = selectedCategories.includes(k); });
-    selectedCategories.forEach(c => { obj[c] = true; });
+    // (28/08/2026, collaudo) LE CHIP DELLA MAPPA NON ACCENDONO L'AUDIOGUIDA
+    // dei verticali commerciali. Vino e Gusto, shopping e lusso sulla mappa
+    // sono livelli da GUARDARE; se diventano categorie da raccontare, chi li
+    // accende per curiosita' si sente partire la guida di una pasticceria.
+    // Per quelle tre decide solo il setup (Profilo → Categorie audioguida).
+    const SOLO_SETUP = new Set(['enogastronomia', 'shopping', 'lusso']);
+    selectedCategories.forEach(c => { if (!SOLO_SETUP.has(c)) obj[c] = true; });
     localStorage.setItem('wip_active_subcategories', JSON.stringify(obj));
 
     locationService.syncSettings(itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted);
@@ -1125,10 +1214,15 @@ export default function App() {
   if (showOnboarding) return <OnboardingCarousel language={language} onComplete={() => { localStorage.setItem('has_seen_onboarding', 'true'); setShowOnboarding(false); }} />;
   // GATE RIDOTTO AL MINIMO (28/08/2026): resta a tutto schermo solo mentre si
   // legge la sessione (spinner) e durante il reset password via link email —
+  // LOGIN OBBLIGATORIO (decisione del committente, 29/08/2026): niente
+  // modalità ospite. Il 28/08 era stata introdotta per il timore di un rilievo
+  // App Store (5.1.1), ma qui l'account regge davvero il prodotto — audioguide
+  // a crediti, acquisti, Day Pass, itinerari e preferiti personali — e il
+  // login e' solo email+password, quindi non scatta nemmeno l'obbligo di
+  // "Accedi con Apple" (4.8), che vale solo con i login social.
   // isRecovering va azzerato al successo, altrimenti l'utente resta in loop sul
-  // form "Nuova Password". Il `!session` NON è più qui: senza account si entra
-  // lo stesso e si esplora come ospite.
-  if (authLoading || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
+  // form "Nuova Password".
+  if (authLoading || !session || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
 
   return (
     <div className="min-h-[100dvh] bg-[#323639] flex justify-center items-center p-0 sm:p-4">
@@ -1136,21 +1230,6 @@ export default function App() {
         <PermissionsModal onComplete={() => setPermissionsGranted(true)} language={language} />
         
         {session?.user && <ZeroCreditsBanner userId={session.user.id} />}
-
-        {/* OSPITE: barra sempre presente con il tasto "Accedi". Il login deve
-            restare a un tocco di distanza da qualsiasi schermata — è la
-            contropartita di non imporlo più all'avvio. */}
-        {!session && (
-          <div className="shrink-0 bg-primary text-white px-4 py-1.5 flex items-center justify-between gap-2 text-[11px] font-bold z-[900]">
-            <span className="truncate">{getTranslation('guest_banner', language)}</span>
-            <button
-              onClick={() => setShowLogin(true)}
-              className="shrink-0 bg-white/15 hover:bg-white/25 px-3 py-1 rounded-full uppercase tracking-wide"
-            >
-              {getTranslation('guest_accedi', language)}
-            </button>
-          </div>
-        )}
 
         {/* Avviso leggero: posizione negata → audioguide automatiche off. */}
         {showLocDeniedBanner && (
@@ -1178,47 +1257,79 @@ export default function App() {
               livelli della mappa. A destra c'è solo la bussola (bottom-16):
               si sta sopra, con la fila che cresce verso sinistra. */}
           {isAudioGuideActive && activeTab === "map" && (
-            <div className="absolute right-4 z-[999] flex flex-row-reverse items-center gap-2" style={{ bottom: "calc(9.75rem + env(safe-area-inset-bottom, 0px))" }}>
-              <DayPassBadge />
+            /* IN COLONNA, NON IN FILA (28/08/2026, collaudo del committente):
+               cuffie, Naviga, tappa d'itinerario e badge del pass uno sotto
+               l'altro, allineati a destra. In fila crescevano verso sinistra
+               fin sopra il centro della mappa, e il tasto del navigatore —
+               l'unico che serve camminando — era in fondo alla fila. */
+            <div className="absolute right-4 z-[999] flex flex-col items-end gap-2" style={{ bottom: "calc(9.75rem + env(safe-area-inset-bottom, 0px))" }}>
+              <motion.button
+                whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleToggleRadar}
+                className={`w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all ${
+                  isFollowingItinerary
+                    ? 'bg-rose-600 text-white ring-4 ring-rose-600/30'
+                    : isRadarMode
+                      ? 'bg-blue-600 text-white ring-4 ring-blue-600/30 animate-pulse'
+                      : 'bg-white/90 text-blue-600 border border-blue-100'
+                }`}
+              >
+                <Headphones className="w-6 h-6" />
+              </motion.button>
+              {/* DUE PASSI, DUE TASTI (28/08/2026, committente: «deve avere
+                  un avvio esplicito»). Tappe scelte → «Crea il giro»: il
+                  server ordina e disegna, il cruscotto compare, ma non parte
+                  niente. Giro creato → «Avvia la navigazione»: da qui la
+                  voce, le svolte e i geofence. */}
+              {!vistaGiro && bozzaGiro.tappe.length > 0 && (
+                <motion.button
+                  initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                  whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                  onClick={avviaGiroDaMappa}
+                  disabled={avviandoGiro}
+                  title={getTranslation('gr_crea_giro', language)}
+                  className="h-12 px-4 rounded-full shadow-2xl bg-[#1e3a8a] text-white ring-4 ring-[#1e3a8a]/25 flex items-center gap-2 font-black text-[12px] transition-all disabled:opacity-60"
+                >
+                  {avviandoGiro ? <Loader2 className="w-5 h-5 animate-spin" /> : <MapPin className="w-5 h-5" />}
+                  {getTranslation('gr_crea_giro', language)}
+                </motion.button>
+              )}
+              {vistaGiro && !vistaGiro.avviato && vistaGiro.stato !== 'FINITO' && (
+                <motion.button
+                  initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                  whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                  onClick={() => tourService.avvia()}
+                  title={getTranslation('gr_avvia_navigazione', language)}
+                  className="h-12 px-4 rounded-full shadow-2xl bg-emerald-600 text-white ring-4 ring-emerald-600/25 flex items-center gap-2 font-black text-[12px] transition-all animate-pulse"
+                >
+                  <Navigation2 className="w-5 h-5" />
+                  {getTranslation('gr_avvia_navigazione', language)}
+                </motion.button>
+              )}
+              {/* Il navigatore: solo con un giro CREATO e ancora da camminare —
+                  non in bozza (non c'e` una tappa corrente) e non a giro
+                  finito. Nel collaudo del 28/08 «non si trovava» perche` il
+                  giro non veniva mai creato: il server negava il pass. */}
+              {tappaDaNavigare && (
+                <motion.button
+                  initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                  whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                  onClick={() => setNavTappa(tappaDaNavigare)}
+                  title={getTranslation('tour_naviga', language)}
+                  aria-label={getTranslation('tour_naviga', language)}
+                  className="w-12 h-12 rounded-full shadow-2xl bg-emerald-600 text-white ring-4 ring-emerald-600/25 flex items-center justify-center transition-all"
+                >
+                  <Navigation2 className="w-6 h-6" />
+                </motion.button>
+              )}
               {isFollowingItinerary && (
                 <motion.div
-                  initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }}
+                  initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
                   className="w-10 h-10 bg-rose-600 rounded-full flex items-center justify-center shadow-lg border-2 border-white shrink-0"
                 >
                   <MapPin className="w-5 h-5 text-white" />
                 </motion.div>
               )}
-              {/* Cuffie sopra, "Naviga" sotto: una colonna sola, allineata a
-                  destra. Il tasto d'avvio della navigazione sta SULLA MAPPA e
-                  non nel cruscotto perche' e' li` che si guarda camminando. */}
-              <div className="flex flex-col items-end gap-2">
-                <motion.button
-                  whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleToggleRadar}
-                  className={`w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all ${
-                    isFollowingItinerary
-                      ? 'bg-rose-600 text-white ring-4 ring-rose-600/30'
-                      : isRadarMode
-                        ? 'bg-blue-600 text-white ring-4 ring-blue-600/30 animate-pulse'
-                        : 'bg-white/90 text-blue-600 border border-blue-100'
-                  }`}
-                >
-                  <Headphones className="w-6 h-6" />
-                </motion.button>
-                {/* Solo con un giro CREATO e ancora da camminare: non in
-                    bozza (non c'e' una tappa corrente) e non a giro finito. */}
-                {tappaDaNavigare && (
-                  <motion.button
-                    initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
-                    onClick={() => setNavTappa(tappaDaNavigare)}
-                    title={getTranslation('tour_naviga', language)}
-                    aria-label={getTranslation('tour_naviga', language)}
-                    className="w-12 h-12 rounded-full shadow-2xl bg-emerald-600 text-white ring-4 ring-emerald-600/25 flex items-center justify-center transition-all"
-                  >
-                    <Navigation2 className="w-6 h-6" />
-                  </motion.button>
-                )}
-              </div>
+              <DayPassBadge />
             </div>
           )}
 
@@ -1433,11 +1544,15 @@ export default function App() {
             l'ospite deve poter tornare alla mappa senza fare l'account.
             Si apre dal tasto "Accedi", dall'evento 'wip-open-login' e da
             qualsiasi 401 della nostra API. */}
+        {/* Con il login obbligatorio qui non si arriva mai senza sessione (il
+            gate sopra rimanda a LoginScreen). Il modale resta per il caso in
+            cui la sessione scada MENTRE si usa l'app: un 401 lo apre, si
+            rientra e si riprende da dove si era, invece di essere buttati
+            fuori perdendo quello che si stava facendo. */}
         {showLogin && !session && (
           <div className="absolute inset-0 z-[3000] bg-surface">
             <LoginScreen
               onLoginSuccess={(s) => { setSession(s); setShowLogin(false); }}
-              onClose={() => setShowLogin(false)}
             />
           </div>
         )}

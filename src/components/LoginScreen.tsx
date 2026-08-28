@@ -318,19 +318,11 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   // but if unavailable we use a slick fallback showing WIP
   return (
     <div className="fixed inset-0 bg-surface z-50 flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
-      {/* Uscita dal modale in modalità ospite: la X in alto e il link in
-          fondo. Senza questo l'ospite resterebbe intrappolato nel login, che è
-          esattamente ciò che stiamo togliendo. */}
-      {onClose && (
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label={t('guest_continua_senza')}
-          className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-on-surface/10 hover:bg-on-surface/20 text-on-surface flex items-center justify-center text-xl font-bold"
-        >
-          ×
-        </button>
-      )}
+      {/* (29/08/2026) Qui c'erano la X e il link «continua senza account»:
+          l'accesso e' tornato OBBLIGATORIO per decisione del committente, e
+          una via d'uscita dal login non deve esistere. `onClose` resta nella
+          firma perche' App.tsx apre questa stessa schermata quando la sessione
+          SCADE durante l'uso — li' non si esce, si rientra. */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -640,16 +632,6 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
             </motion.form>
           ) : null}
         </AnimatePresence>
-
-        {onClose && !initialAuthLoading && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="mt-6 w-full text-center text-sm font-bold text-on-surface-variant underline underline-offset-4"
-          >
-            {t('guest_continua_senza')}
-          </button>
-        )}
 
         <p className="text-center text-xs text-on-surface-variant/60 mt-8 mb-4">
           {t('vr_a_login_terms_pre')}{' '}

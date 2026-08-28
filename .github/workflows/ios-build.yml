@@ -22,6 +22,27 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
+      # Un IPA senza la chiave RevenueCat compila benissimo e arriva in review
+      # con lo shop SPENTO: offerte vuote, pulsanti d'acquisto disabilitati,
+      # "Ripristina acquisti" in errore. E' un rigetto Apple, e finora non se
+      # ne accorgeva nessuno fino al test sul telefono. Qui almeno lo si vede
+      # nel log, in cima al riepilogo della build.
+      - name: Controlla i secret degli acquisti
+        env:
+          RC: ${{ secrets.REVENUECAT_IOS_KEY }}
+          CARTO: ${{ secrets.CARTO_API_KEY }}
+        run: |
+          if [ -z "$RC" ]; then
+            echo "::warning title=RevenueCat iOS assente::Il secret REVENUECAT_IOS_KEY non e' impostato: l'IPA avra' gli acquisti in-app NON funzionanti (shop vuoto, ripristino in errore). Apple rifiuta. Crearlo in Settings > Secrets and variables > Actions."
+          else
+            echo "RevenueCat iOS: chiave presente."
+          fi
+          if [ -z "$CARTO" ]; then
+            echo "::warning title=CARTO assente::Il secret CARTO_API_KEY non e' impostato: le tile della mappa usciranno con il watermark 'API KEY REQUIRED' (l'app ripiega su /api/config/public, ma solo se la rete risponde)."
+          else
+            echo "CARTO: chiave presente."
+          fi
+
       - name: Build Web App
         # VITE_REVENUECAT_IOS_KEY: senza questa chiave (appl_...) main.tsx NON
         # inizializza RevenueCat su iOS e lo shop mostra "nessun pacchetto" —

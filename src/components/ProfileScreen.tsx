@@ -2852,22 +2852,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               </div>
 
-              {/* OSPITE: l'invito ad accedere sta dove l'utente cerca il
-                  proprio account. Senza sessione il blocco "Esci / Elimina
-                  account" non viene nemmeno passato (onSignOut assente). */}
-              {!userSession?.user && (
-                <div className="pt-4 rounded-2xl bg-primary/5 border border-primary/10 p-4 flex flex-col gap-3">
-                  <p className="text-xs text-primary/80 leading-snug">
-                    {getTranslation('guest_accedi_per', language)}
-                  </p>
-                  <button
-                    onClick={() => window.dispatchEvent(new CustomEvent('wip-open-login'))}
-                    className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all w-full shadow-sm"
-                  >
-                    {getTranslation('guest_accedi', language)}
-                  </button>
-                </div>
-              )}
+              {/* (29/08/2026) Qui c'era l'invito ad accedere per gli ospiti:
+                  l'accesso e' tornato obbligatorio, quindi a questa schermata
+                  si arriva sempre con una sessione valida. */}
 
               {/* RIPRISTINA ACQUISTI — fuori dal blocco `onSignOut` di
                   proposito: deve esserci anche per chi sta usando l'app come
