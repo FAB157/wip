@@ -3,6 +3,12 @@ import type { Language } from '../i18n';
 // Chiavi della bonifica lingua 24/08/2026 — area: radar/giro/nav/day pass
 // (PoiRadarPanel, TourBanner, RoutePoisModal, DayPass*, dayPassService…).
 export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
+  // Arrivo a una tappa SENZA audioguida (pranzo, pausa, trasferimento): si
+  // annuncia il nome e si tace. Fa parte del giro, non ha una storia.
+  tour_sei_arrivato: {
+    IT: "Sei arrivato a", EN: "You've arrived at", FR: "Vous êtes arrivé à",
+    ES: "Has llegado a", DE: "Du bist angekommen bei", RU: "Вы прибыли в", ZH: "你已到达",
+  },
   // ── Giro in corso: il tasto d'avvio della navigazione sulla mappa ──
   tour_naviga: {
     IT: 'Naviga verso la tappa',
@@ -12,6 +18,37 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     DE: 'Zur Station navigieren',
     RU: 'Проложить маршрут к точке',
     ZH: '导航到该站点',
+  },
+  // Il pass c'e` ma il server non l'ha riconosciuto (28/08/2026): si dice
+  // questo, non «attiva il Day Pass» a chi l'ha appena pagato.
+  gr_pass_non_riconosciuto: {
+    IT: 'Il tuo Day Pass è attivo, ma il server non lo ha riconosciuto.',
+    EN: 'Your Day Pass is active, but the server did not recognise it.',
+    FR: "Votre Day Pass est actif, mais le serveur ne l'a pas reconnu.",
+    ES: 'Tu Day Pass está activo, pero el servidor no lo ha reconocido.',
+    DE: 'Dein Day Pass ist aktiv, aber der Server hat ihn nicht erkannt.',
+    RU: 'Ваш Day Pass активен, но сервер его не распознал.',
+    ZH: '你的 Day Pass 已激活，但服务器未能识别。',
+  },
+  gr_riprova: {
+    IT: 'Riprova', EN: 'Retry', FR: 'Réessayer', ES: 'Reintentar', DE: 'Erneut versuchen', RU: 'Повторить', ZH: '重试',
+  },
+  // Il tasto sulla mappa che avvia il giro intero dalle tappe scelte
+  // (28/08/2026): «Crea il giro» stava solo nel pannello.
+  gr_avvia_giro: {
+    IT: 'Avvia il giro', EN: 'Start the tour', FR: 'Démarrer le parcours', ES: 'Iniciar el recorrido', DE: 'Tour starten', RU: 'Начать маршрут', ZH: '开始行程',
+  },
+  // Avvio ESPLICITO del giro (28/08/2026): creato = pronto e fermo; la
+  // navigazione parte solo con questo tasto.
+  gr_avvia_navigazione: {
+    IT: 'Avvia la navigazione', EN: 'Start navigation', FR: 'Démarrer la navigation', ES: 'Iniciar la navegación', DE: 'Navigation starten', RU: 'Начать навигацию', ZH: '开始导航',
+  },
+  gr_pronto_a_partire: {
+    IT: 'Pronto a partire', EN: 'Ready to go', FR: 'Prêt à partir', ES: 'Listo para salir', DE: 'Startbereit', RU: 'Готов к старту', ZH: '准备出发',
+  },
+  // Il tasto sul giorno dell'itinerario che lo porta nel radar della mappa.
+  gr_nel_radar: {
+    IT: 'Nel radar', EN: 'To the radar', FR: 'Vers le radar', ES: 'Al radar', DE: 'Ins Radar', RU: 'В радар', ZH: '加入雷达',
   },
   // Ad anello, dopo l'ultima tappa: la meta` e` il punto di partenza.
   tour_ritorno_partenza: {

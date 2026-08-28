@@ -238,11 +238,29 @@ function onFix(e: Event): void {
       arrivatoA = tappaAnnunciata;
       const ts = Date.now();
       (window as any).__wipLastPoiTrigger = { id: String(tappa.id), ts };
+      // TAPPA CHE NON PARLA (29/08/2026): pranzo, pausa, trasferimento. Fanno
+      // parte del giro e del tracciato — l'arrivo si annuncia con il nome —
+      // ma non hanno una storia: niente scheda che si apre da sola, niente
+      // audioguida, niente addebito. Un ristorante che comincia a raccontarsi
+      // e' esattamente il difetto segnalato dal committente («Martinelli ha
+      // parlato a Carrara»).
+      // DOMANI, semmai, un teaser di tutt'altra natura: il piatto tipico, cosa
+      // ordinare, l'usanza del posto. Non la storia dell'edificio — l'utile di
+      // chi si siede a tavola. Per ora il nome e basta.
+      if (tappa.senzaGuida) {
+        const nome = String(tappa.nome || '').trim();
+        if (nome) {
+          const arrivo = `${getTranslation('tour_sei_arrivato', lingua as Language)} ${nome}`;
+          const d = tourService.chiPuoParlare('navigatore', { guidaInCorso: parlando, metriAllaSvolta: null, suAttraversamento: v.suAttraversamento });
+          if (d.azione === 'parla' || d.azione === 'abbassa_e_parla') { parla(arrivo, lingua, d.azione === 'abbassa_e_parla'); dettoQualcosa = true; }
+          else if (d.azione === 'accoda') tourService.accodaVoce('navigatore', arrivo);
+        }
+      }
       // Sul telefono l'arrivo lo dichiara il servizio nativo (geofence +
       // 'poi-arrived' → wip-poi-trigger): se lo emettesse anche questo driver,
       // la stessa tappa si aprirebbe e parlerebbe due volte. Qui si segna solo
       // il dedupe; sul web, dove il nativo non c'e', si emette.
-      if (!Capacitor.isNativePlatform()) window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+      else if (!Capacitor.isNativePlatform()) window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
         detail: {
           poiId: tappa.id,
           poi: { id: tappa.id, name: tappa.nome, lat: tappa.lat, lon: tappa.lon, category: tappa.categoria || undefined, city: tappa.citta || undefined },

@@ -720,6 +720,63 @@ export default function PlanScreen({
   // Guardie per l'arricchimento POI in background (vedi enrichSequentially)
   const enrichInFlightRef = useRef(false);
   const enrichedPoiIdsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * OGNI TAPPA CHE PARLA DEVE AVERE QUALCOSA DA DIRE (29/08/2026).
+   *
+   * Esportando un giorno sulla mappa, le sue tappe diventano POI veri: scheda,
+   * foto e racconto. Se non esistono ancora — un itinerario ripreso dalla
+   * libreria, o generato prima che l'arricchimento girasse — si creano ADESSO,
+   * altrimenti si arriva davanti al monumento e la scheda e` vuota.
+   *
+   * Due passaggi, entrambi best-effort e in sottofondo: l'utente intanto
+   * cammina, non aspetta una barra di caricamento.
+   *  1. la riga in `shared_pois` (id stabile `iti-…`, lo stesso del
+   *     geofencing), cosi` il servizio nativo la riconosce;
+   *  2. `/api/poi/enrich`, che porta descrizione e FOTO da Wikipedia,
+   *     Wikidata e Commons.
+   * Il testo dell'audioguida NON si genera qui: lo fa `tourService.prescarica`
+   * quando il giro parte davvero, insieme all'MP3 — generarlo per tappe che
+   * l'utente potrebbe togliere sarebbe spendere per niente.
+   *
+   * Le tappe SENZA guida (pranzo, pause) sono escluse: non hanno un racconto
+   * da preparare.
+   */
+  const assicuraContenutiTappe = useCallback(async (poi: any[]) => {
+    const daFare = (poi || []).filter((p) => p && !p.senzaGuida && p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    if (daFare.length === 0) return;
+    try {
+      await supabase.from('shared_pois').upsert(
+        daFare.map((p) => ({
+          id: String(p.id),
+          name: p.name,
+          lat: p.lat,
+          lon: p.lon,
+          category: p.category || 'monumenti',
+          city: p.city || null,
+          // 'auto': viene da un itinerario AI, non e` un POI verificato.
+          status: 'auto',
+        })),
+        { onConflict: 'id' },
+      );
+    } catch (e) {
+      console.warn('[PlanScreen] upsert tappe del giro fallito', e);
+    }
+    // Uno alla volta con una pausa di cortesia: l'arricchimento tocca API
+    // esterne, e venti richieste insieme si prendono un 429.
+    for (const p of daFare) {
+      if (enrichedPoiIdsRef.current.has(String(p.id))) continue;
+      try {
+        await apiFetch(getApiUrl('/api/poi/enrich'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: String(p.id), name: p.name, lat: p.lat, lon: p.lon, category: p.category, city: p.city, lang: language, mode: 'full' }),
+        }, 30000);
+        enrichedPoiIdsRef.current.add(String(p.id));
+      } catch { /* la scheda si arricchira` all'apertura: non blocca il giro */ }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+  }, [language]);
   // ── Form A / Form B / Form C shared fields ──
   const [destinations, setDestinations] = useState<string[]>(['']);
   // Coordinate della destinazione scelta dall'autocomplete Mapbox. Senza,
@@ -6893,17 +6950,28 @@ export default function PlanScreen({
                               // il giro qui dentro; in auto si esce su Google Maps con tutte
                               // le tappe. Guidando l'audioguida a piedi non serve, e i pin
                               // non si toccano.
+                              // TUTTE le tappe con coordinate, pranzi e pause
+                              // comprese (29/08/2026, committente): un giorno
+                              // senza il ristorante non e' piu' il giorno che
+                              // l'utente ha pianificato, e il tracciato
+                              // passerebbe altrove. Quelle che non hanno una
+                              // storia entrano come tappe MUTE: si vedono, ci
+                              // si arriva, l'arrivo si annuncia col nome, ma
+                              // non parlano e non costano nulla.
+                              const SENZA_RACCONTO = ['ristorante', 'pausa', 'spostamento', 'trasferimento', 'pranzo', 'cena', 'colazione', 'aperitivo', 'shopping', 'hotel', 'alloggio'];
                               const tappe = (giorno.tappe || []).filter((t: any) => {
                                 const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
-                                return la && lo && !['ristorante', 'pausa', 'spostamento', 'trasferimento'].includes(String(t?.tipo || ''));
+                                return Number.isFinite(la) && Number.isFinite(lo) && la !== 0 && lo !== 0;
                               });
                               const poi = tappe.map((t: any) => {
                                 const la = Number(t.coordinate.lat), lo = Number(t.coordinate.lng ?? t.coordinate.lon);
                                 const stableId = `iti-${String(t.titolo_tappa || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${la.toFixed(3)}_${lo.toFixed(3)}`.replace(/\./g, 'p');
+                                const tipo = String(t?.tipo || '').toLowerCase();
                                 return {
                                   id: stableId, name: t.titolo_tappa, lat: la, lon: lo,
                                   category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
                                   city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
+                                  senzaGuida: SENZA_RACCONTO.some((s) => tipo.includes(s)) || undefined,
                                 };
                               });
                               if (poi.length === 0) return;
@@ -7883,6 +7951,9 @@ export default function PlanScreen({
             const n = tourService.bozzaDaTappe(navGiorno.poi);
             if (setIsAudioGuideActive && !isAudioGuideActive) setIsAudioGuideActive(true);
             if (n > 0) window.dispatchEvent(new CustomEvent('wip-open-radar'));
+            // Ogni tappa che parla deve avere scheda, foto e racconto: se non
+            // ci sono, si creano ADESSO (vedi assicuraContenutiTappe).
+            void assicuraContenutiTappe(navGiorno.poi);
             setNavGiorno(null);
           }}
         />

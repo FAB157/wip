@@ -142,6 +142,8 @@ export interface VistaGiro {
   /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
   suAttraversamento: boolean;
   inPausa: boolean;
+  /** false = creato ma non ancora avviato: cruscotto e mappa mostrano «Avvia la navigazione». */
+  avviato: boolean;
   /** "A 120 m c'e` X, lo metto al suo posto?" — null se non c'e` niente da proporre. */
   proposta: PropostaSostituta | null;
   prescarico: StatoPrescarico;
@@ -202,6 +204,13 @@ export interface BozzaGiro {
   calcolando: boolean;
   /** 'PASS_RICHIESTO' | 'POSIZIONE' | altro messaggio; null se tutto bene. */
   errore: string | null;
+  /**
+   * Il PERCHE' del 402, come lo dice il server («nessun pass attivo»,
+   * «verifica del pass non riuscita»…). Prima si perdeva per strada e il
+   * pannello diceva sempre «attiva il Day Pass» — anche a chi il pass lo
+   * aveva, verificato sul database (28/08/2026).
+   */
+  erroreDettaglio: string | null;
   /** L'utente ha trascinato le tappe: l'ordine e` il suo, il server non lo tocca. */
   ordineManuale: boolean;
   /** "Ho un'ora": il giro si taglia alle tappe che ci stanno. null = nessun limite. */
@@ -241,7 +250,7 @@ const CHIAVE_RIENTRO = 'wip_giro_rientro';
 const CHIAVE_BOZZA = 'wip_giro_bozza';
 const BOZZA_VUOTA: BozzaGiro = {
   tappe: [], ordine: null, geometria: [], metri: 0, minutiCammino: 0, tratteSecondi: [],
-  problemi: [], partenza: null, calcolando: false, errore: null,
+  problemi: [], partenza: null, calcolando: false, errore: null, erroreDettaglio: null,
   ordineManuale: false, minutiDisponibili: null, tappeNelTempo: null,
   lungoLaStrada: [], cercandoLungoStrada: false,
   anello: true, rientro: 'originale',
@@ -305,6 +314,8 @@ export function tappaDaPoi(p: any): TappaGiro {
     ingresso: (p.entrance_lat && p.entrance_lon)
       ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: livelloIngresso(p) }
       : null,
+    // Pranzo, pausa, trasferimento: tappe del percorso ma senza racconto.
+    senzaGuida: p.senzaGuida === true || undefined,
   };
 }
 
@@ -314,6 +325,14 @@ class TourService {
   private coda = new CodaVoci();
   private ascoltatori = new Set<(v: VistaGiro | null) => void>();
   private pausaManuale = false;
+  /**
+   * AVVIO ESPLICITO (28/08/2026, committente: «deve avere un avvio
+   * esplicito»). Il giro nasce PRONTO e fermo: tracciato e tappe sulla mappa,
+   * cruscotto visibile, ma niente voce, niente svolte e niente geofence
+   * nativi finche` l'utente non tocca «Avvia la navigazione». Chi compone un
+   * giro al tavolino non vuole sentirsi dire «gira a sinistra» da seduto.
+   */
+  private avviato = true;
   private proposta: PropostaSostituta | null = null;
 
   private preferenzaRientro: RientroAnello = leggiPreferenzaRientro();
@@ -333,6 +352,8 @@ class TourService {
   private bozzaTimer: ReturnType<typeof setTimeout> | null = null;
   /** Senza pass il server rifiuta l'anteprima: non ha senso richiederla a ogni tocco. */
   private passMancante = false;
+  /** Il motivo dell'ultimo 402, per dirlo all'utente invece di «attiva il pass». */
+  private passMotivo: string | null = null;
 
   /**
    * I POI che il radar conosce attorno all'utente. Li passa l'app (sono i
@@ -394,7 +415,7 @@ class TourService {
     this.avvisa();
     this.avvisaBozza();
     if (!sospeso) {
-      if (this.giro) { this.sincronizzaTappeNative(); void this.riallineaDopoLaSospensione(); }
+      if (this.giro && this.avviato) { this.sincronizzaTappeNative(); void this.riallineaDopoLaSospensione(); }
       // Bozza ripescata da localStorage (o rimasta da prima): l'anteprima si
       // rifa` adesso, che c'e` di nuovo qualcuno a guardarla.
       else if (this.bozzaStato.tappe.length > 0 && !this.bozzaStato.ordine) this.programmaAnteprima();
@@ -607,6 +628,36 @@ class TourService {
    * in linea d'aria per sempre e senza spiegazione, che e` esattamente il
    * caso segnalato dall'utente il 28/08/2026.
    */
+  /**
+   * «Il pass ce l'ho, riprova» (28/08/2026, collaudo). `passMancante` si
+   * accendeva al primo 402 e si spegneva solo su «Crea giro»: se quel 402 era
+   * un guasto della VERIFICA (chiave vecchia sul server) e non un pass
+   * assente, il pannello restava inchiodato sull'invito ad attivare un pass
+   * gia` pagato. Qui si azzera e si richiede l'anteprima.
+   */
+  riprovaPass() {
+    this.passMancante = false;
+    this.passMotivo = null;
+    this.programmaAnteprima();
+  }
+
+  /**
+   * UN GIORNO D'ITINERARIO NEL RADAR (28/08/2026). Committente: «dall'itinerario,
+   * se si clicca audioguida, si riporta l'itinerario di quel giorno nel radar
+   * della mappa come se fosse un giro Dieci Tappe». La bozza si svuota e si
+   * riempie con le tappe del giorno, nell'ordine del piano, fino al tetto: da
+   * li` in poi e` un giro come gli altri — tracciato, aggiunte lungo la
+   * strada, X sui pin, «Crea il giro». Ritorna quante tappe sono entrate.
+   */
+  bozzaDaTappe(poi: any[]): number {
+    this.bozzaSvuota();
+    let n = 0;
+    for (const p of poi) { if (n >= MAX_TAPPE) break; if (this.bozzaAggiungi(p)) n++; }
+    // L'ordine del piano e` una scelta dell'autore: il server non lo tocca.
+    if (n > 1) this.bozzaStato = { ...this.bozzaStato, ordineManuale: true };
+    return n;
+  }
+
   anteprimaSeManca() {
     const b = this.bozzaStato;
     if (this.sospeso || b.tappe.length === 0 || b.calcolando) return;
@@ -654,7 +705,7 @@ class TourService {
     // funzionare, con la linea dritta al posto del percorso e la pillola
     // `gr_linea_stimata_pass` a dire perche'.
     if (this.passMancante && tappe.length > 1) {
-      this.bozzaStato = { ...this.bozzaStato, partenza, ordine: null, geometria: [], tratteSecondi: [], calcolando: false, errore: 'PASS_RICHIESTO' };
+      this.bozzaStato = { ...this.bozzaStato, partenza, ordine: null, geometria: [], tratteSecondi: [], calcolando: false, errore: 'PASS_RICHIESTO', erroreDettaglio: this.passMotivo };
       this.bozzaStato.tappeNelTempo = this.contaTappeNelTempo(this.bozzaStato);
       this.avvisaBozza();
       return;
@@ -673,6 +724,7 @@ class TourService {
         problemi: g.problemi || [],
         calcolando: false,
         errore: null,
+        erroreDettaglio: null,
       };
       // Col tracciato in mano si guarda cosa c'e` lungo la strada. In
       // parallelo: l'anteprima non aspetta il database.
@@ -680,10 +732,12 @@ class TourService {
     } catch (e: any) {
       if (mia !== this.bozzaVersione) return;
       const m = String(e?.message || '');
-      if (m.startsWith('PASS_RICHIESTO')) this.passMancante = true;
+      const pass = m.startsWith('PASS_RICHIESTO');
+      if (pass) { this.passMancante = true; this.passMotivo = m.slice('PASS_RICHIESTO:'.length).trim() || null; }
       this.bozzaStato = {
         ...this.bozzaStato, partenza, ordine: null, geometria: [], metri: 0, minutiCammino: 0, tratteSecondi: [],
-        calcolando: false, errore: m.startsWith('PASS_RICHIESTO') ? 'PASS_RICHIESTO' : (m || 'anteprima non disponibile'),
+        calcolando: false, errore: pass ? 'PASS_RICHIESTO' : (m || 'anteprima non disponibile'),
+        erroreDettaglio: pass ? this.passMotivo : null,
       };
     }
     this.bozzaStato.tappeNelTempo = this.contaTappeNelTempo(this.bozzaStato);
@@ -782,15 +836,35 @@ class TourService {
     this.prescarico = { ...PRESCARICO_VUOTO };
     this.ultimaTappaArrivata = null;
     this.idSalvato = null;
-    this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
+    // Pronto, non in cammino: si parte con avvia() — vedi `avviato`.
+    this.avviato = false;
+    this.pausaManuale = true;
+    this.stato = { stato: 'IN_PAUSA', tappaCorrente: 0, da: Date.now() };
     this.salva();
     this.avvisa();
     void this.cercaLungoLaStradaGiro();
+    return giro;
+  }
+
+  /**
+   * «Avvia la navigazione»: da PRONTO a IN_CAMMINO. E` qui — non alla
+   * creazione — che le tappe entrano nel geofencing nativo e il driver
+   * comincia a leggere le svolte.
+   */
+  avvia() {
+    if (!this.giro || this.avviato) return;
+    this.avviato = true;
+    this.pausaManuale = false;
+    this.stato = { ...this.stato, stato: 'IN_CAMMINO', da: Date.now(), fermoDa: null };
+    this.salva();
+    this.avvisa();
     // Sul telefono l'arrivo lo dichiara il servizio nativo: le tappe entrano
     // nel suo geofencing come tappe d'itinerario (isFromItinerary=true).
     this.sincronizzaTappeNative();
-    return giro;
   }
+
+  /** Creato ma non ancora avviato: il cruscotto mostra «Avvia». */
+  eAvviato(): boolean { return this.avviato; }
 
   /** Le tappe ancora da fare al geofencing nativo (no-op sul web). */
   private sincronizzaTappeNative() {
@@ -875,7 +949,10 @@ class TourService {
     if (!this.giro) return { testi: 0, audio: 0, totali: 0, mancanti: 0 };
     if (this.prescarico.inCorso) return { testi: this.prescarico.testi, audio: this.prescarico.audio, totali: this.prescarico.totali, mancanti: this.prescarico.mancanti };
     const giroId = this.giro.id;
-    const tappe = this.giro.tappe.filter(t => !t.esclusa);
+    // Le tappe «senza guida» (pranzo, pause) non hanno nulla da scaricare:
+    // includerle vorrebbe dire generare — e pagare — un'audioguida per un
+    // ristorante, e falserebbe il conteggio «N testi, N audio, N mancanti».
+    const tappe = this.giro.tappe.filter(t => !t.esclusa && !t.senzaGuida);
     // Lingua e personaggio dal contesto utente (non 'it' fisso come prima):
     // un utente EN si ritrovava testi e voce italiani nel pre-scaricamento.
     // Fallback finale a linguaCorrente() (che al primo avvio rileva la lingua
@@ -1299,7 +1376,7 @@ class TourService {
     try {
       const grezzo = localStorage.getItem(CHIAVE_RIPRESA);
       if (!grezzo) return null;
-      const { giro, stato, prescarico } = JSON.parse(grezzo);
+      const { giro, stato, prescarico, avviato } = JSON.parse(grezzo);
       // Un giro di ieri non si riprende: si e` andati a dormire, non in pausa.
       if (!giro || Date.now() - giro.creatoIl > 12 * 60 * 60 * 1000) { localStorage.removeItem(CHIAVE_RIPRESA); return null; }
       this.giro = giro;
@@ -1308,7 +1385,12 @@ class TourService {
       // dritto in IN_PAUSA (fermoDa vecchio) o in DEVIATO senza averlo mai
       // visto. Si riparte con i contatori azzerati.
       this.stato = { ...stato, fermoDa: null, fuoriPercorsoDa: null, da: Date.now() };
-      if (this.stato.stato === 'IN_PAUSA' || this.stato.stato === 'DEVIATO') this.stato.stato = 'IN_CAMMINO';
+      // Un giro creato e mai avviato si riprende com'era: pronto e fermo. I
+      // giri salvati prima di questo campo (28/08/2026) erano gia` partiti.
+      this.avviato = avviato !== false;
+      this.pausaManuale = !this.avviato;
+      if (!this.avviato) this.stato.stato = 'IN_PAUSA';
+      else if (this.stato.stato === 'IN_PAUSA' || this.stato.stato === 'DEVIATO') this.stato.stato = 'IN_CAMMINO';
       // Gli object URL salvati non sopravvivono al reload: l'audio si rilegge da IndexedDB.
       for (const t of this.giro.tappe) t.audio = null;
       this.prescarico = prescarico && typeof prescarico === 'object' ? { ...PRESCARICO_VUOTO, ...prescarico, inCorso: false } : { ...PRESCARICO_VUOTO };
@@ -1318,7 +1400,7 @@ class TourService {
       // niente geofence nativi finche` non lo si riaccende.
       if (!this.sospeso) {
         void this.cercaLungoLaStradaGiro();
-        this.sincronizzaTappeNative();
+        if (this.avviato) this.sincronizzaTappeNative();
       }
       return giro;
     } catch { return null; }
@@ -1366,6 +1448,7 @@ class TourService {
       metriAllaSvolta: this.navAttuale.metri,
       suAttraversamento: this.navAttuale.attraversamento,
       inPausa: this.stato.stato === 'IN_PAUSA',
+      avviato: this.avviato,
       proposta,
       prescarico: this.prescarico,
     };
@@ -1658,7 +1741,7 @@ class TourService {
   }
 
   private salva() {
-    try { localStorage.setItem(CHIAVE_RIPRESA, JSON.stringify({ giro: this.giro, stato: this.stato, prescarico: this.prescarico })); } catch {}
+    try { localStorage.setItem(CHIAVE_RIPRESA, JSON.stringify({ giro: this.giro, stato: this.stato, prescarico: this.prescarico, avviato: this.avviato })); } catch {}
   }
 
   private avvisa() {

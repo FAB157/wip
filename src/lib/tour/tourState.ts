@@ -66,6 +66,16 @@ export interface TappaGiro {
    * esclusa non doveva proprio esserci — sparisce dal conteggio e dalla mappa.
    */
   esclusa?: boolean;
+  /**
+   * TAPPA CHE NON PARLA (29/08/2026). Il pranzo, la pausa caffe`, il
+   * trasferimento: fanno parte della giornata e del tracciato — hanno un
+   * orario e delle coordinate, e un giro che li salta non e` piu` il giorno
+   * che l'utente ha pianificato — ma non hanno una storia da raccontare.
+   * Restano tappe a tutti gli effetti: si vedono sulla mappa, il percorso ci
+   * passa, l'arrivo viene annunciato col nome. Solo, niente audioguida: ne'
+   * pre-scaricata, ne' letta all'arrivo, ne' pagata.
+   */
+  senzaGuida?: boolean;
 }
 
 /**
