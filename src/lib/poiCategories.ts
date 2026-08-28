@@ -330,7 +330,7 @@ export const CATEGORY_COLORS: Record<PoiCategory, string> = {
 export const CATEGORY_EMOJI: Record<PoiCategory, string> = {
   enogastronomia: '🍷',
   shopping: '🏬',
-  lusso: '👑',
+  lusso: '💲',
   museum: '🏛️',
   monument: '🗿',
   viewpoint: '🌄',

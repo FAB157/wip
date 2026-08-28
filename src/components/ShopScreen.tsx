@@ -11,6 +11,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { getApiUrl } from '../lib/api';
 import FreeFeaturesModal from './FreeFeaturesModal';
 import { AnimatePresence } from 'motion/react';
+import { acquistiInAppDisponibili, leggiPrezziPacchetti, ripristinaAcquisti } from '../services/iapService';
 
 interface ShopScreenProps {
   userId: string;
@@ -27,6 +28,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
   const [loading, setLoading] = useState(false);
   const [voucherCode, setVoucherCode] = useState('');
   const [isFreeFeaturesOpen, setIsFreeFeaturesOpen] = useState(false);
+  // PREZZI VERI dal negozio dell'utente (RevenueCat → App Store / Play Store):
+  // già in valuta e formato locali. `null` = non ancora letti, `{}` = offerte
+  // non disponibili. In nessuno dei due casi si mostra un prezzo inventato.
+  const [prezzi, setPrezzi] = useState<Record<string, string> | null>(null);
+  const [ripristinoInCorso, setRipristinoInCorso] = useState(false);
+  const iapAttivo = acquistiInAppDisponibili();
 
   useEffect(() => {
     fetchBalance();
@@ -35,6 +42,43 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     window.addEventListener('wip-credits-updated', onCreditsUpdated);
     return () => window.removeEventListener('wip-credits-updated', onCreditsUpdated);
   }, []);
+
+  // Le offerte si leggono una volta all'apertura dello shop.
+  useEffect(() => {
+    let vivo = true;
+    if (!iapAttivo) { setPrezzi({}); return; }
+    leggiPrezziPacchetti().then(p => { if (vivo) setPrezzi(p); }).catch(() => { if (vivo) setPrezzi({}); });
+    return () => { vivo = false; };
+  }, [iapAttivo]);
+
+  /**
+   * L'etichetta del pulsante d'acquisto.
+   * - Nativo con offerte: il `priceString` dello store (unica verità).
+   * - Nativo senza offerte: nessun prezzo e acquisto disabilitato.
+   * - Web: il prezzo autorevole lo mostra Stripe Checkout un attimo dopo;
+   *   qui si dichiara che il prezzo si vede al pagamento invece di cablare
+   *   un euro che potrebbe non essere la valuta dell'utente.
+   */
+  const prezzoPacchetto = (priceId: string): string | null => {
+    if (!iapAttivo) return t('iap_prezzo_al_checkout');
+    if (!prezzi) return null; // ancora in caricamento
+    const alias = priceId === 'package_500' ? ['package_500', 'crediti_500'] : [priceId];
+    for (const k of alias) { if (prezzi[k]) return prezzi[k]; }
+    return null;
+  };
+  /** Acquisto possibile solo se sappiamo davvero quanto costa. */
+  const acquistoAbilitato = (priceId: string): boolean => !iapAttivo || !!prezzoPacchetto(priceId);
+
+  const handleRipristina = async () => {
+    setRipristinoInCorso(true);
+    try {
+      const esito = await ripristinaAcquisti(userId, lang);
+      notify(esito.messaggio, esito.ok ? (esito.ripristinati > 0 ? 'success' : 'info') : 'error');
+      await fetchBalance();
+    } finally {
+      setRipristinoInCorso(false);
+    }
+  };
 
   const fetchBalance = async () => {
     const bal = await getWalletBalance(userId);
@@ -47,6 +91,8 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     // chiedere il login prima di incassare.
     if (!userId || userId === 'mock-user-id') {
       notify(t('vr_b_shop_login_before_buy'));
+      // Ospite: si apre il login invece di lasciare l'utente col solo toast.
+      try { window.dispatchEvent(new CustomEvent('wip-open-login')); } catch { /* SSR */ }
       return;
     }
     setLoading(true);
@@ -145,6 +191,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
       const token = sessionData?.session?.access_token;
       if (!token) {
         notify(t('vr_b_shop_login_redeem'));
+        try { window.dispatchEvent(new CustomEvent('wip-open-login')); } catch { /* SSR */ }
         return;
       }
       const res = await fetch(getApiUrl('/api/coupon/redeem'), {
@@ -219,8 +266,8 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
                 <span className="font-bold">500 {t('vr_b_credits_cap')}</span>
               </p>
             </div>
-            <button onClick={() => buyPackage(500, 0, 'package_500')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
-              € 4,99
+            <button onClick={() => buyPackage(500, 0, 'package_500')} disabled={loading || !acquistoAbilitato('package_500')} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
+              {prezzoPacchetto('package_500') || t('iap_prezzo_non_disp')}
             </button>
           </motion.div>
 
@@ -238,8 +285,8 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
                 <span className="font-black text-white">1100 {t('vr_b_credits_cap')}</span>
               </div>
             </div>
-            <button onClick={() => buyPackage(1000, 100, 'package_1100')} disabled={loading} className="relative shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl shadow-md active:scale-95 transition disabled:opacity-50">
-              € 9,99
+            <button onClick={() => buyPackage(1000, 100, 'package_1100')} disabled={loading || !acquistoAbilitato('package_1100')} className="relative shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl shadow-md active:scale-95 transition disabled:opacity-50">
+              {prezzoPacchetto('package_1100') || t('iap_prezzo_non_disp')}
             </button>
           </motion.div>
 
@@ -257,11 +304,33 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
                 <span className="font-black text-amber-600">2600 {t('vr_b_credits_cap')}</span>
               </div>
             </div>
-            <button onClick={() => buyPackage(2000, 600, 'package_2600')} disabled={loading} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
-              € 19,99
+            <button onClick={() => buyPackage(2000, 600, 'package_2600')} disabled={loading || !acquistoAbilitato('package_2600')} className="shrink-0 bg-white text-[#1e3a8a] font-black px-5 py-2.5 rounded-xl border-2 border-[#1e3a8a]/20 hover:border-[#1e3a8a]/50 active:scale-95 transition disabled:opacity-50">
+              {prezzoPacchetto('package_2600') || t('iap_prezzo_non_disp')}
             </button>
           </motion.div>
         </div>
+
+        {/* Offerte dello store non raggiungibili: nessun prezzo inventato, si
+            spiega perché i pulsanti sono spenti (stessa regola delle foto:
+            meglio niente che una cosa sbagliata). */}
+        {iapAttivo && prezzi && Object.keys(prezzi).length === 0 && (
+          <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
+            {t('iap_store_non_raggiungibile')}
+          </p>
+        )}
+
+        {/* RIPRISTINA ACQUISTI — obbligatorio per App Store Review e gradito da
+            Google Play. Sul web non c'è nulla da ripristinare (Stripe accredita
+            i crediti al profilo): il pulsante non si mostra. */}
+        {iapAttivo && (
+          <button
+            onClick={handleRipristina}
+            disabled={ripristinoInCorso}
+            className="mt-4 w-full px-5 py-3 rounded-xl border-2 border-[#1e3a8a]/20 text-[#1e3a8a] font-black text-sm hover:border-[#1e3a8a]/50 active:scale-[0.99] transition disabled:opacity-50"
+          >
+            {ripristinoInCorso ? t('iap_ripristino_corso') : t('iap_ripristina')}
+          </button>
+        )}
 
         <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 mt-6 tracking-wider">
           {t('vr_b_shop_voucher_head')}

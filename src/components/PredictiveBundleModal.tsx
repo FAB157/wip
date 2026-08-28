@@ -74,7 +74,14 @@ export default function PredictiveBundleModal({
   const cost = pois.length * bundlePricePerPoi;
 
   const startDownload = async () => {
-    if (!session?.user?.id) return;
+    // Ospite (28/08/2026): il bundle si paga in crediti, quindi serve un
+    // account. Prima il tasto non faceva NIENTE in silenzio: ora si propone
+    // il login (stesso evento del tasto "Accedi" di App.tsx).
+    if (!session?.user?.id) {
+      notify(t('guest_accedi_per'));
+      try { window.dispatchEvent(new CustomEvent('wip-open-login')); } catch { /* SSR */ }
+      return;
+    }
     // Guardia anti doppio tap PRIMA del pagamento: il bottone non era
     // disabilitato e `setDownloading(true)` arrivava dopo l'addebito, quindi
     // due tocchi rapidi scalavano il bundle due volte.

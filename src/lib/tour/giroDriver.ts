@@ -37,7 +37,7 @@ function guidaSuona(): boolean {
   try { if (isSpeechActive()) return true; } catch { /* ok */ }
   try { return !!locationService.getAudioState()?.isPlaying; } catch { return false; }
 }
-import { getTranslation, type Language } from '../i18n';
+import { getTranslation, linguaCorrente, type Language } from '../i18n';
 import { SOGLIE } from './tourState';
 
 const ACCURACY_MAX_M = 50;
@@ -131,10 +131,13 @@ export function avviaGiroDriver(): void {
 }
 
 function linguaUi(): string {
+  // Senza scelta salvata si rileva la lingua di sistema (linguaCorrente), non
+  // più 'it' fisso: il giro parlava italiano a chiunque al primo avvio.
   try {
-    const l = localStorage.getItem('wip_language') || localStorage.getItem('language') || document.documentElement.lang || 'it';
-    return l.toLowerCase().slice(0, 2) || 'it';
-  } catch { return 'it'; }
+    const salvata = localStorage.getItem('wip_language') || localStorage.getItem('language');
+    if (salvata) return salvata.toLowerCase().slice(0, 2) || 'en';
+  } catch { /* storage bloccato */ }
+  return linguaCorrente().toLowerCase();
 }
 
 function onFix(e: Event): void {

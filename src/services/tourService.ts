@@ -878,7 +878,9 @@ class TourService {
     const tappe = this.giro.tappe.filter(t => !t.esclusa);
     // Lingua e personaggio dal contesto utente (non 'it' fisso come prima):
     // un utente EN si ritrovava testi e voce italiani nel pre-scaricamento.
-    const lang = String(lingua || this.lingua || localStorage.getItem('wip_language') || 'it').toLowerCase().slice(0, 2) || 'it';
+    // Fallback finale a linguaCorrente() (che al primo avvio rileva la lingua
+    // di sistema) invece di 'it' fisso.
+    const lang = String(lingua || this.lingua || localStorage.getItem('wip_language') || linguaCorrente()).toLowerCase().slice(0, 2) || 'en';
     const carattere: 'nicky' | 'dante' = personaggio || getGuideCharacter() || 'nicky';
     const voce = azureVoiceName(lang, carattere);
     let fatte = 0, testi = 0, audio = 0;

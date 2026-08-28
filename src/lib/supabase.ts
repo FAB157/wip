@@ -44,7 +44,13 @@ const nativeAuthStorage = {
     try { localStorage.removeItem(key); } catch { /* niente */ }
   },
 };
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDM1ODcsImV4cCI6MjA5NDY3OTU4N30.4v8qFrPU4QOJ-Ko61CASjUoPVEBOM8J9rGeiAbNMpSs';
+// Chiave PUBBLICA (29/08/2026): era la vecchia `anon`, un JWT legacy che
+// Supabase sta ritirando. Vanno disattivate le legacy perche' la service_role
+// della stessa generazione era finita nel repository pubblico; questa e' la
+// publishable key, stesso ruolo (accesso pubblico protetto dalle RLS) ma
+// revocabile da sola. Il NOME della variabile resta VITE_SUPABASE_ANON_KEY
+// per non dover cambiare l'ambiente in cinque posti: cambia solo il valore.
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_uTKPsWB6z1M3nSeYOLk3mw_soqmIFOP';
 
 const isPlaceholder = (val: string) => !val || val.includes('your-') || val.includes('placeholder');
 

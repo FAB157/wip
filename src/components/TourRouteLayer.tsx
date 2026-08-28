@@ -20,11 +20,15 @@ import { Polyline, Marker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { useEffect, useState } from 'react';
 import { tourService, MAX_TAPPE, metri as metriFra, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
-import { getTranslation, type Language } from '../lib/i18n';
+import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 
-/** La lingua della UI (App.tsx la scrive in wip_language): il layer non riceve props. */
+/**
+ * La lingua della UI (App.tsx la scrive in wip_language): il layer non riceve
+ * props. Al primo avvio, senza scelta salvata, linguaCorrente() rileva quella
+ * di sistema — prima qui si ripiegava su IT per chiunque nel mondo.
+ */
 function linguaUi(): Language {
-  try { return ((localStorage.getItem('wip_language') || 'IT').toUpperCase() as Language); } catch { return 'IT'; }
+  return linguaCorrente();
 }
 const tr = (k: string) => getTranslation(k, linguaUi());
 

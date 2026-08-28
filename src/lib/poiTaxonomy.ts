@@ -300,6 +300,7 @@ export const LUSSO_SUB_BY_TYPE: Record<string, string> = {
   treno_lusso_storico: "treni_storici",
   stazione_sci_lusso: "sci_lusso",
   noleggio_yacht: "noleggio_lusso", jet_privato: "noleggio_lusso",
+  casino_lusso: "club_esclusivi",
 };
 
 /**

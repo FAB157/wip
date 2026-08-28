@@ -1764,6 +1764,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // Token utente se disponibile (rollout fase 1, vedi
                     // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
                     let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+                    // POSSESSO (29/08/2026): qui NON si scrive il mirror
+                    // `owned_poi_ids_<userId>`. L'auto-play non chiede mai
+                    // l'addebito (`charge:true` non parte dal nativo) e ci si
+                    // arriva solo con `alreadyPurchased || passActive`: un 200
+                    // vuol dire "già suo" oppure "Day Pass" — e il pass è
+                    // accesso a tempo. Segnarlo qui regalerebbe per sempre
+                    // ogni POI sentito col pass.
                     self.supabase.fetchAudioguide(poiId: poi.id, lang: lang, character: guideVoice, accessToken: audioguideToken) { esito in
                         self.workQueue.async {
                             switch esito {
@@ -2084,6 +2091,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             self.store.insertSpend(SpendEntry(
                 poiId: poiId, credits: BillingLogic.defaultGuideCost, ts: nowMs()
             ))
+            // ACQUISTO (29/08/2026): «chi paga un'audioguida non la paga mai
+            // più». È l'unico ramo in cui l'utente ha chiesto l'addebito a
+            // crediti, quindi il POI diventa suo anche nel mirror locale e il
+            // prossimo trigger sullo stesso POI non ripaga. Gli altri due rami
+            // non ci entrano: "purchased" era già suo, il Day Pass è accesso a
+            // tempo.
+            ListeningHistoryStore.shared.markOwned(poiId)
             return "per_listen"
         }
 

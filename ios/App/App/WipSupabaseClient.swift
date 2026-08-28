@@ -10,7 +10,13 @@ import Security
 final class WipSupabaseClient {
 
     static let supabaseUrl = "https://qfxxhzkkrkvbuekfknhh.supabase.co"
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDM1ODcsImV4cCI6MjA5NDY3OTU4N30.4v8qFrPU4QOJ-Ko61CASjUoPVEBOM8J9rGeiAbNMpSs"
+    /// Chiave PUBBLICA (29/08/2026). Era la vecchia `anon`, un JWT legacy:
+    /// Supabase le sta ritirando e vanno disattivate, perche' la service_role
+    /// della stessa generazione era finita nel repository pubblico. Questa e'
+    /// la publishable key: stesso ruolo (accesso pubblico protetto dalle RLS),
+    /// ma revocabile da sola. Il nome della costante resta `anonKey` per non
+    /// toccare i venti punti che la usano.
+    static let anonKey = "sb_publishable_uTKPsWB6z1M3nSeYOLk3mw_soqmIFOP"
 
     private let session: URLSession
 
@@ -403,6 +409,47 @@ final class WipSupabaseClient {
         }.resume()
     }
 
+    // MARK: - Possesso (user_poi_purchases)
+
+    /**
+     * POSSESSO (29/08/2026) — «un'audioguida acquistata non si ripaga mai».
+     *
+     * Il registro vero è `user_poi_purchases`, scritto SOLO dal service role
+     * (il server, dopo un addebito riuscito): il client non può falsificarlo,
+     * mentre `user_listening_history` è scrivibile dall'utente e da ieri non
+     * coincide più col possesso (il server decide il diritto leggendo questa
+     * tabella). Le RLS consentono la SELECT al proprietario, quindi serve il
+     * token utente: con la sola anon key la tabella tornerebbe VUOTA, e una
+     * lista vuota non deve mai passare per "non possiede nulla" — senza token
+     * si esce subito con nil (= richiesta fallita), il mirror locale resta
+     * com'è e nessuno si vede far ripagare un POI.
+     *
+     * nil = fallita/non attendibile; array = possesso certo.
+     */
+    func fetchOwnedPoiIds(userId: String, accessToken: String?, completion: @escaping ([String]?) -> Void) {
+        guard !userId.isEmpty, let token = accessToken, !token.isEmpty,
+              let req = request(
+                path: "/rest/v1/user_poi_purchases?user_id=eq.\(userId)&select=poi_id",
+                method: "GET", accessToken: token
+              ) else {
+            completion(nil)
+            return
+        }
+        session.dataTask(with: req) { data, response, _ in
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  let data = data,
+                  let arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else {
+                completion(nil)
+                return
+            }
+            completion(arr.compactMap { row in
+                if let s = row["poi_id"] as? String { return s }
+                if let n = row["poi_id"] { return String(describing: n) }
+                return nil
+            })
+        }.resume()
+    }
+
     /// Insert/update best-effort della riga di storico, stessa logica del web
     /// (lib/listeningHistory.ts): se esiste aggiorna listened_at, altrimenti insert.
     func recordListeningHistory(
@@ -635,6 +682,15 @@ enum SecureSessionStore {
  * anche offline; gli ascolti registrati offline restano in una coda pending
  * ritentata alla sync successiva. Fail-closed: in dubbio NON è acquistato.
  *
+ * (29/08/2026) POSSESSO. «Chi acquista un'audioguida non la paga mai più:
+ * quel POI è suo, in tutte le lingue e con tutti i personaggi.» Il registro
+ * vero è `user_poi_purchases`, che solo il server scrive dopo un addebito
+ * riuscito; lo storico ascolti qui sopra NON è più la fonte di verità (è
+ * scrivibile dal client e "ascoltato" non vuol dire "pagato"). Questo store
+ * ne tiene un mirror per utente — `owned_poi_ids_<userId>` — perché il
+ * trigger in background deve decidere a schermo spento e senza rete. Lo
+ * storico resta come RIPIEGO, mai come prova contraria.
+ *
  * Stesse chiavi prefs del port Android (ListeningHistoryStore.kt): allineare.
  * userId/accessToken (prefUserId/prefAccessToken) sono in Keychain via
  * SecureSessionStore, non più in UserDefaults — vedi SecureSessionStore sopra.
@@ -649,6 +705,18 @@ final class ListeningHistoryStore {
     static let prefPending = "listened_pending_sync"
     static let prefUserId = "wip_user_id"
     static let prefAccessToken = "wip_supabase_token"
+    /**
+     * POSSESSO (29/08/2026). Prefisso del mirror di `user_poi_purchases`:
+     * la chiave reale è `owned_poi_ids_<userId>`. NON si riusa quella dello
+     * storico: lo storico dice "ascoltato" (scrivibile dal client, e da ieri
+     * non è più una prova di acquisto), questa dice "è suo per sempre".
+     * Stesse chiavi di Android (ListeningHistoryStore.kt): allineare.
+     */
+    static let prefOwnedIds = "owned_poi_ids"
+    /// Ultima sync del possesso, per utente: `owned_sync_at_<userId>` (ms).
+    static let prefOwnedSyncAt = "owned_sync_at"
+    /// Il registro si rilegge al massimo ogni 6 ore (o se il mirror è vuoto).
+    private static let ownedSyncEveryMs: Double = 6 * 60 * 60 * 1000
 
     private let prefs = UserDefaults.standard
     private let client = WipSupabaseClient()
@@ -680,6 +748,8 @@ final class ListeningHistoryStore {
 
     private func chiaveAscoltati(_ userId: String) -> String { "\(Self.prefListenedIds)_\(userId)" }
     private func chiavePending(_ userId: String) -> String { "\(Self.prefPending)_\(userId)" }
+    private func chiavePosseduti(_ userId: String) -> String { "\(Self.prefOwnedIds)_\(userId)" }
+    private func chiaveOwnedSyncAt(_ userId: String) -> String { "\(Self.prefOwnedSyncAt)_\(userId)" }
 
     /// Migrazione una tantum della chiave globale (installazioni aggiornate):
     /// gli id passano sotto l'utente corrente e ogni voce pending riceve il
@@ -713,12 +783,93 @@ final class ListeningHistoryStore {
         return Set(prefs.stringArray(forKey: chiaveAscoltati(userId)) ?? [])
     }
 
-    /// Mirror locale, vale anche offline. In dubbio: NON acquistato.
+    /// Posseduti dell'utente (mirror di user_poi_purchases). Su `queue`.
+    private func possedutiLocked(userId: String) -> Set<String> {
+        Set(prefs.stringArray(forKey: chiavePosseduti(userId)) ?? [])
+    }
+
+    /**
+     * DIRITTO A RIASCOLTARE GRATIS (29/08/2026).
+     *
+     * Ordine: prima il mirror del POSSESSO (`owned_poi_ids_<userId>`, copia
+     * di user_poi_purchases, la stessa fonte che usa il server); se il POI non
+     * c'è, si ripiega sul vecchio mirror degli ascolti. Il ripiego non è
+     * pigrizia: il backfill ha importato nel registro gli acquisti storici, ma
+     * un telefono appena aggiornato e offline può non aver ancora scaricato il
+     * mirror nuovo — e fra "fargli ripagare un POI che è suo" e "regalargli un
+     * riascolto" si sceglie sempre il secondo.
+     *
+     * Nessuna rete qui: solo UserDefaults, il trigger deve restare istantaneo.
+     * Senza utente: false (fail-closed), come prima.
+     */
     func isAlreadyPurchased(_ poiId: String) -> Bool {
         guard !poiId.isEmpty else { return false }
         let userId = utenteCorrente()
         guard !userId.isEmpty else { return false }
-        return queue.sync { ascoltatiLocked(userId: userId).contains(poiId) }
+        return queue.sync {
+            possedutiLocked(userId: userId).contains(poiId)
+                || ascoltatiLocked(userId: userId).contains(poiId)
+        }
+    }
+
+    /**
+     * Aggiunge un POI al mirror del possesso: da chiamare SOLO dopo un
+     * addebito a crediti chiesto esplicitamente dall'utente (mai per il Day
+     * Pass, che è accesso a tempo e non possesso, e mai per un'anteprima 402).
+     * Il registro vero resta `user_poi_purchases` sul server: questo è
+     * l'anticipo locale, perché il riascolto offline subito dopo l'acquisto
+     * deve essere gratis anche senza rete.
+     */
+    func markOwned(_ poiId: String) {
+        guard !poiId.isEmpty else { return }
+        let userId = utenteCorrente()
+        guard !userId.isEmpty else { return }
+        queue.async {
+            var ids = self.possedutiLocked(userId: userId)
+            guard ids.insert(poiId).inserted else { return }
+            self.prefs.set(Array(ids), forKey: self.chiavePosseduti(userId))
+        }
+    }
+
+    /**
+     * Scarica `user_poi_purchases` e lo specchia in `owned_poi_ids_<userId>`.
+     * Chiamata da syncFromCloud (avvio monitoraggio e setUserContext).
+     *
+     * Frequenza: al massimo una volta ogni 6 ore, tranne quando il mirror è
+     * vuoto (primo avvio dopo l'aggiornamento: lì serve subito, altrimenti il
+     * possesso resterebbe appeso al solo ripiego sullo storico).
+     *
+     * UNIONE, mai sostituzione: gli id segnati da markOwned dopo un addebito
+     * OFFLINE non sono ancora arrivati sul server (la riconciliazione la fa il
+     * JS quando torna la rete). Sostituire vorrebbe dire far sparire un
+     * acquisto appena fatto e farlo ripagare: il possesso non si toglie mai.
+     *
+     * FAIL-SAFE: lettura fallita (rete, 401, RLS) → non si tocca niente e non
+     * si aggiorna il timestamp; si riprova al giro dopo e intanto vale il
+     * mirror che c'è. Mai svuotarlo su un errore.
+     */
+    private func syncOwnershipFromCloud() {
+        let userId = utenteCorrente()
+        guard !userId.isEmpty,
+              let token = SecureSessionStore.get(Self.prefAccessToken), !token.isEmpty else { return }
+        let scaduta: Bool = queue.sync {
+            let ultima = prefs.double(forKey: chiaveOwnedSyncAt(userId))
+            let vuoto = possedutiLocked(userId: userId).isEmpty
+            return vuoto || (Date().timeIntervalSince1970 * 1000 - ultima) > Self.ownedSyncEveryMs
+        }
+        guard scaduta else { return }
+        client.fetchOwnedPoiIds(userId: userId, accessToken: token) { [weak self] cloudIds in
+            guard let self = self, let cloudIds = cloudIds else { return }
+            self.queue.async {
+                // L'utente può essere cambiato mentre la richiesta era in
+                // volo: gli id vanno sotto chi li ha chiesti, non sotto quello
+                // corrente.
+                var ids = self.possedutiLocked(userId: userId)
+                ids.formUnion(cloudIds)
+                self.prefs.set(Array(ids), forKey: self.chiavePosseduti(userId))
+                self.prefs.set(Date().timeIntervalSince1970 * 1000, forKey: self.chiaveOwnedSyncAt(userId))
+            }
+        }
     }
 
     /// Registra un ascolto completato: mirror subito (vale anche offline),
@@ -759,6 +910,10 @@ final class ListeningHistoryStore {
     func syncFromCloud() {
         let userId = utenteCorrente()
         guard !userId.isEmpty else { return }
+        // Prima il POSSESSO: è quello che decide se si paga, e deve
+        // aggiornarsi anche se lo storico non risponde. Ha una sua cadenza
+        // (max ogni 6 ore) e non blocca nulla: è una richiesta asincrona.
+        syncOwnershipFromCloud()
         let token = SecureSessionStore.get(Self.prefAccessToken)
         client.fetchListeningHistoryPoiIds(userId: userId, accessToken: token) { [weak self] cloudIds in
             guard let self = self, let cloudIds = cloudIds else { return }
@@ -775,8 +930,12 @@ final class ListeningHistoryStore {
     }
 
     /// Logout (plugin clearUserContext): via userId e token dal Keychain.
-    /// Le chiavi per utente in UserDefaults restano: sono già isolate per
-    /// id e servono se lo stesso utente rientra; nessun altro le legge.
+    /// Le chiavi per utente in UserDefaults restano — storico E possesso
+    /// (`owned_poi_ids_<userId>`): sono già isolate per id e servono se lo
+    /// stesso utente rientra; nessun altro le legge, perché senza userId in
+    /// Keychain nessuna lettura arriva nemmeno a costruire la chiave. Qui non
+    /// c'è cache in memoria da svuotare (a differenza di Android, che tiene
+    /// due Set volatili): ogni lettura riparte da UserDefaults.
     func clearSession() {
         SecureSessionStore.delete(Self.prefUserId)
         SecureSessionStore.delete(Self.prefAccessToken)

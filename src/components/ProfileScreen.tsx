@@ -27,6 +27,7 @@ import { list as listNotifications, markAllRead as markAllNotificationsRead, unr
 import { parseImportFile, importPlacesAsFavorites, ImportReport, MAX_IMPORT_ENTRIES } from '../lib/importGoogleMaps';
 import { getListeningHistory, ListeningHistoryEntry, LISTENING_HISTORY_EVENT, deleteListeningHistory } from '../lib/listeningHistory';
 import { wipeLocalUserData } from '../lib/userSession';
+import { acquistiInAppDisponibili, ripristinaAcquisti } from '../services/iapService';
 import PremiumGuideRenderer from './PremiumGuideRenderer';
 import PremiumGuideAudiobook from './PremiumGuideAudiobook';
 import TravelerDashboard from './TravelerDashboard';
@@ -581,6 +582,20 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   const [profile, setProfile] = useState<UserProfile | null>(null);
 
   const currentUserId = userSession?.user?.id || "mock-user-id";
+
+  // Ripristino acquisti in-app (App Store Guideline 3.1.1): oltre che nello
+  // shop, il pulsante deve essere raggiungibile dalle impostazioni — è lì che
+  // il revisore (e l'utente che ha cambiato telefono) lo cerca.
+  const [ripristinoInCorso, setRipristinoInCorso] = useState(false);
+  const handleRipristinaAcquisti = async () => {
+    setRipristinoInCorso(true);
+    try {
+      const esito = await ripristinaAcquisti(userSession?.user?.id, language);
+      notify(esito.messaggio, esito.ok ? (esito.ripristinati > 0 ? 'success' : 'info') : 'error');
+    } finally {
+      setRipristinoInCorso(false);
+    }
+  };
 
   // Coupon states
   const [couponCode, setCouponCode] = useState('');
@@ -2841,6 +2856,42 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   </div>
                 </div>
               </div>
+
+              {/* OSPITE: l'invito ad accedere sta dove l'utente cerca il
+                  proprio account. Senza sessione il blocco "Esci / Elimina
+                  account" non viene nemmeno passato (onSignOut assente). */}
+              {!userSession?.user && (
+                <div className="pt-4 rounded-2xl bg-primary/5 border border-primary/10 p-4 flex flex-col gap-3">
+                  <p className="text-xs text-primary/80 leading-snug">
+                    {getTranslation('guest_accedi_per', language)}
+                  </p>
+                  <button
+                    onClick={() => window.dispatchEvent(new CustomEvent('wip-open-login'))}
+                    className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all w-full shadow-sm"
+                  >
+                    {getTranslation('guest_accedi', language)}
+                  </button>
+                </div>
+              )}
+
+              {/* RIPRISTINA ACQUISTI — fuori dal blocco `onSignOut` di
+                  proposito: deve esserci anche per chi sta usando l'app come
+                  ospite e ha già pagato su questo telefono. Solo su nativo:
+                  sul web gli acquisti passano da Stripe e i crediti sono già
+                  sul profilo. */}
+              {acquistiInAppDisponibili() && (
+                <div className="pt-4">
+                  <button
+                    onClick={handleRipristinaAcquisti}
+                    disabled={ripristinoInCorso}
+                    className="px-6 py-3 bg-primary/5 text-primary hover:bg-primary/10 rounded-2xl font-black text-xs uppercase tracking-widest transition-all shrink-0 w-full shadow-sm disabled:opacity-50"
+                  >
+                    {ripristinoInCorso
+                      ? getTranslation('iap_ripristino_corso', language)
+                      : getTranslation('iap_ripristina', language)}
+                  </button>
+                </div>
+              )}
 
               {onSignOut && (
                 <div className="pt-4 flex flex-col gap-3 justify-center mb-8">

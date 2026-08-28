@@ -443,7 +443,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
      * Identità utente per lo storico ascolti nativo: il JS la spinge a ogni
      * sessione online (dayPassService.reconcileOfflineBilling). Il token serve
      * per le RLS su user_listening_history; se scade, insert e sync restano
-     * best-effort. Alla ricezione sincronizza subito il mirror.
+     * best-effort. Alla ricezione sincronizza subito il mirror — ascolti E
+     * possesso (`user_poi_purchases`, al massimo ogni 6 ore): è l'unico
+     * momento certo in cui il nativo ha in mano un token fresco.
      */
     @objc func setUserContext(_ call: CAPPluginCall) {
         // userId/accessToken in Keychain (SecureSessionStore), non più in
@@ -460,8 +462,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
      * UserDefaults. Prima il nativo non aveva un modo per dimenticare
      * l'utente: dopo il logout continuava a spendere lo snapshot crediti e il
      * pass di chi se n'era andato, e a registrare ascolti a suo nome. Lo
-     * storico ascolti per utente resta (è già isolato per id, vedi
-     * ListeningHistoryStore). Mai un reject: il JS chiama e va avanti.
+     * storico ascolti e il mirror del possesso per utente restano (sono già
+     * isolati per id, vedi ListeningHistoryStore). Mai un reject: il JS chiama
+     * e va avanti.
      */
     @objc func clearUserContext(_ call: CAPPluginCall) {
         ListeningHistoryStore.shared.clearSession()
@@ -604,6 +607,13 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                 return
             }
             store.insertSpend(SpendEntry(poiId: poiId, credits: cost, ts: nowMs()))
+            // ACQUISTO (29/08/2026): «chi paga un'audioguida non la paga mai
+            // più». Qui l'utente ha davvero chiesto l'addebito a crediti,
+            // quindi il POI entra subito nel mirror del possesso e il
+            // riascolto offline successivo è gratis, senza aspettare che la
+            // riconciliazione scriva user_poi_purchases sul server. Il Day
+            // Pass (ramo sopra) NON ci entra: è accesso a tempo, non possesso.
+            ListeningHistoryStore.shared.markOwned(poiId)
             ret["mode"] = "per_listen"
             ret["charged"] = cost
         }

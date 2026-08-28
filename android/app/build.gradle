@@ -30,7 +30,13 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
         buildConfigField "String", "SUPABASE_URL", "\"https://qfxxhzkkrkvbuekfknhh.supabase.co\""
-        buildConfigField "String", "SUPABASE_ANON_KEY", "\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDM1ODcsImV4cCI6MjA5NDY3OTU4N30.4v8qFrPU4QOJ-Ko61CASjUoPVEBOM8J9rGeiAbNMpSs\""
+        // Chiave PUBBLICA (29/08/2026): la vecchia `anon` era un JWT legacy.
+        // Supabase le sta ritirando e vanno disattivate, perche' la
+        // service_role della stessa generazione era finita nel repository
+        // pubblico. Questa e' la nuova publishable key: stesso ruolo (accesso
+        // pubblico protetto dalle RLS), ma revocabile da sola e senza
+        // scadenza cablata nel token.
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"sb_publishable_uTKPsWB6z1M3nSeYOLk3mw_soqmIFOP\""
 
         javaCompileOptions {
             annotationProcessorOptions {

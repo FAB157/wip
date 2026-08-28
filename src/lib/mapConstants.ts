@@ -167,6 +167,8 @@ export const CATEGORY_EMOJIS: Record<string, string> = {
   community: "📸",
   beni_culturali: "🏺",
   enogastronomia: "🍷",
+  shopping: "🏬",
+  lusso: "💲",
   monumenti: "🏛️",
   chiese: "⛪",
   musei: "🖼️",

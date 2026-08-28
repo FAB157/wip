@@ -358,6 +358,16 @@ export function isCategoryAllowed(
 ): boolean {
   const cat = (poi.category || '').toLowerCase();
 
+  // GEMME PRIMA DI TUTTO (28/08/2026, regola del committente: «se gemma,
+  // qualsiasi categoria — anche non turistica — deve avere foto, descrizione,
+  // audioguida ed essere selezionata dal GeoControl»). Una gemma risponde
+  // SOLO al suo interruttore: un murale, una terma o un bene vincolato
+  // promossi a gemma parlano, anche se la loro categoria di per sé è muta.
+  // Prima questo controllo stava dopo le due esclusioni qui sotto, e una
+  // gemma tematica restava zitta. Il nativo fa già così (CategoryMap.isActive
+  // guarda is_gem per primo).
+  if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
+
   // BENI CULTURALI: scheda e foto, MAI audioguida.
   // Sono i beni dei registri nazionali del patrimonio promossi a POI (circa
   // 430.000): chiese di campagna, mulini, ma anche case private vincolate e
@@ -383,7 +393,6 @@ export function isCategoryAllowed(
   // riprendere per sbaglio.
   if (SENZA_AUDIOGUIDA.has(cat)) return false;
 
-  if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
   // LOCALITÀ TURISTICHE (24/08/2026, richiesta esplicita "con audioguida"):
   // Riomaggiore, Volterra, Colonnata raccontano il borgo, non un singolo
   // monumento — merita la voce quanto una chiesa.

@@ -5098,6 +5098,27 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   a11y_ferma_audio: { IT: "Ferma l'audio", EN: "Stop the audio", FR: "Arrêter l'audio", ES: "Detener el audio", DE: "Audio stoppen", RU: "Остановить аудио", ZH: "停止音频" },
   a11y_cancella_ricerca: { IT: "Cancella la ricerca", EN: "Clear the search", FR: "Effacer la recherche", ES: "Borrar la búsqueda", DE: "Suche löschen", RU: "Очистить поиск", ZH: "清除搜索" },
   a11y_esci_follow: { IT: "Tocca per uscire dalla modalità Segui", EN: "Tap to leave Follow mode", FR: "Touche pour quitter le mode Suivi", ES: "Toca para salir del modo Seguir", DE: "Tippen, um den Verfolgungsmodus zu verlassen", RU: "Нажмите, чтобы выйти из режима слежения", ZH: "点按以退出跟随模式" },
+  // ── 🛒 Acquisti in-app: ripristino e prezzi dello store (28/08/2026) ──
+  // Requisiti di App Store Review: il pulsante "Ripristina acquisti" e il
+  // prezzo nella valuta del negozio dell'utente (mai un euro cablato).
+  iap_ripristina: { IT: "Ripristina acquisti", EN: "Restore purchases", FR: "Restaurer les achats", ES: "Restaurar compras", DE: "Käufe wiederherstellen", RU: "Восстановить покупки", ZH: "恢复购买" },
+  iap_ripristino_ok: { IT: "Acquisti ripristinati: {n}. Saldo e pass aggiornati.", EN: "Purchases restored: {n}. Balance and pass updated.", FR: "Achats restaurés : {n}. Solde et pass mis à jour.", ES: "Compras restauradas: {n}. Saldo y pase actualizados.", DE: "Wiederhergestellte Käufe: {n}. Guthaben und Pass aktualisiert.", RU: "Восстановлено покупок: {n}. Баланс и пропуск обновлены.", ZH: "已恢复购买：{n} 项。余额和通行证已更新。" },
+  iap_ripristino_vuoto: { IT: "Nessun acquisto da ripristinare su questo account.", EN: "No purchases to restore on this account.", FR: "Aucun achat à restaurer sur ce compte.", ES: "No hay compras que restaurar en esta cuenta.", DE: "Für dieses Konto gibt es keine Käufe zum Wiederherstellen.", RU: "На этом аккаунте нет покупок для восстановления.", ZH: "此账号没有可恢复的购买项目。" },
+  iap_ripristino_errore: { IT: "Non siamo riusciti a contattare il negozio. Riprova tra poco.", EN: "We couldn't reach the store. Please try again shortly.", FR: "Impossible de joindre la boutique. Réessaie dans un instant.", ES: "No hemos podido contactar con la tienda. Inténtalo de nuevo en un momento.", DE: "Der Store war nicht erreichbar. Versuch es gleich noch mal.", RU: "Не удалось связаться с магазином. Повторите попытку чуть позже.", ZH: "无法连接到应用商店，请稍后重试。" },
+  iap_ripristino_web: { IT: "Il ripristino vale per gli acquisti in-app: apri l'app WIP sul telefono. I crediti comprati sul web sono già sul tuo profilo.", EN: "Restoring applies to in-app purchases: open the WIP app on your phone. Credits bought on the web are already on your profile.", FR: "La restauration concerne les achats in-app : ouvre l'app WIP sur ton téléphone. Les crédits achetés sur le web sont déjà sur ton profil.", ES: "La restauración se aplica a las compras dentro de la app: abre la app WIP en tu móvil. Los créditos comprados en la web ya están en tu perfil.", DE: "Die Wiederherstellung gilt für In-App-Käufe: Öffne die WIP-App auf deinem Handy. Im Web gekaufte Credits sind bereits in deinem Profil.", RU: "Восстановление относится к встроенным покупкам: откройте приложение WIP на телефоне. Кредиты, купленные в вебе, уже в вашем профиле.", ZH: "恢复功能适用于应用内购买：请在手机上打开 WIP 应用。在网页端购买的积分已记入你的账户。" },
+  iap_ripristino_corso: { IT: "Ripristino in corso…", EN: "Restoring…", FR: "Restauration en cours…", ES: "Restaurando…", DE: "Wird wiederhergestellt…", RU: "Восстановление…", ZH: "正在恢复…" },
+  iap_prezzo_non_disp: { IT: "Prezzo non disponibile", EN: "Price unavailable", FR: "Prix indisponible", ES: "Precio no disponible", DE: "Preis nicht verfügbar", RU: "Цена недоступна", ZH: "价格暂不可用" },
+  iap_prezzo_al_checkout: { IT: "Prezzo al pagamento", EN: "Price at checkout", FR: "Prix au paiement", ES: "Precio al pagar", DE: "Preis beim Bezahlen", RU: "Цена при оплате", ZH: "结算时显示价格" },
+  iap_store_non_raggiungibile: { IT: "Il negozio non è raggiungibile: non possiamo mostrarti il prezzo giusto. Controlla la connessione e riprova.", EN: "The store isn't reachable, so we can't show you the right price. Check your connection and try again.", FR: "La boutique est injoignable : impossible d'afficher le bon prix. Vérifie ta connexion et réessaie.", ES: "La tienda no está disponible: no podemos mostrarte el precio correcto. Comprueba la conexión e inténtalo de nuevo.", DE: "Der Store ist nicht erreichbar, deshalb können wir dir keinen korrekten Preis zeigen. Prüfe deine Verbindung und versuch es erneut.", RU: "Магазин недоступен, поэтому мы не можем показать правильную цену. Проверьте соединение и повторите попытку.", ZH: "无法连接应用商店，因此无法显示正确价格。请检查网络后重试。" },
+  // ── 👤 Modalità ospite (28/08/2026) ──
+  // App Store Review contesta il login obbligatorio quando il contenuto è
+  // fruibile senza account: mappa, POI e teaser sono liberi, l'account serve
+  // solo per acquisti, crediti, salvataggi e profilo.
+  guest_accedi: { IT: "Accedi", EN: "Sign in", FR: "Se connecter", ES: "Iniciar sesión", DE: "Anmelden", RU: "Войти", ZH: "登录" },
+  guest_accedi_per: { IT: "Accedi per salvare i preferiti, usare i crediti e acquistare le audioguide.", EN: "Sign in to save favorites, use credits and buy audio guides.", FR: "Connecte-toi pour enregistrer tes favoris, utiliser tes crédits et acheter les audioguides.", ES: "Inicia sesión para guardar favoritos, usar créditos y comprar audioguías.", DE: "Melde dich an, um Favoriten zu speichern, Guthaben zu nutzen und Audioguides zu kaufen.", RU: "Войдите, чтобы сохранять избранное, тратить кредиты и покупать аудиогиды.", ZH: "登录后即可收藏地点、使用积分并购买语音导览。" },
+  guest_banner: { IT: "Stai esplorando come ospite: mappa e anteprime sono libere.", EN: "You're exploring as a guest: map and previews are free.", FR: "Tu explores en invité : la carte et les aperçus sont libres.", ES: "Estás explorando como invitado: el mapa y las vistas previas son libres.", DE: "Du erkundest als Gast: Karte und Vorschauen sind frei.", RU: "Вы исследуете как гость: карта и превью доступны свободно.", ZH: "你正在以访客身份浏览：地图和预览均可免费使用。" },
+  guest_azione_richiede_account: { IT: "Questa azione richiede un account WIP.", EN: "This action requires a WIP account.", FR: "Cette action nécessite un compte WIP.", ES: "Esta acción requiere una cuenta WIP.", DE: "Für diese Aktion brauchst du ein WIP-Konto.", RU: "Для этого действия нужен аккаунт WIP.", ZH: "此操作需要 WIP 账号。" },
+  guest_continua_senza: { IT: "Continua senza account", EN: "Continue without an account", FR: "Continuer sans compte", ES: "Continuar sin cuenta", DE: "Ohne Konto fortfahren", RU: "Продолжить без аккаунта", ZH: "不登录继续使用" },
   rp_places_along_way: { IT: "Ecco i luoghi che incontrerai lungo la strada. L'audioguida partirà in automatico solo per quelli selezionati.", EN: "These are the places you'll pass along the way. The audio guide starts automatically only for the selected ones.", FR: "Voici les lieux que vous croiserez en chemin. L'audioguide se lancera automatiquement uniquement pour ceux sélectionnés.", ES: "Estos son los lugares que encontrarás por el camino. La audioguía se activará solo para los seleccionados.", DE: "Das sind die Orte, an denen du vorbeikommst. Der Audioguide startet automatisch nur für die ausgewählten.", RU: "Вот места, которые встретятся по пути. Аудиогид включится автоматически только для выбранных.", ZH: "这些是您沿途将经过的地点。语音导览仅对选中的地点自动播放。" },
 };
 
@@ -5106,16 +5127,50 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
 // volta importa solo il tipo Language da questo file.
 import { DIZIONARI_EXTRA } from './i18nDizionari';
 
+export const LINGUE_SUPPORTATE: Language[] = ['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'];
+
+/**
+ * La lingua di SISTEMA del dispositivo, ridotta alle 7 supportate.
+ *
+ * Prima l'app partiva sempre in italiano per chiunque: un revisore Apple in
+ * California apriva WIP e trovava una schermata di login in una lingua che non
+ * conosce (motivo di rifiuto ricorrente). Si guardano tutte le lingue
+ * preferite del browser/telefono, in ordine; se nessuna combacia si usa EN —
+ * MAI IT, che è la lingua di chi ha scritto l'app, non di chi la usa.
+ *
+ * Non usiamo @capacitor/device: il pacchetto non è installato e su nativo la
+ * WebView eredita comunque la lingua di sistema in navigator.language(s).
+ */
+export function rilevaLinguaSistema(): Language {
+  try {
+    const nav: any = typeof navigator !== 'undefined' ? navigator : null;
+    const candidati: string[] = [
+      ...(Array.isArray(nav?.languages) ? nav.languages : []),
+      nav?.language,
+      nav?.userLanguage,
+    ].filter(Boolean);
+    for (const c of candidati) {
+      // "it-CH" → "IT"; "zh-Hant-TW" → "ZH".
+      const base = String(c).split('-')[0].toUpperCase();
+      if ((LINGUE_SUPPORTATE as string[]).includes(base)) return base as Language;
+    }
+  } catch { /* ambiente senza navigator */ }
+  return 'EN';
+}
+
 /**
  * La lingua della UI per chi NON riceve `language` via props (banner, modali
  * montate fuori dall'albero principale): la stessa chiave localStorage che
- * App.tsx scrive a ogni cambio lingua. Fallback IT.
+ * App.tsx scrive a ogni cambio lingua. Senza scelta salvata si RILEVA quella
+ * di sistema (la scelta manuale, una volta fatta, vince sempre e resta).
  */
 export function linguaCorrente(): Language {
   try {
-    const l = String(localStorage.getItem('wip_language') || 'IT').toUpperCase();
-    return (['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'].includes(l) ? l : 'IT') as Language;
-  } catch { return 'IT'; }
+    const salvata = localStorage.getItem('wip_language');
+    if (!salvata) return rilevaLinguaSistema();
+    const l = String(salvata).toUpperCase();
+    return ((LINGUE_SUPPORTATE as string[]).includes(l) ? l : rilevaLinguaSistema()) as Language;
+  } catch { return rilevaLinguaSistema(); }
 }
 
 export function getTranslation(key: string, lang: Language): string {

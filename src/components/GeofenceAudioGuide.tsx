@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Capacitor } from '@capacitor/core';
 import { motion, AnimatePresence } from 'motion/react';
 import { Download, AlertTriangle, X, MapPinOff, Compass } from 'lucide-react';
-import { Language, getTranslation } from '../lib/i18n';
+import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { locationService } from '../services/locationService';
 import { isCategoryAllowed, isPlayed } from '../lib/guideSettings';
@@ -372,7 +372,9 @@ export default function GeofenceAudioGuide({ isActive, isMuted, itinerary, guide
         if (ammesso) {
           prefetchTsRef.current.push(now);
           const { getOrCreateAudioguideText } = await import('../services/audioguideService');
-          const lingua = (localStorage.getItem('wip_language') || 'IT').toUpperCase();
+          // linguaCorrente(): al primo avvio rileva la lingua di sistema
+          // invece di ripiegare su IT (il prefetch generava testi italiani).
+          const lingua = linguaCorrente();
           const personaggio = (localStorage.getItem('wip_guide_character') || guideMode || 'nicky') as any;
           void getOrCreateAudioguideText(poi as any, lingua, personaggio, { incrementPlay: false }).catch(() => { /* si generera' all'arrivo */ });
         }

@@ -11,13 +11,20 @@ interface LoginScreenProps {
   onLoginSuccess: (session: any) => void;
   initialAuthLoading?: boolean;
   forceMethod?: 'email' | 'forgot_password' | 'update_password';
+  /**
+   * Presente quando la schermata è aperta COME MODALE sopra l'app in modalità
+   * ospite (28/08/2026): mostra la X e il tasto "Continua senza account", così
+   * chi non vuole registrarsi torna alla mappa. Assente = gate d'avvio
+   * (caricamento sessione / reset password), che non si chiude.
+   */
+  onClose?: () => void;
 }
 
 /** Lo sblocco biometrico è un'opzione di sicurezza disattivabile dal profilo. */
 export const BIOMETRIC_PREF_KEY = 'wip_biometric_enabled';
 export const isBiometricPrefEnabled = () => localStorage.getItem(BIOMETRIC_PREF_KEY) !== 'false';
 
-export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod, onClose }: LoginScreenProps) {
   // Niente prop `language` qui: la schermata vive prima/fuori dall'albero
   // principale, quindi la lingua si legge dalla stessa chiave che App.tsx
   // scrive a ogni cambio (fallback IT).
@@ -311,6 +318,19 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   // but if unavailable we use a slick fallback showing WIP
   return (
     <div className="fixed inset-0 bg-surface z-50 flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
+      {/* Uscita dal modale in modalità ospite: la X in alto e il link in
+          fondo. Senza questo l'ospite resterebbe intrappolato nel login, che è
+          esattamente ciò che stiamo togliendo. */}
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('guest_continua_senza')}
+          className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-on-surface/10 hover:bg-on-surface/20 text-on-surface flex items-center justify-center text-xl font-bold"
+        >
+          ×
+        </button>
+      )}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -621,6 +641,15 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
           ) : null}
         </AnimatePresence>
 
+        {onClose && !initialAuthLoading && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-6 w-full text-center text-sm font-bold text-on-surface-variant underline underline-offset-4"
+          >
+            {t('guest_continua_senza')}
+          </button>
+        )}
 
         <p className="text-center text-xs text-on-surface-variant/60 mt-8 mb-4">
           {t('vr_a_login_terms_pre')}{' '}

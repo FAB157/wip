@@ -26,7 +26,7 @@ import { getApiUrl, invalidaTokenCache } from "./lib/api";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
 import { Headphones, MapPin, Loader2, Navigation2 } from "lucide-react";
-import { Language, getTranslation } from "./lib/i18n";
+import { Language, getTranslation, linguaCorrente } from "./lib/i18n";
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 // import { Purchases } from '@revenuecat/purchases-capacitor';
@@ -106,8 +106,16 @@ export default function App() {
     // DE è tornata una lingua UI completa il 14/08/2026 (dizionario tradotto,
     // selettore riabilitato): la vecchia coercizione DE→EN qui avrebbe
     // continuato a scippare la scelta agli utenti tedeschi a ogni avvio.
-    const stored = localStorage.getItem("wip_language") as Language;
-    return stored || "IT";
+    //
+    // PRIMO AVVIO: nessuna scelta salvata → si RILEVA la lingua del sistema
+    // (navigator.languages/language, che su nativo eredita quella del
+    // telefono) e si ripiega su EN, non su IT (28/08/2026). L'app che si apre
+    // in italiano per chiunque nel mondo è un motivo di rifiuto di App Store
+    // Review, oltre che una pessima prima impressione. La scelta manuale
+    // dell'utente continua a vincere e resta persistita in `wip_language`.
+    // linguaCorrente() applica esattamente la stessa regola per le schermate
+    // che non ricevono `language` via props (LoginScreen, AppLockGate, banner).
+    return linguaCorrente();
   });
   // Centro e raggio della mappa VISUALIZZATA: è il riferimento geografico di
   // tutte le ricerche esterne (Viator, GetYourGuide, Virgilio, Ticketmaster).
@@ -116,6 +124,15 @@ export default function App() {
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_EVENTS_CENTER);
   const [mapRadiusKm, setMapRadiusKm] = useState<number>(DEFAULT_EVENTS_RADIUS_KM);
   const [isRecovering, setIsRecovering] = useState(() => window.location.hash.includes('type=recovery'));
+  // MODALITÀ OSPITE (28/08/2026). L'app non è più tutta dietro il login: senza
+  // sessione si vedono mappa, POI, schede e teaser gratuiti, e il login si
+  // chiede solo quando serve davvero (acquisti, crediti, Day Pass, preferiti,
+  // itinerari salvati, profilo, community, rotte server con Bearer).
+  // App Store Review contesta il login forzato quando il contenuto è fruibile
+  // senza account; è anche il primo muro che faceva abbandonare l'app.
+  // `showLogin` è il modale, apribile da qualsiasi punto con l'evento
+  // 'wip-open-login' (o automaticamente su 401, vedi più sotto).
+  const [showLogin, setShowLogin] = useState(false);
 
   const { bundleState, closeBundle, triggerBundleCheck, openOffer } = usePredictiveDownload();
   // Invito al Day Pass su richiesta (radar → Dieci Tappe senza pass, 22/08/2026).
@@ -385,12 +402,18 @@ export default function App() {
     return () => window.removeEventListener('wip-nav-arrived', handleNavArrived);
   }, []);
 
-  // 401 {error:'auth_required'} dal server (audioguide, enrich, tts…): la
-  // sessione e' scaduta o non c'e'. Si prova un refresh; se non torna
-  // nessuna sessione si azzera lo stato → compare LoginScreen (l'app e'
-  // gia' tutta dietro il login), invece di uno spinner senza spiegazione.
+  // 401 {error:'auth_required'} dal server (audioguide, enrich, tts…).
+  //
+  // Da quando esiste la MODALITÀ OSPITE (28/08/2026) questo evento ha due
+  // significati: "la sessione è scaduta" (c'era un utente) oppure "questa
+  // azione richiede un account" (ospite). In entrambi i casi si prova prima un
+  // refresh e, se non torna nessuna sessione, si APRE IL MODALE DI LOGIN — non
+  // si butta più l'utente fuori dall'app, che ora è navigabile senza account.
+  // Cooldown di 30 s: una schermata può generare più 401 di fila e non deve
+  // sparare una raffica di toast e di modali.
   useEffect(() => {
     let inCorso = false;
+    let ultimoInvito = 0;
     const onAuthRequired = async () => {
       if (inCorso) return;
       inCorso = true;
@@ -398,18 +421,34 @@ export default function App() {
         invalidaTokenCache();
         const { data } = await supabase.auth.refreshSession();
         if (!data?.session) {
-          notify(getTranslation('auth_richiesta', language));
           setSession(null);
+          if (Date.now() - ultimoInvito > 30_000) {
+            ultimoInvito = Date.now();
+            notify(getTranslation('guest_azione_richiede_account', language));
+            setShowLogin(true);
+          }
         }
       } catch {
-        notify(getTranslation('auth_richiesta', language));
         setSession(null);
+        if (Date.now() - ultimoInvito > 30_000) {
+          ultimoInvito = Date.now();
+          notify(getTranslation('guest_azione_richiede_account', language));
+          setShowLogin(true);
+        }
       } finally {
         inCorso = false;
       }
     };
     window.addEventListener('wip-auth-required', onAuthRequired);
-    return () => window.removeEventListener('wip-auth-required', onAuthRequired);
+    // Invito esplicito al login da qualsiasi punto dell'app (pulsante "Accedi",
+    // azioni che sanno già di richiedere un account): nessun refresh, si apre
+    // e basta.
+    const onOpenLogin = () => setShowLogin(true);
+    window.addEventListener('wip-open-login', onOpenLogin);
+    return () => {
+      window.removeEventListener('wip-auth-required', onAuthRequired);
+      window.removeEventListener('wip-open-login', onOpenLogin);
+    };
   }, [language]);
 
   // Deep link "?poi=<id>" (condivisione schede Vision, link dal pannello
@@ -1084,8 +1123,12 @@ export default function App() {
 
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('has_seen_onboarding'));
   if (showOnboarding) return <OnboardingCarousel language={language} onComplete={() => { localStorage.setItem('has_seen_onboarding', 'true'); setShowOnboarding(false); }} />;
-  // isRecovering va azzerato al successo, altrimenti l'utente resta in loop sul form "Nuova Password"
-  if (authLoading || !session || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
+  // GATE RIDOTTO AL MINIMO (28/08/2026): resta a tutto schermo solo mentre si
+  // legge la sessione (spinner) e durante il reset password via link email —
+  // isRecovering va azzerato al successo, altrimenti l'utente resta in loop sul
+  // form "Nuova Password". Il `!session` NON è più qui: senza account si entra
+  // lo stesso e si esplora come ospite.
+  if (authLoading || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
 
   return (
     <div className="min-h-[100dvh] bg-[#323639] flex justify-center items-center p-0 sm:p-4">
@@ -1093,6 +1136,21 @@ export default function App() {
         <PermissionsModal onComplete={() => setPermissionsGranted(true)} language={language} />
         
         {session?.user && <ZeroCreditsBanner userId={session.user.id} />}
+
+        {/* OSPITE: barra sempre presente con il tasto "Accedi". Il login deve
+            restare a un tocco di distanza da qualsiasi schermata — è la
+            contropartita di non imporlo più all'avvio. */}
+        {!session && (
+          <div className="shrink-0 bg-primary text-white px-4 py-1.5 flex items-center justify-between gap-2 text-[11px] font-bold z-[900]">
+            <span className="truncate">{getTranslation('guest_banner', language)}</span>
+            <button
+              onClick={() => setShowLogin(true)}
+              className="shrink-0 bg-white/15 hover:bg-white/25 px-3 py-1 rounded-full uppercase tracking-wide"
+            >
+              {getTranslation('guest_accedi', language)}
+            </button>
+          </div>
+        )}
 
         {/* Avviso leggero: posizione negata → audioguide automatiche off. */}
         {showLocDeniedBanner && (
@@ -1280,7 +1338,7 @@ export default function App() {
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
           <Suspense fallback={<TabLoadingFallback />}>
-          <ProfileScreen guideMode={guideMode} setGuideMode={setGuideMode} itinerary={itinerary} onSelectPoi={handleSelectPoi} defaultLocation={defaultLocation} setDefaultLocation={updateDefaultLocation} userSession={session} onSignOut={async () => { await supabase.auth.signOut(); setSession(null); }} onRemovePoi={removePoiById} onClearItinerary={async () => setItinerary([])} language={language} setLanguage={setLanguage} />
+          <ProfileScreen guideMode={guideMode} setGuideMode={setGuideMode} itinerary={itinerary} onSelectPoi={handleSelectPoi} defaultLocation={defaultLocation} setDefaultLocation={updateDefaultLocation} userSession={session} onSignOut={session ? async () => { await supabase.auth.signOut(); setSession(null); } : undefined} onRemovePoi={removePoiById} onClearItinerary={async () => setItinerary([])} language={language} setLanguage={setLanguage} />
           </Suspense>
           </motion.div>
         </div>
@@ -1370,6 +1428,19 @@ export default function App() {
             onClose={closeBundle}
           />
         </div>
+
+        {/* MODALE DI LOGIN — a tutto schermo sopra l'app, richiudibile:
+            l'ospite deve poter tornare alla mappa senza fare l'account.
+            Si apre dal tasto "Accedi", dall'evento 'wip-open-login' e da
+            qualsiasi 401 della nostra API. */}
+        {showLogin && !session && (
+          <div className="absolute inset-0 z-[3000] bg-surface">
+            <LoginScreen
+              onLoginSuccess={(s) => { setSession(s); setShowLogin(false); }}
+              onClose={() => setShowLogin(false)}
+            />
+          </div>
+        )}
       </motion.div>
     </div>
   );

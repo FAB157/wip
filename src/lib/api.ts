@@ -126,7 +126,21 @@ export async function apiFetch(url: string | URL | Request, init?: RequestInit, 
     else esterno.addEventListener('abort', () => controller.abort(), { once: true });
   }
   const options: RequestInit = { ...(init || {}), signal: controller.signal };
-  return fetch(url as any, options).finally(() => clearTimeout(timer));
+  const nostra = isOurApiUrl(url);
+  return fetch(url as any, options)
+    .then((res) => {
+      // MODALITÀ OSPITE (28/08/2026): da quando l'app si esplora senza account,
+      // un 401 della nostra API non è più "sessione scaduta" ma, il più delle
+      // volte, "questa azione richiede un account". In entrambi i casi la UI
+      // deve PROPORRE il login, non fallire in silenzio: si emette qui l'evento
+      // che App.tsx già ascolta (prova il refresh, altrimenti apre il modale),
+      // una volta per tutte invece che in ogni singola chiamata.
+      if (nostra && res.status === 401) {
+        try { window.dispatchEvent(new CustomEvent('wip-auth-required', { detail: { url: String(url) } })); } catch { /* SSR */ }
+      }
+      return res;
+    })
+    .finally(() => clearTimeout(timer));
 }
 
 /**
