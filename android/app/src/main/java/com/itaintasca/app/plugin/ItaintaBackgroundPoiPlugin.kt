@@ -456,6 +456,53 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
     }
 
+    /**
+     * CRUSCOTTO DEL NAVIGATORE SUL DISPLAY SPENTO (28/08/2026).
+     *
+     * Il JS (App.tsx, a ogni cambio di tappa o di svolta) manda titolo e corpo
+     * gia' composti — gli stessi del cruscotto in app — e qui NON si crea
+     * nessuna notifica nuova: si riscrive quella del foreground service, che
+     * e' `setOngoing(true)` e quindi l'utente non puo' scartarla con uno swipe.
+     * E' l'equivalente Android della Live Activity iOS.
+     *
+     * Con `attivo=false` (giro finito o in pausa) la notifica torna al testo
+     * normale del radar.
+     *
+     * SERVIZIO SPENTO = NON SI FA NULLA. Mai `startForegroundService` da qui:
+     * farebbe ripartire l'audioguida solo per scrivere una riga di testo (e su
+     * Android 12+ sarebbe un ForegroundServiceStartNotAllowedException). Si
+     * risponde ok=false e il JS ripiega sulla notifica locale.
+     */
+    @PluginMethod
+    fun updateNavBanner(call: PluginCall) {
+        val ret = JSObject()
+        val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        if (!prefs.getBoolean("isServiceActive", false)) {
+            ret.put("ok", false)
+            ret.put("reason", "service_inactive")
+            return call.resolve(ret)
+        }
+        try {
+            val intent = Intent(context, ItaintaBackgroundPoiService::class.java).apply {
+                action = ItaintaBackgroundPoiService.ACTION_NAV_BANNER
+                putExtra("titolo", call.getString("titolo") ?: "")
+                putExtra("corpo", call.getString("corpo") ?: "")
+                putExtra("attivo", call.getBoolean("attivo") ?: false)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            ret.put("ok", true)
+        } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "updateNavBanner: invio al servizio fallito: ${e.message}")
+            ret.put("ok", false)
+            ret.put("reason", e.message ?: "service_error")
+        }
+        call.resolve(ret)
+    }
+
     @PluginMethod
     fun stopBackgroundPoiService(call: PluginCall) {
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)

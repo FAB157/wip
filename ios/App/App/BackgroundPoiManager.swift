@@ -1502,18 +1502,23 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // "150m" anche per un POI a 300 m o già superato.
         let realDist = lastFixLocation.map { Int($0.distance(from: poi.coordinate)) } ?? -1
         let distText = realDist >= 0 ? NotificationStrings.aboutMeters(lang, meters: realDist) : ""
+        // IL NOME DEL LUOGO E' IL TITOLO (28/08/2026, collaudo). Prima il
+        // titolo era «Esplorazione: Politeama Giuseppe Verdi» e iOS lo
+        // troncava a «Esplorazione: Politeama Ca…»: la parola fissa si
+        // mangiava lo spazio e il nome — l'unica cosa che conta sulla lock
+        // screen — non si leggeva. L'etichetta scende nel corpo, dove c'è posto.
         if silent {
             // In silenzioso il testo fa il lavoro della voce: body esteso col
             // messaggio di avvicinamento (già nella lingua dell'utente).
             showNotification(
-                title: "\(notifTitle): \(poi.nome)",
-                body: "\(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces),
+                title: poi.nome,
+                body: "\(notifTitle) · \(approachMsg). \(distText)".trimmingCharacters(in: .whitespaces),
                 poiId: poi.id, guide: guideVoice, isArrival: false
             )
         } else {
             showNotification(
-                title: "\(notifTitle): \(poi.nome)",
-                body: "\(distText) \(NotificationStrings.tapToListen(lang))".trimmingCharacters(in: .whitespaces),
+                title: poi.nome,
+                body: "\(notifTitle) · \(distText) \(NotificationStrings.tapToListen(lang))".trimmingCharacters(in: .whitespaces),
                 poiId: poi.id, guide: guideVoice, isArrival: false
             )
         }

@@ -37,6 +37,28 @@ export interface ItaintaBackgroundPoiPlugin {
   getPendingDeepLink(): Promise<any>;
   speakText(options: { text: string; poiId?: string; kind?: string; priority?: number }): Promise<{ ok?: boolean }>;
 
+  /**
+   * Cruscotto del navigatore a display spento. Android: riscrive la notifica
+   * (ongoing) del foreground service. iOS: avvia/aggiorna/termina la Live
+   * Activity su lock screen e Dynamic Island. `ok:false` = il nativo non l'ha
+   * preso in carico (servizio spento, Live Activities non disponibili) e il
+   * chiamante deve ripiegare sulla notifica locale.
+   */
+  updateNavBanner(options: {
+    titolo: string;
+    corpo: string;
+    attivo: boolean;
+    nomeTappa?: string;
+    indiceTappa?: number;
+    tappeTotali?: number;
+    metriAllaTappa?: number;
+    istruzione?: string;
+    metriAllaSvolta?: number;
+    metriRimanenti?: number;
+    eta?: string;
+    nomeProssima?: string;
+  }): Promise<{ ok?: boolean; reason?: string }>;
+
   setDayPass(options: { expiresAt: number; cap: number; used: number }): Promise<void>;
   getDayPassState(): Promise<{ active?: boolean; expiresAt?: number; used?: number; cap?: number }>;
   consumeDayPassGuide(): Promise<{ ok?: boolean }>;

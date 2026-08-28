@@ -66,6 +66,12 @@ class ItaintaBackgroundPoiService : Service() {
         const val ACTION_SPEECH_PAUSE = "com.itaintasca.app.SPEECH_PAUSE"
         const val ACTION_SPEECH_RESUME = "com.itaintasca.app.SPEECH_RESUME"
         const val ACTION_SPEECH_SKIP = "com.itaintasca.app.SPEECH_SKIP"
+        // (28/08/2026) CRUSCOTTO DEL NAVIGATORE sulla notifica persistente:
+        // il JS manda titolo/corpo della tappa corrente (gli stessi del
+        // cruscotto in app) e la notifica del foreground service — che non si
+        // puo' scartare — li mostra al posto del testo del radar. Non nasce
+        // MAI una seconda notifica: il banner "fisso" e' questa.
+        const val ACTION_NAV_BANNER = "com.itaintasca.app.NAV_BANNER"
         // Notifica normale (non FGS) «permesso posizione negato».
         const val NOTIF_ID_PERMISSION = 4005
 
@@ -432,6 +438,18 @@ class ItaintaBackgroundPoiService : Service() {
             lastQueryLocation = null
             if (locationCallback == null) startActiveMonitoring()
             updateNotificationAndStatus("Audioguida attiva", "Giro concluso: resta il radar")
+            return START_STICKY
+        }
+
+        // (28/08/2026) BANNER DEL NAVIGATORE: aggiorna SOLO il testo della
+        // notifica persistente, niente altro. Arriva a ogni cambio di tappa o
+        // di svolta (mai a ogni fix GPS: la firma anti-raffica sta nel JS).
+        if (intent?.action == ACTION_NAV_BANNER) {
+            applicaNavBanner(
+                intent.getStringExtra("titolo"),
+                intent.getStringExtra("corpo"),
+                intent.getBooleanExtra("attivo", false)
+            )
             return START_STICKY
         }
 
@@ -1868,6 +1886,43 @@ class ItaintaBackgroundPoiService : Service() {
         else -> "parla"
     }
 
+    // ── CRUSCOTTO DEL NAVIGATORE (28/08/2026) ─────────────────────────────
+    // Quando il giro e' in corso il JS spinge qui titolo e corpo della tappa
+    // corrente. Finche' restano valorizzati PRENDONO IL POSTO del testo del
+    // radar in ogni ricostruzione della notifica: cosi' un qualunque altro
+    // updateNotificationAndStatus ("N luoghi monitorati", "Ricerca POI in
+    // corso...") non cancella il cruscotto dal display spento.
+    @Volatile private var navBannerTitolo: String? = null
+    @Volatile private var navBannerCorpo: String? = null
+
+    /** Parte della chiave anti-duplicato: senza, cambiando solo il banner la
+     *  notifica non verrebbe ripubblicata. */
+    private fun navBannerKey(): String = "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}"
+
+    /**
+     * Accende/spegne il cruscotto e ripubblica subito la notifica persistente.
+     * Con `attivo=false` si torna all'ultimo titolo/testo del radar.
+     */
+    private fun applicaNavBanner(titolo: String?, corpo: String?, attivo: Boolean) {
+        if (attivo) {
+            navBannerTitolo = titolo?.trim()?.takeIf { it.isNotEmpty() }
+            navBannerCorpo = corpo?.trim()
+        } else {
+            navBannerTitolo = null
+            navBannerCorpo = null
+        }
+        try {
+            val suffix = dayPassSuffix()
+            val key = "$ultimoTitolo $ultimoTesto $suffix ${voiceStateKey()} ${navBannerKey()}"
+            if (key == ultimaNotificaKey) return
+            ultimaNotificaKey = key
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification(ultimoTitolo, ultimoTesto, suffix))
+        } catch (e: Exception) {
+            Log.w(TAG, "Aggiornamento banner navigazione fallito: ${e.message}")
+        }
+    }
+
     private fun buildNotification(title: String, text: String, suffix: String): Notification {
         val pStop = pStopCache ?: PendingIntent.getService(
             this, 0,
@@ -1877,8 +1932,22 @@ class ItaintaBackgroundPoiService : Service() {
         val pOpen = pOpenCache ?: PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         ).also { pOpenCache = it }
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(title).setContentText(text + suffix)
+        // Cruscotto del navigatore attivo: prende il posto di titolo e testo
+        // del radar (niente suffisso del Day Pass, che qui sarebbe rumore) e
+        // usa BigTextStyle perche' il corpo e' su piu' righe (svolta, metri,
+        // ETA, tappa dopo). Nessuna seconda notifica: e' sempre la stessa.
+        val bannerTitolo = navBannerTitolo
+        val bannerAttivo = !bannerTitolo.isNullOrBlank()
+        val titoloFinale = if (bannerAttivo) bannerTitolo!! else title
+        val testoFinale = if (bannerAttivo) navBannerCorpo.orEmpty() else (text + suffix)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(titoloFinale).setContentText(testoFinale)
             .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setContentIntent(pOpen)
+        if (bannerAttivo) {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(testoFinale))
+            // Il cruscotto ha senso solo nell'ordine in cui e' arrivato:
+            // niente suono/vibrazione, e in cima al gruppo delle "in corso".
+            builder.setOnlyAlertOnce(true)
+        }
         // (AUD-14) Con la voce nativa in corso (teaser o guida del Day Pass
         // nel MediaPlayer del receiver, senza MediaSession) l'unico comando
         // era «Stop», che spegneva TUTTO il servizio. Pausa/Riprendi e Salta
@@ -1905,7 +1974,7 @@ class ItaintaBackgroundPoiService : Service() {
         try {
             if (!getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).getBoolean("isServiceActive", false)) return
             val suffix = dayPassSuffix()
-            val key = "$ultimoTitolo $ultimoTesto $suffix ${voiceStateKey()}"
+            val key = "$ultimoTitolo $ultimoTesto $suffix ${voiceStateKey()} ${navBannerKey()}"
             if (key == ultimaNotificaKey) return
             ultimaNotificaKey = key
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -1922,7 +1991,7 @@ class ItaintaBackgroundPoiService : Service() {
         val suffix = dayPassSuffix()
         ultimoTitolo = title
         ultimoTesto = text
-        val key = "$title $text $suffix ${voiceStateKey()}"
+        val key = "$title $text $suffix ${voiceStateKey()} ${navBannerKey()}"
         if (key != ultimaNotificaKey) {
             ultimaNotificaKey = key
             val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager

@@ -294,9 +294,23 @@ export default function App() {
   // svolta da fare e a quanti metri; i metri mancanti, l'ora d'arrivo e la
   // tappa dopo. Si riposta solo quando cambia qualcosa che si legge — la
   // tappa, la svolta, i metri a scatti di 50 — non a ogni fix GPS.
+  // (28/08/2026) Il banner non e` piu` una notifica locale qualunque: su
+  // Android riscrive la notifica del foreground service (non scartabile), su
+  // iOS pilota una Live Activity (lock screen + Dynamic Island). Vedi
+  // locationService.updateNavBanner. Qui cambia solo una cosa: quando il giro
+  // finisce o va in pausa bisogna dirlo, altrimenti il cruscotto resterebbe
+  // fermo sull'ultimo stato per sempre.
   const firmaBannerRef = useRef<string>('');
+  const bannerAttivoRef = useRef<boolean>(false);
   useEffect(() => {
-    if (!vistaGiro || vistaGiro.stato === 'FINITO' || vistaGiro.inPausa || !vistaGiro.nomeTappa) return;
+    if (!vistaGiro || vistaGiro.stato === 'FINITO' || vistaGiro.inPausa || !vistaGiro.nomeTappa) {
+      if (bannerAttivoRef.current) {
+        bannerAttivoRef.current = false;
+        firmaBannerRef.current = '';
+        locationService.updateNavBanner('', '', false).catch(() => {});
+      }
+      return;
+    }
     const L = linguaCorrente();
     const dist = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
     const n = Math.min(vistaGiro.tappeFatte + 1, vistaGiro.tappeTotali);
@@ -313,7 +327,20 @@ export default function App() {
     const firma = `${n}|${vistaGiro.nomeTappa}|${vistaGiro.istruzione || ''}|${Math.round((vistaGiro.metriAllaSvolta ?? -1) / 50)}|${Math.round(vistaGiro.metriRimanenti / 100)}`;
     if (firma === firmaBannerRef.current) return;
     firmaBannerRef.current = firma;
-    locationService.sendLocalNotification(titolo, righe.join('\n')).catch(() => {});
+    bannerAttivoRef.current = true;
+    // I campi separati servono alla Live Activity iOS, che impagina da se`:
+    // sono gli STESSI valori con cui sono composti titolo e righe qui sopra.
+    locationService.updateNavBanner(titolo, righe.join('\n'), true, {
+      nomeTappa: vistaGiro.nomeTappa,
+      indiceTappa: n,
+      tappeTotali: vistaGiro.tappeTotali,
+      metriAllaTappa: vistaGiro.metriAllaTappa ?? -1,
+      istruzione: vistaGiro.istruzione || '',
+      metriAllaSvolta: vistaGiro.metriAllaSvolta ?? -1,
+      metriRimanenti: vistaGiro.metriRimanenti,
+      eta: eta ? eta.replace(/^ · /, '') : '',
+      nomeProssima: vistaGiro.nomeProssima || '',
+    }).catch(() => {});
   }, [vistaGiro]);
 
   // Località predefinita del profilo. Prima era una costante con un setter

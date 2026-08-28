@@ -40,6 +40,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // equivalente di BootReceiver/START_STICKY su Android — se il servizio
         // era attivo, il manager riparte dai prefs.
         BackgroundPoiManager.shared.restartFromPrefsIfActive()
+
+        // (28/08/2026) Una Live Activity sopravvive alla morte del processo:
+        // senza riagganciare quella eventualmente in corso, dopo un riavvio
+        // dell'app il cruscotto del giro ne avvierebbe una seconda e la
+        // vecchia resterebbe appesa sulla lock screen. Vedi LiveActivityNav.
+        LiveActivityNav.shared.riaggancia()
         return true
     }
 

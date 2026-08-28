@@ -2066,6 +2066,58 @@ class LocationService {
     await LocalNotifications.schedule({ notifications: [{ title, body, id: LocationService.NAV_NOTIFICATION_ID }] });
   }
 
+  /**
+   * IL CRUSCOTTO DEL NAVIGATORE A DISPLAY SPENTO (28/08/2026).
+   *
+   * Stessa chiamata su tutte e due le piattaforme, due meccanismi diversi
+   * sotto — il chiamante non deve saperlo:
+   *  - Android: riscrive la notifica del foreground service, che e' `ongoing`
+   *    e non si puo' scartare con uno swipe;
+   *  - iOS: avvia/aggiorna/chiude una Live Activity (lock screen + Dynamic
+   *    Island), quando disponibile.
+   * In ogni caso in cui il nativo non prende in carico il banner (web, build
+   * vecchie senza il metodo, servizio spento, Live Activities disattivate) si
+   * ripiega sulla notifica locale di prima: mai restare senza cruscotto.
+   *
+   * `attivo=false` (giro finito o in pausa) spegne il banner e riporta la
+   * notifica al testo normale; li' non si posta nessuna notifica locale, si
+   * cancella quella eventualmente appesa.
+   */
+  public async updateNavBanner(
+    titolo: string,
+    corpo: string,
+    attivo: boolean = true,
+    dettagli?: Record<string, any>,
+  ) {
+    if (!Capacitor.isNativePlatform()) return;
+    let presoInCarico = false;
+    try {
+      const p: any = ItaintaBackgroundPoiPlugin;
+      if (p && typeof p.updateNavBanner === 'function') {
+        // `dettagli` sono i campi gia` separati (tappa, indice, metri,
+        // istruzione, ETA, prossima): li usa la Live Activity iOS per
+        // impaginarli a modo suo. Android guarda solo titolo e corpo.
+        const res = await p.updateNavBanner({ ...(dettagli || {}), titolo, corpo, attivo });
+        // Il nativo risponde ok=false quando non ha potuto mostrarlo
+        // (servizio spento su Android, Live Activity non disponibile su iOS).
+        presoInCarico = res?.ok !== false;
+      }
+    } catch {
+      // Metodo assente o plugin non raggiungibile: si ripiega qui sotto.
+      presoInCarico = false;
+    }
+    // Fine del giro: la notifica locale va tolta SEMPRE, anche quando il
+    // nativo ha preso in carico il banner — durante il giro puo' essere
+    // stata usata come ripiego per qualche tratto (servizio non ancora
+    // acceso, Live Activity rifiutata) e resterebbe appesa.
+    if (!attivo) {
+      await this.cancelNavNotification();
+      return;
+    }
+    if (presoInCarico) return;
+    await this.sendLocalNotification(titolo, corpo).catch(() => {});
+  }
+
   /** A fine navigazione la notifica della svolta non deve restare appesa. */
   public async cancelNavNotification() {
     if (!Capacitor.isNativePlatform()) return;

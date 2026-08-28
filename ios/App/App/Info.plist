@@ -110,6 +110,16 @@
 	<array>
 		<string>com.itaintasca.app.offline-refresh</string>
 	</array>
+	<!-- Live Activity del navigatore (28/08/2026): il cruscotto del giro sulla
+	     lock screen e nella Dynamic Island (WipNavActivity). Senza questa
+	     chiave ActivityKit rifiuta ogni richiesta e Activity.request lancia
+	     `unsupported`. Vedi LiveActivityNav.swift. -->
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+	<!-- Aggiornamenti frequenti dalla stessa app in foreground/background
+	     (a ogni cambio di svolta): senza, iOS puo` limitare le update. -->
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key>
+	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

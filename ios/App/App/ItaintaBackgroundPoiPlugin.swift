@@ -52,7 +52,10 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "getHealthStats", returnType: CAPPluginReturnPromise),
         // (28/08/2026) Logout e apertura Impostazioni (audit SEC-02 / UX-03)
         CAPPluginMethod(name: "clearUserContext", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
+        // (28/08/2026) Cruscotto del navigatore: Live Activity su iOS,
+        // notifica del foreground service su Android. Stessa API per il JS.
+        CAPPluginMethod(name: "updateNavBanner", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -282,11 +285,66 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
 
     @objc func stopBackgroundPoiService(_ call: CAPPluginCall) {
         BackgroundPoiManager.shared.stop()
+        // Audioguida spenta = niente cruscotto: se il giro non ha fatto in
+        // tempo a mandare `attivo: false`, la Live Activity resterebbe sulla
+        // lock screen fino alle 8 ore di scadenza di sistema.
+        LiveActivityNav.shared.termina()
         call.resolve()
     }
 
     @objc func getStatus(_ call: CAPPluginCall) {
         call.resolve(["active": prefs.bool(forKey: "isServiceActive")])
+    }
+
+    // MARK: - Cruscotto del navigatore (Live Activity)
+
+    /**
+     * CRUSCOTTO DEL GIRO SULLA LOCK SCREEN (28/08/2026).
+     *
+     * Stesso metodo di Android, meccanismo diverso: qui e' una Live Activity
+     * (WipNavActivity) che resta sullo schermo bloccato e nella Dynamic
+     * Island e si aggiorna da sola mentre si cammina.
+     *  - prima chiamata con `attivo: true`  → avvia l'attivita';
+     *  - chiamate successive                → la aggiornano in posto;
+     *  - `attivo: false` (giro finito o in pausa) → la chiude.
+     *
+     * `ok: false` quando le Live Activities non ci sono (iOS < 16.1) o sono
+     * disattivate dall'utente, oppure quando la richiesta e' stata rifiutata:
+     * il JS ripiega da solo sulla notifica locale.
+     */
+    @objc func updateNavBanner(_ call: CAPPluginCall) {
+        let attivo = call.getBool("attivo") ?? false
+        if !attivo {
+            LiveActivityNav.shared.termina()
+            call.resolve(["ok": true])
+            return
+        }
+        guard LiveActivityNav.shared.disponibili else {
+            call.resolve(["ok": false, "reason": "live_activities_unavailable"])
+            return
+        }
+        // Il titolo composto dal JS fa da titolo del giro; i campi separati
+        // (nomeTappa, indiceTappa, metri...) sono quelli che la vista
+        // impagina. Si estraggono con i getter tipizzati invece di passare
+        // `call.options` grezzo: cosi' un campo mancante (build web piu'
+        // vecchia) cade sul default invece di far saltare la conversione.
+        let titoloGiro = call.getString("titolo") ?? ""
+        let stato: [String: Any] = [
+            "nomeTappa": call.getString("nomeTappa") ?? "",
+            "indiceTappa": call.getInt("indiceTappa") ?? 1,
+            "tappeTotali": call.getInt("tappeTotali") ?? 1,
+            "metriAllaTappa": call.getDouble("metriAllaTappa") ?? -1,
+            "istruzione": call.getString("istruzione") ?? "",
+            "metriAllaSvolta": call.getDouble("metriAllaSvolta") ?? -1,
+            "metriRimanenti": call.getDouble("metriRimanenti") ?? 0,
+            "eta": call.getString("eta") ?? "",
+            "nomeProssima": call.getString("nomeProssima") ?? ""
+        ]
+        // Le API di ActivityKit vogliono il main thread.
+        DispatchQueue.main.async {
+            let ok = LiveActivityNav.shared.avviaOAggiorna(titoloGiro: titoloGiro, stato: stato)
+            call.resolve(ok ? ["ok": true] : ["ok": false, "reason": "live_activity_request_failed"])
+        }
     }
 
     // MARK: - Teaser / deep link
