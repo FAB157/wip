@@ -838,6 +838,39 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "С WIP Nav: аудиогиды по пути",
     ZH: "使用 WIP Nav：沿途语音导览"
   },
+  // ITINERARIO, GIORNO INTERO (29/08/2026): dal piano si sceglie come farlo.
+  // A piedi il giorno diventa un giro Dieci Tappe dentro l'app — radar,
+  // tracciato, tappe che si aggiungono e si tolgono. In auto si esce e si
+  // consegna tutto a Google Maps: guidando non si ascolta una guida pensata
+  // per chi cammina, e non si gioca coi pin.
+  nav_giorno_a_piedi: {
+    IT: "A piedi, con l'audioguida", EN: "On foot, with the audio guide",
+    FR: "À pied, avec l'audioguide", ES: "A pie, con la audioguía",
+    DE: "Zu Fuß, mit Audioguide", RU: "Пешком, с аудиогидом", ZH: "步行，带语音导览"
+  },
+  nav_giorno_a_piedi_sub: {
+    IT: "Le tappe del giorno diventano un giro: tracciato, aggiunte e audioguide",
+    EN: "The day's stops become a tour: route, extra stops and audio guides",
+    FR: "Les étapes du jour deviennent un circuit : tracé, ajouts et audioguides",
+    ES: "Las paradas del día se convierten en una ruta: trazado, añadidos y audioguías",
+    DE: "Die Stationen des Tages werden zur Tour: Route, Ergänzungen und Audioguides",
+    RU: "Точки дня становятся маршрутом: трек, добавления и аудиогиды",
+    ZH: "当天行程变成一条路线：轨迹、可增删地点与语音导览"
+  },
+  nav_giorno_in_auto: {
+    IT: "In auto, tutto il giorno", EN: "By car, the whole day",
+    FR: "En voiture, toute la journée", ES: "En coche, todo el día",
+    DE: "Mit dem Auto, den ganzen Tag", RU: "На машине, весь день", ZH: "驾车，全天行程"
+  },
+  nav_giorno_in_auto_sub: {
+    IT: "Apre Google Maps con tutte le tappe (max 10)",
+    EN: "Opens Google Maps with all the stops (max 10)",
+    FR: "Ouvre Google Maps avec toutes les étapes (10 max)",
+    ES: "Abre Google Maps con todas las paradas (máx. 10)",
+    DE: "Öffnet Google Maps mit allen Stationen (max. 10)",
+    RU: "Открывает Google Maps со всеми точками (макс. 10)",
+    ZH: "在 Google 地图中打开所有地点（最多 10 个）"
+  },
   nav_in_auto: {
     IT: "In auto", EN: "By car", FR: "En voiture", ES: "En coche",
     DE: "Mit dem Auto", RU: "На машине", ZH: "驾车"

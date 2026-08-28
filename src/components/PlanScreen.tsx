@@ -4,6 +4,8 @@ import { Mic, Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass,
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
+import { tourService, MAX_TAPPE } from '../services/tourService';
+import NavChoiceSheet from './NavChoiceSheet';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import { supabase } from '../lib/supabase';
@@ -1297,6 +1299,14 @@ export default function PlanScreen({
   // ── Podcast state ──
   const [playingDay, setPlayingDay] = useState<number | string | null>(null);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState<number | string | null>(null);
+  /**
+   * (29/08/2026) Il giorno dell'itinerario, in attesa che l'utente scelga COME
+   * farlo: a piedi diventa un giro Dieci Tappe nel radar (tracciato, tappe che
+   * si aggiungono e si tolgono, audioguide), in auto esce su Google Maps con
+   * tutte le tappe. Prima il tasto portava dritto nel radar, e chi era in
+   * macchina si ritrovava una guida a piedi.
+   */
+  const [navGiorno, setNavGiorno] = useState<{ titolo: string; poi: any[] } | null>(null);
   const [isPodcastPaused, setIsPodcastPaused] = useState(false);
   // Cache testi podcast per non rigenerare: chiave = `${planKey}_${dayNum}`
   const [podcastCache, setPodcastCache] = useState<Record<string, string>>({});
@@ -6870,10 +6880,39 @@ export default function PlanScreen({
                       <div className="flex flex-wrap gap-1.5 shrink-0">
                         {setIsAudioGuideActive && (
                           <button 
-                            onClick={() => setIsAudioGuideActive(!isAudioGuideActive)}
+                            onClick={() => {
+                              // (28/08/2026, collaudo) NON solo cuffie: LE TAPPE DI QUESTO
+                              // GIORNO VANNO NEL RADAR come giro Dieci Tappe — tracciato,
+                              // ordine del piano, aggiunte lungo la strada, X sui pin, «Crea
+                              // il giro». Fuori pasti, pause e trasferimenti: non sono luoghi
+                              // da audioguida. L'id e` lo stesso con cui la tappa e` scritta
+                              // in shared_pois per il geofencing (vedi l'upsert piu` su), cosi`
+                              // il servizio nativo e la porta d'ingresso la riconoscono.
+                              //
+                              // (29/08/2026) PRIMA SI CHIEDE COME: a piedi il giorno diventa
+                              // il giro qui dentro; in auto si esce su Google Maps con tutte
+                              // le tappe. Guidando l'audioguida a piedi non serve, e i pin
+                              // non si toccano.
+                              const tappe = (giorno.tappe || []).filter((t: any) => {
+                                const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+                                return la && lo && !['ristorante', 'pausa', 'spostamento', 'trasferimento'].includes(String(t?.tipo || ''));
+                              });
+                              const poi = tappe.map((t: any) => {
+                                const la = Number(t.coordinate.lat), lo = Number(t.coordinate.lng ?? t.coordinate.lon);
+                                const stableId = `iti-${String(t.titolo_tappa || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${la.toFixed(3)}_${lo.toFixed(3)}`.replace(/\./g, 'p');
+                                return {
+                                  id: stableId, name: t.titolo_tappa, lat: la, lon: lo,
+                                  category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
+                                  city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
+                                };
+                              });
+                              if (poi.length === 0) return;
+                              setNavGiorno({ titolo: `${getTranslation('day', language)} ${giorno.giorno}`, poi });
+                            }}
+                            title={getTranslation('gr_nel_radar', language)}
                             className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all print:hidden ${isAudioGuideActive ? 'bg-secondary text-white shadow-md scale-105' : 'bg-secondary/10 text-secondary hover:bg-secondary/20 hover:scale-105'}`}
                           >
-                            <Headphones className="w-3 h-3 shrink-0" /> {isAudioGuideActive ? 'Audio ON ✓' : getTranslation("gps_active", language)}
+                            <Headphones className="w-3 h-3 shrink-0" /> {getTranslation('gr_nel_radar', language)} ({Math.min(MAX_TAPPE, (giorno.tappe || []).length)})
                           </button>
                         )}
                         {/* 🎙️ Mini Player Podcast */}
@@ -7828,6 +7867,25 @@ export default function PlanScreen({
             )}
           </div>
         </div>
+      )}
+
+      {/* COME FAI QUESTO GIORNO? (29/08/2026) — a piedi diventa un giro Dieci
+          Tappe nel radar, con tracciato e tappe che si aggiungono; in auto
+          esce su Google Maps con tutte le fermate. */}
+      {navGiorno && (
+        <NavChoiceSheet
+          poi={navGiorno.poi[0]}
+          tappe={navGiorno.poi}
+          titolo={navGiorno.titolo}
+          language={language}
+          onClose={() => setNavGiorno(null)}
+          onAPiedi={() => {
+            const n = tourService.bozzaDaTappe(navGiorno.poi);
+            if (setIsAudioGuideActive && !isAudioGuideActive) setIsAudioGuideActive(true);
+            if (n > 0) window.dispatchEvent(new CustomEvent('wip-open-radar'));
+            setNavGiorno(null);
+          }}
+        />
       )}
     </div>
   );
