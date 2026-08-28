@@ -18,7 +18,7 @@ import PermissionsModal from "./components/PermissionsModal";
 import { locationService } from "./services/locationService";
 import { clearOrphanedAudioFiles } from "./lib/offlineStorage";
 import { FAVORITES_EVENT, getLocalFavorites, setLocalFavorites, toggleFavoritePoi, removeFavoritePoi, flushPendingFavSync } from "./lib/favorites";
-import { initOfflineBilling } from "./services/dayPassService";
+import { initOfflineBilling, azzeraPoiPosseduti, caricaPoiPosseduti } from "./services/dayPassService";
 import { clearNativeUserContext, pushUserContextToNative } from "./plugins/ItaintaBackgroundPoi";
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
@@ -306,6 +306,14 @@ export default function App() {
     initOfflineBilling();
   }, []);
 
+  // Le audioguide gia' acquistate: si caricano UNA volta per sessione (la
+  // mappa mostra centinaia di pin, non puo' chiedere per ciascuno) e servono
+  // a non mostrare mai un prezzo per un POI che e' gia' dell'utente.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    caricaPoiPosseduti(true).catch(() => {});
+  }, [session?.user?.id]);
+
   useEffect(() => {
     const handleOpenChat = (e: any) => {
       setGlobalChatConfig({
@@ -545,6 +553,10 @@ export default function App() {
     // servizio, e l'account successivo sullo stesso telefono ereditava lo
     // storico ascolti e il tetto di spesa offline del precedente.
     clearNativeUserContext().catch(() => {});
+
+    // Le audioguide acquistate sono PERSONALI: la cache dei POI posseduti non
+    // deve sopravvivere al cambio utente (29/08/2026).
+    try { azzeraPoiPosseduti(); } catch { /* niente */ }
 
     wipeLocalUserData();
   }, [language]);

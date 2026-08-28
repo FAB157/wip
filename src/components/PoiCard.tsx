@@ -18,6 +18,7 @@ import {
   MAX_ASK_MORE_LEVEL,
 } from '../services/audioguideService';
 import { notify } from '../lib/toast';
+import { possiedePoi, possiedePoiSync, segnaPoiPosseduto } from '../services/dayPassService';
 import { speakAudioguide, unlockSpeech } from '../services/ttsService';
 import { resetPlayedOne } from '../lib/guideSettings';
 import { CATEGORY_LABELS_IT, CATEGORY_EMOJI } from '../lib/poiCategories';
@@ -82,8 +83,17 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
   // Paywall deciso dal SERVER (28/08/2026): senza diritto /api/poi/audioguide
   // risponde 402 con anteprima e costo; qui si mostra l'anteprima e il tasto
   // «Ascolta per N crediti», che ritenta con charge:true. L'addebito lo fa il
-  // server (idempotente 24 h): nessun consume_credits lato client.
+  // server: nessun consume_credits lato client.
+  // UNA GUIDA ACQUISTATA E' TUA PER SEMPRE (29/08/2026): se il POI risulta
+  // gia' acquistato non si mostra nessun prezzo e non si chiede consenso.
   const [paywall, setPaywall] = useState<{ cost: number; preview: string } | null>(null);
+  const [giaTua, setGiaTua] = useState(() => possiedePoiSync(poi.id));
+  useEffect(() => {
+    let vivo = true;
+    setGiaTua(possiedePoiSync(poi.id));
+    possiedePoi(poi.id).then((v) => { if (vivo && v) setGiaTua(true); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [poi.id]);
   const uiLang = String(language || 'IT').toUpperCase() as any;
 
   const handlePlay = async (charge = false) => {
@@ -100,6 +110,10 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
       if (esito.status === 'ok' || (esito.status === 'error' && esito.text)) {
         const text = esito.text as string;
         setPaywall(null);
+        // Ha pagato adesso (o l'aveva gia'): da ora e' suo per sempre, e la
+        // scheda non deve piu' chiedere crediti per questo POI.
+        if (charge) segnaPoiPosseduto(poi.id);
+        setGiaTua(true);
         heardRef.current = text;
         await speakAudioguide(text, lang, character);
       } else if (esito.status === 'credits_required') {
@@ -199,7 +213,12 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
               {t}
             </p>
           ))}
-          {paywall && (
+          {giaTua && !paywall && (
+            <p className="mt-3 text-[11px] font-bold text-emerald-700">
+              ✓ {getTranslation('audio_gia_tua', uiLang)}
+            </p>
+          )}
+          {paywall && !giaTua && (
             <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
               {paywall.preview && (
                 <>

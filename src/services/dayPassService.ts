@@ -212,6 +212,68 @@ export async function consumeDayPassGuide(): Promise<boolean> {
 }
 
 /**
+ * I POI gia' acquistati dall'utente, in memoria per la sessione.
+ *
+ * REGOLA: un'audioguida acquistata non si paga mai piu' (registro
+ * `user_poi_purchases`, migration 20260829090000: il proprietario puo'
+ * leggerlo, solo il server puo' scriverlo). Si carica UNA VOLTA e si tiene:
+ * la mappa mostra centinaia di pin e non puo' fare una query per ciascuno.
+ */
+let poiPossedutiCache: Set<string> | null = null;
+let poiPossedutiInFlight: Promise<Set<string>> | null = null;
+
+export async function caricaPoiPosseduti(forza = false): Promise<Set<string>> {
+  if (!forza && poiPossedutiCache) return poiPossedutiCache;
+  if (!forza && poiPossedutiInFlight) return poiPossedutiInFlight;
+  poiPossedutiInFlight = (async () => {
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData?.user?.id;
+      if (!userId) return new Set<string>();
+      const { data, error } = await supabase
+        .from('user_poi_purchases')
+        .select('poi_id')
+        .eq('user_id', userId);
+      // Tabella non ancora creata (migration da applicare): nessun possesso
+      // noto, ma NON si memorizza il vuoto come verita' definitiva.
+      if (error) return new Set<string>();
+      const s = new Set<string>((data || []).map((r: any) => String(r.poi_id)));
+      poiPossedutiCache = s;
+      return s;
+    } catch {
+      return new Set<string>();
+    } finally {
+      poiPossedutiInFlight = null;
+    }
+  })();
+  return poiPossedutiInFlight;
+}
+
+/** Sincrono: usa solo quello gia' caricato (per il rendering dei pin). */
+export function possiedePoiSync(poiId: string): boolean {
+  return !!poiPossedutiCache?.has(String(poiId));
+}
+
+/** Asincrono: carica l'elenco se manca. */
+export async function possiedePoi(poiId: string): Promise<boolean> {
+  const s = await caricaPoiPosseduti();
+  return s.has(String(poiId));
+}
+
+/** Dopo un acquisto riuscito: il POI e' suo da adesso, senza rileggere tutto. */
+export function segnaPoiPosseduto(poiId: string): void {
+  if (!poiPossedutiCache) poiPossedutiCache = new Set<string>();
+  poiPossedutiCache.add(String(poiId));
+  try { window.dispatchEvent(new CustomEvent('wip-poi-posseduto', { detail: { poiId: String(poiId) } })); } catch { /* niente */ }
+}
+
+/** Cambio utente: il possesso e' personale, la cache va buttata. */
+export function azzeraPoiPosseduti(): void {
+  poiPossedutiCache = null;
+  poiPossedutiInFlight = null;
+}
+
+/**
  * Cancello unico per la riproduzione della guida COMPLETA (usato dal
  * percorso web AudioQueueManager). Ordine: acquisto pregresso (gratis, non
  * consuma il pass) → Day Pass (consuma 1 guida) → altrimenti si paga.
@@ -221,6 +283,14 @@ export async function authorizeGuidePlayback(poiId: string): Promise<{
   allowed: boolean;
   via?: 'day_pass' | 'purchased';
 }> {
+  // UN'AUDIOGUIDA ACQUISTATA E' TUA PER SEMPRE (29/08/2026): la fonte di
+  // verita' e' `user_poi_purchases`, scritta SOLO dal server dopo un addebito
+  // riuscito. Lo storico degli ascolti resta come ripiego per i POI comprati
+  // prima di questa modifica (e per chi e' offline), ma non e' piu' la prova
+  // principale: e' scrivibile dal client, quindi falsificabile.
+  try {
+    if (await possiedePoi(poiId)) return { allowed: true, via: 'purchased' };
+  } catch { /* registro non raggiungibile: si prova con lo storico */ }
   try {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData?.user?.id;

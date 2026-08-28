@@ -2080,7 +2080,17 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   // davanti a OGNI rotta che chiama un LLM (callUniversalAi) o un provider
   // TTS a nostre spese: prima molte di queste erano generabili gratis e
   // senza login via curl, col solo rateLimiter in memoria come freno.
+  // Bypass per gli script di arricchimento di sfondo (28/08/2026, scratch/*):
+  // un header statico confrontato con SCRIPT_SHARED_SECRET, mai mandato dal
+  // client web/nativo. Senza, ogni script di sfondo prende sempre 401 non
+  // avendo un utente loggato dietro — è quello che ha fermato l'arricchimento
+  // natura in corso lo stesso giorno di questo commit.
+  const SCRIPT_SHARED_SECRET = process.env.SCRIPT_SHARED_SECRET;
   async function requireAuth(req: any, res: any, next: any) {
+    if (SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET) {
+      req.userId = 'background-script';
+      return next();
+    }
     let uid: string | null = null;
     try { uid = await verifyUserToken(req); } catch { uid = null; }
     if (!uid) return res.status(401).json({ error: 'auth_required' });
@@ -2191,6 +2201,87 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       const p = r.data?.[0];
       return !!p && Number(p.guides_used || 0) < Number(p.guides_cap || 0);
     } catch { return false; }
+  }
+
+  /**
+   * POSSESSO PERMANENTE DI UN'AUDIOGUIDA (29/08/2026).
+   *
+   * Regola del committente: «quando l'utente acquista un'audioguida, non la
+   * paga mai piu', e' sua». Fino a ieri il diritto scadeva dopo 24 ore
+   * (chiave `audiocharge_*` in api_cache) e il POI si ripagava il giorno
+   * dopo. Il registro vero e' `user_poi_purchases` (migration
+   * 20260829090000): scrivibile SOLO da qui col service role, quindi non
+   * falsificabile dal client come lo era `user_listening_history`.
+   *
+   * Il possesso vale per il POI in TUTTE le lingue e con tutti i registri:
+   * la chiave e' (user_id, poi_id), senza lingua.
+   *
+   * FAIL-SAFE VERSO L'UTENTE: se la tabella non esiste ancora (migration non
+   * applicata) o la lettura fallisce, si ripiega sulla vecchia chiave
+   * `audiocharge_*` SENZA la finestra dei 30 giorni... anzi, senza finestra
+   * affatto: in dubbio non si fa ripagare un cliente.
+   */
+  async function possiedeIlPoi(userId: string, poiId: string): Promise<boolean> {
+    const uid = pgSafe(userId), pid = pgSafe(poiId);
+    if (!uid || !pid) return false;
+    try {
+      const r = await axios.get(
+        `${supabaseUrl}/rest/v1/user_poi_purchases?user_id=eq.${uid}&poi_id=eq.${pid}&select=poi_id&limit=1`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 4000 }
+      );
+      return Array.isArray(r.data) && r.data.length > 0;
+    } catch (e: any) {
+      // 404/42P01 = tabella assente: lo dice una volta e passa al ripiego.
+      if (!(possiedeIlPoi as any)._avvisato) {
+        (possiedeIlPoi as any)._avvisato = true;
+        console.warn('[possesso] user_poi_purchases non leggibile, ripiego su audiocharge_*:', e?.message);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Registra il possesso dopo un addebito riuscito. Ritorna false solo se la
+   * scrittura fallisce per un motivo diverso dalla tabella mancante: il
+   * chiamante in quel caso rimborsa, perche' addebitare senza consegnare il
+   * possesso significherebbe far ripagare lo stesso POI domani.
+   */
+  async function registraPossesso(userId: string, poiId: string, cost: number, source = 'crediti'): Promise<boolean> {
+    try {
+      await axios.post(
+        `${supabaseUrl}/rest/v1/user_poi_purchases`,
+        { user_id: userId, poi_id: String(poiId), source, cost: Math.max(0, Math.round(cost || 0)) },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=ignore-duplicates,return=minimal' }, timeout: 5000 }
+      );
+      return true;
+    } catch (e: any) {
+      const st = e?.response?.status;
+      const msg = String(e?.response?.data?.message || e?.message || '');
+      // Tabella non ancora creata: non si blocca l'ascolto gia' pagato — resta
+      // la chiave audiocharge_* come rete di sicurezza.
+      if (st === 404 || /relation .* does not exist|42P01/i.test(msg)) {
+        console.warn('[possesso] user_poi_purchases assente: applicare la migration 20260829090000');
+        return true;
+      }
+      console.error('[possesso] scrittura fallita:', msg);
+      return false;
+    }
+  }
+
+  /**
+   * Annulla il possesso: si usa SOLO quando si rimborsa un addebito appena
+   * fatto perche' la guida non e' stata consegnata. Non e' una revoca — un
+   * acquisto riuscito non si toglie mai.
+   */
+  async function annullaPossesso(userId: string, poiId: string): Promise<void> {
+    const uid = pgSafe(userId), pid = pgSafe(poiId);
+    if (!uid || !pid) return;
+    try {
+      await axios.delete(
+        `${supabaseUrl}/rest/v1/user_poi_purchases?user_id=eq.${uid}&poi_id=eq.${pid}&source=eq.crediti`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }
+      );
+    } catch { /* best-effort: il rimborso e' gia' avvenuto */ }
   }
 
   /** Prime `n` frasi di un testo (anteprima gratuita), tetto 400 caratteri. */
@@ -7097,19 +7188,28 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       const guideChar = normalizeGuideChar(character);
 
       // ── DIRITTO AL TESTO INTEGRALE (deciso qui, vedi commento sopra) ──
-      // Addebito IDEMPOTENTE per (utente, poi, lingua) nelle 24 ore: chiave
-      // api_cache audiocharge_<user>_<poi>_<lang>. Riascoltare lo stesso POI
-      // nello stesso giorno, cambiare registro o ricevere il prefetch nativo
-      // non costa due volte.
+      // UN'AUDIOGUIDA ACQUISTATA E' DELL'UTENTE PER SEMPRE (29/08/2026):
+      // il registro e' `user_poi_purchases`, scritto solo dal server dopo un
+      // addebito riuscito. Fino a ieri il diritto durava 24 ORE (chiave
+      // audiocharge_* in api_cache) e il POI si ripagava il giorno dopo.
+      // Il possesso vale per il POI in tutte le lingue e con tutti i
+      // registri: cambiare lingua o personaggio non e' un nuovo acquisto.
+      // La vecchia chiave resta scritta come rete di sicurezza per i client
+      // e i server non ancora aggiornati, e vale ancora come prova (senza
+      // scadenza) quando la tabella non e' leggibile: in dubbio non si fa
+      // ripagare un cliente.
       const prefetch = req.body?.prefetch === true;
       const consensoAddebito = req.body?.charge === true && !prefetch;
       const chargeKey = `audiocharge_${callerUserId}_${String(poiId).replace(/[^A-Za-z0-9_:.-]/g, '')}_${langLower}`;
       const unit = await prezzoDi('audio_guide');
       let haDiritto = false;
       let fonteDiritto = '';
-      const prev = await getFromCache(chargeKey);
-      const prevTs = Number(prev?.text_content) || 0;
-      if (prevTs && Date.now() - prevTs < 24 * 60 * 60 * 1000) { haDiritto = true; fonteDiritto = 'acquisto_24h'; }
+      if (await possiedeIlPoi(callerUserId, poiId)) { haDiritto = true; fonteDiritto = 'acquistato'; }
+      if (!haDiritto) {
+        const prev = await getFromCache(chargeKey);
+        const prevTs = Number(prev?.text_content) || 0;
+        if (prevTs) { haDiritto = true; fonteDiritto = 'audiocharge_storico'; }
+      }
       if (!haDiritto && !(unit > 0)) { haDiritto = true; fonteDiritto = 'listino_zero'; }
       if (!haDiritto && await haDayPassAttivo(callerUserId)) { haDiritto = true; fonteDiritto = 'day_pass'; }
 
@@ -7120,6 +7220,13 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
         if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: unit });
         if (outcome === 'error') return res.status(500).json({ error: 'charge_failed' });
         audioChargeUser = callerUserId; audioChargeCost = unit;
+        // Il possesso si scrive PRIMA di consegnare: se non riesce si rimborsa
+        // subito, perche' un addebito senza possesso vorrebbe dire far
+        // ripagare lo stesso POI domani.
+        if (!await registraPossesso(callerUserId, poiId, unit)) {
+          await refundCreditsServer(callerUserId, unit);
+          return res.status(500).json({ error: 'charge_failed' });
+        }
         // Per il catch esterno (rimborso su errore di generazione).
         (res as any).locals = { ...((res as any).locals || {}), audioChargeUser, audioChargeCost, audioChargeKey: chargeKey };
         await saveToCache(chargeKey, 'audio_charge', String(Date.now()));
@@ -7202,11 +7309,14 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       const text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower });
       if (!text || !text.trim()) {
         // Nessuna narrazione generata: se si è addebitato ORA si restituisce
-        // (best-effort) e si toglie la chiave delle 24 h, così il prossimo
-        // tentativo non risulta "già pagato". L'utente riceve la base grezza.
+        // (best-effort) e si tolgono ENTRAMBE le prove d'acquisto — la chiave
+        // storica e la riga di possesso — così il prossimo tentativo non
+        // risulta "già pagato" e l'utente non resta proprietario di una guida
+        // che non ha mai ricevuto. L'utente riceve la base grezza.
         if (audioChargeUser && audioChargeCost > 0) {
           await refundServer(audioChargeUser, audioChargeCost).catch(() => {});
           await axios.delete(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(chargeKey)}`, { headers: CREDIT_SVC_HEADERS }).catch(() => {});
+          await annullaPossesso(audioChargeUser, poiId);
         }
         return res.json({ text: base }); // mai silenzio: almeno la base
       }
@@ -7236,12 +7346,15 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     } catch (e: any) {
       // Dettaglio solo nei log server; al client messaggio generico.
       console.error('[api/poi/audioguide] error:', e.message);
-      // Addebito senza consegna: si restituisce (best-effort).
+      // Addebito senza consegna: si restituisce (best-effort) e si annulla il
+      // possesso appena scritto — senza, l'utente resterebbe proprietario di
+      // una guida mai ricevuta e il rimborso creerebbe un acquisto gratis.
       try {
         const u = (res as any).locals?.audioChargeUser; const c = (res as any).locals?.audioChargeCost; const k = (res as any).locals?.audioChargeKey;
         if (u && c > 0) {
           await refundServer(u, c);
           if (k) await axios.delete(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(k)}`, { headers: CREDIT_SVC_HEADERS }).catch(() => {});
+          await annullaPossesso(u, (req.body?.poiId ?? ''));
         }
       } catch { /* best-effort */ }
       res.status(500).json({ error: 'audioguide_failed' });
