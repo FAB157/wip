@@ -28,6 +28,10 @@ export type PoiCategory =
   // Vino e Gusto (20/08/2026): macro-categoria propria in shared_pois. Il
   // tipo preciso (cantina, caseificio, frantoio…) vive in `poi_type`.
   | 'enogastronomia'
+  // Turismo dello Shopping e Turismo di Lusso (28/08/2026): stesso schema
+  // di enogastronomia — categoria propria, tipo preciso in `poi_type`.
+  | 'shopping'
+  | 'lusso'
   // Verticali NATURALI (harvest non culturale, 16/08/2026): confluiscono
   // nel filtro "panorami" — vedi guideSettings.isCategoryAllowed,
   // CategoryMap.kt e PoiCategories.map (iOS), che vanno tenuti allineati.

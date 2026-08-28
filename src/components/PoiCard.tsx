@@ -13,10 +13,11 @@ import { ensurePoiDetails } from '../services/enrichmentService';
 import { fotoPrincipale } from '../lib/fotoUrl';
 import AttribuzioneFoto from './AttribuzioneFoto';
 import {
-  getOrCreateAudioguideText,
+  getAudioguideForPlayback,
   askMore,
   MAX_ASK_MORE_LEVEL,
 } from '../services/audioguideService';
+import { notify } from '../lib/toast';
 import { speakAudioguide, unlockSpeech } from '../services/ttsService';
 import { resetPlayedOne } from '../lib/guideSettings';
 import { CATEGORY_LABELS_IT, CATEGORY_EMOJI } from '../lib/poiCategories';
@@ -78,19 +79,36 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
     };
   }, [poi.id, lang]);
 
-  const handlePlay = async () => {
+  // Paywall deciso dal SERVER (28/08/2026): senza diritto /api/poi/audioguide
+  // risponde 402 con anteprima e costo; qui si mostra l'anteprima e il tasto
+  // «Ascolta per N crediti», che ritenta con charge:true. L'addebito lo fa il
+  // server (idempotente 24 h): nessun consume_credits lato client.
+  const [paywall, setPaywall] = useState<{ cost: number; preview: string } | null>(null);
+  const uiLang = String(language || 'IT').toUpperCase() as any;
+
+  const handlePlay = async (charge = false) => {
     unlockSpeech();
     resetPlayedOne(poi.id); // PLAY esplicito riabilita il geofencing per questo POI
     setPlaying(true);
     try {
-      const text = await getOrCreateAudioguideText(
+      const esito = await getAudioguideForPlayback(
         { id: poi.id, name: poi.name, lat: poi.lat, lon: poi.lon, category: poi.category },
         lang,
         character,
+        { charge },
       );
-      if (text) {
+      if (esito.status === 'ok' || (esito.status === 'error' && esito.text)) {
+        const text = esito.text as string;
+        setPaywall(null);
         heardRef.current = text;
         await speakAudioguide(text, lang, character);
+      } else if (esito.status === 'credits_required') {
+        setPaywall({ cost: esito.cost, preview: esito.preview });
+      } else if (esito.status === 'insufficient_credits') {
+        setPaywall(prev => prev ?? { cost: esito.cost, preview: '' });
+        notify(getTranslation('sk_crediti_insufficienti_audio', uiLang));
+      } else if (esito.status === 'auth_required') {
+        notify(getTranslation('auth_richiesta', uiLang));
       }
     } finally {
       setPlaying(false);
@@ -181,11 +199,29 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
               {t}
             </p>
           ))}
+          {paywall && (
+            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+              {paywall.preview && (
+                <>
+                  <p className="text-[10px] font-black uppercase tracking-wide text-amber-700">{getTranslation('audio_anteprima_label', uiLang)}</p>
+                  <p className="mt-1 italic text-[#1e3a8a]">{paywall.preview}…</p>
+                </>
+              )}
+              <button
+                onClick={() => handlePlay(true)}
+                disabled={playing}
+                className="mt-2 w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 px-3 py-2 text-sm font-bold text-white disabled:opacity-60"
+              >
+                {playing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                {getTranslation('audio_ascolta_per_crediti', uiLang).replace('{n}', String(paywall.cost))}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex gap-2">
           <button
-            onClick={handlePlay}
+            onClick={() => handlePlay(false)}
             disabled={playing}
             className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-primary px-3 py-2.5 text-sm font-semibold text-secondary disabled:opacity-60"
           >

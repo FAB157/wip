@@ -16,6 +16,8 @@ import { CATEGORY_EMOJI } from '../lib/poiCategories';
 import type { PoiCategory } from '../types/poi';
 import { getTranslation, Language } from '../lib/i18n';
 import { puntoArrivo } from '../lib/puntoArrivo';
+import { vibra } from './hapticsHelper';
+import { useAudioState } from '../hooks/useAudioState';
 
 // ─── Tipi ─────────────────────────────────────────────────────────
 
@@ -96,6 +98,18 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   const [navInstruction, setNavInstruction] = useState<string>('');
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number, heading?: number | null} | null>(null);
 
+  // Il mini-player (AudioPlayerBanner) è ancorato a 5,5 rem dal fondo: quando
+  // è visibile il banner di avvicinamento sale di ~4 rem per non coprirlo.
+  // Stesse due sorgenti che usa il mini-player: player principale + ttsService.
+  const audioState = useAudioState();
+  const [ttsVisible, setTtsVisible] = useState(false);
+  useEffect(() => {
+    const onAudio = (e: Event) => setTtsVisible(!!((e as CustomEvent).detail || {}).isVisible);
+    window.addEventListener('wip-audio-state-change', onAudio);
+    return () => window.removeEventListener('wip-audio-state-change', onAudio);
+  }, []);
+  const miniPlayerVisible = audioState.isActive || ttsVisible;
+
   // Specchio delle entries per i listener (deps []) + memorie anti-ripetizione:
   // - announcedAtRef: ultimo beep/vibrazione per POI (mai due annunci ravvicinati)
   // - dismissedRef: POI chiusi con la X o già aperti in scheda — i distance-update
@@ -146,7 +160,8 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
 
       announcedAtRef.current.set(poiId, Date.now());
       playBeep(isArrival ? 2 : 1);
-      navigator.vibrate?.(isArrival ? [250, 100, 250] : [200]);
+      // Haptics nativi (iOS non implementa navigator.vibrate, UX-08).
+      vibra(isArrival ? 'successo' : 'avviso');
 
       // La distanza e la freccia puntano all'INGRESSO quando lo conosciamo,
       // non al centroide: su un edificio grande il banner diceva "40 m" a
@@ -354,12 +369,14 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     setEntries(prev => prev.filter(x => x.poiId !== entry.poiId));
   };
 
-  // top con safe-area: su iPhone il banner finiva sotto il notch e la X
-  // di chiusura non era cliccabile.
+  // In BASSO, sopra la barra dei tab (UX-07): «Ascolta» e «Portami lì» sono
+  // i tasti che si premono camminando e con una mano, e in alto a destra
+  // (sotto il notch, fuori dal pollice) non ci si arrivava. Stessa quota di
+  // AgentControls (6 rem + safe-area); +4 rem quando c'è il mini-player.
   return (
     <div
-      className="absolute left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none"
-      style={{ top: 'calc(env(safe-area-inset-top, 0px) + 1rem)' }}
+      className="absolute left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none transition-[bottom] duration-300"
+      style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + env(safe-area-inset-bottom, 0px))` }}
     >
       <AnimatePresence>
         {entries.slice(0, 2).map((entry, index) => {
@@ -369,36 +386,41 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
           return (
             <motion.div
               key={entry.poiId}
-              initial={{ opacity: 0, x: -20, scale: 0.9 }}
+              initial={{ opacity: 0, y: 24, scale: 0.95 }}
               animate={{
                 opacity: 1,
-                x: 0,
+                y: 0,
                 scale: 1,
                 zIndex: entries.length - index
               }}
-              exit={{ opacity: 0, x: 20, scale: 0.9 }}
+              exit={{ opacity: 0, y: 24, scale: 0.95 }}
               layout
-              className={`pointer-events-auto bg-white/95 backdrop-blur-xl border ${isGem ? 'border-amber-400 shadow-[0_8px_30px_rgba(245,158,11,0.3)]' : 'border-stone-200 shadow-xl'} rounded-2xl p-3 flex items-start gap-3 relative transition-all`}
+              role="status"
+              className={`pointer-events-auto bg-white/95 backdrop-blur-xl border ${isGem ? 'border-amber-400 shadow-[0_8px_30px_rgba(245,158,11,0.3)]' : 'border-stone-200 shadow-xl'} rounded-2xl p-2 pr-3 flex items-start gap-2 relative transition-all`}
             >
-              {/* Pulsante X */}
+              {/* Pulsante X: a SINISTRA, 44 px, lontano da «Ascolta» (che
+                  addebita crediti) — prima era 24 px a 8 px da quel tasto
+                  (UX-06). */}
               <button
+                type="button"
                 onClick={() => handleClose(entry.poiId)}
-                className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full bg-stone-100 text-stone-500 hover:bg-stone-200 transition-all"
+                aria-label={getTranslation('close', language)}
+                className="min-w-11 min-h-11 self-center flex items-center justify-center rounded-full text-stone-500 hover:bg-stone-100 active:bg-stone-200 transition-all shrink-0"
               >
-                ✕
+                <span aria-hidden="true">✕</span>
               </button>
 
               {entry.image ? (
-                <img src={entry.image} alt={entry.name} loading="lazy" decoding="async" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
+                <img src={entry.image} alt="" loading="lazy" decoding="async" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" />
               ) : (
-                <div className={`w-12 h-12 rounded-lg ${isGem ? 'bg-amber-100 text-amber-600' : 'bg-primary/10 text-primary'} flex items-center justify-center text-xl flex-shrink-0`}>
+                <div className={`w-12 h-12 rounded-lg ${isGem ? 'bg-amber-100 text-amber-600' : 'bg-primary/10 text-primary'} flex items-center justify-center text-xl flex-shrink-0`} aria-hidden="true">
                   {isGem ? '💎' : (CATEGORY_EMOJI[entry.category as PoiCategory] ?? '🗺️')}
                 </div>
               )}
 
-              <div className="flex-1 min-w-0 pr-4">
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 mb-0.5">
-                   <span className={`text-[10px] font-black uppercase tracking-tighter ${isGem ? 'text-amber-600' : 'text-primary'}`}>
+                   <span className={`text-[11px] font-black uppercase tracking-tight ${isGem ? 'text-amber-600' : 'text-primary'}`}>
                      {isGem ? '💎 ' + getTranslation('gr_gemma', language) : '📍 ' + (getTranslation(entry.category || 'monumenti', language))} • {Math.round(entry.distance)}m
                    </span>
                    {userLocation && entry.lat && entry.lon && (
@@ -417,8 +439,9 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
                 {isLead && (
                   <div className="mt-2 flex items-stretch gap-1.5">
                     <button
+                      type="button"
                       onClick={() => handlePlayNow(entry)}
-                      className={`flex-1 py-1.5 rounded-lg ${isGem ? 'bg-amber-500 hover:bg-amber-600' : 'bg-primary hover:bg-primary-hover'} text-white text-[10px] font-black shadow transition-all flex items-center justify-center gap-1.5`}
+                      className={`flex-1 min-h-11 py-2 rounded-lg ${isGem ? 'bg-amber-500 hover:bg-amber-600' : 'bg-primary hover:bg-primary-hover'} text-white text-[13px] font-black shadow transition-all flex items-center justify-center gap-1.5`}
                     >
                       {entry.alreadyPaid ? (
                         <>
@@ -441,10 +464,11 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
                         ascoltare, questa e' il modo per arrivarci. */}
                     {typeof entry.lat === 'number' && typeof entry.lon === 'number' && (
                       <button
+                        type="button"
                         onClick={() => handleNavigate(entry)}
                         aria-label={getTranslation('navigate', language)}
                         title={getTranslation('navigate', language)}
-                        className="px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-700 text-white text-[11px] font-black shadow transition-all flex items-center justify-center"
+                        className="min-w-11 min-h-11 px-3 py-2 rounded-lg bg-stone-900 hover:bg-stone-700 text-white text-[13px] font-black shadow transition-all flex items-center justify-center"
                       >
                         ➤
                       </button>
@@ -464,12 +488,13 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
             exit={{ opacity: 0, y: 10 }}
             className="pointer-events-auto bg-stone-900/80 backdrop-blur-lg text-white rounded-xl px-4 py-2 flex items-center justify-between shadow-lg border border-white/10"
           >
-            <span className="text-[10px] font-black uppercase tracking-widest">
+            <span className="text-[12px] font-black uppercase tracking-wider">
               +{entries.length - 2} {getTranslation('altri_luoghi_vicini', language)}
             </span>
             <button
+              type="button"
               onClick={() => setEntries(prev => prev.slice(0, 2))}
-              className="text-[10px] font-black bg-white/20 hover:bg-white/30 px-2 py-1 rounded-lg transition-colors"
+              className="text-[12px] min-h-11 font-black bg-white/20 hover:bg-white/30 px-3 py-1 rounded-lg transition-colors"
             >
               {getTranslation('pulisci', language)}
             </button>

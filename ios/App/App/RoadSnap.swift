@@ -25,7 +25,7 @@ final class RoadSnap {
     }
 
     private let cell = 0.003 // ~300 m
-    private let roadsUrl = "https://wip.guide/api/roads/tile"
+    private let roadsUrl = "\(WipApi.base)/api/roads/tile"
 
     private struct Seg { let aLat: Double; let aLon: Double; let bLat: Double; let bLon: Double }
 

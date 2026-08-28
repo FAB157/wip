@@ -129,7 +129,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       }}
       exit={{ y: "100%", opacity: 0 }}
       transition={{ type: "spring", stiffness: 250, damping: 30 }}
-      className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[60dvh] bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl shadow-2xl rounded-t-[2.5rem] md:rounded-[2rem] z-[1100] flex flex-col overflow-hidden border border-black/5"
+      className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[78dvh] bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl shadow-2xl rounded-t-[2.5rem] md:rounded-[2rem] z-[1100] flex flex-col overflow-hidden border border-black/5"
     >
       {/* Header con tasto Riduzione/Espansione */}
       <div
@@ -155,11 +155,19 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         </button>
       </div>
 
+      {/* UN SOLO CONTENITORE CHE SCORRE (28/08/2026). Prima scorreva solo la
+          lista dei POI in fondo, mentre tempo, arrivo, ordine delle tappe e
+          "lungo la strada" erano fissi: con dieci tappe scelte quei blocchi
+          riempivano da soli il pannello e la lista restava schiacciata sotto,
+          senza altezza e senza scroll — il "+" non si riusciva più a toccare.
+          Ora scorre tutto insieme; la barra del giro resta appiccicata in
+          alto perché il tasto "Crea giro" deve stare sempre a portata. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain custom-scrollbar">
       {/* La barra del giro: compare solo quando c'e` qualcosa da fare.
           Sta in ALTO e non in fondo alla lista, perche' con dieci tappe la
           lista scorre e il tasto sparirebbe proprio quando serve. */}
       {!isCollapsed && scelte.length > 0 && (
-        <div className="px-4 py-3 border-b border-black/5 bg-blue-50/70 flex items-center gap-3">
+        <div className="px-4 py-3 border-b border-black/5 bg-blue-50/95 backdrop-blur flex items-center gap-3 sticky top-0 z-10">
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-black text-[#1e3a8a] leading-tight">
               {scelte.length} {scelte.length === 1 ? tr('gr_tappa_scelta') : tr('gr_tappe_scelte')}
@@ -218,13 +226,13 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           chi cammina. */}
       {!isCollapsed && scelte.length > 0 && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-white/70 space-y-2">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">{tr('gr_tempo_che_hai')}</span>
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_tempo_che_hai')}</span>
             {TEMPI.map(({ min, label }) => (
               <button
                 key={label}
                 onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaTempo(min); }}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+                className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
                   bozza.minutiDisponibili === min
                     ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
                     : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
@@ -236,13 +244,13 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           </div>
           {/* Ad anello o aperto. Era sempre ad anello: chi dorme dall'altra
               parte della citta` non vuole tornare al punto di partenza. */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1">{tr('gr_arrivo')}</span>
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+            <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
             {[{ v: true, label: tr('gr_torno_da_dove_parto') }, { v: false, label: tr('gr_finisco_ultima') }].map(({ v, label }) => (
               <button
                 key={String(v)}
                 onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaAnello(v); }}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-bold border transition-colors ${
+                className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
                   bozza.anello === v
                     ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
                     : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
@@ -358,8 +366,8 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         </div>
       )}
 
-      {/* Lista POI */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[250px] custom-scrollbar">
+      {/* Lista POI: scorre col resto del pannello (vedi sopra). */}
+      <div className="p-4 space-y-3 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
         <AnimatePresence initial={false}>
           {uniquePois.length === 0 ? (
             <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center py-16 text-center opacity-40">
@@ -441,6 +449,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
             })
           )}
         </AnimatePresence>
+      </div>
       </div>
       <NavChoiceSheet poi={navPoi} language={language} onClose={() => setNavPoi(null)} />
     </motion.div>

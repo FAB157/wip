@@ -29,5 +29,36 @@ data class PoiEntity(
     // del peso senza aggiungere niente. Nullable: 402.889 POI su 2,3 milioni
     // ce l'hanno, gli altri restano ai raggi come sempre.
     // Parità con src/lib/geofencing/footprints.ts e PoiFootprints.swift.
-    val footprint: String? = null
+    val footprint: String? = null,
+    // INDIRIZZO leggibile (23/08/2026), per la notifica e la voce. NON fa da
+    // solo gradino nella scala di fiducia: una stringa non si può trasformare
+    // in un cerchio, e un POI con l'indirizzo scritto ma senza punto resta al
+    // centroide (raggio ×2). Il gradino lo fanno le coordinate qui sotto.
+    // `addressSource` non è decorazione: 'strada_vicina' vuol dire «la strada
+    // più vicina», non l'indirizzo del luogo — una chiesa in mezzo ai campi
+    // non sta al civico di quella via, e usarla porterebbe il punto altrove:
+    // per questo scarta anche il PUNTO (vedi RaggiFiducia.puntoIndirizzo).
+    // Nullable: i pacchetti offline già scaricati non li portano e restano
+    // validi (Room usa il default).
+    val address: String? = null,
+    val addressSource: String? = null,
+    // IL PUNTO DELL'INDIRIZZO (23/08/2026, migration
+    // 20260823160000_poi_address_point.sql: address_point_lat/lon/source).
+    // NON è una geocodifica testuale: è la casa più vicina al POI nel dump
+    // Nominatim, cioè vicinanza MISURATA a pochi metri. Per questo vale come
+    // punto d'ARRIVO anche senza numero civico, e non come indizio.
+    // Regola dell'utente: «chi ha indirizzo, quello È l'arrivo: il trigger a
+    // 30 m da lì, e il navigatore punta a quell'indirizzo».
+    // La stringa `address` da sola NON basta più a fare gradino: senza queste
+    // due coordinate il POI resta al centroide (vedi RaggiFiducia.livello).
+    // Nullable: i pacchetti e le cache già scaricati non li portano e restano
+    // validi (Room usa il default), col comportamento identico a prima.
+    val addressPointLat: Double? = null,
+    val addressPointLon: Double? = null,
+    // Provenienza E qualità del punto in un valore solo (photon_casa_civico |
+    // photon_casa | …). Oggi non cambia il raggio — il punto è misurato in
+    // entrambi i casi — ma è l'unico appiglio se un domani una fonte peggiore
+    // scriverà qui: chi legge deve poter decidere dalla qualità, non dalla
+    // sola presenza.
+    val addressPointSource: String? = null
 )

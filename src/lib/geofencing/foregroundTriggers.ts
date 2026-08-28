@@ -64,10 +64,14 @@ import { valutaGate, azzeraGate } from './bearingGate';
 // serve a decidere «sono nei paraggi» (registrare geofence, scaricare POI), non
 // a far partire un racconto. Vedi il commento sulle due soglie in guideSettings.
 const ACCURACY_MAX_M = SOGLIA_ACCURATEZZA_TRIGGER_M; // fix peggiore → scartato
-const HAS_PASSED_M = 40;            // metri oltre il CPA = POI superato
-// In auto 40 m sono un secondo e mezzo: fra un fix e l'altro il POI risulta
-// "superato" prima ancora di essere stato valutato (22/08/2026).
-const HAS_PASSED_CAR_M = 150;
+// Metri oltre il CPA perche' un POI sia "superato": 40 m come i nativi
+// (PredictiveTrigger.kt PASS_DISTANCE_M, PredictiveTrigger.swift). Fino al
+// 28/08/2026 in auto qui valeva 150 m, giustificato con «fra un fix e l'altro
+// il POI risulta superato prima di essere valutato»: ma quel problema lo
+// risolve il PAVIMENTO RADIALE (come nel nativo hasPassed: superato solo se
+// ANCHE fuori dal raggio d'arrivo e in allontanamento), non una soglia tripla
+// che lasciava parlare un POI gia' 100 m alle spalle a 50 km/h.
+const HAS_PASSED_M = 40;
 const DEFAULT_TRIGGER_RADIUS_M = 50;
 // Il solo limite inferiore rimasto (23/08/2026, prima era 25 m = metà del
 // default). Non è una scelta di prodotto ma di fisica: in città un fix GPS ha
@@ -82,7 +86,11 @@ const MIN_TRIGGER_RADIUS_M = 10;
 // PoiFootprints.swift.
 const PERIMETER_TRIGGER_WALK_M = 30;
 const PERIMETER_TRIGGER_CAR_M = 100;
-const GLOBAL_THROTTLE_MS = 90_000;  // max 1 trigger ogni 90 s
+// Throttle GLOBALE: max 1 trigger ogni 90 s. SCELTA WEB ESPLICITA, non un
+// disallineamento dai nativi: sul web la guida suona nel tag <audio> della
+// stessa WebView e un secondo trigger a 30 s taglierebbe la narrazione in
+// corso; i nativi hanno una coda TTS/ExoPlayer propria e arbitrano li'.
+const GLOBAL_THROTTLE_MS = 90_000;
 // 24 h per-POI, come il servizio nativo (era 6 h: lo stesso POI poteva
 // riparlare nel pomeriggio di chi l'aveva sentito al mattino).
 const POI_COOLDOWN_MS = PLAYED_COOLDOWN_MS;
@@ -344,7 +352,6 @@ function onLocationUpdate(e: Event): void {
     // velocita' del fix).
     const speed = Number(d.speed);
     const modo = resolveTransportMode(Number.isFinite(speed) ? speed : null);
-    const passatoM = modo === 'car' ? HAS_PASSED_CAR_M : HAS_PASSED_M;
 
     // 🎚️ FILTRO SUL JITTER, PRIMA DI TUTTO IL RESTO (23/08/2026). Il CPA del
     // predittore e' una derivata: si nutre della differenza fra due posizioni,
@@ -452,9 +459,12 @@ function onLocationUpdate(e: Event): void {
       }
 
       const approaching = dist < st.prevDist - APPROACH_EPSILON_M;
-      // hasPassed in METRI oltre il CPA (mai secondi): superato = niente
-      // trigger tardivo alle spalle dell'utente.
-      if (dist > st.minDist + passatoM) st.passed = true;
+      // hasPassed in METRI oltre il CPA (mai secondi), con lo stesso pavimento
+      // radiale del nativo (PredictiveTrigger.hasPassed: `metersPastCpa > 40
+      // && distanceNow > radiusM`, in allontanamento): finche' si e' DENTRO il
+      // raggio d'arrivo non si e' "superato" nulla, anche se il CPA e' 40 m
+      // indietro — e' il caso del pedone che gira attorno al monumento.
+      if (dist > st.prevDist && dist > st.minDist + HAS_PASSED_M && dist > radius) st.passed = true;
       if (dist < st.minDist) st.minDist = dist;
 
       // 🎯 PREDIZIONE (23/08/2026): il POI e' pertinente anche se il PASSAGGIO

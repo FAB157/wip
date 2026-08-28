@@ -158,22 +158,46 @@ export async function getNearbyPois(
 
   // Primary: RPC nearby_pois (legge da shared_pois con PostGIS) e get_utility_pois
   if (hasRpc()) {
-    const fetchShared = supabase.rpc('nearby_pois', {
-      p_lat: lat,
-      p_lon: lon,
-      radius_m: radiusMeters,
-      limit_num: 400
-    });
-    
-    const fetchUtility = supabase.rpc('get_utility_pois', {
-      user_lat: lat,
-      user_lon: lon,
-      radius_meters: radiusMeters,
-      limit_num: 400
-    });
+    // Dentro il CIRCUIT BREAKER (ITI-14): fino al 28/08/2026 solo
+    // get_geofence_pois ci passava, e con Supabase giu' il radar rifaceva le
+    // due RPC ogni 15 s fino al timeout di 20 s ciascuna. Con il breaker
+    // aperto si legge subito da Dexie, come offline.
+    let sharedRes: any;
+    let utilityRes: any;
+    try {
+      [sharedRes, utilityRes] = await supabaseCircuitBreaker.execute(async () => {
+        const risultati = await Promise.all([
+          supabase.rpc('nearby_pois', {
+            p_lat: lat,
+            p_lon: lon,
+            radius_m: radiusMeters,
+            limit_num: 400
+          }),
+          supabase.rpc('get_utility_pois', {
+            user_lat: lat,
+            user_lon: lon,
+            radius_meters: radiusMeters,
+            limit_num: 400
+          }),
+        ]);
+        // Entrambe fallite = problema di rete/DB, conta per il breaker. Una
+        // sola fallita (funzione mancante, timeout isolato) NO: l'altra basta.
+        if (risultati[0].error && risultati[1].error) throw new Error(risultati[0].error.message || 'rpc failed');
+        return risultati;
+      });
+    } catch (e) {
+      console.warn('[poiRepository] nearby RPC non disponibili (breaker/rete): leggo da Dexie', e);
+      try {
+        const localPois = await db.pois.toArray();
+        return localPois
+          .filter(isVisiblePoiStatus)
+          .filter(p => haversineMeters(lat, lon, p.lat, p.lon) <= radiusMeters)
+          .map(p => ({ ...p, distance_meters: haversineMeters(lat, lon, p.lat, p.lon), id: p.id })) as any[];
+      } catch {
+        return [];
+      }
+    }
 
-    const [sharedRes, utilityRes] = await Promise.all([fetchShared, fetchUtility]);
-    
     let allPois: NearbyPoi[] = [];
     // La RPC nearby_pois deployata espone il nome nella colonna "nome".
     // La RPC NON filtra per status: bozze e POI in bonifica (status draft/

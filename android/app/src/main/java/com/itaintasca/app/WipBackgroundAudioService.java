@@ -67,6 +67,19 @@ public class WipBackgroundAudioService extends Service {
     private PlaybackCallback callback;
 
     private boolean isForeground = false;
+    // (AUD-02) Il plugin e' legato (bound) al servizio? Finche' lo e' il
+    // servizio resta vivo anche da fermo (la guida successiva parte subito);
+    // quando si slega e il player e' vuoto ci si spegne da soli.
+    private boolean isBound = false;
+
+    // (AUD-01) Stato condiviso con la coda vocale nativa del
+    // GeofenceBroadcastReceiver, che gira in un altro thread e non ha il
+    // binder: l'istanza viva del servizio e il flag "sta suonando".
+    private static volatile WipBackgroundAudioService instance;
+    private static volatile boolean playingNow = false;
+    // true = la pausa l'ha chiesta la voce nativa (teaser/arrivo), non
+    // l'utente: solo in quel caso si riprende da soli a voce finita.
+    private static volatile boolean pausedByNativeVoice = false;
     private String currentTitle = "Italia in Tasca";
     private String currentSubtitle = "Audioguida";
 
@@ -102,6 +115,7 @@ public class WipBackgroundAudioService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         createNotificationChannel();
         ensurePlayer();
     }
@@ -109,13 +123,45 @@ public class WipBackgroundAudioService extends Service {
     @Nullable
     @Override
     public IBinder onBind(Intent intent) {
+        isBound = true;
         return binder;
     }
 
-    /** Gestisce i pulsanti della notifica / lock screen. */
+    @Override
+    public boolean onUnbind(Intent intent) {
+        // (AUD-02) Il plugin si e' slegato (Activity distrutta): se sta
+        // suonando il servizio e' "started" + foreground e prosegue da solo;
+        // se e' vuoto non ha motivo di restare in memoria.
+        isBound = false;
+        stopSelfIfIdle();
+        return true; // vogliamo onRebind al prossimo bind
+    }
+
+    @Override
+    public void onRebind(Intent intent) {
+        isBound = true;
+    }
+
+    /**
+     * (AUD-02) Il servizio viene ora AVVIATO (startForegroundService) dal
+     * plugin prima di ogni play, non solo legato: un servizio bound-only
+     * moriva con l'Activity e troncava la guida. Regole:
+     *  - promozione IMMEDIATA in foreground (obbligo entro pochi secondi da
+     *    startForegroundService, pena ForegroundServiceDidNotStartInTime);
+     *  - START_STICKY per gli avvii con intent; il riavvio STICKY a intent
+     *    nullo (processo ucciso) trova il player vuoto e si spegne pulito;
+     *  - i pulsanti della notifica arrivano da qui come prima.
+     */
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent != null ? intent.getAction() : null;
+        startForegroundSafe();
+        if (intent == null) {
+            // Riavvio STICKY dopo un kill: niente da riprendere.
+            releaseForeground();
+            stopSelfIfIdle();
+            return START_NOT_STICKY;
+        }
+        String action = intent.getAction();
         if (ACTION_PAUSE.equals(action)) {
             pause();
         } else if (ACTION_RESUME.equals(action)) {
@@ -123,7 +169,83 @@ public class WipBackgroundAudioService extends Service {
         } else if (ACTION_STOP.equals(action)) {
             stop();
         }
-        return START_NOT_STICKY;
+        return START_STICKY;
+    }
+
+    /**
+     * (AUD-02) L'utente ha tolto l'app dai recenti: la riproduzione NON si
+     * ferma. Il servizio e' started + foreground e la notifica media resta
+     * l'unico controllo; se invece era fermo, l'unbind dell'Activity lo ha
+     * gia' spento (onUnbind → stopSelfIfIdle).
+     */
+    @Override
+    public void onTaskRemoved(Intent rootIntent) {
+        Log.d(TAG, "Task rimosso dai recenti: riproduzione mantenuta (" + (isPlaying() ? "in corso" : "ferma") + ")");
+        super.onTaskRemoved(rootIntent);
+    }
+
+    /** Spegne il servizio se nessuno e' legato e il player e' vuoto o finito. */
+    private void stopSelfIfIdle() {
+        if (isBound) return;
+        boolean idle = exoPlayer == null
+                || exoPlayer.getPlaybackState() == Player.STATE_IDLE
+                || exoPlayer.getPlaybackState() == Player.STATE_ENDED;
+        if (idle) {
+            releaseForeground();
+            stopSelf();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // (AUD-01) Ponte con la coda vocale nativa (GeofenceBroadcastReceiver).
+    // Prima le due voci suonavano INSIEME: la voce nativa chiedeva il focus
+    // in MAY_DUCK e l'ExoPlayer si limitava ad abbassarsi sotto il teaser.
+    // ------------------------------------------------------------------
+
+    /** true se l'ExoPlayer della guida JS sta suonando in questo momento. */
+    public static boolean isPlayingNow() {
+        return playingNow;
+    }
+
+    /**
+     * Mette in pausa la guida JS per far parlare la voce nativa. Ritorna true
+     * se c'era davvero qualcosa in riproduzione (e quindi andra' ripreso).
+     * Chiamabile da qualunque thread.
+     */
+    public static boolean pauseForNativeVoice() {
+        final WipBackgroundAudioService svc = instance;
+        if (svc == null || !playingNow) return false;
+        pausedByNativeVoice = true;
+        svc.mainHandler.post(() -> {
+            try {
+                if (svc.exoPlayer != null && svc.exoPlayer.isPlaying()) svc.exoPlayer.pause();
+            } catch (Exception e) {
+                Log.w(TAG, "Pausa per voce nativa fallita: " + e.getMessage());
+            }
+        });
+        return true;
+    }
+
+    /**
+     * Riprende la guida JS SOLO se l'avevamo messa in pausa noi
+     * (pauseForNativeVoice) e nel frattempo l'utente non ha premuto Pausa o
+     * Stop, e il JS non ha avviato un'altra guida.
+     */
+    public static void resumeAfterNativeVoice() {
+        if (!pausedByNativeVoice) return;
+        pausedByNativeVoice = false;
+        final WipBackgroundAudioService svc = instance;
+        if (svc == null) return;
+        svc.mainHandler.post(() -> {
+            try {
+                if (svc.exoPlayer != null && svc.hasMedia() && !svc.exoPlayer.isPlaying()
+                        && svc.exoPlayer.getPlaybackState() != Player.STATE_ENDED) {
+                    svc.resume();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Ripresa dopo voce nativa fallita: " + e.getMessage());
+            }
+        });
     }
 
     public void setCallback(@Nullable PlaybackCallback cb) {
@@ -150,7 +272,11 @@ public class WipBackgroundAudioService extends Service {
                 // true => ExoPlayer richiede/abbandona l'audio focus da solo in base
                 // agli AudioAttributes sopra: duck (non pausa) la musica di altre app.
                 .setAudioAttributes(attrs, true)
-                .setHandleAudioBecomingNoisy(true)
+                // false => cuffie staccate: la guida CONTINUA dall'altoparlante
+                // (decisione di prodotto 28/08/2026, stessa regola della voce
+                // nativa del 23/08). Con true ExoPlayer si metteva in pausa da
+                // solo e il turista, in strada, doveva ripartire a mano.
+                .setHandleAudioBecomingNoisy(false)
                 .build();
 
         // Mantiene CPU e Wi-Fi attivi con lo schermo spento: senza questo la guida
@@ -166,12 +292,16 @@ public class WipBackgroundAudioService extends Service {
                         callback.onPlaybackProgress(exoPlayer.getDuration(), exoPlayer.getDuration());
                         callback.onPlaybackEnded();
                     }
+                    pausedByNativeVoice = false;
                     releaseForeground();
+                    // (AUD-02) Guida finita e nessuno legato: si spegne.
+                    stopSelfIfIdle();
                 }
             }
 
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
+                playingNow = isPlaying;
                 if (callback != null) callback.onPlaybackStateChanged(isPlaying);
                 if (isPlaying) {
                     startProgressTicker();
@@ -194,7 +324,9 @@ public class WipBackgroundAudioService extends Service {
                 Log.e(TAG, "Playback error: " + error.getMessage(), error);
                 stopProgressTicker();
                 if (callback != null) callback.onPlaybackError(error.getMessage());
+                pausedByNativeVoice = false;
                 releaseForeground();
+                stopSelfIfIdle();
             }
         });
 
@@ -216,6 +348,17 @@ public class WipBackgroundAudioService extends Service {
             ensurePlayer();
             currentTitle = title != null ? title : "Italia in Tasca";
             currentSubtitle = subtitle != null ? subtitle : "Audioguida";
+
+            // (AUD-01) Il JS avvia una guida: la voce nativa (teaser/arrivo)
+            // cede il passo. Prima si azzera il flag di pausa "per voce
+            // nativa", cosi' il finishActiveSpeech innescato dallo stop non
+            // riprende il brano PRECEDENTE sopra quello nuovo.
+            pausedByNativeVoice = false;
+            try {
+                com.itaintasca.app.geofence.GeofenceBroadcastReceiver.Companion.stopSpeaking(this);
+            } catch (Exception e) {
+                Log.w(TAG, "stopSpeaking della voce nativa fallito: " + e.getMessage());
+            }
 
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
@@ -244,6 +387,9 @@ public class WipBackgroundAudioService extends Service {
     }
 
     public void pause() {
+        // Pausa esplicita (utente o JS): la voce nativa non deve piu'
+        // riprendere da sola a fine teaser.
+        pausedByNativeVoice = false;
         if (exoPlayer != null) exoPlayer.pause();
     }
 
@@ -256,13 +402,15 @@ public class WipBackgroundAudioService extends Service {
 
     public void stop() {
         stopProgressTicker();
+        pausedByNativeVoice = false;
         if (exoPlayer != null) {
             exoPlayer.stop();
             exoPlayer.clearMediaItems();
         }
         releaseForeground();
-        // Nessun stopSelf(): il servizio resta legato al plugin cosi' la guida
-        // successiva parte immediatamente, senza attendere un nuovo bind.
+        // (AUD-02) Finche' il plugin e' legato il servizio resta vivo (la
+        // guida successiva parte subito); se nessuno e' legato si spegne.
+        stopSelfIfIdle();
     }
 
     public void seekTo(long positionMs) {
@@ -403,10 +551,15 @@ public class WipBackgroundAudioService extends Service {
     private PendingIntent buildActionIntent(String action, int requestCode) {
         Intent intent = new Intent(this, WipBackgroundAudioService.class);
         intent.setAction(action);
-        return PendingIntent.getService(
-                this, requestCode, intent,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
-        );
+        int flags = PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT;
+        // (AUD-02) Da Android 8 un getService lanciato con l'app in background
+        // viene scartato in silenzio (IllegalStateException lato sistema): il
+        // tasto della notifica non faceva nulla. getForegroundService e'
+        // consentito e onStartCommand si promuove subito.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return PendingIntent.getForegroundService(this, requestCode, intent, flags);
+        }
+        return PendingIntent.getService(this, requestCode, intent, flags);
     }
 
     private Notification buildNotification() {
@@ -460,6 +613,9 @@ public class WipBackgroundAudioService extends Service {
 
     @Override
     public void onDestroy() {
+        if (instance == this) instance = null;
+        playingNow = false;
+        pausedByNativeVoice = false;
         stopProgressTicker();
         releaseMegaphone();
         callback = null;

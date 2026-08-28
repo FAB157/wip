@@ -2,6 +2,15 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
+/* Tema scuro SPENTO finché non esiste un tema scuro completo (UX-02, audit
+   28/08/2026): Tailwind v4 attiva `dark:` da `prefers-color-scheme`, ma solo
+   5 file su ~80 hanno varianti dark — il risultato era una barra di ricerca
+   nera con testo blu navy (1,6:1) sui telefoni in modalità scura. Con questa
+   variante `dark:` risponde SOLO alla classe `.dark` sull'html, che nessuno
+   aggiunge; le classi `dark:` esistenti restano pronte per quando il tema
+   sarà completo. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --color-surface: #ffffff;
@@ -30,7 +39,11 @@
   
   --color-tertiary: #9ca3af;
   --color-on-tertiary: #ffffff;
-  
+
+  /* Mancava: `bg-error`/`text-error` erano classi vuote (UX-05). */
+  --color-error: #dc2626;
+  --color-on-error: #ffffff;
+
   --color-background: #fdfbf7; /* Panna */
   --color-on-background: #1e3a8a;
   --color-surface-warm: #f8f5f0;
@@ -42,12 +55,78 @@
 
 @layer base {
   html, body {
-    overscroll-behavior-y: none;
+    overscroll-behavior: none;
     -webkit-tap-highlight-color: transparent;
+  }
+  /* L'app e' un'unica schermata con scroll INTERNI (mappa, liste, sheet).
+     Su iOS (WKWebView) `overflow: hidden` sul body non basta: se un elemento
+     sporge dal viewport — sheet e modali montati con portal fuori da #root,
+     animazioni che partono da x:100%, righe più larghe dello schermo — il
+     documento diventa scorrevole e tutta l'interfaccia "si muove fuori dai
+     bordi" trascinandola (IPA del 28/08/2026: itinerari e tutte le sezioni).
+     Body fisso a tutto schermo = il documento non ha mai overflow da
+     scorrere; gli scroll interni continuano a funzionare. */
+  html {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overflow-wrap: break-word;
+  }
+  #root {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+  /* In stampa (PDF itinerario / Premium Guide) il documento deve poter
+     scorrere su più pagine: si torna al flusso normale. */
+  @media print {
+    html, body, #root {
+      position: static;
+      height: auto;
+      overflow: visible;
+    }
+  }
+  /* Dynamic Type (iOS): il font di sistema segue la taglia scelta
+     dall'utente in Impostazioni › Accessibilità. Si prende solo la
+     DIMENSIONE (`font` shorthand, poi si rimette la famiglia del tema); le
+     misure in `rem` dell'app scalano di conseguenza. Sugli altri sistemi la
+     regola non si applica e resta il default del browser (16px). */
+  @supports (font: -apple-system-body) {
+    html {
+      font: -apple-system-body;
+      /* lo shorthand `font` azzera famiglia e interlinea del preflight */
+      font-family: var(--font-sans);
+      line-height: 1.5;
+    }
   }
   body {
     @apply bg-background text-on-background font-sans antialiased;
-    touch-action: pan-x pan-y;
+    font-size: 1rem;
+    /* `pan-x pan-y` bloccava il pinch-zoom (UX-04): con 766 testi ≤ 10px chi
+       vede poco non poteva ingrandire. `manipulation` toglie solo il ritardo
+       del doppio tap e lascia lo zoom a due dita. */
+    touch-action: manipulation;
+  }
+  /* Anello di fuoco da tastiera/switch-control sui controlli che non ne
+     dichiarano uno proprio (UX-11). Mai al tocco: `focus-visible` soltanto. */
+  button:focus-visible, a:focus-visible, [role="button"]:focus-visible,
+  input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid #1e3a8a;
+    outline-offset: 2px;
+  }
+}
+
+/* Movimento ridotto (UX-13): le animazioni decorative si fermano; resta
+   `animate-spin`, che in molti punti è l'unico indicatore di caricamento. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-ping, .animate-pulse, .animate-bounce, .animate-shimmer {
+    animation: none !important;
   }
 }
 

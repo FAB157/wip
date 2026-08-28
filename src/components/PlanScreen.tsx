@@ -11,7 +11,7 @@ import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
@@ -377,6 +377,21 @@ async function processItineraryStream(
     throw new PlanError('INVALID_RESPONSE');
   }
 
+  // NORMALIZZAZIONE DELLE TAPPE (ITI-01, 28/08/2026): lo schema AI del server
+  // non produce `id_tappa`, ma tutto il resto della schermata lo da' per
+  // scontato (lock, check-in, navigazione). Un id sintetico stabile
+  // "t<giorno>_<indice>" evita il TypeError su `id_tappa.replace` e resta
+  // riconoscibile come NON-POI (App.tsx lo ignora all'arrivo del WIP Nav).
+  if (Array.isArray(result?.giorni)) {
+    result.giorni.forEach((g: any, gi: number) => {
+      if (!g || !Array.isArray(g.tappe)) return;
+      const giorno = Number.isFinite(Number(g.giorno)) ? Number(g.giorno) : gi + 1;
+      g.tappe.forEach((t: any, i: number) => {
+        if (t && typeof t === 'object' && !t.id_tappa) t.id_tappa = `t${giorno}_${i}`;
+      });
+    });
+  }
+
   // I crediti pagati viaggiano col piano: savePlanToSupabase li scrive in
   // dati_itinerario e la Garanzia pioggia li legge da lì.
   if (billing && typeof billing.credits_paid === 'number' && result && typeof result === 'object') {
@@ -494,6 +509,20 @@ interface ItineraryDay {
     coordinate: { lat: number; lng: number };
   }>;
 }
+
+/**
+ * Coordinate USABILI per la navigazione: finite e non il punto (0,0) nel
+ * Golfo di Guinea, che e' il segnaposto delle esperienze/eventi aggiunti a
+ * mano senza posizione (Viator/GYG/Ticketmaster/Tiqets). Prima bastava che
+ * `coordinate` fosse truthy e WIP Nav partiva verso l'Atlantico (ITI-04).
+ */
+const haCoordinateValide = (t: { coordinate?: { lat?: number; lng?: number } | null } | null | undefined): boolean => {
+  const lat = Number(t?.coordinate?.lat);
+  const lng = Number(t?.coordinate?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat === 0 && lng === 0) return false;
+  return Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+};
 
 interface GeneratedItinerary {
   id?: string;
@@ -1149,12 +1178,12 @@ export default function PlanScreen({
     if (hit) { setBigFive({ open: true, loading: false, city, guide: hit, error: null }); return; }
     setBigFive({ open: true, loading: true, city, guide: null, error: null });
     try {
-      const res = await fetch(getApiUrl('/api/city-big-five'), {
+      // apiFetch: Bearer automatico (il server esige il login per generare).
+      const res = await apiFetch(getApiUrl('/api/city-big-five'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city, lang: String(language || 'IT').toLowerCase() }),
-        signal: AbortSignal.timeout(90000),
-      });
+      }, 90000);
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.guide?.luoghi?.length) throw new Error(data?.error || 'no-guide');
       bigFiveCacheRef.current[`${norm}_${language}`] = data.guide;
@@ -1626,7 +1655,9 @@ export default function PlanScreen({
         // risultava vuoto pur annunciando "Audioguide scaricate e pronte!".
         // getApiUrl serve perché su app nativa i path relativi puntano al
         // bundle locale invece che al server.
-        const res = await fetch(getApiUrl(`/api/poi/details?id=${poiId}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`));
+        // apiFetch: col Bearer /api/poi/details risponde completo (all'anonimo
+        // in forma degradata con auth_required: true).
+        const res = await apiFetch(getApiUrl(`/api/poi/details?id=${poiId}&lat=${lat}&lon=${lon}&name=${encodeURIComponent(tappa.titolo_tappa)}`), undefined, 20000);
         if (!res.ok) continue;
         const details = await res.json();
         
@@ -1638,11 +1669,14 @@ export default function PlanScreen({
         // nativo), non più dai campi italiani di shared_pois. La traduzione
         // la paga il primo utente di quella lingua, poi è cache per tutti.
         try {
-          const agRes = await fetch(getApiUrl('/api/poi/audioguide'), {
+          // Bearer automatico. NIENTE `charge`: il bundle e' gia' stato pagato
+          // dal client (consumeCredits del bundle sopra); senza pass/diritto il
+          // server risponde 402 e si resta sul testo base della scheda.
+          const agRes = await apiFetch(getApiUrl('/api/poi/audioguide'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ poiId: stableId, lang: language, character: guideMode }),
-          });
+            body: JSON.stringify({ poiId: stableId, lang: language, character: guideMode, prefetch: true }),
+          }, 25000);
           if (agRes.ok) {
             const ag = await agRes.json();
             if (ag?.text && String(ag.text).trim().length > 40) textToSpeak = ag.text;
@@ -1676,11 +1710,11 @@ export default function PlanScreen({
         };
         const voice = voiceMapping[language.toUpperCase()]?.[guideMode] || "it-IT-ElsaNeural";
         
-        const ttsRes = await fetch(getApiUrl("/api/tts/smart"), {
+        const ttsRes = await apiFetch(getApiUrl("/api/tts/smart"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: textToSpeak, voice }),
-        });
+        }, 30000);
 
         if (!ttsRes.ok) continue;
         const blob = await ttsRes.blob();
@@ -1747,11 +1781,16 @@ export default function PlanScreen({
             allPoisToUpsert.push({
               id: stableId,
               name: tappa.titolo_tappa,
-              category: tappa.tipo || 'monumenti',
+              category: mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti'),
               lat: lat,
               lon: lon,
               description_ai: tappa.attivita || '',
               source: 'itinerary',
+              // status: 'auto' (27/08/2026) — mancava, e isDownloadablePoiStatus
+              // tratta i record senza status come non scaricabili: queste POI
+              // "per il GPS tracking" restavano escluse proprio dal trigger
+              // offline/background per cui esistono.
+              status: 'auto',
               created_at: new Date().toISOString()
             });
           }
@@ -1948,6 +1987,10 @@ export default function PlanScreen({
   // Navigazione Interna
   const [navDayIndex, setNavDayIndex] = useState<number | null>(null);
   const [navStopIndex, setNavStopIndex] = useState<number | null>(null);
+  // Copia in ref per l'handler di check-in (registrato con deps
+  // [generatedPlan?.id], quindi con una closure che non vede gli stati).
+  const navIdxRef = useRef<{ day: number | null; stop: number | null }>({ day: null, stop: null });
+  useEffect(() => { navIdxRef.current = { day: navDayIndex, stop: navStopIndex }; }, [navDayIndex, navStopIndex]);
   const {
     state: navState,
     currentInstruction,
@@ -1996,18 +2039,24 @@ export default function PlanScreen({
   const handleNextStop = () => {
     if (navDayIndex !== null && navStopIndex !== null && generatedPlan) {
       const giorno = generatedPlan.giorni[navDayIndex];
-      if (giorno && navStopIndex < giorno.tappe.length - 1) {
-         // Passa alla prossima tappa
-         const nextStop = giorno.tappe[navStopIndex + 1];
-         if (nextStop?.coordinate) {
-           setNavStopIndex(navStopIndex + 1);
-           startNavigation({
-             lat: nextStop.coordinate.lat,
-             lon: nextStop.coordinate.lng,
-             poiId: parseInt(nextStop.id_tappa.replace(/\D/g, '') || '0') || undefined,
-             poiName: nextStop.titolo_tappa
-           });
-         }
+      // Prossima tappa CON coordinate valide (ITI-04): le esperienze
+      // aggiunte a mano hanno {0,0} e vanno saltate, non "navigate".
+      let nextIdx = navStopIndex + 1;
+      while (giorno && nextIdx < giorno.tappe.length && !haCoordinateValide(giorno.tappe[nextIdx])) nextIdx += 1;
+      if (giorno && nextIdx < giorno.tappe.length) {
+         const nextStop = giorno.tappe[nextIdx];
+         setNavStopIndex(nextIdx);
+         startNavigation({
+           lat: nextStop.coordinate.lat,
+           lon: nextStop.coordinate.lng,
+           // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
+           // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
+           // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
+           poiId: nextStop.id_tappa || undefined,
+           poiName: nextStop.titolo_tappa,
+           dayIndex: navDayIndex,
+           stopIndex: nextIdx,
+         });
       } else {
          // Fine itinerario per il giorno
          stopNavigation();
@@ -2253,16 +2302,31 @@ export default function PlanScreen({
     // t1/t10/t11/t21 → una tappa raggiunta ne marcava mezzo itinerario.
     const handleCheckin = (e: any) => {
       const { poiId, poiName } = e.detail || {};
+      // MATCH PER INDICE quando c'e' (ITI-12): 'wip-nav-arrived' porta
+      // dayIndex/stopIndex della tappa navigata; in mancanza si usano gli
+      // indici correnti della navigazione. Il nome resta SOLO come ultima
+      // riserva, limitata al giorno corrente: due «Duomo» in giorni diversi
+      // non si marcano piu' insieme.
+      const dayIdx: number | null = Number.isInteger(e.detail?.dayIndex) ? e.detail.dayIndex
+        : Number.isInteger(navIdxRef.current.day) ? navIdxRef.current.day : null;
+      const stopIdx: number | null = Number.isInteger(e.detail?.stopIndex) ? e.detail.stopIndex
+        : (Number.isInteger(e.detail?.dayIndex) ? null : (Number.isInteger(navIdxRef.current.stop) ? navIdxRef.current.stop : null));
       setGeneratedPlan(prev => {
         if (!prev) return prev;
         let changed = false;
         const newPlan = {
           ...prev,
-          giorni: prev.giorni.map(g => ({
+          giorni: prev.giorni.map((g, gi) => ({
             ...g,
-            tappe: g.tappe.map(t => {
-              const isMatch = (poiId != null && String(t.id_tappa) === String(poiId)) ||
-                            (poiName && t.titolo_tappa === poiName);
+            tappe: g.tappe.map((t, ti) => {
+              let isMatch = false;
+              if (dayIdx != null && stopIdx != null) {
+                isMatch = gi === dayIdx && ti === stopIdx;
+              } else if (poiId != null && String(t.id_tappa) === String(poiId)) {
+                isMatch = true;
+              } else if (poiName && t.titolo_tappa === poiName) {
+                isMatch = dayIdx == null || gi === dayIdx;
+              }
               if (isMatch && !(t as any).visited) { changed = true; return { ...t, visited: true }; }
               return t;
             })
@@ -2355,6 +2419,25 @@ export default function PlanScreen({
   };
 
   const fetchCurrentPlan = async () => {
+    // Copia locale dell'ultimo piano (scritta da savePlanToSupabase in
+    // idb 'wip_last_plan'): fino al 28/08/2026 veniva salvata e MAI letta,
+    // quindi offline o con Supabase in timeout l'utente vedeva la schermata
+    // di selezione vuota anche col piano di ieri sul telefono (ITI-02).
+    const ripiegaSuCopiaLocale = async (): Promise<boolean> => {
+      try {
+        const local: any = await idbGet('wip_last_plan');
+        if (local && Array.isArray(local.giorni) && local.giorni.length > 0) {
+          setGeneratedPlan(local);
+          setPlannerMode('view');
+          return true;
+        }
+      } catch { /* IndexedDB non disponibile */ }
+      return false;
+    };
+
+    const offline = !isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false);
+    if (offline && await ripiegaSuCopiaLocale()) return;
+
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const currentUserId = sessionData?.session?.user?.id;
@@ -2366,14 +2449,18 @@ export default function PlanScreen({
         .order('updated_at', { ascending: false })
         .limit(1)
         .single();
-      
+
       if (!error && data && data.dati_itinerario && Array.isArray(data.dati_itinerario.giorni)) {
         setGeneratedPlan(data.dati_itinerario);
         setPlannerMode('view');
         return;
       }
+      // Errore di RETE/timeout (non "nessuna riga", che e' PGRST116): il
+      // piano c'e' quasi certamente in locale.
+      if (error && String(error.code || '') !== 'PGRST116' && await ripiegaSuCopiaLocale()) return;
     } catch (err) {
-      // Not found, fallback
+      // Timeout del fetch (supabase.ts abortisce a 20 s) o rete assente
+      if (await ripiegaSuCopiaLocale()) return;
     }
 
     // Fallback to local storage
@@ -3514,7 +3601,7 @@ export default function PlanScreen({
       const eventCardsPromise = fetchSwipeEventCards(coords);
       // getApiUrl come sopra: su nativo il path relativo non raggiunge l'API
       // e il mazzo di carte "tinder" restava vuoto.
-      const res = await fetch(getApiUrl('/api/groq/candidates'), {
+      const res = await apiFetch(getApiUrl('/api/groq/candidates'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3527,7 +3614,7 @@ export default function PlanScreen({
           soloGratis,
           language
         })
-      });
+      }, 120000);
       const data = await res.json();
       if (data && Array.isArray(data.candidates) && data.candidates.length > 0) {
         // Id stabile e univoco per ogni carta: il render usava
@@ -3935,7 +4022,6 @@ export default function PlanScreen({
               : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
 
             const descriptionFull = tappa.attivita || "";
-            const descShort = descriptionFull.substring(0, 300).replace(/\n/g, ' ').trim();
             const descLong = descriptionFull;
 
             return {
@@ -3945,9 +4031,14 @@ export default function PlanScreen({
               name: tappa.titolo_tappa,
               city: cityFromPlan,
               category: mapItineraryCategoryToMapCategory(tappa.tipo || "monumenti"),
+              // SOLO description_ai (27/08/2026), non description_short/long:
+              // quei due campi sono il segnale che /api/poi/enrich legge per
+              // decidere se il POI è "già arricchito" (existing.description_short,
+              // server.ts) — riempirli subito con la prosa AI non verificata
+              // faceva SALTARE per sempre la vera messa a terra su Wikipedia,
+              // anche quando esiste. description_ai resta per la UI (che fa
+              // fallback su di lei finché description_long non arriva).
               description_ai: descLong + (tappa.consiglio_guida ? "\n\n💡 " + tappa.consiglio_guida : ""),
-              description_short: descShort,
-              description_long: descLong,
               status: 'auto', // generati dall'AI: non marcarli come verificati
               created_at: new Date().toISOString()
             };
@@ -3971,11 +4062,12 @@ export default function PlanScreen({
               for (const poi of poiPayloads) {
                 if (enrichedPoiIdsRef.current.has(poi.id)) continue;
                 try {
-                  await fetch('/api/poi/enrich', {
+                  // Bearer automatico: lo userId lo prende dal token, non dal body.
+                  await apiFetch(getApiUrl('/api/poi/enrich'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ ...poi, lang: language, fast: false, mode: 'full' })
-                  });
+                  }, 30000);
                   enrichedPoiIdsRef.current.add(poi.id);
                   // Piccolo delay di cortesia per le API esterne
                   await new Promise(r => setTimeout(r, 600));
@@ -4469,7 +4561,7 @@ export default function PlanScreen({
       ? tappa.id_tappa
       : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
 
-    const category = tappa.tipo || 'monumenti';
+    const category = mapItineraryCategoryToMapCategory(tappa.tipo || 'monumenti');
     const desc = tappa.attivita || '';
 
     // Silently upsert to Supabase to make it a real POI for audio guide support
@@ -4482,6 +4574,7 @@ export default function PlanScreen({
         lon: lon,
         description_ai: desc,
         source: 'itinerary',
+        status: 'auto',
         created_at: new Date().toISOString()
       }, { onConflict: "id" });
     }
@@ -7350,10 +7443,13 @@ export default function PlanScreen({
                     if (gIdx !== null && generatedPlan) {
                       const giorno = generatedPlan.giorni[gIdx];
                       if (giorno && giorno.tappe.length > 0) {
+                        // Prima tappa CON coordinate valide (ITI-04).
+                        let firstIdx = 0;
+                        while (firstIdx < giorno.tappe.length && !haCoordinateValide(giorno.tappe[firstIdx])) firstIdx += 1;
                         setNavDayIndex(gIdx);
-                        setNavStopIndex(0);
-                        const firstStop = giorno.tappe[0];
-                        if (firstStop?.coordinate) {
+                        setNavStopIndex(firstIdx < giorno.tappe.length ? firstIdx : 0);
+                        const firstStop = firstIdx < giorno.tappe.length ? giorno.tappe[firstIdx] : undefined;
+                        if (firstStop && haCoordinateValide(firstStop)) {
                           // Origine scelta nel modal: prima veniva ignorata e
                           // si partiva sempre dal GPS anche con "Indirizzo
                           // personalizzato" selezionato.
@@ -7366,8 +7462,11 @@ export default function PlanScreen({
                           startNavigation({
                             lat: firstStop.coordinate.lat,
                             lon: firstStop.coordinate.lng,
-                            poiId: parseInt(firstStop.id_tappa.replace(/\D/g, '') || '0') || undefined,
-                            poiName: firstStop.titolo_tappa
+                            // Id com'e' (ITI-01): niente parseInt su un id che puo' mancare.
+                            poiId: firstStop.id_tappa || undefined,
+                            poiName: firstStop.titolo_tappa,
+                            dayIndex: gIdx,
+                            stopIndex: firstIdx,
                           }, originOverride);
                         }
                       }
@@ -7455,7 +7554,7 @@ export default function PlanScreen({
       {/* Barra di avanzamento quando il quiz è stato chiuso: l'utente vede
           l'itinerario costruirsi ma deve comunque sapere che sta lavorando. */}
       {(loading || candidatesLoading) && quizDismissed && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
+        <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
           <span className="text-xs font-black uppercase tracking-widest">
             {getTranslation('wip_working', language)}
@@ -7475,7 +7574,7 @@ export default function PlanScreen({
         />
       )}
       {extendLoading && extendQuizDismissed && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
+        <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-[95] px-5 py-3 bg-primary text-white rounded-2xl shadow-2xl flex items-center gap-3 print:hidden" aria-live="polite">
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
           <span className="text-xs font-black uppercase tracking-widest">Genero…</span>
         </div>

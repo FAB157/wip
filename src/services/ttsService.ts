@@ -12,6 +12,7 @@ import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { getNativeAudioUri } from '../lib/capacitor/nativeAudioHelper';
 import { getApiUrl } from '../lib/api';
 import { postForAudioBlob } from '../lib/audioFetch';
+import { getTranslation, linguaCorrente } from '../lib/i18n';
 
 let speechUnlocked = false;
 let activeAudio: HTMLAudioElement | null = null;
@@ -343,7 +344,7 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
     await WipBackgroundAudio.play({
       url: nativeUri,
       title: text.length > 40 ? text.slice(0, 40) + '…' : text,
-      subtitle: 'Navigazione',
+      subtitle: getTranslation('nav_sottotitolo', linguaCorrente()),
     });
     setTimeout(() => emitSpeechEnded(text), Math.max(2500, (text.length / 15) * 1000) + 1000);
   } catch {

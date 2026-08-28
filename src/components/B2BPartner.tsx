@@ -5,6 +5,7 @@ import { Building2, Download, CheckCircle, Package, Coins, ShieldCheck, Ticket }
 import { Language, getTranslation } from '../lib/i18n';
 import { Capacitor } from '@capacitor/core';
 import { getApiUrl } from '../lib/api';
+import { notify } from '../lib/toast';
 
 interface B2BPartnerProps {
   userSession: any;
@@ -80,14 +81,15 @@ export default function B2BPartner({ userSession, language }: B2BPartnerProps) {
   };
 
   const purchasePackage = async (packageType: string) => {
+    // Niente alert() bloccanti (UX-15): toast tradotto, non bloccante.
     if (!structureName) {
-      alert(getTranslation("b2b_alert_fill_name", language));
+      notify(getTranslation("b2b_alert_fill_name", language), 'info');
       return;
     }
-    
+
     if (Capacitor.isNativePlatform()) {
       // Vale per Google Play E App Store: i pacchetti B2B si acquistano dal sito.
-      alert(getTranslation("b2b_error", language) + ": Gli acquisti in-app tramite store saranno disponibili a breve. Per ora, visita il nostro sito web per gestire l'acquisto dei pacchetti.");
+      notify(getTranslation("b2b_iap_non_disponibile", language), 'info', 8000);
       return;
     }
     
@@ -111,8 +113,10 @@ export default function B2BPartner({ userSession, language }: B2BPartnerProps) {
         throw new Error('Nessun link di pagamento ricevuto dal server.');
       }
     } catch (e: any) {
-      console.error(e);
-      alert(getTranslation("b2b_error", language) + ": " + e.message);
+      // Il dettaglio tecnico (e.message: URL, codici Stripe) resta in console;
+      // all'utente arriva solo un messaggio tradotto.
+      console.error('[B2B] checkout fallito:', e);
+      notify(getTranslation("b2b_checkout_errore", language), 'error');
     } finally {
       setLoading(false);
     }

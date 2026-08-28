@@ -7,8 +7,8 @@
 // - Per-listen: online il flusso esistente; offline il plugin annota la spesa
 //   nel registro locale (tetto = snapshot saldo) e qui la riconciliamo.
 
-import { registerPlugin } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
+import { ItaintaBackgroundPoi, pushUserContextToNative } from '../plugins/ItaintaBackgroundPoi';
 import {
   PRICING_LIST,
   DAY_PASS_GUIDE_CAP,
@@ -22,7 +22,8 @@ import {
 import { isNativeOfflineSupported } from './offlinePackageService';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
 
-const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
+// Wrapper tipizzato condiviso (src/plugins/ItaintaBackgroundPoi.ts).
+const plugin = ItaintaBackgroundPoi;
 
 export const DAY_PASS_COST = PRICING_LIST.day_pass;
 export const DAY_PASS_CAP = DAY_PASS_GUIDE_CAP;
@@ -127,15 +128,10 @@ export async function reconcileOfflineBilling(): Promise<void> {
 
   // 0) Identità utente → nativo: serve al check "già ascoltato = già
   // acquistato" del trigger in background e all'insert dello storico ascolti
-  // nativo (user_listening_history). Il token permette le RLS; se scade, il
-  // nativo resta best-effort.
-  try {
-    const { data: sess } = await supabase.auth.getSession();
-    await plugin.setUserContext({
-      userId,
-      accessToken: sess?.session?.access_token || '',
-    });
-  } catch { /* metodo assente su build vecchie: best-effort */ }
+  // nativo (user_listening_history). Il token permette le RLS. Lo stesso
+  // push avviene a SIGNED_IN/TOKEN_REFRESHED (App.tsx) e su 'tokenExpired'
+  // dal nativo (locationService): qui e' solo il giro di riconciliazione.
+  await pushUserContextToNative({ userId });
 
   // 1) Registro spese per-listen offline
   try {

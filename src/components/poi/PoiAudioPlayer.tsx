@@ -7,7 +7,7 @@ import {
 import { getTranslation, Language } from '../../lib/i18n';
 import { useAudioState } from '../../hooks/useAudioState';
 import { locationService, parseDuetLines } from '../../services/locationService';
-import { getApiUrl } from '../../lib/api';
+import { getApiUrl, apiFetch } from '../../lib/api';
 import { notify } from '../../lib/toast';
 
 export type GuideRegister = 'standard' | 'breve' | 'bambini' | 'duetto';
@@ -215,7 +215,8 @@ export default function PoiAudioPlayer({
     setAskBusy(true);
     setAskAnswer('');
     try {
-      const res = await fetch(getApiUrl('/api/regenerate'), {
+      // apiFetch: Bearer automatico (/api/regenerate esige il login) + timeout.
+      const res = await apiFetch(getApiUrl('/api/regenerate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -225,7 +226,7 @@ export default function PoiAudioPlayer({
           previousText: displayText || undefined,
           lang: language,
         }),
-      });
+      }, 45000);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const answer = String(data?.result || '').trim();
@@ -444,9 +445,9 @@ export default function PoiAudioPlayer({
               <button
                 onClick={() => setFeedbackReq(null)}
                 aria-label={getTranslation('sk_chiudi_feedback', language)}
-                className="ml-auto p-1 text-primary/40 hover:text-primary/70 transition-colors"
+                className="ml-auto -my-2 -mr-2 min-w-11 min-h-11 flex items-center justify-center text-primary/60 hover:text-primary transition-colors"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </motion.div>
           )}
@@ -563,12 +564,13 @@ export default function PoiAudioPlayer({
             <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
               <RotateCcw className="w-6 h-6" />
             </div>
-            <span className="text-[9px] font-bold uppercase">{getTranslation("restart_btn", language)}</span>
+            <span className="text-[11px] font-bold uppercase">{getTranslation("restart_btn", language)}</span>
           </button>
 
           <button
             onClick={onToggleSpeech}
             disabled={(!wikiData?.extract && !generatedText) || isLoading || isRegenerating}
+            aria-label={(audioState.isPlaying && isCurrentPoi) ? getTranslation('a11y_pausa', language) : getTranslation('a11y_riproduci', language)}
             className={`w-20 h-20 rounded-full flex items-center justify-center transition-all shadow-xl active:scale-90 ${
               (audioState.isPlaying && isCurrentPoi) ? "bg-red-500 shadow-red-200" : "bg-secondary shadow-secondary/30"
             }`}
@@ -580,7 +582,7 @@ export default function PoiAudioPlayer({
             <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center">
               <RotateCw className="w-6 h-6" />
             </div>
-            <span className="text-[9px] font-bold uppercase">{getTranslation("forward_10s", language)}</span>
+            <span className="text-[11px] font-bold uppercase">{getTranslation("forward_10s", language)}</span>
           </button>
 
           {/* Velocità tra i controlli principali: il vecchio "1x" in alto a
@@ -595,7 +597,7 @@ export default function PoiAudioPlayer({
             }`}>
               {audioState.playbackSpeed}x
             </div>
-            <span className="text-[9px] font-bold uppercase">{getTranslation('sk_velocita', language)}</span>
+            <span className="text-[11px] font-bold uppercase">{getTranslation('sk_velocita', language)}</span>
           </button>
 
           {/* Sleep timer: off → 10' → 20' → 30' → off. Allo scadere l'audio
@@ -610,7 +612,7 @@ export default function PoiAudioPlayer({
             }`}>
               {sleepMin ? <span className="text-xs font-black">{sleepMin}'</span> : <Moon className="w-6 h-6" />}
             </div>
-            <span className="text-[9px] font-bold uppercase">{getTranslation('sk_sleep', language)}</span>
+            <span className="text-[11px] font-bold uppercase">{getTranslation('sk_sleep', language)}</span>
           </button>
         </div>
 

@@ -58,6 +58,9 @@ import type { DatiSole } from "../lib/sunIndex";
 import { orariSole, oraBreve, mancaAllOraOro, fusoDelPunto } from "../lib/sunTimes";
 import type { OrariSole } from "../lib/sunTimes";
 import { fetchBathingSites, aggiungiMisure, BATHING_QUALITY_COLOR } from "../lib/bathingWater";
+import { fetchValanghe, VALANGHE_COLORE } from "../lib/valanghe";
+import { fetchAreeProtette, COLORE_AREA, schedaNatura2000 } from "../lib/areeProtette";
+import { fetchAreeDenominazioni } from "../lib/denominazioniAree";
 
 import type { PoiCategory } from "../types/poi";
 
@@ -72,11 +75,72 @@ import "react-leaflet-cluster/dist/assets/MarkerCluster.css";
 import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css";
 
 import { getInitialMapCenter, saveLastMapCenter, shouldFlyToGpsOnFirstFix } from "../lib/mapStart";
+import { vibra } from "./hapticsHelper";
 
 // Non più Carrara per tutti (22/08/2026): la città scelta dall'utente,
 // altrimenti l'ultimo centro visto, altrimenti il fallback. Letto una volta
 // al caricamento del modulo: la mappa si monta con quel centro.
 const INITIAL_CENTER: [number, number] = getInitialMapCenter();
+
+/**
+ * Marker emoji dei layer tematici (sentieri, ciclabili, neve, gusto…) in un
+ * cerchio bianco di almeno 28 px (UX-14): prima erano emoji nude da 14-22 px,
+ * illeggibili sulle tile scure e sotto la soglia di tocco. Stesso stile dei
+ * marker dei servizi (fontanelle/bagni). `iconAnchor` = metà lato.
+ */
+const MARKER_CERCHIO_PX = 28;
+function cerchioMarker(inner: string, size = MARKER_CERCHIO_PX, fontSize = 15, innerStyle = ''): string {
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:#fff;border:1.5px solid rgba(0,0,0,.15);box-shadow:0 1px 3px rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;line-height:1;"><span style="${innerStyle}">${inner}</span></div>`;
+}
+function cerchioMarkerOpts(size = MARKER_CERCHIO_PX): { iconSize: [number, number]; iconAnchor: [number, number]; popupAnchor: [number, number] } {
+  const half = Math.round(size / 2);
+  return { iconSize: [size, size], iconAnchor: [half, half], popupAnchor: [0, -(half + 2)] };
+}
+
+// "TUTTO NEL RAGGIO" (28/08/2026): le fonti descrivono la stessa categoria
+// con chiavi diverse — OSM/utility in inglese ("church", "viewpoint",
+// "museum"), shared_pois in italiano ("chiese", "panorami", "musei") — e il
+// pannello mostrava "Chiese" E "Church" come due gruppi. Qui ogni chiave
+// grezza torna alla chiave delle chip, che ha già emoji, colore e traduzione
+// in sette lingue. Le famiglie della natura confluiscono in `natura`,
+// castelli e archeologia in `monumenti`, come nei filtri dell'audioguida
+// (guideSettings.isCategoryAllowed).
+const EVERYTHING_CANON: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  const add = (canon: string, keys: string[]) => keys.forEach((k) => { m[k] = canon; });
+  add('chiese', ['church', 'chiesa', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella',
+    'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario', 'baptistery',
+    'bell_tower', 'cloister', 'crypt', 'synagogue', 'mosque', 'temple', 'religione']);
+  add('monumenti', ['monument', 'monumento', 'artwork', 'attraction', 'square', 'piazza', 'bridge', 'ponte',
+    'fountain', 'fontana', 'theatre', 'teatro', 'opera_house', 'palace', 'palazzo', 'tower', 'torre',
+    'skyscraper', 'cemetery', 'library', 'windmill', 'aqueduct', 'observatory', 'stadium', 'memorial',
+    'sculpture', 'university', 'town_hall', 'city_gate', 'city_walls', 'villa', 'amphitheatre',
+    'mausoleum', 'obelisk', 'triumphal_arch', 'archaeological_park', 'archaeological_site', 'ruins',
+    'archeo', 'castle', 'castello', 'castelli', 'fortress', 'stronghold', 'harbour', 'pier', 'mine']);
+  add('musei', ['museum', 'museo', 'gallery', 'art_museum', 'art_gallery', 'natural_history_museum',
+    'house_museum']);
+  add('panorami', ['viewpoint', 'panorama', 'belvedere', 'lighthouse', 'faro', 'scenic_road', 'aerialway',
+    'trail', 'sentiero', 'hiking', 'via_ferrata', 'ski_resort']);
+  add('natura', ['beach', 'spiaggia', 'spiagge', 'bay', 'baia', 'island', 'isola', 'cliff', 'coast', 'dune',
+    'peak', 'vetta', 'vette', 'volcano', 'glacier', 'mountain_pass', 'waterfall', 'cascata', 'cascate',
+    'spring', 'hot_spring', 'lake', 'lago', 'laghi', 'river', 'fiume', 'gorge', 'canyon', 'cave', 'grotta',
+    'grotte', 'park', 'parco', 'parchi', 'garden', 'giardino', 'botanical_garden', 'nature_reserve',
+    'riserva', 'forest', 'wood', 'bosco', 'national_park', 'acque', 'nature', 'natural']);
+  add('localita', ['city', 'town', 'village', 'hamlet', 'borgo', 'locality', 'località']);
+  add('enogastronomia', ['winery', 'cantina', 'vineyard', 'vigneto', 'brewery', 'birrificio', 'distillery',
+    'distilleria', 'frantoio', 'caseificio', 'enoteca']);
+  return m;
+})();
+function everythingCanonKey(raw: string): string {
+  const k = String(raw || '').toLowerCase().trim();
+  return EVERYTHING_CANON[k] || k;
+}
+/** Chiavi canoniche che hanno una voce in i18n (le stesse delle chip). */
+const EVERYTHING_LABEL_KEY: Record<string, string> = {
+  monumenti: 'monumenti', chiese: 'chiese', musei: 'musei', panorami: 'panorami', natura: 'natura',
+  gemme: 'gemme', localita: 'localita', utilita: 'utilita', enogastronomia: 'enogastronomia',
+  beni_culturali: 'beni_culturali',
+};
 
 const CATEGORY_BORDER_COLORS: Record<string, string> = {
   gemme: "border-t-[#0f766e]",
@@ -432,24 +496,43 @@ function MapController({
   return null;
 }
 
+/** Sotto questa distanza, in follow-me, un `moveend` è solo il GPS che
+ *  respira: non vale un salvataggio, un evento né una geocodifica. */
+const FOLLOW_MOVEEND_SOGLIA_M = 100;
+/** Debounce di salvataggio centro + evento `wip-map-center-change`. */
+const MOVEEND_DEBOUNCE_MS = 2000;
+
 function MapEventsHandler({
   onMoveEnd,
   onCenterChange,
   onDragStart,
+  isFollowing,
 }: {
   onMoveEnd: (bounds: L.LatLngBounds) => void;
   onCenterChange?: (center: [number, number]) => void;
   onDragStart?: () => void;
+  /** Follow-me attivo? Letto a ogni moveend (ref del genitore), mai in deps. */
+  isFollowing?: () => boolean;
 }) {
   const onMoveEndRef = useRef(onMoveEnd);
   const onCenterChangeRef = useRef(onCenterChange);
   const onDragStartRef = useRef(onDragStart);
+  const isFollowingRef = useRef(isFollowing);
+  // MAP-12: in follow-me `panTo` a ogni fix GPS produceva un moveend ogni
+  // 1-5 s, e ognuno scriveva localStorage, dispatchava l'evento (che fa
+  // ripartire le ricerche esterne) e accodava una geocodifica. Si tiene
+  // l'ultimo centro "contabilizzato" e un timer di debounce.
+  const ultimoCentroRef = useRef<L.LatLng | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     onMoveEndRef.current = onMoveEnd;
     onCenterChangeRef.current = onCenterChange;
     onDragStartRef.current = onDragStart;
-  }, [onMoveEnd, onCenterChange, onDragStart]);
+    isFollowingRef.current = isFollowing;
+  }, [onMoveEnd, onCenterChange, onDragStart, isFollowing]);
+
+  useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const map = useMapEvents({
     dragstart: () => {
@@ -470,9 +553,12 @@ function MapEventsHandler({
           if (onCenterChangeRef.current) {
             onCenterChangeRef.current([center.lat, center.lng]);
           }
-          // «Dove ero l'ultima volta»: l'ultimo centro visto riapre la mappa
-          // al prossimo avvio (lib/mapStart.ts).
-          saveLastMapCenter(center.lat, center.lng);
+
+          // Follow-me: spostamento piccolo dal centro già contabilizzato ⇒
+          // nessuna delle tre azioni qui sotto.
+          const seguendo = !!isFollowingRef.current?.();
+          const prev = ultimoCentroRef.current;
+          if (seguendo && prev && map.distance(prev, center) < FOLLOW_MOVEEND_SOGLIA_M) return;
 
           // Ancoraggio geografico delle ricerche esterne (Viator, GetYourGuide,
           // Virgilio, Ticketmaster): il riferimento è ciò che l'utente sta
@@ -483,9 +569,18 @@ function MapEventsHandler({
             1,
             Math.round(map.distance(center, ne) / 1000),
           );
-          window.dispatchEvent(new CustomEvent('wip-map-center-change', {
-            detail: { lat: center.lat, lon: center.lng, radiusKm },
-          }));
+
+          if (debounceRef.current) clearTimeout(debounceRef.current);
+          debounceRef.current = setTimeout(() => {
+            debounceRef.current = null;
+            ultimoCentroRef.current = center;
+            // «Dove ero l'ultima volta»: l'ultimo centro visto riapre la mappa
+            // al prossimo avvio (lib/mapStart.ts).
+            saveLastMapCenter(center.lat, center.lng);
+            window.dispatchEvent(new CustomEvent('wip-map-center-change', {
+              detail: { lat: center.lat, lon: center.lng, radiusKm },
+            }));
+          }, MOVEEND_DEBOUNCE_MS);
 
           // Pre-cache del nome città per il nuovo centro. La coda globale
           // serializza a 1 req/1.2s, deduplica per cella e rispetta la
@@ -636,10 +731,10 @@ import PoiRadarPanel from "./PoiRadarPanel";
 const BENI_CULTURALI_MIN_ZOOM = 13;
 
 // CARTO ha smesso di servire le tile anonime senza chiave (26/08/2026,
-// watermark "API KEY REQUIRED" su tutta la mappa): la chiave gratuita
-// (5M richieste/mese, uso commerciale ammesso) va in coda all'URL come
-// parametro `key`, non come token nel path.
-const CARTO_TILE_URL = `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${import.meta.env.VITE_CARTO_API_KEY || ''}`;
+// watermark "API KEY REQUIRED" su tutta la mappa). URL e chiave vivono in
+// lib/cartoTiles.ts: se la build non aveva VITE_CARTO_API_KEY (IPA di CI del
+// 28/08/2026) la chiave viene chiesta a runtime al server.
+import { cartoTileUrl, ensureCartoKey, onCartoKeyChange } from '../lib/cartoTiles';
 
 function MapArea({
   selectedCategories,
@@ -654,6 +749,15 @@ function MapArea({
 }: MapAreaProps) {
   const [center, setCenter] = useState<[number, number]>(INITIAL_CENTER);
   const [mapZoom, setMapZoom] = useState(13);
+
+  // URL delle tile CARTO: se la chiave manca nella build arriva a runtime
+  // (vedi lib/cartoTiles.ts) e il layer viene ridisegnato con l'URL buono.
+  const [cartoUrl, setCartoUrl] = useState<string>(() => cartoTileUrl());
+  useEffect(() => {
+    const off = onCartoKeyChange(() => setCartoUrl(cartoTileUrl()));
+    ensureCartoKey().then(() => setCartoUrl(cartoTileUrl())).catch(() => {});
+    return off;
+  }, []);
 
   // Stato di rete del dispositivo (Capacitor Network + fallback navigator.onLine):
   // pilota il banner offline discreto più sotto.
@@ -826,8 +930,19 @@ function MapArea({
   const [everythingLoading, setEverythingLoading] = useState(false);
   const [everythingGroups, setEverythingGroups] = useState<{ key: string; count: number; items: EverythingItem[] }[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // (28/08/2026) Il pannello deve "ricordare": chi tocca un luogo, lo vede
+  // sulla mappa e riapre il pannello, ritrova la stessa lista allo stesso
+  // punto — non una lista nuova ripartita dall'alto. Quindi: centro e raggio
+  // dell'ultima ricerca, posizione di scorrimento, flag "riapri senza rifare
+  // la fetch", e i luoghi già toccati, che restano segnati sulla mappa.
+  const everythingCenterRef = useRef<{ lat: number; lng: number; radius: number } | null>(null);
+  const everythingScrollTopRef = useRef(0);
+  const everythingScrollElRef = useRef<HTMLDivElement | null>(null);
+  const everythingKeepRef = useRef(false);
+  const [everythingFullLoaded, setEverythingFullLoaded] = useState(false);
+  const [everythingPinned, setEverythingPinned] = useState<Poi[]>([]);
 
-  const fetchEverythingNearby = useCallback(async (radiusM: number) => {
+  const fetchEverythingNearby = useCallback(async (radiusM: number, perGroup = 50) => {
     const map = mapRef.current;
     if (!map) return;
     let centerPoint: { lat: number; lng: number };
@@ -844,26 +959,40 @@ function MapArea({
         p_lat: centerPoint.lat,
         p_lon: centerPoint.lng,
         p_radius_m: radiusM,
-        p_per_group_limit: 50,
+        p_per_group_limit: perGroup,
       });
       if (error) {
         console.warn('[nearby_everything]', error.message);
-        setEverythingGroups([]);
+        // Una lista già a schermo non va cancellata da un errore del
+        // "carica tutti" (timeout sul raggio grande): resta quella parziale.
+        setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
         return;
       }
       const rows = (data || []) as EverythingItem[];
-      const byKey = new Map<string, EverythingItem[]>();
+      // Chiavi normalizzate PRIMA di raggruppare (vedi EVERYTHING_CANON):
+      // "church" e "chiese" finiscono nello stesso gruppo, con il conteggio
+      // sommato e gli elementi in ordine di distanza.
+      const byKey = new Map<string, { items: EverythingItem[]; count: number; raw: Set<string> }>();
       for (const row of rows) {
-        if (!byKey.has(row.group_key)) byKey.set(row.group_key, []);
-        byKey.get(row.group_key)!.push(row);
+        const key = everythingCanonKey(row.group_key);
+        let g = byKey.get(key);
+        if (!g) { g = { items: [], count: 0, raw: new Set() }; byKey.set(key, g); }
+        g.items.push(row);
+        if (!g.raw.has(row.group_key)) { g.raw.add(row.group_key); g.count += Number(row.group_count) || 0; }
       }
       const groups = Array.from(byKey.entries())
-        .map(([key, items]) => ({ key, count: items[0]?.group_count || items.length, items }))
+        .map(([key, g]) => ({
+          key,
+          count: Math.max(g.count, g.items.length),
+          items: g.items.sort((a, b) => a.distanza_m - b.distanza_m),
+        }))
         .sort((a, b) => b.count - a.count);
       setEverythingGroups(groups);
+      setEverythingFullLoaded(perGroup > 50);
+      everythingCenterRef.current = { lat: centerPoint.lat, lng: centerPoint.lng, radius: radiusM };
     } catch (e) {
       console.warn('[nearby_everything] fetch error', e);
-      setEverythingGroups([]);
+      setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
     } finally {
       setEverythingLoading(false);
     }
@@ -871,15 +1000,45 @@ function MapArea({
 
   const handleOpenEverythingPanel = useCallback(() => {
     setShowEverythingPanel(true);
+    // Riapertura dopo aver toccato un luogo: la lista resta quella e lo
+    // scroll viene ripristinato (effetto sotto). Idem se centro e raggio non
+    // sono cambiati: niente fetch, niente lista che riparte dall'alto.
+    if (everythingKeepRef.current && everythingGroups.length) {
+      everythingKeepRef.current = false;
+      return;
+    }
+    const last = everythingCenterRef.current;
+    if (last && last.radius === everythingRadius && everythingGroups.length) {
+      try {
+        const c = mapRef.current?.getCenter();
+        if (c && getDistanceFromLatLonInM(c.lat, c.lng, last.lat, last.lng) < 300) return;
+      } catch { /* mappa non pronta: si rifà la fetch */ }
+    }
     setExpandedGroups(new Set());
+    everythingScrollTopRef.current = 0;
     void fetchEverythingNearby(everythingRadius);
-  }, [everythingRadius, fetchEverythingNearby]);
+  }, [everythingRadius, everythingGroups.length, fetchEverythingNearby]);
 
   const handleChangeEverythingRadius = useCallback((radiusM: number) => {
     setEverythingRadius(radiusM);
     setExpandedGroups(new Set());
+    everythingScrollTopRef.current = 0;
     void fetchEverythingNearby(radiusM);
   }, [fetchEverythingNearby]);
+
+  /** "+N": la RPC taglia ogni gruppo a 50 elementi; chi vuole il resto lo
+   * chiede toccando il "+N" e si rifà la fetch con il tetto alto, una volta. */
+  const loadMoreEverything = useCallback(() => {
+    if (everythingFullLoaded || everythingLoading) return;
+    void fetchEverythingNearby(everythingRadius, 500);
+  }, [everythingFullLoaded, everythingLoading, everythingRadius, fetchEverythingNearby]);
+
+  // Scroll riportato dov'era, dopo che la lista è stata renderizzata.
+  useEffect(() => {
+    if (!showEverythingPanel) return;
+    const el = everythingScrollElRef.current;
+    if (el && everythingScrollTopRef.current > 0) el.scrollTop = everythingScrollTopRef.current;
+  }, [showEverythingPanel, everythingGroups]);
 
   const toggleEverythingGroup = useCallback((key: string) => {
     setExpandedGroups(prev => {
@@ -905,7 +1064,13 @@ function MapArea({
   const everythingGroupInfo = (key: string): { emoji: string; label: string } => {
     if (EVERYTHING_GROUP_FALLBACK[key]) return EVERYTHING_GROUP_FALLBACK[key];
     const emoji = (CATEGORY_EMOJIS as any)[key] || '📍';
-    const label = key.replace(/^percorsi_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    // Le chiavi canoniche hanno la traduzione delle chip; il resto si
+    // prettifica (ultima spiaggia, non dovrebbe più capitare per le
+    // categorie principali).
+    const labelKey = EVERYTHING_LABEL_KEY[key];
+    const label = labelKey
+      ? getTranslation(labelKey, language)
+      : key.replace(/^percorsi_/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     return { emoji, label };
   };
 
@@ -915,6 +1080,8 @@ function MapArea({
    * aspetta invece di forzare un cast. */
   const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null }) => {
     setShowEverythingPanel(false);
+    // Alla riapertura la lista non si rifà (e lo scroll torna dov'era).
+    everythingKeepRef.current = true;
     const poi = {
       id: item.id,
       name: item.name,
@@ -923,6 +1090,8 @@ function MapArea({
       category: item.category,
       subCategory: item.sub_category || undefined,
     } as unknown as Poi;
+    // Resta segnato sulla mappa anche quando si tocca il luogo successivo.
+    setEverythingPinned((prev) => (prev.some((p) => p.id === poi.id) ? prev : [...prev, poi]));
     if (mapRef.current) {
       centerMapOnPoi(poi, 18);
     } else {
@@ -1075,11 +1244,9 @@ function MapArea({
 
       for (const pt of points) {
         const icon = L.divIcon({
-          html: `<div style="width:22px;height:22px;border-radius:11px;background:#fff;border:1.5px solid #cbd5e1;box-shadow:0 1px 4px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;font-size:12px;">${SERVICE_EMOJI[pt.type]}</div>`,
+          html: cerchioMarker(SERVICE_EMOJI[pt.type], MARKER_CERCHIO_PX, 14),
           className: "wip-service-marker",
-          iconSize: [22, 22],
-          iconAnchor: [11, 11],
-          popupAnchor: [0, -12],
+          ...cerchioMarkerOpts(),
         });
         const marker = L.marker([pt.lat, pt.lon], { icon });
         // Contenuto calcolato all'apertura: la distanza usa la posizione
@@ -1386,9 +1553,9 @@ function MapArea({
           : s.source === 'osm_storici' ? '🏛'
           : '🥾';
         const icon = L.divIcon({
-          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emojiFonte}</div>`,
+          html: cerchioMarker(emojiFonte),
           className: 'wip-sentiero-marker',
-          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+          ...cerchioMarkerOpts(),
         });
         L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
@@ -1410,9 +1577,9 @@ function MapArea({
           .limit(60);
         for (const r of rifugi || []) {
           const icon = L.divIcon({
-            html: '<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🏔</div>',
+            html: cerchioMarker('🏔'),
             className: 'wip-rifugio-marker',
-            iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+            ...cerchioMarkerOpts(),
           });
           L.marker([Number(r.lat), Number(r.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;">
@@ -1563,9 +1730,9 @@ function MapArea({
       for (const c of data || []) {
         const emojiFonte = c.source === 'osm_mtb' ? '🚵' : '🚲';
         const icon = L.divIcon({
-          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emojiFonte}</div>`,
+          html: cerchioMarker(emojiFonte),
           className: 'wip-ciclabile-marker',
-          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+          ...cerchioMarkerOpts(),
         });
         L.marker([Number(c.lat), Number(c.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:230px;">
@@ -1655,6 +1822,8 @@ function MapArea({
   // Come per i sentieri: sotto questo zoom una pallina bordeaux col numero
   // di strade e cantine, sopra i pin singoli e i tracciati.
   const GUSTO_ZOOM_APERTURA = 12;
+  // Zone di denominazione (AVA, aree UE derivate): confini, non pin.
+  const GUSTO_AREE_ZOOM = 8;
 
   const toggleStradeGusto = useCallback(() => {
     setStradeGustoActive((prev) => {
@@ -1689,9 +1858,9 @@ function MapArea({
       const curate = tasteRoutesInBounds(bounds.getSouth(), bounds.getWest(), bounds.getNorth(), bounds.getEast());
       for (const r of curate) {
         const icon = L.divIcon({
-          html: `<div style="font-size:17px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.45))">${r.emoji}</div>`,
+          html: cerchioMarker(r.emoji, 30, 17),
           className: 'wip-strada-gusto-marker',
-          iconSize: [20, 20], iconAnchor: [10, 10], popupAnchor: [0, -12],
+          ...cerchioMarkerOpts(30),
         });
         const tappe = r.stops
           .map((s) => `<li style="margin:1px 0;">${escapeHtml(s.place)} — ${escapeHtml(s.what)}</li>`)
@@ -1719,9 +1888,9 @@ function MapArea({
       for (const s of percorsi || []) {
         if (s.is_hidden === true || s.status === 'needs_revision') continue;
         const icon = L.divIcon({
-          html: '<div style="font-size:14px;line-height:1;opacity:.85;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">🍇</div>',
+          html: cerchioMarker('🍇', MARKER_CERCHIO_PX, 14, 'opacity:.85'),
           className: 'wip-strada-osm-marker',
-          iconSize: [17, 17], iconAnchor: [8, 8], popupAnchor: [0, -10],
+          ...cerchioMarkerOpts(),
         });
         L.marker([Number(s.lat), Number(s.lon)], { icon })
           .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
@@ -1795,11 +1964,10 @@ function MapArea({
           const icon = L.divIcon({
             // I produttori sono più grandi e pieni, le botteghe più discrete:
             // a colpo d'occhio si distingue dove si visita da dove si compra.
-            html: `<div style="font-size:${produttore ? 15 : 12}px;line-height:1;opacity:${produttore ? 1 : 0.75};filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emoji}</div>`,
+            // Mai sotto i 28 px (UX-14).
+            html: cerchioMarker(emoji, produttore ? 30 : MARKER_CERCHIO_PX, produttore ? 16 : 13, produttore ? '' : 'opacity:.75'),
             className: 'wip-gusto-marker',
-            iconSize: produttore ? [18, 18] : [15, 15],
-            iconAnchor: produttore ? [9, 9] : [7, 7],
-            popupAnchor: [0, -10],
+            ...cerchioMarkerOpts(produttore ? 30 : MARKER_CERCHIO_PX),
           });
           L.marker([Number(p.lat), Number(p.lon)], { icon })
             .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
@@ -1810,6 +1978,33 @@ function MapArea({
               <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_verifica_orari_osm', language)}</div>
             </div>`)
             .addTo(group);
+        }
+      }
+
+      // 4) LE ZONE DI DENOMINAZIONE (27/08/2026). Dove un confine esiste in
+      // forma aperta si disegna: le AVA americane (ufficiali, CC0) e le aree
+      // UE derivate dai comuni collegati su Wikidata (indicative, e il popup
+      // lo dice). Campitura bordeaux leggera sotto le linee delle strade, da
+      // zoom 8: più lontano una regione vinicola è una macchia senza nome.
+      if (map.getZoom() >= GUSTO_AREE_ZOOM) {
+        const aree = await fetchAreeDenominazioni({
+          south: bounds.getSouth(), west: bounds.getWest(), north: bounds.getNorth(), east: bounds.getEast(),
+        });
+        for (const a of aree) {
+          if (!a.geom) continue;
+          const ufficiale = a.qualita === 'ufficiale';
+          const poly = L.geoJSON(a.geom, {
+            style: { color: '#7f1d1d', weight: ufficiale ? 1.2 : 0.8, opacity: 0.7, dashArray: ufficiale ? undefined : '4 4', fillColor: '#9f1239', fillOpacity: 0.07 },
+            interactive: true,
+          });
+          poly.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:160px;max-width:240px;">
+              <div style="font-size:12px;font-weight:800;color:#7f1d1d;">🍷 ${escapeHtml(a.nome)}${a.tipo ? ` <span style="font-size:9px;color:#9f1239;">${escapeHtml(a.tipo)}</span>` : ''}</div>
+              <div style="font-size:11px;color:#374151;margin-top:3px;">${getTranslation('mp_denominazione_area', language)}${a.area_kmq ? ` · ${Math.round(a.area_kmq).toLocaleString()} km²` : ''}</div>
+              <div style="font-size:10px;color:${ufficiale ? '#166534' : '#9a3412'};margin-top:2px;">${getTranslation(ufficiale ? 'mp_area_ufficiale' : 'mp_area_indicativa', language)}</div>
+              ${a.url ? `<a href="${escapeHtml(a.url)}" target="_blank" rel="noopener" style="font-size:10px;color:#7f1d1d;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito_ufficiale', language)} ↗</a>` : ''}
+              ${a.attribuzione ? `<div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${escapeHtml(a.attribuzione)}</div>` : ''}
+            </div>`);
+          linee.addLayer(poly);
         }
       }
 
@@ -1920,15 +2115,16 @@ function MapArea({
       for (const l of data || []) {
         const sub = String(l.sub_category || '');
         const icon = L.divIcon({
-          html: `<div style="font-size:15px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))">${emoji[sub] || '❄️'}</div>`,
+          html: cerchioMarker(emoji[sub] || '❄️'),
           className: 'wip-neve-marker',
-          iconSize: [18, 18], iconAnchor: [9, 9], popupAnchor: [0, -10],
+          ...cerchioMarkerOpts(),
         });
         const marker = L.marker([Number(l.lat), Number(l.lon)], { icon });
         marker.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:170px;max-width:230px;">
           <div style="font-size:12px;font-weight:700;color:#111827;">${emoji[sub] || '❄️'} ${escapeHtml(l.name || '')}</div>
           <div style="font-size:11px;color:#374151;margin-top:2px;">${escapeHtml(etichetta[sub] || '')}</div>
           <div id="neve-${escapeHtml(String(l.id))}" style="font-size:11px;color:#0369a1;margin-top:5px;font-weight:700;">…</div>
+          <div id="valanghe-${escapeHtml(String(l.id))}" style="font-size:11px;margin-top:4px;"></div>
           <div style="font-size:9px;color:#6b7280;margin-top:4px;">${getTranslation('mp_osm_contributori', language)} · MET Norway</div>
         </div>`);
         // Le condizioni si chiedono solo all'apertura: 150 pin non devono
@@ -1936,6 +2132,18 @@ function MapArea({
         marker.on('popupopen', async () => {
           const box = document.getElementById(`neve-${l.id}`);
           if (!box) return;
+          // Pericolo valanghe (avalanche.report, solo Euregio): parte insieme
+          // alle condizioni, e fuori dall'Euregio il server risponde subito
+          // "dentro:false" senza scaricare nulla — la riga resta vuota.
+          void fetchValanghe(Number(l.lat), Number(l.lon), language).then((v) => {
+            const riga = document.getElementById(`valanghe-${l.id}`);
+            if (!riga || !riga.isConnected || !v?.dentro || !v.pericolo) return;
+            const liv = Math.max(0, Math.min(5, Number(v.pericolo.livello) || 0));
+            riga.innerHTML = `<span style="display:inline-block;width:10px;height:10px;border-radius:5px;background:${VALANGHE_COLORE[liv]};vertical-align:middle;margin-right:5px;"></span>`
+              + `<b>${getTranslation('mp_valanghe', language)}: ${liv} · ${getTranslation(`mp_valanghe_${liv}`, language)}</b>`
+              + (v.stagione_attiva ? '' : `<div style="font-size:9px;color:#9a3412;margin-top:1px;">${getTranslation('mp_valanghe_fuori_stagione', language)}</div>`)
+              + `<div style="font-size:9px;color:#6b7280;margin-top:1px;"><a href="${escapeHtml(String(v.url || 'https://avalanche.report'))}" target="_blank" rel="noopener" style="color:#6b7280;">${getTranslation('mp_valanghe_fonte', language)}</a></div>`;
+          });
           const d = await fetchDatiSole(Number(l.lat), Number(l.lon));
           if (!box.isConnected) return;
           box.textContent = d
@@ -2086,8 +2294,9 @@ function MapArea({
     setZtlBanner({ name: cleanName, pre: ev.preWarning });
     if (ztlBannerTimerRef.current) clearTimeout(ztlBannerTimerRef.current);
     ztlBannerTimerRef.current = setTimeout(() => setZtlBanner(null), 15000);
-    // Vibrazione: arriva anche con lo schermo in tasca
-    try { navigator.vibrate?.([250, 120, 250]); } catch { /* API assente */ }
+    // Vibrazione: arriva anche con lo schermo in tasca (haptics nativi su
+    // iOS, dove navigator.vibrate non esiste — UX-08)
+    vibra('errore');
     // Beep vocale SOLO se non interferisce con audio già in corso
     // (audioguida in riproduzione/caricata o TTS già attivo → solo banner+vibrazione)
     try {
@@ -2230,11 +2439,11 @@ function MapArea({
       for (const site of sites) {
         const color = BATHING_QUALITY_COLOR[site.quality];
         const icon = L.divIcon({
-          html: `<div style="width:14px;height:14px;border-radius:7px;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);"></div>`,
+          // Pallino colorato dentro il cerchio bianco standard (28 px, UX-14):
+          // il colore resta l'informazione, il bersaglio diventa toccabile.
+          html: cerchioMarker(`<span style="display:block;width:14px;height:14px;border-radius:7px;background:${color};"></span>`),
           className: 'wip-bathing-marker',
-          iconSize: [14, 14],
-          iconAnchor: [7, 7],
-          popupAnchor: [0, -8],
+          ...cerchioMarkerOpts(),
         });
         const marker = L.marker([site.lat, site.lon], { icon });
         // Le etichette bilingue di bathingWater.ts coprono solo it/en: le
@@ -2330,6 +2539,122 @@ function MapArea({
       bathingCenterRef.current = null; // al riaccendersi si ricarica subito
     };
   }, [bathingActive, bathingTick, loadBathingSites]);
+
+  // ── Aree protette: Natura 2000 + aree nazionali CDDA (EEA, CC BY 4.0) ──
+  // 27/08/2026. Confini, non pin: un poligono per sito, colorato per tipo
+  // (habitat / uccelli / nazionale). Stesso schema del layer balneazione:
+  // default OFF, solo Europa, refresh su pan > 10 km. Zoom minimo 9: sotto,
+  // un intero paese di poligoni sarebbe una macchia verde e una risposta da
+  // megabyte.
+  const AREE_MIN_ZOOM = 9;
+  const AREE_ZOOM_FINE = 12;
+  const [areeActive, setAreeActive] = useState(() => {
+    try { return localStorage.getItem('wip_aree_enabled') === '1'; } catch { return false; }
+  });
+  const [areeLoading, setAreeLoading] = useState(false);
+  const [areeDisclaimer, setAreeDisclaimer] = useState(false);
+  const areeLayerRef = useRef<L.LayerGroup | null>(null);
+  const areeCenterRef = useRef<{ lat: number; lon: number; fine: boolean } | null>(null);
+  const [areeTick, setAreeTick] = useState(0);
+
+  const loadAreeProtette = useCallback(async (bounds: L.LatLngBounds, fine: boolean) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setAreeLoading(true);
+    try {
+      const aree = await fetchAreeProtette({
+        south: bounds.getSouth(), west: bounds.getWest(),
+        north: bounds.getNorth(), east: bounds.getEast(),
+      }, fine);
+      if (!areeLayerRef.current) areeLayerRef.current = L.layerGroup();
+      const group = areeLayerRef.current;
+      group.clearLayers();
+      for (const a of aree) {
+        const colore = COLORE_AREA[a.tipo];
+        const etichetta = a.tipo === 'n2k_habitat'
+          ? getTranslation('mp_n2k_habitat', language)
+          : a.tipo === 'n2k_uccelli'
+            ? getTranslation('mp_n2k_uccelli', language)
+            : `${getTranslation('mp_cdda_nazionale', language)}${a.iucn ? ` · IUCN ${escapeHtml(a.iucn)}` : ''}`;
+        const link = a.tipo === 'nazionale' ? '' :
+          `<div style="font-size:10px;margin-top:4px;"><a href="${schedaNatura2000(a.codice)}" target="_blank" rel="noopener" style="color:${colore};font-weight:700;">${getTranslation('mp_n2k_scheda', language)} ↗</a></div>`;
+        const poly = L.geoJSON(a.geometry, {
+          style: { color: colore, weight: 1.5, opacity: 0.9, fillColor: colore, fillOpacity: 0.12 },
+          interactive: true,
+        });
+        poly.bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:160px;max-width:230px;">
+            <div style="font-size:12px;font-weight:700;color:#111827;">🌿 ${escapeHtml(a.nome)}</div>
+            <div style="font-size:11px;color:#374151;margin-top:3px;display:flex;align-items:center;gap:5px;">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${colore};flex:none;"></span>
+              ${etichetta}
+            </div>
+            ${a.kmq != null ? `<div style="font-size:11px;color:#374151;margin-top:2px;">${a.kmq} km² · ${escapeHtml(a.codice)}</div>` : ''}
+            ${link}
+            <div style="font-size:9px;color:#6b7280;margin-top:4px;line-height:1.3;">${getTranslation('mp_n2k_fonte', language)}</div>
+          </div>`);
+        group.addLayer(poly);
+      }
+      if (!map.hasLayer(group) && map.getZoom() >= AREE_MIN_ZOOM) group.addTo(map);
+      const c = bounds.getCenter();
+      areeCenterRef.current = { lat: c.lat, lon: c.lng, fine };
+    } catch (e) {
+      // EEA giù: il layer resta com'era, si riprova al prossimo pan
+      console.warn('[Aree protette] fetch EEA fallito:', e);
+    } finally {
+      setAreeLoading(false);
+    }
+  }, [language]);
+
+  const toggleAree = useCallback(() => {
+    setAreeActive((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('wip_aree_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+      if (next) {
+        try {
+          if (localStorage.getItem('wip_aree_disclaimer_shown') !== '1') {
+            localStorage.setItem('wip_aree_disclaimer_shown', '1');
+            setAreeDisclaimer(true);
+            setTimeout(() => setAreeDisclaimer(false), 12000);
+          }
+        } catch { /* senza storage il toast riapparirà: accettabile */ }
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!areeActive) return;
+    const map = mapRef.current;
+    if (!map) {
+      const retry = setTimeout(() => setAreeTick((t) => t + 1), 500);
+      return () => clearTimeout(retry);
+    }
+    const refresh = () => {
+      try {
+        if (map.getZoom() < AREE_MIN_ZOOM) {
+          if (areeLayerRef.current && map.hasLayer(areeLayerRef.current)) map.removeLayer(areeLayerRef.current);
+          return;
+        }
+        if (areeLayerRef.current && !map.hasLayer(areeLayerRef.current)) areeLayerRef.current.addTo(map);
+        const c = map.getCenter();
+        const fine = map.getZoom() >= AREE_ZOOM_FINE;
+        const last = areeCenterRef.current;
+        // Refresh su pan > 10 km o quando si passa alla precisione fine
+        if (!last || last.fine !== fine || getDistanceFromLatLonInM(last.lat, last.lon, c.lat, c.lng) > 10000) {
+          loadAreeProtette(map.getBounds(), fine);
+        }
+      } catch { /* bounds non pronti */ }
+    };
+    refresh();
+    map.on('moveend', refresh);
+    map.on('zoomend', refresh);
+    return () => {
+      map.off('moveend', refresh);
+      map.off('zoomend', refresh);
+      if (areeLayerRef.current && map.hasLayer(areeLayerRef.current)) map.removeLayer(areeLayerRef.current);
+      areeCenterRef.current = null;
+    };
+  }, [areeActive, areeTick, loadAreeProtette]);
 
   // ── Meteo sulla mappa + modalità "al coperto" ─────────────────────────
   const [meteo, setMeteo] = useState<MeteoData | null>(null);
@@ -5013,11 +5338,19 @@ function MapArea({
       nome: getTranslation('mp_layer_balneazione_nome', language),
       dettaglio: '', onClick: toggleBathing,
     },
+    {
+      id: 'aree-protette', gruppo: 'reti', on: areeActive, loading: areeLoading, emoji: '🌿',
+      tinta: 'bg-green-700 border-green-500', zoomMin: AREE_MIN_ZOOM,
+      nome: getTranslation('mp_layer_natura2000_nome', language),
+      dettaglio: getTranslation('mp_layer_natura2000_det', language),
+      onClick: toggleAree,
+    },
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
     neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
-    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing,
+    areeActive, areeLoading, AREE_MIN_ZOOM,
+    toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
@@ -5106,10 +5439,10 @@ function MapArea({
         >
           <CachedTiles
             attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-            url={CARTO_TILE_URL}
+            url={cartoUrl}
           />
           <MapController center={center} zoom={mapZoom} />
-          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={stopFollowMode} />
+          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={stopFollowMode} isFollowing={() => followModeRef.current} />
 
           {userLocation &&
             typeof userLocation[0] === "number" &&
@@ -5158,6 +5491,23 @@ function MapArea({
               porta e un filo fino al pin, solo sul POI aperto e solo se la
               porta non coincide col centro (sotto 8 m sarebbe un pallino sopra
               il pin). */}
+          {/* Luoghi toccati in "Tutto nel raggio": restano segnati sulla
+              mappa anche dopo averne aperto un altro (28/08/2026). Un tap
+              riapre la scheda; si azzerano dal pannello. */}
+          {everythingPinned.map((p) => (
+            <Marker
+              key={`everything-pin-${p.id}`}
+              position={[p.lat, p.lon]}
+              zIndexOffset={900}
+              icon={L.divIcon({
+                className: 'custom-poi-marker',
+                html: cerchioMarker((CATEGORY_EMOJIS as any)[everythingCanonKey(String((p as any).category || ''))] || '📍', 30, 16),
+                ...cerchioMarkerOpts(30),
+              })}
+              eventHandlers={{ click: () => { setActivePopupId(p.id); setActivePoi(p); } }}
+            />
+          ))}
+
           {activePoi && (() => {
             const a = puntoArrivo(activePoi);
             const cLat = Number(activePoi.lat), cLon = Number(activePoi.lon);
@@ -5344,6 +5694,32 @@ function MapArea({
             </motion.div>
           )}
         </AnimatePresence>
+        {/* Toast una tantum: copertura europea del layer aree protette */}
+        <AnimatePresence>
+          {areeDisclaimer && (
+            <motion.div
+              key="aree-disclaimer"
+              initial={{ opacity: 0, y: -16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -16 }}
+              className="pointer-events-auto w-full"
+            >
+              <div className="bg-green-700/95 backdrop-blur-2xl text-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.25)] border border-green-400/60 px-4 py-2.5 flex items-start gap-2">
+                <span className="text-[15px] leading-none mt-0.5">🌿</span>
+                <p className="text-[11px] font-bold leading-snug flex-1">
+                  {getTranslation('mp_natura2000_disclaimer', language)}
+                </p>
+                <button
+                  onClick={() => setAreeDisclaimer(false)}
+                  aria-label={getTranslation('mp_chiudi', language)}
+                  className="shrink-0 p-1 rounded-full hover:bg-white/20 active:scale-90 transition-all"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* ── Colonna controlli in alto a sinistra: meteo + servizi pratici ──
@@ -5380,13 +5756,13 @@ function MapArea({
               <div className="flex gap-1.5 mt-2">
                 <button
                   onClick={() => { setIndoorMode(true); setRainBannerDismissed(true); }}
-                  className="px-2.5 py-1 bg-[#1e3a8a] text-white rounded-lg text-[10px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all"
+                  className="px-3 py-2 min-h-10 bg-[#1e3a8a] text-white rounded-lg text-[12px] font-black uppercase tracking-wider hover:opacity-90 active:scale-95 transition-all"
                 >
                   {getTranslation('mp_al_coperto', language)}
                 </button>
                 <button
                   onClick={() => setRainBannerDismissed(true)}
-                  className="px-2.5 py-1 bg-black/5 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-lg text-[10px] font-bold hover:bg-black/10 active:scale-95 transition-all"
+                  className="px-3 py-2 min-h-10 bg-black/5 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-lg text-[12px] font-bold hover:bg-black/10 active:scale-95 transition-all"
                 >
                   {getTranslation('mp_no_grazie', language)}
                 </button>
@@ -5586,7 +5962,7 @@ function MapArea({
                     {datiSole.prossimeOre.slice(0, 6).map((o) => (
                       <div key={o.ora} className="flex-1 flex flex-col items-center gap-0.5">
                         <span className="w-full h-1.5 rounded-full" style={{ background: livelloUv(o.uv).colore }} />
-                        <span className="text-[8px] text-primary/50 dark:text-white/50 leading-none">{o.ora.slice(0, 2)}</span>
+                        <span className="text-[11px] text-primary/70 dark:text-white/70 leading-none">{o.ora.slice(0, 2)}</span>
                       </div>
                     ))}
                   </div>
@@ -5639,15 +6015,20 @@ function MapArea({
             exit={{ opacity: 0, y: 40 }}
             className="absolute bottom-16 md:bottom-20 right-2 md:right-4 z-[1001] flex flex-col items-center gap-2 pointer-events-auto"
           >
-            <div
+            {/* Bussola: era un <div onClick> muto per lo screen reader (UX-11).
+                Tocco = esci dal follow-me; l'etichetta dice orientamento e azione. */}
+            <button
+              type="button"
               className={`w-12 h-12 bg-white/60 dark:bg-black/60 backdrop-blur-3xl rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/50 dark:border-white/20 flex items-center justify-center cursor-pointer hover:scale-105 active:scale-95 transition-all ${followMode ? 'ring-2 ring-blue-500' : ''}`}
-              title={`Orientamento: ${Math.round(mapRotation)}°`}
+              title={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°`}
+              aria-label={`${getTranslation('map_orientamento', language)}: ${Math.round(mapRotation)}°. ${getTranslation('a11y_esci_follow', language)}`}
               onClick={stopFollowMode}
             >
               <svg
                 viewBox="0 0 40 40"
                 width="36"
                 height="36"
+                aria-hidden="true"
                 className={followMode ? "animate-pulse-slow" : ""}
                 style={{ transform: `rotate(-${mapRotation}deg)`, transition: 'transform 0.3s ease' }}
               >
@@ -5656,11 +6037,11 @@ function MapArea({
                 <circle cx="20" cy="20" r="3" fill="#1e3a8a" />
                 <text x="20" y="3" textAnchor="middle" fontSize="4" fill="#e11d48" fontWeight="bold">N</text>
               </svg>
-            </div>
+            </button>
 
-            <div className="bg-blue-600/80 backdrop-blur-2xl text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse inline-block" />
-              Follow ON
+            <div className="bg-blue-600/80 backdrop-blur-2xl text-white text-[11px] font-black uppercase tracking-wider px-3 py-1.5 rounded-full shadow-2xl border border-white/20 flex items-center gap-2" aria-live="polite">
+              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse inline-block" aria-hidden="true" />
+              {getTranslation('map_follow_on', language)}
             </div>
           </motion.div>
         )}
@@ -5854,12 +6235,25 @@ function MapArea({
                   <h2 className="text-xl font-black text-[#1e3a8a] tracking-tight leading-none">
                     {getTranslation("everything_nearby_title", language)}
                   </h2>
-                  <button
-                    onClick={() => setShowEverythingPanel(false)}
-                    className="p-2 bg-secondary/5 hover:bg-secondary/10 text-secondary rounded-full transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {everythingPinned.length > 0 && (
+                      <button
+                        onClick={() => { setEverythingPinned([]); }}
+                        title={getTranslation('everything_pinned_clear', language)}
+                        aria-label={getTranslation('everything_pinned_clear', language)}
+                        className="min-h-9 px-2.5 rounded-full bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center gap-1 hover:bg-[#1e3a8a]/20 transition-colors"
+                      >
+                        📍 {everythingPinned.length} <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setShowEverythingPanel(false)}
+                      aria-label={getTranslation('close', language)}
+                      className="min-w-11 min-h-11 flex items-center justify-center bg-[#1e3a8a]/5 hover:bg-[#1e3a8a]/10 text-[#1e3a8a] rounded-full transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
                 {/* Selettore raggio: rifà la fetch a ogni cambio, così la
                     lista/i conteggi restano coerenti col raggio mostrato. */}
@@ -5884,7 +6278,11 @@ function MapArea({
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto pt-3 px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] space-y-2 custom-scrollbar min-h-[300px] overscroll-none select-none touch-pan-y">
+              <div
+                ref={everythingScrollElRef}
+                onScroll={(e) => { everythingScrollTopRef.current = e.currentTarget.scrollTop; }}
+                className="flex-1 overflow-y-auto pt-3 px-4 pb-[calc(2rem+env(safe-area-inset-bottom))] space-y-2 custom-scrollbar min-h-[300px] overscroll-none select-none touch-pan-y"
+              >
                 {!everythingLoading && everythingGroups.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-20 text-center opacity-60">
                     <MapPin className="w-12 h-12 mb-4 text-[#1e3a8a]/50" />
@@ -5930,9 +6328,20 @@ function MapArea({
                               </button>
                             ))}
                             {group.count > group.items.length && (
-                              <p className="text-[10px] text-center text-[#1e3a8a]/50 font-bold pt-1">
-                                +{group.count - group.items.length}
-                              </p>
+                              everythingFullLoaded ? (
+                                <p className="text-[10px] text-center text-[#1e3a8a]/50 font-bold pt-1">
+                                  +{group.count - group.items.length}
+                                </p>
+                              ) : (
+                                <button
+                                  onClick={loadMoreEverything}
+                                  disabled={everythingLoading}
+                                  className="w-full min-h-10 rounded-xl bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center justify-center gap-2 hover:bg-[#1e3a8a]/20 transition-colors disabled:opacity-60"
+                                >
+                                  {everythingLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                  +{group.count - group.items.length} · {getTranslation('everything_show_all', language)}
+                                </button>
+                              )
                             )}
                           </div>
                         )}
@@ -5963,7 +6372,7 @@ function MapArea({
           >
             <MapPin className="w-4 h-4 fill-white/20" />
             <span className="uppercase tracking-[0.1em]">{getTranslation("find_near", language)}</span>
-            <span className="w-4 h-4 bg-[#2c6e54] text-white rounded-full flex items-center justify-center text-[9px] font-black shadow-inner">
+            <span className="min-w-5 h-5 px-1 bg-[#2c6e54] text-white rounded-full flex items-center justify-center text-[11px] font-black shadow-inner">
               {
                 visiblePois.filter((p) => {
                   try {
@@ -6046,9 +6455,10 @@ function MapArea({
               <button
                 type="button"
                 onClick={() => setSearchQuery("")}
-                className="p-1 hover:bg-[#fcfaf8]-container rounded-full transition-colors text-[#1e3a8a]"
+                aria-label={getTranslation('a11y_cancella_ricerca', language)}
+                className="min-w-11 min-h-11 -my-2 flex items-center justify-center hover:bg-surface-container rounded-full transition-colors text-[#1e3a8a]"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             )}
             {isSearching || isLoadingPois ? (
@@ -6132,7 +6542,7 @@ function MapArea({
                     }}
                     className={`w-full px-5 py-4 min-h-[56px] text-left hover:bg-primary/5 flex items-start gap-4 transition-all border-t border-amber-100/40 first:border-t-0 group cursor-pointer ${idx === activeSuggestionIdx ? 'bg-primary/10' : ''}`}
                   >
-                    <div className="mt-0.5 p-1.5 bg-[#fcfaf8]-container rounded-lg group-hover:bg-primary/10 transition-colors shrink-0">
+                    <div className="mt-0.5 p-1.5 bg-surface-container rounded-lg group-hover:bg-primary/10 transition-colors shrink-0">
                       {res.kind === 'categoria' ? <span className="text-base leading-none">{res.emoji}</span>
                         : res.kind === 'percorso' ? <span className="text-base leading-none">🥾</span>
                         : res.kind === 'poi' ? <span className="text-base leading-none">{res.is_gem ? '💎' : (CATEGORY_EMOJIS as any)[res.category] || '📍'}</span>

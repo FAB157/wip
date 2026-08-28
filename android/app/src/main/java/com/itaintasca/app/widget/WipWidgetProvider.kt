@@ -111,9 +111,21 @@ class WipWidgetProvider : AppWidgetProvider() {
 
         if (nextStop == null || nearest == null) {
             try {
-                // Ultima posizione persistita dal servizio a ogni fix GPS
-                val lat = itainta.getFloat("lastFixLat", 0f)
-                val lon = itainta.getFloat("lastFixLon", 0f)
+                // Ultima posizione persistita dal servizio a ogni fix GPS.
+                // Dal 23/08/2026 sta in un file di preferenze dedicato
+                // (PREFS_FIX): scriverla in ItaintaPrefs significava riscrivere
+                // a ogni fix anche l'elenco dei POI ascoltati e l'itinerario.
+                // Ripiego sul file vecchio per il primo avvio dopo
+                // l'aggiornamento, altrimenti il widget resta cieco finche' non
+                // arriva un fix nuovo.
+                val fixPrefs = context.getSharedPreferences(
+                    com.itaintasca.app.service.ItaintaBackgroundPoiService.PREFS_FIX,
+                    Context.MODE_PRIVATE
+                )
+                val lat = fixPrefs.getFloat("lastFixLat", 0f)
+                    .takeIf { it != 0f } ?: itainta.getFloat("lastFixLat", 0f)
+                val lon = fixPrefs.getFloat("lastFixLon", 0f)
+                    .takeIf { it != 0f } ?: itainta.getFloat("lastFixLon", 0f)
                 if (lat != 0f || lon != 0f) {
                     val here = Location("widget").apply {
                         latitude = lat.toDouble()

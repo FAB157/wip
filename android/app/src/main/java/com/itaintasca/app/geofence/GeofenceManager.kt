@@ -12,6 +12,161 @@ import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.itaintasca.app.db.PoiEntity
 
+/**
+ * RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026).
+ *
+ * Un POI non e' un punto: e' un punto di cui sappiamo, caso per caso, quanto
+ * fidarci. Il perimetro e' misurato sul muro; l'ingresso e' la porta vera; il
+ * PUNTO dell'indirizzo e' la casa piu' vicina al POI nel dump Nominatim, cioe'
+ * vicinanza MISURATA a pochi metri; il centroide e' solo il baricentro di
+ * quello che sappiamo, e li' non conosciamo ne' la via ne' la porta.
+ *
+ * Scala a quattro livelli (la STESSA di src/lib/guideSettings.ts):
+ *   perimetro  → nessun allargamento: la misura c'e' gia' (Footprints)
+ *   ingresso   → raggio base
+ *   indirizzo  → raggio base, STRETTO: quando c'e' un PUNTO quello E' l'arrivo
+ *   centroide  → base x2: non si sa dove sia la porta, meglio largo che muto
+ *
+ * COSA FA GRADINO E COSA NO (regola dell'utente, 23/08/2026). Il criterio non
+ * e' la presenza del numero civico nella stringa — quella distinzione
+ * civico/via, provata poche ore prima, e' stata TOLTA — ma la presenza del
+ * PUNTO (address_point_lat/lon). Un POI con la sola stringa dell'indirizzo e
+ * nessun punto e' `centroide`: la stringa non si puo' trasformare in un
+ * cerchio.
+ *
+ * Tetti: trigger 80 m a piedi / 120 m in auto, avviso 250 m / 400 m. Un raggio
+ * CALIBRATO dal DB (geofence_radius/alert_radius) vince su tutto: e' misurato,
+ * non stimato.
+ *
+ * UNICO punto di verita': lo usano GeofenceManager (recinti di sistema) e
+ * ItaintaBackgroundPoiService (valutazione predittiva). Tre copie della stessa
+ * scala e' esattamente il difetto che il CLAUDE.md segnala.
+ */
+object RaggiFiducia {
+
+    enum class Livello { PERIMETRO, INGRESSO, INDIRIZZO, CENTROIDE }
+
+    data class Raggi(val alert: Float, val arrivo: Float)
+
+    /** Un punto d'arrivo: le coordinate a cui puntare (trigger e navigatore). */
+    data class Punto(val lat: Double, val lon: Double)
+
+    const val TETTO_TRIGGER_PIEDI = 80f
+    const val TETTO_TRIGGER_AUTO = 120f
+    const val TETTO_ALERT_PIEDI = 250f
+    const val TETTO_ALERT_AUTO = 400f
+
+    /**
+     * GUARDIA sul punto dell'indirizzo: oltre questa distanza dal centroide il
+     * punto non e' l'indirizzo di QUESTO POI ma di qualcos'altro (un abbinamento
+     * sbagliato, una casa dall'altra parte del paese). Meglio il centroide, che
+     * e' sicuramente il posto giusto per quanto impreciso, di un punto preciso
+     * nel posto sbagliato.
+     */
+    const val MAX_DISTANZA_PUNTO_INDIRIZZO = 250f
+
+    /**
+     * Moltiplicatore del raggio base per livello di fiducia.
+     *
+     * L'INDIRIZZO CON UN PUNTO E' L'ARRIVO, NON UN'INCERTEZZA (decisione
+     * utente, 23/08/2026): quel punto e' la casa piu' vicina misurata sul dump
+     * Nominatim, sta a pochi metri dalla facciata, e il raggio ci resta stretto
+     * — 30 m da LI'. Il centroide puro e' l'unico caso da allargare, perche'
+     * li' non sappiamo ne' la via ne' la porta e stringere farebbe perdere
+     * il POI.
+     */
+    private fun moltiplicatore(livello: Livello): Float = when (livello) {
+        Livello.PERIMETRO -> 1f
+        Livello.INGRESSO -> 1f
+        Livello.INDIRIZZO -> 1f
+        Livello.CENTROIDE -> 2f
+    }
+
+    /**
+     * Il PUNTO dell'indirizzo, se utilizzabile, altrimenti null.
+     *
+     * Due condizioni, entrambe necessarie:
+     *  1. `addressSource != "strada_vicina"`. Quella non e' un indirizzo: e'
+     *     «la strada con nome piu' vicina», scritta dalla catena Photon per
+     *     dire da dove ci si arriva. Una chiesa in mezzo ai campi non sta al
+     *     civico di quella via, e puntarci porterebbe altrove.
+     *  2. il punto dista meno di MAX_DISTANZA_PUNTO_INDIRIZZO dal centroide
+     *     (vedi la costante: guardia contro abbinamenti sballati).
+     *
+     * Nota: NON si guarda dentro la stringa `address`. Il gradino lo fa il
+     * punto; la stringa da sola non si puo' trasformare in un cerchio.
+     */
+    fun puntoIndirizzo(poi: PoiEntity): Punto? {
+        val pLat = poi.addressPointLat ?: return null
+        val pLon = poi.addressPointLon ?: return null
+        if (poi.addressSource?.trim().equals("strada_vicina", ignoreCase = true)) return null
+        val fuori = FloatArray(1)
+        Location.distanceBetween(poi.lat, poi.lon, pLat, pLon, fuori)
+        if (fuori[0] > MAX_DISTANZA_PUNTO_INDIRIZZO) return null
+        return Punto(pLat, pLon)
+    }
+
+    /**
+     * IL PUNTO D'ARRIVO di questo POI: ingresso → punto dell'indirizzo →
+     * centroide. E' lo stesso punto per il trigger e per il navigatore, ed e'
+     * la traduzione della regola: «chi ha indirizzo, quello E' l'arrivo».
+     */
+    fun puntoArrivo(poi: PoiEntity): Punto {
+        val eLat = poi.entranceLat
+        val eLon = poi.entranceLon
+        if (eLat != null && eLon != null) return Punto(eLat, eLon)
+        return puntoIndirizzo(poi) ?: Punto(poi.lat, poi.lon)
+    }
+
+    /** Da dove viene il punto di questo POI. */
+    fun livello(poi: PoiEntity): Livello {
+        if (!poi.footprint.isNullOrBlank()) return Livello.PERIMETRO
+        if (poi.entranceLat != null && poi.entranceLon != null) return Livello.INGRESSO
+        if (puntoIndirizzo(poi) != null) return Livello.INDIRIZZO
+        return Livello.CENTROIDE
+    }
+
+    /**
+     * Raggi effettivi per questo POI, a partire dai raggi base della modalita'
+     * (gli slider dell'utente). `alertBase`/`arrivoBase` sono gia' quelli della
+     * modalita' corrente (piedi o auto).
+     */
+    fun calcola(poi: PoiEntity, isDriving: Boolean, alertBase: Float, arrivoBase: Float): Raggi {
+        var alert = alertBase
+        var arrivo = arrivoBase
+
+        // RAGGIO CALIBRATO DAL DB: vince. E' misurato sul perimetro reale — una
+        // piazza lo ha grande, una statua stretto — e non va ne' scalato ne'
+        // tagliato dai tetti, che servono alle STIME. Comportamento invariato
+        // rispetto a prima: gated su hasEntrance, e puo' solo allargare.
+        val hasEntrance = poi.entranceLat != null && poi.entranceLon != null
+        if (hasEntrance) {
+            val calAlert = poi.alertRadius?.takeIf { it > 0 }?.toFloat()
+            val calArrivo = poi.geofenceRadius?.takeIf { it > 0 }?.toFloat()
+            if (calAlert != null || calArrivo != null) {
+                if (calAlert != null) alert = maxOf(alert, calAlert)
+                if (calArrivo != null) arrivo = maxOf(arrivo, calArrivo)
+                return Raggi(alert, arrivo)
+            }
+        }
+
+        val m = moltiplicatore(livello(poi))
+        alert *= m
+        arrivo *= m
+
+        // I tetti limitano l'ALLARGAMENTO, non la scelta dell'utente: chi porta
+        // lo slider a 400 m a piedi continua ad averli. Senza il maxOf col
+        // valore base, il tetto diventerebbe un tappo sugli slider e
+        // spegnerebbe una preferenza esplicita.
+        val tettoTrigger = maxOf(arrivoBase, if (isDriving) TETTO_TRIGGER_AUTO else TETTO_TRIGGER_PIEDI)
+        val tettoAlert = maxOf(alertBase, if (isDriving) TETTO_ALERT_AUTO else TETTO_ALERT_PIEDI)
+        return Raggi(
+            alert = alert.coerceAtMost(tettoAlert),
+            arrivo = arrivo.coerceAtMost(tettoTrigger)
+        )
+    }
+}
+
 class GeofenceManager(private val context: Context) {
     private val geofencingClient = LocationServices.getGeofencingClient(context)
     private val TAG = "GeofenceManager"
@@ -63,9 +218,13 @@ class GeofenceManager(private val context: Context) {
                 id = poi.id,
                 isGem = poi.isGem,
                 distanceM = if (origin == null) 0f else {
+                    // Stesso punto d'arrivo del trigger (ingresso → indirizzo →
+                    // centroide): la finestra deve ordinare per la distanza dal
+                    // punto a cui poi si scattera', non da un altro.
+                    val p = RaggiFiducia.puntoArrivo(poi)
                     val loc = Location("").apply {
-                        latitude = poi.entranceLat ?: poi.lat
-                        longitude = poi.entranceLon ?: poi.lon
+                        latitude = p.lat
+                        longitude = p.lon
                     }
                     origin.distanceTo(loc)
                 },
@@ -207,22 +366,27 @@ class GeofenceManager(private val context: Context) {
         alertRadiusWalk: Float, arrivalRadiusWalk: Float,
         alertRadiusCar: Float, arrivalRadiusCar: Float
     ): List<Geofence> {
-        val lat = poi.entranceLat ?: poi.lat
-        val lon = poi.entranceLon ?: poi.lon
+        // IL CENTRO DEI RECINTI E' IL PUNTO D'ARRIVO: ingresso → punto
+        // dell'indirizzo → centroide (RaggiFiducia.puntoArrivo). Chi ha
+        // l'indirizzo con un punto lo usa come arrivo, e il cerchio da 30 m sta
+        // li' invece che sul baricentro dell'edificio, che puo' cadere sul retro.
+        val punto = RaggiFiducia.puntoArrivo(poi)
+        val lat = punto.lat
+        val lon = punto.lon
 
-        var alertRadius = if (guideMode == "driving") alertRadiusCar else alertRadiusWalk
-        var arrivalRadius = if (guideMode == "driving") arrivalRadiusCar else arrivalRadiusWalk
+        val isDriving = guideMode == "driving"
 
-        // RAGGI DA FOOTPRINT (perimetro reale del POI). Parità con
-        // src/lib/guideSettings.ts::radiiForTransport: SOLO se il POI è stato
-        // processato col footprint (ingresso valorizzato = hasEntrance) si
-        // ESPANDE (mai riduce) il raggio di modalità coi valori reali —
-        // una piazza ottiene un cerchio grande, una statua resta stretta.
-        val hasEntrance = poi.entranceLat != null && poi.entranceLon != null
-        if (hasEntrance) {
-            poi.alertRadius?.let { if (it > 0) alertRadius = maxOf(alertRadius, it.toFloat()) }
-            poi.geofenceRadius?.let { if (it > 0) arrivalRadius = maxOf(arrivalRadius, it.toFloat()) }
-        }
+        // RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO: unica funzione condivisa col
+        // servizio (RaggiFiducia.calcola, in cima a questo file). Comprende sia
+        // i raggi CALIBRATI dal DB (che vincono, come prima) sia la scala
+        // perimetro/ingresso/indirizzo/centroide coi suoi tetti.
+        val raggi = RaggiFiducia.calcola(
+            poi, isDriving,
+            alertBase = if (isDriving) alertRadiusCar else alertRadiusWalk,
+            arrivoBase = if (isDriving) arrivalRadiusCar else arrivalRadiusWalk
+        )
+        var alertRadius = raggi.alert
+        var arrivalRadius = raggi.arrivo
 
         // A 30 M DAL PERIMETRO (22/08/2026). Il sistema conosce solo cerchi:
         // perche' il Receiver possa decidere "sei a 30 m dal muro", l'ENTER

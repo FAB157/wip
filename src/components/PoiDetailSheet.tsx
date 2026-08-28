@@ -111,15 +111,18 @@ function triggerManualePer(poiId: string): boolean {
 
 // fetch con timeout: su serverless (cold start) o LLM lenti una fetch senza
 // AbortController può restare appesa per minuti e bloccare la UI.
-const fetchWithTimeout = (url: string, opts: any = {}, ms = 12000): Promise<Response> => {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
-};
+// Dal 28/08/2026 delega ad apiFetch: stesso timeout + Bearer automatico
+// (il server esige il login su /api/poi/details, /api/poi/enrich,
+// /api/regenerate quando deve generare).
+const fetchWithTimeout = (url: string, opts: any = {}, ms = 12000): Promise<Response> =>
+  apiFetch(url, opts, ms);
 
+import { apiFetch, bearerHeaders } from '../lib/api';
 import { mapItineraryCategoryToMapCategory, getAudioguide, upsertAudioguide, ensureSharedPoi } from "../services/poiRepository";
 import PoiAudioPlayer from "./poi/PoiAudioPlayer";
 import PoiExtraDetails from "./poi/PoiExtraDetails";
+import PoiBiodiversity from "./poi/PoiBiodiversity";
+import DenominazioniZona from "./DenominazioniZona";
 import PoiNearbyList from "./poi/PoiNearbyList";
 
 interface PoiDetailSheetProps {
@@ -305,6 +308,12 @@ export default function PoiDetailSheet({
     height?: string;
     city?: string;
     wikivoyage_dest?: string;
+    // Import fonti aperte 27/08/2026: link alle schede dei registri esterni
+    // (linkare è lecito, copiare no), artista/anno dei murales, altezza cascate.
+    rcdb_url?: string;
+    wwd_url?: string;
+    artista?: string;
+    anno?: string;
   } | null>(null);
 
   const [generatedText, setGeneratedText] = useState<string | null>(null);
@@ -389,6 +398,24 @@ export default function PoiDetailSheet({
       return () => clearInterval(interval);
     }
   }, [isLoading, isRegenerating]);
+
+  // RETE LENTA + «Riprova» (UX-09): dopo 40 s di caricamento la scheda lo
+  // dice e offre un tasto, invece di frasi rassicuranti a rotazione per
+  // sempre. Il retry azzera la chiave di lavoro e rilancia l'effetto di
+  // caricamento (retryNonce nelle sue dipendenze).
+  const [reteLenta, setReteLenta] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
+  useEffect(() => {
+    if (!isLoading) { setReteLenta(false); return; }
+    const timer = setTimeout(() => setReteLenta(true), 40000);
+    return () => clearTimeout(timer);
+  }, [isLoading, retryNonce]);
+  const riprovaCaricamento = () => {
+    processedRef.current = "";
+    setIsLoading(false);
+    setReteLenta(false);
+    setRetryNonce(n => n + 1);
+  };
 
   useEffect(() => {
     const textToType = wikiData?.extract;
@@ -935,20 +962,29 @@ export default function PoiDetailSheet({
                 }
 
                 const fullDesc = dbData.full_description || dbData.description_long || dbData.description_ai;
+                const techData = dbData.technical_data || {};
+                // Dati tecnici mostrati come chip con icone (vedi render),
+                // non più incollati come testo emoji dentro la descrizione/TTS.
+                const techPayload = {
+                  inception: techData.inception || undefined,
+                  architect: techData.architect || undefined,
+                  style: techData.style || undefined,
+                  material: techData.material || undefined,
+                  // altezza_m: cascate importate da Wikidata/OSM (27/08/2026)
+                  height: techData.height || (techData.altezza_m ? `${techData.altezza_m} m` : undefined),
+                  city: techData.city || undefined,
+                  wikivoyage_dest: techData.wikivoyage_dest || undefined,
+                  rcdb_url: techData.rcdb_url || undefined,
+                  wwd_url: techData.wwd_url || undefined,
+                  artista: techData.artista || techData.artist_name || undefined,
+                  anno: techData.anno || undefined,
+                };
+                const hasTechData = Object.values(techPayload).some(Boolean);
+                // I POI appena importati (montagne russe, cascate, murales) hanno
+                // i link e i dati tecnici ma ancora nessuna descrizione: le chip
+                // vanno mostrate comunque, anche se sotto si passa all'AI.
+                if (hasTechData && active) setTechnicalData(techPayload);
                 if (fullDesc && fullDesc.length > 30) {
-                  const techData = dbData.technical_data || {};
-                  // Dati tecnici mostrati come chip con icone (vedi render),
-                  // non più incollati come testo emoji dentro la descrizione/TTS.
-                  const techPayload = {
-                    inception: techData.inception || undefined,
-                    architect: techData.architect || undefined,
-                    style: techData.style || undefined,
-                    material: techData.material || undefined,
-                    height: techData.height || undefined,
-                    city: techData.city || undefined,
-                    wikivoyage_dest: techData.wikivoyage_dest || undefined,
-                  };
-                  const hasTechData = Object.values(techPayload).some(Boolean);
                   const finalDesc = fullDesc;
 
                   // Practical info
@@ -1138,9 +1174,10 @@ export default function PoiDetailSheet({
                 const currentUserId = sessionData?.session?.user?.id || 'anonymous';
 
                 // Fase 2: Streaming live dell'intelligenza artificiale
+                // SSE: fetch nuda (lo stream va letto a chunk), ma col Bearer.
                 const streamRes = await fetch("/api/poi/enrich-stream", {
                   method: "POST",
-                  headers: { "Content-Type": "application/json" },
+                  headers: { "Content-Type": "application/json", ...(await bearerHeaders()) },
                   signal: streamCtrl.signal,
                   body: JSON.stringify({
                     id: poi.id,
@@ -1349,7 +1386,7 @@ export default function PoiDetailSheet({
       active = false;
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
     };
-  }, [poi, visionText, guideMode, isOnline]);
+  }, [poi, visionText, guideMode, isOnline, retryNonce]);
 
   const toggleSpeech = async (forceRefresh = false, origine: 'auto' | 'utente' = 'utente') => {
     // Con un registro diverso da standard (breve/bimbi/duetto) il copione da
@@ -3125,6 +3162,17 @@ export default function PoiDetailSheet({
                          : (wikiData?.extract || poi?.description || getTranslation("no_description", language))
                        )}
                        {(isTyping || isStreaming || isLoading) && <span className="inline-block w-1.5 h-4 ml-1 bg-primary animate-pulse align-middle"></span>}
+                       {isLoading && reteLenta && (
+                         <div className="mt-3 not-italic flex flex-wrap items-center gap-2">
+                           <span className="text-xs font-bold text-amber-700">{getTranslation("sk_rete_lenta", language)}</span>
+                           <button
+                             onClick={riprovaCaricamento}
+                             className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-black uppercase tracking-wide active:scale-95 transition-transform"
+                           >
+                             {getTranslation("sk_riprova", language)}
+                           </button>
+                         </div>
+                       )}
                     </div>
                   )}
                 </div>
@@ -3170,11 +3218,45 @@ export default function PoiDetailSheet({
                     <Compass className="w-3.5 h-3.5 text-primary" /> {technicalData.wikivoyage_dest}
                   </span>
                 )}
+                {technicalData.artista && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <User className="w-3.5 h-3.5 text-primary" /> {technicalData.artista}
+                  </span>
+                )}
+                {technicalData.anno && (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm">
+                    <Calendar className="w-3.5 h-3.5 text-primary" /> {technicalData.anno}
+                  </span>
+                )}
+                {technicalData.rcdb_url && (
+                  <a href={technicalData.rcdb_url} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm hover:bg-amber-50">
+                    🎢 {getTranslation('poi_scheda_rcdb', language)} ↗
+                  </a>
+                )}
+                {technicalData.wwd_url && (
+                  <a href={technicalData.wwd_url} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-amber-100/50 bg-white text-[#1e3a8a] text-[11px] font-bold rounded-xl shadow-sm hover:bg-amber-50">
+                    💧 {getTranslation('poi_scheda_wwd', language)} ↗
+                  </a>
+                )}
               </div>
+            )}
+
+            {/* Denominazioni d'origine della zona (eAmbrosia): solo per i luoghi del gusto */}
+            {poi && ['enogastronomia', 'locali', 'restaurant', 'cafe', 'winery', 'bar', 'pub'].includes(String(poi.category || '').toLowerCase()) && (
+              <DenominazioniZona
+                nome={String(poi.name || '')}
+                citta={(poi as any).city || null}
+                regione={(poi as any).region || null}
+                paese={(poi as any).country || null}
+                language={language}
+              />
             )}
 
             {/* Dettagli dell'Opera / Visione IA */}
             <PoiExtraDetails poi={poi} language={language} />
+
+            {/* Biodiversità (solo parchi, da GBIF — richiesta 28/08/2026) */}
+            <PoiBiodiversity poi={poi} language={language} />
 
             <PoiAudioPlayer
               localGuideMode={localGuideMode}

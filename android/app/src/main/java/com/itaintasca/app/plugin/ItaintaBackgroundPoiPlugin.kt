@@ -14,6 +14,7 @@ import com.getcapacitor.*
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import com.itaintasca.app.geofence.BearingGate
 import com.itaintasca.app.service.ItaintaBackgroundPoiService
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -221,6 +222,12 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         // chiave letta da GeofenceBroadcastReceiver.resolveGuideVoice.
         val guideCharacter = call.getString("guideCharacter")
             ?.takeIf { it == "nicky" || it == "dante" }
+        // (23/08/2026) GATE DI BUSSOLA: se il POI e' ormai alle spalle il
+        // racconto d'arrivo si rimanda al fix successivo invece di partire a
+        // monumento superato. Acceso di default (e' il comportamento che
+        // l'utente si aspetta): si persiste solo se il JS lo manda davvero,
+        // cosi' una chiamata senza il campo non spegne niente.
+        val bearingGate = call.getBoolean("bearingGate")
 
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         prefs.edit().apply {
@@ -234,6 +241,7 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             // STICKY ripartiva con l'insieme vuoto.
             putStringSet("selectedCategories", categories.toSet())
             if (guideCharacter != null) putString("guideCharacter", guideCharacter)
+            if (bearingGate != null) putBoolean(BearingGate.PREF_BEARING_GATE, bearingGate)
             apply()
         }
         
@@ -269,17 +277,174 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
     @PluginMethod
     fun syncManualSelection(call: PluginCall) {
         val poisJson = call.getString("poisJson") ?: "[]"
+        val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+
+        // (MAP-03) Servizio NON attivo: si salva SOLO la selezione nelle
+        // prefs (stessa chiave "itineraryPoisJson" letta da
+        // restoreItineraryFromPrefs) e si risponde. Prima si faceva
+        // startForegroundService anche ad audioguida spenta: il servizio
+        // partiva, si promuoveva in foreground, RadarState.setActive(true)
+        // senza nessun monitoraggio — e su Android 12+ da background era un
+        // ForegroundServiceStartNotAllowedException. startForegroundService
+        // OBBLIGA a startForeground entro 5 s, quindi il "non promuovere" si
+        // decide qui, prima di avviare qualcosa.
+        if (!prefs.getBoolean("isServiceActive", false)) {
+            try {
+                val vuota = poisJson.isBlank() || poisJson.trim() == "[]"
+                if (vuota) prefs.edit().remove("itineraryPoisJson").apply()
+                else prefs.edit().putString("itineraryPoisJson", poisJson).apply()
+            } catch (e: Exception) {
+                Log.w("ItaintaPoiPlugin", "syncManualSelection: salvataggio prefs fallito: ${e.message}")
+            }
+            call.resolve()
+            return
+        }
+
         val intent = Intent(context, ItaintaBackgroundPoiService::class.java).apply {
             action = ItaintaBackgroundPoiService.ACTION_SYNC_SELECTION
             putExtra("poisJson", poisJson)
         }
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            // Rifiuto da background: le tappe restano comunque in prefs per
+            // il prossimo avvio del servizio.
+            Log.w("ItaintaPoiPlugin", "syncManualSelection: avvio servizio rifiutato: ${e.message}")
+            try { prefs.edit().putString("itineraryPoisJson", poisJson).apply() } catch (_: Exception) { }
         }
         call.resolve()
+    }
+
+    /**
+     * (UX-03) Apre la scheda dell'app nelle Impostazioni di sistema: e'
+     * l'unico posto dove l'utente puo' riconcedere la posizione «Sempre» o
+     * quella precisa dopo un rifiuto. Il JS la chiama dal messaggio
+     * «Permesso posizione negato» (statusUpdate) e dalla schermata permessi.
+     */
+    @PluginMethod
+    fun openAppSettings(call: PluginCall) {
+        try {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:${context.packageName}")
+            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            context.startActivity(intent)
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject("Cannot open app settings: ${e.message}")
+        }
+    }
+
+    /**
+     * FINE DEL GIRO: via le tappe dell'itinerario dal geofencing nativo.
+     *
+     * (23/08/2026) Il JS lo chiama da locationService.unsyncTappeGiroFromNative
+     * protetto da `typeof === 'function'`: finora il metodo NON esisteva, la
+     * chiamata cadeva nel warn e le tappe di un giro finito restavano
+     * registrate come geofence prioritari fino al riavvio del servizio.
+     *
+     * Non serve un'azione nuova nel servizio: ACTION_SYNC_SELECTION con una
+     * lista VUOTA fa gia' esattamente questo (svuota itineraryPois, toglie la
+     * pref delle tappe e ri-registra i geofence con il solo radar). Qui si
+     * aggiunge la cancellazione della pref anche lato plugin, per il caso in
+     * cui il processo del servizio non sia vivo: senza, al prossimo avvio a
+     * freddo restoreItineraryFromPrefs rimetterebbe in gioco le tappe di un
+     * giro gia' chiuso.
+     */
+    @PluginMethod
+    fun clearManualSelection(call: PluginCall) {
+        try {
+            // Stessa chiave di ItaintaBackgroundPoiService.PREF_ITINERARY_POIS
+            // (li' e' private: se un giorno diventa una const del companion,
+            // sostituire la stringa con quella).
+            context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                .edit().remove("itineraryPoisJson").apply()
+        } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "clearManualSelection: pulizia prefs fallita: ${e.message}")
+        }
+        try {
+            // Solo se il servizio e' dichiarato attivo: startForegroundService
+            // su un servizio spento lo farebbe RIPARTIRE ad audioguida chiusa
+            // (e su Android 12+ rischierebbe ForegroundServiceStartNotAllowed).
+            val attivo = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                .getBoolean("isServiceActive", false)
+            if (attivo) {
+                val intent = Intent(context, ItaintaBackgroundPoiService::class.java).apply {
+                    action = ItaintaBackgroundPoiService.ACTION_SYNC_SELECTION
+                    putExtra("poisJson", "[]")
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "clearManualSelection: sync al servizio fallita: ${e.message}")
+        }
+        // Sempre resolve: il JS non deve mai restare appeso alla fine di un giro.
+        call.resolve()
+    }
+
+    /**
+     * L'UTENTE HA CHIUSO IL BANNER DI QUEL POI: non lo si riannuncia al fix
+     * successivo.
+     *
+     * (23/08/2026) Chiamato da ApproachBanner.handleClose, anche questo
+     * protetto da `typeof === 'function'` e finora inesistente: lato web il POI
+     * veniva messo fra i "dismissed", ma il servizio nativo non lo sapeva e al
+     * fix dopo rifaceva banner e teaser.
+     *
+     * Si scrive lo stato EXITED in Room, lo stesso che il receiver mette
+     * all'uscita dal geofence: il suo timestamp fa da cooldown
+     * (APPROACH_RETRIGGER_COOLDOWN_MS, 30 min) sia nel receiver sia nel
+     * valutatore predittivo del servizio, quindi vale per entrambi i percorsi.
+     * Non e' un "mai piu'": passata la mezz'ora il POI torna annunciabile,
+     * che e' il comportamento giusto per chi ci ripassa davvero.
+     */
+    @PluginMethod
+    fun markPoiExited(call: PluginCall) {
+        val poiId = call.getString("poiId")?.trim().orEmpty()
+        if (poiId.isEmpty()) {
+            // Nemmeno qui un reject: il JS chiama e va avanti.
+            val ret = JSObject()
+            ret.put("ok", false)
+            ret.put("reason", "missing_poiId")
+            return call.resolve(ret)
+        }
+        // CHIUDERE IL BANNER VUOL DIRE «NON MI INTERESSA», NON «RIPETIMELO PIU'
+        // TARDI» (23/08/2026). Prima di scrivere lo stato si TACE su quel POI:
+        // se l'utente chiude il banner mentre il teaser sta ancora parlando,
+        // lasciar finire la frase e' esattamente il contrario di quello che ha
+        // chiesto. La funzione e' per-POI: non tocca una guida diversa in
+        // riproduzione. Fuori dalla coroutine perche' e' immediata e non deve
+        // aspettare il giro su Room.
+        try {
+            com.itaintasca.app.geofence.GeofenceBroadcastReceiver.stopSpeakingForPoi(context, poiId)
+        } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "stop voce per $poiId non riuscito: ${e.message}")
+        }
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            val ret = JSObject()
+            try {
+                com.itaintasca.app.db.PoiDatabase.getInstance(context).poiDao().updateTriggerState(
+                    com.itaintasca.app.db.TriggerStateEntity(
+                        poiId,
+                        com.itaintasca.app.db.TriggerState.EXITED
+                    )
+                )
+                ret.put("ok", true)
+            } catch (e: Exception) {
+                Log.w("ItaintaPoiPlugin", "markPoiExited fallita per $poiId: ${e.message}")
+                ret.put("ok", false)
+                ret.put("reason", e.message ?: "db_error")
+            }
+            call.resolve(ret)
+        }
     }
 
     @PluginMethod
@@ -497,41 +662,45 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      * Verifica al momento del DOWNLOAD (con la rete ancora disponibile) che la
      * voce TTS della lingua sia installata e utilizzabile offline. Non
      * scoprirlo quando si è già senza rete.
+     *
+     * (23/08/2026) La mappa delle lingue e il criterio «voce usabile offline»
+     * NON sono più riscritti qui: sono quelli di
+     * GeofenceBroadcastReceiver.localeForLang/hasOfflineVoice, gli stessi che
+     * decidono al momento di parlare. Prima erano due copie e potevano
+     * rispondere in modo diverso — il download veniva approvato e poi, in
+     * strada, la voce non c'era. Cambia anche il verso del dubbio: se il motore
+     * non espone l'elenco delle voci non si dichiara più `false` (che avrebbe
+     * fermato il download su telefoni perfettamente capaci), si dice `true` e
+     * il controllo al momento di parlare farà da rete di sicurezza.
      */
     @PluginMethod
     fun checkOfflineTtsVoice(call: PluginCall) {
         val lang = call.getString("language") ?: "it"
-        val locale = when (lang) {
-            "en" -> java.util.Locale.ENGLISH
-            "fr" -> java.util.Locale.FRENCH
-            "es" -> java.util.Locale("es", "ES")
-            "de" -> java.util.Locale.GERMAN
-            "ru" -> java.util.Locale("ru", "RU")
-            "zh" -> java.util.Locale.SIMPLIFIED_CHINESE
-            else -> java.util.Locale.ITALIAN
-        }
+        val locale = com.itaintasca.app.geofence.GeofenceBroadcastReceiver.localeForLang(lang)
         var tts: android.speech.tts.TextToSpeech? = null
         tts = android.speech.tts.TextToSpeech(context) { status ->
             val ret = JSObject()
-            if (status == android.speech.tts.TextToSpeech.SUCCESS) {
-                val res = tts?.isLanguageAvailable(locale)
-                    ?: android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
-                ret.put("available", res >= android.speech.tts.TextToSpeech.LANG_AVAILABLE)
-                // Una voce può esserci ma richiedere la rete: cerchiamone una
-                // dichiarata utilizzabile offline.
-                val hasOfflineVoice = try {
-                    tts?.voices?.any { v ->
-                        v.locale.language == locale.language && !v.isNetworkConnectionRequired
-                    } ?: false
+            val engine = tts
+            if (status == android.speech.tts.TextToSpeech.SUCCESS && engine != null) {
+                val res = try {
+                    engine.isLanguageAvailable(locale)
                 } catch (_: Exception) {
-                    false
+                    android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
                 }
-                ret.put("offlineVoice", hasOfflineVoice)
+                val available = res >= android.speech.tts.TextToSpeech.LANG_AVAILABLE
+                ret.put("available", available)
+                // Una voce può esserci ma richiedere la rete: offline, silenzio.
+                ret.put(
+                    "offlineVoice",
+                    available &&
+                        com.itaintasca.app.geofence.GeofenceBroadcastReceiver
+                            .hasOfflineVoice(engine, locale)
+                )
             } else {
                 ret.put("available", false)
                 ret.put("offlineVoice", false)
             }
-            try { tts?.shutdown() } catch (_: Exception) { }
+            try { engine?.shutdown() } catch (_: Exception) { }
             call.resolve(ret)
         }
     }
@@ -641,15 +810,44 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         // Identità utente cifrata (EncryptedSharedPreferences): prima
         // userId/accessToken erano in chiaro in "ItaintaPrefs" insieme a
         // impostazioni non sensibili. Le altre prefs restano invariate.
-        com.itaintasca.app.service.SecurePrefs.get(context).edit()
-            .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_USER_ID, userId)
-            .putString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, accessToken)
-            .apply()
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+        // (SEC-08) putUserContext: nello store di ripiego in chiaro il token
+        // NON viene scritto.
+        val precedente = try {
+            com.itaintasca.app.service.SecurePrefs.get(context)
+                .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_USER_ID, "") ?: ""
+        } catch (_: Exception) { "" }
+        com.itaintasca.app.service.SecurePrefs.putUserContext(context, userId, accessToken)
+        // (SEC-02) Cambio utente sullo stesso telefono: via il mirror in
+        // memoria dell'utente precedente (quello su disco e' gia' per utente).
+        if (precedente != userId) com.itaintasca.app.service.ListeningHistoryStore.clearMemory()
+        // (SEC-10) Scope condiviso, serializzato e con timeout: niente piu'
+        // CoroutineScope(Dispatchers.IO).launch fire-and-forget.
+        val appContext = context.applicationContext
+        com.itaintasca.app.service.HistoryScope.scope.launch {
             try {
-                com.itaintasca.app.service.ListeningHistoryStore.syncFromCloud(context)
+                com.itaintasca.app.service.ListeningHistoryStore.syncFromCloud(appContext)
             } catch (_: Exception) { /* best-effort */ }
         }
+        call.resolve()
+    }
+
+    /**
+     * (SEC-02) LOGOUT: via userId e access token dallo store cifrato e il
+     * mirror in memoria dello storico ascolti. Le chiavi per utente su disco
+     * (`listened_poi_ids_<userId>`) restano: sono gia' isolate per account e
+     * tornano utili se lo stesso utente rientra. Da chiamare dal JS insieme a
+     * supabase.auth.signOut(). Mai un reject: il logout deve sempre finire.
+     */
+    @PluginMethod
+    fun clearUserContext(call: PluginCall) {
+        try {
+            com.itaintasca.app.service.SecurePrefs.clearUserContext(context)
+        } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "clearUserContext: pulizia SecurePrefs fallita: ${e.message}")
+        }
+        try {
+            com.itaintasca.app.service.ListeningHistoryStore.clearMemory()
+        } catch (_: Exception) { }
         call.resolve()
     }
 
@@ -761,6 +959,32 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                     call.resolve(ret)
                     return@launch
                 }
+
+                // LA LINGUA DEL PACCHETTO (23/08/2026). Un pacchetto porta UNA
+                // lingua sola: quella scelta al download. Se l'utente cambia
+                // lingua dopo, il testo che c'è è in un'altra lingua, e finora
+                // il POI o taceva senza spiegazioni (ArrivalWorker) o si faceva
+                // leggere testo italiano con la pronuncia tedesca (qui).
+                // Adesso si dice com'è: si risponde `lang_mismatch` con le due
+                // lingue, e si legge lo stesso SOLO se il chiamante ha già
+                // chiesto all'utente e passa acceptOtherLanguage=true. Mai una
+                // scelta presa al posto suo, mai il silenzio muto.
+                val pkgLang = db.offlineDao().getPoiPackageLanguage(poiId)
+                val mismatch = mp3 == null && !text.isNullOrBlank() &&
+                    pkgLang != null && !pkgLang.equals(lang, ignoreCase = true)
+                if (mismatch && call.getBoolean("acceptOtherLanguage", false) != true) {
+                    ret.put("ok", false)
+                    ret.put("reason", "lang_mismatch")
+                    ret.put("packageLanguage", pkgLang)
+                    ret.put("userLanguage", lang)
+                    com.itaintasca.app.geofence.GeofenceBroadcastReceiver
+                        .notifyPackageLanguage(context, pkgLang!!, lang)
+                    call.resolve(ret)
+                    return@launch
+                }
+                // L'utente ha accettato di ascoltare nell'altra lingua: glielo
+                // si conferma nella risposta, così la scheda può dirlo.
+                if (mismatch) ret.put("langMismatch", true)
 
                 val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
                 val nowMs = System.currentTimeMillis()

@@ -22,8 +22,10 @@ interface PlanMapProps {
 // Colors per day (polyline)
 const DAY_COLORS = ['#1e3a8a', '#e17b3c', '#2563eb', '#9333ea', '#db2777', '#0891b2'];
 
-// CARTO richiede la chiave gratuita dal 26/08/2026 (stessa nota di MapArea.tsx).
-const CARTO_TILE_URL = `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${import.meta.env.VITE_CARTO_API_KEY || ''}`;
+// CARTO richiede la chiave gratuita dal 26/08/2026 (stessa nota di MapArea.tsx):
+// URL e chiave vivono in lib/cartoTiles.ts, con ripiego a runtime se la build
+// non aveva VITE_CARTO_API_KEY.
+import { cartoTileUrl, ensureCartoKey, onCartoKeyChange } from '../lib/cartoTiles';
 
 // Color + emoji based on stop type
 function getMarkerStyle(tipo: string): { bg: string; border: string; emoji: string } {
@@ -114,6 +116,12 @@ function median(nums: number[]): number {
 }
 
 function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAudioGuideActive = false }: PlanMapProps) {
+  const [cartoUrl, setCartoUrl] = React.useState<string>(() => cartoTileUrl());
+  React.useEffect(() => {
+    const off = onCartoKeyChange(() => setCartoUrl(cartoTileUrl()));
+    ensureCartoKey().then(() => setCartoUrl(cartoTileUrl())).catch(() => {});
+    return off;
+  }, []);
   // Coordinate allucinate dall'AI (luogo omonimo in un'altra città) finivano
   // sulla mappa: un pin a 400 km sfasciava zoom e percorso. Filtro robusto:
   // centro MEDIANO delle tappe (insensibile agli outlier) + soglia adattiva.
@@ -192,7 +200,8 @@ function PlanMap({ giorni, isPrint = false, navRouteGeometry, onSelectPoi, isAud
             service worker) copre anche la mappa dell'itinerario. */}
         <TileLayer
           attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url={CARTO_TILE_URL}
+          key={cartoUrl}
+          url={cartoUrl}
         />
         {bounds && <ChangeView bounds={bounds} />}
 

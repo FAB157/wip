@@ -29,8 +29,29 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setupMediaSession", returnType: CAPPluginReturnPromise)
     ]
 
+    /// (28/08/2026, AUD-01) Istanza viva del plugin, per SpeechQueue: la voce
+    /// nativa (teaser, annunci) deve sapere se la guida JS sta suonando e
+    /// metterla in pausa — `.duckOthers` non agisce su un secondo player
+    /// della stessa app, e prima le due voci si sovrapponevano. `weak`: il
+    /// plugin vive quanto il bridge Capacitor, non lo si trattiene.
+    public private(set) static weak var shared: WipBackgroundAudioPlugin?
+
     private var player: AVPlayer?
     private var statusObservation: NSKeyValueObservation?
+    /// (AUD-12) KVO su `timeControlStatus`: è l'unica fonte di verità su
+    /// "sta suonando" — le pause decise dal sistema (route, stall, fine
+    /// buffer) non passano da nessun metodo del plugin.
+    private var timeControlObservation: NSKeyValueObservation?
+    /// Ultimo `isPlaying` mandato al JS: la KVO notifica solo i cambi.
+    private var ultimoStatoNotificato: Bool?
+    /// (AUD-01) In pausa per far parlare SpeechQueue: si riprende a coda
+    /// vuota. Qualunque comando esplicito (pause/resume/stop/play dal JS o
+    /// dalla Lock Screen) lo azzera: la volontà dell'utente vince.
+    private(set) var isPausedForSpeech = false
+    /// L'utente (o il JS) vuole la riproduzione in corso: serve allo stacco
+    /// delle cuffie, quando iOS mette in pausa l'AVPlayer da solo e noi
+    /// dobbiamo farlo ripartire dall'altoparlante (decisione 28/08/2026).
+    private var riproduzioneVoluta = false
     private var progressTimer: Timer?
     /// Velocità scelta dall'utente: va riapplicata a ogni resume perché
     /// AVPlayer riparte sempre a rate 1.0 con play().
@@ -46,10 +67,21 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     override public func load() {
         super.load()
+        Self.shared = self
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleInterruption(_:)),
             name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        // (AUD-12) Cambio di uscita: auricolari sfilati / Bluetooth spento.
+        // Il sistema mette in pausa l'AVPlayer da solo ma non lo dice a
+        // nessuno: la UI JS restava su "in riproduzione" e la Lock Screen su
+        // rate 1. Qui la pausa diventa esplicita e notificata.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRouteChange(_:)),
+            name: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance()
         )
         // Il timer di progresso non deve battere a schermo spento: gli eventi
@@ -74,6 +106,45 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        statusObservation?.invalidate()
+        timeControlObservation?.invalidate()
+        progressTimer?.invalidate()
+        timerSpegnimentoSessione?.invalidate()
+    }
+
+    // MARK: - Coordinamento con la voce nativa (SpeechQueue, AUD-01)
+
+    /// Il player JS sta suonando? Da leggere sul main.
+    var isPlaying: Bool { (player?.rate ?? 0) > 0 }
+
+    /// SpeechQueue sta per parlare: pausa, ricordando che è stata nostra.
+    /// Sul main (i chiamanti di SpeechQueue già ci stanno; si rientra
+    /// comunque in modo sicuro).
+    func pauseForSpeech() {
+        let esegui = {
+            guard let player = self.player, player.rate > 0 else { return }
+            player.pause()
+            self.isPausedForSpeech = true
+            self.updateNowPlayingInfo()
+            self.notifyPlaybackState(isPlaying: false)
+        }
+        if Thread.isMainThread { esegui() } else { DispatchQueue.main.async(execute: esegui) }
+    }
+
+    /// SpeechQueue ha finito: si riprende SOLO se la pausa era nostra e
+    /// nessuno nel frattempo ha fermato o sostituito il player.
+    func resumeAfterSpeechIfNeeded() {
+        let esegui = {
+            guard self.isPausedForSpeech, let player = self.player else { return }
+            self.isPausedForSpeech = false
+            self.riproduzioneVoluta = true
+            self.annullaSpegnimentoSessione()
+            self.activateAudioSession()
+            player.playImmediately(atRate: self.desiredRate)
+            self.updateNowPlayingInfo()
+            self.notifyPlaybackState(isPlaying: true)
+        }
+        if Thread.isMainThread { esegui() } else { DispatchQueue.main.async(execute: esegui) }
     }
 
     // MARK: - Metodi plugin
@@ -99,6 +170,10 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         DispatchQueue.main.async {
+            // (AUD-01) La guida JS parte: la voce nativa cede (teaser in coda
+            // compresi). Mai due voci insieme — e questa è quella che
+            // l'utente ha chiesto toccando Ascolta.
+            SpeechQueue.shared.stopSpeaking()
             self.teardownPlayer(deactivateSession: false)
             self.activateAudioSession()
 
@@ -115,6 +190,19 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
                     self.teardownPlayer(deactivateSession: true)
                 }
             }
+            // (AUD-12) Stato reale di riproduzione → JS + Now Playing. La
+            // KVO può arrivare da un thread qualsiasi: si torna sul main.
+            // `.waitingToPlayAtSpecifiedRate` (buffering) conta come "in
+            // riproduzione": è l'intenzione, e la barra non deve lampeggiare.
+            self.timeControlObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] osservato, _ in
+                DispatchQueue.main.async {
+                    guard let self = self, self.player === osservato else { return }
+                    let inRiproduzione = osservato.timeControlStatus != .paused
+                    guard self.ultimoStatoNotificato != inRiproduzione else { return }
+                    self.notifyPlaybackState(isPlaying: inRiproduzione)
+                    self.updateNowPlayingInfo()
+                }
+            }
 
             NotificationCenter.default.addObserver(
                 self,
@@ -124,6 +212,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             )
 
             self.configureRemoteCommandsIfNeeded()
+            self.riproduzioneVoluta = true
             player.playImmediately(atRate: self.desiredRate)
             self.startProgressTimer()
             self.updateNowPlayingInfo()
@@ -134,6 +223,8 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func pause(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.isPausedForSpeech = false // pausa voluta: niente ripresa automatica
+            self.riproduzioneVoluta = false
             self.player?.pause()
             self.programmaSpegnimentoSessione()
             self.updateNowPlayingInfo()
@@ -144,6 +235,8 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func resume(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
+            self.isPausedForSpeech = false
+            self.riproduzioneVoluta = true
             self.annullaSpegnimentoSessione()
             self.activateAudioSession()
             self.player?.playImmediately(atRate: self.desiredRate)
@@ -269,6 +362,36 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         timerSpegnimentoSessione = nil
     }
 
+    /// (AUD-12) `.oldDeviceUnavailable` (auricolari sfilati, Bluetooth
+    /// spento): pausa esplicita — è la linea guida Apple per un player di
+    /// contenuti, e la ragione è pratica: l'audio passerebbe all'altoparlante
+    /// a tutto volume in mezzo alla gente. La voce nativa (SpeechQueue) segue
+    /// una regola diversa e deliberata — continua — perché è un annuncio
+    /// breve; qui sono minuti di racconto. Gli altri motivi non toccano nulla.
+    @objc private func handleRouteChange(_ notification: Notification) {
+        guard let info = notification.userInfo,
+              let raw = info[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw),
+              reason == .oldDeviceUnavailable else { return }
+        // Cuffie/BT staccati: iOS mette in pausa l'AVPlayer da solo. Decisione
+        // di prodotto (28/08/2026, stessa regola della voce nativa del 23/08):
+        // la guida CONTINUA dall'altoparlante. Si riparte solo se la
+        // riproduzione era voluta e non è una pausa per la voce nativa; se
+        // l'utente aveva messo in pausa lui, resta in pausa.
+        DispatchQueue.main.async {
+            guard let player = self.player, self.riproduzioneVoluta, !self.isPausedForSpeech else {
+                self.updateNowPlayingInfo()
+                self.notifyPlaybackState(isPlaying: self.isPlaying)
+                return
+            }
+            self.annullaSpegnimentoSessione()
+            self.activateAudioSession()
+            player.playImmediately(atRate: self.desiredRate)
+            self.updateNowPlayingInfo()
+            self.notifyPlaybackState(isPlaying: true)
+        }
+    }
+
     @objc private func handleInterruption(_ notification: Notification) {
         guard let info = notification.userInfo,
               let typeValue = info[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -337,15 +460,21 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func notifyPlaybackState(isPlaying: Bool) {
+        ultimoStatoNotificato = isPlaying
         notifyListeners("playbackStatus", data: ["isPlaying": isPlaying])
     }
 
     private func teardownPlayer(deactivateSession: Bool) {
         annullaSpegnimentoSessione()
+        isPausedForSpeech = false
+        riproduzioneVoluta = false
+        ultimoStatoNotificato = nil
         progressTimer?.invalidate()
         progressTimer = nil
         statusObservation?.invalidate()
         statusObservation = nil
+        timeControlObservation?.invalidate()
+        timeControlObservation = nil
         if let item = player?.currentItem {
             NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: item)
         }
@@ -374,15 +503,28 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    private func configureRemoteCommandsIfNeeded() {
+    /// Non più `private` (AUD-14): SpeechQueue la chiama quando fa partire
+    /// l'MP3 della guida completa, così i tasti della Lock Screen esistono
+    /// anche se il JS non ha mai riprodotto nulla in questa sessione.
+    /// Idempotente: i target si registrano una volta sola.
+    func configureRemoteCommandsIfNeeded() {
         guard !remoteCommandsConfigured else { return }
         remoteCommandsConfigured = true
         UIApplication.shared.beginReceivingRemoteControlEvents()
 
         let center = MPRemoteCommandCenter.shared()
 
+        // (AUD-14) Player JS nil ma MP3 della guida in SpeechQueue: play e
+        // pausa agiscono lì. Prima rispondevano .noSuchContent e dalla Lock
+        // Screen non si poteva fermare la guida del Day Pass.
         center.playCommand.addTarget { [weak self] _ in
-            guard let self = self, self.player != nil else { return .noSuchContent }
+            guard let self = self else { return .noSuchContent }
+            guard self.player != nil else {
+                guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
+                SpeechQueue.shared.continueSpeaking()
+                return .success
+            }
+            self.isPausedForSpeech = false
             self.activateAudioSession()
             self.player?.playImmediately(atRate: self.desiredRate)
             self.updateNowPlayingInfo()
@@ -390,11 +532,42 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            guard let self = self, self.player != nil else { return .noSuchContent }
+            guard let self = self else { return .noSuchContent }
+            guard self.player != nil else {
+                guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
+                SpeechQueue.shared.pauseSpeaking()
+                return .success
+            }
+            self.isPausedForSpeech = false
             self.player?.pause()
             self.programmaSpegnimentoSessione()
             self.updateNowPlayingInfo()
             self.notifyPlaybackState(isPlaying: false)
+            return .success
+        }
+        // Un solo tasto play/pausa (AirPods, tasto cuffie): stessa logica.
+        center.togglePlayPauseCommand.addTarget { [weak self] _ in
+            guard let self = self else { return .noSuchContent }
+            if let player = self.player {
+                self.isPausedForSpeech = false
+                if player.rate > 0 {
+                    player.pause()
+                    self.programmaSpegnimentoSessione()
+                    self.notifyPlaybackState(isPlaying: false)
+                } else {
+                    self.activateAudioSession()
+                    player.playImmediately(atRate: self.desiredRate)
+                    self.notifyPlaybackState(isPlaying: true)
+                }
+                self.updateNowPlayingInfo()
+                return .success
+            }
+            guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
+            if SpeechQueue.shared.isMp3Playing {
+                SpeechQueue.shared.pauseSpeaking()
+            } else {
+                SpeechQueue.shared.continueSpeaking()
+            }
             return .success
         }
         center.skipForwardCommand.preferredIntervals = [15]

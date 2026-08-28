@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Download, Trash2, MapPin, Search, Loader2, RefreshCw, Radar } from 'lucide-react';
-import { OfflineMapArea, saveOfflineMapArea, getOfflineMapAreasList, deleteOfflineMapArea } from '../lib/offlineStorage';
+import { OfflineMapArea, saveOfflineMapArea, getOfflineMapAreasList, deleteOfflineMapArea, updateOfflineMapAreaMeta } from '../lib/offlineStorage';
 import { prefetchTilesForArea, removeTilesForArea, planTilesForArea, stimaDownloadArea } from '../lib/offlineTiles';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import { getTranslation, Language } from '../lib/i18n';
@@ -369,8 +369,11 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
         const west = centerLon - lonDelta;
         const east = centerLon + lonDelta;
 
+        // [timeout:25] lato Overpass + 15 s lato client (ITI-07): con 90 s il
+        // download restava appeso su un mirror lento, e Overpass a runtime
+        // e' gia' best-effort (vedi memoria "Overpass inaffidabile").
         const overpassQuery = `
-          [out:json][timeout:90];
+          [out:json][timeout:25];
           (
             nwr["tourism"~"^(museum|gallery|viewpoint|artwork|attraction|theme_park|zoo|winery)$"](${south},${west},${north},${east});
             nwr["historic"](${south},${west},${north},${east});
@@ -391,11 +394,11 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
         let overpassRes = null;
         for (const mirror of overpassMirrors) {
           try {
-            const tempRes = await fetch(mirror, {
+            const tempRes = await apiFetch(mirror, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: `data=${encodeURIComponent(overpassQuery)}`
-            });
+            }, 15000);
             if (tempRes.ok) {
               overpassRes = tempRes;
               break;
@@ -485,6 +488,9 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
 
       // 4. Sfondo mappa: senza le tile in cache la mappa offline era vuota.
       const tiles = await prefetchTiles(centerLat, centerLon);
+      // Esito salvato nell'area (ITI-05): `failed > 0` → badge «Incompleta»
+      // e bottone «Completa download» nella lista.
+      await updateOfflineMapAreaMeta(newArea.id, { tiles });
 
       await loadAreas();
       setSearchCity('');
@@ -510,6 +516,29 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
     if (!searchCity.trim()) return;
     if (isNative) handleDownloadNative();
     else handleDownloadWeb();
+  };
+
+  /** «Completa download» (ITI-05): rilancia il prefetch delle tile dell'area;
+   *  quelle gia' in cache vengono saltate, si scaricano solo le mancanti. */
+  const handleCompletaTile = async (area: OfflineMapArea) => {
+    if (isDownloading || !area?.center) return;
+    setIsDownloading(true);
+    setDownloadProgress(t('pf_om_sfondo'));
+    try {
+      const tiles = await prefetchTilesForArea(area.center.lat, area.center.lon, area.radiusKm, (p) => {
+        setDownloadProgress(t('pf_om_sfondo_n', { n: p.done, x: p.total }));
+      });
+      await updateOfflineMapAreaMeta(area.id, { tiles });
+      await loadAreas();
+      notify(tiles.failed > 0
+        ? t('offl_incompleta', { n: tiles.failed })
+        : t('offl_completato', { n: tiles.done }));
+    } catch (e: any) {
+      notify(e?.message || t('pf_om_download_err'));
+    } finally {
+      setIsDownloading(false);
+      setDownloadProgress('');
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -710,10 +739,25 @@ export default function OfflineMapsTab({ language }: OfflineMapsTabProps) {
                     onClick={() => window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: area.center.lat, lon: area.center.lon, zoom: 13 } }))}
                   >
                     <h4 className="font-semibold text-gray-900">{area.name}</h4>
-                    <div className="flex gap-4 mt-1 text-xs text-gray-500">
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-gray-500">
                       <span>{t('pf_om_pin', { n: area.poiCount })}</span>
                       <span>{new Date(area.date).toLocaleDateString(t('pf_locale'))}</span>
+                      {(area.tiles?.failed ?? 0) > 0 && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">
+                          {t('offl_incompleta', { n: area.tiles!.failed })}
+                        </span>
+                      )}
                     </div>
+                    {(area.tiles?.failed ?? 0) > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCompletaTile(area); }}
+                        disabled={isDownloading}
+                        className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-xs font-bold hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        {t('offl_completa_download')}
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
                     <button

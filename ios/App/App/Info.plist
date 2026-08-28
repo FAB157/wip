@@ -50,6 +50,15 @@
 	<string>La tua posizione serve per mostrarti i punti di interesse sulla mappa e calcolare il percorso verso i monumenti.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>L'accesso continuo alla posizione permette all'audioguida di attivarsi automaticamente mentre esplori la città, anche a schermo spento.</string>
+	<!-- Precisione piena temporanea (MAP-08): con «Posizione esatta» spenta iOS
+	     consegna fix a ~3 km e nessun trigger a 30 m può scattare. La chiave
+	     `Audioguida` è quella passata da BackgroundPoiManager a
+	     requestTemporaryFullAccuracyAuthorization(withPurposeKey:). -->
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>Audioguida</key>
+		<string>Serve la posizione precisa per riconoscere il monumento davanti a te</string>
+	</dict>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Utilizziamo il Face ID per proteggere il tuo profilo e i tuoi contenuti premium.</string>
 	<key>NSCameraUsageDescription</key>

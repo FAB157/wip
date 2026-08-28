@@ -12,7 +12,7 @@ import {
 import { getCachedPoiDetails, setCachedPoiDetails } from "../lib/poiCache";
 import { fetchCityNameQueued } from "../lib/nominatimQueue";
 import { Language, getTranslation } from "../lib/i18n";
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, bearerHeaders } from '../lib/api';
 import { fotoPrincipale } from '../lib/fotoUrl';
 import { displayName } from '../lib/poiDisplay';
 import AttribuzioneFoto from './AttribuzioneFoto';
@@ -436,9 +436,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           };
 
           // Avvia lo stream Groq
+          // SSE: fetch nuda per leggere lo stream, ma col Bearer (401 altrimenti).
           const streamRes = await fetch(getApiUrl(`/api/poi/enrich-stream`), {
              method: "POST",
-             headers: { "Content-Type": "application/json" },
+             headers: { "Content-Type": "application/json", ...(await bearerHeaders()) },
              signal: streamCtrl.signal,
              body: JSON.stringify({
                id: poi.id,

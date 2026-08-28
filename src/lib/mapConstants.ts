@@ -20,6 +20,9 @@ export const CATEGORY_COLORS: Record<string, string> = {
   beni_culturali:    "bg-[#78716c]",
   // Vino e Gusto: bordeaux, il colore che nessun'altra macro usa.
   enogastronomia:    "bg-[#7f1d1d]",
+  // Turismo dello Shopping e Turismo di Lusso (28/08/2026): stesso schema.
+  shopping:          "bg-[#c026d3]",
+  lusso:             "bg-[#581c87]",
   church:            "bg-[#4338ca]",
   museum:            "bg-[#7c3aed]",
   viewpoint:         "bg-[#0369a1]",
@@ -277,6 +280,7 @@ export const SUB_CATEGORY_EMOJIS: Record<string, string> = {
   stazione_fs: "🚂",
   station: "🚂",
   casello_autostradale: "🛣️",
+  ev_charging: "🔌",
   metropolitana: "🚇",
   metro: "🚇",
   subway_entrance: "🚇",

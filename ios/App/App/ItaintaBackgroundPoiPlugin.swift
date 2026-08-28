@@ -49,7 +49,10 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "getOfflineSpendState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "markSpendReconciled", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "playOfflineGuide", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "getHealthStats", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "getHealthStats", returnType: CAPPluginReturnPromise),
+        // (28/08/2026) Logout e apertura Impostazioni (audit SEC-02 / UX-03)
+        CAPPluginMethod(name: "clearUserContext", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -114,7 +117,7 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
 
         switch status {
         case .authorizedAlways:
-            call.resolve(["status": "all_granted"])
+            call.resolve(["status": "all_granted", "background": "granted"])
             rilasciaPermissionManager()
         case .authorizedWhenInUse:
             // Upgrade a "Sempre": iOS mostra il prompt una sola volta, poi
@@ -127,7 +130,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                     let now: CLAuthorizationStatus
                     if #available(iOS 14.0, *) { now = manager.authorizationStatus }
                     else { now = CLLocationManager.authorizationStatus() }
-                    pending.resolve(["status": now == .authorizedAlways ? "all_granted" : "requesting_background_location"])
+                    // (28/08/2026, MAP-05) `background` dice la verità sul
+                    // permesso in background accanto allo `status` legacy:
+                    // "granted" SOLO con «Sempre», "limited" con «Mentre usi
+                    // l'app». I valori di `status` non cambiano.
+                    if now == .authorizedAlways {
+                        pending.resolve(["status": "all_granted", "background": "granted"])
+                    } else {
+                        pending.resolve(["status": "requesting_background_location", "background": "limited"])
+                    }
                     self.rilasciaPermissionManager()
                 }
             }
@@ -159,10 +170,12 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         switch status {
         case .authorizedAlways:
             pendingPermissionCall = nil
-            call.resolve(["status": "all_granted"])
+            call.resolve(["status": "all_granted", "background": "granted"])
         case .authorizedWhenInUse:
+            // «Mentre usi l'app» NON è definitivo per noi: a schermo spento
+            // iOS smette di consegnare i fix. `background: "limited"`.
             pendingPermissionCall = nil
-            call.resolve(["status": "denied_background_location"])
+            call.resolve(["status": "denied_background_location", "background": "limited"])
         case .denied, .restricted:
             pendingPermissionCall = nil
             call.reject("Permesso posizione necessario")
@@ -438,6 +451,41 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         SecureSessionStore.set(call.getString("accessToken"), forKey: ListeningHistoryStore.prefAccessToken)
         ListeningHistoryStore.shared.syncFromCloud()
         call.resolve()
+    }
+
+    /**
+     * (28/08/2026, SEC-02) Logout: via userId e token dal Keychain
+     * (SecureSessionStore) e via gli specchi del portafoglio e del Day Pass in
+     * UserDefaults. Prima il nativo non aveva un modo per dimenticare
+     * l'utente: dopo il logout continuava a spendere lo snapshot crediti e il
+     * pass di chi se n'era andato, e a registrare ascolti a suo nome. Lo
+     * storico ascolti per utente resta (è già isolato per id, vedi
+     * ListeningHistoryStore). Mai un reject: il JS chiama e va avanti.
+     */
+    @objc func clearUserContext(_ call: CAPPluginCall) {
+        ListeningHistoryStore.shared.clearSession()
+        prefs.removeObject(forKey: "wallet_snapshot_credits")
+        prefs.removeObject(forKey: "daypass_expires_at")
+        prefs.removeObject(forKey: "daypass_cap")
+        prefs.removeObject(forKey: "daypass_used")
+        call.resolve()
+    }
+
+    /**
+     * (28/08/2026, UX-03) Apre la pagina dell'app nelle Impostazioni di iOS
+     * (permessi posizione «Sempre», «Posizione esatta», notifiche). Il JS la
+     * offre quando il servizio segnala `permissionDowngraded`.
+     */
+    @objc func openAppSettings(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            guard let url = URL(string: UIApplication.openSettingsURLString) else {
+                call.resolve(["opened": false])
+                return
+            }
+            UIApplication.shared.open(url, options: [:]) { ok in
+                call.resolve(["opened": ok])
+            }
+        }
     }
 
     @objc func setWalletBalance(_ call: CAPPluginCall) {

@@ -332,6 +332,26 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Вино и вкус",
     ZH: "美酒与风味"
   , DE: "Wein & Genuss"},
+  // Layer del turismo dello shopping: vie/quartieri, grandi magazzini, mall,
+  // outlet, souk/bazaar. Stesso schema di enogastronomia (28/08/2026).
+  shopping: {
+    IT: "Turismo dello Shopping",
+    EN: "Shopping Tourism",
+    FR: "Tourisme de Shopping",
+    ES: "Turismo de Compras",
+    RU: "Шопинг-туризм",
+    ZH: "购物旅游"
+  , DE: "Shopping-Tourismus"},
+  // Layer del turismo di lusso: hotel/resort top di gamma, ristoranti
+  // stellati, marine per yacht, treni storici, sci di lusso (28/08/2026).
+  lusso: {
+    IT: "Turismo di Lusso",
+    EN: "Luxury Tourism",
+    FR: "Tourisme de Luxe",
+    ES: "Turismo de Lujo",
+    RU: "Люкс-туризм",
+    ZH: "奢华旅游"
+  , DE: "Luxustourismus"},
   eventi: {
     IT: "Eventi",
     EN: "Events",
@@ -894,6 +914,23 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   posizione_negata_titolo: { IT: "Posizione non consentita", EN: "Location not allowed", FR: "Position refusée", ES: "Ubicación no permitida", DE: "Standort nicht erlaubt", RU: "Доступ к геопозиции запрещён", ZH: "未允许获取位置" },
   posizione_negata_testo: { IT: "Senza la posizione l'audioguida non sa dove sei. Consenti la posizione a questo sito dalle impostazioni del browser (icona del lucchetto accanto all'indirizzo) e ricarica la pagina.", EN: "Without your location the audio guide cannot know where you are. Allow location for this site in the browser settings (the lock icon next to the address) and reload the page.", FR: "Sans la position, l'audioguide ne sait pas où vous êtes. Autorisez la position pour ce site dans les réglages du navigateur (icône cadenas à côté de l'adresse) et rechargez la page.", ES: "Sin la ubicación la audioguía no sabe dónde estás. Permite la ubicación para este sitio en los ajustes del navegador (icono del candado junto a la dirección) y recarga la página.", DE: "Ohne Standort weiß der Audioguide nicht, wo du bist. Erlaube den Standort für diese Seite in den Browser-Einstellungen (Schloss-Symbol neben der Adresse) und lade die Seite neu.", RU: "Без геопозиции аудиогид не знает, где вы. Разрешите доступ к геопозиции для этого сайта в настройках браузера (значок замка рядом с адресом) и перезагрузите страницу.", ZH: "没有位置信息，语音导览无法知道您在哪里。请在浏览器设置中（地址栏旁的锁形图标）允许此网站获取位置，然后刷新页面。" },
   posizione_negata_stato: { IT: "GPS negato: l'audioguida non può sapere dove sei", EN: "GPS denied: the audio guide cannot know where you are", FR: "GPS refusé : l'audioguide ne peut pas savoir où vous êtes", ES: "GPS denegado: la audioguía no puede saber dónde estás", DE: "GPS verweigert: der Audioguide weiß nicht, wo du bist", RU: "GPS запрещён: аудиогид не знает, где вы", ZH: "GPS 被拒绝：语音导览无法知道您的位置" },
+  // ── Audit pre-release 28/08/2026: stringhe prima cablate in IT/EN ──
+  loc_denied_banner: { IT: "Posizione disattivata: le audioguide automatiche non partono.", EN: "Location off: automatic audio guides are disabled.", FR: "Position désactivée : les audioguides automatiques ne démarrent pas.", ES: "Ubicación desactivada: las audioguías automáticas no arrancan.", DE: "Standort aus: automatische Audioguides starten nicht.", RU: "Геопозиция выключена: автоматические аудиогиды не запускаются.", ZH: "位置已关闭：自动语音导览无法启动。" },
+  loc_denied_dismiss: { IT: "Chiudi", EN: "Dismiss", FR: "Fermer", ES: "Cerrar", DE: "Schließen", RU: "Закрыть", ZH: "关闭" },
+  nav_sottotitolo: { IT: "Navigazione", EN: "Navigation", FR: "Navigation", ES: "Navegación", DE: "Navigation", RU: "Навигация", ZH: "导航" },
+  audio_titolo_default: { IT: "Audioguida", EN: "Audio guide", FR: "Audioguide", ES: "Audioguía", DE: "Audioguide", RU: "Аудиогид", ZH: "语音导览" },
+  nav_skip_stop: { IT: "Salta tappa", EN: "Skip stop", FR: "Passer l'étape", ES: "Saltar parada", DE: "Halt überspringen", RU: "Пропустить точку", ZH: "跳过此站" },
+  sk_riprova: { IT: "Riprova", EN: "Retry", FR: "Réessayer", ES: "Reintentar", DE: "Erneut versuchen", RU: "Повторить", ZH: "重试" },
+  sk_rete_lenta: { IT: "Rete lenta: la scheda ci sta mettendo più del solito.", EN: "Slow network: this card is taking longer than usual.", FR: "Réseau lent : la fiche met plus de temps que d'habitude.", ES: "Red lenta: la ficha está tardando más de lo normal.", DE: "Langsames Netz: die Karte braucht länger als sonst.", RU: "Медленная сеть: карточка загружается дольше обычного.", ZH: "网络较慢：此卡片加载时间比平时更长。" },
+  offl_incompleta: { IT: "Incompleta ({n} tile mancanti)", EN: "Incomplete ({n} tiles missing)", FR: "Incomplète ({n} tuiles manquantes)", ES: "Incompleta (faltan {n} teselas)", DE: "Unvollständig ({n} Kacheln fehlen)", RU: "Не завершено (не хватает {n} тайлов)", ZH: "未完成（缺少 {n} 个图块）" },
+  offl_completa_download: { IT: "Completa download", EN: "Complete download", FR: "Terminer le téléchargement", ES: "Completar descarga", DE: "Download abschließen", RU: "Завершить загрузку", ZH: "完成下载" },
+  offl_completato: { IT: "Sfondo mappa completato: {n} tile scaricate.", EN: "Map background completed: {n} tiles downloaded.", FR: "Fond de carte terminé : {n} tuiles téléchargées.", ES: "Fondo de mapa completado: {n} teselas descargadas.", DE: "Kartenhintergrund vervollständigt: {n} Kacheln geladen.", RU: "Фон карты дозагружен: {n} тайлов.", ZH: "地图底图已完成：已下载 {n} 个图块。" },
+  giro_ricalcolo_senza_rete: { IT: "Rete assente: segui la linea sulla mappa.", EN: "No network: follow the line on the map.", FR: "Pas de réseau : suivez la ligne sur la carte.", ES: "Sin red: sigue la línea en el mapa.", DE: "Kein Netz: folge der Linie auf der Karte.", RU: "Нет сети: следуйте линии на карте.", ZH: "没有网络：请沿地图上的路线前进。" },
+  auth_richiesta: { IT: "Sessione scaduta: accedi di nuovo per continuare.", EN: "Session expired: sign in again to continue.", FR: "Session expirée : reconnectez-vous pour continuer.", ES: "Sesión caducada: inicia sesión de nuevo para continuar.", DE: "Sitzung abgelaufen: melde dich erneut an, um fortzufahren.", RU: "Сессия истекла: войдите снова, чтобы продолжить.", ZH: "会话已过期：请重新登录以继续。" },
+  audio_crediti_necessari_per: { IT: "Crediti o pass necessari per «{name}»", EN: "Credits or a pass are needed for \"{name}\"", FR: "Crédits ou pass nécessaires pour « {name} »", ES: "Se necesitan créditos o un pase para «{name}»", DE: "Für „{name}“ sind Credits oder ein Pass nötig", RU: "Для «{name}» нужны кредиты или пасс", ZH: "收听“{name}”需要积分或通行证" },
+  audio_anteprima_label: { IT: "Anteprima", EN: "Preview", FR: "Aperçu", ES: "Vista previa", DE: "Vorschau", RU: "Превью", ZH: "预览" },
+  audio_ascolta_per_crediti: { IT: "Ascolta per {n} crediti", EN: "Listen for {n} credits", FR: "Écouter pour {n} crédits", ES: "Escuchar por {n} créditos", DE: "Für {n} Credits anhören", RU: "Слушать за {n} кредитов", ZH: "花 {n} 积分收听" },
+  perm_downgraded_msg: { IT: "Permesso posizione ridotto: l'audioguida a schermo spento non funziona più. Riporta la posizione su «Sempre» nelle impostazioni.", EN: "Location permission reduced: the audio guide no longer works with the screen off. Set location back to \"Always\" in Settings.", FR: "Autorisation de position réduite : l'audioguide ne fonctionne plus écran éteint. Remettez la position sur « Toujours » dans les réglages.", ES: "Permiso de ubicación reducido: la audioguía ya no funciona con la pantalla apagada. Vuelve a poner la ubicación en «Siempre» en Ajustes.", DE: "Standortberechtigung eingeschränkt: der Audioguide funktioniert bei ausgeschaltetem Bildschirm nicht mehr. Stelle den Standort in den Einstellungen wieder auf „Immer“.", RU: "Доступ к геопозиции ограничен: аудиогид больше не работает при выключенном экране. Верните «Всегда» в настройках.", ZH: "位置权限已降低：熄屏时语音导览无法工作。请在设置中将位置改回“始终”。" },
   gps_active: {
     IT: "Audio GPS",
     EN: "GPS Audio",
@@ -2883,6 +2920,13 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   },
   everything_nearby_button: {
     IT: "TUTTO", EN: "ALL", FR: "TOUT", ES: "TODO", DE: "ALLES", RU: "ВСЁ", ZH: "全部",
+  },
+  everything_show_all: {
+    IT: "mostra tutti", EN: "show all", FR: "tout afficher", ES: "mostrar todos", DE: "alle anzeigen", RU: "показать все", ZH: "显示全部",
+  },
+  everything_pinned_clear: {
+    IT: "Togli i luoghi segnati dalla mappa", EN: "Remove pinned places from the map", FR: "Retirer les lieux épinglés de la carte",
+    ES: "Quitar los lugares marcados del mapa", DE: "Markierte Orte von der Karte entfernen", RU: "Убрать отмеченные места с карты", ZH: "从地图移除已标记的地点",
   },
   everything_nearby_empty: {
     IT: "Niente entro questo raggio", EN: "Nothing within this radius", FR: "Rien dans ce rayon",
@@ -5030,6 +5074,28 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   chat_service_name: { IT: "WIP - Esperto Viaggi (10 messaggi)", EN: "WIP - Travel Expert (10 messages)", FR: "WIP - Expert Voyages (10 messages)", ES: "WIP - Experto en Viajes (10 mensajes)", DE: "WIP - Reiseexperte (10 Nachrichten)", RU: "WIP — эксперт по путешествиям (10 сообщений)", ZH: "WIP - 旅行专家（10 条消息）" },
   chat_speak_btn: { IT: "Parla", EN: "Speak", FR: "Parler", ES: "Hablar", DE: "Sprechen", RU: "Говорить", ZH: "说话" },
   chat_stop_listening: { IT: "Ferma ascolto", EN: "Stop listening", FR: "Arrêter l'écoute", ES: "Detener escucha", DE: "Zuhören beenden", RU: "Остановить прослушивание", ZH: "停止聆听" },
+  // ── Audit UI/UX pre-release 28/08/2026: mini-player, blocco app, bussola, a11y ──
+  // (`audio_titolo_default` esiste già più in alto: il mini-player la riusa.)
+  audio_in_riproduzione: { IT: "In riproduzione", EN: "Playing", FR: "En lecture", ES: "Reproduciendo", DE: "Wird abgespielt", RU: "Воспроизведение", ZH: "正在播放" },
+  audio_in_pausa: { IT: "In pausa", EN: "Paused", FR: "En pause", ES: "En pausa", DE: "Pausiert", RU: "На паузе", ZH: "已暂停" },
+  map_orientamento: { IT: "Orientamento", EN: "Heading", FR: "Orientation", ES: "Orientación", DE: "Ausrichtung", RU: "Ориентация", ZH: "方向" },
+  map_follow_on: { IT: "Segui attivo", EN: "Follow on", FR: "Suivi actif", ES: "Seguimiento activo", DE: "Verfolgung an", RU: "Слежение включено", ZH: "跟随已开启" },
+  applock_titolo: { IT: "Sblocca con impronta o Face ID", EN: "Unlock with fingerprint or Face ID", FR: "Déverrouiller avec l'empreinte ou Face ID", ES: "Desbloquea con huella o Face ID", DE: "Mit Fingerabdruck oder Face ID entsperren", RU: "Разблокируйте отпечатком или Face ID", ZH: "使用指纹或面容 ID 解锁" },
+  applock_sblocca: { IT: "Sblocca", EN: "Unlock", FR: "Déverrouiller", ES: "Desbloquear", DE: "Entsperren", RU: "Разблокировать", ZH: "解锁" },
+  applock_motivo: { IT: "Sblocca World in Pocket", EN: "Unlock World in Pocket", FR: "Déverrouiller World in Pocket", ES: "Desbloquear World in Pocket", DE: "World in Pocket entsperren", RU: "Разблокировать World in Pocket", ZH: "解锁 World in Pocket" },
+  applock_prompt_titolo: { IT: "Sblocco app", EN: "App unlock", FR: "Déverrouillage de l'app", ES: "Desbloqueo de la app", DE: "App-Entsperrung", RU: "Разблокировка приложения", ZH: "应用解锁" },
+  b2b_iap_non_disponibile: { IT: "Gli acquisti in-app dallo store saranno disponibili a breve. Per ora i pacchetti si acquistano dal sito wip.guide.", EN: "In-app purchases from the store are coming soon. For now, packages are purchased on wip.guide.", FR: "Les achats intégrés via le store arrivent bientôt. Pour l'instant, les packs s'achètent sur wip.guide.", ES: "Las compras dentro de la app desde la tienda llegarán pronto. Por ahora, los paquetes se compran en wip.guide.", DE: "In-App-Käufe über den Store kommen bald. Vorerst werden die Pakete auf wip.guide gekauft.", RU: "Покупки в приложении через магазин скоро появятся. Пока пакеты покупаются на сайте wip.guide.", ZH: "应用商店内购即将推出。目前请在 wip.guide 网站购买套餐。" },
+  b2b_checkout_errore: { IT: "Non siamo riusciti ad avviare il pagamento. Riprova tra poco.", EN: "We couldn't start the checkout. Please try again shortly.", FR: "Impossible de lancer le paiement. Réessaie dans un instant.", ES: "No hemos podido iniciar el pago. Inténtalo de nuevo en un momento.", DE: "Der Bezahlvorgang konnte nicht gestartet werden. Versuch es gleich noch mal.", RU: "Не удалось начать оплату. Повторите попытку чуть позже.", ZH: "无法启动付款。请稍后重试。" },
+  a11y_nav_principale: { IT: "Navigazione principale", EN: "Main navigation", FR: "Navigation principale", ES: "Navegación principal", DE: "Hauptnavigation", RU: "Основная навигация", ZH: "主导航" },
+  a11y_fotocamera: { IT: "Fotocamera e riconoscimento", EN: "Camera and recognition", FR: "Appareil photo et reconnaissance", ES: "Cámara y reconocimiento", DE: "Kamera und Erkennung", RU: "Камера и распознавание", ZH: "相机与识别" },
+  a11y_audioguida: { IT: "Audioguida automatica", EN: "Automatic audio guide", FR: "Audioguide automatique", ES: "Audioguía automática", DE: "Automatischer Audioguide", RU: "Автоматический аудиогид", ZH: "自动语音导览" },
+  a11y_silenzia_audio: { IT: "Silenzia l'audioguida", EN: "Mute the audio guide", FR: "Couper le son de l'audioguide", ES: "Silenciar la audioguía", DE: "Audioguide stummschalten", RU: "Выключить звук аудиогида", ZH: "静音语音导览" },
+  a11y_riattiva_audio: { IT: "Riattiva l'audio dell'audioguida", EN: "Unmute the audio guide", FR: "Réactiver le son de l'audioguide", ES: "Reactivar el sonido de la audioguía", DE: "Ton des Audioguides wieder einschalten", RU: "Включить звук аудиогида", ZH: "取消静音语音导览" },
+  a11y_pausa: { IT: "Pausa", EN: "Pause", FR: "Pause", ES: "Pausa", DE: "Pause", RU: "Пауза", ZH: "暂停" },
+  a11y_riproduci: { IT: "Riproduci", EN: "Play", FR: "Lecture", ES: "Reproducir", DE: "Abspielen", RU: "Воспроизвести", ZH: "播放" },
+  a11y_ferma_audio: { IT: "Ferma l'audio", EN: "Stop the audio", FR: "Arrêter l'audio", ES: "Detener el audio", DE: "Audio stoppen", RU: "Остановить аудио", ZH: "停止音频" },
+  a11y_cancella_ricerca: { IT: "Cancella la ricerca", EN: "Clear the search", FR: "Effacer la recherche", ES: "Borrar la búsqueda", DE: "Suche löschen", RU: "Очистить поиск", ZH: "清除搜索" },
+  a11y_esci_follow: { IT: "Tocca per uscire dalla modalità Segui", EN: "Tap to leave Follow mode", FR: "Touche pour quitter le mode Suivi", ES: "Toca para salir del modo Seguir", DE: "Tippen, um den Verfolgungsmodus zu verlassen", RU: "Нажмите, чтобы выйти из режима слежения", ZH: "点按以退出跟随模式" },
   rp_places_along_way: { IT: "Ecco i luoghi che incontrerai lungo la strada. L'audioguida partirà in automatico solo per quelli selezionati.", EN: "These are the places you'll pass along the way. The audio guide starts automatically only for the selected ones.", FR: "Voici les lieux que vous croiserez en chemin. L'audioguide se lancera automatiquement uniquement pour ceux sélectionnés.", ES: "Estos son los lugares que encontrarás por el camino. La audioguía se activará solo para los seleccionados.", DE: "Das sind die Orte, an denen du vorbeikommst. Der Audioguide startet automatisch nur für die ausgewählten.", RU: "Вот места, которые встретятся по пути. Аудиогид включится автоматически только для выбранных.", ZH: "这些是您沿途将经过的地点。语音导览仅对选中的地点自动播放。" },
 };
 

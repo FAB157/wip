@@ -8,8 +8,12 @@
 // =====================================================================
 
 import { getPoiDetails } from './poiRepository';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { isNetworkError } from '../lib/circuitBreaker';
+
+// Timeout delle rotte di arricchimento (wiki/Commons/Foursquare via server):
+// 20 s, poi si ricade sui dati che ci sono (ITI-07).
+const ENRICH_TIMEOUT_MS = 20000;
 import type { PoiCategory, PoiDetails, PoiImage, FoursquareData } from '../types/poi';
 
 // --- CIRCUIT BREAKER (half-open con cooldown) ---
@@ -79,7 +83,7 @@ async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> 
     // ID ORIGINALE, non modificato: forzare "osm-" su QUALSIASI id (uuid
     // community, "iti-…", utility) faceva creare al server una riga nuova.
     // Il dedup è responsabilità del server, che riceve l'id reale del POI.
-    const res = await fetch(getApiUrl('/api/poi/enrich'), {
+    const res = await apiFetch(getApiUrl('/api/poi/enrich'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -93,7 +97,7 @@ async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> 
         ...(poi.wikidata ? { wikidata: poi.wikidata } : {}),
         lang,
       }),
-    });
+    }, ENRICH_TIMEOUT_MS);
     if (!res.ok) return null; // errore applicativo/HTTP: NON conta per il breaker
     noteEnrichSuccess();
     return await res.json();
@@ -108,14 +112,14 @@ async function fetchEnrich(poi: EnrichInput, lang: string): Promise<any | null> 
 async function fetchFoursquare(poi: EnrichInput): Promise<FoursquareData | null> {
   try {
     const sUrl = getApiUrl(`/api/fsq/search?lat=${poi.lat}&lon=${poi.lon}&query=${encodeURIComponent(poi.name)}`);
-    const sRes = await fetch(sUrl);
+    const sRes = await apiFetch(sUrl, undefined, ENRICH_TIMEOUT_MS);
     if (!sRes.ok) return null;
     const sData = await sRes.json();
     const best = sData?.results?.[0];
     if (!best?.fsq_id) return null;
 
     const fields = 'description,photos,rating,categories,location,website,tel,hours';
-    const dRes = await fetch(getApiUrl(`/api/fsq/details?fsq_id=${best.fsq_id}&fields=${fields}`));
+    const dRes = await apiFetch(getApiUrl(`/api/fsq/details?fsq_id=${best.fsq_id}&fields=${fields}`), undefined, ENRICH_TIMEOUT_MS);
     const d = dRes.ok ? await dRes.json() : {};
 
     return {

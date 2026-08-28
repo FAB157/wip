@@ -1,6 +1,7 @@
 import { get, set, del, keys } from 'idb-keyval';
 import { db, prunePoisOlderThan } from './db';
 import { supabase } from './supabase';
+import { apiFetch } from './api';
 import { isDownloadablePoiStatus } from '../services/poiRepository';
 
 export interface OfflineItinerarySummary {
@@ -36,7 +37,9 @@ export const deleteOfflineItinerary = async (id: string) => {
 
 export const saveOfflineAudio = async (url: string, id: string) => {
   try {
-    const response = await fetch(url);
+    // 30 s per un MP3: oltre e' rete morta, non un file grande (ITI-07).
+    const response = await apiFetch(url, undefined, 30000);
+    if (!response.ok) throw new Error(`audio ${response.status}`);
     const blob = await response.blob();
     await set(`audio_${id}`, blob);
     return true;
@@ -62,7 +65,21 @@ export interface OfflineMapArea {
   date: number;
   poiCount: number;
   lastSync?: number; // ultima riconciliazione con Supabase
+  /** Esito del prefetch delle tile di sfondo (ITI-05): prima gli errori
+   *  finivano solo in `failed++` e l'area risultava "scaricata" anche con
+   *  meta' mappa mancante. `failed > 0` → badge «Incompleta» + «Completa
+   *  download» nella lista. */
+  tiles?: { done: number; failed: number; total: number };
 }
+
+/** Aggiorna SOLO i metadati di un'area (senza riscrivere i POI). */
+export const updateOfflineMapAreaMeta = async (id: string, patch: Partial<OfflineMapArea>) => {
+  const list = await get('offline_map_areas_list') as OfflineMapArea[] || [];
+  const idx = list.findIndex(a => a.id === id);
+  if (idx < 0) return;
+  list[idx] = { ...list[idx], ...patch, id: list[idx].id };
+  await set('offline_map_areas_list', list);
+};
 
 /**
  * Mirroring dei POI in Dexie (db.pois): è la tabella che poiRepository legge

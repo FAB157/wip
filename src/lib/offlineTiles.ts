@@ -22,15 +22,23 @@
 // scelta del sottodominio ((x+y) % subdomains) e stesso suffisso retina.
 
 import L from 'leaflet';
+import { Network } from '@capacitor/network';
+import { apiFetch } from './api';
 
 const TILE_CACHE_NAME = 'map-tiles-cache';
+// Timeout per singola tile: 15 s nel prefetch (in coda, 6 alla volta), 8 s
+// nel layer a schermo (ITI-13: oltre, meglio la tile genitore sfocata che
+// il grigio). Prima nessuno dei due aveva un limite.
+const TILE_PREFETCH_TIMEOUT_MS = 15000;
+const TILE_LAYER_TIMEOUT_MS = 8000;
 // ATTENZIONE: deve restare identico ai subdomains del TileLayer in MapArea
 // (che non li specifica, quindi usa il default Leaflet 'abc'): la scelta del
 // sottodominio entra nell'URL e quindi nella chiave di cache.
 const SUBDOMAINS = 'abc';
-// Corrisponde al TileLayer di MapArea.tsx. CARTO richiede la chiave gratuita
-// dal 26/08/2026 (watermark "API KEY REQUIRED" sull'accesso anonimo).
-const TILE_URL_TEMPLATE = `https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key=${import.meta.env.VITE_CARTO_API_KEY || ''}`;
+// Corrisponde al TileLayer di MapArea.tsx: stesso template (e stessa chiave,
+// anche quando arriva a runtime) da lib/cartoTiles.ts, altrimenti gli URL
+// in cache non combacerebbero con quelli richiesti da Leaflet.
+import { cartoTileUrl } from './cartoTiles';
 // Tetto complessivo per download: ~4500 tile.
 const MAX_TILES_PER_AREA = 4500;
 const FETCH_CONCURRENCY = 6;
@@ -68,7 +76,7 @@ const subdomainFor = (x: number, y: number) => SUBDOMAINS[Math.abs(x + y) % SUBD
 const retinaSuffix = () => (typeof window !== 'undefined' && window.devicePixelRatio > 1 ? '@2x' : '');
 
 const tileUrl = (z: number, x: number, y: number) =>
-  TILE_URL_TEMPLATE
+  cartoTileUrl()
     .replace('{s}', subdomainFor(x, y))
     .replace('{z}', String(z))
     .replace('{x}', String(x))
@@ -168,7 +176,10 @@ export const stimaDownloadArea = (lat: number, lon: number, radiusKm: number): S
 /**
  * Scarica le tile dell'area nella cache del service worker. Tollerante ai
  * singoli errori (una tile mancante non blocca il download); ritorna il
- * conteggio finale. No-op (total=0) dove la Cache API non esiste.
+ * conteggio finale `{ done, failed, total }` — il chiamante DEVE guardare
+ * `failed` (ITI-05): un'area con tile mancanti va mostrata come incompleta
+ * e si completa rilanciando questa stessa funzione (le tile gia' in cache
+ * vengono saltate). No-op (total=0) dove la Cache API non esiste.
  */
 export const prefetchTilesForArea = async (
   lat: number,
@@ -190,16 +201,18 @@ export const prefetchTilesForArea = async (
         if (await cache.match(url)) {
           progress.done++;
         } else {
-          const res = await fetch(url, { mode: 'cors' });
+          const res = await apiFetch(url, { mode: 'cors' }, TILE_PREFETCH_TIMEOUT_MS);
           if (res.ok) {
             await cache.put(url, res);
             progress.done++;
+            segnaEsitoRete(true);
           } else {
             progress.failed++;
           }
         }
       } catch {
         progress.failed++;
+        segnaEsitoRete(false);
       }
       if ((progress.done + progress.failed) % 25 === 0) onProgress?.({ ...progress });
     }
@@ -301,7 +314,80 @@ const daCacheApi = async (url: string): Promise<Blob | null> => {
   }
 };
 
-const inRete = () => (typeof navigator === 'undefined' ? true : navigator.onLine !== false);
+// ── Stato rete (ITI-13) ──────────────────────────────────────────────────
+// `navigator.onLine` nella WebView dice "connesso" anche con Wi-Fi senza
+// internet o con dati mobili in ombra: si combina con il plugin Network di
+// Capacitor (lo stesso di useNetworkStatus) e con l'esito dell'ULTIMO fetch
+// di tile — se e' appena fallito, per 10 s ci si comporta da offline (tile
+// genitore dalla cache) invece di infilare altre richieste in un buco.
+let reteDalPlugin: boolean | null = null;
+let ultimoFallimentoTs = 0;
+const RETE_FALLITA_MS = 10_000;
+const ascoltatoriRete = new Set<() => void>();
+const notificaRete = () => { ascoltatoriRete.forEach(f => { try { f(); } catch { /* layer smontato */ } }); };
+
+const segnaEsitoRete = (ok: boolean) => {
+  const prima = inRete();
+  ultimoFallimentoTs = ok ? 0 : Date.now();
+  if (prima !== inRete()) notificaRete();
+};
+
+if (typeof window !== 'undefined') {
+  Network.getStatus().then(s => { reteDalPlugin = s.connected; notificaRete(); }).catch(() => {});
+  Network.addListener('networkStatusChange', s => { reteDalPlugin = s.connected; ultimoFallimentoTs = 0; notificaRete(); }).catch(() => {});
+  window.addEventListener('online', () => { ultimoFallimentoTs = 0; notificaRete(); });
+  window.addEventListener('offline', notificaRete);
+}
+
+const inRete = (): boolean => {
+  if (typeof navigator === 'undefined') return true;
+  if (reteDalPlugin === false) return false;
+  if (navigator.onLine === false) return false;
+  if (ultimoFallimentoTs && Date.now() - ultimoFallimentoTs < RETE_FALLITA_MS) return false;
+  return true;
+};
+
+/**
+ * Tile "genitore" allo zoom massimo scaricato, ritagliata e ingrandita sul
+ * quadrante giusto (ITI-13): e' il ripiego immediato quando la tile vera
+ * non e' in cache e la rete non risponde. Ritorna un dataURL o null.
+ */
+const tileGenitoreDaCache = async (
+  layer: any,
+  coords: { x: number; y: number; z: number },
+  zoomMax: number,
+): Promise<string | null> => {
+  if (coords.z <= zoomMax || typeof document === 'undefined') return null;
+  const fattore = Math.pow(2, coords.z - zoomMax);
+  const px = Math.floor(coords.x / fattore);
+  const py = Math.floor(coords.y / fattore);
+  let url: string;
+  try { url = layer.getTileUrl({ x: px, y: py, z: zoomMax }); } catch { return null; }
+  const blob = await daCacheApi(url);
+  if (!blob) return null;
+  return new Promise<string | null>((resolve) => {
+    const img = new Image();
+    const obj = URL.createObjectURL(blob);
+    img.onload = () => {
+      try {
+        const lato = img.naturalWidth || 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = lato; canvas.height = lato;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { resolve(null); return; }
+        const sw = lato / fattore;
+        const sx = (coords.x % fattore) * sw;
+        const sy = (coords.y % fattore) * sw;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(img, sx, sy, sw, sw, 0, 0, lato, lato);
+        resolve(canvas.toDataURL('image/png'));
+      } catch { resolve(null); }
+      finally { URL.revokeObjectURL(obj); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(obj); resolve(null); };
+    img.src = obj;
+  });
+};
 
 /**
  * TileLayer che, per OGNI tile:
@@ -350,12 +436,20 @@ const CachedTileLayer = L.TileLayer.extend({
         tile.src = obj;
         return;
       }
-      // 2) rete + eventuale riempimento cache
+      const zoomMax = Number.isFinite(this.options?._wipMaxNativeOffline) ? this.options._wipMaxNativeOffline : MAX_ZOOM_SCARICATO;
+      // 1b) senza rete: subito la tile genitore dalla cache (sfocata, non grigia)
+      if (!inRete()) {
+        const genitore = await tileGenitoreDaCache(this, coords, zoomMax);
+        if ((tile as any)._wipMorta) return;
+        if (genitore) { tile.src = genitore; return; }
+      }
+      // 2) rete + eventuale riempimento cache (con timeout: ITI-13)
       if (inRete() && typeof caches !== 'undefined') {
         try {
           if (await dentroAreaScaricata(coords)) {
-            const res = await fetch(url, { mode: 'cors' });
+            const res = await apiFetch(url, { mode: 'cors' }, TILE_LAYER_TIMEOUT_MS);
             if (res.ok) {
+              segnaEsitoRete(true);
               const copia = res.clone();
               const b = await res.blob();
               try { (await caches.open(TILE_CACHE_NAME)).put(url, copia); } catch { /* quota */ }
@@ -366,7 +460,14 @@ const CachedTileLayer = L.TileLayer.extend({
               return;
             }
           }
-        } catch { /* si ricade sull'img classica */ }
+        } catch {
+          // Timeout/rete: per 10 s il layer si comporta da offline e prova
+          // la tile genitore dalla cache prima dell'img classica.
+          segnaEsitoRete(false);
+          const genitore = await tileGenitoreDaCache(this, coords, zoomMax);
+          if ((tile as any)._wipMorta) return;
+          if (genitore) { tile.src = genitore; return; }
+        }
       }
       // 3) comportamento identico a prima
       if (!(tile as any)._wipMorta) tile.src = url;
@@ -394,6 +495,8 @@ export const createCachedTileLayer = (
   const maxNativeOffline = opzioni.maxNativeZoomOffline ?? MAX_ZOOM_SCARICATO;
   const layer = new (CachedTileLayer as any)(url, {
     attribution: opzioni.attribution,
+    // Letto da createTile per il ripiego sulla tile genitore.
+    _wipMaxNativeOffline: maxNativeOffline,
   }) as L.TileLayer;
 
   // Revoca degli objectURL: 'tileunload' scatta quando Leaflet butta la tile.
@@ -417,12 +520,12 @@ export const createCachedTileLayer = (
     try { (layer as any)._resetView?.(); } catch { /* layer non ancora sulla mappa */ }
   };
   applicaLimite();
-  window.addEventListener('online', applicaLimite);
-  window.addEventListener('offline', applicaLimite);
+  // Non solo online/offline del browser (ITI-13): anche il plugin Network e
+  // l'esito dell'ultimo fetch (vedi inRete) cambiano il limite.
+  ascoltatoriRete.add(applicaLimite);
 
   const dispose = () => {
-    window.removeEventListener('online', applicaLimite);
-    window.removeEventListener('offline', applicaLimite);
+    ascoltatoriRete.delete(applicaLimite);
     layer.off('tileunload', suUnload);
     const container = (layer as any)._container as HTMLElement | undefined;
     container?.querySelectorAll('img').forEach((img: any) => {

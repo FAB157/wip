@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -24,22 +25,29 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.google.android.gms.location.CurrentLocationRequest
 import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingEvent
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.itaintasca.app.MainActivity
 import com.itaintasca.app.R
+import com.itaintasca.app.WipBackgroundAudioService
 import com.itaintasca.app.db.PoiDatabase
 import com.itaintasca.app.db.PoiEntity
 import com.itaintasca.app.db.TriggerState
 import com.itaintasca.app.db.TriggerStateEntity
 import com.itaintasca.app.db.toPoiEntity
+import com.itaintasca.app.service.WipApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -90,8 +98,31 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // AudioFocusRequest (solo O+), tenuto come Any per non referenziare la classe su API < 26
         @Volatile
         private var activeFocusRequest: Any? = null
+        // Listener del focus per API < 26 (prima si passava null: nessun
+        // callback, quindi nessuna pausa/ripresa possibile).
+        @Volatile
+        private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
         private val safetyHandler = Handler(Looper.getMainLooper())
         private var safetyRunnable: Runnable? = null
+
+        // (AUD-06) Id dell'utterance TTS in corso. I callback del motore
+        // (onDone/onError/onStop) arrivano anche in ritardo e per utterance
+        // GIA' chiuse: senza confrontare l'id, l'onStop tardivo di A chiudeva
+        // B appena partito. null = nessuna utterance TTS attiva.
+        @Volatile
+        private var activeUtteranceId: String? = null
+
+        // (AUD-05 / AUD-14) L'item attivo e' in PAUSA (perdita transitoria
+        // del focus, o tasto Pausa della notifica): resta activeItem, non si
+        // passa al successivo, e alla ripresa riparte dal punto (MP3) o da
+        // capo (TTS). pausedByUser distingue la pausa esplicita: un GAIN di
+        // focus non deve riprendere cio' che l'utente ha fermato.
+        @Volatile
+        private var speechPaused = false
+        @Volatile
+        private var pausedByUser = false
+        @Volatile
+        private var pausedMp3PositionMs = 0
 
         data class SpeechItem(
             val text: String,
@@ -139,9 +170,59 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          */
         fun stopSpeaking(context: Context) {
             speechQueue.clear()
+            // (AUD-06) Si "disconosce" l'utterance PRIMA dello stop: l'onStop
+            // che il motore manda dopo porta l'id vecchio e viene ignorato.
+            activeUtteranceId = null
             try { ttsInstance?.stop() } catch (_: Exception) { }
             // Se onStop del TTS non arriva (engine capricciosi), chiudiamo comunque lo stato
             finishActiveSpeech(context.applicationContext, notifyJs = true)
+        }
+
+        /** (AUD-14) La voce nativa sta parlando (o e' in pausa)? Per le azioni della notifica. */
+        fun isVoiceActive(): Boolean = isSpeaking
+
+        /** (AUD-14) La voce nativa e' in pausa (utente o focus)? */
+        fun isVoicePaused(): Boolean = isSpeaking && speechPaused
+
+        /** (AUD-14) Tasto «Pausa» della notifica: ferma SOLO la coda vocale, non il servizio. */
+        fun pauseSpeech(context: Context) {
+            val appContext = context.applicationContext
+            Handler(Looper.getMainLooper()).post {
+                if (pauseActiveSpeech(appContext, byUser = true)) notifyVoiceStateChanged()
+            }
+        }
+
+        /** (AUD-14) Tasto «Riprendi» della notifica. */
+        fun resumeSpeech(context: Context) {
+            val appContext = context.applicationContext
+            Handler(Looper.getMainLooper()).post {
+                pausedByUser = false
+                if (resumeActiveSpeech(appContext)) notifyVoiceStateChanged()
+            }
+        }
+
+        /** (AUD-14) Tasto «Salta»: chiude l'item corrente e passa al successivo. */
+        fun skipSpeech(context: Context) {
+            val appContext = context.applicationContext
+            Handler(Looper.getMainLooper()).post {
+                if (activeItem == null) return@post
+                activeUtteranceId = null
+                try { ttsInstance?.stop() } catch (_: Exception) { }
+                finishActiveSpeech(appContext, notifyJs = true)
+                processNextSpeech(appContext)
+            }
+        }
+
+        /**
+         * Avvisa il servizio in foreground che lo stato della voce e' cambiato,
+         * cosi' ricostruisce la notifica con/senza i tasti Pausa/Salta senza
+         * aspettare il refresh dei 5 s. Hook in-process: niente intent di
+         * avvio, che da background potrebbe essere rifiutato.
+         */
+        private fun notifyVoiceStateChanged() {
+            try {
+                com.itaintasca.app.service.ItaintaBackgroundPoiService.onVoiceStateChanged?.invoke()
+            } catch (_: Exception) { }
         }
 
         /**
@@ -155,6 +236,11 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             if (poiId.isBlank()) return
             speechQueue.removeAll { it.poiId == poiId }
             if (activeItem?.poiId != poiId) return
+            // (AUD-06) Schema coerente con stopSpeaking: si azzera l'id, si
+            // ferma il motore, si chiude subito; l'onStop tardivo di questa
+            // utterance viene scartato da onUtteranceFinished e NON chiude
+            // l'item successivo che processNextSpeech fa partire qui sotto.
+            activeUtteranceId = null
             try { ttsInstance?.stop() } catch (_: Exception) { }
             // finishActiveSpeech rilascia anche l'eventuale MediaPlayer attivo
             finishActiveSpeech(context.applicationContext, notifyJs = true)
@@ -185,7 +271,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          * è esattamente il difetto che il CLAUDE.md del progetto segnala.
          */
         fun isCategoryActive(poi: PoiEntity, selected: List<String>): Boolean =
-            GeofenceBroadcastReceiver().isPoiCategoryActive(poi, selected)
+            CategoryMap.isActive(poi.poiType, poi.isGem, poi.isFromItinerary, selected)
+
+        /**
+         * (23/08/2026) Istanza UNICA per i due ponti companion→membro qui
+         * sotto (firePredictedApproach / firePerimeterArrival). Prima ogni
+         * chiamata faceva `GeofenceBroadcastReceiver()`: un oggetto nuovo solo
+         * per invocare un metodo. Il receiver non ha nessuno stato di istanza
+         * (tutto vive nel companion) e non trattiene Context, quindi
+         * riutilizzarlo e' identico a costruirlo ogni volta.
+         */
+        private val ponte: GeofenceBroadcastReceiver by lazy { GeofenceBroadcastReceiver() }
 
         suspend fun firePredictedApproach(
             context: Context,
@@ -198,7 +294,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             speak: Boolean
         ) {
             // Il companion può accedere ai membri privati della propria classe.
-            GeofenceBroadcastReceiver().handleApproach(
+            ponte.handleApproach(
                 context, poiId, name, guide, isGem, isItinerary, db, speak
             )
         }
@@ -215,11 +311,41 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             poi: PoiEntity,
             isAutomaticMode: Boolean,
             db: PoiDatabase,
-            distanceM: Float
-        ) {
-            GeofenceBroadcastReceiver().handleArrival(
+            distanceM: Float,
+            // (AUD-04) false = un altro POI dello stesso fix ha gia' la guida
+            // completa: questo scrive lo stato e notifica, ma non consuma il
+            // pass ne' accoda voce/testo integrale.
+            fullGuide: Boolean = true
+        ): Boolean {
+            return ponte.handleArrival(
                 context, poi.id, poi.nome, poi.guideDefault, poi.isGem, poi.isFromItinerary,
-                isAutomaticMode, db, distanceM = distanceM
+                isAutomaticMode, db, distanceM = distanceM, fullGuide = fullGuide
+            )
+        }
+
+        /**
+         * (28/08/2026) Il server ha risposto 402 alla guida completa: la
+         * notifica d'arrivo (stesso id di quella gia' mostrata: la
+         * sostituisce) dice «Tocca per ascoltare» e, nel testo espanso,
+         * l'anteprima e il perche' servono crediti. Nessun addebito.
+         */
+        fun showCreditsRequiredNotification(
+            context: Context,
+            poiId: String,
+            name: String,
+            guideVoice: String,
+            lang: String,
+            preview: String?
+        ) {
+            val big = listOfNotNull(
+                preview?.takeIf { it.isNotBlank() },
+                NotificationStrings.get(lang, "credits_required_text")
+            ).joinToString("\n\n")
+            ponte.showNotification(
+                context.applicationContext,
+                NotificationStrings.get(lang, "arrival_at", name),
+                NotificationStrings.get(lang, "arrived_tap"),
+                poiId, guideVoice, true, bigText = big
             )
         }
 
@@ -250,6 +376,17 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
 
             Handler(Looper.getMainLooper()).post {
+                // (AUD-01) Se la guida completa del JS (ExoPlayer in
+                // WipBackgroundAudioService) sta suonando, la si mette in
+                // PAUSA: prima le due voci si sovrapponevano, perche' il
+                // focus in MAY_DUCK faceva solo abbassare l'ExoPlayer. Si
+                // riprende in finishActiveSpeech a coda vuota, e solo se
+                // la pausa l'abbiamo chiesta noi.
+                if (WipBackgroundAudioService.pauseForNativeVoice()) {
+                    Log.d(TAG, "Guida JS in pausa per la voce nativa (${next.kind})")
+                }
+                notifyVoiceStateChanged()
+
                 // MP3 prefetchato disponibile? Partenza istantanea senza TTS.
                 val mp3 = next.audioFile?.let { path ->
                     try {
@@ -262,6 +399,20 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 }
 
                 initTtsIfNeeded(appContext) {
+                    // LA VOCE C'È DAVVERO, QUI E ORA? (23/08/2026). Il controllo
+                    // esisteva solo prima del download di un pacchetto: fra
+                    // allora e adesso l'utente può aver cambiato lingua,
+                    // disinstallato i dati vocali o cambiato motore TTS. Se
+                    // manca non si ripiega su un'altra lingua (vedi
+                    // applyTtsConfig): si dice la verità e si passa oltre.
+                    val muta = missingVoiceLang
+                    if (muta != null) {
+                        showVoiceMissingNotification(appContext, muta)
+                        broadcastTeaserEvent(appContext, "listenFailed", next, "voice_not_installed")
+                        finishActiveSpeech(appContext, notifyJs = false)
+                        processNextSpeech(appContext)
+                        return@initTtsIfNeeded
+                    }
                     requestFocus(appContext)
 
                     // Chime di avviso prima della voce
@@ -277,41 +428,139 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         .apply()
                     broadcastTeaserEvent(appContext, "teaserStarted", next)
 
-                    val params = Bundle()
-                    params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
-                    // Via emoji/pittogrammi: il TTS li legge per nome ("💎" →
-                    // "diamante", "📍" → "puntina"). Port di SpeechQueue.speakableText (iOS).
-                    val result = ttsInstance?.speak(
-                        speakableText(next.text),
-                        TextToSpeech.QUEUE_ADD,
-                        params,
-                        "GEOFENCE_${next.poiId ?: "x"}_${System.currentTimeMillis()}"
-                    ) ?: TextToSpeech.ERROR
-
-                    if (result != TextToSpeech.SUCCESS) {
+                    if (!speakTts(appContext, next)) {
                         Log.e(TAG, "tts.speak() returned error, skipping item")
                         finishActiveSpeech(appContext, notifyJs = true)
                         processNextSpeech(appContext)
                         return@initTtsIfNeeded
                     }
-
-                    // Watchdog anti-blocco: se onDone non arriva mai (bug di alcuni engine),
-                    // la coda non deve restare inchiodata su isSpeaking=true.
-                    // Cap 15 min (non 60s): il tetto di 60s tagliava a metà le
-                    // audioguide COMPLETE (3-4 min) del Day Pass offline e di
-                    // ogni fallback TTS senza MP3. Il teaser (~200 char) resta
-                    // ben sotto e non è toccato.
-                    val maxMs = (8000L + next.text.length * 120L).coerceAtMost(15 * 60_000L)
-                    val guard = Runnable {
-                        Log.w(TAG, "Speech watchdog fired, resetting queue state")
-                        try { ttsInstance?.stop() } catch (_: Exception) { }
-                        finishActiveSpeech(appContext, notifyJs = true)
-                        processNextSpeech(appContext)
-                    }
-                    safetyRunnable = guard
-                    safetyHandler.postDelayed(guard, maxMs)
                 }
             }
+        }
+
+        /**
+         * Invia l'item al motore TTS con un id NUOVO (AUD-06) e arma il
+         * watchdog. Usato all'avvio dell'item e alla ripresa dopo una pausa
+         * (il TTS di sistema non sa riprendere: si rilegge da capo).
+         * Ritorna false se speak() ha rifiutato.
+         */
+        private fun speakTts(appContext: Context, item: SpeechItem): Boolean {
+            val params = Bundle()
+            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+            val uttId = "GEOFENCE_${item.poiId ?: "x"}_${System.currentTimeMillis()}"
+            activeUtteranceId = uttId
+            // Via emoji/pittogrammi: il TTS li legge per nome ("💎" →
+            // "diamante", "📍" → "puntina"). Port di SpeechQueue.speakableText (iOS).
+            val result = ttsInstance?.speak(
+                speakableText(item.text),
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                uttId
+            ) ?: TextToSpeech.ERROR
+            if (result != TextToSpeech.SUCCESS) {
+                activeUtteranceId = null
+                return false
+            }
+
+            // Watchdog anti-blocco: se onDone non arriva mai (bug di alcuni engine),
+            // la coda non deve restare inchiodata su isSpeaking=true.
+            // Cap 15 min (non 60s): il tetto di 60s tagliava a metà le
+            // audioguide COMPLETE (3-4 min) del Day Pass offline e di
+            // ogni fallback TTS senza MP3. Il teaser (~200 char) resta
+            // ben sotto e non è toccato.
+            val maxMs = (8000L + item.text.length * 120L).coerceAtMost(15 * 60_000L)
+            armSpeechWatchdog(appContext, maxMs, "Speech watchdog fired, resetting queue state")
+            return true
+        }
+
+        /** Watchdog dell'item corrente (TTS o MP3): uno solo alla volta. */
+        private fun armSpeechWatchdog(appContext: Context, maxMs: Long, logMsg: String) {
+            safetyRunnable?.let { safetyHandler.removeCallbacks(it) }
+            val guard = Runnable {
+                Log.w(TAG, logMsg)
+                // (AUD-06) Solo stop + chiusura esplicita: l'onStop tardivo
+                // porta l'id vecchio e viene ignorato.
+                activeUtteranceId = null
+                try { ttsInstance?.stop() } catch (_: Exception) { }
+                finishActiveSpeech(appContext, notifyJs = true)
+                processNextSpeech(appContext)
+            }
+            safetyRunnable = guard
+            safetyHandler.postDelayed(guard, maxMs)
+        }
+
+        /**
+         * (AUD-05 / AUD-14) Mette in pausa l'item attivo senza chiuderlo:
+         * MP3 → pause() e posizione memorizzata; TTS → stop() del motore (il
+         * TTS di sistema non ha pausa) tenendo l'item come "in pausa", cosi'
+         * alla ripresa si rilegge da capo. Il watchdog viene sospeso.
+         * Ritorna true se c'era qualcosa da mettere in pausa.
+         */
+        private fun pauseActiveSpeech(appContext: Context, byUser: Boolean): Boolean {
+            val item = activeItem ?: return false
+            if (speechPaused) {
+                if (byUser) pausedByUser = true
+                return true
+            }
+            speechPaused = true
+            if (byUser) pausedByUser = true
+            safetyRunnable?.let { safetyHandler.removeCallbacks(it) }
+            safetyRunnable = null
+            val mp = activeMediaPlayer
+            if (mp != null) {
+                try {
+                    if (mp.isPlaying) {
+                        pausedMp3PositionMs = mp.currentPosition
+                        mp.pause()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Pausa MP3 fallita: ${e.message}")
+                }
+            } else {
+                // L'onStop che segue porta l'id di questa utterance:
+                // onUtteranceFinished lo ignora perche' speechPaused e' true.
+                try { ttsInstance?.stop() } catch (_: Exception) { }
+            }
+            Log.d(TAG, "Voce nativa in pausa (${if (byUser) "utente" else "focus"}) per ${item.poiId}")
+            return true
+        }
+
+        /**
+         * (AUD-05 / AUD-14) Riprende l'item in pausa: MP3 dal punto in cui
+         * era, TTS da capo (nuova utterance, nuovo id). Ritorna true se ha
+         * ripreso qualcosa.
+         */
+        private fun resumeActiveSpeech(appContext: Context): Boolean {
+            val item = activeItem ?: return false
+            if (!speechPaused) return false
+            speechPaused = false
+            val mp = activeMediaPlayer
+            if (mp != null) {
+                try {
+                    requestFocus(appContext)
+                    mp.seekTo(pausedMp3PositionMs)
+                    mp.start()
+                    val restMs = (mp.duration - pausedMp3PositionMs).toLong() + 15_000L
+                    armSpeechWatchdog(appContext, restMs.coerceIn(15_000L, 15 * 60_000L), "MP3 watchdog fired, resetting queue state")
+                    Log.d(TAG, "MP3 ripreso da ${pausedMp3PositionMs} ms per ${item.poiId}")
+                    return true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Ripresa MP3 fallita: ${e.message}, passo oltre")
+                    finishActiveSpeech(appContext, notifyJs = true)
+                    processNextSpeech(appContext)
+                    return false
+                }
+            }
+            // TTS: si rilegge da capo (il testo di un teaser e' breve).
+            requestFocus(appContext)
+            if (ttsInstance == null || !ttsReady || !speakTts(appContext, item)) {
+                Log.w(TAG, "Ripresa TTS fallita per ${item.poiId}, passo oltre")
+                finishActiveSpeech(appContext, notifyJs = true)
+                processNextSpeech(appContext)
+                return false
+            }
+            Log.d(TAG, "TTS ripreso (da capo) per ${item.poiId}")
+            return true
         }
 
         /**
@@ -355,8 +604,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
+                // (AUD-14) Guida completa di 3-4 minuti a schermo spento: senza
+                // wake lock la CPU puo' addormentarsi a meta' riproduzione.
+                // Permesso WAKE_LOCK gia' nel manifest.
+                try { mp.setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK) } catch (_: Exception) { }
                 mp.setDataSource(file.absolutePath)
-                mp.setOnCompletionListener { onUtteranceFinished(appContext) }
+                mp.setOnCompletionListener { onUtteranceFinished(appContext, null) }
                 mp.setOnErrorListener { _, what, extra ->
                     Log.w(TAG, "MP3 playback error ($what/$extra), fallback TTS")
                     fallbackToTts()
@@ -369,13 +622,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         // mai, la coda non deve restare bloccata.
                         val maxMs = (player.duration.toLong() + 15_000L)
                             .coerceIn(15_000L, 15 * 60_000L)
-                        val guard = Runnable {
-                            Log.w(TAG, "MP3 watchdog fired, resetting queue state")
-                            finishActiveSpeech(appContext, notifyJs = true)
-                            processNextSpeech(appContext)
-                        }
-                        safetyRunnable = guard
-                        safetyHandler.postDelayed(guard, maxMs)
+                        armSpeechWatchdog(appContext, maxMs, "MP3 watchdog fired, resetting queue state")
                     } catch (e: Exception) {
                         Log.w(TAG, "MP3 start failed: ${e.message}")
                         fallbackToTts()
@@ -395,6 +642,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 item = activeItem
                 activeItem = null
                 isSpeaking = false
+                activeUtteranceId = null
+                speechPaused = false
+                pausedByUser = false
+                pausedMp3PositionMs = 0
                 safetyRunnable?.let { safetyHandler.removeCallbacks(it) }
                 safetyRunnable = null
             }
@@ -405,6 +656,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 try { mp.release() } catch (_: Exception) { }
             }
             abandonFocus(appContext)
+
+            // (AUD-01) Coda finita: la guida JS che avevamo messo in pausa
+            // riprende (no-op se non l'abbiamo fermata noi o se l'utente ha
+            // premuto Pausa/Stop nel frattempo).
+            if (speechQueue.isEmpty()) {
+                WipBackgroundAudioService.resumeAfterNativeVoice()
+            }
+            if (item != null) notifyVoiceStateChanged()
 
             val ed = appContext.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE).edit()
             ed.putBoolean(PREF_TEASER_SPEAKING, false)
@@ -418,7 +677,24 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             if (notifyJs && item != null) broadcastTeaserEvent(appContext, "teaserFinished", item)
         }
 
-        private fun onUtteranceFinished(appContext: Context) {
+        /**
+         * Fine dell'item corrente. `utteranceId` e' quello del callback TTS
+         * (null per l'MP3, che non ha utterance).
+         * (AUD-06) Un callback con id diverso da quello attivo e' l'eco di
+         * un'utterance gia' chiusa (stop esplicito, watchdog, pausa): si
+         * ignora, altrimenti chiuderebbe l'item successivo.
+         */
+        private fun onUtteranceFinished(appContext: Context, utteranceId: String?) {
+            if (utteranceId != null) {
+                val attesa = activeUtteranceId
+                if (attesa == null || utteranceId != attesa) {
+                    Log.d(TAG, "Callback TTS ignorato per utterance non attiva ($utteranceId)")
+                    return
+                }
+                // (AUD-05) In pausa il motore e' stato fermato da noi: l'item
+                // resta attivo e riparte alla ripresa.
+                if (speechPaused) return
+            }
             val finished = activeItem
             finishActiveSpeech(appContext, notifyJs = true)
             if (finished?.isItinerary == true) showCheckInNotification(appContext, finished.poiId ?: "")
@@ -460,6 +736,58 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          * e rispetta il focus richiesto. Senza setAudioAttributes il TTS parla come
          * USAGE_MEDIA e il focus richiesto non corrisponde all'audio riprodotto.
          */
+        /**
+         * Lingua dell'utente per cui il telefono NON ha una voce usabile senza
+         * rete, aggiornata a ogni applyTtsConfig (cioè a ogni init del TTS e a
+         * ogni cambio di configurazione). null = si può parlare.
+         * Vive nel companion come tutto il resto dello stato della coda.
+         */
+        @Volatile
+        private var missingVoiceLang: String? = null
+
+        /** Ultima notifica "voce mancante": una ogni 10 minuti, non una per POI. */
+        @Volatile
+        private var lastVoiceWarningAt: Long = 0L
+
+        /** Come sopra, per "il pacchetto è in un'altra lingua". */
+        @Volatile
+        private var lastPackageLangWarningAt: Long = 0L
+
+        /**
+         * Mappa lingua dell'app → Locale del TTS. Unico punto di verità:
+         * la usano applyTtsConfig e il controllo pre-download del plugin
+         * (checkOfflineTtsVoice), che devono rispondere sulla stessa voce.
+         */
+        fun localeForLang(lang: String): Locale = when (lang) {
+            "en" -> Locale.ENGLISH
+            "fr" -> Locale.FRENCH
+            "es" -> Locale("es", "ES")
+            "de" -> Locale.GERMAN
+            "ru" -> Locale("ru", "RU")
+            "zh" -> Locale.SIMPLIFIED_CHINESE
+            else -> Locale.ITALIAN
+        }
+
+        /**
+         * Esiste una voce di questa lingua che il motore sa sintetizzare SENZA
+         * RETE? `isNetworkConnectionRequired` è l'unico modo di saperlo prima di
+         * provare: una voce di rete, offline, produce silenzio.
+         *
+         * Conservativo per scelta: se il motore non espone l'elenco delle voci
+         * (lista nulla o vuota — succede su alcuni OEM e sugli engine di terze
+         * parti) si risponde `true` e si prova a parlare. Meglio tentare che
+         * accusare il telefono di una mancanza che non ha.
+         */
+        fun hasOfflineVoice(tts: TextToSpeech, locale: Locale): Boolean = try {
+            val voices = tts.voices
+            if (voices.isNullOrEmpty()) true
+            else voices.any { v ->
+                v.locale?.language == locale.language && !v.isNetworkConnectionRequired
+            }
+        } catch (_: Exception) {
+            true
+        }
+
         private fun applyTtsConfig(appContext: Context) {
             val tts = ttsInstance ?: return
             try {
@@ -472,31 +800,83 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
             val lang = appContext.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
                 .getString("language", "it") ?: "it"
-            val locale = when (lang) {
-                "en" -> Locale.ENGLISH
-                "fr" -> Locale.FRENCH
-                "es" -> Locale("es", "ES")
-                "de" -> Locale.GERMAN
-                "ru" -> Locale("ru", "RU")
-                "zh" -> Locale.SIMPLIFIED_CHINESE
-                else -> Locale.ITALIAN
-            }
-            try {
+            val locale = localeForLang(lang)
+            // (23/08/2026) NIENTE PIÙ RIPIEGO SU UN'ALTRA LINGUA. Prima, se la
+            // voce della lingua scelta mancava, si passava a italiano o
+            // inglese: un utente tedesco si sentiva leggere in italiano un
+            // testo tedesco, con la pronuncia di un'altra lingua. È peggio del
+            // silenzio, perché sembra un guasto dell'app e non un dato
+            // mancante del telefono. Ora si registra la lingua senza voce e
+            // processNextSpeech lo DICE all'utente, con l'azione per
+            // installarla.
+            missingVoiceLang = try {
                 val result = tts.setLanguage(locale)
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    // Fallback inglese: per un utente RU/ZH senza voce locale
-                    // installata è meno straniante dell'italiano.
-                    tts.language = if (lang == "it") Locale.ITALIAN else Locale.ENGLISH
+                    lang
+                } else if (!hasOfflineVoice(tts, locale)) {
+                    // La voce c'è ma la fa il server del motore TTS: senza rete
+                    // non esce un suono. È esattamente il caso che
+                    // checkOfflineTtsVoice verifica PRIMA del download, e che
+                    // fino a oggi nessuno ricontrollava al momento di parlare.
+                    lang
+                } else {
+                    null
                 }
-            } catch (_: Exception) { }
+            } catch (_: Exception) {
+                // Un'eccezione qui non è la prova che la voce manchi: si prova
+                // comunque a parlare, come si è sempre fatto.
+                null
+            }
+
+            applyTtsGender(tts, appContext)
+        }
+
+        /**
+         * Il genere della voce di SISTEMA deve seguire il personaggio scelto,
+         * come già fa l'MP3 neurale (AudioPrefetchManager.azureVoiceFor: Nicky
+         * = voce femminile, Dante = maschile, in tutte e sette le lingue).
+         * Prima qui si impostava solo la lingua e il motore usava la sua voce
+         * di default: offline, o quando il server TTS non risponde, Dante
+         * parlava con voce di donna in ogni lingua.
+         *
+         * I nomi delle voci Android hanno la forma `it-it-x-kda#female_1-local`:
+         * il marcatore `#female`/`#male` è la fonte affidabile del genere.
+         */
+        private fun applyTtsGender(tts: TextToSpeech, appContext: Context) {
+            try {
+                // Stessa preferenza letta da resolveGuideVoice (persistita dal
+                // plugin): qui non si può chiamare, è nel corpo della classe.
+                val character = appContext
+                    .getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+                    .getString("guideCharacter", null)
+                val wantFemale = character != "dante"
+                val target = tts.voice?.locale?.language
+                    ?: tts.language?.language
+                    ?: return
+                val candidates = (tts.voices ?: return)
+                    .filter { it.locale?.language == target && !it.isNetworkConnectionRequired }
+                    .filter { v ->
+                        val n = v.name.lowercase()
+                        if (wantFemale) n.contains("#female") else n.contains("#male")
+                    }
+                if (candidates.isEmpty()) return
+                // A parità di genere si preferisce la voce di qualità migliore.
+                val best = candidates.maxByOrNull { it.quality } ?: return
+                tts.setVoice(best)
+            } catch (_: Exception) {
+                // Nessuna voce con quel genere installata: si tiene quella di
+                // default — meglio la voce sbagliata che il silenzio.
+            }
         }
 
         private fun attachProgressListener(appContext: Context) {
             ttsInstance?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) { }
-                override fun onDone(utteranceId: String?) { onUtteranceFinished(appContext) }
-                override fun onError(utteranceId: String?) { onUtteranceFinished(appContext) }
-                override fun onStop(utteranceId: String?, interrupted: Boolean) { onUtteranceFinished(appContext) }
+                override fun onDone(utteranceId: String?) { onUtteranceFinished(appContext, utteranceId) }
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) { onUtteranceFinished(appContext, utteranceId) }
+                override fun onError(utteranceId: String?, errorCode: Int) { onUtteranceFinished(appContext, utteranceId) }
+                override fun onStop(utteranceId: String?, interrupted: Boolean) { onUtteranceFinished(appContext, utteranceId) }
             })
         }
 
@@ -516,9 +896,44 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             return cleaned.ifBlank { text.trim() }
         }
 
+        /**
+         * (AUD-05) Cambi di focus audio, uguali su tutte le API:
+         *  - LOSS_TRANSIENT (telefonata, prompt del navigatore): PAUSA — l'item
+         *    resta attivo e riparte al GAIN (MP3 dal punto, TTS da capo);
+         *  - GAIN: ripresa, salvo pausa esplicita dell'utente;
+         *  - LOSS definitivo: si chiude l'item e si prova col successivo
+         *    (processNextSpeech rinvia da solo di 8 s se c'e' una chiamata).
+         * Prima ogni perdita chiudeva l'item e la coda restava ferma per
+         * sempre: nessun ramo GAIN, nessun processNextSpeech.
+         */
+        private fun onAudioFocusChange(appContext: Context, change: Int) {
+            when (change) {
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+                AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                    // CAN_DUCK: siamo gia' voce di navigazione, non ci si
+                    // abbassa sotto un'altra voce — pausa breve come per
+                    // la perdita transitoria.
+                    pauseActiveSpeech(appContext, byUser = false)
+                    notifyVoiceStateChanged()
+                }
+                AudioManager.AUDIOFOCUS_GAIN -> {
+                    if (!pausedByUser && resumeActiveSpeech(appContext)) notifyVoiceStateChanged()
+                }
+                AudioManager.AUDIOFOCUS_LOSS -> {
+                    activeUtteranceId = null
+                    try { ttsInstance?.stop() } catch (_: Exception) { }
+                    finishActiveSpeech(appContext, notifyJs = true)
+                    processNextSpeech(appContext)
+                }
+            }
+        }
+
         private fun requestFocus(appContext: Context) {
             val am = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // Richiesta gia' in piedi (ripresa dopo pausa): non se ne
+                // crea una seconda, il sistema terrebbe entrambe.
+                if (activeFocusRequest != null) return
                 val attrs = AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -527,25 +942,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     .setAudioAttributes(attrs)
                     .setAcceptsDelayedFocusGain(false)
                     .setWillPauseWhenDucked(false)
-                    .setOnAudioFocusChangeListener { change ->
-                        // Se qualcuno ci porta via il focus (es. chiamata in arrivo,
-                        // prompt del navigatore), tacere subito è la scelta pulita.
-                        // Prima si fermava SOLO il TTS: l'MP3 prefetchato continuava
-                        // a suonare sopra la telefonata. Ora si chiude anche il
-                        // MediaPlayer e lo stato "sto parlando" (finishActiveSpeech
-                        // rilascia il player, abbandona il focus, avvisa il JS).
-                        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-                            try { ttsInstance?.stop() } catch (_: Exception) { }
-                            try { activeMediaPlayer?.pause() } catch (_: Exception) { }
-                            finishActiveSpeech(appContext, notifyJs = true)
-                        }
-                    }
+                    .setOnAudioFocusChangeListener(
+                        AudioManager.OnAudioFocusChangeListener { change -> onAudioFocusChange(appContext, change) },
+                        safetyHandler
+                    )
                     .build()
                 activeFocusRequest = req
                 am.requestAudioFocus(req)
             } else {
+                if (legacyFocusListener != null) return
+                val listener = AudioManager.OnAudioFocusChangeListener { change -> onAudioFocusChange(appContext, change) }
+                legacyFocusListener = listener
                 @Suppress("DEPRECATION")
-                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                am.requestAudioFocus(listener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             }
         }
 
@@ -557,15 +966,26 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 }
                 activeFocusRequest = null
             } else {
+                val listener = legacyFocusListener
+                legacyFocusListener = null
                 @Suppress("DEPRECATION")
-                am.abandonAudioFocus(null)
+                am.abandonAudioFocus(listener)
             }
         }
 
-        private fun broadcastTeaserEvent(appContext: Context, event: String, item: SpeechItem) {
+        private fun broadcastTeaserEvent(
+            appContext: Context,
+            event: String,
+            item: SpeechItem,
+            // Motivo del fallimento, solo per l'evento "listenFailed": il JS
+            // deve poter distinguere «manca il testo» da «manca la voce», che
+            // si risolvono in due modi diversi.
+            reason: String? = null
+        ) {
             val data = JSONObject().apply {
                 put("poiId", item.poiId ?: "")
                 put("kind", item.kind)
+                if (reason != null) put("reason", reason)
             }
             val intent = Intent("com.itaintasca.POI_EVENT").apply {
                 setPackage(appContext.packageName)
@@ -574,6 +994,99 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 item.poiId?.let { putExtra("poiId", it) }
             }
             appContext.sendBroadcast(intent)
+        }
+
+        /**
+         * LA VERITÀ AL POSTO DEL SILENZIO (23/08/2026). Quando la voce della
+         * lingua dell'utente non è installata (o esiste solo come voce di rete)
+         * l'audioguida non può parlare: prima si ripiegava su italiano o
+         * inglese — un tedesco si sentiva leggere il proprio testo con la
+         * pronuncia italiana — e la coda proseguiva come se tutto andasse bene.
+         *
+         * Ora si notifica, in lingua, e il tocco porta DIRITTO alle impostazioni
+         * dati vocali del sistema (ACTION_INSTALL_TTS_DATA, lo stesso intent del
+         * plugin): l'unico posto dove il problema si risolve. Se il motore non
+         * la espone si ripiega sulle impostazioni TTS e poi sull'app.
+         *
+         * Una notifica ogni 10 minuti, non una per POI: camminando in centro
+         * sarebbero decine, e la ripetizione trasformerebbe un'informazione
+         * utile in molestia.
+         */
+        private fun showVoiceMissingNotification(context: Context, lang: String) {
+            val now = System.currentTimeMillis()
+            if (now - lastVoiceWarningAt < 10 * 60_000L) return
+            lastVoiceWarningAt = now
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val pm = context.packageManager
+                val target = listOf(
+                    Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA),
+                    Intent("com.android.settings.TTS_SETTINGS")
+                ).firstOrNull { it.resolveActivity(pm) != null }
+                    ?: Intent(context, MainActivity::class.java)
+                target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val pIntent = PendingIntent.getActivity(
+                    context, 9997, target,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                val builder = NotificationCompat.Builder(context, "geofencing_channel")
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(NotificationStrings.get(lang, "voice_missing_title"))
+                    .setContentText(NotificationStrings.get(lang, "voice_missing_text"))
+                    .setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .bigText(NotificationStrings.get(lang, "voice_missing_text"))
+                    )
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setContentIntent(pIntent)
+                nm.notify(9997, builder.build())
+            } catch (_: Exception) {
+                // Notifiche negate o canale assente: non è un motivo per far
+                // cadere la coda della voce.
+            }
+        }
+
+        /**
+         * IL PACCHETTO È IN UN'ALTRA LINGUA (23/08/2026). Un pacchetto offline
+         * porta una lingua sola, quella scelta al download; chi poi cambia
+         * lingua nell'app si ritrova un'area piena di testi che non gli
+         * servono. Finora quel caso finiva in silenzio (ArrivalWorker scarta il
+         * testo e torna) o in un testo italiano letto con la voce tedesca.
+         * Dirlo, con le due lingue scritte per esteso, è l'unica risposta
+         * onesta: da lì l'utente sa cosa fare — riscaricare l'area nella sua
+         * lingua, o ascoltare in quella del pacchetto.
+         *
+         * Stesso throttle di 10 minuti della voce mancante, stesso motivo.
+         */
+        fun notifyPackageLanguage(context: Context, packageLang: String, userLang: String) {
+            val now = System.currentTimeMillis()
+            if (now - lastPackageLangWarningAt < 10 * 60_000L) return
+            lastPackageLangWarningAt = now
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val pIntent = PendingIntent.getActivity(
+                    context, 9996, intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                val text = NotificationStrings.get(
+                    userLang, "pkg_lang_text",
+                    NotificationStrings.languageName(packageLang),
+                    NotificationStrings.languageName(userLang)
+                )
+                val builder = NotificationCompat.Builder(context, "geofencing_channel")
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(NotificationStrings.get(userLang, "pkg_lang_title"))
+                    .setContentText(text)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .setAutoCancel(true)
+                    .setContentIntent(pIntent)
+                nm.notify(9996, builder.build())
+            } catch (_: Exception) { }
         }
 
         private fun showCheckInNotification(context: Context, poiId: String) {
@@ -605,6 +1118,25 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val event = GeofencingEvent.fromIntent(intent) ?: return
         if (event.hasError()) {
             Log.e(TAG, "Geofencing error: ${event.errorCode}")
+            // (MAP-04) GEOFENCE_NOT_AVAILABLE (1000): il sistema ha buttato
+            // via TUTTI i recinti (posizione spenta e riaccesa, Play Services
+            // riavviati). Il GeofenceManager pero' li credeva ancora
+            // registrati (registeredPoiIds pieno) e faceva solo diff: la
+            // finestra restava vuota per sempre. Si chiede al servizio di
+            // azzerare e ri-registrare tutto al prossimo fix.
+            if (event.errorCode == GeofenceStatusCodes.GEOFENCE_NOT_AVAILABLE) {
+                try {
+                    val i = Intent(context, com.itaintasca.app.service.ItaintaBackgroundPoiService::class.java)
+                        .setAction(com.itaintasca.app.service.ItaintaBackgroundPoiService.ACTION_REFRESH_GEOFENCES)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(i)
+                    } else {
+                        context.startService(i)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Richiesta di ri-registrazione geofence non inviata: ${e.message}")
+                }
+            }
             return
         }
 
@@ -703,6 +1235,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         // Anti-spam: se in un unico batch scattano più "approach" (piazza densa),
         // solo il più prioritario parla; gli altri restano su vibrazione+notifica.
         var approachSpokenInBatch = false
+        // (AUD-04) Stessa regola per gli ARRIVI: prima ogni arrivo del batch
+        // chiamava handleArrival → ArrivalWorker, che scalava il Day Pass e
+        // accodava la guida COMPLETA per ciascuno (tre monumenti nella stessa
+        // piazza = tre guide consumate e 10 minuti di voce in fila). Ora solo
+        // il primo (per priorita' e distanza) ha la guida; gli altri scrivono
+        // lo stato e mostrano la notifica «Tocca per ascoltare».
+        var arrivalSpokenInBatch = false
 
         for (info in sorted) {
             val poi = db.poiDao().getPoiById(info.poiId) ?: continue
@@ -789,11 +1328,35 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 // pensera' il loop del servizio (firePerimeterArrival) al
                 // fix in cui lo si diventa.
                 val haPerimetro = !poi.footprint.isNullOrBlank()
+
+                // GATE DI BUSSOLA (23/08/2026), SOLO sull'arrivo: se il POI e'
+                // ormai alle spalle non si racconta ADESSO — si rimanda, senza
+                // marcare lo stato e senza consumare nessun cooldown, e si
+                // riprova al fix successivo. L'avviso a 150 m (approach) non e'
+                // toccato: serve a preparare teaser e MP3 e deve scattare
+                // comunque. Le tappe di un itinerario non passano mai dal gate:
+                // le ha scelte l'utente e si raccontano in ogni caso.
+                // `dentroPerimetro` qui e' "entro 30 m dal muro": al gate serve
+                // il DENTRO stretto, altrimenti sarebbe sempre fail-open.
+                val gate = if (info.isItinerary) BearingGate.Esito.IGNORA_GATE else BearingGate.valuta(
+                    context, poi, currentLoc,
+                    dentroPerimetro = Footprints.dentroPerimetro(
+                        info.poiId, poi.footprint, currentLoc.latitude, currentLoc.longitude
+                    ),
+                    distanzaM = info.realDist
+                )
+
                 if (haPerimetro && !dentroPerimetro) {
                     Log.d(TAG, "Arrivo rinviato per ${poi.nome}: dentro il cerchio ma a piu' di ${Footprints.triggerM(isDrivingMode).toInt()} m dal perimetro")
+                } else if (gate == BearingGate.Esito.RIMANDA) {
+                    Log.d(TAG, "Arrivo rimandato per ${poi.nome}: e' alle spalle (gate di bussola)")
                 } else if (!blockedArrival) {
                     // ✅ [ROBUSTEZZA] - Permettiamo l'arrivo anche se l'approccio è stato saltato (es. marcia veloce)
-                    handleArrival(context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary, isAutomaticMode, db, distanceM = info.realDist)
+                    val fired = handleArrival(
+                        context, info.poiId, poi.nome, poi.guideDefault, poi.isGem, info.isItinerary,
+                        isAutomaticMode, db, distanceM = info.realDist, fullGuide = !arrivalSpokenInBatch
+                    )
+                    if (fired) arrivalSpokenInBatch = true
                 }
             }
         }
@@ -863,15 +1426,44 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * (AUD-08) Fix corrente con TIMEOUT. Prima `getCurrentLocation(...).await()`
+     * senza limite dentro goAsync(): indoor o con GPS lento il Task poteva
+     * restare appeso oltre i ~10 s del receiver e l'OS lo chiudeva a meta',
+     * perdendo l'ENTER. Ora: richiesta con durata massima 3 s (accetta un fix
+     * fresco fino a 15 s), token di cancellazione, e comunque un tetto di 4 s
+     * attorno all'await; oltre, si ripiega su lastLocation (il chiamante
+     * verifica poi accuratezza ed eta').
+     */
     private suspend fun getCurrentPreciseLocation(context: Context): Location? {
+        val fusedClient = try {
+            LocationServices.getFusedLocationProviderClient(context)
+        } catch (e: Exception) {
+            return null
+        }
+        val fresh: Location? = try {
+            withTimeoutOrNull(4000L) {
+                val cts = CancellationTokenSource()
+                try {
+                    val req = CurrentLocationRequest.Builder()
+                        .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                        .setDurationMillis(3000L)
+                        .setMaxUpdateAgeMillis(15_000L)
+                        .build()
+                    fusedClient.getCurrentLocation(req, cts.token).await()
+                } finally {
+                    // Scaduto il tempo (o finito) si cancella la richiesta:
+                    // niente GPS acceso a vuoto dopo che il receiver e' morto.
+                    try { cts.cancel() } catch (_: Exception) { }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "getCurrentLocation fallita: ${e.message}")
+            null
+        }
+        if (fresh != null) return fresh
         return try {
-            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-            // Usiamo il valore più preciso disponibile immediatamente
-            val location = fusedClient.getCurrentLocation(
-                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
-                null
-            ).await()
-            location ?: fusedClient.lastLocation.await()
+            fusedClient.lastLocation.await()
         } catch (e: Exception) {
             null
         }
@@ -959,9 +1551,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         showNotification(context, "$notifTitle: $name", NotificationStrings.get(lang, "approach_text", alertRadNow.toInt().toString()), poiId, guideVoice, false, bigText = approachBigText)
     }
 
+    /**
+     * Arrivo a un POI. Ritorna true se l'arrivo e' stato EMESSO (stato
+     * scritto, evento, notifica), false se scartato (POI assente o gia'
+     * ARRIVED_FIRED): il chiamante usa il ritorno per l'anti-spam di batch.
+     *
+     * `fullGuide` (AUD-04): false per i POI successivi al primo nello stesso
+     * fix/batch — stato e notifica «Tocca per ascoltare», ma niente voce,
+     * niente ArrivalWorker (che consumerebbe il pass e accoderebbe il testo
+     * integrale) e niente launchApp (l'app in foreground farebbe partire la
+     * guida da sola).
+     */
     private suspend fun handleArrival(
-        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, isAutomaticMode: Boolean, db: PoiDatabase, distanceM: Float? = null
-    ): Unit = lockForPoi(poiId).withLock {
+        context: Context, poiId: String, name: String, guide: String, isGem: Boolean, isItinerary: Boolean, isAutomaticMode: Boolean, db: PoiDatabase, distanceM: Float? = null,
+        fullGuide: Boolean = true
+    ): Boolean = lockForPoi(poiId).withLock {
         var poi = db.poiDao().getPoiById(poiId)
         if (poi == null) {
             // Senza il POI nel DB locale non abbiamo lat/lon reali: prima si
@@ -969,7 +1573,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // 0.0,0.0 (banner/notifica sul punto sbagliato). Meglio scartare
             // l'evento: il prossimo fetch/refresh ripopolerà Room.
             Log.w(TAG, "handleArrival: POI $poiId non trovato nel DB locale, evento poiArrived scartato")
-            return
+            return false
         }
         // Ri-verifica SOTTO LOCK: stesso motivo di handleApproach — il loop
         // predittivo del servizio e il path broadcast possono decidere
@@ -977,9 +1581,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val stateNow = db.poiDao().getTriggerState(poiId)?.state
         if (stateNow == TriggerState.ARRIVED_FIRED) {
             Log.d(TAG, "handleArrival: $poiId già ARRIVED_FIRED, doppio trigger evitato")
-            return
+            return false
         }
         db.poiDao().updateTriggerState(TriggerStateEntity(poiId, TriggerState.ARRIVED_FIRED))
+        // Il POI ha parlato: il suo contatore di rinvii non serve piu' (spec
+        // del gate, punto 7 — si azzera appena torna davanti o appena parla).
+        BearingGate.azzera(poiId)
         sendEventToPlugin(context, "poiArrived", poiId, name, poi?.lat ?: 0.0, poi?.lon ?: 0.0, distanceM)
 
         val priority = if (poi?.isFromItinerary == true) 0 else 1
@@ -1085,12 +1692,39 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             fallbackTeaser = fallbackTeaser, poiLat = poi?.lat ?: 0.0, poiLon = poi?.lon ?: 0.0,
             poiType = poi?.poiType
         )
-        val online = com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
-        val mayNeedFullGuide = isAutomaticMode && !silentMode && !isAppInForeground(context)
-        val needsLongWork = online && (teaser.isNullOrBlank() || mayNeedFullGuide)
-        val forwarded = needsLongWork && ArrivalWorker.dispatchToService(context, params)
-        if (!forwarded) {
-            ArrivalWorker.run(context, params)
+        if (fullGuide) {
+            val online = com.itaintasca.app.offline.ConnectivityMonitor.isOnline(context)
+            val mayNeedFullGuide = isAutomaticMode && !silentMode && !isAppInForeground(context)
+            val needsLongWork = online && (teaser.isNullOrBlank() || mayNeedFullGuide)
+            val forwarded = needsLongWork && ArrivalWorker.dispatchToService(context, params)
+            if (!forwarded) {
+                // (AUD-08) Ripiego INLINE nel receiver (il servizio non e'
+                // avviabile da background): niente rete — ne' teaser dal
+                // server ne' download MP3 — e tetto di 8 s, cosi' goAsync()
+                // non viene chiuso a meta' dall'OS. Voce dal teaser locale e,
+                // col pass, guida dal pacchetto offline / MP3 gia' in cache.
+                // (androidx.work non e' fra le dipendenze: niente WorkManager.)
+                val done = withTimeoutOrNull(8000L) {
+                    ArrivalWorker.run(context, params, offlineOnly = true)
+                    true
+                }
+                if (done == null) Log.w(TAG, "Arrivo $poiId: lavoro inline oltre gli 8 s, interrotto")
+            }
+        }
+
+        // (AUD-11) Il testo della notifica dice la verita': «Avvio audioguida»
+        // SOLO se la guida partira' davvero da sola (gia' acquistata o Day
+        // Pass attivo, ArrivalWorker.run:158-167); altrimenti prima diceva
+        // «Avvio audioguida» e restava muta. Senza pass → «Tocca per ascoltare».
+        val autoPlay = fullGuide && isAutomaticMode && !silentMode && run {
+            val alreadyPurchased = com.itaintasca.app.service.ListeningHistoryStore.isAlreadyPurchased(context, poiId)
+            val passActive = com.itaintasca.app.offline.BillingLogic.isPassActive(
+                System.currentTimeMillis(),
+                prefs.getLong("daypass_expires_at", 0L),
+                prefs.getInt("daypass_used", 0),
+                prefs.getInt("daypass_cap", 0)
+            )
+            alreadyPurchased || passActive
         }
 
         if (silentMode) {
@@ -1099,12 +1733,19 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // automatico farebbe partire l'audio.
             // (22/08/2026) Notifiche nella lingua dell'utente (NotificationStrings), non più italiano fisso
             showNotification(context, NotificationStrings.get(lang, "arrival_at", name), teaser ?: fallbackTeaser, poiId, guideVoice, true, bigText = fullMsg)
-        } else if (isAutomaticMode) {
+        } else if (autoPlay) {
             showNotification(context, NotificationStrings.get(lang, "arrived_title"), NotificationStrings.get(lang, "arrived_starting", name), poiId, guideVoice, true)
+            launchApp(context, poiId, guideVoice)
+        } else if (isAutomaticMode && fullGuide) {
+            // Automatico ma senza pass/acquisto: si apre l'app (che propone
+            // l'acquisto) e la notifica invita ad ascoltare, senza promettere
+            // un avvio che non ci sara'.
+            showNotification(context, NotificationStrings.get(lang, "arrival_at", name), NotificationStrings.get(lang, "arrived_tap"), poiId, guideVoice, true)
             launchApp(context, poiId, guideVoice)
         } else {
             showNotification(context, NotificationStrings.get(lang, "arrival_at", name), NotificationStrings.get(lang, "arrived_tap"), poiId, guideVoice, true)
         }
+        true
     }
 
     private fun triggerTeaserGeneration(context: Context, poiId: String, lang: String) {
@@ -1115,7 +1756,10 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 // connect, 10 s read) tagliava la generazione AI del teaser,
                 // che può superare i 10 s; 25 s di read è il tetto ragionevole
                 // per un job in background che non blocca nessuno.
-                val client = OkHttpClient.Builder()
+                // (23/08/2026) Timeout identici, ma su newBuilder() del client
+                // condiviso (WipHttp): niente pool/dispatcher nuovi a ogni
+                // avvicinamento.
+                val client = com.itaintasca.app.service.WipHttp.client.newBuilder()
                     .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
@@ -1130,7 +1774,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 val accessToken = com.itaintasca.app.service.SecurePrefs.get(appContext)
                     .getString(com.itaintasca.app.service.ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
                 val requestBuilder = Request.Builder()
-                    .url("https://wip.guide/api/poi/batch-teaser")
+                    .url(WipApi.BASE + "/api/poi/batch-teaser")
                     .post(body)
                 if (!accessToken.isNullOrBlank()) {
                     requestBuilder.addHeader("Authorization", "Bearer $accessToken")
@@ -1142,6 +1786,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         Log.d(TAG, "Predictive teaser requested for $poiId (HTTP ${response.code})")
                     } else {
                         Log.w(TAG, "Predictive teaser $poiId: HTTP ${response.code} (token ${if (accessToken.isNullOrBlank()) "assente" else "presente"})")
+                        // (SEC-03) Token scaduto: il JS deve rinnovarlo.
+                        if (response.code == 401 && !accessToken.isNullOrBlank()) WipApi.notifyTokenExpired(appContext)
                     }
                 }
             } catch (e: Exception) {

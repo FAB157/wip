@@ -141,6 +141,8 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
 
   // ── PoiExtraDetails / PoiNearbyList ─────────────────────────────────────
   sk_dettagli_opera: { IT: "Dettagli dell'Opera", EN: "Artwork Details", FR: "Détails de l'œuvre", ES: "Detalles de la obra", DE: "Details zum Werk", RU: "Сведения о произведении", ZH: "作品详情" },
+  sk_biodiversita: { IT: "Biodiversità", EN: "Biodiversity", FR: "Biodiversité", ES: "Biodiversidad", DE: "Biodiversität", RU: "Биоразнообразие", ZH: "生物多样性" },
+  sk_biodiversita_fonte: { IT: "Specie avvistate qui, da GBIF", EN: "Species spotted here, from GBIF", FR: "Espèces observées ici, via GBIF", ES: "Especies avistadas aquí, de GBIF", DE: "Hier gesichtete Arten, von GBIF", RU: "Виды, замеченные здесь, по данным GBIF", ZH: "此处发现的物种，来自 GBIF" },
   sk_vicino_a_te: { IT: "Vicino a te", EN: "Near you", FR: "Près de toi", ES: "Cerca de ti", DE: "In deiner Nähe", RU: "Рядом с вами", ZH: "你附近" },
   sk_attrazioni_dintorni: { IT: "Attrazioni nei dintorni", EN: "Attractions nearby", FR: "Attractions aux alentours", ES: "Atracciones en los alrededores", DE: "Attraktionen in der Umgebung", RU: "Достопримечательности поблизости", ZH: "周边景点" },
 };

@@ -234,32 +234,117 @@ final class WipSupabaseClient {
     /// rompere l'audioguida automatica sulle installazioni non ancora
     /// aggiornate. La fase 2 (server che rifiuta senza token) va fatta solo
     /// quando questa build sarà diffusa alla maggioranza degli utenti.
+    /// Esito della richiesta del testo integrale (28/08/2026).
+    enum AudioguideEsito {
+        /// Testo integrale nella lingua dell'utente: si può riprodurre.
+        case testo(String)
+        /// 402 `credits_required`: l'utente NON ha diritto al testo integrale
+        /// (pass/crediti non validi lato server). `preview` è l'anteprima da
+        /// usare come TEASER — mai come guida completa, mai addebitata.
+        case anteprima(String?)
+        /// Rete, server, JSON vuoto: nulla da riprodurre.
+        case fallito
+    }
+
+    /// Compatibilità: i chiamanti che vogliono solo "testo o niente". Un 402
+    /// qui è nil come un errore — chi deve distinguerlo usa `fetchAudioguide`.
     func fetchAudioguideText(poiId: String, lang: String, character: String, accessToken: String? = nil, completion: @escaping (String?) -> Void) {
-        guard let url = URL(string: "https://wip.guide/api/poi/audioguide") else {
-            completion(nil); return
+        fetchAudioguide(poiId: poiId, lang: lang, character: character, accessToken: accessToken) { esito in
+            if case .testo(let t) = esito { completion(t) } else { completion(nil) }
+        }
+    }
+
+    /// (28/08/2026) Il server ora risponde 402 {error:'credits_required',
+    /// preview} quando l'utente non ha diritto al testo integrale: prima
+    /// finiva nel `guard` come "testo vuoto" e il trigger passava alla
+    /// notifica muta. Ora: 2xx → `.testo`; 402 → `.anteprima(preview)`;
+    /// 401 (token assente/scaduto) → ripiego sui campi grezzi di shared_pois
+    /// (`fetchPoiAudioText`, rete di sicurezza già prevista); altro → `.fallito`.
+    /// Il Bearer parte SEMPRE quando c'è un token: chi chiama con `accessToken`
+    /// nil riceve comunque quello del Keychain.
+    /// Ultimo evento `tokenExpired` emesso (throttle 5 min, come WipApi.kt).
+    private static var ultimoTokenExpiredTs: TimeInterval = 0
+
+    /// (28/08/2026) 401 con token presente → evento `tokenExpired` al JS, che
+    /// rinnova la sessione e rispinge il token con setUserContext.
+    private func segnalaTokenScaduto(token: String?) {
+        guard let token = token, !token.isEmpty else { return }
+        let ora = Date().timeIntervalSince1970
+        guard ora - WipSupabaseClient.ultimoTokenExpiredTs > 300 else { return }
+        WipSupabaseClient.ultimoTokenExpiredTs = ora
+        DispatchQueue.main.async {
+            BackgroundPoiManager.shared.onEvent?("tokenExpired", nil, [
+                "reason": "http_401",
+                "ts": Int(ora * 1000)
+            ])
+        }
+    }
+
+    /// Ripiego dopo un 401 definitivo: i campi grezzi di shared_pois sono in
+    /// ITALIANO, quindi si usano solo per lang=it (regola del 23/08: mai un
+    /// testo nella lingua sbagliata). Stessa regola di SupabaseClient.kt.
+    private func ripiegoDopo401(poiId: String, lang: String, completion: @escaping (AudioguideEsito) -> Void) {
+        guard lang.lowercased().hasPrefix("it") else { completion(.fallito); return }
+        fetchPoiAudioText(poiId) { raw in
+            if let raw = raw, !raw.isEmpty { completion(.testo(raw)) } else { completion(.fallito) }
+        }
+    }
+
+    func fetchAudioguide(poiId: String, lang: String, character: String, accessToken: String? = nil, ritenta: Bool = true, completion: @escaping (AudioguideEsito) -> Void) {
+        guard let url = URL(string: "\(WipApi.base)/api/poi/audioguide") else {
+            completion(.fallito); return
         }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = 30
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Solo se presente: nessun header quando manca, la richiesta resta
-        // identica a quella di oggi (vedi commento fase 1 sopra).
-        if let accessToken = accessToken, !accessToken.isEmpty {
-            req.addValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let token = (accessToken?.isEmpty == false)
+            ? accessToken
+            : SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
+        if let token = token, !token.isEmpty {
+            req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: [
             "poiId": poiId, "lang": lang, "character": character
         ])
-        session.dataTask(with: req) { data, response, _ in
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  let data = data,
-                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let text = obj["text"] as? String,
-                  !text.trimmingCharacters(in: .whitespaces).isEmpty else {
-                completion(nil)
-                return
+        session.dataTask(with: req) { [weak self] data, response, _ in
+            guard let http = response as? HTTPURLResponse else { completion(.fallito); return }
+            let obj = data.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+            switch http.statusCode {
+            case 200..<300:
+                if let text = obj?["text"] as? String,
+                   !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                    completion(.testo(text))
+                } else {
+                    completion(.fallito)
+                }
+            case 402:
+                let preview = (obj?["preview"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                completion(.anteprima((preview?.isEmpty == false) ? preview : nil))
+            case 401:
+                // Senza identità valida il server non traduce né genera.
+                // (28/08/2026) Quasi sempre è un token SCADUTO: si avvisa il
+                // JS (tokenExpired → refresh + setUserContext), si aspettano
+                // 2,5 s, si rilegge il token dal Keychain e si ritenta UNA
+                // volta. Solo dopo, il ripiego (solo italiano).
+                guard let self = self else { completion(.fallito); return }
+                self.segnalaTokenScaduto(token: token)
+                if ritenta {
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2.5) {
+                        let nuovo = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken) ?? ""
+                        if !nuovo.isEmpty && nuovo != (token ?? "") {
+                            self.fetchAudioguide(poiId: poiId, lang: lang, character: character,
+                                                 accessToken: nuovo, ritenta: false, completion: completion)
+                        } else {
+                            self.ripiegoDopo401(poiId: poiId, lang: lang, completion: completion)
+                        }
+                    }
+                    return
+                }
+                self.ripiegoDopo401(poiId: poiId, lang: lang, completion: completion)
+            default:
+                completion(.fallito)
             }
-            completion(text)
         }.resume()
     }
 
@@ -556,6 +641,10 @@ enum SecureSessionStore {
  */
 final class ListeningHistoryStore {
     static let shared = ListeningHistoryStore()
+    /// Prefissi delle chiavi PER UTENTE: la chiave reale è
+    /// `listened_poi_ids_<userId>` / `listened_pending_sync_<userId>`.
+    /// I nomi senza suffisso sono le vecchie chiavi globali, lette solo per
+    /// la migrazione una tantum.
     static let prefListenedIds = "listened_poi_ids"
     static let prefPending = "listened_pending_sync"
     static let prefUserId = "wip_user_id"
@@ -571,25 +660,83 @@ final class ListeningHistoryStore {
         SecureSessionStore.migrateFromUserDefaultsIfNeeded(legacyKey: Self.prefAccessToken, prefs: prefs)
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // (28/08/2026, SEC-02) STORICO PER UTENTE.
+    //
+    // Prima il mirror degli ascolti e la coda pending stavano in UserDefaults
+    // sotto UNA chiave globale, senza utente: sullo stesso telefono, chi
+    // faceva login dopo ereditava i POI "già acquistati" del precedente (li
+    // ascoltava gratis), la sync li UNIVA al suo storico cloud e il flush dei
+    // pending ATTRIBUIVA all'utente corrente ascolti fatti da un altro. Ora
+    // ogni chiave porta l'id utente, ogni voce pending porta `user_id` e viene
+    // scartata se non coincide, e la vecchia chiave globale viene migrata
+    // sotto l'utente corrente alla prima lettura. Senza utente non c'è
+    // storico (fail-closed: nessun "già acquistato" anonimo).
+    // ─────────────────────────────────────────────────────────────────────
+
+    private func utenteCorrente() -> String {
+        SecureSessionStore.get(Self.prefUserId) ?? ""
+    }
+
+    private func chiaveAscoltati(_ userId: String) -> String { "\(Self.prefListenedIds)_\(userId)" }
+    private func chiavePending(_ userId: String) -> String { "\(Self.prefPending)_\(userId)" }
+
+    /// Migrazione una tantum della chiave globale (installazioni aggiornate):
+    /// gli id passano sotto l'utente corrente e ogni voce pending riceve il
+    /// suo `user_id`. Da chiamare su `queue`, con userId non vuoto.
+    private func migraChiaviGlobaliLocked(userId: String) {
+        if let vecchi = prefs.stringArray(forKey: Self.prefListenedIds) {
+            var ids = Set(prefs.stringArray(forKey: chiaveAscoltati(userId)) ?? [])
+            ids.formUnion(vecchi)
+            prefs.set(Array(ids), forKey: chiaveAscoltati(userId))
+            prefs.removeObject(forKey: Self.prefListenedIds)
+        }
+        if let vecchiPending = prefs.stringArray(forKey: Self.prefPending) {
+            var pending = Set(prefs.stringArray(forKey: chiavePending(userId)) ?? [])
+            for raw in vecchiPending {
+                guard let data = raw.data(using: .utf8),
+                      var entry = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { continue }
+                entry["user_id"] = userId
+                if let out = try? JSONSerialization.data(withJSONObject: entry),
+                   let s = String(data: out, encoding: .utf8) {
+                    pending.insert(s)
+                }
+            }
+            prefs.set(Array(pending), forKey: chiavePending(userId))
+            prefs.removeObject(forKey: Self.prefPending)
+        }
+    }
+
+    /// Ascoltati dell'utente (con migrazione al primo accesso). Su `queue`.
+    private func ascoltatiLocked(userId: String) -> Set<String> {
+        migraChiaviGlobaliLocked(userId: userId)
+        return Set(prefs.stringArray(forKey: chiaveAscoltati(userId)) ?? [])
+    }
+
     /// Mirror locale, vale anche offline. In dubbio: NON acquistato.
     func isAlreadyPurchased(_ poiId: String) -> Bool {
         guard !poiId.isEmpty else { return false }
-        return queue.sync {
-            (prefs.stringArray(forKey: Self.prefListenedIds) ?? []).contains(poiId)
-        }
+        let userId = utenteCorrente()
+        guard !userId.isEmpty else { return false }
+        return queue.sync { ascoltatiLocked(userId: userId).contains(poiId) }
     }
 
     /// Registra un ascolto completato: mirror subito (vale anche offline),
     /// poi insert cloud best-effort. Se il cloud fallisce la voce resta
-    /// pending e viene ritentata alla prossima sync.
+    /// pending e viene ritentata alla prossima sync. La voce pending porta
+    /// l'utente che ha ascoltato: al flush non può finire nello storico di un
+    /// altro.
     func recordListening(poiId: String, poiName: String?, category: String?, imageUrl: String? = nil) {
         guard !poiId.isEmpty else { return }
+        let userId = utenteCorrente()
+        guard !userId.isEmpty else { return }
         queue.async {
-            var ids = Set(self.prefs.stringArray(forKey: Self.prefListenedIds) ?? [])
+            var ids = self.ascoltatiLocked(userId: userId)
             ids.insert(poiId)
-            self.prefs.set(Array(ids), forKey: Self.prefListenedIds)
+            self.prefs.set(Array(ids), forKey: self.chiaveAscoltati(userId))
 
             var entry: [String: Any] = [
+                "user_id": userId,
                 "poi_id": poiId,
                 "poi_name": (poiName?.isEmpty == false) ? poiName! : "Luogo d'interesse",
                 "category": (category?.isEmpty == false) ? category! : "Altro"
@@ -597,42 +744,63 @@ final class ListeningHistoryStore {
             if let imageUrl = imageUrl, !imageUrl.isEmpty { entry["image_url"] = imageUrl }
             if let data = try? JSONSerialization.data(withJSONObject: entry),
                let raw = String(data: data, encoding: .utf8) {
-                var pending = Set(self.prefs.stringArray(forKey: Self.prefPending) ?? [])
+                var pending = Set(self.prefs.stringArray(forKey: self.chiavePending(userId)) ?? [])
                 pending.insert(raw)
-                self.prefs.set(Array(pending), forKey: Self.prefPending)
+                self.prefs.set(Array(pending), forKey: self.chiavePending(userId))
             }
             self.flushPending()
         }
     }
 
     /// All'avvio del servizio (e quando il JS aggiorna l'identità utente):
-    /// scarica gli id dal cloud e li UNISCE al mirror (mai sostituire: gli
-    /// ascolti offline non sincronizzati non vanno persi), poi ritenta i pending.
+    /// scarica gli id dal cloud e li UNISCE al mirror DELLO STESSO utente
+    /// (mai sostituire: gli ascolti offline non sincronizzati non vanno
+    /// persi), poi ritenta i pending.
     func syncFromCloud() {
-        let userId = SecureSessionStore.get(Self.prefUserId) ?? ""
+        let userId = utenteCorrente()
         guard !userId.isEmpty else { return }
         let token = SecureSessionStore.get(Self.prefAccessToken)
         client.fetchListeningHistoryPoiIds(userId: userId, accessToken: token) { [weak self] cloudIds in
             guard let self = self, let cloudIds = cloudIds else { return }
             self.queue.async {
-                var ids = Set(self.prefs.stringArray(forKey: Self.prefListenedIds) ?? [])
+                // L'utente può essere cambiato mentre la richiesta era in
+                // volo: gli id del cloud vanno sotto l'utente che li ha
+                // chiesti, non sotto quello corrente.
+                var ids = self.ascoltatiLocked(userId: userId)
                 ids.formUnion(cloudIds)
-                self.prefs.set(Array(ids), forKey: Self.prefListenedIds)
+                self.prefs.set(Array(ids), forKey: self.chiaveAscoltati(userId))
                 self.flushPending()
             }
         }
     }
 
-    /// Da chiamare su `queue`. Ritenta l'insert cloud delle voci pending.
+    /// Logout (plugin clearUserContext): via userId e token dal Keychain.
+    /// Le chiavi per utente in UserDefaults restano: sono già isolate per
+    /// id e servono se lo stesso utente rientra; nessun altro le legge.
+    func clearSession() {
+        SecureSessionStore.delete(Self.prefUserId)
+        SecureSessionStore.delete(Self.prefAccessToken)
+    }
+
+    /// Da chiamare su `queue`. Ritenta l'insert cloud delle voci pending
+    /// dell'utente corrente; una voce senza `user_id` o di un altro utente
+    /// viene scartata, mai attribuita a chi è loggato adesso.
     private func flushPending() {
-        let userId = SecureSessionStore.get(Self.prefUserId) ?? ""
+        let userId = utenteCorrente()
         guard !userId.isEmpty else { return }
         let token = SecureSessionStore.get(Self.prefAccessToken)
-        let pending = prefs.stringArray(forKey: Self.prefPending) ?? []
+        migraChiaviGlobaliLocked(userId: userId)
+        let chiave = chiavePending(userId)
+        let pending = prefs.stringArray(forKey: chiave) ?? []
+        var daScartare: [String] = []
         for raw in pending {
             guard let data = raw.data(using: .utf8),
                   let entry = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let poiId = entry["poi_id"] as? String else { continue }
+                  let poiId = entry["poi_id"] as? String,
+                  let proprietario = entry["user_id"] as? String, proprietario == userId else {
+                daScartare.append(raw)
+                continue
+            }
             client.recordListeningHistory(
                 userId: userId, accessToken: token,
                 poiId: poiId,
@@ -642,11 +810,16 @@ final class ListeningHistoryStore {
             ) { [weak self] ok in
                 guard ok, let self = self else { return }
                 self.queue.async {
-                    var rest = Set(self.prefs.stringArray(forKey: Self.prefPending) ?? [])
+                    var rest = Set(self.prefs.stringArray(forKey: chiave) ?? [])
                     rest.remove(raw)
-                    self.prefs.set(Array(rest), forKey: Self.prefPending)
+                    self.prefs.set(Array(rest), forKey: chiave)
                 }
             }
+        }
+        if !daScartare.isEmpty {
+            var rest = Set(pending)
+            for raw in daScartare { rest.remove(raw) }
+            prefs.set(Array(rest), forKey: chiave)
         }
     }
 }

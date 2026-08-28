@@ -18,7 +18,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { get as idbGet } from "idb-keyval";
 import { logApiCall } from "../lib/apiLogger";
 import { supabase } from "../lib/supabase";
-import { getApiUrl } from "../lib/api";
+import { getApiUrl, apiFetch } from "../lib/api";
 import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
 
@@ -1405,12 +1405,12 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     if (eveningPlan) { setShowEveningModal(true); return; }
     setEveningLoading(true);
     try {
-      const r = await fetch(getApiUrl("/api/evening-plan"), {
+      // apiFetch: Bearer automatico (rotta a login obbligatorio) + timeout 45 s.
+      const r = await apiFetch(getApiUrl("/api/evening-plan"), {
         method: "POST",
-        signal: AbortSignal.timeout(45000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lat: ref[0], lon: ref[1], lang: langParam, language: langParam }),
-      });
+      }, 45000);
       const data = await r.json().catch(() => null);
       // 503 serata_non_componibile: il server non ha locali REALI in zona e
       // non inventa nulla. Messaggio chiaro, non un errore generico.

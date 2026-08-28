@@ -15,7 +15,7 @@ import {
   buildPortPrefill, buildLayoverPrefill,
   type CruisePort, type AirportLayover, type StopOption, type StopPrefill,
 } from '../lib/transitCatalog';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { getTranslation, type Language } from '../lib/i18n';
 
 /** Stringhe della sheet (chiavi `te_*` in i18n.ts). */
@@ -95,12 +95,14 @@ export default function TransitEscapesSheet({
     aiAbortRef.current = ctrl;
     const timer = setTimeout(() => ctrl.abort(), 90000);
     try {
-      const res = await fetch(getApiUrl('/api/transit-guide'), {
+      // apiFetch: Bearer automatico (login obbligatorio per generare); il
+      // signal esterno resta rispettato.
+      const res = await apiFetch(getApiUrl('/api/transit-guide'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind, query: query.trim(), lang: (language || 'IT').toLowerCase() }),
         signal: ctrl.signal,
-      });
+      }, 90000);
       const data = await res.json().catch(() => null);
       if (ctrl.signal.aborted) return;
       if (!res.ok || !data?.item?.id) {

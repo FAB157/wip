@@ -16,14 +16,50 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class SupabaseClient {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
-        
+/**
+ * CLIENT HTTP UNICO DELL'APP (23/08/2026).
+ *
+ * Prima ogni punto che parlava con la rete costruiva il PROPRIO OkHttpClient:
+ * `SupabaseClient` a ogni istanza (e se ne creava una nuova a ogni sync dello
+ * storico ascolti), il probe di rete a ogni refresh del radar, i due job
+ * teaser a ogni chiamata. Ogni client porta con se' un connection pool, un
+ * dispatcher con il suo thread pool e una cache TLS separati: due client non
+ * si riusano MAI la connessione, quindi il probe verso wip.guide faceva un
+ * handshake TLS completo un istante prima che un altro client ne aprisse un
+ * secondo verso lo stesso host. Con un client solo la connessione resta calda
+ * e il secondo giro costa un round-trip invece di quattro.
+ *
+ * Timeout diversi: `WipHttp.client.newBuilder()` — condivide pool e
+ * dispatcher, cambia solo i tempi.
+ */
+object WipHttp {
+    val client: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
+}
+
+/**
+ * `appContext` (SEC-03, facoltativo): se presente, un 401 su una chiamata
+ * AUTENTICATA col token utente emette l'evento `tokenExpired` al plugin
+ * (WipApi.notifyTokenExpired). Senza context il comportamento e' quello di
+ * sempre (si logga e si torna null/false).
+ */
+class SupabaseClient(private val appContext: android.content.Context? = null) {
+    // Stessi timeout di prima (15 s/15 s), ma pool e dispatcher condivisi.
+    private val client = WipHttp.client
+
     private val gson = Gson()
     private val TAG = "SupabaseClient"
+
+    /** (SEC-03) 401 con token utente presente → evento tokenExpired (throttlato). */
+    private fun checkUnauthorized(code: Int, accessToken: String?) {
+        if (code != 401 || accessToken.isNullOrBlank()) return
+        val ctx = appContext ?: return
+        WipApi.notifyTokenExpired(ctx)
+    }
 
     suspend fun fetchPoisNearby(
         lat: Double,
@@ -172,12 +208,28 @@ class SupabaseClient {
      * non ancora aggiornate. La fase 2 (server che rifiuta senza token) va
      * fatta solo quando questa build sarà diffusa alla maggioranza degli utenti.
      */
-    suspend fun fetchAudioguideText(
+    /**
+     * Esito di /api/poi/audioguide (28/08/2026, server con paywall):
+     *  - [Testo]: testo integrale (200);
+     *  - [Anteprima]: 402 `{error:'credits_required', preview}` — l'utente
+     *    non ha diritto al testo integrale, `preview` sono le prime 2 frasi
+     *    (puo' essere vuota). NON e' una guida: chi la riceve non consuma
+     *    pass, non registra ascolti e avvisa il JS;
+     *  - [Fallito]: 401 senza ripiego, altri errori, rete assente.
+     */
+    sealed class AudioguideResult {
+        data class Testo(val text: String) : AudioguideResult()
+        data class Anteprima(val preview: String) : AudioguideResult()
+        object Fallito : AudioguideResult()
+    }
+
+    suspend fun fetchAudioguide(
         poiId: String,
         lang: String,
         character: String,
-        accessToken: String? = null
-    ): String? = withContext(Dispatchers.IO) {
+        accessToken: String? = null,
+        ritenta: Boolean = true
+    ): AudioguideResult = withContext(Dispatchers.IO) {
         try {
             val body = JSONObject().apply {
                 put("poiId", poiId)
@@ -185,25 +237,80 @@ class SupabaseClient {
                 put("character", character)
             }.toString().toRequestBody("application/json".toMediaType())
             val requestBuilder = Request.Builder()
-                .url("https://wip.guide/api/poi/audioguide")
+                // (SEC-09) Dominio unico in WipApi.BASE.
+                .url(WipApi.BASE + "/api/poi/audioguide")
                 .post(body)
                 .addHeader("Content-Type", "application/json")
-            // Solo se presente: nessun header quando manca, la richiesta resta
-            // identica a quella di oggi (vedi commento fase 1 sopra).
+            // Solo se presente: senza token il server risponde 401 (vedi sotto).
             if (!accessToken.isNullOrBlank()) {
                 requestBuilder.addHeader("Authorization", "Bearer $accessToken")
             }
             val request = requestBuilder.build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext null
-                val obj = JSONObject(response.body?.string() ?: "{}")
-                val text = obj.optString("text", "")
-                if (text.isNotBlank()) text else null
+                val raw = response.body?.string().orEmpty()
+                when {
+                    response.isSuccessful -> {
+                        val text = try { JSONObject(raw.ifBlank { "{}" }).optString("text", "") } catch (_: Exception) { "" }
+                        if (text.isNotBlank()) AudioguideResult.Testo(text) else AudioguideResult.Fallito
+                    }
+                    response.code == 402 -> {
+                        // Paywall: anteprima distinta dal testo integrale.
+                        val preview = try { JSONObject(raw.ifBlank { "{}" }).optString("preview", "") } catch (_: Exception) { "" }
+                        Log.d(TAG, "Audioguida $poiId: crediti richiesti (402), anteprima ${preview.length} caratteri")
+                        AudioguideResult.Anteprima(preview.trim())
+                    }
+                    response.code == 401 -> {
+                        checkUnauthorized(response.code, accessToken)
+                        // (28/08/2026) Un 401 e' quasi sempre un token SCADUTO: il JS
+                        // lo rinnova all'evento tokenExpired e lo rispinge in
+                        // SecurePrefs. Si aspettano 2,5 s, si rilegge il token e si
+                        // ritenta UNA volta: cosi' anche l'utente straniero sente la
+                        // guida nella sua lingua invece di cadere nel ripiego.
+                        val ctx = appContext
+                        if (ritenta && ctx != null) {
+                            kotlinx.coroutines.delay(2500)
+                            val nuovo = try {
+                                SecurePrefs.get(ctx).getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "").orEmpty()
+                            } catch (_: Exception) { "" }
+                            if (nuovo.isNotBlank() && nuovo != accessToken) {
+                                Log.d(TAG, "Audioguida $poiId: 401, ritento con il token rinnovato")
+                                return@withContext fetchAudioguide(poiId, lang, character, nuovo, ritenta = false)
+                            }
+                        }
+                        // Ripiego sui campi grezzi di shared_pois (fetchPoiAudioText),
+                        // che sono in ITALIANO: si usa solo per lang=it, altrimenti
+                        // un utente straniero sentirebbe testo italiano con la voce
+                        // della sua lingua (regola del 23/08: mai la lingua sbagliata).
+                        if (lang.lowercase().startsWith("it")) {
+                            fetchPoiAudioText(poiId)?.takeIf { it.isNotBlank() }
+                                ?.let { AudioguideResult.Testo(it) } ?: AudioguideResult.Fallito
+                        } else {
+                            AudioguideResult.Fallito
+                        }
+                    }
+                    else -> {
+                        Log.w(TAG, "Audioguida $poiId: HTTP ${response.code}")
+                        AudioguideResult.Fallito
+                    }
+                }
             }
         } catch (e: Exception) {
-            null
+            Log.w(TAG, "fetchAudioguide $poiId fallita: ${e.message}")
+            AudioguideResult.Fallito
         }
     }
+
+    /**
+     * Wrapper compatibile per i chiamanti che vogliono SOLO il testo
+     * integrale (prefetch MP3): un'anteprima da 402 qui vale null, perche'
+     * sintetizzare due frasi come se fossero la guida sarebbe un inganno.
+     */
+    suspend fun fetchAudioguideText(
+        poiId: String,
+        lang: String,
+        character: String,
+        accessToken: String? = null
+    ): String? = (fetchAudioguide(poiId, lang, character, accessToken) as? AudioguideResult.Testo)?.text
 
     /**
      * Fallback mono-lingua dai campi grezzi di shared_pois (tipicamente
@@ -262,7 +369,10 @@ class SupabaseClient {
                 .addHeader("Authorization", bearerFor(accessToken))
                 .build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext null
+                if (!response.isSuccessful) {
+                    checkUnauthorized(response.code, accessToken)
+                    return@withContext null
+                }
                 val arr = JSONArray(response.body?.string() ?: "[]")
                 val ids = mutableListOf<String>()
                 for (i in 0 until arr.length()) {
@@ -306,7 +416,10 @@ class SupabaseClient {
                 .addHeader("Authorization", bearerFor(accessToken))
                 .build()
             val existingId: String? = client.newCall(checkReq).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext false
+                if (!resp.isSuccessful) {
+                    checkUnauthorized(resp.code, accessToken)
+                    return@withContext false
+                }
                 val arr = JSONArray(resp.body?.string() ?: "[]")
                 if (arr.length() > 0) arr.getJSONObject(0).opt("id")?.toString() else null
             }
@@ -340,7 +453,10 @@ class SupabaseClient {
                 .addHeader("Prefer", "return=minimal")
                 .build()
 
-            client.newCall(req).execute().use { resp -> resp.isSuccessful }
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) checkUnauthorized(resp.code, accessToken)
+                resp.isSuccessful
+            }
         } catch (e: Exception) {
             Log.w(TAG, "recordListeningHistory failed: ${e.message}")
             false
@@ -392,7 +508,23 @@ class SupabaseClient {
                 // Raggi da footprint reale (perimetro OSM). Usati solo se il POI
                 // ha un ingresso (entrance_lat/lon) — vedi GeofenceManager.
                 alertRadius = (map["alert_radius"] as? Number)?.toInt(),
-                geofenceRadius = (map["geofence_radius"] as? Number)?.toInt()
+                geofenceRadius = (map["geofence_radius"] as? Number)?.toInt(),
+                // INDIRIZZO (23/08/2026): alimenta la scala di fiducia di
+                // RaggiFiducia. Le due RPC li restituiscono dalle migration
+                // 20260823090000 e 20260823150000; con una RPC vecchia
+                // restano null e il comportamento è quello di prima.
+                address = map["address"]?.toString(),
+                addressSource = map["address_source"]?.toString(),
+                // IL PUNTO dell'indirizzo (migration 20260823160000). E' la
+                // casa più vicina al POI nel dump Nominatim — vicinanza
+                // misurata, non una geocodifica testuale — quindi è il PUNTO
+                // D'ARRIVO: RaggiFiducia.puntoArrivo lo mette fra l'ingresso e
+                // il centroide, e il trigger scatta a 30 m da lì.
+                // Le RPC vecchie non li restituiscono: restano null e il
+                // comportamento è quello di prima (centroide).
+                addressPointLat = (map["address_point_lat"] as? Number)?.toDouble(),
+                addressPointLon = (map["address_point_lon"] as? Number)?.toDouble(),
+                addressPointSource = map["address_point_source"]?.toString()
             )
         }
 

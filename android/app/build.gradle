@@ -2,6 +2,11 @@ apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-kapt'
 
+// Credenziali di firma: il file esiste solo sulla macchina che firma le
+// release (è gitignorato). Dichiarato qui, fuori dal blocco android, così è
+// visibile sia a signingConfigs sia a buildTypes.
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+
 android {
     namespace "com.itaintasca.app"
     compileSdk libs.versions.compileSdk.get().toInteger()
@@ -9,7 +14,17 @@ android {
         applicationId "com.itaintasca.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
+        // multiDex NON si tocca: AndroidManifest.xml dichiara
+        // android:name="androidx.multidex.MultiDexApplication" come classe
+        // Application. Toglierlo (o togliere la dipendenza multidex) fa
+        // crashare l'app all'avvio con ClassNotFoundException.
         multiDexEnabled true
+        // NB: nessun resConfigs/localeFilters qui. Le lingue dell'app sono 7
+        // (src/lib/i18n.ts: IT EN FR ES DE RU ZH) ma i testi arrivano dal
+        // bundle JS, non dalle risorse Android: filtrare i locali farebbe
+        // risparmiare solo le traduzioni delle librerie, e su AGP 9
+        // `resConfigs` e' sostituito da androidResources.localeFilters.
+        // Non si tocca senza una build di prova.
         versionCode 2
         versionName "1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -43,10 +58,9 @@ android {
     // dal build.gradle versionato. Il blocco si attiva solo se il file esiste.
     signingConfigs {
         release {
-            def ksPropsFile = rootProject.file('keystore.properties')
-            if (ksPropsFile.exists()) {
+            if (keystorePropertiesFile.exists()) {
                 def ksProps = new Properties()
-                ksProps.load(new FileInputStream(ksPropsFile))
+                ksProps.load(new FileInputStream(keystorePropertiesFile))
                 storeFile file(ksProps['storeFile'])
                 storePassword ksProps['storePassword']
                 keyAlias ksProps['keyAlias']
@@ -59,6 +73,19 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // Senza questa assegnazione signingConfigs.release veniva DEFINITO
+            // ma mai USATO: l'APK/AAB di release usciva firmato con la chiave di
+            // debug (o non firmato), quindi rifiutato dal Play Store e non
+            // aggiornabile sopra un'installazione esistente.
+            // Se keystore.properties non c'è (CI, altra macchina) si ricade
+            // sulla firma di debug: la build passa, ma l'artefatto NON è
+            // pubblicabile — da qui l'avviso in console.
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+                logger.warn("ATTENZIONE: android/keystore.properties assente: la build di release sara' firmata con la chiave di DEBUG e non e' pubblicabile sul Play Store.")
+            }
         }
         debug {
             crunchPngs false

@@ -294,13 +294,30 @@ struct OfflinePackage: Codable {
     var downloadedAt: TimeInterval // epoch ms
     var lastSyncAt: String?
     var status: String // downloading | ready | error
+    // (28/08/2026, ITI-06) Campi opzionali con default: il JSON dei pacchetti
+    // già salvati (senza queste chiavi) si decodifica ancora, e le chiamate
+    // esistenti all'init memberwise restano valide.
+    /// Ultimo uso (epoch ms): download, sync o lettura di un testo di un suo
+    /// POI. Serve all'eviction LRU del tetto di storage (WipPackageDownloadManager).
+    var lastUsedAt: TimeInterval? = nil
+    /// Checkpoint del DOWNLOAD PIENO interrotto (cursore keyset dell'ultima
+    /// pagina scritta): il prossimo tentativo riparte da qui. Solo il download
+    /// pieno lo scrive, mai il delta — vedi PackageDownloadManager.kt.
+    var pendingCursorUpdated: String? = nil
+    var pendingCursorId: String? = nil
+    /// Firma del run che ha scritto il checkpoint (epoch ms): senza firma il
+    /// checkpoint non si riprende. È anche il timbro dei riferimenti scritti
+    /// da quel run (PoiStore.pruneStaleRefs).
+    var pendingRunStartedAt: TimeInterval? = nil
 
     func toJson() -> [String: Any] {
         [
             "id": id, "name": name, "centerLat": centerLat, "centerLon": centerLon,
             "radiusKm": radiusKm, "language": language, "poiCount": poiCount,
             "sizeBytes": sizeBytes, "downloadedAt": downloadedAt,
-            "lastSyncAt": lastSyncAt ?? "", "status": status
+            "lastSyncAt": lastSyncAt ?? "", "status": status,
+            "lastUsedAt": lastUsedAt ?? downloadedAt,
+            "resumable": !(pendingCursorUpdated ?? "").isEmpty && pendingRunStartedAt != nil
         ]
     }
 }
@@ -402,7 +419,8 @@ enum PoiCategories {
                    "nature_reserve", "riserva", "geopark", "forest", "foresta", "wood", "bosco",
                    "desert", "deserto", "tree", "albero", "national_park"],
         "locali": ["restaurant", "cafe", "bar", "fast_food", "pub", "locali"],
-        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth"],
+        // ev_charging (27/08/2026): colonnine EV da OpenChargeMap.
+        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"],
         "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"],
         /// Vino e Gusto (20/08/2026): 199.280 luoghi del gusto importati da
         /// OpenStreetMap. Chip OFF di default. Allineato a CategoryMap.kt.
@@ -412,6 +430,22 @@ enum PoiCategories {
                            "pasticceria", "cioccolato", "caffe", "te", "miele", "spezie",
                            "museo_gusto", "strada_del_vino",
                            "panificio", "macelleria", "pescheria", "ortofrutta", "dolciumi"],
+        /// Turismo dello Shopping (28/08/2026): vie/quartieri dello shopping,
+        /// grandi magazzini, mall, gallerie storiche, outlet village,
+        /// duty-free, bazaar/souk nella loro dimensione di shopping turistico.
+        /// Stesso trattamento di enogastronomia. Allineato a CategoryMap.kt.
+        "shopping": ["shopping",
+                     "shopping_street", "department_store", "shopping_mall", "historic_arcade",
+                     "outlet_village", "souk_bazaar", "duty_free_zone"],
+        /// Turismo di Lusso (28/08/2026): hotel/resort top di gamma,
+        /// ristoranti stellati, marine per superyacht, treni storici di
+        /// lusso, sci di lusso. Stesso trattamento di enogastronomia.
+        /// Allineato a CategoryMap.kt.
+        "lusso": ["lusso",
+                  "palace_hotel", "hotel_5_stelle", "ristorante_stellato", "chiave_michelin",
+                  "resort_esclusivo", "marina_yacht", "club_esclusivo", "treno_lusso_storico",
+                  "isola_privata", "stazione_sci_lusso", "ryokan_lusso",
+                  "noleggio_yacht", "jet_privato"],
         "consigli": ["information", "tourism_information", "office", "consigli"],
         // Gemme: chiave presente per completezza (passano comunque via isGem).
         "gemme": ["gemme"],

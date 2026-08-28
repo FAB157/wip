@@ -216,6 +216,21 @@ export default function NavigationOverlay({
               </div>
             </div>
 
+            {/* «Salta tappa» anche IN NAVIGAZIONE (ITI-04): una tappa chiusa,
+                irraggiungibile o senza coordinate valide bloccava l'utente
+                finche' non "arrivava" — il bottone esisteva solo in stato
+                arrived. */}
+            {onNextStop && (
+              <div className="px-4 pb-3">
+                <button
+                  onClick={onNextStop}
+                  className="w-full rounded-2xl bg-white/10 hover:bg-white/20 py-2 text-white text-[11px] font-black uppercase tracking-widest active:scale-[0.98] transition-transform"
+                >
+                  {t('nav_skip_stop')}
+                </button>
+              </div>
+            )}
+
             {/* Piede: quanto manca alla meta, in tre numeri */}
             <div className="flex items-center justify-between gap-2 border-t border-white/10 px-4 py-2.5 text-white/75">
               {poiName && (

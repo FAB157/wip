@@ -37,6 +37,17 @@ const POI_TRIGGER_M = 80;       // audioguida automatica entro 80 m dal POI scel
 const OFF_ROUTE_M = 45;         // oltre 45 m dal tracciato = fuori rotta
 const OFF_ROUTE_FIXES = 2;      // fix GPS consecutivi fuori rotta prima del ricalcolo
 const RECALC_COOLDOWN_MS = 20000;
+// Backoff dopo un ricalcolo FALLITO (ITI-03): 20 s, poi x2 fino a 120 s.
+// Prima lastRecalcRef si aggiornava solo al successo: senza rete si
+// ritentava il routing a OGNI fix GPS (uno al secondo), cioe' una tempesta
+// di richieste OSRM proprio quando la rete era gia' in difficolta'.
+const RECALC_BACKOFF_MIN_MS = 20000;
+const RECALC_BACKOFF_MAX_MS = 120000;
+// Stima velocita' per l'ETA (ITI-11): media mobile degli ultimi fix,
+// limitata a 0,5-2 m/s (sotto = fermo/semaforo, sopra = non a piedi).
+const SPEED_SAMPLES = 5;
+const SPEED_MIN_MS = 0.5;
+const SPEED_MAX_MS = 2;
 // Fix GPS con accuratezza peggiore di questa soglia (metri) non vengono usati
 // per lo snap-to-route / fuori-rotta / distanza-da-manovra: un fix "ballerino"
 // (es. sotto copertura scarsa) farebbe scattare ricalcoli fantasma o letture
@@ -108,6 +119,11 @@ function projectToSeg(
 export interface NavTarget extends LatLon {
   poiId?: number | string;
   poiName?: string;
+  /** Indici della tappa nell'itinerario (giorno/tappa), se la meta e' una
+   *  tappa: all'arrivo viaggiano in 'wip-nav-arrived' cosi' PlanScreen marca
+   *  QUELLA tappa e non tutte le omonime (ITI-12). */
+  dayIndex?: number;
+  stopIndex?: number;
 }
 
 /** POI lungo il percorso scelto nel modal WIP Nav. */
@@ -173,6 +189,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const offRouteCountRef = useRef(0);
   const lastRecalcRef = useRef(0);
   const recalcInFlightRef = useRef(false);
+  // Attesa corrente prima di ritentare un ricalcolo fallito (0 = nessun
+  // fallimento pendente: vale RECALC_COOLDOWN_MS).
+  const recalcBackoffRef = useRef(0);
+  // Campioni di velocita' (m/s) degli ultimi fix + ultimo fix per il calcolo
+  // distanza/Δt quando il GPS non fornisce speed.
+  const speedSamplesRef = useRef<number[]>([]);
+  const lastFixRef = useRef<{ lat: number; lon: number; ts: number } | null>(null);
   const wakeLockRef = useRef<any>(null);
   // Lunghezza totale del tracciato corrente: denominatore della barra di
   // avanzamento. Si aggiorna a ogni ricalcolo (la barra si riadatta da sé).
@@ -313,26 +336,74 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (distFromRoute <= OFF_ROUTE_M) { offRouteCountRef.current = 0; return; }
     offRouteCountRef.current += 1;
     if (offRouteCountRef.current < OFF_ROUTE_FIXES) return;
-    if (recalcInFlightRef.current || Date.now() - lastRecalcRef.current < RECALC_COOLDOWN_MS) return;
+    // Dopo un fallimento vale il backoff (20 s → 120 s), altrimenti il
+    // cooldown normale fra due ricalcoli riusciti.
+    const attesa = recalcBackoffRef.current > 0 ? recalcBackoffRef.current : RECALC_COOLDOWN_MS;
+    if (recalcInFlightRef.current || Date.now() - lastRecalcRef.current < attesa) return;
 
     const t = targetRef.current;
     if (!t) return;
     recalcInFlightRef.current = true;
+    let riuscito = false;
     try {
       const route = await fetchWalkingRoute(here, t, language, t.poiName);
       if (route && route.steps.length > 0 && targetRef.current === t) {
+        riuscito = true;
         setRoute(route);
         stepIdxRef.current = 0;
         spokenRef.current.clear();
+        // Lo step 0 di un reroute e' un 'depart' nel punto in cui si e' gia'
+        // (ITI-10): letto ad alta voce interrompeva «Percorso ricalcolato»
+        // con un «Prosegui su via X» un secondo dopo. Si marca come gia'
+        // detto: il banner e la voce passano direttamente alla prima svolta.
+        route.steps.forEach((s, i) => { if (String(s.maneuverType || '').toLowerCase() === 'depart') spokenRef.current.add(i); });
         offRouteCountRef.current = 0;
         lastRecalcRef.current = Date.now();
+        recalcBackoffRef.current = 0;
         const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
         setCurrentInstruction(phrase);
         setCurrentManeuver({ type: 'reroute' });
         speakInstruction(phrase, language);
       }
     } catch { /* rete assente: si continua col vecchio tracciato */ }
-    finally { recalcInFlightRef.current = false; }
+    finally {
+      recalcInFlightRef.current = false;
+      if (!riuscito && targetRef.current === t) {
+        // Anche il fallimento conta come tentativo: prossimo tra 20 s, poi
+        // 40, 80, 120 (tetto). Al successo il backoff torna a zero.
+        lastRecalcRef.current = Date.now();
+        recalcBackoffRef.current = Math.min(
+          RECALC_BACKOFF_MAX_MS,
+          recalcBackoffRef.current > 0 ? recalcBackoffRef.current * 2 : RECALC_BACKOFF_MIN_MS,
+        );
+      }
+    }
+  };
+
+  /**
+   * Velocita' stimata a piedi (m/s): media mobile degli ultimi SPEED_SAMPLES
+   * fix, dalla speed del GPS se c'e' (> 0) altrimenti da distanza/Δt fra due
+   * fix. Clamp 0,5-2 m/s; null finche' non c'e' nessun campione (il
+   * chiamante ricade sulla velocita' media del router).
+   */
+  const aggiornaVelocitaStimata = (loc: { latitude: number; longitude: number; speed: number | null; timestamp: number }): number | null => {
+    const ts = Number(loc.timestamp) || Date.now();
+    let v: number | null = Number.isFinite(loc.speed as number) && (loc.speed as number) > 0 ? (loc.speed as number) : null;
+    const prev = lastFixRef.current;
+    if (v == null && prev) {
+      const dt = (ts - prev.ts) / 1000;
+      if (dt >= 0.5 && dt <= 60) v = haversineMeters(prev.lat, prev.lon, loc.latitude, loc.longitude) / dt;
+    }
+    lastFixRef.current = { lat: loc.latitude, lon: loc.longitude, ts };
+    if (v != null && Number.isFinite(v)) {
+      const s = speedSamplesRef.current;
+      s.push(v);
+      if (s.length > SPEED_SAMPLES) s.splice(0, s.length - SPEED_SAMPLES);
+    }
+    const s = speedSamplesRef.current;
+    if (s.length === 0) return null;
+    const media = s.reduce((a, b) => a + b, 0) / s.length;
+    return Math.min(SPEED_MAX_MS, Math.max(SPEED_MIN_MS, media));
   };
 
   const stopNavigation = useCallback(() => {
@@ -351,6 +422,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // poteva ricalcolare per RECALC_COOLDOWN_MS anche se gia' fuori rotta.
     lastRecalcRef.current = 0;
     recalcInFlightRef.current = false;
+    recalcBackoffRef.current = 0;
+    speedSamplesRef.current = [];
+    lastFixRef.current = null;
     // La notifica dell'ultima svolta non deve restare nel centro notifiche.
     locationService.cancelNavNotification().catch(() => {});
     releaseWakeLock();
@@ -382,6 +456,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       spokenRef.current.clear();
       stepIdxRef.current = 0;
       offRouteCountRef.current = 0;
+      recalcBackoffRef.current = 0;
+      speedSamplesRef.current = [];
+      lastFixRef.current = null;
       pendingPoisRef.current = (routePois || []).filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number');
       // Con origine personalizzata (indirizzo) l'utente è tipicamente LONTANO
       // dal tracciato: ricalcolo e arrivo restano sospesi finché non si
@@ -436,6 +513,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         if (!t || !r) return;
 
         const here: LatLon = { lat: loc.latitude, lon: loc.longitude };
+        // Velocita' stimata su OGNI fix (anche quelli scartati sotto per
+        // accuratezza: la media mobile li smussa da se').
+        const velocitaStimata = aggiornaVelocitaStimata(loc);
 
         // Audioguide dei POI scelti lungo il percorso (posizione "raw": la
         // soglia di trigger è larga, 80 m, un fix impreciso non è un problema).
@@ -458,10 +538,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const dDestAir = haversineMeters(here.lat, here.lon, t.lat, t.lon);
         const dDest = remaining;
         setDistanceToDestination(Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist)));
-        // Velocita' media del percorso secondo il router (distanza/durata),
-        // riserva 1,3 m/s: cosi' l'ETA sente salite e scalinate.
+        // ETA = residuo / velocita' REALE dell'utente (media mobile degli
+        // ultimi fix, ITI-11): chi cammina piano o si ferma alle vetrine
+        // vedeva un orario d'arrivo che non arrivava mai. Riserva: velocita'
+        // media del percorso secondo il router (sente salite e scalinate),
+        // poi 1,3 m/s.
         const velocitaRotta = r.duration > 0 && r.distance > 0 ? Math.min(2, Math.max(0.6, r.distance / r.duration)) : WALK_SPEED_MS;
-        setEtaSeconds(Math.round((dDest + nearest.dist) / velocitaRotta));
+        setEtaSeconds(Math.round((dDest + nearest.dist) / (velocitaStimata ?? velocitaRotta)));
         setProgress(Math.min(1, Math.max(0, 1 - dDest / routeTotalRef.current)));
 
         // Aggancio al tracciato (origine personalizzata): da qui in poi
@@ -502,7 +585,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
             .then(taken => { if (!taken) speakInstruction(arrivePhrase, language); });
           window.dispatchEvent(
-            new CustomEvent('wip-nav-arrived', { detail: { poiId: t.poiId, poiName: t.poiName } }),
+            new CustomEvent('wip-nav-arrived', { detail: { poiId: t.poiId, poiName: t.poiName, dayIndex: t.dayIndex, stopIndex: t.stopIndex } }),
           );
           unsubRef.current?.();
           unsubRef.current = null;

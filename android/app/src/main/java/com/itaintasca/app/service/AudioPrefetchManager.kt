@@ -36,7 +36,8 @@ import java.util.concurrent.TimeUnit
 object AudioPrefetchManager {
 
     private const val TAG = "AudioPrefetch"
-    private const val TTS_ENDPOINT = "https://wip.guide/api/tts/smart"
+    // (SEC-09) Dominio unico in WipApi.BASE.
+    private const val TTS_ENDPOINT = WipApi.BASE + "/api/tts/smart"
     private const val MAX_AGE_MS = 24 * 60 * 60 * 1000L
     // Un MP3 sotto ~1KB è un errore mascherato (il server stesso scarta <500B)
     private const val MIN_VALID_BYTES = 1000L
@@ -192,7 +193,9 @@ object AudioPrefetchManager {
                 // Token utente se disponibile (rollout fase 1, vedi commento su
                 // SupabaseClient.fetchAudioguideText): mai bloccante se assente.
                 val token = SecurePrefs.get(context).getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
-                SupabaseClient().fetchAudioguideText(poiId, lang, character, token)?.takeIf { it.isNotBlank() }
+                // Solo il testo INTEGRALE: un 402 (anteprima) qui vale null,
+                // niente MP3 di due frasi spacciato per guida.
+                SupabaseClient(context).fetchAudioguideText(poiId, lang, character, token)?.takeIf { it.isNotBlank() }
             }
         } catch (_: Exception) {
             null
@@ -217,10 +220,22 @@ object AudioPrefetchManager {
                 put("voice", azureVoiceFor(lang, character))
             }.toString().toRequestBody("application/json".toMediaType())
 
-            val request = Request.Builder().url(TTS_ENDPOINT).post(body).build()
+            // (28/08/2026) Il server esige il Bearer su /api/tts/smart per le
+            // sintesi NUOVE (il colpo di cache resta pubblico; 401 sul miss
+            // senza token). Stesso accessor del token usato per
+            // /api/poi/audioguide (SecurePrefs / ListeningHistoryStore).
+            val token = try {
+                SecurePrefs.get(context).getString(ListeningHistoryStore.PREF_ACCESS_TOKEN, "")
+            } catch (_: Exception) { null }
+            val requestBuilder = Request.Builder().url(TTS_ENDPOINT).post(body)
+            if (!token.isNullOrBlank()) requestBuilder.addHeader("Authorization", "Bearer $token")
+            val request = requestBuilder.build()
             (if (quick) quickClient else client).newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    Log.w(TAG, "TTS endpoint HTTP ${response.code} for $poiId")
+                    // 401/402/altro: null in silenzio, il chiamante ripiega sul
+                    // TTS di sistema. Un 401 CON token = token scaduto.
+                    Log.d(TAG, "TTS endpoint HTTP ${response.code} for $poiId (token ${if (token.isNullOrBlank()) "assente" else "presente"})")
+                    if (response.code == 401 && !token.isNullOrBlank()) WipApi.notifyTokenExpired(context)
                     return null
                 }
                 val bytes = response.body?.bytes() ?: return null

@@ -214,7 +214,118 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             checkRefreshPois(at: CLLocation(latitude: lat, longitude: lon))
         }
 
-        startActiveMonitoring()
+        avviaConControlloPermesso()
+    }
+
+    // MARK: - Permesso posizione (MAP-02 / MAP-05 / MAP-08, audit 28/08/2026)
+    //
+    // Prima `startConfinato` accendeva il GPS alla cieca: `startUpdatingLocation`
+    // con il permesso mai chiesto (o negato) non fa nulla e non dice niente, e
+    // l'utente vedeva "Acquisizione posizione..." per sempre. Ora lo stato
+    // dell'autorizzazione si legge PRIMA di partire, sul main (CLLocationManager
+    // non è thread-safe), e ogni esito ha un messaggio suo verso il JS.
+
+    /// Avvio differito: il permesso è stato appena chiesto e si riparte dal
+    /// callback `locationManagerDidChangeAuthorization`. Stato confinato.
+    private var avvioInAttesaDiPermesso = false
+    /// Servizio fermato per permesso negato/revocato: se il permesso torna
+    /// (callback di autorizzazione) si riparte da solo. Senza questa bandiera
+    /// il callback `.authorizedAlways` — che iOS manda anche a ogni avvio —
+    /// farebbe partire il monitoraggio due volte accanto a `start`.
+    private var fermatoPerPermesso = false
+
+    /// Evento verso il JS quando il permesso non basta o si degrada
+    /// (`permissionDowngraded`, payload {status}): "denied" (negato/limitato
+    /// dal sistema), "whenInUse" (manca «Sempre»), "reducedAccuracy" (manca
+    /// «Posizione esatta»).
+    private func segnalaPermessoDegradato(_ stato: String) {
+        sendEvent("permissionDowngraded", json: ["status": stato, "ts": nowMs()], extra: ["status": stato])
+    }
+
+    /// Legge lo stato del permesso sul main e prosegue sulla workQueue.
+    private func avviaConControlloPermesso() {
+        DispatchQueue.main.async {
+            let stato = self.locationManager.authorizationStatus
+            self.workQueue.async { self.avviaSecondoPermesso(stato) }
+        }
+    }
+
+    private func avviaSecondoPermesso(_ stato: CLAuthorizationStatus) {
+        switch stato {
+        case .notDetermined:
+            // Si chiede «Sempre» e si riparte quando arriva il callback: il
+            // prompt di sistema può restare aperto a lungo, non si aspetta.
+            avvioInAttesaDiPermesso = true
+            updateStatus("Audioguida in attesa", "Concedi il permesso posizione per avviare l'audioguida")
+            DispatchQueue.main.async { self.locationManager.requestAlwaysAuthorization() }
+        case .denied, .restricted:
+            avvioInAttesaDiPermesso = false
+            fermatoPerPermesso = true
+            isRunning = false
+            updateStatus("Audioguida in pausa", "⚠️ Permesso posizione negato: riattivalo nelle Impostazioni")
+            segnalaPermessoDegradato("denied")
+        case .authorizedWhenInUse:
+            // Funziona con l'app aperta; a schermo spento iOS smette di
+            // consegnare i fix. Si parte comunque, ma si dice la verità.
+            avvioInAttesaDiPermesso = false
+            fermatoPerPermesso = false
+            startActiveMonitoring()
+            updateStatus("Audioguida limitata", "Serve «Sempre» per parlare a schermo spento")
+            segnalaPermessoDegradato("whenInUse")
+            verificaPrecisioneRidotta()
+        case .authorizedAlways:
+            avvioInAttesaDiPermesso = false
+            fermatoPerPermesso = false
+            startActiveMonitoring()
+            verificaPrecisioneRidotta()
+        @unknown default:
+            avvioInAttesaDiPermesso = false
+            fermatoPerPermesso = false
+            startActiveMonitoring()
+        }
+    }
+
+    /// PRECISIONE RIDOTTA (MAP-08). Con «Posizione esatta» spenta iOS consegna
+    /// fix a ~3 km: nessun trigger a 30 m può scattare, e il servizio taceva
+    /// senza spiegare perché. Si chiede la precisione piena temporanea con la
+    /// chiave `Audioguida` di NSLocationTemporaryUsageDescriptionDictionary
+    /// (Info.plist); se resta ridotta si avvisa. Va chiamata sul main (API di
+    /// CLLocationManager) e lascia gli esiti alla workQueue.
+    private func verificaPrecisioneRidotta() {
+        DispatchQueue.main.async {
+            guard self.locationManager.accuracyAuthorization == .reducedAccuracy else { return }
+            self.locationManager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "Audioguida") { _ in
+                // Il completion arriva sul main: si rilegge lì e si riferisce
+                // alla workQueue.
+                DispatchQueue.main.async {
+                    let ancoraRidotta = self.locationManager.accuracyAuthorization == .reducedAccuracy
+                    guard ancoraRidotta else { return }
+                    self.workQueue.async {
+                        guard self.isRunning else { return }
+                        self.updateStatus("Audioguida limitata", "Attiva «Posizione esatta» nelle Impostazioni per riconoscere i monumenti")
+                        self.segnalaPermessoDegradato("reducedAccuracy")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Permesso negato a runtime (revoca, o `didFailWithError` con .denied):
+    /// GPS giù, bussola giù, stato e evento verso il JS. Sulla workQueue.
+    private func fermaPerPermessoNegato(_ messaggio: String) {
+        avvioInAttesaDiPermesso = false
+        fermatoPerPermesso = true
+        guard isRunning else {
+            updateStatus("Audioguida in pausa", messaggio)
+            segnalaPermessoDegradato("denied")
+            return
+        }
+        isRunning = false
+        DispatchQueue.main.async { self.locationManager.stopUpdatingLocation() }
+        // Manager a riposo: anche la bussola si spegne (vedi BearingGate).
+        BearingGate.shared.spegniBussola()
+        updateStatus("Audioguida in pausa", messaggio)
+        segnalaPermessoDegradato("denied")
     }
 
     /// Riavvio a freddo (rilancio dell'app da parte dell'OS per un evento
@@ -236,7 +347,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         arrivalRadiusWalk = min(max(prefs.object(forKey: "arrivalRadiusWalk") as? Double ?? 30, 15), 100)
         alertRadiusCar = min(max(prefs.object(forKey: "alertRadiusCar") as? Double ?? 300, 100), 600)
         arrivalRadiusCar = min(max(prefs.object(forKey: "arrivalRadiusCar") as? Double ?? 50, 20), 150)
-        startActiveMonitoring()
+        // Anche il rilancio a freddo passa dal controllo del permesso: se nel
+        // frattempo è stato revocato, si avvisa invece di restare ciechi.
+        avviaConControlloPermesso()
     }
 
     func stop() {
@@ -261,6 +374,8 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         BearingGate.shared.spegni()
         SpeechQueue.shared.stopSpeaking()
         isRunning = false
+        avvioInAttesaDiPermesso = false
+        fermatoPerPermesso = false
         // CLLocationManager si tocca sul main (non è thread-safe e la
         // workQueue non deve bloccarsi ad aspettarlo).
         DispatchQueue.main.async {
@@ -466,20 +581,78 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     /// nella UI fermo all'ultimo messaggio. Fermiamo gli update e avvisiamo il
     /// JS; se il permesso torna authorized non serve fare nulla qui, il flusso
     /// di start esistente (start / restartFromPrefsIfActive) gestisce la ripartenza.
+    /// (28/08/2026, MAP-05) Prima reagiva SOLO al passaggio a negato: un
+    /// declassamento da «Sempre» a «Mentre usi l'app» (Impostazioni, o il
+    /// prompt periodico di iOS "continuare a consentire Sempre?") lasciava il
+    /// servizio convinto di parlare a schermo spento mentre iOS aveva smesso di
+    /// consegnare i fix in background. Ora ogni esito ha la sua risposta, e un
+    /// avvio rimasto in attesa del prompt (`avvioInAttesaDiPermesso`) riparte
+    /// da qui.
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        guard status == .denied || status == .restricted else { return }
+        workQueue.async {
+            guard self.prefs.bool(forKey: "isServiceActive") else { return }
+            switch status {
+            case .notDetermined:
+                return // prompt ancora aperto
+            case .denied, .restricted:
+                self.fermaPerPermessoNegato("⚠️ Permesso posizione revocato: riattivalo dalle Impostazioni per usare l'audioguida")
+            case .authorizedWhenInUse:
+                if self.avvioInAttesaDiPermesso || self.fermatoPerPermesso {
+                    self.avviaSecondoPermesso(.authorizedWhenInUse)
+                } else if self.isRunning {
+                    self.updateStatus("Audioguida limitata", "Serve «Sempre» per parlare a schermo spento")
+                    self.segnalaPermessoDegradato("whenInUse")
+                }
+            case .authorizedAlways:
+                if self.avvioInAttesaDiPermesso || self.fermatoPerPermesso {
+                    // Permesso arrivato (o tornato) mentre il servizio era
+                    // fermo per mancanza di permesso: si riparte.
+                    self.avviaSecondoPermesso(.authorizedAlways)
+                }
+            @unknown default:
+                return
+            }
+        }
+    }
+
+    /// (28/08/2026, MAP-02) Mai implementato: un `.denied` da Core Location —
+    /// l'utente che nega il prompt, o i Servizi di localizzazione spenti a
+    /// livello di sistema — arrivava qui e cadeva nel vuoto, col servizio che
+    /// mostrava "Acquisizione posizione..." per sempre. Gli altri errori
+    /// (`.locationUnknown`, rete) sono transitori: Core Location continua a
+    /// provare, non serve fare nulla.
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        guard let errore = error as? CLError, errore.code == .denied else { return }
+        workQueue.async {
+            self.fermaPerPermessoNegato("⚠️ Permesso posizione negato: riattivalo nelle Impostazioni")
+        }
+    }
+
+    /// (28/08/2026, MAP-05) Il monitoraggio di una region può fallire per
+    /// permesso insufficiente (serve «Sempre»: con «Mentre usi l'app» iOS
+    /// rifiuta `startMonitoring`) o per il tetto delle 20 region. Nel primo
+    /// caso si avvisa come per il declassamento — la region è l'assicurazione
+    /// di rilancio del servizio, senza di essa a processo ucciso non si
+    /// riparte; nel secondo si logga e basta (la finestra scorrevole è già
+    /// sotto il tetto, è un caso residuo).
+    func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+        let codice = (error as? CLError)?.code
+        NSLog("[WIP] monitoraggio region \(region?.identifier ?? "-") fallito: \(error.localizedDescription)")
+        guard codice == .denied || codice == .regionMonitoringDenied else { return }
         workQueue.async {
             guard self.isRunning else { return }
-            self.isRunning = false
-            DispatchQueue.main.async { self.locationManager.stopUpdatingLocation() }
-            // Manager a riposo: anche la bussola si spegne (vedi BearingGate).
-            BearingGate.shared.spegniBussola()
-            self.updateStatus("Audioguida in pausa", "⚠️ Permesso posizione revocato: riattivalo dalle Impostazioni per usare l'audioguida")
+            self.updateStatus("Audioguida limitata", "Serve «Sempre» per parlare a schermo spento")
+            self.segnalaPermessoDegradato("whenInUse")
         }
     }
 
     private func handleLocation(_ location: CLLocation) {
+        // (28/08/2026, MAP-09) Fix SIMULATI (app di spoofing GPS, Xcode
+        // "Simulate Location"): mai un trigger — un'audioguida "ascoltata" da
+        // casa consumerebbe pass e crediti su un luogo mai visitato. iOS 15+
+        // lo dichiara in `sourceInformation`; il deployment target è 15.1.
+        if location.sourceInformation?.isSimulatedBySoftware == true { return }
         // GATING SENSORI (fail-safe): se Motion & Fitness dice che siamo fermi
         // da >5 minuti e questo fix salta di >100 m dall'ultima posizione
         // accettata, è un "teletrasporto GPS" — il fix viene IGNORATO del
@@ -860,6 +1033,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // MARK: - Trigger (port della macchina a stati del receiver)
 
     private var approachSpokenInBatch = false
+    /// (AUD-04) Arrivo già annunciato in questo fix: gli altri arrivi dello
+    /// stesso batch ricevono solo la notifica «Ascolta».
+    private var arrivalSpokenInBatch = false
 
     /// Distanza al fix precedente, per POI: serve a rilevare il superamento
     /// (distanza crescente + CPA alle spalle). Port di `lastDistances`
@@ -909,6 +1085,14 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
               nowMs() - location.timestamp.timeIntervalSince1970 * 1000 <= maxFixAgeMs else { return }
 
         let isDriving = guideMode == "driving"
+        // (28/08/2026, AUD-09) DUE SOGLIE, come Android e web. Fino a 100 m il
+        // fix basta per ARMARE e AGGIORNARE la macchina a stati (superamento,
+        // uscita dall'isteresi, distanze); per PARLARE — avviso e arrivo, cioè
+        // ciò che scrive uno stato, consuma il pass e fa partire la voce —
+        // serve un fix entro 50 m. Con 100 m un canyon urbano poteva far
+        // "arrivare" l'utente a un POI a due isolati di distanza. Quando il fix
+        // non basta NON si scrive nulla: il fix successivo riprova.
+        let fixDaTrigger = location.horizontalAccuracy <= 50
         // I raggi NON sono più costanti di batch: dal footprint OSM ogni POI può
         // avere raggi calibrati sul suo perimetro reale. Vengono calcolati per
         // POI dentro il loop (effectiveRadii), mirror di radiiForTransport web.
@@ -1011,6 +1195,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
 
         approachSpokenInBatch = false
+        arrivalSpokenInBatch = false
 
         for c in candidates {
             // Raggi calibrati sul perimetro (footprint OSM) del singolo POI,
@@ -1147,7 +1332,10 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     (state == .arrivedFired && age < arrivalRetriggerTtlMs) ||
                     (state == .passed && age < arrivalRetriggerTtlMs && c.dist > arrivalRad) ||
                     (state == .exited && age < arrivalAfterExitCooldownMs)
-                if !blockedArrival {
+                // `fixDaTrigger` PRIMA del gate di bussola: `valuta` annota i
+                // rinvii, e un fix scadente non deve nemmeno contare come
+                // tentativo. Niente stato, niente cooldown: si riprova dopo.
+                if !blockedArrival && fixDaTrigger {
                     // 🧭 GATE DI BUSSOLA (solo sull'ARRIVO). Se il POI è ormai
                     // alle spalle, il racconto non si butta via: si RIMANDA —
                     // niente stato, niente cooldown, niente evento, si riprova
@@ -1163,7 +1351,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                             dentroPerimetro: dentroPerimetro, distanzaM: c.dist
                         )
                     if esitoGate != .rimanda {
-                        handleArrival(poi: c.poi)
+                        // (28/08/2026, AUD-04) UNA guida completa per fix. I
+                        // candidati sono ordinati (itinerario > gemma > più
+                        // vicino): il primo che arriva riceve teaser, pass e
+                        // audioguida; gli altri dello stesso fix — tre chiese
+                        // sulla stessa piazza — scrivono lo stato e ricevono
+                        // la sola notifica «Ascolta». Prima ognuno consumava
+                        // una guida del pass e accodava minuti di audio che
+                        // nessuno avrebbe ascoltato in fila.
+                        handleArrival(poi: c.poi, soloNotifica: arrivalSpokenInBatch)
+                        arrivalSpokenInBatch = true
                     }
                 }
             // Finestra allargata a 3× il raggio: il predittore deve poter
@@ -1187,7 +1384,9 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     poiId: c.poi.id, poiName: c.poi.nome, phase: "approach",
                     result: pred, location: location, isDriving: isDriving, radiusM: alertRad
                 )
-                if pred.decision == .fire {
+                // AUD-09: senza un fix entro 50 m l'avviso non scatta e non
+                // scrive lo stato — il predittore rivaluta al fix successivo.
+                if pred.decision == .fire && fixDaTrigger {
                     handleApproach(poi: c.poi, speak: !approachSpokenInBatch)
                     approachSpokenInBatch = true
                 }
@@ -1343,7 +1542,12 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    private func handleArrival(poi initialPoi: Poi) {
+    /// `soloNotifica` (AUD-04): secondo e successivi arrivi dello stesso fix.
+    /// Stato ARRIVED_FIRED ed evento come sempre — la macchina a stati non
+    /// cambia — ma niente voce, niente pass, niente audioguida in coda: solo
+    /// la notifica col tasto ▶ Ascolta, che passa dalla stessa catena di
+    /// autorizzazione del tasto in app.
+    private func handleArrival(poi initialPoi: Poi, soloNotifica: Bool = false) {
         var poi = initialPoi
         // Il POI ha parlato: il gate dimentica i suoi rinvii (specifica, punto 7).
         BearingGate.shared.azzera(poiId: poi.id)
@@ -1355,6 +1559,16 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
         // vale per MP3, testo del pass e deep link ?guide= della notifica.
         let guideVoice = resolveGuideVoice(fallback: poi.guideDefault)
         let lang = appLanguage
+
+        if soloNotifica {
+            showNotification(
+                title: NotificationStrings.arrivedTitle(lang, name: poi.nome),
+                body: NotificationStrings.listenHintNoAutoplay(lang),
+                poiId: poi.id, guide: guideVoice, isArrival: true,
+                withListenAction: true
+            )
+            return
+        }
 
         let arrivalMsg: String
         switch appLanguage {
@@ -1549,17 +1763,35 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     // Token utente se disponibile (rollout fase 1, vedi
                     // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
                     let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
-                    self.supabase.fetchAudioguideText(poiId: poi.id, lang: lang, character: guideVoice, accessToken: audioguideToken) { fetched in
+                    self.supabase.fetchAudioguide(poiId: poi.id, lang: lang, character: guideVoice, accessToken: audioguideToken) { esito in
                         self.workQueue.async {
-                            guard let fetched = fetched, !fetched.isEmpty else {
+                            switch esito {
+                            case .testo(let fetched):
+                                AudioPrefetchManager.download(
+                                    poiId: poi.id, lang: lang,
+                                    character: guideVoice, text: fetched, timeout: 25
+                                ) { file in
+                                    self.workQueue.async { playFullText(fetched, file?.path) }
+                                }
+                            case .anteprima(let preview):
+                                // (28/08/2026) 402: il server nega il testo
+                                // integrale — il pass/saldo locale è stantio.
+                                // NIENTE pass consumato, NIENTE storico: si
+                                // legge l'anteprima come teaser (se dice
+                                // qualcosa in più del teaser già in coda) e la
+                                // notifica torna quella col tasto ▶ Ascolta.
+                                // Evento al JS per riallineare pass e saldo.
+                                if let preview = preview, !preview.isEmpty,
+                                   preview != teaser, !fullMsg.contains(preview) {
+                                    SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
+                                        text: preview, isGem: poi.isGem, isItinerary: poi.isFromItinerary,
+                                        poiId: poi.id, priority: priority, kind: "arrival"
+                                    ))
+                                }
+                                self.sendPoiEvent("audioguideCreditsRequired", poi: poi)
                                 playFullText(nil, nil) // → notifica col tasto Ascolta
-                                return
-                            }
-                            AudioPrefetchManager.download(
-                                poiId: poi.id, lang: lang,
-                                character: guideVoice, text: fetched, timeout: 25
-                            ) { file in
-                                self.workQueue.async { playFullText(fetched, file?.path) }
+                            case .fallito:
+                                playFullText(nil, nil) // → notifica col tasto Ascolta
                             }
                         }
                     }
@@ -1918,17 +2150,25 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             // Token utente se disponibile (rollout fase 1, vedi
             // WipSupabaseClient.fetchAudioguideText): mai bloccante se assente.
             let audioguideToken = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken)
-            supabase.fetchAudioguideText(poiId: poiId, lang: lang, character: guideCharacter, accessToken: audioguideToken) { fetched in
+            supabase.fetchAudioguide(poiId: poiId, lang: lang, character: guideCharacter, accessToken: audioguideToken) { esito in
                 self.workQueue.async {
-                    guard let fetched = fetched, !fetched.isEmpty else {
+                    switch esito {
+                    case .testo(let fetched):
+                        AudioPrefetchManager.download(
+                            poiId: poiId, lang: lang,
+                            character: guideCharacter, text: fetched, timeout: 25
+                        ) { file in
+                            self.workQueue.async { play(fetched, file?.path) }
+                        }
+                    case .anteprima:
+                        // (28/08/2026) 402: il server nega la guida completa.
+                        // `charge()` non è ancora passato di qui, quindi
+                        // niente pass né registro: la notifica dice che
+                        // servono crediti (l'utente ha premuto ▶ Ascolta e
+                        // aspetta una risposta, non un'anteprima).
+                        self.notifyListenFailed(poi: poi, poiId: poiId, reason: "insufficient_credits")
+                    case .fallito:
                         play(nil, nil) // → notifica "non disponibile"
-                        return
-                    }
-                    AudioPrefetchManager.download(
-                        poiId: poiId, lang: lang,
-                        character: guideCharacter, text: fetched, timeout: 25
-                    ) { file in
-                        self.workQueue.async { play(fetched, file?.path) }
                     }
                 }
             }
@@ -1953,7 +2193,7 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     // MARK: - Teaser batch (stesso endpoint del server Vercel)
 
     private func generateTeasersInBackground(poiIds: [String]) {
-        guard let url = URL(string: "https://wip.guide/api/poi/batch-teaser") else { return }
+        guard let url = URL(string: "\(WipApi.base)/api/poi/batch-teaser") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")

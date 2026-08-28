@@ -17,7 +17,7 @@ import Foundation
  */
 enum AudioPrefetchManager {
 
-    private static let ttsEndpoint = "https://wip.guide/api/tts/smart"
+    private static let ttsEndpoint = "\(WipApi.base)/api/tts/smart"
     private static let maxAgeSec: TimeInterval = 24 * 60 * 60
     // Un MP3 sotto ~1KB è un errore mascherato (il server stesso scarta <500B)
     private static let minValidBytes = 1000
@@ -131,9 +131,21 @@ enum AudioPrefetchManager {
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
         req.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        // TOKEN UTENTE (28/08/2026). Il server esige il Bearer per le SINTESI
+        // NUOVE su /api/tts/smart (il colpo di cache resta pubblico): senza,
+        // un testo mai sintetizzato risponde 401 e qui si ripiegava sul TTS
+        // di sistema senza che nessuno lo volesse. Stesso accessor di
+        // WipSupabaseClient.fetchAudioguide; se il token manca la richiesta
+        // parte identica a prima (cache pubblica → MP3, altrimenti nil).
+        if let token = SecureSessionStore.get(ListeningHistoryStore.prefAccessToken), !token.isEmpty {
+            req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         req.httpBody = body
 
         URLSession.shared.dataTask(with: req) { data, response, _ in
+            // 401 (token assente/scaduto) e 402 (nessun diritto alla sintesi)
+            // degradano IN SILENZIO al TTS di sistema: nil come ogni altro
+            // errore, nessun log — al trigger sarebbe uno per POI.
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   let data = data, data.count >= minValidBytes else {
                 finish(nil)

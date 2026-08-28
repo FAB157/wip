@@ -8,7 +8,7 @@ import { notify } from '../lib/toast';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 import { supabase } from '../lib/supabase';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings';
 // Pannello admin caricato SOLO su richiesta (React.lazy): è pesante e serve
 // solo agli admin, quindi non deve finire nel bundle di ogni utente.
@@ -503,11 +503,12 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     if (giorni.length === 0) { notify(getTranslation('pf_story_no_stops', language)); return; }
     setStoryLoadingId(itineraryDb.id);
     try {
-      const res = await fetch(getApiUrl('/api/trip-story'), {
+      // apiFetch: Bearer automatico (rotta a login obbligatorio) + timeout.
+      const res = await apiFetch(getApiUrl('/api/trip-story'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ titolo: itineraryDb.titolo, giorni, lang: language }),
-      });
+      }, 90000);
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.story) throw new Error(data?.error || 'generazione fallita');
       setTripStory({ titolo: itineraryDb.titolo || getTranslation('pf_nostro_viaggio', language), story: data.story });

@@ -44,7 +44,7 @@ interface PoiDao {
         OfflinePackagePoiRef::class,
         OfflineSpendEntity::class
     ],
-    version = 9
+    version = 12
 )
 @TypeConverters(Converters::class)
 abstract class PoiDatabase : RoomDatabase() {
@@ -151,6 +151,82 @@ abstract class PoiDatabase : RoomDatabase() {
             }
         }
 
+        // 9→10: indirizzo e sua PROVENIENZA sul radar cache. La stringa serve
+        // a notifica e voce; `addressSource` è la guardia della scala di
+        // fiducia: 'strada_vicina' non è l'indirizzo del luogo ma la strada più
+        // vicina, e trattarla come indirizzo sposterebbe il punto altrove.
+        // (Nella stessa giornata la stringa ha smesso di fare gradino da sola:
+        // il gradino lo fa il PUNTO, aggiunto dalla 10→11 qui sotto.)
+        // Colonne nullable senza default → le righe già in cache restano NULL,
+        // cioè continuano a comportarsi esattamente come prima finché il
+        // prossimo fetch non porta i campi.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v9.
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `address` TEXT")
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `addressSource` TEXT")
+            }
+        }
+
+        // 10→11: IL PUNTO dell'indirizzo sul radar cache (address_point_lat/lon
+        // e la sua fonte, migration DB 20260823160000_poi_address_point.sql).
+        // Non è la stringa: è la casa più vicina al POI nel dump Nominatim,
+        // vicinanza MISURATA a pochi metri. Con quel punto l'indirizzo diventa
+        // il PUNTO D'ARRIVO — il trigger scatta a 30 m da lì invece che dal
+        // centroide, che su un palazzo può stare sul retro.
+        // Migration REALE (mai distruttiva, come tutte le altre): un bump
+        // distruttivo cancellerebbe i pacchetti offline scaricati.
+        // Colonne nullable senza default → le righe già in cache restano NULL,
+        // cioè continuano a comportarsi esattamente come prima finché il
+        // prossimo fetch non porta i campi.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v10.
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `addressPointLat` REAL")
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `addressPointLon` REAL")
+                db.execSQL("ALTER TABLE `poi_cache` ADD COLUMN `addressPointSource` TEXT")
+            }
+        }
+
+        // 11→12: il PUNTO dell'indirizzo anche nei PACCHETTI OFFLINE, più due
+        // colonne di servizio per il download.
+        //
+        // Perché: dal 23/08 online il punto dell'indirizzo È il punto d'arrivo
+        // (RaggiFiducia), e il raggio ci resta stretto. Offline no: il bundle
+        // non lo portava, quindi lo STESSO POI con la STESSA app scattava a
+        // 30 m online e col raggio raddoppiato senza rete — cioè male proprio a
+        // chi si era scaricato l'area per camminare senza rete. La RPC lo
+        // restituisce dalla migration 20260823180000_area_bundle_address_point.
+        //
+        // Le altre due colonne chiudono due buchi del download (vedi i commenti
+        // su OfflinePackageEntity):
+        //   pendingRunStartedAt → distingue un checkpoint di download PIENO da
+        //     uno lasciato da una versione precedente (che poteva venire da un
+        //     delta fallito, e ripreso come pieno faceva SALTARE i POI più
+        //     vecchi dichiarandosi comunque `ready`);
+        //   offline_package_pois.syncedAt → timbro del run, per potare a fine
+        //     download i riferimenti ai POI usciti dall'area, che prima
+        //     restavano agganciati per sempre e non diventavano mai orfani.
+        //
+        // Migration REALE (mai distruttiva, come tutte le altre): un bump
+        // distruttivo cancellerebbe i pacchetti offline scaricati. Colonne
+        // nullable senza default (o NOT NULL DEFAULT 0 dove il tipo è primitivo)
+        // → le righe esistenti non cambiano comportamento: i pacchetti già
+        // scaricati continuano a lavorare esattamente come prima finché il
+        // prossimo sync non porta i campi nuovi.
+        // ⚠️ DA VERIFICARE SU DISPOSITIVO: upgrade reale da un'installazione v11
+        //    con almeno un pacchetto offline scaricato.
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `addressSource` TEXT")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `addressPointLat` REAL")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `addressPointLon` REAL")
+                db.execSQL("ALTER TABLE `offline_pois` ADD COLUMN `addressPointSource` TEXT")
+                db.execSQL("ALTER TABLE `offline_packages` ADD COLUMN `pendingRunStartedAt` INTEGER")
+                db.execSQL("ALTER TABLE `offline_package_pois` ADD COLUMN `syncedAt` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
         private val rtreeCallback = object : Callback() {
@@ -166,7 +242,7 @@ abstract class PoiDatabase : RoomDatabase() {
         fun getInstance(context: Context): PoiDatabase {
             return instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(context, PoiDatabase::class.java, "itainta_poi.db")
-                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+                    .addMigrations(MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                     // Distruttivo SOLO dalle versioni volatili pre-4 (cache): un
                     // domani una migration mancante (es. 6→7 dimenticata) o un
                     // downgrade NON deve azzerare offline_packages/pois/ledger.

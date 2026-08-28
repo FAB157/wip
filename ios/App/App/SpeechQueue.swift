@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AudioToolbox
+import MediaPlayer
 import UIKit
 import UserNotifications
 
@@ -47,6 +48,15 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
     /// era in corso: dice a handleInterruptionEnded se c'è qualcosa da
     /// riprendere.
     private var pausedForInterruption = false
+    /// (28/08/2026, AUD-01) Il player della guida JS (WipBackgroundAudioPlugin,
+    /// AVPlayer) è stato messo in pausa DA NOI per far parlare la voce nativa:
+    /// a coda vuota lo si fa ripartire. `.duckOthers` abbassa le ALTRE app,
+    /// non un secondo player della stessa: prima teaser e guida JS suonavano
+    /// insieme. Tutto lo stato di questa classe vive sul main (ogni ingresso
+    /// pubblico è un `DispatchQueue.main.async`), dove AVPlayer va toccato.
+    private var pausedJsPlayer = false
+    /// (AUD-14) Titolo mostrato in Lock Screen mentre suona l'MP3 della guida.
+    private var nowPlayingTitle = ""
     /// Rete di sicurezza: se isSpeaking resta true oltre il timeout senza
     /// che il delegate di completamento scatti (interruzione gestita male dal
     /// sistema, item anomalo…) sblocchiamo comunque la coda invece di restare
@@ -209,6 +219,14 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         isSpeaking = true
         activeItem = next
 
+        // (AUD-01) Una voce alla volta ANCHE rispetto al player JS: se la
+        // guida completa sta suonando nell'AVPlayer del plugin, si mette in
+        // pausa e si riprende a coda vuota (finishActiveSpeech).
+        if let jsPlayer = WipBackgroundAudioPlugin.shared, jsPlayer.isPlaying {
+            jsPlayer.pauseForSpeech()
+            pausedJsPlayer = true
+        }
+
         activateAudioSession()
 
         // Chime di avviso prima della voce (equivalente del ringtone Android)
@@ -225,6 +243,11 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
            playMp3(path: path) {
             // MP3: durata reale + 15 s (tetto 15 min), come Receiver.kt
             armWatchdog(seconds: Self.watchdogTimeout(forMp3Duration: audioPlayer?.duration ?? 0))
+            // (AUD-14) Lock Screen / Control Center: titolo, durata e tasti
+            // play/pausa, che il plugin inoltra qui quando il suo player è nil.
+            nowPlayingTitle = Self.titoloPerNowPlaying(poiId: next.poiId)
+            WipBackgroundAudioPlugin.shared?.configureRemoteCommandsIfNeeded()
+            pubblicaNowPlaying(rate: 1)
             return
         }
 
@@ -307,6 +330,65 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         }
     }
 
+    // MARK: - Now Playing e comandi remoti per l'MP3 della guida (AUD-14)
+    //
+    // L'audioguida completa del Day Pass suona in un AVAudioPlayer dentro
+    // questa coda: prima non pubblicava nulla in MPNowPlayingInfoCenter e i
+    // remote command del plugin (`guard self.player != nil`) rispondevano
+    // .noSuchContent — dalla Lock Screen non si poteva mettere in pausa
+    // quattro minuti di racconto. Ora l'MP3 pubblica il Now Playing e il
+    // plugin, quando il suo player è nil, inoltra play/pausa qui.
+
+    private static func titoloPerNowPlaying(poiId: String?) -> String {
+        guard let id = poiId, !id.isEmpty else { return "Audioguida" }
+        return PoiStore.shared.getPoi(id)?.nome
+            ?? PoiStore.shared.getOfflinePoi(id)?.nome
+            ?? "Audioguida"
+    }
+
+    /// Sul main. Aggiorna anche elapsed/rate: va richiamata a ogni pausa e
+    /// ripresa, il sistema interpola da lì.
+    private func pubblicaNowPlaying(rate: Float) {
+        guard let player = audioPlayer else { return }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: nowPlayingTitle,
+            MPMediaItemPropertyArtist: "WIP · Audioguida",
+            MPMediaItemPropertyPlaybackDuration: player.duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: player.currentTime,
+            MPNowPlayingInfoPropertyPlaybackRate: rate
+        ]
+    }
+
+    /// C'è un MP3 della guida caricato in questa coda (in riproduzione o in
+    /// pausa)? Da leggere sul main (i remote command arrivano lì).
+    var hasActiveMp3: Bool { audioPlayer != nil }
+    /// L'MP3 sta suonando adesso? Sul main.
+    var isMp3Playing: Bool { audioPlayer?.isPlaying == true }
+
+    /// Pausa dell'MP3 da Lock Screen / Control Center. Il watchdog resta
+    /// armato di proposito: una pausa dimenticata per un quarto d'ora chiude
+    /// l'item e libera la coda, invece di restare muti a oltranza.
+    func pauseSpeaking() {
+        DispatchQueue.main.async {
+            guard let player = self.audioPlayer, player.isPlaying else { return }
+            player.pause()
+            self.pubblicaNowPlaying(rate: 0)
+        }
+    }
+
+    /// Ripresa dell'MP3 da Lock Screen / Control Center. Il watchdog si
+    /// ri-arma sul tempo che resta, non su quello già passato.
+    func continueSpeaking() {
+        DispatchQueue.main.async {
+            guard let player = self.audioPlayer, !player.isPlaying else { return }
+            self.activateAudioSession()
+            guard player.play() else { return }
+            let residuo = max(0, player.duration - player.currentTime)
+            self.armWatchdog(seconds: Self.watchdogTimeout(forMp3Duration: residuo))
+            self.pubblicaNowPlaying(rate: 1)
+        }
+    }
+
     /// Il TTS deve duck-are la musica come un'istruzione di navigazione.
     private func activateAudioSession() {
         do {
@@ -320,6 +402,10 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
 
     private func deactivateAudioSessionIfIdle() {
         guard queue.isEmpty, !isSpeaking else { return }
+        // (AUD-01) La sessione è condivisa con il player JS: se sta suonando
+        // (o sta per riprendere dopo la nostra pausa) non gli si spegne la
+        // sessione sotto i piedi.
+        if let jsPlayer = WipBackgroundAudioPlugin.shared, jsPlayer.isPlaying || jsPlayer.isPausedForSpeech { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
@@ -476,9 +562,15 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         let item = activeItem
         activeItem = nil
         isSpeaking = false
+        let jsPlayer = WipBackgroundAudioPlugin.shared
         if let player = audioPlayer {
             player.stop()
             audioPlayer = nil
+            // (AUD-14) Il Now Playing dell'MP3 si toglie solo se non c'è un
+            // player JS che lo ripubblicherà (in pausa per noi, o attivo).
+            if !(jsPlayer?.isPlaying ?? false) && !(jsPlayer?.isPausedForSpeech ?? false) {
+                MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            }
         }
 
         prefs.set(false, forKey: Self.prefTeaserSpeaking)
@@ -490,6 +582,15 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
 
         if notifyJs, let item = item {
             onEvent?("teaserFinished", ["poiId": item.poiId ?? "", "kind": item.kind])
+        }
+
+        // (AUD-01) Coda finita: il player JS messo in pausa da noi riparte.
+        // Differito di un giro di main: i chiamanti proseguono con
+        // processNext + deactivateAudioSessionIfIdle, e la ripresa (che
+        // riattiva la sessione per conto suo) deve venire DOPO, non in mezzo.
+        if pausedJsPlayer && queue.isEmpty {
+            pausedJsPlayer = false
+            DispatchQueue.main.async { jsPlayer?.resumeAfterSpeechIfNeeded() }
         }
     }
 

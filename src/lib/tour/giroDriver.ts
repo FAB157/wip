@@ -53,6 +53,8 @@ let arrivatoA: string | null = null;
 /** Manovre gia` dette: una volta "fra N metri", una volta a ridosso. */
 let svoltaDettaLontano: string | null = null;
 let svoltaDettaVicino: string | null = null;
+// «Rete assente: segui la linea» detto una volta per episodio di deviazione.
+let avvisatoSenzaRete = false;
 /** A questi metri dalla manovra la si dice "a ridosso" (come useWalkingNavigation). */
 const SVOLTA_VICINO_M = 35;
 /** Oltre questi si preannuncia "fra N metri" appena la manovra diventa la prossima. */
@@ -194,8 +196,19 @@ function onFix(e: Event): void {
     //    nessuno: chi sbagliava strada continuava a vedere la linea vecchia.
     if (v.stato === 'DEVIATO') {
       void tourService.ricalcolaDaDeviazione(pos).then(fatto => {
-        if (fatto) { svoltaDettaLontano = null; svoltaDettaVicino = null; parla(fraseRicalcolo(lingua), lingua); }
+        if (fatto === true) {
+          svoltaDettaLontano = null; svoltaDettaVicino = null; avvisatoSenzaRete = false;
+          parla(fraseRicalcolo(lingua), lingua);
+        } else if (fatto === false && !avvisatoSenzaRete) {
+          // Tentato e fallito (ITI-09): niente «ricalcolo il giro» finto. Si
+          // dice una volta per deviazione di seguire la linea; lo stato resta
+          // DEVIATO e si ritenta fra un minuto.
+          avvisatoSenzaRete = true;
+          parla(getTranslation('giro_ricalcolo_senza_rete', lingua.toUpperCase() as Language), lingua);
+        }
       });
+    } else {
+      avvisatoSenzaRete = false;
     }
 
     // 0b. Le istruzioni del navigatore: "fra 120 metri, gira a destra" quando

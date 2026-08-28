@@ -146,14 +146,25 @@ object PredictiveTrigger {
         // A 1,4 m/s ogni secondo di ritardo è 1,4 m di errore: a 30 m di
         // raggio di arrivo sono errori che spostano l'annuncio oltre il
         // monumento. Si proietta in avanti lungo la rotta nota.
+        // (23/08/2026) I due helper scrivevano il risultato in un
+        // `Pair<Double, Double>`: un Pair piu' DUE Double incapsulati, sei
+        // oggetti per valutazione. `evaluate` gira per ogni POI candidato a
+        // ogni fix (fino a 5 volte al secondo nella finestra armata, piu' il
+        // percorso del receiver): erano migliaia di oggetti al minuto da far
+        // raccogliere al GC mentre si cammina. Ora scrivono in un array di due
+        // primitivi, locale alla chiamata — quindi ancora rientrante e sicuro
+        // fra thread. La matematica e' identica, riga per riga.
         val extrapolationS = if (canPredict) min(fixAgeMs / 1000.0, MAX_EXTRAPOLATION_S) else 0.0
-        val (userLat, userLon) = extrapolate(
-            location.latitude, location.longitude, bearing, speed, extrapolationS
-        )
+        val fuori = DoubleArray(2)
+        extrapolate(location.latitude, location.longitude, bearing, speed, extrapolationS, fuori)
+        val userLat = fuori[0]
+        val userLon = fuori[1]
 
         // Frame metrico locale (equirettangolare): alle distanze in gioco
         // (< 2 km) l'errore è trascurabile e costa due moltiplicazioni.
-        val (east, north) = toLocalMeters(userLat, userLon, poiLat, poiLon)
+        toLocalMeters(userLat, userLon, poiLat, poiLon, fuori)
+        val east = fuori[0]
+        val north = fuori[1]
         val distanceNow = sqrt(east * east + north * north)
 
         if (!canPredict) {
@@ -164,10 +175,17 @@ object PredictiveTrigger {
                 dCpaMeters = Double.NaN,
                 distanceNowMeters = distanceNow,
                 usedPrediction = false,
+                // (23/08/2026) Via `String.format`: e' il ramo piu' frequente
+                // in citta' (fix impreciso, utente fermo) e ogni chiamata
+                // costruiva un Formatter, un StringBuilder interno e faceva la
+                // ricerca del Locale. Un arrotondamento a un decimale fa lo
+                // stesso lavoro. In piu' il decimale ora e' sempre il punto:
+                // "%.1f".format() usava il Locale di SISTEMA e su un telefono
+                // italiano scriveva "0,3" — una virgola dentro un CSV.
                 reason = buildString {
                     append("fail-open:")
                     if (accuracy > MAX_ACCURACY_FOR_PREDICTION_M) append(" acc=${accuracy.toInt()}m")
-                    if (speed < MIN_SPEED_FOR_VECTOR_MS) append(" speed=${"%.1f".format(speed)}m/s")
+                    if (speed < MIN_SPEED_FOR_VECTOR_MS) append(" speed=${Math.round(speed * 10.0) / 10.0}m/s")
                     if (bearing < 0) append(" no-bearing")
                     if (fixAgeMs > MAX_FIX_AGE_MS) append(" age=${fixAgeMs}ms")
                 }
@@ -242,28 +260,38 @@ object PredictiveTrigger {
 
     // ─── Utilità geometriche ─────────────────────────────────────────────
 
-    /** Proietta una posizione in avanti lungo una rotta, per `seconds`. */
+    /**
+     * Proietta una posizione in avanti lungo una rotta, per `seconds`.
+     * Scrive in `fuori`: [0] = latitudine, [1] = longitudine.
+     */
     private fun extrapolate(
-        lat: Double, lon: Double, bearingDeg: Double, speedMs: Double, seconds: Double
-    ): Pair<Double, Double> {
-        if (seconds <= 0.0 || speedMs <= 0.0 || bearingDeg < 0.0) return lat to lon
+        lat: Double, lon: Double, bearingDeg: Double, speedMs: Double, seconds: Double,
+        fuori: DoubleArray
+    ) {
+        if (seconds <= 0.0 || speedMs <= 0.0 || bearingDeg < 0.0) {
+            fuori[0] = lat
+            fuori[1] = lon
+            return
+        }
         val distance = speedMs * seconds
         val bearingRad = Math.toRadians(bearingDeg)
         val dNorth = distance * Math.cos(bearingRad)
         val dEast = distance * Math.sin(bearingRad)
-        val newLat = lat + dNorth / 111_320.0
         val cosLat = cos(Math.toRadians(lat)).let { if (abs(it) < 1e-6) 1e-6 else it }
-        val newLon = lon + dEast / (111_320.0 * cosLat)
-        return newLat to newLon
+        fuori[0] = lat + dNorth / 111_320.0
+        fuori[1] = lon + dEast / (111_320.0 * cosLat)
     }
 
-    /** Offset (est, nord) in metri dal punto utente al POI. */
+    /**
+     * Offset dal punto utente al POI, in metri.
+     * Scrive in `fuori`: [0] = est, [1] = nord.
+     */
     private fun toLocalMeters(
-        userLat: Double, userLon: Double, poiLat: Double, poiLon: Double
-    ): Pair<Double, Double> {
+        userLat: Double, userLon: Double, poiLat: Double, poiLon: Double,
+        fuori: DoubleArray
+    ) {
         val cosLat = cos(Math.toRadians(userLat)).let { if (abs(it) < 1e-6) 1e-6 else it }
-        val east = (poiLon - userLon) * 111_320.0 * cosLat
-        val north = (poiLat - userLat) * 111_320.0
-        return east to north
+        fuori[0] = (poiLon - userLon) * 111_320.0 * cosLat
+        fuori[1] = (poiLat - userLat) * 111_320.0
     }
 }

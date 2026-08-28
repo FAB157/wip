@@ -61,15 +61,17 @@ module.exports = {
       time: true,
     },
     {
-      // Copia locale dell'API (dist/server.cjs, buildata a parte e copiata
-      // qui): serve SOLO alla semina della biblioteca. Su Vercel la function
+      // Copia locale dell'API (dist-server/server.cjs, buildata a parte e
+      // copiata qui): serve SOLO alla semina della biblioteca. Su Vercel la function
       // muore a 300s e la terza rigenerazione correttiva non fa in tempo a
       // finire — misurato il 18/08/2026: 3 item su 7 buttati a metà lavoro.
       // Qui non c'è tetto (LIB_SYNC_BUDGET_MS=900000 nel .env) e si può usare
       // anche Agnes, che impiega 2-4 minuti a chiamata.
       // Aggiornamento: rifare `npx esbuild server.ts --bundle --platform=node
-      // --format=cjs --packages=external --outfile=dist/server.cjs` e copiare
-      // il file; il frontend NON serve (qui gira solo l'API).
+      // --format=cjs --packages=external --outfile=dist-server/server.cjs` e
+      // copiare il file; il frontend NON serve (qui gira solo l'API).
+      // (28/08/2026, audit SEC-04: l'output di esbuild è uscito da `dist/`,
+      // che è il webDir di Capacitor e finiva dentro le app native.)
       name: 'wip-api',
       script: 'node',
       // Tetti alzati il 19/08/2026: con 256 MB di heap e il riavvio pm2 a 330
@@ -77,7 +79,7 @@ module.exports = {
       // la generazione in corso (4-6 minuti di lavoro buttati). Il droplet ha
       // 1 GB di swap, quindi il picco si attraversa invece di morire; con la
       // semina in parallelo il picco è più alto e questi tetti servono.
-      args: '--max-old-space-size=320 dist/server.cjs',
+      args: '--max-old-space-size=320 dist-server/server.cjs',
       interpreter: 'none',
       cwd: __dirname,
       autorestart: true,

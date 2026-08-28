@@ -1945,7 +1945,20 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     }
   });
 
-  app.use(express.json({ limit: "50mb" }));
+  // Tetto GLOBALE del body JSON: 1 MB (audit SEC-06, 28/08/2026). Prima era
+  // 50 MB per tutte le rotte: chiunque poteva tenere occupata la function con
+  // payload enormi. Le sole rotte che ricevono immagini base64 (/api/vision)
+  // montano INLINE un express.json({ limit: '12mb' }) prima dell'handler:
+  // per loro il parser globale DEVE saltare, altrimenti risponderebbe 413 a
+  // 1 MB prima che quello di rotta venga mai eseguito.
+  // I webhook Stripe (express.raw) e RevenueCat sono registrati sopra e non
+  // passano di qui.
+  const jsonBodyPiccolo = express.json({ limit: "1mb" });
+  const ROTTE_BODY_GRANDE = new Set(["/api/vision"]);
+  app.use((req, res, next) => {
+    if (ROTTE_BODY_GRANDE.has(req.path)) return next();
+    return jsonBodyPiccolo(req, res, next);
+  });
 
   // --- STRIPE CREATE CHECKOUT ---
   app.post('/api/stripe/create-checkout', async (req, res) => {
@@ -2059,6 +2072,133 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     } catch {
       return null;
     }
+  }
+
+  // ── AUTH OBBLIGATORIA + RATE LIMIT PERSISTENTE (audit pre-release SEC-01, 28/08/2026)
+  // requireAuth: middleware di rotta. Bearer utente Supabase valido oppure
+  // 401 { error: 'auth_required' }; in caso positivo mette req.userId. Va
+  // davanti a OGNI rotta che chiama un LLM (callUniversalAi) o un provider
+  // TTS a nostre spese: prima molte di queste erano generabili gratis e
+  // senza login via curl, col solo rateLimiter in memoria come freno.
+  async function requireAuth(req: any, res: any, next: any) {
+    let uid: string | null = null;
+    try { uid = await verifyUserToken(req); } catch { uid = null; }
+    if (!uid) return res.status(401).json({ error: 'auth_required' });
+    req.userId = uid;
+    next();
+  }
+
+  // Rate limit PERSISTENTE su Supabase (tabella api_rate_limits + RPC
+  // rate_limit_hit, vedi supabase/migrations/20260828120000_rate_limits.sql).
+  // Il rateLimiter in memoria resta come PRIMO filtro (gratis, immediato) ma
+  // si azzera a ogni cold start serverless: qui il contatore sopravvive.
+  // api_cache NON è adatta: nessuna scadenza, un contatore per minuto
+  // lascerebbe righe per sempre e l'incremento leggi-poi-scrivi non è
+  // atomico. La RPC fa upsert+incremento in una sola istruzione.
+  // Chiave: utente autenticato (req.userId, messo da requireAuth) oppure
+  // IP; finestra = minuto corrente. FAIL-OPEN: se la RPC/tabella non esiste
+  // ancora o Supabase non risponde, la richiesta passa e si logga UNA volta.
+  const RL_COSTOSE_PER_MINUTO = 60;
+  let rlFailOpenLoggato = false;
+  async function conteggioRateLimitPersistente(chiave: string, finestraSec = 120): Promise<number | null> {
+    try {
+      const r = await axios.post(
+        `${supabaseUrl}/rest/v1/rpc/rate_limit_hit`,
+        { p_key: chiave, p_window_seconds: finestraSec },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 2500 }
+      );
+      const n = Number(r.data);
+      return Number.isFinite(n) ? n : null;
+    } catch (e: any) {
+      if (!rlFailOpenLoggato) {
+        rlFailOpenLoggato = true;
+        console.warn('[rate-limit] RPC rate_limit_hit non disponibile (fail-open):', e?.response?.status || e?.message,
+          '— applicare supabase/migrations/20260828120000_rate_limits.sql');
+      }
+      return null;
+    }
+  }
+  /**
+   * Ritorna i secondi di attesa se la richiesta supera il tetto, altrimenti
+   * null. Usabile inline nelle rotte che verificano il token a metà handler
+   * (es. /api/tts/smart, dove il colpo di cache resta aperto).
+   */
+  async function limiteCostosoSuperato(req: any, maxPerMinuto = RL_COSTOSE_PER_MINUTO): Promise<number | null> {
+    const chi = req.userId ? `u_${req.userId}` : `ip_${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+    const adesso = Date.now();
+    const minuto = Math.floor(adesso / 60000);
+    const n = await conteggioRateLimitPersistente(`rl_${chi}_${minuto}`, 120);
+    if (n !== null && n > maxPerMinuto) {
+      console.warn(`[rate-limit] ${chi} oltre ${maxPerMinuto}/min su ${req.method} ${req.path} (${n})`);
+      return Math.max(1, 60 - Math.floor((adesso / 1000) % 60));
+    }
+    return null;
+  }
+  function rateLimitCostoso(maxPerMinuto = RL_COSTOSE_PER_MINUTO) {
+    return async (req: any, res: any, next: any) => {
+      const attesa = await limiteCostosoSuperato(req, maxPerMinuto);
+      if (attesa !== null) {
+        res.setHeader('Retry-After', String(attesa));
+        return res.status(429).json({ error: 'rate_limited', retry_after_seconds: attesa });
+      }
+      next();
+    };
+  }
+  // Catena standard per le rotte costose (LLM/TTS): login + tetto per utente.
+  // Il rateLimiter in memoria (per IP) va messo per primo dalla rotta.
+  const guardiaCostosa = [requireAuth, rateLimitCostoso()];
+
+  /**
+   * Cancello per il ramo "cache miss" delle rotte CACHE-FIRST che oggi sono
+   * pubbliche (catalogo stagionale, traduzioni, mini-guide città, TTS…): il
+   * colpo di cache non costa nulla e resta aperto; la GENERAZIONE (LLM/TTS
+   * a nostre spese) richiede un Bearer valido e passa dal tetto persistente.
+   * Ritorna true se si può generare; altrimenti ha GIÀ risposto 401/429.
+   */
+  async function cancelloGenerazione(req: any, res: any): Promise<boolean> {
+    let uid: string | null = null;
+    try { uid = await verifyUserToken(req); } catch { uid = null; }
+    if (!uid) { res.status(401).json({ error: 'auth_required' }); return false; }
+    req.userId = uid;
+    const attesa = await limiteCostosoSuperato(req);
+    if (attesa !== null) {
+      res.setHeader('Retry-After', String(attesa));
+      res.status(429).json({ error: 'rate_limited', retry_after_seconds: attesa });
+      return false;
+    }
+    return true;
+  }
+  /** Come cancelloGenerazione ma SENZA rispondere: la rotta degrada da sé. */
+  async function puoGenerare(req: any): Promise<boolean> {
+    let uid: string | null = null;
+    try { uid = await verifyUserToken(req); } catch { uid = null; }
+    if (!uid) return false;
+    req.userId = uid;
+    return (await limiteCostosoSuperato(req)) === null;
+  }
+
+  /**
+   * Day Pass attivo (tabella user_passes, migration 20260806120000_day_pass):
+   * non scaduto e con guide residue. Il contatore guides_used lo riconcilia
+   * il client (prefs native ⇄ server), qui si legge soltanto.
+   */
+  async function haDayPassAttivo(userId: string): Promise<boolean> {
+    try {
+      const r = await axios.get(
+        `${supabaseUrl}/rest/v1/user_passes?user_id=eq.${encodeURIComponent(userId)}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&select=guides_used,guides_cap&order=expires_at.desc&limit=1`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 4000 }
+      );
+      const p = r.data?.[0];
+      return !!p && Number(p.guides_used || 0) < Number(p.guides_cap || 0);
+    } catch { return false; }
+  }
+
+  /** Prime `n` frasi di un testo (anteprima gratuita), tetto 400 caratteri. */
+  function primeFrasi(testo: any, n = 2): string {
+    const t = String(testo || '').replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    const frasi = t.split(/(?<=[.!?…])\s+/).filter(Boolean);
+    return frasi.slice(0, n).join(' ').slice(0, 400);
   }
 
   // ── HELPER DI SICUREZZA (audit 22/08/2026) ────────────────────────────────
@@ -2400,6 +2540,18 @@ function parseSafeJSON(text: string) {
     console.log("✅ [STARTUP] Viator API Key configurata correttamente.");
   }
 
+  // Configurazione PUBBLICA di client (28/08/2026). Serve alle build native
+  // in cui Vite non ha inlineato VITE_CARTO_API_KEY (IPA di CI senza il
+  // secret → tile con watermark "API KEY REQUIRED"): lib/cartoTiles.ts la
+  // chiede qui a runtime. Solo valori che finiscono comunque nel client
+  // (la chiave CARTO sta nell'URL di ogni tile): MAI segreti server.
+  app.get("/api/config/public", (_req, res) => {
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.json({
+      cartoApiKey: (process.env.VITE_CARTO_API_KEY || process.env.CARTO_API_KEY || "").trim(),
+    });
+  });
+
   app.get("/api/wiki/pois", rateLimiter, async (req, res) => {
     try {
       const lat = req.query.lat;
@@ -2657,7 +2809,11 @@ REGOLE ASSOLUTE:
 });
 
 
-app.post("/api/groq/candidates", rateLimiter, async (req, res) => {
+// AUTH (audit SEC-01): callUniversalAi senza cache né login; è il primo
+// passo della creazione itinerario, il cui passo successivo
+// (/api/groq/itinerary-stream) richiede già il Bearer. Il client
+// (PlanScreen) deve mandare lo stesso header anche qui.
+app.post("/api/groq/candidates", rateLimiter, ...guardiaCostosa, async (req, res) => {
   try {
     const { destination, days, categories, includeEvents, includeTours, soloGratis, language = "IT", lat, lon } = req.body;
     if (!destination || !days) {
@@ -3586,7 +3742,9 @@ Non modificare le tappe attuali, DEVI FORNIRE SOLO LA NUOVA TAPPA in questo form
     }
   });
 
-  app.post("/api/groq/trivia", async (req, res) => {
+  // AUTH (audit SEC-01): callUniversalAi senza login né rateLimiter, nessun
+  // chiamante in src/ (il quiz d'attesa non è più usato dal client).
+  app.post("/api/groq/trivia", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { destination, count = 5, language = "it" } = req.body;
       if (!destination) return res.status(400).json({ error: "destination is required" });
@@ -3644,7 +3802,9 @@ Assicurati che correctIndex sia un numero intero tra 0 e 2.`
     }
   });
 
-  app.post("/api/groq/enrich_poi", async (req, res) => {
+  // AUTH (audit SEC-01): Gemini/Groq senza login né rateLimiter, nessun
+  // chiamante in src/ (rotta storica).
+  app.post("/api/groq/enrich_poi", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { poiName, lat, lon, category, language = "it" } = req.body;
       if (!poiName) return res.status(400).json({ error: "poiName is required" });
@@ -3930,7 +4090,11 @@ function isNameMatching(name1: string, name2: string): boolean {
     }
   });
 
-  app.post("/api/vision", rateLimiter, async (req, res) => {
+  // express.json inline a 12 MB: è l'UNICA rotta che riceve immagini base64
+  // nel body (imageBase64 + imageHiResBase64); il tetto globale è 1 MB e il
+  // parser globale salta questo path (ROTTE_BODY_GRANDE), altrimenti qui il
+  // body arriverebbe già rifiutato.
+  app.post("/api/vision", rateLimiter, express.json({ limit: "12mb" }), async (req, res) => {
     // Addebito effettuato: vive fuori dal try perché il catch deve poter
     // rimborsare se qualcosa fallisce DOPO il prelievo crediti.
     let charge: { userId: string; cost: number } | null = null;
@@ -3946,8 +4110,10 @@ function isNameMatching(name1: string, name2: string): boolean {
 
       // Validazione input PRIMA di consumare quota o toccare le API: senza
       // imageBase64 il codice a valle andava in TypeError su .startsWith().
-      // Tetto per-rotta sul payload (il limite globale di express.json è 50 MB):
-      // due JPEG ≤1600px stanno ampiamente sotto i 12 MB.
+      // Tetto per-rotta sul payload (il limite globale di express.json è 1 MB,
+      // qui l'express.json inline arriva a 12 MB): due JPEG ≤1600px stanno
+      // ampiamente sotto i 12 MB. Il controllo su Content-Length resta come
+      // risposta 413 esplicita e leggibile dal client.
       const contentLen = parseInt(String(req.headers['content-length'] || '0'), 10) || 0;
       if (contentLen > 12 * 1024 * 1024) {
         return res.status(413).json({ error: 'immagine troppo grande' });
@@ -6777,7 +6943,9 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     return (response.data || response.text || "").trim().replace(/[#*_~`]/g, '');
   }
 
-  app.post("/api/regenerate", rateLimiter, async (req, res) => {
+  // guardiaCostosa (audit SEC-01, 28/08/2026): requireAuth + tetto
+  // persistente per utente. Il Bearer era già obbligatorio dal 22/08.
+  app.post("/api/regenerate", rateLimiter, ...guardiaCostosa, async (req, res) => {
     // BUGFIX 2026-08-14: era stato aggiunto un chargeOrReject('chiedi_di_piu')
     // che addebitava 5 crediti su OGNI chiamata a questa rotta — ma questa
     // rotta è anche il percorso GRATUITO per design di: anteprima automatica
@@ -6795,8 +6963,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       // AUDIT 22/08/2026: Bearer obbligatorio. Senza, chiunque poteva
       // riscrivere la narrazione base di un POI in poi_audioguides (defacement
       // del catalogo) mandando `text` e `poi_id` a piacere via curl.
-      const regenUser = await verifyUserToken(req);
-      if (!regenUser) return res.status(401).json({ error: 'login_required' });
+      const regenUser: string = req.userId; // messo da requireAuth
 
       let { text, poiName, mode, location, previousText, lang = "it", focusInstruction, poi_id, poiId } = req.body || {};
       // Lingua da lista chiusa: finisce nel prompt e (sotto) in una chiave
@@ -6889,31 +7056,31 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
    * poi_audioguides (per lingua) e condivisa fra web e nativo — la paga il
    * primo utente di quella lingua, la riusano tutti.
    */
-  app.post("/api/poi/audioguide", rateLimiter, async (req, res) => {
+  // FASE 2 DEL ROLLOUT ANTI-ABUSO (audit pre-release SEC-01, 28/08/2026):
+  // Bearer OBBLIGATORIO (requireAuth → 401 auth_required). I client nativi
+  // (SupabaseClient.kt::fetchAudioguideText, WipSupabaseClient.swift::
+  // fetchAudioguideText) mandano il token quando l'utente è loggato; senza
+  // utente ricevono 401 e ripiegano sui campi grezzi di shared_pois
+  // (fetchPoiAudioText), come già previsto dalla loro catena di fallback.
+  //
+  // CHI DECIDE L'ADDEBITO: IL SERVER, mai `req.body.charge` da solo. Prima
+  // bastava omettere `charge` (o mandare `prefetch: true`) per ricevere il
+  // testo integrale gratis. Ora il testo integrale esce SOLO se l'utente ne
+  // ha diritto: (a) l'ha già pagato nelle 24 h (chiave api_cache
+  // audiocharge_<utente>_<poi>_<lingua>), (b) ha un Day Pass attivo
+  // (user_passes), (c) il prezzo di listino è 0 (feature resa gratuita dal
+  // pannello), oppure (d) paga ADESSO: `charge: true` vale solo come CONSENSO
+  // a spendere (il modale crediti del client), il prezzo lo fissa prezzoDi.
+  // `prefetch: true` non addebita mai: chi ha diritto riceve il testo (è il
+  // prefetch dell'MP3 in auto col Day Pass), chi non ce l'ha riceve 402
+  // { error: 'credits_required', preview } con le prime due frasi — mai il
+  // testo integrale.
+  app.post("/api/poi/audioguide", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { poiId, lang = 'it', character = 'nicky' } = req.body;
       if (!poiId) return res.status(400).json({ error: 'missing poiId' });
 
-      // ROLLOUT ANTI-ABUSO FASE 1 (2026-08-14) — vedi il BUGFIX 2026-08-14 qui
-      // sotto per il perché questa rotta è aperta. Il client nativo (Android
-      // SupabaseClient.kt::fetchAudioguideText, iOS WipSupabaseClient.swift
-      // ::fetchAudioguideText) ha appena iniziato a INVIARE il token utente
-      // (Authorization: Bearer) quando disponibile. Qui lo ACCETTIAMO se
-      // presente, solo per loggare userId e misurare quanti client aggiornati
-      // lo mandano già — NON lo richiediamo ancora: nessun res.status(401),
-      // la richiesta prosegue SEMPRE identica a oggi anche senza token o con
-      // token invalido/scaduto. Le installazioni non ancora aggiornate (o
-      // senza utente loggato, es. uso anonimo) continuano a funzionare senza
-      // modifiche. SOLO quando la nuova build nativa sarà diffusa alla
-      // maggioranza degli utenti (settimane/mesi, fuori scope oggi) si potrà
-      // valutare una fase 2 che rifiuta le richieste senza token.
-      const callerUserId = await verifyUserToken(req).catch(() => null);
-      insertApiUsageLog({
-        api_name: 'poi_audioguide_native_auth_rollout',
-        feature_context: callerUserId ? 'token_present' : 'token_absent',
-        user_id: callerUserId,
-        success: true
-      }).catch(() => {});
+      const callerUserId: string = req.userId;
       const sUrl = process.env.VITE_SUPABASE_URL || '';
       const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
       const H = { apikey: sKey, Authorization: `Bearer ${sKey}` };
@@ -6929,36 +7096,41 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       // diventava "dante" e la versione per bambini non esisteva su questa rotta.
       const guideChar = normalizeGuideChar(character);
 
-      // ADDEBITO SERVER-SIDE (22/08/2026), solo con Bearer valido: voce
-      // `audio_guide`, IDEMPOTENTE per (utente, poi, lingua) nelle 24 ore
-      // (chiave api_cache audiocharge_<user>_<poi>_<lang>): riascoltare lo
-      // stesso POI nello stesso giorno, cambiare registro o ricevere il
-      // prefetch nativo non costa due volte. Senza token la rotta resta
-      // com'era (rollout nativo in corso, vedi sopra).
-      // SOLO con `charge: true` esplicito dal client: la stessa rotta serve
-      // anche il prefetch predittivo, il pre-scaricamento delle Dieci Tappe,
-      // la scheda in sola lettura e il Day Pass (che consuma una guida del
-      // pass, non crediti). Un Bearer da solo NON basta per addebitare.
+      // ── DIRITTO AL TESTO INTEGRALE (deciso qui, vedi commento sopra) ──
+      // Addebito IDEMPOTENTE per (utente, poi, lingua) nelle 24 ore: chiave
+      // api_cache audiocharge_<user>_<poi>_<lang>. Riascoltare lo stesso POI
+      // nello stesso giorno, cambiare registro o ricevere il prefetch nativo
+      // non costa due volte.
+      const prefetch = req.body?.prefetch === true;
+      const consensoAddebito = req.body?.charge === true && !prefetch;
+      const chargeKey = `audiocharge_${callerUserId}_${String(poiId).replace(/[^A-Za-z0-9_:.-]/g, '')}_${langLower}`;
+      const unit = await prezzoDi('audio_guide');
+      let haDiritto = false;
+      let fonteDiritto = '';
+      const prev = await getFromCache(chargeKey);
+      const prevTs = Number(prev?.text_content) || 0;
+      if (prevTs && Date.now() - prevTs < 24 * 60 * 60 * 1000) { haDiritto = true; fonteDiritto = 'acquisto_24h'; }
+      if (!haDiritto && !(unit > 0)) { haDiritto = true; fonteDiritto = 'listino_zero'; }
+      if (!haDiritto && await haDayPassAttivo(callerUserId)) { haDiritto = true; fonteDiritto = 'day_pass'; }
+
       let audioChargeUser: string | null = null;
       let audioChargeCost = 0;
-      const vuoleAddebito = req.body?.charge === true && req.body?.prefetch !== true;
-      if (callerUserId && vuoleAddebito) {
-        const chargeKey = `audiocharge_${callerUserId}_${String(poiId).replace(/[^A-Za-z0-9_:.-]/g, '')}_${langLower}`;
-        const prev = await getFromCache(chargeKey);
-        const prevTs = Number(prev?.text_content) || 0;
-        if (!(prevTs && Date.now() - prevTs < 24 * 60 * 60 * 1000)) {
-          const unit = await prezzoDi('audio_guide');
-          if (unit > 0) {
-            const outcome = await consumeCreditsServer(callerUserId, unit);
-            if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: unit });
-            if (outcome === 'error') return res.status(500).json({ error: 'charge_failed' });
-            audioChargeUser = callerUserId; audioChargeCost = unit;
-            // Per il catch esterno (rimborso su errore di generazione).
-            (res as any).locals = { ...((res as any).locals || {}), audioChargeUser, audioChargeCost, audioChargeKey: chargeKey };
-          }
-          await saveToCache(chargeKey, 'audio_charge', String(Date.now()));
-        }
+      if (!haDiritto && consensoAddebito) {
+        const outcome = await consumeCreditsServer(callerUserId, unit);
+        if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: unit });
+        if (outcome === 'error') return res.status(500).json({ error: 'charge_failed' });
+        audioChargeUser = callerUserId; audioChargeCost = unit;
+        // Per il catch esterno (rimborso su errore di generazione).
+        (res as any).locals = { ...((res as any).locals || {}), audioChargeUser, audioChargeCost, audioChargeKey: chargeKey };
+        await saveToCache(chargeKey, 'audio_charge', String(Date.now()));
+        haDiritto = true; fonteDiritto = 'addebito';
       }
+      insertApiUsageLog({
+        api_name: 'poi_audioguide_diritto',
+        feature_context: haDiritto ? fonteDiritto : (prefetch ? 'negato_prefetch' : 'negato_402'),
+        user_id: callerUserId,
+        success: haDiritto
+      }).catch(() => {});
 
       // 1. CACHE per-lingua: se esiste già la traduzione, ritornala subito.
       // BUGFIX 26/08/2026: una riga cachata in inglese per errore (fonte
@@ -6974,23 +7146,37 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       ).catch(() => null);
       const cachedText = cacheRes?.data?.[0]?.audio_text;
       const cacheSospetta = languageDb === 'IT' && cachedText && String(cachedText).trim().length >= 30 && !sembraItaliano(String(cachedText));
-      if (cachedText && String(cachedText).trim() && !cacheSospetta) {
-        return res.json({ text: cachedText, cached: true });
+      const cacheValida = !!(cachedText && String(cachedText).trim() && !cacheSospetta);
+
+      // SENZA DIRITTO: 402 con ANTEPRIMA (prime due frasi), mai il testo
+      // integrale e mai una generazione AI a nostre spese. L'anteprima viene
+      // dalla cache se c'è, altrimenti dai campi già in DB (nessuna chiamata
+      // LLM). Il client mostra il modale crediti e ritenta con charge: true.
+      if (!haDiritto) {
+        let fonteAnteprima = cacheValida ? String(cachedText) : '';
+        if (!fonteAnteprima) {
+          // teaser_text_<lingua>: le sette colonne di shared_pois (migration
+          // 20260822100000_nearby_pois_teaser) — il teaser È già l'anteprima.
+          const colTeaser = `teaser_text_${langLower}`;
+          const spAnt = await axios.get(
+            `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=${colTeaser},description_short,description_ai,description_long,description&limit=1`,
+            { headers: H }
+          ).catch(() => null);
+          const s = spAnt?.data?.[0] || {};
+          fonteAnteprima = s[colTeaser] || s.description_short || s.description_ai || s.description_long || s.description || '';
+        }
+        return res.status(402).json({
+          error: 'credits_required',
+          cost: unit,
+          prefetch,
+          cached: cacheValida,
+          preview: primeFrasi(fonteAnteprima, 2)
+        });
       }
 
-      // BUGFIX 2026-08-14: qui era stato aggiunto un chargeOrReject('audio_guide')
-      // che ADDEBITAVA 15 crediti anche quando l'utente aveva già pagato per
-      // l'ascolto tramite consumeCredits lato client (PoiDetailSheet.tsx) —
-      // doppio addebito reale sullo stesso ascolto. Inoltre il chiamante
-      // principale di questa rotta è il servizio NATIVO Android/iOS in
-      // background (prefetch silenzioso, nessun token utente disponibile in
-      // quel contesto): il gate lo faceva fallire sempre, spegnendo
-      // l'audioguida automatica "cammina e ascolta". Rimosso: nessun addebito
-      // qui, resta solo il rateLimiter generico. Un vero controllo anti-abuso
-      // per questa rotta richiede prima un giro di lavoro coordinato sul
-      // client nativo (fargli inviare un token) — non fatto qui per non
-      // rompere la funzione principale del prodotto senza poterla testare su
-      // un device reale.
+      if (cacheValida) {
+        return res.json({ text: cachedText, cached: true });
+      }
 
       // 2. BASE INFO: prima i dettagli nella lingua (se già arricchiti),
       //    altrimenti i campi di shared_pois (spesso in italiano: è solo la
@@ -7015,8 +7201,13 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       // 3. Genera/traduce nella lingua target (stessa logica di /api/regenerate).
       const text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower });
       if (!text || !text.trim()) {
-        // Nessuna narrazione generata: nessun addebito da rimborsare (questa
-        // rotta è gratuita, vedi sopra), l'utente riceve solo la base grezza.
+        // Nessuna narrazione generata: se si è addebitato ORA si restituisce
+        // (best-effort) e si toglie la chiave delle 24 h, così il prossimo
+        // tentativo non risulta "già pagato". L'utente riceve la base grezza.
+        if (audioChargeUser && audioChargeCost > 0) {
+          await refundServer(audioChargeUser, audioChargeCost).catch(() => {});
+          await axios.delete(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(chargeKey)}`, { headers: CREDIT_SVC_HEADERS }).catch(() => {});
+        }
         return res.json({ text: base }); // mai silenzio: almeno la base
       }
 
@@ -8400,10 +8591,39 @@ ${description}
     const l = String(raw || 'it').slice(0, 2).toLowerCase();
     return ['it', 'en', 'fr', 'es', 'de', 'ru', 'zh'].includes(l) ? l : 'it';
   };
+  // GeoNames (27/08/2026): stesso identico bisogno di nominatimQueue.ts —
+  // "nome città da coordinate", niente indirizzo civico. findNearbyPlaceName
+  // e' fatto apposta per questo, con una quota molto piu' larga di Nominatim
+  // (che il client tiene a 1 richiesta/1,2s per la policy OSM). Se manca lo
+  // username o GeoNames non risponde, si ripiega su Nominatim: nessuna
+  // modifica lato client, la forma della risposta resta {address:{city}}.
+  async function reverseGeoNames(lat: number, lon: number): Promise<string | null> {
+    const username = process.env.GEONAMES_USERNAME;
+    if (!username) return null;
+    try {
+      const url = `http://api.geonames.org/findNearbyPlaceNameJSON?lat=${lat}&lng=${lon}&username=${encodeURIComponent(username)}`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) return null;
+      const data = await r.json();
+      // status.value 18/19 = quota oraria/giornaliera esaurita: si ripiega
+      // su Nominatim senza far fallire la richiesta dell'utente.
+      if (data?.status) return null;
+      const name = data?.geonames?.[0]?.name;
+      return typeof name === 'string' && name ? name : null;
+    } catch {
+      return null;
+    }
+  }
   app.get("/api/nominatim/reverse", rateLimiter, async (req, res) => {
     try {
       const lat = parseFloat(String(req.query.lat)), lon = parseFloat(String(req.query.lon));
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'lat/lon non validi' });
+
+      const geoNamesCity = await reverseGeoNames(lat, lon);
+      if (geoNamesCity) {
+        return res.json({ address: { city: geoNamesCity }, source: 'geonames' });
+      }
+
       const lang = nominatimLang(req.query.lang || req.query.language || req.query['accept-language']);
       const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=${lang}`;
       const nRes = await fetch(url, {
@@ -8652,7 +8872,10 @@ ${description}
               // uscirebbero mutilati in silenzio.
               if (typeof v === 'string' && v.trim().length >= 20) sorgente[k] = v.slice(0, 2500);
             }
-            if (Object.keys(sorgente).length > 0) {
+            // Audit SEC-01: la rotta è pubblica (scheda POI anche da anonimo)
+            // e resta tale, ma la TRADUZIONE AI su cache miss si fa solo per
+            // un utente loggato e sotto tetto; l'anonimo riceve l'originale.
+            if (Object.keys(sorgente).length > 0 && await puoGenerare(req)) {
               const ai = await callUniversalAi(
                 'groq',
                 [
@@ -10097,6 +10320,319 @@ out center tags 120;`;
     }
   });
 
+  // --- BIODIVERSITÀ NEI PARCHI (GBIF) ---------------------------------------
+  //
+  // Richiesta utente (28/08/2026): specie avvistate vicino a un parco, con
+  // foto, nella scheda del POI. Fonte: GBIF occurrence search — API pubblica,
+  // nessuna chiave, ma i dati sono aggregati da migliaia di dataset con
+  // licenze DIVERSE (occorrenza per occorrenza, foto per foto): mai fidarsi
+  // di una licenza "generale" del servizio, va controllata riga per riga
+  // esattamente come per Wikimedia Commons/Europeana (vedi CLAUDE.md, foto
+  // reali e licenza verificata).
+  // MAI CC BY-NC: l'occorrenza E la sua foto devono essere entrambe
+  // CC0/Public Domain o CC BY/CC BY-SA. Senza una foto con licenza sicura,
+  // la specie non compare — "nessuna foto è meglio della foto sbagliata"
+  // vale anche qui.
+  function licenzaBiodivOk(url?: string | null): boolean {
+    if (!url) return false;
+    const s = url.toLowerCase();
+    return s.includes('creativecommons.org/publicdomain') ||
+      s.includes('creativecommons.org/licenses/by/') ||
+      s.includes('creativecommons.org/licenses/by-sa/');
+  }
+
+  async function biodiversitaVicino(lat: number, lon: number): Promise<any> {
+    // Cella di ~1 km (2 decimali): un parco intero condivide la stessa cache.
+    const chiave = `biodiv_gbif_${lat.toFixed(2)}_${lon.toFixed(2)}`;
+    const CACHE_MS = 24 * 60 * 60 * 1000; // le specie avvistate non cambiano di minuto in minuto
+
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (Array.isArray(inCache?.text_content?.specie) && eta < CACHE_MS) {
+      return { fonte: 'cache', ...inCache.text_content };
+    }
+
+    // Raggio ~10 km: un parco intero, non solo il punto d'ingresso.
+    const d = 0.1;
+    const url = `https://api.gbif.org/v1/occurrence/search`
+      + `?decimalLatitude=${(lat - d).toFixed(4)},${(lat + d).toFixed(4)}`
+      + `&decimalLongitude=${(lon - d).toFixed(4)},${(lon + d).toFixed(4)}`
+      + `&hasCoordinate=true&hasGeospatialIssue=false&mediaType=StillImage&limit=100`;
+
+    try {
+      const r = await axios.get(url, { timeout: 15000 });
+      const risultati = r.data?.results || [];
+
+      const perSpecie = new Map<string, any>();
+      for (const occ of risultati) {
+        if (!occ.species || !licenzaBiodivOk(occ.license)) continue;
+        if (perSpecie.has(occ.species)) continue;
+        const foto = (occ.media || []).find((m: any) => m.type === 'StillImage' && m.identifier && licenzaBiodivOk(m.license));
+        if (!foto) continue; // niente foto sicura = niente scheda per questa specie
+        perSpecie.set(occ.species, {
+          specie: occ.species,
+          regno: occ.kingdom || null,
+          foto_url: foto.identifier,
+          foto_autore: foto.creator || foto.rightsHolder || null,
+          foto_fonte: foto.publisher || 'GBIF',
+          data_avvistamento: occ.eventDate || null,
+        });
+        if (perSpecie.size >= 12) break;
+      }
+
+      const payload = { specie: [...perSpecie.values()], totale_osservazioni: risultati.length };
+      await saveToCache(chiave, 'biodiversita', payload);
+      return { fonte: 'gbif', ...payload };
+    } catch (e: any) {
+      return { fonte: 'errore', specie: [], errore: e?.message };
+    }
+  }
+
+  app.get("/api/biodiversita/vicino", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    try {
+      res.json({ ok: true, ...(await biodiversitaVicino(lat, lon)) });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.message || 'GBIF non raggiungibile' });
+    }
+  });
+
+  // --- PERICOLO VALANGHE (avalanche.report, Euregio) -----------------------
+  //
+  // Il layer neve dice DOVE si scia e se c'è neve (MODIS); non diceva se la
+  // montagna è sicura. Il bollettino valanghe dell'Euregio Tirolo–Alto
+  // Adige–Trentino è pubblicato come open data (CC BY 4.0, attribuzione
+  // dovuta: "avalanche.report") in formato CAAML v6 JSON, una volta al
+  // giorno in stagione (novembre–maggio). Fuori stagione l'ultimo bollettino
+  // resta online: si controlla validTime e si dice onestamente che è vecchio.
+  //
+  // Copre SOLO l'Euregio (67 micro-regioni). Le micro-regioni sono poligoni
+  // pubblicati dall'EAWS (regions.avalanches.org, licenza aperta): tre file
+  // GeoJSON da ~1 MB in tutto, scaricati una volta e tenuti in memoria della
+  // lambda + api_cache, con le coordinate ridotte a 4 decimali (11 m: più
+  // che sufficiente per dire in quale valle sei). Il punto→regione è un
+  // ray casting, nessuna libreria.
+  //
+  // Per il resto delle Alpi ogni servizio (AINEVA regionali, SLF, Météo-
+  // France) ha licenza e formato propri: si aggiungono uno alla volta, MAI
+  // copiando i bollettini a mano.
+  const VALANGHE_REGIONI = ['AT-07', 'IT-32-BZ', 'IT-32-TN'];
+  const VALANGHE_LIVELLI: Record<string, number> = { low: 1, moderate: 2, considerable: 3, high: 4, very_high: 5, no_snow: 0 };
+  let valangheRegioniMem: { quando: number; feature: Array<{ id: string; poligoni: number[][][] }> } | null = null;
+
+  /** Ray casting su un anello [lon,lat][] */
+  const dentroAnello = (lon: number, lat: number, anello: number[][]) => {
+    let dentro = false;
+    for (let i = 0, j = anello.length - 1; i < anello.length; j = i++) {
+      const [xi, yi] = anello[i], [xj, yj] = anello[j];
+      if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) dentro = !dentro;
+    }
+    return dentro;
+  };
+
+  async function valangheRegioni(): Promise<Array<{ id: string; poligoni: number[][][] }>> {
+    const MEM_MS = 6 * 60 * 60 * 1000, CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+    if (valangheRegioniMem && Date.now() - valangheRegioniMem.quando < MEM_MS) return valangheRegioniMem.feature;
+    const chiave = 'valanghe_regioni_eaws_v1';
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (Array.isArray(inCache?.text_content?.feature) && eta < CACHE_MS) {
+      valangheRegioniMem = { quando: Date.now(), feature: inCache.text_content.feature };
+      return valangheRegioniMem.feature;
+    }
+    const feature: Array<{ id: string; poligoni: number[][][] }> = [];
+    for (const reg of VALANGHE_REGIONI) {
+      const r = await axios.get(`https://regions.avalanches.org/micro-regions/${reg}_micro-regions.geojson.json`, { timeout: 20000 });
+      for (const f of (r.data?.features || [])) {
+        // end_date valorizzata = confine storico, non più in uso
+        if (f?.properties?.end_date) continue;
+        const g = f.geometry;
+        const multi: number[][][][] = g?.type === 'Polygon' ? [g.coordinates] : g?.type === 'MultiPolygon' ? g.coordinates : [];
+        // Solo l'anello esterno di ogni poligono, a 4 decimali
+        const poligoni = multi.map((p) => (p[0] || []).map(([x, y]: number[]) => [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4]));
+        if (poligoni.length) feature.push({ id: String(f.properties?.id || ''), poligoni });
+      }
+    }
+    if (!feature.length) throw new Error('micro-regioni EAWS non disponibili');
+    valangheRegioniMem = { quando: Date.now(), feature };
+    await saveToCache(chiave, 'valanghe_regioni', { feature });
+    return feature;
+  }
+
+  async function valangheBollettino(lang: string): Promise<any[]> {
+    const l = ['de', 'it', 'en'].includes(lang) ? lang : 'en';
+    const chiave = `valanghe_bollettino_${l}`;
+    const CACHE_MS = 60 * 60 * 1000;
+    const inCache = await getFromCache(chiave);
+    const eta = inCache?.created_at ? Date.now() - new Date(inCache.created_at).getTime() : Infinity;
+    if (Array.isArray(inCache?.text_content?.bulletins) && eta < CACHE_MS) return inCache.text_content.bulletins;
+    try {
+      const r = await axios.get(`https://avalanche.report/bulletins/latest/EUREGIO_${l}_CAAMLv6.json`, {
+        headers: { 'User-Agent': 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)' }, timeout: 15000,
+      });
+      const bulletins = Array.isArray(r.data?.bulletins) ? r.data.bulletins : [];
+      // Si conserva solo ciò che serve: regioni, pericolo, validità, testi.
+      const snelli = bulletins.map((b: any) => ({
+        bulletinID: b.bulletinID, publicationTime: b.publicationTime, validTime: b.validTime,
+        regions: (b.regions || []).map((x: any) => ({ regionID: x.regionID, name: x.name })),
+        dangerRatings: b.dangerRatings || [], tendency: b.tendency || null,
+        avalancheProblems: (b.avalancheProblems || []).map((p: any) => p.problemType).filter(Boolean),
+        highlights: b.avalancheActivity?.highlights || b.highlights || null,
+        comment: b.avalancheActivity?.comment || null,
+      }));
+      await saveToCache(chiave, 'valanghe_bollettino', { bulletins: snelli });
+      return snelli;
+    } catch (e) {
+      if (Array.isArray(inCache?.text_content?.bulletins)) return inCache.text_content.bulletins; // copia vecchia
+      throw e;
+    }
+  }
+
+  app.get("/api/valanghe/punto", rateLimiter, async (req, res) => {
+    const lat = Number((req.query as any).lat), lon = Number((req.query as any).lon);
+    if (!isFinite(lat) || !isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+    const lang = String((req.query as any).lang || 'it').toLowerCase().slice(0, 2);
+    // Riquadro grossolano dell'Euregio: fuori non si scarica nulla.
+    if (lat < 45.6 || lat > 47.8 || lon < 9.9 || lon > 13.1) return res.json({ ok: true, dentro: false });
+    try {
+      const regioni = await valangheRegioni();
+      const regione = regioni.find((f) => f.poligoni.some((anello) => dentroAnello(lon, lat, anello)));
+      if (!regione) return res.json({ ok: true, dentro: false });
+      const bollettini = await valangheBollettino(lang);
+      const b = bollettini.find((x: any) => (x.regions || []).some((r: any) => r.regionID === regione.id));
+      if (!b) return res.json({ ok: true, dentro: true, regione: { id: regione.id }, bollettino: null });
+      let livello = 0;
+      for (const d of b.dangerRatings || []) livello = Math.max(livello, VALANGHE_LIVELLI[String(d.mainValue)] ?? 0);
+      const fine = Date.parse(String(b.validTime?.endTime || ''));
+      const stagioneAttiva = Number.isFinite(fine) && fine > Date.now() - 36 * 60 * 60 * 1000;
+      res.json({
+        ok: true, dentro: true,
+        regione: { id: regione.id, nome: (b.regions || []).find((r: any) => r.regionID === regione.id)?.name || null },
+        pericolo: { livello, valore: (b.dangerRatings || []).map((d: any) => ({ valore: d.mainValue, quota: d.elevation || null, periodo: d.validTimePeriod || 'all' })) },
+        problemi: b.avalancheProblems || [], tendenza: b.tendency?.tendencyType || null,
+        testo: b.highlights || null, commento: b.comment || null,
+        pubblicato: b.publicationTime, valido: b.validTime, stagione_attiva: stagioneAttiva,
+        url: `https://avalanche.report/bulletin/latest?region=${encodeURIComponent(regione.id)}`,
+        fonte: 'avalanche.report (Euregio Tirolo–Alto Adige–Trentino), CC BY 4.0',
+      });
+    } catch (e: any) {
+      res.status(503).json({ error: e?.message || 'bollettino valanghe non raggiungibile' });
+    }
+  });
+
+  // --- DENOMINAZIONI D'ORIGINE (eAmbrosia, CC BY 4.0) ----------------------
+  //
+  // Le DOP/IGP/STG di cibo, vino e spiriti (3.973 al 27/08/2026, più le IG
+  // di paesi terzi protette nell'UE) stanno nella tabella `denominazioni`,
+  // importata da scratch/importa-eambrosia.mjs. Non sono POI: non hanno
+  // coordinate né poligoni, hanno un NOME che contiene quasi sempre il
+  // luogo ("Chianti Classico", "Parmigiano Reggiano", "Aceto Balsamico di
+  // Modena"). L'aggancio a un POI di Vino e Gusto si fa quindi per parole:
+  // le parole del nome della denominazione contro nome, città e regione del
+  // POI, nello stesso paese. È un'euristica, e va detto: la scheda la
+  // presenta come "denominazioni della zona", non come certificazione del
+  // produttore.
+  //
+  // La tabella è piccola (4.000 righe): si carica tutta in memoria della
+  // lambda una volta ogni 6 ore e si filtra in JS — nessuna query per
+  // richiesta.
+  const DENOM_TTL_MS = 6 * 60 * 60 * 1000;
+  let denominazioniMem: { quando: number; righe: any[] } | null = null;
+  const denomNorm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  // Parole che compaiono nei nomi delle denominazioni ma non dicono DOVE
+  const DENOM_STOP = new Set(['di', 'del', 'della', 'delle', 'dei', 'degli', 'da', 'de', 'la', 'le', 'il', 'lo', 'gli', 'e', 'ed', 'al', 'alla', 'con', 'in', 'su', 'per',
+    'dop', 'igp', 'stg', 'doc', 'docg', 'igt', 'vino', 'vini', 'olio', 'extra', 'vergine', 'oliva', 'formaggio', 'prosciutto', 'salame', 'pane', 'miele', 'aceto', 'balsamico',
+    'pecorino', 'caciocavallo', 'mozzarella', 'ricotta', 'mela', 'mele', 'pera', 'pere', 'pesca', 'pesche', 'ciliegia', 'riso', 'farina', 'pasta', 'birra', 'grappa', 'liquore',
+    'rosso', 'bianco', 'rosato', 'spumante', 'classico', 'superiore', 'riserva', 'passito', 'colli', 'colline', 'terre', 'terra', 'valle', 'val', 'monte', 'monti', 'costa', 'isola',
+    'des', 'du', 'et', 'le', 'les', 'von', 'aus', 'the', 'of', 'and', 'wine', 'cheese', 'oil', 'ham', 'beer', 'san', 'santa', 'santo', 'sant']);
+
+  async function denominazioniTutte(): Promise<any[]> {
+    if (denominazioniMem && Date.now() - denominazioniMem.quando < DENOM_TTL_MS) return denominazioniMem.righe;
+    const righe: any[] = [];
+    for (let off = 0; ; off += 1000) {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/denominazioni?select=id,nome,nome_norm,tipo,prodotto,categoria,paese,paese_nome,terzo_paese,registrato,stato,url,data_registrazione&order=id&limit=1000&offset=${off}`,
+        { headers: CREDIT_SVC_HEADERS, timeout: 15000 });
+      const j = Array.isArray(r.data) ? r.data : [];
+      righe.push(...j);
+      if (j.length < 1000) break;
+    }
+    denominazioniMem = { quando: Date.now(), righe };
+    return righe;
+  }
+
+  /**
+   * GET /api/denominazioni?q=chianti&paese=it&prodotto=vino&limit=20
+   * GET /api/denominazioni?nome=<POI>&citta=…&regione=…&paese=it   (per un POI)
+   * Sempre 200 con elenco (vuoto se la tabella non c'è ancora): la scheda
+   * POI non deve rompersi perché una migration non è stata applicata.
+   */
+  app.get("/api/denominazioni", rateLimiter, async (req, res) => {
+    const q = req.query as any;
+    const limit = Math.min(Math.max(Number(q.limit) || 20, 1), 100);
+    const paese = q.paese ? String(q.paese).toLowerCase().slice(0, 2) : '';
+    const prodotto = q.prodotto ? String(q.prodotto).toLowerCase() : '';
+    try {
+      let righe = await denominazioniTutte();
+      if (paese) righe = righe.filter((d) => d.paese === paese);
+      if (prodotto) righe = righe.filter((d) => d.prodotto === prodotto);
+      // Solo quelle registrate, salvo richiesta esplicita
+      if (String(q.tutte || '') !== '1') righe = righe.filter((d) => d.registrato);
+
+      if (q.q) {
+        const testo = denomNorm(q.q);
+        const trovate = righe.filter((d) => d.nome_norm.includes(testo));
+        return res.json({ ok: true, denominazioni: trovate.slice(0, limit), totale: trovate.length, attribuzione: 'eAmbrosia, Commissione europea (CC BY 4.0)' });
+      }
+
+      // Aggancio a un POI: parole "di luogo" della denominazione dentro nome/città/regione del POI
+      const contesto = ` ${denomNorm([q.nome, q.citta, q.regione].filter(Boolean).join(' '))} `;
+      if (contesto.trim().length < 3) return res.json({ ok: true, denominazioni: [], totale: 0 });
+      const punteggio = (d: any) => {
+        let p = 0;
+        for (const parola of String(d.nome_norm).split(' ')) {
+          if (parola.length < 4 || DENOM_STOP.has(parola)) continue;
+          if (contesto.includes(` ${parola} `)) p += parola.length;
+        }
+        return p;
+      };
+      const con = righe.map((d) => ({ d, p: punteggio(d) })).filter((x) => x.p > 0).sort((a, b) => b.p - a.p);
+      res.json({ ok: true, denominazioni: con.slice(0, limit).map((x) => x.d), totale: con.length, attribuzione: 'eAmbrosia, Commissione europea (CC BY 4.0)' });
+    } catch {
+      res.json({ ok: true, denominazioni: [], totale: 0 });
+    }
+  });
+
+  /**
+   * GET /api/denominazioni/aree?n=&w=&s=&e=&limit=
+   * Confini delle denominazioni nel riquadro (tabella denominazioni_geometrie:
+   * USA TTB ufficiali, UE derivate dai comuni su Wikidata/OSM). Geometrie già
+   * semplificate a ~100 m in import; qui si tappa il numero e si scartano le
+   * aree enormi rispetto al riquadro (una AVA da 100.000 km² a zoom 12 è solo
+   * una campitura). Sempre 200 con elenco, anche a tabella assente.
+   */
+  app.get("/api/denominazioni/aree", rateLimiter, async (req, res) => {
+    const q = req.query as any;
+    const n = Number(q.n), w = Number(q.w), s = Number(q.s), e = Number(q.e);
+    if (![n, w, s, e].every(Number.isFinite) || n <= s || e <= w) return res.status(400).json({ error: 'n,w,s,e richiesti' });
+    const limit = Math.min(Math.max(Number(q.limit) || 40, 1), 120);
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/denominazioni_geometrie`
+        + `?select=id,fonte,qualita,attribuzione,geom,area_kmq,denominazioni(nome,tipo,prodotto,paese,url)`
+        + `&min_lat=lte.${n}&max_lat=gte.${s}&min_lon=lte.${e}&max_lon=gte.${w}`
+        + `&order=area_kmq.asc&limit=${limit}`,
+        { headers: CREDIT_SVC_HEADERS, timeout: 15000 });
+      const aree = (Array.isArray(r.data) ? r.data : []).map((x: any) => ({
+        id: x.id, fonte: x.fonte, qualita: x.qualita, attribuzione: x.attribuzione, area_kmq: x.area_kmq,
+        nome: x.denominazioni?.nome || x.id, tipo: x.denominazioni?.tipo || null, prodotto: x.denominazioni?.prodotto || null,
+        paese: x.denominazioni?.paese || null, url: x.denominazioni?.url || null, geom: x.geom,
+      }));
+      res.json({ ok: true, aree });
+    } catch {
+      res.json({ ok: true, aree: [] });
+    }
+  });
+
   // --- VERTICALI TEMATICI: QUELLO CHE DIPENDE DAL CALENDARIO -------------
   //
   // Tre degli otto verticali non si possono mostrare come un elenco fisso:
@@ -11371,6 +11907,8 @@ out center 360;`;
       const cacheKey = `trip_story_${crypto.createHash('md5').update(`${outline}_${langName}`).digest('hex')}`;
       const cached = await getFromCache(cacheKey);
       if (cached?.text_content?.story) return res.json({ story: cached.text_content.story, cached: true });
+      // Audit SEC-01: la generazione (Groq) richiede login; la cache resta aperta.
+      if (!(await cancelloGenerazione(req, res))) return;
 
       const prompt = `Sei il diario di viaggio dell'app World in Pocket. Scrivi un racconto di viaggio in prima persona plurale ("siamo partiti…", "ci siamo persi tra…"), caldo, personale ed evocativo, in lingua ${langName}, di 250-350 parole, per il viaggio "${titolo || 'Il nostro viaggio'}". Basati ESCLUSIVAMENTE su queste tappe reali (VIETATO inventare luoghi non elencati) e chiudi con una frase che faccia venire voglia di ripartire:\n${outline}\n\nRestituisci SOLO il racconto in testo piano, senza titolo e senza markdown.`;
       const resp = await callUniversalAi('groq', [{ role: 'user', content: prompt }], { temperature: 0.8 }, 'trip_story', supabaseUrl, supabaseServiceKey, getGroqClient());
@@ -11825,6 +12363,10 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON: {"tappe":[{"orario":"...","titolo_t
         }
       }
 
+      // Audit SEC-01: TripAdvisor/Foursquare/Ticketmaster + LLM a nostre
+      // spese → login obbligatorio per generare; la cache sopra resta aperta.
+      if (!(await cancelloGenerazione(req, res))) return;
+
       // 1. Locali reali per aperitivo/cena (TripAdvisor + Foursquare).
       // Senza NESSUN locale reale la serata sarebbe tutta inventata:
       // meglio un 503 onesto che "trattoria tipica del centro".
@@ -11968,6 +12510,10 @@ Rispondi SOLO con un oggetto JSON valido, testi in lingua "${lang}":
         if (typeof item === 'string') { try { item = JSON.parse(item); } catch { item = null; } }
         if (item && item.id) return res.json({ kind, item, cached: true });
       }
+
+      // Audit SEC-01: generazione (Agnes + Mapbox) solo con login; la cache
+      // sopra resta aperta.
+      if (!(await cancelloGenerazione(req, res))) return;
 
       // Geocoding rigoroso (stesso pattern di /api/seasonal-catalog).
       const mapboxToken = process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN;
@@ -15248,6 +15794,10 @@ LIMIT ${limit} OFFSET ${offset}`;
         }
       }
 
+      // Audit SEC-01: `area` è testo libero → ogni valore nuovo costava una
+      // chiamata Agnes senza login. Cache aperta; generazione solo con Bearer.
+      if (!(await cancelloGenerazione(req, res))) return;
+
       // 2. Finestra di 3 mesi e prompt redazionale
       const mesi = [month, (month % 12) + 1, ((month % 12) + 1) % 12 + 1];
       const finestra = mesi.map(mm => MESI_ITALIANO[mm - 1]).join(', ');
@@ -15377,6 +15927,13 @@ Rispondi SOLO con un array JSON, nessun testo prima o dopo:
         }
       }
 
+      // Audit SEC-01: la traduzione (Agnes) solo con login; senza si degrada a
+      // "nessuna traduzione" (il client mostra i curati in italiano), mai 401
+      // secco su una chiamata di contorno della UI.
+      if (!(await puoGenerare(req))) {
+        return res.json({ translations: {}, lang: langRaw, cached: false, auth_required: true });
+      }
+
       const langName = SEASONAL_LANGS[langRaw];
       const trSys = `Sei un traduttore editoriale di un'app di viaggi. Traduci in ${langName} SOLO i campi "title" e "specialRequests" di ogni elemento, con naturalezza editoriale (niente traduzione letterale rigida).
 REGOLE:
@@ -15469,6 +16026,13 @@ REGOLE:
         } catch { mancanti.push(t); }
       }));
       if (!mancanti.length) return res.json({ testi: fuori, lang, cached: true });
+
+      // Audit SEC-01: `testi` è input libero (40 stringhe × 400 caratteri):
+      // senza login si servono solo le traduzioni già in cache e le altre
+      // restano in originale (il client le mostra così com'erano).
+      if (!(await puoGenerare(req))) {
+        return res.json({ testi: fuori, lang, cached: false, auth_required: true });
+      }
 
       // 2. Le altre, in un colpo solo.
       const sistema = `Traduci in ${ATLANTE_LANGS[lang]} le voci di un catalogo di beni culturali vincolati (tipologie e brevi descrizioni di registri nazionali).
@@ -15893,7 +16457,7 @@ Wikipedia: <materiale>${String(extract || "Nessuna fonte trovata").replace(/<\/?
              const agH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' };
              for (const ch of ['nicky', 'dante']) {
                await axios.post(`${supabaseUrl}/rest/v1/poi_audioguides`,
-                 { poi_id: precisionId, language: 'IT', guide_character: ch, audio_text: jsonResponse.audio_script, generated_at: new Date().toISOString() },
+                 { poi_id: precisionId, language: String(lang || 'it').toUpperCase(), guide_character: ch, audio_text: jsonResponse.audio_script, generated_at: new Date().toISOString() },
                  { headers: agH }).catch((e: any) => console.warn('[batch-ensure] audioguide save failed:', e?.message));
              }
           }
@@ -15922,7 +16486,12 @@ Wikipedia: <materiale>${String(extract || "Nessuna fonte trovata").replace(/<\/?
     }
   });
 
-app.post("/api/poi/enrich", rateLimiter, async (req, res) => {
+// AUTH (audit SEC-01, 28/08/2026): chiama callUniversalAi (Groq/Agnes/
+// Cerebras) a nostre spese; prima era aperta a chiunque via curl. Il client
+// (enrichmentService.ensurePoiDetails) deve mandare il Bearer; gli script di
+// arricchimento di sfondo usano un token utente/admin. `userId` dal body non
+// vale più: si usa quello del token.
+app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       // `engine` (23/08/2026): DEFAULT invariato (groq). Questa è la rotta che
       // il client chiama IN DIRETTA quando l'utente apre un POI non ancora
@@ -15933,7 +16502,8 @@ app.post("/api/poi/enrich", rateLimiter, async (req, res) => {
       // SOLO per chi lo chiede esplicitamente (gli script di arricchimento
       // di sfondo, dove la latenza non la vede nessuno) — mai per il traffico
       // normale dell'app, che continua a non passarlo.
-      const { id, name, lat, lon, category, subCategory, wikidata: clientWikidata, wikipedia: clientWikipedia, lang = "it", fast = false, mode = "full", userId, engine: requestedEngine } = req.body;
+      const { id, name, lat, lon, category, subCategory, wikidata: clientWikidata, wikipedia: clientWikipedia, lang = "it", fast = false, mode = "full", engine: requestedEngine } = req.body;
+      const userId: string = req.userId; // dal token (requireAuth), mai dal body
       const poiEnrichEngine: 'groq' | 'agnes' | 'cerebras' = (requestedEngine === 'agnes' || requestedEngine === 'cerebras') ? requestedEngine : 'groq';
       
       const targetLat = parseFloat(lat);
@@ -16113,9 +16683,11 @@ app.post("/api/poi/enrich", rateLimiter, async (req, res) => {
       }
 
 
-      // Fallback foto finale: immagine REALE via API Unsplash, oppure niente.
-      // (prima si scriveva un URL source.unsplash.com ormai dismesso, che
-      // restava salvato come foto valida e bloccava ogni tentativo futuro)
+      // Fallback foto finale. findFallbackPhoto è disattivata dal 22/08/2026
+      // (ritorna sempre null): Unsplash non è una fonte per una foto di
+      // QUESTO posto (query per keyword, non per luogo — vedi CLAUDE.md).
+      // Tenuta solo perché i chiamanti non si aspettano che la funzione sparisca;
+      // in pratica qui sotto una POI resta senza foto, mai con una sbagliata.
       if (!thumbnail) {
         thumbnail = await findFallbackPhoto(name || "", "") || "";
       }
@@ -16277,7 +16849,7 @@ ${extract || "Nessuna fonte trovata"}
            const agH = { ...svcHeaders, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' };
            for (const ch of ['nicky', 'dante']) {
              await axios.post(`${supabaseUrl}/rest/v1/poi_audioguides`,
-               { poi_id: precisionId, language: 'IT', guide_character: ch, audio_text: (jsonResponse as any).audio_script, generated_at: new Date().toISOString() },
+               { poi_id: precisionId, language: String(lang || 'it').toUpperCase(), guide_character: ch, audio_text: (jsonResponse as any).audio_script, generated_at: new Date().toISOString() },
                { headers: agH }).catch((e: any) => console.warn('[enrich] audioguide save failed:', e?.message));
            }
         }
@@ -16308,9 +16880,96 @@ ${extract || "Nessuna fonte trovata"}
       return res.status(500).json({ error: e.message });
     }
   });
+  // Ricerca REALE del materiale su un luogo — Wikipedia (multilingua) →
+  // Wikimedia Commons/Wikivoyage per coordinate. Copiata (non spostata) da
+  // /api/poi/enrich il 27/08/2026: quella rotta si arricchiva del suo, ma
+  // /api/poi/enrich-stream si fidava ciecamente dell'`extract` mandato dal
+  // client — per le tappe di itinerario AI quell'`extract` è la prosa NON
+  // verificata dell'itinerario stesso, quindi la regola "niente materiale ->
+  // niente testo" non scattava mai per l'audioguida generata da questa rotta.
+  async function cercaMaterialeReale(name: string, targetLat: number, targetLon: number, lang: string): Promise<{ extract: string; pageUrl: string; thumbnail: string }> {
+    let extract = "";
+    let pageUrl = "";
+    let thumbnail = "";
+    const wikiLangs = [...new Set([lang, 'it', 'en'].filter(Boolean))];
+
+    async function tryWikiLang(wikiLang: string): Promise<{extract: string; pageUrl: string; thumbnail: string} | null> {
+      try {
+        const wikiRes = await fetch(
+          `https://${wikiLang}.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${targetLat}|${targetLon}&gsradius=1000&gslimit=10&gsprop=type&format=json&origin=*`,
+          { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': WIKI_UA } }
+        );
+        if (!wikiRes.ok) return null;
+        const wikiData = await wikiRes.json();
+        const pages = (wikiData.query?.geosearch || []).filter((p: any) => !eArticoloDiCentroAbitato(p));
+        let bestPage = pages.find((p: any) => p.title.toLowerCase() === name?.toLowerCase());
+        if (!bestPage) bestPage = pages.find((p: any) => nomeCombacia(p.title, name || ''));
+        if (!bestPage) return null;
+
+        const summaryRes = await fetch(
+          `https://${wikiLang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(bestPage.title)}`,
+          { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': WIKI_UA } }
+        );
+        if (!summaryRes.ok) return null;
+        const summary = await summaryRes.json();
+        const ex = summary.extract || "";
+        if (ex.length < 50) return null;
+        return {
+          extract: ex,
+          pageUrl: summary.content_urls?.mobile?.page || "",
+          thumbnail: summary.thumbnail?.source || summary.originalimage?.source || "",
+        };
+      } catch { return null; }
+    }
+
+    const wikiResults = await Promise.allSettled(wikiLangs.map(l => tryWikiLang(l)));
+    for (const r of wikiResults) {
+      if (r.status === "fulfilled" && r.value) {
+        extract = r.value.extract;
+        pageUrl = r.value.pageUrl;
+        thumbnail = thumbnail || r.value.thumbnail;
+        break;
+      }
+    }
+
+    if (!thumbnail || !extract) {
+      const [commonsResult, wvResult] = await Promise.allSettled([
+        (async () => {
+          if (thumbnail) return null;
+          return fotoDelLuogo(name || "", targetLat, targetLon, lang);
+        })(),
+        (async () => {
+          if (extract) return null;
+          const wvRes = await fetch(
+            `https://it.wikivoyage.org/w/api.php?action=query&list=geosearch&gscoord=${targetLat}|${targetLon}&gsradius=1000&gslimit=2&format=json&origin=*`,
+            { signal: AbortSignal.timeout(4000), headers: { 'User-Agent': WIKI_UA } }
+          ).catch(() => null);
+          if (!wvRes?.ok) return null;
+          const wvData = await wvRes.json();
+          const pages = wvData.query?.geosearch || [];
+          // Stesso controllo di /api/poi/enrich: il più vicino non è mai
+          // detto che parli DI QUESTO posto (Wikivoyage è per destinazione).
+          const best = pages.find((p: any) => nomeCombacia(p.title, name || ''));
+          if (!best) return null;
+          const sumRes = await fetch(
+            `https://it.wikivoyage.org/api/rest_v1/page/summary/${encodeURIComponent(best.title)}`,
+            { signal: AbortSignal.timeout(4000), headers: { 'User-Agent': WIKI_UA } }
+          ).catch(() => null);
+          if (!sumRes?.ok) return null;
+          const s = await sumRes.json();
+          return s.extract || null;
+        })(),
+      ]);
+      if (commonsResult.status === "fulfilled" && commonsResult.value) thumbnail = commonsResult.value;
+      if (!extract && wvResult.status === "fulfilled" && wvResult.value) extract = wvResult.value;
+    }
+
+    return { extract, pageUrl, thumbnail };
+  }
+
   app.post("/api/poi/enrich-stream", rateLimiter, async (req, res) => {
     try {
-      const { id, name, lat, lon, category, subCategory, lang = "it", extract = "", userId } = req.body;
+      const { id, name, lat, lon, category, subCategory, lang = "it", extract: clientExtract = "", userId } = req.body;
       const targetLat = parseFloat(lat);
       const targetLon = parseFloat(lon);
 
@@ -16368,10 +17027,19 @@ ${extract || "Nessuna fonte trovata"}
         console.warn("[enrich-stream] Lookup shared_pois fallito, procedo con LLM:", cacheErr?.message);
       }
 
+      // Ricerca REALE, non l'`extract` mandato dal client (27/08/2026): per le
+      // tappe di itinerario AI quel campo è la prosa non verificata generata
+      // dall'itinerario stesso — usarla come "materiale" avrebbe fatto scrivere
+      // un'audioguida "storicamente dettagliata" su fatti mai controllati.
+      const materiale = await cercaMaterialeReale(name, targetLat, targetLon, lang);
+      const extract = materiale.extract;
+      const nienteMateriale = !extract;
+      void clientExtract; // non più usato come fonte di verità, vedi sopra
+
       let roleInstruction = "";
       if (['locali', 'utilita', 'famiglie'].includes(category)) {
         roleInstruction = `Sei un assistente informativo locale di World in Pocket. Ricevi Nome, Categoria ("${category}") e Coordinate.
-Regola fondamentale: usa i dati reali forniti da Wikipedia, Wikimedia, Wikivoyage e dai tuoi dati interni (simulando una ricerca Google aggiornata).
+Regola fondamentale: basa la risposta ESCLUSIVAMENTE sul blocco <materiale> qui sotto: non aggiungere fatti che non vi siano scritti, anche se pensi di conoscerli da altra fonte.
 Restituisci IMMEDIATAMENTE un JSON valido con questa struttura:
 {
   "description_short": "Sintesi di 2 frasi.",
@@ -16381,7 +17049,7 @@ Restituisci IMMEDIATAMENTE un JSON valido con questa struttura:
 }`;
       } else {
         roleInstruction = `Sei un curatore turistico e storico d'eccellenza per World in Pocket. Ricevi Nome, Categoria ("${category}") e Coordinate.
-Regola fondamentale: basa la narrazione su fatti storici certi tratti da Wikipedia, Wikivoyage, Wikimedia e simulando una ricerca Google per aneddoti recenti.
+Regola fondamentale: basa la narrazione ESCLUSIVAMENTE sul blocco <materiale> qui sotto: non aggiungere fatti, nomi, date o dettagli che non vi siano scritti, anche se pensi di conoscerli da altra fonte.
 Sii narrativo, colto e appassionante.
 Restituisci IMMEDIATAMENTE un JSON valido con questa struttura:
 {
@@ -16392,7 +17060,9 @@ Restituisci IMMEDIATAMENTE un JSON valido con questa struttura:
 }`;
       }
 
-      const curatorPrompt = `${roleInstruction}
+      const regolaSenzaMateriale = `\nSE il blocco <materiale> contiene ESATTAMENTE "Nessuna fonte trovata": NON hai nessuna fonte su questo luogo specifico. È VIETATO scrivere una descrizione basata sulla tua conoscenza generale della zona, della città o di luoghi con nomi simili — anche se pensi di riconoscere il posto dalle coordinate. In quel caso restituisci description_short, description_long e audio_script come stringhe VUOTE ("") e is_gem:false. Una descrizione dettagliata ma del posto sbagliato è peggio di nessuna descrizione.`;
+
+      const curatorPrompt = `${roleInstruction}${regolaSenzaMateriale}
 
 INFORMAZIONI SUL LUOGO DA CURARE:
 Nome: "${name}"
@@ -16418,33 +17088,37 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
         if (first === -1 || last <= first) return;
         clean = clean.slice(first, last + 1);
         const parsed = JSON.parse(clean);
-        if (!parsed.description_long && !parsed.description_short) return;
 
-        const patch: any = {
-          description_long: parsed.description_long || parsed.description_short,
-          description_ai: parsed.description_long || parsed.description_short,
-          description_short: parsed.description_short || String(parsed.description_long).substring(0, 200),
-          audio_script: parsed.audio_script || null,
-        };
-        if (typeof parsed.is_gem === "boolean") patch.is_gem = parsed.is_gem;
-
-        // FOTO: questa route generava solo testo. L'unica immagine arrivava da
-        // una ricerca fatta nel browser, che poi tentava di salvarla con la
-        // anon key — bloccata dalle RLS. Risultato: il pin restava senza foto
-        // e ogni visita ripeteva la stessa ricerca a vuoto. Ora la cerca (e la
-        // salva) il server, che ha i permessi giusti.
-        if (!existingImage) {
-          try {
-            // Per coordinate e nome, mai per nome soltanto, mai Unsplash.
-            const photo = await fotoDelLuogo(name, targetLat, targetLon, lang);
-            if (photo) {
-              patch.image_url = photo;
-              patch.photo_url = photo;
-            }
-          } catch (photoErr: any) {
-            console.warn('[enrich-stream] Ricerca foto fallita:', photoErr?.message);
-          }
+        // Backstop di CODICE, non solo di prompt (stesso principio di
+        // /api/poi/enrich, 24/08/2026): se cercaMaterialeReale non ha trovato
+        // nulla, il testo resta vuoto qualunque cosa il modello abbia scritto.
+        if (nienteMateriale) {
+          parsed.description_short = "";
+          parsed.description_long = "";
+          parsed.audio_script = "";
+          parsed.is_gem = false;
         }
+
+        const patch: any = {};
+        if (parsed.description_long || parsed.description_short) {
+          patch.description_long = parsed.description_long || parsed.description_short;
+          patch.description_ai = parsed.description_long || parsed.description_short;
+          patch.description_short = parsed.description_short || String(parsed.description_long).substring(0, 200);
+          patch.audio_script = parsed.audio_script || null;
+          if (typeof parsed.is_gem === "boolean") patch.is_gem = parsed.is_gem;
+        }
+
+        // FOTO: fuori dall'if sopra e mai una seconda ricerca — una foto reale
+        // trovata da cercaMaterialeReale (Wikipedia/Commons per coordinate+nome,
+        // mai Unsplash) va salvata anche quando manca un estratto testuale: le
+        // due prove (foto/testo) sono indipendenti, niente-testo non deve
+        // buttare via una foto vera.
+        if (!existingImage && materiale.thumbnail) {
+          patch.image_url = materiale.thumbnail;
+          patch.photo_url = materiale.thumbnail;
+        }
+
+        if (Object.keys(patch).length === 0) return;
 
         for (const candidate of [dbPoiId, idStr, cleanId]) {
           if (!candidate) continue;
@@ -16485,8 +17159,14 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
         console.warn(`[enrich-stream] Nessuna riga shared_pois aggiornata per id=${idStr}`);
       };
 
+      // Audit SEC-01: lo STEP 0 (Supabase-first) sopra resta pubblico; la
+      // generazione LLM richiede un Bearer valido e passa dal tetto
+      // persistente. Qui la risposta è ancora "pulita" (lo stream SSE lo apre
+      // streamUniversalAi), quindi il 401/429 JSON arriva intero al client.
+      // Lo userId per il log usage è quello del TOKEN, non quello del body.
+      if (!(await cancelloGenerazione(req, res))) return;
       // Groq come motore primario (velocità), DeepSeek come fallback
-      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" } }, res, groq, `poi_enrichment | Target: ${name}`, userId, saveToSharedPois);
+      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" } }, res, groq, `poi_enrichment | Target: ${name}`, req.userId, saveToSharedPois);
 
     } catch (e: any) {
       console.error("[/api/poi/enrich-stream] Error:", e.message);
@@ -16847,7 +17527,69 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
     } catch { return null; }
   };
 
-  const rainFetchDaily = async (lat: number, lon: number, dayDate: string): Promise<{ mm: number; ore: number } | null> => {
+  /**
+   * OSSERVAZIONI VERE, prima fonte (27/08/2026): GHCN-Daily di NOAA/NCEI.
+   *
+   * È l'archivio giornaliero mondiale delle stazioni meteo (100.000+ in 180
+   * paesi), pubblico dominio (17 U.S.C. §105), senza chiave e senza vincoli
+   * commerciali — verificato: a differenza di GSOD, né il readme né la scheda
+   * di GHCN-Daily portano la clausola WMO Res. 40. È la sola fonte della
+   * catena che sia al tempo stesso un'OSSERVAZIONE (non una previsione) e
+   * utilizzabile in un prodotto a pagamento.
+   *
+   * Limiti misurati il 27/08/2026, che spiegano perché resta il fallback su
+   * Open-Meteo e sul registro proprio:
+   *  - ritardo: le stazioni USA arrivano a T-4/T-5 giorni, quelle europee
+   *    simili; dentro la finestra di 7 giorni della garanzia ci sta, ma un
+   *    reclamo fatto il giorno dopo non trova ancora il dato;
+   *  - copertura: in Italia il flusso è quasi fermo (Pisa aggiornata
+   *    all'agosto 2025, solo Sigonella e Napoli correnti), Francia/Spagna/
+   *    Germania/USA bene. Si cerca una stazione con PRCP entro ~30 km; se
+   *    non c'è o non ha ancora il giorno, si passa oltre senza errore;
+   *  - dà i millimetri, non le ore: `ore` resta 0 e la garanzia scatta
+   *    sulla soglia dei 20 mm.
+   * Due chiamate: la ricerca stazioni (bbox N,W,S,E, date con orario) e i
+   * dati della più vicina (units=metric → mm).
+   */
+  const rainFetchDailyNcei = async (lat: number, lon: number, dayDate: string): Promise<{ mm: number; ore: number; fonte: string } | null> => {
+    const UA = 'WorldInPocket/1.0 (https://wip.guide; support@wip.guide)';
+    const d = 0.3; // ~33 km in latitudine
+    try {
+      const cerca = `https://www.ncei.noaa.gov/access/services/search/v1/data?dataset=daily-summaries&dataTypes=PRCP`
+        + `&startDate=${dayDate}T00:00:00&endDate=${dayDate}T23:59:59`
+        + `&bbox=${(lat + d).toFixed(3)},${(lon - d).toFixed(3)},${(lat - d).toFixed(3)},${(lon + d).toFixed(3)}&limit=10`;
+      const rs = await axios.get(cerca, { headers: { 'User-Agent': UA }, timeout: 10000 });
+      const cand: Array<{ id: string; nome: string; dist: number }> = [];
+      for (const x of (Array.isArray(rs.data?.results) ? rs.data.results : [])) {
+        const st = x?.stations?.[0];
+        const c = x?.boundingPoints?.[0]?.coordinates;
+        if (!st?.id || !Array.isArray(c)) continue;
+        const prcp = (st.dataTypes || []).find((t: any) => t?.id === 'PRCP');
+        // La stazione deve avere PRCP che arriva almeno al giorno richiesto
+        if (!prcp || String(prcp.endDate || '').slice(0, 10) < dayDate) continue;
+        const dLat = (Number(c[1]) - lat) * 111, dLon = (Number(c[0]) - lon) * 111 * Math.cos((lat * Math.PI) / 180);
+        cand.push({ id: String(st.id), nome: String(st.name || ''), dist: Math.sqrt(dLat * dLat + dLon * dLon) });
+      }
+      cand.sort((a, b) => a.dist - b.dist);
+      for (const st of cand.slice(0, 2)) {
+        const rd = await axios.get(`https://www.ncei.noaa.gov/access/services/data/v1?dataset=daily-summaries&dataTypes=PRCP`
+          + `&stations=${encodeURIComponent(st.id)}&startDate=${dayDate}&endDate=${dayDate}&format=json&units=metric&includeAttributes=false`,
+          { headers: { 'User-Agent': UA }, timeout: 10000 });
+        const riga = (Array.isArray(rd.data) ? rd.data : []).find((r: any) => String(r?.DATE) === dayDate);
+        const mm = Number(riga?.PRCP);
+        if (riga && Number.isFinite(mm)) {
+          return { mm: Math.round(mm * 10) / 10, ore: 0, fonte: `NOAA GHCN-Daily · ${st.nome || st.id} (${Math.round(st.dist)} km)` };
+        }
+      }
+    } catch { /* NCEI giù o senza stazioni: si passa alle altre fonti */ }
+    return null;
+  };
+
+  const rainFetchDaily = async (lat: number, lon: number, dayDate: string): Promise<{ mm: number; ore: number; fonte?: string } | null> => {
+    // 1) Osservazione di una stazione vera, se c'è (vedi sopra).
+    const osservata = await rainFetchDailyNcei(lat, lon, dayDate);
+    if (osservata) return osservata;
+
     const pick = (data: any): { mm: number; ore: number } | null => {
       const d = data?.daily;
       const i = Array.isArray(d?.time) ? d.time.indexOf(dayDate) : -1;
@@ -19562,6 +20304,13 @@ out center tags;`;
     return { audioUrl, buffer, provider, cached: false };
   }
 
+  // AUTH (audit SEC-01, 28/08/2026): il COLPO DI CACHE resta aperto (un
+  // redirect all'MP3 già sintetizzato non costa nulla e serve al prefetch
+  // nativo, che NON manda il Bearer: AudioPrefetchManager.kt/.swift). La
+  // SINTESI (Azure/Google a nostre spese) richiede invece un Bearer valido:
+  // prima bastava un contatore anonimo per IP in memoria, azzerato a ogni
+  // cold start. Un nativo senza utente loggato riceve 401 e ripiega sul TTS
+  // di sistema, come già previsto dalla sua catena al trigger.
   app.post("/api/tts/smart", rateLimiter, async (req, res) => {
     try {
       // preloadOnly: il client chiede solo di scaldare la cache (warm-up del
@@ -19582,9 +20331,10 @@ out center tags;`;
         return res.redirect(cachedUrl);
       }
 
-      // Quota: per utente se c'è un Bearer valido, altrimenti per IP
-      // (contatore in memoria). Mai dallo userId del body.
-      const quota = await checkAndIncrementQuota(req, 'audioguide', { allowAnonymous: true });
+      // Cache miss = sintesi a pagamento: Bearer obbligatorio, tetto
+      // persistente per utente, poi la quota giornaliera (mai anonima).
+      if (!(await cancelloGenerazione(req, res))) return;
+      const quota = await checkAndIncrementQuota(req, 'audioguide');
       if (!quota.allowed) {
         return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
       }
@@ -19625,7 +20375,10 @@ out center tags;`;
       .replace(/'/g, "&apos;");
   }
 
-  app.post("/api/tts/azure", rateLimiter, async (req, res) => {
+  // AUTH (audit SEC-01): Azure/Google a nostre spese, senza cache né quota.
+  // Unico chiamante in src/: il test voci di ProfileScreen, che manda il
+  // Bearer via postForAudioBlob.
+  app.post("/api/tts/azure", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { text, voice = "it-IT-ElsaNeural" } = req.body;
       const key = process.env.AZURE_SPEECH_KEY;
@@ -19693,7 +20446,9 @@ out center tags;`;
     }
   });
 
-  app.post("/api/tts/google", rateLimiter, async (req, res) => {
+  // AUTH (audit SEC-01): provider Google a nostre spese, nessun chiamante in
+  // src/ (rotta storica): Bearer obbligatorio.
+  app.post("/api/tts/google", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { text, voice = "it-IT-Wavenet-A" } = req.body;
       const key = process.env.GOOGLE_TTS_API_KEY;
@@ -19765,7 +20520,8 @@ out center tags;`;
     }
   });
 
-  app.post("/api/guide-intro", rateLimiter, async (req, res) => {
+  // AUTH (audit SEC-01): callUniversalAi senza login, nessun chiamante in src/.
+  app.post("/api/guide-intro", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       // Prima moriva con 500 se GEMINI_API_KEY mancava (usava ai.models direttamente)
       // ed era SEMPRE Nicky in italiano. Ora passa da callUniversalAi (Groq/Agnes/
@@ -20481,6 +21237,10 @@ Usa SEMPRE E SOLO questo schema JSON:
         if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { obj = null; } }
         if (obj?.luoghi?.length) return res.json({ guide: obj, cached: true });
       }
+
+      // Audit SEC-01: `city` è testo libero → generazione Agnes solo con
+      // login; la mini-guida già in cache resta pubblica.
+      if (!(await cancelloGenerazione(req, res))) return;
 
       const bfLangRule = lang === 'it' ? '' : `
 LINGUA OBBLIGATORIA: scrivi TUTTI i testi in ${langName}. Le CHIAVI del JSON restano in italiano come da schema; i nomi propri dei luoghi restano nella forma usata sul posto o in quella più nota in ${langName}.`;
@@ -22535,7 +23295,10 @@ out body;`;
   });
 
   // API Catch-all (to prevent Vite from returning HTML for unmatched /api routes)
-  app.post("/api/poi/audioguide/stream", rateLimiter, async (req, res) => {
+  // AUTH (audit SEC-01): LLM (regenerateAudioguideText) + TTS senza login,
+  // nessun chiamante in src/ (rotta storica). Con requireAuth la quota non è
+  // più anonima.
+  app.post("/api/poi/audioguide/stream", rateLimiter, ...guardiaCostosa, async (req, res) => {
     try {
       const { poiId, poiName, lang = "it", mode = "nicky" } = req.body;
       if (!poiId || !poiName) {
@@ -22592,8 +23355,8 @@ out body;`;
       // La voce segue il PERSONAGGIO base (il registro non cambia voce).
       const voiceName = (VOICES[langLower] || VOICES.it)[guideChar.split('_')[0] === 'dante' ? 'dante' : 'nicky'];
 
-      // Stessa quota della rotta TTS (per utente con Bearer, per IP senza).
-      const quota = await checkAndIncrementQuota(req, 'audioguide', { allowAnonymous: true });
+      // Stessa quota della rotta TTS, per utente (il Bearer è obbligatorio).
+      const quota = await checkAndIncrementQuota(req, 'audioguide');
       if (!quota.allowed) return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
 
       // In-process: niente round-trip HTTP su se stessi (vedi synthesizeToCache).

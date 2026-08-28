@@ -55,21 +55,23 @@ export default function ProminentDisclosure({ isOpen, onAccept, onDecline, langu
               </ul>
            </div>
 
-           <p className="text-[10px] text-gray-500 font-bold text-center">
+           <p className="text-[12px] text-gray-600 font-bold text-center">
              {t('vr_b_pd_note')}
            </p>
         </div>
 
         <div className="flex flex-col gap-3">
           <button
+            type="button"
             onClick={onAccept}
-            className="w-full py-4 bg-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest transition-all shadow-lg active:scale-95"
+            className="w-full min-h-11 py-4 bg-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest transition-all shadow-lg active:scale-95"
           >
             {t('vr_b_pd_accept')}
           </button>
           <button
+            type="button"
             onClick={onDecline}
-            className="w-full py-3 text-gray-500 font-black text-xs uppercase tracking-widest hover:text-gray-600 transition-colors"
+            className="w-full min-h-11 py-3 text-gray-600 font-black text-xs uppercase tracking-widest hover:text-gray-700 transition-colors"
           >
             {t('vr_b_pd_decline')}
           </button>

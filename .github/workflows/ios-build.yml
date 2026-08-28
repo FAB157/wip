@@ -27,8 +27,14 @@ jobs:
         # inizializza RevenueCat su iOS e lo shop mostra "nessun pacchetto" —
         # acquisti in-app morti nell'IPA. Il secret va creato in
         # Settings → Secrets and variables → Actions del repo GitHub.
+        # VITE_CARTO_API_KEY: CARTO non serve più tile anonime (26/08/2026).
+        # Senza la chiave in fase di build (Vite la inlinea) ogni tile della
+        # mappa esce con il watermark "API KEY REQUIRED" — visto sull'IPA del
+        # 28/08/2026. Secret da creare come CARTO_API_KEY (chiave gratuita da
+        # carto.com/basemaps/apikey, è una chiave pubblica di client).
         env:
           VITE_REVENUECAT_IOS_KEY: ${{ secrets.REVENUECAT_IOS_KEY }}
+          VITE_CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
         run: npm run build
 
       - name: Sync Capacitor

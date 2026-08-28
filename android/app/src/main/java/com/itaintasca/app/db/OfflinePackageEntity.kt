@@ -7,7 +7,13 @@ import androidx.room.PrimaryKey
 /**
  * Pacchetto area per la modalità offline "essenziale": solo testi (POI, teaser,
  * audioguida completa), nessun file audio né immagine — la voce è il TTS di
- * sistema e la mappa è la vista radar. 1-3 MB per area da 50-100 km.
+ * sistema e la mappa è la vista radar.
+ *
+ * PESO REALE (misurato 23/08/2026): ~3,4 KB per POI, di cui il 70% è
+ * `audioText`. Col raggio predefinito di 50 km un'area urbana porta decine di
+ * migliaia di POI, cioè ~35 MB — un ordine di grandezza sopra "1-3 MB", che era
+ * la stima scritta qui prima e non è mai stata vera. Vedi la nota estesa in
+ * PackageDownloadManager.
  */
 @Entity(tableName = "offline_packages")
 data class OfflinePackageEntity(
@@ -33,9 +39,31 @@ data class OfflinePackageEntity(
      * Checkpoint della paginazione keyset (vedi PackageDownloadManager.runPages):
      * un download interrotto riparte da qui invece che da pagina 1. Azzerati a
      * download completato.
+     *
+     * ⚠️ SOLO IL DOWNLOAD PIENO LI SCRIVE (23/08/2026). Prima li scriveva anche
+     * il delta sync, e un delta fallito lasciava qui un cursore "dell'era
+     * delta": il download successivo lo riprendeva come se fosse un download
+     * pieno, ripartiva da metà catalogo, SALTAVA tutti i POI più vecchi e si
+     * dichiarava comunque `ready`. Perdita di dati silenziosa. Un delta
+     * interrotto ora riparte semplicemente da capo — costa poco, non perde
+     * niente (lastSyncAt si muove solo a delta completato).
      */
     val pendingCursorUpdated: String? = null,
-    val pendingCursorId: String? = null
+    val pendingCursorId: String? = null,
+    /**
+     * Millisecondi d'inizio del download PIENO che ha scritto il checkpoint qui
+     * sopra. Fa tre lavori insieme:
+     *  1. distingue un checkpoint da download pieno (valore != null) da uno
+     *     lasciato da una versione precedente, che poteva venire da un delta
+     *     (valore null): i checkpoint vecchi non si riprendono mai, si riparte
+     *     da pagina 1 — costa banda, non perde POI;
+     *  2. timbra le righe di offline_package_pois scritte dal run
+     *     (OfflinePackagePoiRef.syncedAt), così a fine download i riferimenti
+     *     NON riscritti — i POI usciti dall'area — si possono potare;
+     *  3. sopravvive al resume, quindi i due tronconi dello stesso download
+     *     portano lo stesso timbro.
+     */
+    val pendingRunStartedAt: Long? = null
 )
 
 /**
@@ -73,7 +101,29 @@ data class OfflinePoiEntity(
      */
     val footprint: String? = null,
     /** Indirizzo leggibile (via e civico), per la notifica e la voce. */
-    val address: String? = null
+    val address: String? = null,
+    /**
+     * PROVENIENZA della stringa qui sopra (shared_pois.address_source). Non è
+     * decorazione: 'strada_vicina' vuol dire «la strada con nome più vicina»,
+     * non l'indirizzo del luogo — una chiesa in mezzo ai campi non sta al
+     * civico di quella via — e per questo scarta anche il PUNTO qui sotto
+     * (RaggiFiducia.puntoIndirizzo).
+     */
+    val addressSource: String? = null,
+    /**
+     * IL PUNTO DELL'INDIRIZZO (23/08/2026, RPC area_bundle_pois estesa dalla
+     * migration 20260823180000_area_bundle_address_point.sql). È la casa più
+     * vicina al POI nel dump Nominatim: vicinanza MISURATA a pochi metri, non
+     * una geocodifica del testo. Vale quindi come punto d'ARRIVO fra l'ingresso
+     * e il centroide, e il trigger scatta a 30 m da lì invece di raddoppiare il
+     * raggio — offline esattamente come online.
+     * Nullable: i pacchetti già scaricati non lo portano e restano validi
+     * (Room usa il default), col comportamento identico a prima.
+     */
+    val addressPointLat: Double? = null,
+    val addressPointLon: Double? = null,
+    /** photon_casa_civico | photon_casa | … : qualità e provenienza del punto. */
+    val addressPointSource: String? = null
 )
 
 /** Un POI può appartenere a più pacchetti sovrapposti (aree che si intersecano). */
@@ -84,7 +134,23 @@ data class OfflinePoiEntity(
 )
 data class OfflinePackagePoiRef(
     val packageId: String,
-    val poiId: String
+    val poiId: String,
+    /**
+     * Timbro del run che ha (ri)scritto questo riferimento
+     * (OfflinePackageEntity.pendingRunStartedAt per il download pieno, l'ora
+     * corrente per il delta sync).
+     *
+     * PERCHE' ESISTE (23/08/2026): ri-scaricare la stessa area non cancellava
+     * mai i riferimenti vecchi. Un POI uscito dall'area (cancellato, nascosto,
+     * rinominato "Punto di interesse") restava agganciato al pacchetto per
+     * sempre, quindi non era mai orfano e `deleteOrphanPois` non lo vedeva:
+     * spazio occupato per sempre e un POI fantasma nel radar offline. A
+     * download pieno completato si potano i riferimenti con syncedAt più
+     * vecchio del timbro del run — cioè quelli che il server non ha ripetuto.
+     * Le righe migrate da schema precedente hanno 0 → potate al primo
+     * ri-download, che è esattamente il momento in cui vengono riscritte.
+     */
+    val syncedAt: Long = 0L
 )
 
 /**
@@ -102,14 +168,35 @@ data class OfflineSpendEntity(
 )
 
 /**
+ * I raggi del POI sono una MISURA e non un default? Lo sono quando il server ha
+ * avuto qualcosa di reale su cui misurarli: la porta (entrance_lat/lon) oppure
+ * il perimetro OSM. Senza né l'una né l'altro, alert/geofence valgono 150/50
+ * perché così li lascia il `coalesce` della RPC, e propagarli come se fossero
+ * misurati farebbe scattare i trigger su un cerchio inventato.
+ */
+private fun OfflinePoiEntity.hasCalibratedRadii(): Boolean =
+    (entranceLat != null && entranceLon != null) || !footprint.isNullOrBlank()
+
+/**
  * Adattatore verso la pipeline esistente (radar, geofence, receiver).
  *
  * Porta con sé ingresso, raggi calibrati e perimetro: prima passavano solo
  * nome e centroide, e offline il geofence lavorava a cerchi sul centro
  * dell'edificio anche per i POI che online hanno porta e perimetro.
- * I raggi vanno in PoiEntity SOLO con l'ingresso (stesso gate hasEntrance di
- * GeofenceManager): senza ingresso, 150/50 sono i default del server e non
- * una misura sul perimetro.
+ *
+ * IL NARRATORE resta "nicky" ed è una SCELTA (23/08/2026), non una
+ * dimenticanza: il TESTO dell'audioguida è unico, il personaggio scelto
+ * dall'utente cambia la VOCE — e offline la voce è la sintesi di sistema, che
+ * il timbro se lo prende già dalle prefs "guideCharacter"
+ * (GeofenceBroadcastReceiver.applyTtsGender). Non renderlo variabile qui: si
+ * scaricherebbe due volte lo stesso testo.
+ *
+ * I RAGGI (23/08/2026) si conservano con l'ingresso OPPURE col perimetro. Il
+ * gate valeva solo per l'ingresso, e un POI con perimetro OSM ma senza porta —
+ * un chiostro, un parco recintato — perdeva offline raggi MISURATI sul
+ * poligono reale e tornava ai 150/50 di default. Chi non ha né porta né
+ * perimetro resta null come prima: lì 150/50 sono davvero un default del
+ * server, non una misura, e PoiEntity/GeofenceManager devono poterlo sapere.
  */
 fun OfflinePoiEntity.toPoiEntity() = PoiEntity(
     id = id,
@@ -123,7 +210,18 @@ fun OfflinePoiEntity.toPoiEntity() = PoiEntity(
     isGem = isGem,
     isFromItinerary = false,
     teaserText = teaserText,
-    alertRadius = if (entranceLat != null && entranceLon != null) alertRadius else null,
-    geofenceRadius = if (entranceLat != null && entranceLon != null) arrivalRadius else null,
-    footprint = footprint
+    // Misurati sul poligono reale (porta o perimetro), non i default del server.
+    alertRadius = if (hasCalibratedRadii()) alertRadius else null,
+    geofenceRadius = if (hasCalibratedRadii()) arrivalRadius else null,
+    footprint = footprint,
+    // L'indirizzo, la sua provenienza e il suo PUNTO (23/08/2026): senza questi
+    // campi offline la scala di fiducia si fermava all'ingresso, e chi aveva
+    // solo l'indirizzo finiva al centroide col raggio raddoppiato — mentre lo
+    // stesso POI, online, scattava a 30 m dalla facciata. Null sui pacchetti
+    // scaricati prima: comportamento identico a prima.
+    address = address,
+    addressSource = addressSource,
+    addressPointLat = addressPointLat,
+    addressPointLon = addressPointLon,
+    addressPointSource = addressPointSource
 )

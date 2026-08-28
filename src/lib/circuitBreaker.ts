@@ -48,6 +48,17 @@ export class CircuitBreaker {
       if (isNetworkError(e)) {
         this.failureCount++;
         this.lastFailureTime = Date.now();
+        // All'apertura si registra l'errore VERO in system_errors: l'utente
+        // vede solo «pausa di sicurezza» (IPA del 28/08/2026, Carrara) e
+        // senza questa riga non c'è modo di sapere cosa ha fallito davvero.
+        if (this.failureCount === this.threshold) {
+          import('./errorLogger')
+            .then(({ logSystemError }) => logSystemError(
+              `Circuit breaker aperto: ${String((e as any)?.message || e).slice(0, 300)}`,
+              { level: 'warning', context: { type: 'circuit_breaker', failureCount: this.failureCount } },
+            ))
+            .catch(() => {});
+        }
       }
       throw e;
     }

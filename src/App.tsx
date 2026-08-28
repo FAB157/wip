@@ -19,9 +19,10 @@ import { locationService } from "./services/locationService";
 import { clearOrphanedAudioFiles } from "./lib/offlineStorage";
 import { FAVORITES_EVENT, getLocalFavorites, setLocalFavorites, toggleFavoritePoi, removeFavoritePoi, flushPendingFavSync } from "./lib/favorites";
 import { initOfflineBilling } from "./services/dayPassService";
+import { clearNativeUserContext, pushUserContextToNative } from "./plugins/ItaintaBackgroundPoi";
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
-import { getApiUrl } from "./lib/api";
+import { getApiUrl, invalidaTokenCache } from "./lib/api";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
 import { Headphones, MapPin, Loader2 } from "lucide-react";
@@ -314,6 +315,15 @@ export default function App() {
     return () => window.removeEventListener('wip-smart-navigate', handleSmartNav);
   }, []);
 
+  // Id SINTETICI delle tappe: "wipnav_<nome>" (indirizzo libero), "t<g>_<i>"
+  // (tappe AI normalizzate in processItineraryStream), "lib_…" (libreria),
+  // "rain_…" (garanzia pioggia), "viator_/gyg_/tm_/tq_" (esperienze). Non
+  // sono POI di shared_pois: aprirne la scheda mostrerebbe un POI inesistente.
+  const isSyntheticStopId = (id: unknown): boolean => {
+    const s = String(id ?? '');
+    return !s || /^(wipnav_|lib_|rain_|viator_|gyg_|tm_|tq_|t\d+_)/.test(s);
+  };
+
   // ARRIVO DEL WIP NAV → AUDIOGUIDA. Sul web `wip-nav-arrived` aveva un solo
   // ascoltatore (PlanScreen, che marca la tappa visitata): la promessa "arrivi
   // e la guida parte" reggeva solo sul nativo. Qui, se la destinazione era un
@@ -323,7 +333,7 @@ export default function App() {
   useEffect(() => {
     const handleNavArrived = (e: any) => {
       const poiId = e?.detail?.poiId;
-      if (!poiId || String(poiId).startsWith('wipnav_')) return;
+      if (!poiId || isSyntheticStopId(poiId)) return;
       // Stesso dedupe e stesso cooldown degli altri dispatcher (trigger web,
       // nativo, giro): senza, il trigger di prossimita' rifaceva parlare il
       // POI appena raccontato all'arrivo, e un doppio 'wip-nav-arrived' lo
@@ -340,6 +350,33 @@ export default function App() {
     window.addEventListener('wip-nav-arrived', handleNavArrived);
     return () => window.removeEventListener('wip-nav-arrived', handleNavArrived);
   }, []);
+
+  // 401 {error:'auth_required'} dal server (audioguide, enrich, tts…): la
+  // sessione e' scaduta o non c'e'. Si prova un refresh; se non torna
+  // nessuna sessione si azzera lo stato → compare LoginScreen (l'app e'
+  // gia' tutta dietro il login), invece di uno spinner senza spiegazione.
+  useEffect(() => {
+    let inCorso = false;
+    const onAuthRequired = async () => {
+      if (inCorso) return;
+      inCorso = true;
+      try {
+        invalidaTokenCache();
+        const { data } = await supabase.auth.refreshSession();
+        if (!data?.session) {
+          notify(getTranslation('auth_richiesta', language));
+          setSession(null);
+        }
+      } catch {
+        notify(getTranslation('auth_richiesta', language));
+        setSession(null);
+      } finally {
+        inCorso = false;
+      }
+    };
+    window.addEventListener('wip-auth-required', onAuthRequired);
+    return () => window.removeEventListener('wip-auth-required', onAuthRequired);
+  }, [language]);
 
   // Deep link "?poi=<id>" (condivisione schede Vision, link dal pannello
   // admin): carica il POI da shared_pois, apre la mappa e lo mette a fuoco;
@@ -477,6 +514,12 @@ export default function App() {
       localStorage.setItem('wip_audioguide_active', 'false');
     } catch { /* storage non disponibile */ }
 
+    // Anche il NATIVO deve dimenticare l'utente (SEC-02, 28/08/2026): fino a
+    // oggi userId, token e snapshot del wallet restavano nelle prefs del
+    // servizio, e l'account successivo sullo stesso telefono ereditava lo
+    // storico ascolti e il tetto di spesa offline del precedente.
+    clearNativeUserContext().catch(() => {});
+
     wipeLocalUserData();
   }, [language]);
 
@@ -542,6 +585,18 @@ export default function App() {
 
       setSession(s);
       if (event === 'PASSWORD_RECOVERY') setIsRecovering(true);
+
+      // Token → nativo (SEC-03). Prima arrivava solo dalla riconciliazione
+      // offline di dayPassService (avvio/online/crediti): dopo un'ora il JWT
+      // scadeva e il servizio in background scriveva lo storico con un
+      // token morto. Ora ogni SIGNED_IN e ogni TOKEN_REFRESHED lo rispinge.
+      // La cache del Bearer di apiFetch non deve servire un token vecchio.
+      invalidaTokenCache();
+      if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && s?.user?.id) {
+        pushUserContextToNative({ userId: s.user.id, accessToken: s.access_token }).catch(() => {});
+      } else if (event === 'SIGNED_OUT') {
+        clearNativeUserContext().catch(() => {});
+      }
     });
     
     // Check for deep links (e.g. ?pin=123456)
@@ -1007,13 +1062,11 @@ export default function App() {
             <span className="flex items-center gap-1.5 min-w-0">
               <MapPin className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">
-                {language === 'IT'
-                  ? 'Posizione disattivata: le audioguide automatiche non partono.'
-                  : 'Location off: automatic audio guides are disabled.'}
+                {getTranslation('loc_denied_banner', language)}
               </span>
             </span>
             <button onClick={() => setShowLocDeniedBanner(false)} className="shrink-0 underline uppercase tracking-wide">
-              {language === 'IT' ? 'Chiudi' : 'Dismiss'}
+              {getTranslation('loc_denied_dismiss', language)}
             </button>
           </div>
         )}
@@ -1022,9 +1075,14 @@ export default function App() {
         <div className={`flex-1 w-full overflow-hidden ${activeTab === "map" ? "h-full relative block" : "absolute inset-0 invisible opacity-0 pointer-events-none -z-10"}`}>
           <MapArea selectedCategories={selectedCategories} onSelectPoi={handleSelectPoi} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} activeTab={activeTab} isRadarMode={isRadarMode} radarPois={radarPois} />
 
-          {/* PULSANTE RADAR CUFFIE */}
+          {/* PULSANTE RADAR CUFFIE — sopra la tab bar E la safe area inferiore
+              (iPhone con home indicator, Android gesture nav): con 100px fissi
+              il bottone finiva sotto la barra di sistema (UX-12).
+              A DESTRA (28/08/2026): in basso a sinistra copriva il tasto dei
+              livelli della mappa. A destra c'è solo la bussola (bottom-16):
+              si sta sopra, con la fila che cresce verso sinistra. */}
           {isAudioGuideActive && activeTab === "map" && (
-            <div className="absolute left-4 z-[999] flex items-center gap-2" style={{ bottom: "100px" }}>
+            <div className="absolute right-4 z-[999] flex flex-row-reverse items-center gap-2" style={{ bottom: "calc(9.75rem + env(safe-area-inset-bottom, 0px))" }}>
               <DayPassBadge />
               {isFollowingItinerary && (
                 <motion.div

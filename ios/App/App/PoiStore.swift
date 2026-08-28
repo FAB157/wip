@@ -35,6 +35,10 @@ final class PoiStore {
     private let offlinePoisFile: URL
     private let offlinePoisDbFile: URL
     private let refsFile: URL
+    /// (ITI-06) Timbro di run per ogni riferimento pacchetto→POI, file
+    /// SEPARATO da offline_refs.json: cambiare il tipo di `packageRefs` avrebbe
+    /// reso illeggibili (quarantena) i riferimenti già salvati.
+    private let refStampsFile: URL
     private let ledgerFile: URL
 
     // Cache in memoria (caricata pigramente, scritta su disco a ogni mutazione;
@@ -50,6 +54,11 @@ final class PoiStore {
     private var offlinePois: [String: OfflinePoi] = [:]
     /// packageId → set di poiId (offline_package_pois)
     private var packageRefs: [String: Set<String>] = [:]
+    /// packageId → (poiId → timbro epoch ms del run che lo ha scritto per
+    /// ultimo). Mirror della colonna `runStartedAt` di OfflinePackagePoiRef
+    /// Android: a download pieno completato, i riferimenti col timbro più
+    /// vecchio del run sono POI usciti dall'area e si potano (pruneStaleRefs).
+    private var packageRefStamps: [String: [String: TimeInterval]] = [:]
     private var spendLedger: [SpendEntry] = []
     private var loaded = false
 
@@ -92,6 +101,7 @@ final class PoiStore {
         offlinePoisFile = baseDir.appendingPathComponent("offline_pois.json")
         offlinePoisDbFile = baseDir.appendingPathComponent("offline_pois.sqlite")
         refsFile = baseDir.appendingPathComponent("offline_refs.json")
+        refStampsFile = baseDir.appendingPathComponent("offline_ref_stamps.json")
         ledgerFile = baseDir.appendingPathComponent("spend_ledger.json")
 
         // Rete di sicurezza per la scrittura differita dei POI offline: se
@@ -117,6 +127,7 @@ final class PoiStore {
         triggerStates = readFile(triggerFile) ?? [:]
         packages = readFile(packagesFile) ?? [:]
         packageRefs = readFile(refsFile) ?? [:]
+        packageRefStamps = readFile(refStampsFile) ?? [:]
         spendLedger = readFile(ledgerFile) ?? []
         openOfflineDbLocked()
         if !sqliteReady {
@@ -588,6 +599,7 @@ final class PoiStore {
     private func writeOfflineFilesLocked() {
         if !sqliteReady { writeFile(offlinePois, to: offlinePoisFile) }
         writeFile(packageRefs, to: refsFile)
+        writeFile(packageRefStamps, to: refStampsFile)
         offlinePendingPages = 0
     }
 
@@ -608,7 +620,11 @@ final class PoiStore {
     /// (file temporaneo + rename), quindi un'uscita anomala non può lasciare un
     /// JSON troncato: si trova o la versione vecchia o quella nuova, e la
     /// quarantena dei file corrotti resta l'ultima rete di sicurezza.
-    func upsertOfflinePois(_ pois: [OfflinePoi], packageId: String) {
+    /// `runStamp` (ITI-06): timbro del run che scrive la pagina — quello del
+    /// download pieno (serve alla potatura finale), l'ora corrente per il
+    /// delta, che non pota e non deve farsi potare. Default = ora, così i
+    /// chiamanti che non fanno potatura restano invariati.
+    func upsertOfflinePois(_ pois: [OfflinePoi], packageId: String, runStamp: TimeInterval = nowMs()) {
         queue.sync {
             loadIfNeeded()
             if sqliteReady {
@@ -624,6 +640,9 @@ final class PoiStore {
             var refs = packageRefs[packageId] ?? []
             refs.formUnion(pois.map { $0.id })
             packageRefs[packageId] = refs
+            var timbri = packageRefStamps[packageId] ?? [:]
+            for p in pois { timbri[p.id] = runStamp }
+            packageRefStamps[packageId] = timbri
             offlinePendingPages += 1
             guard offlinePendingPages >= Self.offlineFlushEveryPages else { return }
             // Il contatore va azzerato SUBITO (dentro il lock) altrimenti le
@@ -658,6 +677,7 @@ final class PoiStore {
                 for (pkgId, var refs) in packageRefs where refs.contains(id) {
                     refs.remove(id)
                     packageRefs[pkgId] = refs
+                    packageRefStamps[pkgId]?.removeValue(forKey: id)
                 }
             }
             // Scrittura immediata (non differita): una cancellazione deve
@@ -666,10 +686,59 @@ final class PoiStore {
         }
     }
 
+    /// (28/08/2026, ITI-06) Potatura a DOWNLOAD PIENO COMPLETATO, port di
+    /// OfflineDao.pruneStaleRefs + deleteOrphanPois: i riferimenti di questo
+    /// pacchetto che il run non ha riscritto (timbro più vecchio di
+    /// `runStartedAt`, o assente) sono POI usciti dall'area. Prima restavano
+    /// agganciati per sempre — `formUnion` sapeva solo aggiungere — quindi non
+    /// diventavano mai orfani: spazio occupato per sempre e fantasmi nel radar
+    /// offline. Mai a metà strada: butterebbe POI ancora buoni.
+    func pruneStaleRefs(packageId: String, runStartedAt: TimeInterval) {
+        queue.sync {
+            loadIfNeeded()
+            guard let refs = packageRefs[packageId] else { return }
+            let timbri = packageRefStamps[packageId] ?? [:]
+            let stantii = refs.filter { (timbri[$0] ?? 0) < runStartedAt }
+            guard !stantii.isEmpty else { return }
+            packageRefs[packageId] = refs.subtracting(stantii)
+            var nuoviTimbri = timbri
+            for id in stantii { nuoviTimbri.removeValue(forKey: id) }
+            packageRefStamps[packageId] = nuoviTimbri
+            // Orfani: POI che nessun altro pacchetto referenzia più.
+            let ancoraReferenziati = Set(packageRefs.values.flatMap { $0 })
+            let orfani = stantii.filter { !ancoraReferenziati.contains($0) }
+            if sqliteReady {
+                deleteOfflineLocked(ids: Array(orfani))
+            } else {
+                for poiId in orfani { offlinePois.removeValue(forKey: poiId) }
+            }
+            print("[PoiStore] potatura \(packageId): \(stantii.count) riferimenti stantii, \(orfani.count) POI orfani rimossi")
+            writeOfflineFilesLocked()
+        }
+    }
+
+    /// (ITI-06) Segna «usato adesso» i pacchetti che contengono il POI: è la
+    /// base dell'eviction LRU. Al più una scrittura l'ora per pacchetto, così
+    /// una passeggiata non riscrive il file dei pacchetti a ogni POI. Da
+    /// chiamare tenendo `queue`.
+    private func touchPackagesForPoiLocked(_ poiId: String) {
+        let ora = nowMs()
+        var cambiato = false
+        for (pkgId, refs) in packageRefs where refs.contains(poiId) {
+            guard var pkg = packages[pkgId] else { continue }
+            if let ultimo = pkg.lastUsedAt, ora - ultimo < 60 * 60 * 1000 { continue }
+            pkg.lastUsedAt = ora
+            packages[pkgId] = pkg
+            cambiato = true
+        }
+        if cambiato { writeFile(packages, to: packagesFile) }
+    }
+
     func deletePackage(_ id: String) {
         queue.sync {
             loadIfNeeded()
             let refs = packageRefs.removeValue(forKey: id) ?? []
+            packageRefStamps.removeValue(forKey: id)
             packages.removeValue(forKey: id)
             // deleteOrphanPois: rimuove i POI non più referenziati da alcun pacchetto
             let stillReferenced = Set(packageRefs.values.flatMap { $0 })
@@ -730,7 +799,10 @@ final class PoiStore {
                 ? selectOfflineTextLocked(id: poiId, column: "audio_text")
                 : offlinePois[poiId]?.audioText
             guard let t = text, !t.isEmpty else { return nil }
-            return offlineLangConflictsLocked(poiId, lang: lang) ? nil : t
+            guard !offlineLangConflictsLocked(poiId, lang: lang) else { return nil }
+            // Il pacchetto è servito davvero: conta come uso per l'LRU.
+            touchPackagesForPoiLocked(poiId)
+            return t
         }
     }
 

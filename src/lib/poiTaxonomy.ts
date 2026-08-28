@@ -27,6 +27,9 @@ export function subCategoryToFilterId(subCat?: string | null): string {
     "polizia": "polizia", "police": "polizia",
     "parco giochi": "parco_giochi", "playground": "parco_giochi",
     "parco a tema": "parco_divertimenti", "theme_park": "parco_divertimenti",
+    // Montagne russe (import 27/08/2026 da Wikidata/OSM): stanno nel sotto-chip
+    // dei parchi divertimento, non hanno un chip proprio.
+    "roller_coaster": "parco_divertimenti", "montagne russe": "parco_divertimenti",
     "acquario": "acquario", "aquarium": "acquario",
     "zoo": "zoo",
     "gelateria": "gelateria", "ice_cream": "gelateria",
@@ -164,7 +167,10 @@ export const SUBS_BY_MACRO: Record<string, string[]> = {
   // e un `const` letto prima della sua riga fa esplodere il modulo.)
   natura: ["spiagge", "vette", "acque", "grotte", "parchi"],
   locali: ["ristorante", "pizzeria", "pesce", "carne", "sushi", "vegetariano", "glutenfree", "gluten_free_only", "gluten_free_options", "bar", "gelateria"],
-  utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia"],
+  // ev_charging (27/08/2026): colonnine di ricarica EV da OpenChargeMap
+  // (CC BY 4.0). Stesso schema delle altre utilita': `category` sul DB e'
+  // gia' il valore specifico ('ev_charging'), non un bucket generico.
+  utilita: ["farmacia", "ospedale", "mercato", "fontanelle", "stazione_ferroviaria", "metropolitana", "taxi", "casello_autostradale", "polizia", "ev_charging"],
   famiglie: ["parco_giochi", "parco_divertimenti", "acquario", "zoo"],
   // WIP Community: i POI nati dalle foto Vision approvate. Nessun sub-chip:
   // il tipo reale (chiesa, statua...) vive in poi_type/subCategory.
@@ -235,8 +241,8 @@ export const PANORAMI_TYPES = [
 ];
 export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
 export const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
-export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park"];
-export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking"];
+export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park", "roller_coaster"];
+export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking", "ev_charging", "charging_station"];
 
 /**
  * ENOGASTRONOMIA — dal `poi_type` importato da OSM al sub-chip.
@@ -262,6 +268,38 @@ export const ENO_SUB_BY_TYPE: Record<string, string> = {
   panificio: "botteghe_gusto", macelleria: "botteghe_gusto", pescheria: "botteghe_gusto",
   ortofrutta: "botteghe_gusto", dolciumi: "botteghe_gusto",
   strada_del_vino: "strade_vino",
+};
+
+/**
+ * TURISMO DELLO SHOPPING (28/08/2026) — dal `poi_type` importato da OSM/
+ * Wikidata (`scratch/importa-shopping.mjs`) o dal catalogo curato degli
+ * outlet (`src/lib/outletCatalog.ts`) all'id del sub-chip. Stesso schema di
+ * ENO_SUB_BY_TYPE: se si aggiunge una famiglia all'harvest va aggiunta anche qui.
+ */
+export const SHOPPING_SUB_BY_TYPE: Record<string, string> = {
+  shopping_street: "vie_shopping", historic_arcade: "vie_shopping",
+  department_store: "grandi_magazzini",
+  shopping_mall: "mall",
+  outlet_village: "outlet",
+  souk_bazaar: "souk",
+  duty_free_zone: "duty_free",
+};
+
+/**
+ * TURISMO DI LUSSO (28/08/2026) — dal `poi_type` del catalogo curato
+ * (`src/lib/luxuryCatalog.ts`, popolato a mano: l'universo del lusso vero è
+ * piccolo, non ha senso un harvest di massa) all'id del sub-chip.
+ */
+export const LUSSO_SUB_BY_TYPE: Record<string, string> = {
+  palace_hotel: "hotel_lusso", hotel_5_stelle: "hotel_lusso",
+  chiave_michelin: "hotel_lusso", resort_esclusivo: "hotel_lusso",
+  ryokan_lusso: "hotel_lusso", isola_privata: "hotel_lusso",
+  ristorante_stellato: "ristoranti_stellati",
+  marina_yacht: "marine_yacht",
+  club_esclusivo: "club_esclusivi",
+  treno_lusso_storico: "treni_storici",
+  stazione_sci_lusso: "sci_lusso",
+  noleggio_yacht: "noleggio_lusso", jet_privato: "noleggio_lusso",
 };
 
 /**
@@ -349,6 +387,16 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // usano per scegliere l'icona.
   if (raw === "enogastronomia") {
     return { macro: null, subId: ENO_SUB_BY_TYPE[sub] || ENO_SUB_BY_TYPE[subCanonical] || "" };
+  }
+
+  // TURISMO DELLO SHOPPING e TURISMO DI LUSSO (28/08/2026) — stesso schema
+  // di enogastronomia: macro null, layer a sé nel pannello ⓘ, fuori dalla
+  // mappa turistica normale finché l'utente non accende il layer.
+  if (raw === "shopping") {
+    return { macro: null, subId: SHOPPING_SUB_BY_TYPE[sub] || SHOPPING_SUB_BY_TYPE[subCanonical] || "" };
+  }
+  if (raw === "lusso") {
+    return { macro: null, subId: LUSSO_SUB_BY_TYPE[sub] || LUSSO_SUB_BY_TYPE[subCanonical] || "" };
   }
 
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,

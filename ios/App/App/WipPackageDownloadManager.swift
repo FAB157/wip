@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /**
  * Port iOS di offline/PackageDownloadManager.kt: download e delta-sync dei
@@ -7,12 +8,32 @@ import Foundation
  * (ogni 10 pagine, vedi PoiStore.upsertOfflinePois) con flush esplicito a fine
  * download e su errore; tombstone per i POI cancellati. Il progresso arriva al JS con l'evento
  * 'offlinePackageProgress' {packageId, done, total, phase}.
+ *
+ * (28/08/2026, ITI-06) Allineato ad Android su quattro punti che qui
+ * mancavano del tutto:
+ *  1. CHECKPOINT: il download pieno persiste il cursore keyset a ogni pagina
+ *     (OfflinePackage.pendingCursor*/pendingRunStartedAt) e il tentativo
+ *     successivo riparte da lì invece che da pagina 1. Solo il download pieno,
+ *     mai il delta: un cursore dell'era delta ripreso da un download pieno
+ *     saltava in silenzio tutti i POI più vecchi.
+ *  2. TEMPO IN BACKGROUND: il download è avvolto in un
+ *     UIApplication.beginBackgroundTask, così chi preme "Scarica" e mette il
+ *     telefono in tasca non trova il pacchetto "error" al ritorno.
+ *  3. BUDGET DI STORAGE: 50 MB liberi minimi sul dispositivo e tetto di 2 GB
+ *     per i pacchetti, con eviction LRU (lastUsedAt) del meno usato.
+ *  4. POTATURA: a download pieno completato i POI usciti dall'area perdono il
+ *     riferimento (PoiStore.pruneStaleRefs) e, se orfani, il posto su disco.
  */
 final class WipPackageDownloadManager {
 
-    static let bundleUrl = "https://wip.guide/api/area/bundle"
+    static let bundleUrl = "\(WipApi.base)/api/area/bundle"
     static let pageSize = 500
     static let eventProgress = "offlinePackageProgress"
+    /// Tetto complessivo dei pacchetti offline (Android: MAX_OFFLINE_STORAGE_MB).
+    static let maxOfflineStorageBytes: Int64 = 2048 * 1024 * 1024
+    /// Spazio libero minimo sul dispositivo prima di iniziare (Android:
+    /// MIN_FREE_DEVICE_BYTES).
+    static let minFreeDeviceBytes: Int64 = 50 * 1024 * 1024
 
     /// Placeholder generici del vecchio import CSV/OSM (nessun contenuto reale):
     /// mirror ESATTO dell'IN-list di public.is_generic_poi_name (migration
@@ -59,29 +80,137 @@ final class WipPackageDownloadManager {
         session = URLSession(configuration: config)
     }
 
+    // MARK: - Tempo di esecuzione in background
+
+    /// Un beginBackgroundTask per download, chiuso UNA sola volta (fine,
+    /// errore o scadenza concessa dall'OS: qualunque arrivi prima). Non serve
+    /// una URLSession background: le pagine sono piccole e sequenziali, e il
+    /// checkpoint per pagina copre il caso in cui l'OS revochi il tempo.
+    private final class BackgroundTaskHandle {
+        /// Stato toccato SOLO sul main: begin/end sono serializzati lì, così
+        /// non serve un lock e `UIApplication.shared` resta sul suo thread.
+        private var id: UIBackgroundTaskIdentifier = .invalid
+        private var chiuso = false
+
+        init(name: String) {
+            DispatchQueue.main.async {
+                guard !self.chiuso else { return }
+                // Alla scadenza si chiude e basta: le richieste in corso
+                // verranno ignorate al completamento, e la pagina già scritta
+                // resta (checkpoint).
+                self.id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+                    self?.end()
+                }
+            }
+        }
+
+        func end() {
+            DispatchQueue.main.async {
+                self.chiuso = true
+                guard self.id != .invalid else { return }
+                UIApplication.shared.endBackgroundTask(self.id)
+                self.id = .invalid
+            }
+        }
+    }
+
+    // MARK: - API
+
     func downloadPackage(
         id: String, name: String, lat: Double, lon: Double,
         radiusKm: Double, language: String,
         completion: @escaping (Result<OfflinePackage, Error>) -> Void
     ) {
-        store.upsertPackage(OfflinePackage(
+        let existing = store.getPackage(id)
+
+        // Resume: un tentativo precedente interrotto (status "downloading" per
+        // crash/kill, o "error" per rete caduta) ha già persistito il cursore
+        // keyset raggiunto — si riparte da lì invece che da pagina 1. Serve
+        // ANCHE la firma del run (pendingRunStartedAt): un checkpoint senza
+        // firma non si riprende, si riparte da pagina 1, che costa banda e non
+        // perde niente. Mirror di PackageDownloadManager.kt::downloadPackage.
+        let isResume: Bool
+        if let e = existing {
+            isResume = (e.status == "downloading" || e.status == "error")
+                && !(e.pendingCursorUpdated ?? "").isEmpty
+                && e.pendingRunStartedAt != nil
+        } else {
+            isResume = false
+        }
+        // Timbro del run: i due tronconi dello stesso download devono portare
+        // lo stesso timbro, altrimenti la potatura finale butterebbe la prima
+        // metà.
+        let runStartedAt: TimeInterval = (isResume ? existing?.pendingRunStartedAt : nil) ?? nowMs()
+
+        if let errore = ensureStorageBudget(newPackageId: id) {
+            // Lo stato del pacchetto (se esisteva) resta com'era: non si è
+            // toccato nulla.
+            onProgress?(id, 0, 0, "error")
+            completion(.failure(errore))
+            return
+        }
+
+        var pkg = existing ?? OfflinePackage(
             id: id, name: name, centerLat: lat, centerLon: lon,
             radiusKm: radiusKm, language: language, poiCount: 0, sizeBytes: 0,
             downloadedAt: nowMs(), lastSyncAt: nil, status: "downloading"
-        ))
+        )
+        pkg.name = name
+        pkg.centerLat = lat
+        pkg.centerLon = lon
+        pkg.radiusKm = radiusKm
+        pkg.language = language
+        pkg.status = "downloading"
+        pkg.lastUsedAt = nowMs()
+        pkg.pendingRunStartedAt = runStartedAt
+        if !isResume {
+            // Fuori dal resume si riparte da pagina 1: qualunque checkpoint
+            // vecchio va buttato, non ereditato; i byte ripartono da zero.
+            pkg.pendingCursorUpdated = nil
+            pkg.pendingCursorId = nil
+            pkg.sizeBytes = 0
+        }
+        store.upsertPackage(pkg)
+
+        var state = PageState(runStartedAt: runStartedAt)
+        if isResume, let e = existing {
+            state.cursorUpdated = e.pendingCursorUpdated
+            state.cursorId = e.pendingCursorId
+            // I byte ripartono dal cumulativo del troncone precedente.
+            state.bytes = e.sizeBytes
+            // Base del prossimo delta: quella del PRIMO troncone. Usare il
+            // generatedAt del troncone finale perderebbe per sempre ciò che è
+            // cambiato durante l'interruzione sotto il cursore.
+            state.generatedAt = e.lastSyncAt
+        }
         runPages(id: id, name: name, lat: lat, lon: lon, radiusKm: radiusKm,
-                 language: language, since: nil, completion: completion)
+                 language: language, since: nil, state: state, completion: completion)
     }
 
     /// Delta sync: solo POI modificati dopo lastSyncAt + tombstone.
+    ///
+    /// Se il pacchetto ha un download pieno interrotto a metà (checkpoint
+    /// firmato), il delta non ha senso — mancano ancora POI del primo giro:
+    /// si riprende quel download invece di chiedere un delta su una base
+    /// incompleta.
     func syncPackage(id: String, completion: @escaping (Result<OfflinePackage, Error>) -> Void) {
         guard let pkg = store.getPackage(id) else {
             completion(.failure(NSError(domain: "wip", code: 404, userInfo: [NSLocalizedDescriptionKey: "Package not found"])))
             return
         }
+        if !(pkg.pendingCursorUpdated ?? "").isEmpty, pkg.pendingRunStartedAt != nil {
+            NSLog("[WIP] pacchetto \(id): download pieno interrotto, lo riprendo invece del delta")
+            downloadPackage(id: pkg.id, name: pkg.name, lat: pkg.centerLat, lon: pkg.centerLon,
+                            radiusKm: pkg.radiusKm, language: pkg.language, completion: completion)
+            return
+        }
+        var aggiornato = pkg
+        aggiornato.lastUsedAt = nowMs()
+        store.upsertPackage(aggiornato)
         runPages(id: pkg.id, name: pkg.name, lat: pkg.centerLat, lon: pkg.centerLon,
                  radiusKm: pkg.radiusKm, language: pkg.language,
-                 since: pkg.lastSyncAt, completion: completion)
+                 since: pkg.lastSyncAt, state: PageState(runStartedAt: nowMs()),
+                 completion: completion)
     }
 
     func deletePackage(id: String) {
@@ -118,24 +247,81 @@ final class WipPackageDownloadManager {
         }
     }
 
+    // MARK: - Budget di storage (port di ensureStorageBudget Android)
+
+    /// Se lo spazio occupato dai pacchetti supera il tetto, libera evictando i
+    /// meno usati di recente (LRU su lastUsedAt, fallback downloadedAt per i
+    /// pacchetti salvati prima di questo campo) finché non si scende sotto il
+    /// tetto o non resta che il pacchetto in corso — quello non si evict mai,
+    /// è ciò che l'utente sta chiedendo adesso. L'occupato COMPRENDE il
+    /// pacchetto che si sta (ri)scaricando. Poi, se lo spazio libero reale sul
+    /// dispositivo è sotto la soglia, restituisce l'errore invece di lasciare
+    /// che il download riempia il disco.
+    private func ensureStorageBudget(newPackageId: String) -> Error? {
+        let tutti = store.allPackages()
+        var occupati = tutti.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        let candidati = tutti
+            .filter { $0.id != newPackageId }
+            .sorted { ($0.lastUsedAt ?? $0.downloadedAt) < ($1.lastUsedAt ?? $1.downloadedAt) }
+        for lru in candidati {
+            if occupati <= Self.maxOfflineStorageBytes { break }
+            NSLog("[WIP] tetto pacchetti offline superato: eviction LRU di \(lru.id) (\(lru.sizeBytes) byte, ultimo uso \(lru.lastUsedAt ?? lru.downloadedAt))")
+            store.deletePackage(lru.id)
+            occupati -= lru.sizeBytes
+        }
+
+        if let liberi = Self.spazioLiberoBytes(), liberi < Self.minFreeDeviceBytes {
+            let mb = liberi / (1024 * 1024)
+            return NSError(domain: "wip", code: 507, userInfo: [
+                NSLocalizedDescriptionKey: "Spazio insufficiente sul dispositivo per il pacchetto offline (\(mb) MB liberi, anche dopo aver rimosso i pacchetti meno usati): libera spazio sul telefono e riprova."
+            ])
+        }
+        return nil
+    }
+
+    /// Spazio che iOS è disposto a concedere a dati importanti per l'utente
+    /// (comprende ciò che il sistema può liberare da solo, cache comprese).
+    /// nil se la lettura fallisce: nel dubbio non si blocca il download.
+    private static func spazioLiberoBytes() -> Int64? {
+        let url = URL(fileURLWithPath: NSHomeDirectory())
+        guard let valori = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]) else {
+            return nil
+        }
+        return valori.volumeAvailableCapacityForImportantUsage
+    }
+
     // MARK: - Paginazione
 
     private struct PageState {
+        /// Timbro del run (epoch ms): firma del checkpoint e dei riferimenti
+        /// scritti da questo download pieno.
+        let runStartedAt: TimeInterval
         var cursorUpdated: String?
         var cursorId: String?
         var generatedAt: String?
         var total = 0
         var received = 0
         var bytes: Int64 = 0
+        /// Il run pieno è stato "aperto" (firma + base delta scritte alla
+        /// prima pagina, come OfflineDao.startFullDownloadRun).
+        var runAperto = false
+        var bgTask: BackgroundTaskHandle?
+
+        init(runStartedAt: TimeInterval) {
+            self.runStartedAt = runStartedAt
+        }
     }
 
     private func runPages(
         id: String, name: String, lat: Double, lon: Double,
         radiusKm: Double, language: String, since: String?,
+        state: PageState,
         completion: @escaping (Result<OfflinePackage, Error>) -> Void
     ) {
+        var iniziale = state
+        iniziale.bgTask = BackgroundTaskHandle(name: "wip-offline-\(id)")
         fetchPage(id: id, name: name, lat: lat, lon: lon, radiusKm: radiusKm,
-                  language: language, since: since, state: PageState(), completion: completion)
+                  language: language, since: since, state: iniziale, completion: completion)
     }
 
     private func fetchPage(
@@ -193,6 +379,18 @@ final class WipPackageDownloadManager {
             if newState.generatedAt == nil { newState.generatedAt = meta["generatedAt"] as? String }
             newState.total = meta["totalCount"] as? Int ?? newState.total
 
+            // Apertura del run pieno: firma + base del prossimo delta, scritte
+            // SUBITO alla prima pagina (come OfflineDao.startFullDownloadRun).
+            // Sul resume `generatedAt` è già quello del primo troncone.
+            if since == nil && !newState.runAperto {
+                newState.runAperto = true
+                if var pkg = self.store.getPackage(id) {
+                    pkg.pendingRunStartedAt = newState.runStartedAt
+                    pkg.lastSyncAt = newState.generatedAt ?? pkg.lastSyncAt
+                    self.store.upsertPackage(pkg)
+                }
+            }
+
             // Tombstone: POI cancellati sul server → via anche dal locale
             if let tombs = json["tombstones"] as? [String], !tombs.isEmpty {
                 self.store.deleteOfflinePois(ids: tombs)
@@ -235,7 +433,11 @@ final class WipPackageDownloadManager {
                 ))
             }
             if !pois.isEmpty {
-                self.store.upsertOfflinePois(pois, packageId: id)
+                // Il timbro: quello del run per il download pieno (serve alla
+                // potatura finale), l'ora corrente per il delta — che non
+                // pota niente e non deve farsi potare.
+                let timbro = since == nil ? newState.runStartedAt : nowMs()
+                self.store.upsertOfflinePois(pois, packageId: id, runStamp: timbro)
             }
             newState.received += pois.count
             self.onProgress?(id, newState.received, newState.total, "downloading")
@@ -243,6 +445,18 @@ final class WipPackageDownloadManager {
             let next = json["nextCursor"] as? [String: Any]
             newState.cursorUpdated = next?["cursorUpdated"] as? String
             newState.cursorId = next?["cursorId"] as? String
+
+            // CHECKPOINT (solo download pieno): il cursore raggiunto e i byte
+            // cumulativi vanno su disco a ogni pagina, così un kill a metà
+            // riprende da qui e il tetto di storage vede anche i pacchetti
+            // interrotti.
+            if since == nil, var pkg = self.store.getPackage(id) {
+                pkg.pendingCursorUpdated = newState.cursorUpdated
+                pkg.pendingCursorId = newState.cursorId
+                pkg.pendingRunStartedAt = newState.runStartedAt
+                pkg.sizeBytes = newState.bytes
+                self.store.upsertPackage(pkg)
+            }
 
             if let cu = newState.cursorUpdated, !cu.isEmpty {
                 self.fetchPage(id: id, name: name, lat: lat, lon: lon,
@@ -266,11 +480,19 @@ final class WipPackageDownloadManager {
         // upsertOfflinePois accumula in memoria e tocca il disco ogni 10
         // pagine, qui si garantisce che l'ultimo batch sia persistito.
         store.flushOfflinePois()
+        // Potatura dei riferimenti che questo download pieno non ha
+        // riscritto: i POI usciti dall'area. Solo a download pieno
+        // COMPLETATO (qui siamo dopo l'ultima pagina).
+        if since == nil {
+            store.pruneStaleRefs(packageId: id, runStartedAt: state.runStartedAt)
+        }
         let existing = store.getPackage(id)
-        let pkg = OfflinePackage(
+        var pkg = OfflinePackage(
             id: id, name: name, centerLat: lat, centerLon: lon,
             radiusKm: radiusKm, language: language,
             poiCount: store.countPoisForPackage(id),
+            // Delta: si somma al totale esistente. Download pieno o resume:
+            // `bytes` è già il cumulativo (seminato dal checkpoint).
             sizeBytes: since == nil ? state.bytes : (existing?.sizeBytes ?? 0) + state.bytes,
             downloadedAt: existing?.downloadedAt ?? nowMs(),
             // generatedAt della prima pagina: i cambi avvenuti DURANTE il
@@ -278,21 +500,28 @@ final class WipPackageDownloadManager {
             lastSyncAt: state.generatedAt ?? since,
             status: "ready"
         )
+        pkg.lastUsedAt = nowMs()
+        // Download completato: nessun checkpoint pendente da riprendere.
+        pkg.pendingCursorUpdated = nil
+        pkg.pendingCursorId = nil
+        pkg.pendingRunStartedAt = nil
         store.upsertPackage(pkg)
         onProgress?(id, state.received, state.total, "ready")
+        state.bgTask?.end()
         completion(.success(pkg))
     }
 
     private func fail(id: String, state: PageState, error: Error, completion: @escaping (Result<OfflinePackage, Error>) -> Void) {
         // Anche su errore/annullamento le pagine già scaricate non si buttano:
         // si scrivono su disco, così il prossimo tentativo riparte da lì
-        // invece di rifare tutto.
+        // invece di rifare tutto (il checkpoint per pagina è già persistito).
         store.flushOfflinePois()
         if var pkg = store.getPackage(id) {
             pkg.status = "error"
             store.upsertPackage(pkg)
         }
         onProgress?(id, state.received, state.total, "error")
+        state.bgTask?.end()
         completion(.failure(error))
     }
 }

@@ -10,7 +10,7 @@
 import { X, Loader2, ExternalLink, Sparkles } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { templatesForNow, loadTemplateTranslations, SEASONAL_THEMES, type SeasonalTemplate, type SeasonalTheme, type TemplateI18nMap } from '../lib/seasonalTemplates';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 /** Template col marcatore di provenienza (i curati non ce l'hanno). */
 type CatalogTemplate = SeasonalTemplate & { aiGenerated?: boolean };
@@ -171,9 +171,8 @@ export default function SeasonalCatalogSheet({
       // Dedupe lato server contro i curati già in griglia (lista corta).
       const exclude = curati.slice(0, 20).map(t => t.destination).join(',');
       if (exclude) params.set('exclude', exclude);
-      const res = await fetch(getApiUrl(`/api/seasonal-catalog?${params.toString()}`), {
-        signal: AbortSignal.timeout(60000),
-      });
+      // apiFetch: Bearer automatico (senza, il server non genera proposte AI).
+      const res = await apiFetch(getApiUrl(`/api/seasonal-catalog?${params.toString()}`), undefined, 60000);
       const data = await res.json().catch(() => null);
       const nuovi: CatalogTemplate[] = Array.isArray(data?.templates)
         ? data.templates.filter((t: any) => t?.id && t?.destination && t?.title)

@@ -36,9 +36,41 @@ object Footprints {
      * I perimetri gia' analizzati, per id POI. Il parsing di una stringa e' la
      * parte cara: farlo a ogni fix GPS per ogni POI vicino sprecherebbe
      * batteria, che su un servizio in foreground e' la risorsa che conta.
+     *
+     * (23/08/2026) ERA UNA HashMap, ED E' UN BUG SERIO. Questa cache viene
+     * letta E scritta da almeno tre thread diversi: il serviceScope di
+     * ItaintaBackgroundPoiService (valutatore predittivo), il
+     * GeofenceBroadcastReceiver (transizioni consegnate dall'OS) e
+     * GeofenceManager (calcolo dei raggi di copertura in registrazione). Una
+     * HashMap in resize concorrente puo' entrare in loop infinito dentro
+     * get/put — un core al 100% e il telefono che si scalda con l'app
+     * "ferma". Si passa a ConcurrentHashMap: nessun lock in lettura, che e'
+     * il caso dominante (stessi POI a ogni fix).
+     *
+     * ConcurrentHashMap NON accetta valori null, e qui il null e' informativo
+     * ("questo POI non ha perimetro, non riprovare ad analizzarlo"): si usa
+     * NESSUN_PERIMETRO come sentinella, confrontata per identita'.
      */
-    private val cache = HashMap<String, Perimetro?>()
-    private const val MAX_CACHE = 400
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Perimetro>()
+
+    /**
+     * Ordine di inserimento, per lo sfratto. Prima, oltre la soglia, si faceva
+     * `cache.clear()`: appena superato il tetto si ri-analizzavano TUTTI i
+     * poligoni a OGNI fix GPS — esattamente il lavoro che la cache doveva
+     * evitare, e proprio in centro citta' dove i POI sono tanti.
+     * Ora si tolgono solo le voci piu' vecchie, una alla volta.
+     */
+    private val ordineInserimento = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /**
+     * Tetto alzato da 400 a 2.000: un poligono compatto (15 vertici) sono
+     * ~240 byte di DoubleArray piu' l'oggetto — 2.000 stanno in mezzo mega,
+     * meno di una singola tile di mappa.
+     */
+    private const val MAX_CACHE = 2000
+
+    /** Sentinella "nessun perimetro": vedi commento sulla cache. */
+    private val NESSUN_PERIMETRO = Perimetro(emptyList(), Riquadro(0.0, 0.0, 0.0, 0.0))
 
     /**
      * Da GeoJSON Polygon/MultiPolygon (com'e' in poi_footprints e nel bundle
@@ -116,10 +148,23 @@ object Footprints {
     }
 
     private fun perimetroDi(poiId: String, testo: String?): Perimetro? {
-        if (cache.containsKey(poiId)) return cache[poiId]
+        // Una sola lettura (niente containsKey + get: fra i due un altro
+        // thread puo' sfrattare la voce).
+        cache[poiId]?.let { return if (it === NESSUN_PERIMETRO) null else it }
         val p = if (testo.isNullOrBlank()) null else analizza(testo)
-        if (cache.size >= MAX_CACHE) cache.clear() // cache di comodo: si azzera e si ricostruisce
-        cache[poiId] = p
+        val valore = p ?: NESSUN_PERIMETRO
+        // put torna null solo se la chiave non c'era: cosi' ogni id finisce
+        // nella coda dello sfratto una volta sola.
+        if (cache.put(poiId, valore) == null) {
+            ordineInserimento.add(poiId)
+            // Sfratto FIFO: si tolgono le piu' vecchie finche' si rientra nel
+            // tetto. Se la coda si svuota (chiavi gia' rimosse da svuota()) si
+            // esce: mai un ciclo che non termina.
+            while (cache.size > MAX_CACHE) {
+                val vecchio = ordineInserimento.poll() ?: break
+                cache.remove(vecchio)
+            }
+        }
         return p
     }
 
@@ -241,6 +286,16 @@ object Footprints {
     fun alPerimetro(poiId: String, footprint: String?, lat: Double, lon: Double, isDriving: Boolean = false): Boolean =
         distanzaDalPerimetro(poiId, footprint, lat, lon, entro = TRIGGER_CAR_M) <= triggerM(isDriving)
 
-    /** Svuota la cache: serve quando il radar cambia zona. */
-    fun svuota() = cache.clear()
+    /**
+     * Svuota la cache: serve quando il radar cambia zona.
+     * (23/08/2026) NON HA CHIAMANTI: la cache non viene mai invalidata al
+     * cambio zona. Con lo sfratto FIFO il danno e' contenuto (le voci vecchie
+     * escono da sole), ma il punto giusto in cui chiamarla e' il fetch di una
+     * nuova finestra radar in ItaintaBackgroundPoiService — file fuori dal
+     * mandato di questa modifica.
+     */
+    fun svuota() {
+        cache.clear()
+        ordineInserimento.clear()
+    }
 }

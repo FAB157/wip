@@ -20,7 +20,7 @@
  * che ascolta i fix di locationService: questo file decide, quello sente.
  */
 import { Capacitor } from '@capacitor/core';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import { postForAudioBlob } from '../lib/audioFetch';
@@ -614,7 +614,9 @@ class TourService {
     } catch { /* senza sessione il server rispondera` 402, ed e` giusto cosi` */ }
 
     const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}`);
-    const r = await fetch(url, { headers: intestazioni });
+    // 45 s: il server ottimizza l'ordine e chiede OSRM per ogni tratta; oltre
+    // e' rete morta, e prima la promise restava appesa per sempre (ITI-07).
+    const r = await apiFetch(url, { headers: intestazioni }, 45000);
     if (r.status === 402) {
       const j = await r.json().catch(() => ({}));
       throw new Error(`PASS_RICHIESTO:${j?.motivo || 'serve il Day Pass attivo'}`);
@@ -789,12 +791,18 @@ class TourService {
    * dove si e`. Un ricalcolo al minuto al massimo — il GPS in un vicolo puo`
    * oscillare per un po' prima di rientrare.
    */
-  async ricalcolaDaDeviazione(pos: { lat: number; lon: number }): Promise<boolean> {
-    if (!this.giro || this.stato.stato !== 'DEVIATO') return false;
-    if (Date.now() - this.ultimoRicalcoloDeviazione < 60_000) return false;
+  /**
+   * Ritorna: true = percorso rifatto; false = TENTATO e fallito (rete assente,
+   * server giu'): lo stato resta DEVIATO e `fuoriPercorsoDa` non si azzera;
+   * null = non era il momento (non deviati, o meno di un minuto dall'ultimo
+   * tentativo). Fino al 28/08/2026 tornava true anche a ricalcolo fallito e
+   * il driver annunciava «ricalcolo il giro» senza aver ricalcolato nulla.
+   */
+  async ricalcolaDaDeviazione(pos: { lat: number; lon: number }): Promise<boolean | null> {
+    if (!this.giro || this.stato.stato !== 'DEVIATO') return null;
+    if (Date.now() - this.ultimoRicalcoloDeviazione < 60_000) return null;
     this.ultimoRicalcoloDeviazione = Date.now();
-    await this.ricalcola(pos);
-    return true;
+    return await this.ricalcola(pos, { daDeviazione: true });
   }
 
   /** La pausa dal banner: la macchina a stati la vede al prossimo campione. */
@@ -945,9 +953,12 @@ class TourService {
    * data (o dall'ultima nota). `ordine` da qui in poi contiene SOLO le tappe
    * restanti: le fatte restano in `tappe` per il conteggio e per la mappa.
    */
-  private async ricalcola(posizione?: { lat: number; lon: number }) {
+  private async ricalcola(
+    posizione?: { lat: number; lon: number },
+    opzioni: { daDeviazione?: boolean } = {},
+  ): Promise<boolean> {
     const giro = this.giro;
-    if (!giro) return;
+    if (!giro) return false;
     const daFare = (t: TappaGiro) => !t.fatta && !t.saltata && !t.esclusa;
     // Prima quelle gia` in ordine (nell'ordine che avevano), poi le nuove
     // arrivate (una sostituta accettata) che in `ordine` non stanno ancora.
@@ -960,7 +971,7 @@ class TourService {
       giro.ordine = [];
       this.stato = { stato: 'FINITO', tappaCorrente: 0, da: Date.now() };
       this.salva(); this.avvisa();
-      return;
+      return true;
     }
 
     const partenza = posizione ?? this.ultimaPosizione ?? await this.posizioneAttuale();
@@ -978,9 +989,15 @@ class TourService {
         this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
         this.salva(); this.avvisa();
         void this.cercaLungoLaStradaGiro();
-        return;
+        return true;
       } catch { /* si continua nell'ordine che c'era, senza la tappa tolta */ }
     }
+
+    // Da DEVIAZIONE il ripiego non ha senso: l'ordine e' gia' quello giusto,
+    // manca solo la strada nuova. Si lascia lo stato DEVIATO com'e' (con
+    // fuoriPercorsoDa) e si ritentera' fra un minuto; il driver avvisa
+    // l'utente di seguire la linea sulla mappa.
+    if (opzioni.daDeviazione) return false;
 
     // Riserva senza server: stesso ordine, meno la tappa tolta. Le tratte si
     // tengono allineate all'ordine, altrimenti i metri rimanenti mentirebbero.
@@ -991,6 +1008,8 @@ class TourService {
     this.passoCorrente = 0; this.tappaDelPasso = -1;
     this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
     this.salva(); this.avvisa();
+    // Ordine aggiornato ma SENZA rotta nuova: non e' un ricalcolo riuscito.
+    return false;
   }
 
   termina() {

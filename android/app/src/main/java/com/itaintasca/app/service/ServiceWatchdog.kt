@@ -55,7 +55,17 @@ class ServiceWatchdog : BroadcastReceiver() {
             // 15 min solo perché il flag "isServiceActive" era true — churn
             // (remove+add dei location callback) anche a servizio sano.
             // Ora si riavvia SOLO se l'heartbeat è assente o troppo vecchio.
-            val lastHeartbeat = prefs.getLong(ItaintaBackgroundPoiService.PREF_LAST_HEARTBEAT, 0L)
+            // Dal 23/08/2026 l'heartbeat sta in un file di preferenze DEDICATO
+            // (PREFS_FIX): scritto a ogni fix, non deve trascinarsi dietro la
+            // riscrittura di tutto ItaintaPrefs. Ripiego sul file vecchio per il
+            // primo avvio dopo l'aggiornamento: senza, il watchdog leggerebbe 0
+            // e riavvierebbe un servizio perfettamente sano.
+            val prefsFix = context.getSharedPreferences(
+                ItaintaBackgroundPoiService.PREFS_FIX, Context.MODE_PRIVATE
+            )
+            val lastHeartbeat = prefsFix.getLong(ItaintaBackgroundPoiService.PREF_LAST_HEARTBEAT, 0L)
+                .takeIf { it > 0L }
+                ?: prefs.getLong(ItaintaBackgroundPoiService.PREF_LAST_HEARTBEAT, 0L)
             val gapMs = System.currentTimeMillis() - lastHeartbeat
             val heartbeatOk = lastHeartbeat > 0L && gapMs < HEARTBEAT_STALE_MS
             if (heartbeatOk) {

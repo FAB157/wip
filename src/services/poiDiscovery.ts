@@ -17,6 +17,7 @@ import {
   type AutoPoiInput,
 } from './poiRepository';
 import type { OverpassRawPoi } from '../types/poi';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 /** Costruisce la query Overpass QL per le categorie itainta intorno al punto. */
 export function buildOverpassQuery(lat: number, lon: number, radius: number): string {
@@ -62,11 +63,14 @@ export async function runOverpassDiscovery(
   let elements: OverpassRawPoi[] = [];
   try {
     // Usa la NUOVA API SMART DISCOVERY che include Overpass + Geoapify fallback
-    const res = await fetch('/api/poi/discover', {
+    // getApiUrl: su app nativa il path relativo non raggiunge Vercel.
+    // 20 s di timeout: Overpass dietro al server puo' impiegare anche di piu',
+    // ma la scoperta e' best-effort e non deve tenere in sospeso il radar.
+    const res = await apiFetch(getApiUrl('/api/poi/discover'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lat, lon, radius, categories }),
-    });
+    }, 20000);
     if (res.ok) {
       const json = await res.json();
       elements = (json?.elements ?? []) as OverpassRawPoi[];

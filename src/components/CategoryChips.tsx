@@ -126,6 +126,7 @@ const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>>
   farmacia: { IT: "Farmacia", EN: "Pharmacy", FR: "Pharmacie", ES: "Farmacia", RU: "Аптека", ZH: "药店" },
   fontanelle: { IT: "Fontanelle", EN: "Drinking Water", FR: "Eau Potable", ES: "Agua Potable", RU: "Питьевая вода", ZH: "饮用水" },
   metropolitana: { IT: "Metro", EN: "Metro", FR: "Métro", ES: "Metro", RU: "Метро", ZH: "地铁" },
+  ev_charging: { IT: "Ricarica EV", EN: "EV Charging", FR: "Recharge VE", ES: "Carga VE", RU: "Зарядка EV", ZH: "电动车充电" },
   // famiglie
   parco_giochi: { IT: "Parco Giochi", EN: "Playground", FR: "Aire de jeux", ES: "Parque infantil", RU: "Детская площадка", ZH: "儿童游乐场" },
   parco_divertimenti: { IT: "Divertimenti", EN: "Amusement Park", FR: "Parc d'attractions", ES: "Atracciones", RU: "Парк развлечений", ZH: "游乐园" },
@@ -143,6 +144,21 @@ const SUB_FILTER_TRANSLATIONS: Record<string, Partial<Record<Language, string>>>
   frantoi: { IT: "Frantoi e olio", EN: "Olive oil mills", FR: "Moulins à huile", ES: "Almazaras", DE: "Ölmühlen", RU: "Маслодавильни", ZH: "橄榄油坊" },
   botteghe_gusto: { IT: "Botteghe del gusto", EN: "Food shops", FR: "Boutiques gourmandes", ES: "Tiendas gourmet", DE: "Feinkost", RU: "Гастрономические лавки", ZH: "美食小店" },
   strade_vino: { IT: "Strade del vino", EN: "Wine routes", FR: "Routes des vins", ES: "Rutas del vino", DE: "Weinstraßen", RU: "Винные маршруты", ZH: "葡萄酒之路" },
+  // shopping (28/08/2026)
+  vie_shopping: { IT: "Vie dello shopping", EN: "Shopping streets", FR: "Rues commerçantes", ES: "Calles comerciales", DE: "Einkaufsstraßen", RU: "Торговые улицы", ZH: "购物街" },
+  grandi_magazzini: { IT: "Grandi magazzini", EN: "Department stores", FR: "Grands magasins", ES: "Grandes almacenes", DE: "Kaufhäuser", RU: "Универмаги", ZH: "百货商店" },
+  mall: { IT: "Centri commerciali", EN: "Shopping malls", FR: "Centres commerciaux", ES: "Centros comerciales", DE: "Einkaufszentren", RU: "Торговые центры", ZH: "购物中心" },
+  outlet: { IT: "Outlet", EN: "Outlets", FR: "Magasins d'usine", ES: "Outlets", DE: "Outlet-Center", RU: "Аутлеты", ZH: "奥特莱斯" },
+  souk: { IT: "Souk e bazaar", EN: "Souks & bazaars", FR: "Souks et bazars", ES: "Zocos y bazares", DE: "Basare", RU: "Базары", ZH: "集市与巴扎" },
+  duty_free: { IT: "Duty-free", EN: "Duty-free", FR: "Hors-taxe", ES: "Libre de impuestos", DE: "Duty-Free", RU: "Дьюти-фри", ZH: "免税店" },
+  // lusso (28/08/2026)
+  hotel_lusso: { IT: "Hotel e resort di lusso", EN: "Luxury hotels & resorts", FR: "Hôtels et resorts de luxe", ES: "Hoteles y resorts de lujo", DE: "Luxushotels & Resorts", RU: "Роскошные отели и курорты", ZH: "豪华酒店与度假村" },
+  ristoranti_stellati: { IT: "Ristoranti stellati", EN: "Starred restaurants", FR: "Restaurants étoilés", ES: "Restaurantes con estrellas", DE: "Sternerestaurants", RU: "Рестораны со звёздами", ZH: "米其林星级餐厅" },
+  marine_yacht: { IT: "Marine per yacht", EN: "Yacht marinas", FR: "Marinas de yachts", ES: "Marinas de yates", DE: "Yachthäfen", RU: "Яхтенные марины", ZH: "游艇码头" },
+  club_esclusivi: { IT: "Club esclusivi", EN: "Exclusive clubs", FR: "Clubs exclusifs", ES: "Clubes exclusivos", DE: "Exklusive Clubs", RU: "Эксклюзивные клубы", ZH: "尊享会所" },
+  treni_storici: { IT: "Treni di lusso storici", EN: "Historic luxury trains", FR: "Trains de luxe historiques", ES: "Trenes de lujo históricos", DE: "Historische Luxuszüge", RU: "Исторические поезда люкс", ZH: "历史豪华列车" },
+  sci_lusso: { IT: "Sci di lusso", EN: "Luxury ski resorts", FR: "Ski de luxe", ES: "Esquí de lujo", DE: "Luxus-Skiorte", RU: "Люкс-горнолыжные курорты", ZH: "豪华滑雪度假区" },
+  noleggio_lusso: { IT: "Noleggio yacht e jet", EN: "Yacht & jet charter", FR: "Location de yachts et jets", ES: "Alquiler de yates y jets", DE: "Yacht- & Jetcharter", RU: "Аренда яхт и самолётов", ZH: "游艇与私人飞机租赁" },
   // gemme / monumenti sub-types
   monumenti_sub: { IT: "Monumenti", EN: "Monuments", FR: "Monuments", ES: "Monumentos", RU: "Памятники", ZH: "纪念碑" },
   chiese: { IT: "Chiese", EN: "Churches", FR: "Églises", ES: "Iglesias", RU: "Церкви", ZH: "教堂" },
@@ -322,7 +338,7 @@ export default function CategoryChips({
               <button
                 key="esperienze"
                 onClick={() => setEsperienzeAperte((v) => !v)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
+                className={`flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
                   ${esperienzeAperte
                     ? "bg-primary text-secondary border-secondary shadow-md scale-105"
                     : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
@@ -338,7 +354,7 @@ export default function CategoryChips({
               <button
                 key={cat.id}
                 onClick={() => onEventClick?.()}
-                className="flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm bg-gradient-to-r from-primary to-black text-secondary border-secondary shadow-secondary/30 hover:scale-105 hover:shadow-lg hover:shadow-secondary/40 active:scale-95"
+                className="flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm bg-gradient-to-r from-primary to-black text-secondary border-secondary shadow-secondary/30 hover:scale-105 hover:shadow-lg hover:shadow-secondary/40 active:scale-95"
               >
                 <div className="w-4 h-4 flex items-center justify-center shrink-0 relative">
                   {cat.icon}
@@ -364,7 +380,7 @@ export default function CategoryChips({
             <button
               key={cat.id}
               onClick={handleChipClick}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
+              className={`flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
                 ${
                   isActive
                     ? (isCommunity ? "bg-[#ec4899] text-white border-pink-300 shadow-md scale-105" : "bg-primary text-secondary border-secondary shadow-md scale-105")
@@ -384,7 +400,7 @@ export default function CategoryChips({
         <button
           onClick={() => setPannelloAperto((v) => !v)}
           aria-expanded={pannelloAperto}
-          className={`flex-shrink-0 px-3 py-1.5 rounded-full font-bold text-[11px] md:text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
+          className={`flex-shrink-0 px-3 py-2 min-h-10 rounded-full font-bold text-[13px] transition-all flex items-center gap-1.5 border shadow-sm
             ${pannelloAperto
               ? "bg-primary text-secondary border-secondary shadow-md scale-105"
               : "bg-[#fcfaf8]/90 backdrop-blur-sm text-primary border-outline-variant hover:bg-[#fcfaf8]"}`}
@@ -593,6 +609,7 @@ export default function CategoryChips({
               { id: "metropolitana", emoji: "🚇" },
               { id: "taxi", emoji: "🚕" },
               { id: "casello_autostradale", emoji: "🛣️" },
+              { id: "ev_charging", emoji: "🔌" },
             ].map((f) => (
               <SubChip key={f.id ?? "all"} f={f} isSelected={isSubSelected(f.id)}
                 label={f.id === null ? SUB_FILTER_TRANSLATIONS.all_f[language] : SUB_FILTER_TRANSLATIONS[f.id]?.[language] || f.id}

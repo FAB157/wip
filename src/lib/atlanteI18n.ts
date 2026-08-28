@@ -20,7 +20,7 @@
  * Fallisce in silenzio: senza rete, senza chiave AI o con una risposta strana
  * si tiene l'originale. Una voce non tradotta e' leggibile; uno spazio vuoto no.
  */
-import { getApiUrl } from './api';
+import { getApiUrl, apiFetch } from './api';
 
 const CHIAVE_LS = 'wip_atlante_i18n';
 const MAX_VOCI = 500;
@@ -74,11 +74,12 @@ export async function traduciVoci(lang: string, voci: string[]): Promise<Record<
   if (!mancanti.length) return fuori;
 
   try {
-    const r = await fetch(getApiUrl('/api/atlante/traduci'), {
+    // apiFetch: Bearer automatico (all'anonimo la rotta risponde degradata).
+    const r = await apiFetch(getApiUrl('/api/atlante/traduci'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lang: l, testi: mancanti.slice(0, 40) }),
-    });
+    }, 30000);
     if (!r.ok) return fuori;
     const j = await r.json();
     for (const [o, t] of Object.entries(j?.testi || {})) {

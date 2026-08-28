@@ -5,73 +5,169 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RawQuery
+import androidx.room.Transaction
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import kotlin.math.cos
 
+/**
+ * Classe astratta e non interfaccia (23/08/2026): due metodi qui dentro hanno
+ * un corpo — [upsertPage], che deve girare in UNA transazione, e [getPoiById],
+ * che registra l'uso del pacchetto — e i metodi concreti con @Transaction sono
+ * supportati da Room in modo pieno e documentato sulle classi astratte. Per il
+ * resto è identica a prima: stesse query, stessi nomi, stessi chiamanti.
+ */
 @Dao
-interface OfflineDao {
+abstract class OfflineDao {
 
     // --- Pacchetti ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertPackage(pkg: OfflinePackageEntity)
+    abstract suspend fun upsertPackage(pkg: OfflinePackageEntity)
 
     @Query("SELECT * FROM offline_packages ORDER BY downloadedAt DESC")
-    suspend fun getAllPackages(): List<OfflinePackageEntity>
+    abstract suspend fun getAllPackages(): List<OfflinePackageEntity>
 
     @Query("SELECT * FROM offline_packages WHERE id = :id")
-    suspend fun getPackage(id: String): OfflinePackageEntity?
+    abstract suspend fun getPackage(id: String): OfflinePackageEntity?
 
     @Query("DELETE FROM offline_packages WHERE id = :id")
-    suspend fun deletePackageRow(id: String)
+    abstract suspend fun deletePackageRow(id: String)
 
     /**
-     * Checkpoint di un download in corso: cursore keyset raggiunto (resume) e,
-     * per il download pieno (non delta sync), i byte già ricevuti finora — così
-     * un retry riparte da qui invece che da pagina 1 e lo storage cap vede una
-     * stima realistica anche a download interrotto.
+     * Checkpoint di un download PIENO in corso: cursore keyset raggiunto
+     * (resume) e byte già ricevuti finora — così un retry riparte da qui invece
+     * che da pagina 1 e lo storage cap vede una stima realistica anche a
+     * download interrotto.
+     *
+     * ⚠️ Il delta sync NON scrive checkpoint: vedi il commento su
+     * OfflinePackageEntity.pendingCursorUpdated.
      */
     @Query(
         "UPDATE offline_packages SET pendingCursorUpdated = :cursorUpdated, " +
             "pendingCursorId = :cursorId, sizeBytes = :sizeBytes WHERE id = :id"
     )
-    suspend fun updateDownloadCheckpoint(id: String, cursorUpdated: String?, cursorId: String?, sizeBytes: Long)
-
-    /** Come [updateDownloadCheckpoint] ma senza toccare sizeBytes (delta sync). */
-    @Query(
-        "UPDATE offline_packages SET pendingCursorUpdated = :cursorUpdated, " +
-            "pendingCursorId = :cursorId WHERE id = :id"
+    abstract suspend fun updateDownloadCheckpoint(
+        id: String,
+        cursorUpdated: String?,
+        cursorId: String?,
+        sizeBytes: Long
     )
-    suspend fun updateDownloadCursor(id: String, cursorUpdated: String?, cursorId: String?)
+
+    /**
+     * Apertura di un download PIENO: timbro del run (vedi
+     * OfflinePackageEntity.pendingRunStartedAt) e `lastSyncAt` provvisorio.
+     *
+     * `lastSyncAt` si scrive SUBITO, non alla fine: se il download si
+     * interrompe e riprende ore dopo, la base del prossimo delta deve restare
+     * l'istante in cui il download è COMINCIATO. Con il generatedAt del
+     * troncone finale, ciò che è cambiato durante l'interruzione e che stava
+     * sotto il cursore non tornerebbe più né dal download né dal delta. La riga
+     * è in stato "downloading", quindi nessuno usa questo valore per un delta
+     * finché il download non è completo.
+     */
+    @Query(
+        "UPDATE offline_packages SET pendingRunStartedAt = :runStartedAt, " +
+            "lastSyncAt = :generatedAt WHERE id = :id"
+    )
+    abstract suspend fun startFullDownloadRun(id: String, runStartedAt: Long, generatedAt: String?)
+
+    /** Ultimo utilizzo del pacchetto: chiave dell'eviction LRU. */
+    @Query("UPDATE offline_packages SET lastAccessedAt = :ts WHERE id = :id")
+    abstract suspend fun touchPackage(id: String, ts: Long)
+
+    /**
+     * Come sopra, ma partendo dal POI: usare un POI offline È usare i pacchetti
+     * che lo contengono. Prima `lastAccessedAt` si muoveva solo a download
+     * fatto, quindi l'eviction LRU poteva buttare il pacchetto della città in
+     * cui l'utente cammina tutti i giorni per tenere quello scaricato ieri e
+     * mai aperto.
+     */
+    @Query(
+        "UPDATE offline_packages SET lastAccessedAt = :ts WHERE id IN " +
+            "(SELECT packageId FROM offline_package_pois WHERE poiId = :poiId)"
+    )
+    abstract suspend fun touchPackagesForPoi(poiId: String, ts: Long)
 
     // --- POI ---
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertPois(pois: List<OfflinePoiEntity>)
+    abstract suspend fun upsertPois(pois: List<OfflinePoiEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertRefs(refs: List<OfflinePackagePoiRef>)
+    abstract suspend fun upsertRefs(refs: List<OfflinePackagePoiRef>)
+
+    /**
+     * Una pagina del bundle = UNA transazione. Prima erano due (prima i POI,
+     * poi i riferimenti): un crash o un kill del sistema nel mezzo lasciava i
+     * POI scritti senza il riferimento al pacchetto, cioè righe che nessun
+     * pacchetto rivendica — invisibili al radar e cancellate al primo
+     * `deleteOrphanPois`. In più è metà dei commit su disco.
+     */
+    @Transaction
+    open suspend fun upsertPage(pois: List<OfflinePoiEntity>, refs: List<OfflinePackagePoiRef>) {
+        upsertPois(pois)
+        upsertRefs(refs)
+    }
 
     @Query("DELETE FROM offline_package_pois WHERE packageId = :packageId")
-    suspend fun deleteRefsForPackage(packageId: String)
+    abstract suspend fun deleteRefsForPackage(packageId: String)
+
+    /**
+     * Riferimenti che il download pieno appena concluso NON ha riscritto: i POI
+     * che erano nell'area e non ci sono più (cancellati, nascosti, rinominati
+     * con un nome generico, o fuori raggio se l'area è stata ri-scaricata più
+     * stretta). Vedi OfflinePackagePoiRef.syncedAt.
+     */
+    @Query("DELETE FROM offline_package_pois WHERE packageId = :packageId AND syncedAt < :runStartedAt")
+    abstract suspend fun pruneStaleRefs(packageId: String, runStartedAt: Long)
+
+    /**
+     * POI che APPARTENGONO SOLO a questo pacchetto: quelli che una delete del
+     * pacchetto renderà orfani. Serve a sapere quali MP3 in cache si possono
+     * buttare — un POI condiviso con un'altra area scaricata resta vivo, e il
+     * suo audio va lasciato dov'è.
+     */
+    @Query(
+        "SELECT poiId FROM offline_package_pois WHERE packageId = :packageId " +
+            "AND poiId NOT IN (SELECT poiId FROM offline_package_pois WHERE packageId <> :packageId)"
+    )
+    abstract suspend fun exclusivePoiIds(packageId: String): List<String>
 
     @Query("DELETE FROM offline_package_pois WHERE poiId IN (:ids)")
-    suspend fun deleteRefsByPoiIds(ids: List<String>)
+    abstract suspend fun deleteRefsByPoiIds(ids: List<String>)
 
     @Query("DELETE FROM offline_pois WHERE id IN (:ids)")
-    suspend fun deletePoisByIds(ids: List<String>)
+    abstract suspend fun deletePoisByIds(ids: List<String>)
 
     /** POI non più referenziati da alcun pacchetto (dopo una delete pacchetto). */
     @Query("DELETE FROM offline_pois WHERE id NOT IN (SELECT poiId FROM offline_package_pois)")
-    suspend fun deleteOrphanPois()
+    abstract suspend fun deleteOrphanPois()
 
     @Query("SELECT COUNT(*) FROM offline_package_pois WHERE packageId = :packageId")
-    suspend fun countPoisForPackage(packageId: String): Int
+    abstract suspend fun countPoisForPackage(packageId: String): Int
 
     @Query("SELECT COUNT(*) FROM offline_pois")
-    suspend fun countPois(): Int
+    abstract suspend fun countPois(): Int
 
     @Query("SELECT * FROM offline_pois WHERE id = :id")
-    suspend fun getPoiById(id: String): OfflinePoiEntity?
+    abstract suspend fun getPoiRow(id: String): OfflinePoiEntity?
+
+    /**
+     * Il POI più la registrazione dell'uso: leggere un POI offline (teaser,
+     * audioguida, indirizzo) vuol dire che quel pacchetto SERVE, e l'eviction
+     * LRU deve saperlo. Una UPDATE per lettura, e solo sui percorsi di trigger
+     * e di arrivo — il loop del radar passa da [queryPoisRaw] e non tocca
+     * niente. Deliberatamente NON in @Transaction e con la scrittura protetta:
+     * la lettura non deve mai fallire per colpa di un timestamp.
+     */
+    open suspend fun getPoiById(id: String): OfflinePoiEntity? {
+        val poi = getPoiRow(id) ?: return null
+        try {
+            touchPackagesForPoi(id, System.currentTimeMillis())
+        } catch (_: Exception) {
+            // best-effort: il peggio che può capitare è una LRU meno informata
+        }
+        return poi
+    }
 
     /**
      * Lingua del pacchetto che contiene questo POI: il testo audioguida offline
@@ -84,7 +180,7 @@ interface OfflineDao {
             "JOIN offline_package_pois r ON p.id = r.packageId " +
             "WHERE r.poiId = :poiId LIMIT 1"
     )
-    suspend fun getPoiPackageLanguage(poiId: String): String?
+    abstract suspend fun getPoiPackageLanguage(poiId: String): String?
 
     /**
      * Le query spaziali passano dall'R-tree (tabella virtuale offline_poi_rtree,
@@ -92,21 +188,21 @@ interface OfflineDao {
      * [OfflineRtree.bboxQuery], mai a mano.
      */
     @RawQuery
-    suspend fun queryPoisRaw(query: SupportSQLiteQuery): List<OfflinePoiEntity>
+    abstract suspend fun queryPoisRaw(query: SupportSQLiteQuery): List<OfflinePoiEntity>
 
     // --- Registro spese offline (per-listen) ---
     @Insert
-    suspend fun insertSpend(entry: OfflineSpendEntity)
+    abstract suspend fun insertSpend(entry: OfflineSpendEntity)
 
     @Query("SELECT COALESCE(SUM(credits), 0) FROM offline_spend_ledger")
-    suspend fun pendingSpendCredits(): Int
+    abstract suspend fun pendingSpendCredits(): Int
 
     @Query("SELECT COUNT(*) FROM offline_spend_ledger")
-    suspend fun pendingSpendCount(): Int
+    abstract suspend fun pendingSpendCount(): Int
 
     /** Dopo una riconciliazione riuscita (consume_credits lato server). */
     @Query("DELETE FROM offline_spend_ledger")
-    suspend fun clearSpendLedger()
+    abstract suspend fun clearSpendLedger()
 }
 
 /**

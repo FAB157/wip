@@ -36,7 +36,9 @@ export default function ToastHost({ language = 'IT' as Language }: { language?: 
   if (items.length === 0) return null;
 
   return (
-    <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[9999] w-[calc(100%-2rem)] max-w-sm flex flex-col gap-2 print:hidden pointer-events-none">
+    // bottom con safe-area (UX-12): su iPhone `bottom-24` fisso finiva a
+    // ridosso della gesture bar.
+    <div className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom,0px))] left-1/2 -translate-x-1/2 z-[9999] w-[calc(100%-2rem)] max-w-sm flex flex-col gap-2 print:hidden pointer-events-none">
       <AnimatePresence initial={false}>
         {items.map(t => (
           <motion.div

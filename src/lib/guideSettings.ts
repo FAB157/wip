@@ -463,6 +463,20 @@ export function isCategoryAllowed(
        'pasticceria', 'cioccolato', 'caffe', 'te', 'miele', 'spezie',
        'museo_gusto', 'strada_del_vino', 'winery',
       ].includes(cat)) return activeSubcats.enogastronomia ?? false;
+  // TURISMO DELLO SHOPPING e TURISMO DI LUSSO (28/08/2026): stesso schema di
+  // Vino e Gusto — default OFF, ma se l'utente accende il layer un grande
+  // magazzino storico o un palace hanno una storia da raccontare quanto una
+  // cantina. Categoria in shared_pois 'shopping'/'lusso'.
+  if (['shopping',
+       'shopping_street', 'department_store', 'shopping_mall', 'historic_arcade',
+       'outlet_village', 'souk_bazaar', 'duty_free_zone',
+      ].includes(cat)) return activeSubcats.shopping ?? false;
+  if (['lusso',
+       'palace_hotel', 'hotel_5_stelle', 'ristorante_stellato', 'chiave_michelin',
+       'resort_esclusivo', 'marina_yacht', 'club_esclusivo', 'treno_lusso_storico',
+       'isola_privata', 'stazione_sci_lusso', 'ryokan_lusso',
+       'noleggio_yacht', 'jet_privato',
+      ].includes(cat)) return activeSubcats.lusso ?? false;
   // I verticali tematici (terme, cinema, cieli, street_art, mercati,
   // fioriture, memoria, lento) stavano qui con `activeSubcats[cat] ?? false`
   // fino al 22/08/2026: ora sono in SENZA_AUDIOGUIDA, vedi in cima.
@@ -489,7 +503,7 @@ export const SENZA_AUDIOGUIDA: ReadonlySet<string> = new Set([
 export const CHIAVI_NATIVO_AUDIOGUIDA: ReadonlySet<string> = new Set([
   'gemme', 'monumenti', 'musei', 'panorami', 'chiese', 'consigli',
   'castelli', 'archeo', 'natura', 'spiagge', 'vette', 'acque', 'grotte', 'parchi',
-  'enogastronomia', 'localita',
+  'enogastronomia', 'localita', 'shopping', 'lusso',
 ]);
 
 // --- Modalita' attivazione ---------------------------------------------

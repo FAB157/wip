@@ -35,13 +35,20 @@ object ConnectivityMonitor {
      */
     fun probe(timeoutMs: Long = 1500L): Boolean {
         return try {
-            val client = OkHttpClient.Builder()
+            // (23/08/2026) newBuilder() sul client condiviso invece di un
+            // client nuovo a ogni probe: i timeout aggressivi restano identici,
+            // ma pool di connessioni e dispatcher sono gli stessi di
+            // SupabaseClient — cosi' questo HEAD verso wip.guide non paga (e
+            // non butta via) un handshake TLS tutto suo un istante prima che
+            // il fetch dei POI ne apra un altro.
+            val client = com.itaintasca.app.service.WipHttp.client.newBuilder()
                 .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .callTimeout(timeoutMs * 2, TimeUnit.MILLISECONDS)
                 .build()
             val req = Request.Builder()
-                .url("https://wip.guide/api/area/bundle")
+                // (SEC-09) Dominio unico in WipApi.BASE.
+                .url(com.itaintasca.app.service.WipApi.BASE + "/api/area/bundle")
                 .head()
                 .build()
             client.newCall(req).execute().use { it.code in 200..499 }

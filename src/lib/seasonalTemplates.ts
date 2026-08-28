@@ -1340,13 +1340,13 @@ export async function loadTemplateTranslations(
   if (missing.length === 0) return cachedMap;
 
   try {
-    const { getApiUrl } = await import('./api');
-    const res = await fetch(getApiUrl('/api/seasonal-catalog/translate'), {
+    const { getApiUrl, apiFetch } = await import('./api');
+    // apiFetch: Bearer automatico (all'anonimo la rotta risponde degradata).
+    const res = await apiFetch(getApiUrl('/api/seasonal-catalog/translate'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: missing, lang: l }),
-      signal: AbortSignal.timeout(60000),
-    });
+    }, 60000);
     if (!res.ok) return cachedMap;
     const data = await res.json().catch(() => null);
     const nuove = (data && typeof data.translations === 'object' && data.translations) || {};

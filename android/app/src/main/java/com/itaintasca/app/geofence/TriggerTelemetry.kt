@@ -54,12 +54,93 @@ object TriggerTelemetry {
         "timestamp,poi_id,poi_name,phase,decision,reason,used_prediction," +
         "t_cpa_s,d_cpa_m,d_now_m,radius_m,fix_age_ms,accuracy_m,speed_ms,bearing_deg,mode\n"
 
-    private val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+    /**
+     * (23/08/2026) SimpleDateFormat NON e' thread-safe, e qui scrivevano il
+     * loop predittivo del servizio, il receiver dei geofence e il thread
+     * dell'arrivo: due format() sovrapposti producono timestamp corrotti
+     * (millisecondi di una riga dentro l'orario di un'altra), cioe' proprio la
+     * colonna su cui si tara il geofencing. Uno per thread, stesso formato.
+     */
+    private val fmt = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)
+    }
 
-    /** Interruttore: si può spegnere da SharedPreferences senza ricompilare. */
+    /**
+     * Interruttore: si può spegnere (e ACCENDERE) da SharedPreferences senza
+     * ricompilare — e' cosi' che si arma la prova in strada.
+     *
+     * (23/08/2026) Il DEFAULT ora e' BuildConfig.DEBUG: in una build di
+     * release il file CSV non si scrive finche' qualcuno non mette
+     * `telemetryEnabled=true` nelle prefs. Prima era acceso per tutti, e
+     * significava aprire, scrivere, svuotare e chiudere un file su ogni
+     * decisione di trigger, sul thread che decide se far partire la voce.
+     */
     private fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
-            .getBoolean("telemetryEnabled", true)
+            .getBoolean("telemetryEnabled", com.itaintasca.app.BuildConfig.DEBUG)
+
+    // ── Scrittura a lotti, fuori dal thread che decide ───────────────────
+    // Prima ogni riga costava: File(), exists(), length() (due stat() sul
+    // filesystem) e poi un appendText che apre/scrive/flusha/chiude. Ora le
+    // righe si accumulano in memoria e scendono su disco a lotti, su un
+    // thread suo. Il contenuto del CSV e' identico, riga per riga.
+    private const val RIGHE_PER_LOTTO = 20
+    private const val ATTESA_MASSIMA_MS = 10_000L
+
+    private val righe = ArrayList<String>()
+    private var ultimoFlushAt = 0L
+
+    private val scrittore: java.util.concurrent.ExecutorService by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "wip-telemetry").apply { isDaemon = true }
+        }
+    }
+
+    private fun accoda(context: Context, riga: String) {
+        val appContext = context.applicationContext
+        val lotto: List<String>?
+        synchronized(righe) {
+            righe.add(riga)
+            val adesso = System.currentTimeMillis()
+            if (ultimoFlushAt == 0L) ultimoFlushAt = adesso
+            lotto = if (righe.size >= RIGHE_PER_LOTTO || adesso - ultimoFlushAt >= ATTESA_MASSIMA_MS) {
+                ultimoFlushAt = adesso
+                ArrayList(righe).also { righe.clear() }
+            } else null
+        }
+        if (lotto != null) scrittore.execute { scriviLotto(appContext, lotto) }
+    }
+
+    private fun scriviLotto(context: Context, lotto: List<String>) {
+        if (lotto.isEmpty()) return
+        try {
+            val file = File(context.filesDir, FILE_NAME)
+            if (!file.exists() || file.length() > MAX_BYTES) {
+                file.writeText(HEADER)
+            }
+            file.appendText(lotto.joinToString(""))
+        } catch (e: Exception) {
+            // Best-effort: la telemetria non deve mai rompere un trigger.
+            Log.w(TAG, "Telemetry write failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Porta su disco tutto quello che e' ancora in memoria. Va chiamata prima
+     * di LEGGERE il file (fileFor), altrimenti l'ultima manciata di righe —
+     * quelle appena camminate — non c'e' ancora.
+     */
+    fun flush(context: Context) {
+        val appContext = context.applicationContext
+        val lotto: List<String>
+        synchronized(righe) {
+            if (righe.isEmpty()) return
+            ultimoFlushAt = System.currentTimeMillis()
+            lotto = ArrayList(righe)
+            righe.clear()
+        }
+        scriviLotto(appContext, lotto)
+    }
 
     fun log(
         context: Context,
@@ -89,13 +170,10 @@ object TriggerTelemetry {
         if (!isEnabled(context)) return
 
         try {
-            val file = File(context.filesDir, FILE_NAME)
-            if (!file.exists() || file.length() > MAX_BYTES) {
-                file.writeText(HEADER)
-            }
-            file.appendText(
+            accoda(
+                context,
                 listOf(
-                    fmt.format(Date()),
+                    (fmt.get() ?: SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", Locale.US)).format(Date()),
                     poiId,
                     csv(poiName),
                     phase,
@@ -119,11 +197,18 @@ object TriggerTelemetry {
         }
     }
 
-    /** Percorso del file, per esporlo al plugin Capacitor / condivisione. */
-    fun fileFor(context: Context): File = File(context.filesDir, FILE_NAME)
+    /**
+     * Percorso del file, per esporlo al plugin Capacitor / condivisione.
+     * Svuota prima il buffer: chi chiede il file lo vuole COMPLETO.
+     */
+    fun fileFor(context: Context): File {
+        flush(context)
+        return File(context.filesDir, FILE_NAME)
+    }
 
     fun clear(context: Context) {
-        try { fileFor(context).writeText(HEADER) } catch (_: Exception) {}
+        synchronized(righe) { righe.clear() }
+        try { File(context.filesDir, FILE_NAME).writeText(HEADER) } catch (_: Exception) {}
     }
 
     private fun fmtNum(v: Double): String =

@@ -18,7 +18,7 @@ import {
   PILGRIM_ROUTES, buildPilgrimPrefill,
   type PilgrimRoute, type PilgrimDifficulty, type RoutePrefill,
 } from '../lib/transitCatalog';
-import { getApiUrl } from '../lib/api';
+import { getApiUrl, apiFetch } from '../lib/api';
 import { getTranslation, type Language } from '../lib/i18n';
 import { supabase } from '../lib/supabase';
 import {
@@ -136,12 +136,14 @@ export default function PilgrimWaysSheet({
     aiAbortRef.current = ctrl;
     const timer = setTimeout(() => ctrl.abort(), 120000);
     try {
-      const res = await fetch(getApiUrl('/api/transit-guide'), {
+      // apiFetch: Bearer automatico (login obbligatorio per generare); il
+      // signal esterno resta rispettato.
+      const res = await apiFetch(getApiUrl('/api/transit-guide'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind: 'pilgrim', query: query.trim(), lang: (language || 'IT').toLowerCase() }),
         signal: ctrl.signal,
-      });
+      }, 120000);
       const data = await res.json().catch(() => null);
       if (ctrl.signal.aborted) return;
       if (!res.ok || !data?.item?.id) {

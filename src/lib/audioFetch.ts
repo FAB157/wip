@@ -1,5 +1,9 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
-import { supabase } from './supabase';
+import { apiFetch, bearerHeaders as bearerHeadersApi } from './api';
+
+/** Timeout MP3 (TTS/audioguide): 30 s in lettura, 15 s per connettersi. */
+const AUDIO_CONNECT_TIMEOUT_MS = 15000;
+const AUDIO_READ_TIMEOUT_MS = 30000;
 
 /**
  * Intestazioni con il token di sessione (Bearer), se c'e` una sessione.
@@ -9,13 +13,8 @@ import { supabase } from './supabase';
  * Best-effort: senza sessione si manda la richiesta com'era.
  */
 export async function bearerHeaders(): Promise<Record<string, string>> {
-  try {
-    const { data } = await supabase.auth.getSession();
-    const t = data?.session?.access_token;
-    return t ? { Authorization: `Bearer ${t}` } : {};
-  } catch {
-    return {};
-  }
+  // Stessa logica (e stessa cache del token) di lib/api.ts.
+  return bearerHeadersApi();
 }
 
 /**
@@ -40,12 +39,16 @@ export async function postForAudioBlob(
   const headers = { 'Content-Type': 'application/json', ...(await bearerHeaders()) };
 
   if (Capacitor.isNativePlatform()) {
+    // Senza connectTimeout/readTimeout CapacitorHttp aspettava per sempre
+    // (28/08/2026): un MP3 da 200 KB su rete a singhiozzo bloccava la coda.
     const res = await CapacitorHttp.request({
       url,
       method: 'POST',
       headers,
       data: body,
       responseType: 'blob',
+      connectTimeout: AUDIO_CONNECT_TIMEOUT_MS,
+      readTimeout: AUDIO_READ_TIMEOUT_MS,
     });
     const okStatus = res.status >= 200 && res.status < 300;
     if (!okStatus || typeof res.data !== 'string' || !res.data) {
@@ -64,11 +67,11 @@ export async function postForAudioBlob(
     return { ok: true, status: res.status, blob: new Blob([bytes], { type: 'audio/mpeg' }) };
   }
 
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  });
+  }, AUDIO_READ_TIMEOUT_MS);
   if (!res.ok) {
     let errorText: string | undefined;
     try { errorText = await res.text(); } catch { /* niente */ }

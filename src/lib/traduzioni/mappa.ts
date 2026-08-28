@@ -410,6 +410,124 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     FR: 'Qualité des eaux de baignade', ES: 'Calidad del agua de baño',
     DE: 'Badegewässerqualität', RU: 'Качество воды для купания', ZH: '海水浴场水质',
   },
+  // ── Aree protette Natura 2000 (EEA) — 27/08/2026 ──
+  mp_layer_natura2000_nome: {
+    IT: 'Aree protette Natura 2000', EN: 'Natura 2000 protected areas',
+    FR: 'Aires protégées Natura 2000', ES: 'Áreas protegidas Natura 2000',
+    DE: 'Natura-2000-Schutzgebiete', RU: 'Охраняемые территории Natura 2000', ZH: 'Natura 2000 保护区',
+  },
+  mp_layer_natura2000_det: {
+    IT: '~27.000 siti UE con confini (Agenzia Europea dell\'Ambiente)',
+    EN: '~27,000 EU sites with boundaries (European Environment Agency)',
+    FR: '~27 000 sites UE avec leurs limites (Agence européenne pour l\'environnement)',
+    ES: '~27.000 sitios de la UE con sus límites (Agencia Europea de Medio Ambiente)',
+    DE: '~27.000 EU-Gebiete mit Grenzen (Europäische Umweltagentur)',
+    RU: '~27 000 участков ЕС с границами (Европейское агентство по окружающей среде)',
+    ZH: '约 27,000 个欧盟保护区及其边界（欧洲环境署）',
+  },
+  mp_n2k_habitat: {
+    IT: 'Sito di importanza comunitaria (habitat)', EN: 'Habitats Directive site (SCI/SAC)',
+    FR: 'Site d\'importance communautaire (habitats)', ES: 'Lugar de importancia comunitaria (hábitats)',
+    DE: 'FFH-Gebiet (Lebensräume)', RU: 'Участок Директивы о местообитаниях', ZH: '栖息地指令保护区',
+  },
+  mp_n2k_uccelli: {
+    IT: 'Zona di protezione speciale (uccelli)', EN: 'Special Protection Area (birds)',
+    FR: 'Zone de protection spéciale (oiseaux)', ES: 'Zona de especial protección para las aves',
+    DE: 'Vogelschutzgebiet', RU: 'Особая охраняемая зона (птицы)', ZH: '特别保护区（鸟类）',
+  },
+  mp_cdda_nazionale: {
+    IT: 'Area protetta nazionale', EN: 'Nationally designated area', FR: 'Aire protégée nationale',
+    ES: 'Área protegida nacional', DE: 'National ausgewiesenes Schutzgebiet', RU: 'Национальная охраняемая территория', ZH: '国家级保护区',
+  },
+  mp_n2k_scheda: {
+    IT: 'Scheda ufficiale', EN: 'Official factsheet', FR: 'Fiche officielle', ES: 'Ficha oficial',
+    DE: 'Offizielles Datenblatt', RU: 'Официальная карточка', ZH: '官方资料页',
+  },
+  mp_n2k_fonte: {
+    IT: 'Fonte: Agenzia Europea dell\'Ambiente (CC BY 4.0) — rispetta i regolamenti del sito',
+    EN: 'Source: European Environment Agency (CC BY 4.0) — respect the site rules',
+    FR: 'Source : Agence européenne pour l\'environnement (CC BY 4.0) — respectez la réglementation du site',
+    ES: 'Fuente: Agencia Europea de Medio Ambiente (CC BY 4.0) — respeta las normas del lugar',
+    DE: 'Quelle: Europäische Umweltagentur (CC BY 4.0) — beachte die Schutzgebietsregeln',
+    RU: 'Источник: Европейское агентство по окружающей среде (CC BY 4.0) — соблюдайте правила территории',
+    ZH: '来源：欧洲环境署（CC BY 4.0）——请遵守保护区规定',
+  },
+  mp_natura2000_disclaimer: {
+    IT: 'Confini ufficiali della rete Natura 2000 (EEA). Solo Europa; avvicina la mappa per vederli.',
+    EN: 'Official Natura 2000 network boundaries (EEA). Europe only; zoom in to see them.',
+    FR: 'Limites officielles du réseau Natura 2000 (AEE). Europe uniquement ; zoomez pour les voir.',
+    ES: 'Límites oficiales de la red Natura 2000 (AEMA). Solo Europa; acerca el mapa para verlos.',
+    DE: 'Offizielle Grenzen des Natura-2000-Netzes (EUA). Nur Europa; zum Anzeigen hineinzoomen.',
+    RU: 'Официальные границы сети Natura 2000 (ЕАОС). Только Европа; приблизьте карту.',
+    ZH: 'Natura 2000 网络官方边界（EEA）。仅限欧洲；请放大地图查看。',
+  },
+  // ── Scheda POI: denominazioni d'origine e link ai registri esterni — 27/08/2026 ──
+  poi_denominazioni_zona: {
+    IT: 'Denominazioni della zona', EN: 'Designations of origin in the area', FR: 'Appellations de la zone',
+    ES: 'Denominaciones de la zona', DE: 'Herkunftsbezeichnungen der Gegend', RU: 'Наименования происхождения этой зоны', ZH: '该地区的原产地名称',
+  },
+  poi_denominazioni_nota: {
+    IT: 'Registro UE eAmbrosia (CC BY 4.0). Aggancio per zona, non certificazione del produttore.',
+    EN: 'EU eAmbrosia register (CC BY 4.0). Matched by area, not a producer certification.',
+    FR: 'Registre UE eAmbrosia (CC BY 4.0). Rattachement par zone, pas une certification du producteur.',
+    ES: 'Registro UE eAmbrosia (CC BY 4.0). Vinculado por zona, no es una certificación del productor.',
+    DE: 'EU-Register eAmbrosia (CC BY 4.0). Zuordnung nach Gebiet, keine Zertifizierung des Erzeugers.',
+    RU: 'Реестр ЕС eAmbrosia (CC BY 4.0). Привязка по зоне, не сертификация производителя.',
+    ZH: '欧盟 eAmbrosia 登记册（CC BY 4.0）。按地区匹配，并非生产者认证。',
+  },
+  mp_denominazione_area: {
+    IT: 'Zona di denominazione', EN: 'Designation area', FR: 'Zone d\'appellation', ES: 'Zona de denominación',
+    DE: 'Herkunftsgebiet', RU: 'Зона наименования происхождения', ZH: '原产地名称区域',
+  },
+  mp_area_ufficiale: {
+    IT: 'confine ufficiale', EN: 'official boundary', FR: 'limite officielle', ES: 'límite oficial',
+    DE: 'amtliche Grenze', RU: 'официальная граница', ZH: '官方边界',
+  },
+  mp_area_indicativa: {
+    IT: 'area indicativa (confini dei comuni), non il disciplinare', EN: 'indicative area (municipal boundaries), not the specification',
+    FR: 'zone indicative (limites communales), pas le cahier des charges', ES: 'zona indicativa (límites municipales), no el pliego de condiciones',
+    DE: 'ungefähres Gebiet (Gemeindegrenzen), nicht die Produktspezifikation', RU: 'ориентировочная зона (границы муниципалитетов), не спецификация', ZH: '示意区域（市镇边界），并非产品规范',
+  },
+  poi_scheda_rcdb: {
+    IT: 'Scheda su RCDB', EN: 'RCDB entry', FR: 'Fiche RCDB', ES: 'Ficha en RCDB', DE: 'RCDB-Eintrag', RU: 'Карточка RCDB', ZH: 'RCDB 资料页',
+  },
+  poi_scheda_wwd: {
+    IT: 'Scheda su World Waterfall Database', EN: 'World Waterfall Database entry', FR: 'Fiche World Waterfall Database',
+    ES: 'Ficha en World Waterfall Database', DE: 'Eintrag in der World Waterfall Database', RU: 'Карточка World Waterfall Database', ZH: 'World Waterfall Database 资料页',
+  },
+  // ── Pericolo valanghe (avalanche.report, Euregio) — 27/08/2026 ──
+  mp_valanghe: {
+    IT: 'Pericolo valanghe', EN: 'Avalanche danger', FR: 'Risque d\'avalanche', ES: 'Peligro de aludes',
+    DE: 'Lawinengefahr', RU: 'Лавинная опасность', ZH: '雪崩危险',
+  },
+  mp_valanghe_0: {
+    IT: 'nessuna neve', EN: 'no snow', FR: 'pas de neige', ES: 'sin nieve', DE: 'kein Schnee', RU: 'нет снега', ZH: '无雪',
+  },
+  mp_valanghe_1: {
+    IT: 'debole', EN: 'low', FR: 'faible', ES: 'débil', DE: 'gering', RU: 'низкая', ZH: '低',
+  },
+  mp_valanghe_2: {
+    IT: 'moderato', EN: 'moderate', FR: 'limité', ES: 'limitado', DE: 'mäßig', RU: 'умеренная', ZH: '中等',
+  },
+  mp_valanghe_3: {
+    IT: 'marcato', EN: 'considerable', FR: 'marqué', ES: 'notable', DE: 'erheblich', RU: 'значительная', ZH: '较高',
+  },
+  mp_valanghe_4: {
+    IT: 'forte', EN: 'high', FR: 'fort', ES: 'fuerte', DE: 'groß', RU: 'высокая', ZH: '高',
+  },
+  mp_valanghe_5: {
+    IT: 'molto forte', EN: 'very high', FR: 'très fort', ES: 'muy fuerte', DE: 'sehr groß', RU: 'очень высокая', ZH: '极高',
+  },
+  mp_valanghe_fuori_stagione: {
+    IT: 'ultimo bollettino della stagione, non aggiornato', EN: 'last bulletin of the season, not current',
+    FR: 'dernier bulletin de la saison, non actualisé', ES: 'último boletín de la temporada, no actualizado',
+    DE: 'letztes Bulletin der Saison, nicht aktuell', RU: 'последний бюллетень сезона, не обновлён', ZH: '本季最后一期公报，非最新',
+  },
+  mp_valanghe_fonte: {
+    IT: 'avalanche.report (Euregio, CC BY 4.0)', EN: 'avalanche.report (Euregio, CC BY 4.0)',
+    FR: 'avalanche.report (Euregio, CC BY 4.0)', ES: 'avalanche.report (Euregio, CC BY 4.0)',
+    DE: 'lawinen.report (Euregio, CC BY 4.0)', RU: 'avalanche.report (Euregio, CC BY 4.0)', ZH: 'avalanche.report（Euregio，CC BY 4.0）',
+  },
 
   // ── Carta del sole ──
   mp_uv_basso: {

@@ -18,14 +18,18 @@ import { isBearingGateEnabled } from '../lib/geofencing/bearingGate';
 import { azureVoiceName, pickVoice } from './ttsService';
 import { VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
 
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 // Import statico: il vecchio require() non esiste nel bundle ESM e lanciava
 // ReferenceError su device, lasciando il player bloccato in stato "playing".
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
+import { ItaintaBackgroundPoi, pushUserContextToNative } from '../plugins/ItaintaBackgroundPoi';
+import { apiFetch } from '../lib/api';
 
+// Wrapper tipizzato condiviso: null sul web, cosi' ogni `if (plugin)` sotto
+// resta com'era.
 const ItaintaBackgroundPoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
-  ? registerPlugin<any>('ItaintaBackgroundPoiPlugin') 
+  ? ItaintaBackgroundPoi
   : null;
 
 export interface LocationUpdate {
@@ -346,6 +350,63 @@ class LocationService {
             const detail = parseNativePoiEvent(data);
             if (detail.poiId) window.dispatchEvent(new CustomEvent('wip-poi-exit', { detail }));
           });
+
+          // iOS (MAP-05): l'utente ha declassato il permesso da "Sempre" a
+          // "Mentre usi l'app" (o l'ha tolto) dalle Impostazioni. Lo stato
+          // memorizzato dall'onboarding (PermissionsModal) non vale piu': si
+          // azzera, cosi' la modale ripropone il passo, e si avvisa l'app.
+          ItaintaBackgroundPoiPlugin.addListener('permissionDowngraded', (data: any) => {
+            try { localStorage.removeItem('wip_perm_background_status'); } catch { /* storage bloccato */ }
+            const message = getTranslation('perm_downgraded_msg', this.language);
+            window.dispatchEvent(new CustomEvent('wip-permission-downgraded', {
+              detail: { status: data?.status ?? null, message, ts: Date.now() },
+            }));
+            window.dispatchEvent(new CustomEvent('audioguide-status', { detail: message }));
+          });
+
+          // iOS: il trigger in background ha chiesto la guida completa e il
+          // server ha risposto 402 (niente pass/crediti). Si riallineano Day
+          // Pass e saldo nel nativo (reconcileOfflineBilling: contatore pass →
+          // server, snapshot wallet → nativo) e si avvisa l'utente aprendo la
+          // scheda del POI, dove c'e' il tasto di acquisto.
+          ItaintaBackgroundPoiPlugin.addListener('audioguideCreditsRequired', (data: any) => {
+            let extra: any = {};
+            try { if (data?.data) extra = JSON.parse(data.data) || {}; } catch { /* payload piatto */ }
+            const poiId = data?.poiId ?? extra.poiId;
+            const poiName = data?.poiName ?? extra.poiName ?? '';
+            const lat = Number(data?.lat ?? extra.lat);
+            const lon = Number(data?.lon ?? extra.lon);
+            import('./dayPassService').then(m => m.reconcileOfflineBilling()).catch(() => {});
+            import('../lib/toast').then(({ notify }) => {
+              notify(getTranslation('audio_crediti_necessari_per', this.language).replace('{name}', poiName || String(poiId || '')), 'info', 8000);
+            }).catch(() => {});
+            if (poiId) {
+              window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+                detail: {
+                  poiId: String(poiId),
+                  poi: Number.isFinite(lat) && Number.isFinite(lon) ? { id: String(poiId), name: poiName, lat, lon } : undefined,
+                  autoPlay: false, manual: true, fromNative: true, ts: Date.now(),
+                },
+              }));
+            }
+          });
+
+          // Il token spinto al nativo e' scaduto (SEC-03): si rinnova la
+          // sessione e si rispinge. Senza, lo storico ascolti in background
+          // finiva rifiutato dalle RLS finche' l'app non tornava in primo piano.
+          ItaintaBackgroundPoiPlugin.addListener('tokenExpired', () => {
+            (async () => {
+              try {
+                const { data } = await supabase.auth.refreshSession();
+                const sess = data?.session;
+                if (sess?.user?.id) {
+                  await pushUserContextToNative({ userId: sess.user.id, accessToken: sess.access_token });
+                } else {
+                  await pushUserContextToNative();
+                }
+              } catch { /* offline o sessione persa: si riprova al prossimo evento */ }
+            })();
+          });
         } catch (e) {
           console.warn("[LocationService] Native listeners setup failed", e);
         }
@@ -591,10 +652,8 @@ class LocationService {
     // metodo non deve succedere nulla.
     (async () => {
       try {
-        const { Capacitor, registerPlugin } = await import('@capacitor/core');
-        if (!Capacitor.isNativePlatform()) return;
-        const plugin = registerPlugin<any>('ItaintaBackgroundPoiPlugin');
-        await plugin.setSilentMode({ enabled });
+        if (!ItaintaBackgroundPoiPlugin) return;
+        await ItaintaBackgroundPoiPlugin.setSilentMode({ enabled });
       } catch { /* best-effort: il nativo si allineerà alla prossima build */ }
     })();
   }
@@ -849,9 +908,20 @@ class LocationService {
         // l'itinerario e lo ignorava, quindi le tappe non erano mai registrate
         // come geofence prioritari (isFromItinerary) e la notifica di check-in
         // nativa non poteva scattare. Ora le tappe arrivano allo store nativo.
-        this.startNativeBackgroundService().then(() => {
+        // MAP-02 (28/08/2026): il servizio nativo NON si avvia a permesso
+        // negato. Prima partiva comunque: foreground service in piedi, GPS
+        // muto, e l'utente vedeva le cuffie accese senza che succedesse nulla.
+        (async () => {
+          try {
+            const perm = await Geolocation.checkPermissions();
+            if (perm.location === 'denied' && (perm.coarseLocation ?? 'denied') === 'denied') {
+              this.segnalaPosizioneNegata();
+              return;
+            }
+          } catch { /* plugin assente/errore: si tenta comunque l'avvio */ }
+          await this.startNativeBackgroundService();
           this.syncItineraryToNative(itinerary);
-        }).catch(() => {});
+        })().catch(() => {});
       } else if (this.lastLocation) {
         // Su PWA, se abbiamo già una posizione, triggeriamo subito il fetch
         this.triggerWebPoiFetch(this.lastLocation);
@@ -1155,13 +1225,28 @@ class LocationService {
   public subscribe(listener: LocationListener): () => void {
     this.listeners.add(listener);
     if (this.lastLocation) listener(this.lastLocation);
-    if (!this.watchId) this.startWatching();
+    // Un avvio gia' in corso NON ne apre un secondo (MAP-07): prima ogni
+    // subscribe durante l'await del permesso lanciava un altro watchPosition
+    // e il primo restava zombie (mai piu' cancellabile, doppio consumo GPS).
+    if (this.watchId === null && !this.starting) this.startWatching();
     return () => { this.listeners.delete(listener); };
   }
 
-  public async startWatching(highAccuracy: boolean = true) {
-    if (this.watchId !== null && this.isHighAccuracy === highAccuracy) return;
-    this.stopWatching();
+  /** Promise dell'avvio in corso: le chiamate concorrenti la condividono. */
+  private starting: Promise<void> | null = null;
+
+  public startWatching(highAccuracy: boolean = true): Promise<void> {
+    if (this.watchId !== null && this.isHighAccuracy === highAccuracy) return Promise.resolve();
+    if (this.starting) return this.starting;
+    this.starting = this.startWatchingInterno(highAccuracy).finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  private async startWatchingInterno(highAccuracy: boolean) {
+    // stopWatching e' async (clearWatch nativo): senza await il nuovo watch
+    // partiva PRIMA che il vecchio fosse chiuso, e il watchId vecchio veniva
+    // sovrascritto — il watch precedente non si poteva piu' fermare.
+    await this.stopWatching();
     this.isHighAccuracy = highAccuracy;
 
     const handlePosition = async (position: any, isNative: boolean = false) => {
@@ -1177,12 +1262,20 @@ class LocationService {
       const update: LocationUpdate = {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        speed: coords.speed || 0,
+        // speed REALE o null (MAP-10): `|| 0` trasformava "velocita' ignota"
+        // in "fermo" — il predittore e il modo di trasporto la leggevano come
+        // misura. I consumatori (resolveTransportMode, foregroundTriggers,
+        // giroDriver) sanno gia' gestire null/NaN e ricadono sul calcolo fra
+        // due fix.
+        speed: Number.isFinite(coords.speed as number) && (coords.speed as number) >= 0 ? (coords.speed as number) : null,
         // heading REALE o null: `|| 0` faceva credere al marker di avere
         // sempre una direzione → freccia sempre puntata a Nord anche da fermo.
         // Alcuni device usano -1/NaN per "assente": in quei casi → null (pallino).
         heading: (Number.isFinite(coords.heading) && coords.heading >= 0) ? coords.heading : null,
-        accuracy: coords.accuracy || 10,
+        // accuracy: se manca NON si finge un ottimo fix da 10 m. Infinity
+        // fa scartare il fix a tutti i filtri (`accuracy <= soglia` → false),
+        // che e' il comportamento giusto per un fix di qualita' ignota.
+        accuracy: Number.isFinite(coords.accuracy) && coords.accuracy > 0 ? coords.accuracy : Number.POSITIVE_INFINITY,
         timestamp: position?.timestamp || position?.time || now,
       };
       this.lastLocation = update;
@@ -1256,7 +1349,13 @@ class LocationService {
         try {
           const perm = await Geolocation.checkPermissions();
           if (perm.location !== 'granted' && perm.coarseLocation !== 'granted') {
-            await Geolocation.requestPermissions({ permissions: ['location'] });
+            // L'esito NON si butta via (MAP-06): a permesso negato si avvisa
+            // e non si apre un watch che restera' muto per sempre.
+            const res = await Geolocation.requestPermissions({ permissions: ['location'] });
+            if (res.location === 'denied' && (res.coarseLocation ?? 'denied') === 'denied') {
+              this.segnalaPosizioneNegata();
+              return;
+            }
           }
         } catch (permErr) {
           console.warn('[LocationService] Permission check failed', permErr);
@@ -1271,7 +1370,14 @@ class LocationService {
         this.watchId = await Geolocation.watchPosition(
           { enableHighAccuracy: true, timeout: 10000 },
           (position, err) => {
-            if (err) { console.warn('[LocationService] watchPosition error', err); return; }
+            if (err) {
+              console.warn('[LocationService] watchPosition error', err);
+              // Permesso revocato a watch aperto (Impostazioni di sistema):
+              // il callback lo segnala solo qui, e prima finiva in console.
+              if (/denied|permission|autorizz/i.test(String((err as any)?.message || err))) this.segnalaPosizioneNegata();
+              return;
+            }
+            this.locationDenied = false;
             if (position) handlePosition(position, true);
           }
         ) as any;
@@ -1334,15 +1440,20 @@ class LocationService {
   }
 
   public async stopWatching() {
-    if (this.watchId) {
-      if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
-        try {
-          await Geolocation.clearWatch({ id: this.watchId.toString() });
-        } catch (e) {}
-      } else if (typeof window !== 'undefined') {
-        navigator.geolocation.clearWatch(this.watchId as number);
-      }
-      this.watchId = null;
+    // `watchId !== null` e non truthy: il watch web puo' avere id 0.
+    if (this.watchId === null) return;
+    // Si azzera PRIMA dell'await (MAP-07): durante clearWatch un subscribe
+    // concorrente vedeva ancora l'id vecchio e non avviava nulla, oppure lo
+    // startWatching in corso lo sovrascriveva e questo azzeramento tardivo
+    // cancellava l'id NUOVO.
+    const id = this.watchId;
+    this.watchId = null;
+    if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
+      try {
+        await Geolocation.clearWatch({ id: String(id) });
+      } catch (e) {}
+    } else if (typeof window !== 'undefined') {
+      try { navigator.geolocation.clearWatch(id as number); } catch (e) {}
     }
   }
 
@@ -1649,7 +1760,10 @@ class LocationService {
     this.notifyAudioState();
 
     try {
-      const res = await fetch(url);
+      // 30 s: un MP3 acquistato/offline che non arriva non deve tenere il
+      // player in "caricamento" per sempre (ITI-07).
+      const res = await apiFetch(url, undefined, 30000);
+      if (!res.ok) throw new Error(`audio ${res.status}`);
       const blob = await res.blob();
       return (await this.playAudioBlob(blob, "")) ? 'started' : false;
     } catch (e) {
@@ -1759,7 +1873,7 @@ class LocationService {
     try {
       const characterName = this.currentCharacter === 'dante' ? 'Dante' : 'Nicky';
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: this.audioState.poiName || 'Audioguida',
+        title: this.audioState.poiName || getTranslation('audio_titolo_default', this.language),
         artist: `WIP — ${characterName}`,
         album: 'World in Pocket',
       });

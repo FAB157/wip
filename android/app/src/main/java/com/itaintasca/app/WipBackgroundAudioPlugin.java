@@ -7,6 +7,8 @@ import android.content.ServiceConnection;
 import android.os.IBinder;
 import android.util.Log;
 
+import androidx.core.content.ContextCompat;
+
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -98,6 +100,36 @@ public class WipBackgroundAudioPlugin extends Plugin {
     }
 
     /**
+     * (AUD-02) Prima di ogni play/resume il servizio viene AVVIATO, non solo
+     * legato: un servizio bound-only moriva con l'Activity (unbindService in
+     * handleOnDestroy) e la guida si troncava a schermo chiuso. Avviato con
+     * startForegroundService, il servizio si promuove subito in foreground
+     * (notifica media) e sopravvive all'unbind finche' la guida non finisce.
+     *
+     * Da background Android 12+ puo' rifiutare l'avvio in foreground
+     * (ForegroundServiceStartNotAllowedException): si ripiega su startService
+     * e, se anche quello fallisce, resta il solo bind (comportamento di
+     * prima) — in ogni caso si logga e non si crasha.
+     *
+     * Non lo si fa in load(): avviare il servizio all'apertura dell'app
+     * mostrerebbe una notifica media senza nessuna guida in corso.
+     */
+    private void ensureServiceStarted() {
+        Context context = getContext();
+        Intent intent = new Intent(context, WipBackgroundAudioService.class);
+        try {
+            ContextCompat.startForegroundService(context, intent);
+        } catch (Exception e) {
+            Log.w(TAG, "startForegroundService rifiutato (app in background?): " + e.getMessage());
+            try {
+                context.startService(intent);
+            } catch (Exception e2) {
+                Log.w(TAG, "startService fallito, resta il solo bind: " + e2.getMessage());
+            }
+        }
+    }
+
+    /**
      * Esegue l'azione sul servizio; se il bind non e' pronto la mette in coda e
      * forza il bind, invece di fallire come faceva la versione precedente.
      */
@@ -138,6 +170,7 @@ public class WipBackgroundAudioPlugin extends Plugin {
             return;
         }
 
+        ensureServiceStarted();
         withService(call, (service, c) -> {
             service.play(url, title, subtitle);
             JSObject ret = new JSObject();
@@ -156,6 +189,7 @@ public class WipBackgroundAudioPlugin extends Plugin {
 
     @PluginMethod
     public void resume(PluginCall call) {
+        ensureServiceStarted();
         withService(call, (service, c) -> {
             service.resume();
             c.resolve();
@@ -239,6 +273,9 @@ public class WipBackgroundAudioPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        // (AUD-02) Solo unbind, mai stopService: se una guida e' in corso il
+        // servizio (started + foreground) continua da solo; se e' fermo si
+        // spegne da se' in onUnbind.
         try {
             if (audioService != null) audioService.setCallback(null);
             if (isBound) getContext().unbindService(connection);

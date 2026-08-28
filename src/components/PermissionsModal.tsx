@@ -159,8 +159,16 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     }
   };
 
-  // Apre la schermata Impostazioni dell'app (best-effort per piattaforma).
+  // Apre la schermata Impostazioni dell'app: prima via plugin nativo
+  // (src/plugins/ItaintaBackgroundPoi.ts, metodo openAppSettings), poi il
+  // vecchio best-effort con App.openUrl per le build che non lo espongono.
   const openAppSettings = async () => {
+    try {
+      const { apriImpostazioniApp } = await import('../plugins/ItaintaBackgroundPoi');
+      if (await apriImpostazioniApp()) return;
+    } catch (e) {
+      // modulo assente o plugin senza il metodo: si prova la via vecchia
+    }
     try {
       const { App } = await import('@capacitor/app');
       // openUrl non è nei tipi di @capacitor/app (servirebbe il plugin
@@ -220,7 +228,10 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
 
   return (
     <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-xl flex items-center justify-center p-4">
-      <div className="bg-surface border border-white/10 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-10 duration-500">
+      {/* Pannello BIANCO: i colori qui sotto erano quelli di un pannello
+          scuro (oro, bianco/10) rimasti dopo il cambio di sfondo — titolo
+          oro su bianco a 2,1:1, «Salta» a 1,3:1 (UX-01, audit 28/08/2026). */}
+      <div className="bg-surface border border-primary/10 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-10 duration-500">
 
         {/* Intestazione Dinamica */}
         <div className="p-8 pb-4 text-center relative bg-gradient-to-br from-primary/20 to-transparent">
@@ -230,13 +241,13 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
             {step === 2 && <Bell className="w-10 h-10 animate-pulse" />}
             {step === 3 && <BatteryCharging className="w-10 h-10" />}
           </div>
-          <h2 className="text-2xl font-black text-secondary mb-2 tracking-tight">
+          <h2 className="text-2xl font-black text-primary mb-2 tracking-tight">
             {step === 0 && tr('pf_pm_titolo0')}
             {step === 1 && tr('pf_pm_titolo1')}
             {step === 2 && tr('pf_pm_titolo2')}
             {step === 3 && tr('pf_pm_titolo3')}
           </h2>
-          <p className="text-sm text-secondary/70 leading-relaxed font-medium h-16">
+          <p className="text-sm text-on-surface-variant leading-relaxed font-medium min-h-16">
             {step === 0 && tr('pf_pm_desc0')}
             {step === 1 && tr('pf_pm_desc1')}
             {step === 2 && tr('pf_pm_desc2')}
@@ -249,7 +260,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
           {[1, 2, 3].map((s) => (
             <div
               key={s}
-              className={`h-1.5 rounded-full transition-all duration-300 ${step >= s ? 'w-8 bg-primary' : 'w-2 bg-white/10'}`}
+              className={`h-1.5 rounded-full transition-all duration-300 ${step >= s ? 'w-8 bg-primary' : 'w-2 bg-primary/15'}`}
             />
           ))}
         </div>
@@ -258,23 +269,23 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
         {step === 0 && (
           <div className="p-8 pt-4 flex-1">
             <div className="space-y-4">
-              <div className="flex items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
-                <div className="w-10 h-10 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
+              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
+                <div className="w-10 h-10 rounded-full bg-blue-500/15 text-blue-700 flex items-center justify-center shrink-0">
                   <MapPin className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{tr('pf_pm_gps')}</div>
+                <div className="text-sm font-bold text-primary">{tr('pf_pm_gps')}</div>
               </div>
-              <div className="flex items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
-                <div className="w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
+                <div className="w-10 h-10 rounded-full bg-amber-500/15 text-amber-700 flex items-center justify-center shrink-0">
                   <Bell className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{tr('pf_pm_notifiche')}</div>
+                <div className="text-sm font-bold text-primary">{tr('pf_pm_notifiche')}</div>
               </div>
-              <div className="flex items-center gap-4 p-4 bg-white/5 rounded-2xl border border-white/5">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
+                <div className="w-10 h-10 rounded-full bg-emerald-500/15 text-emerald-700 flex items-center justify-center shrink-0">
                   <BatteryCharging className="w-5 h-5" />
                 </div>
-                <div className="text-sm font-bold text-secondary">{tr('pf_pm_batteria')}</div>
+                <div className="text-sm font-bold text-primary">{tr('pf_pm_batteria')}</div>
               </div>
             </div>
           </div>
@@ -285,12 +296,13 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
           {/* Diniego posizione: spiegazione + apri impostazioni (step 1) */}
           {locationDenied && step === 1 && (
             <div className="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left">
-              <p className="text-sm font-bold text-secondary/90 leading-relaxed mb-3">
+              <p className="text-sm font-bold text-on-surface leading-relaxed mb-3">
                 {tr('pf_pm_denied')}
               </p>
               <button
+                type="button"
                 onClick={openAppSettings}
-                className="w-full bg-white/10 text-secondary font-bold py-3 rounded-xl border border-white/10 active:scale-95 transition-all flex items-center justify-center gap-2"
+                className="w-full min-h-11 bg-primary/10 text-primary font-bold py-3 rounded-xl border border-primary/20 active:scale-95 transition-all flex items-center justify-center gap-2"
               >
                 <Settings className="w-4 h-4" />
                 {tr('pf_pm_apri_impostazioni')}
@@ -299,8 +311,9 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
           )}
 
           <button
+            type="button"
             onClick={locationDenied && step === 1 ? () => { setLocationDenied(false); setStep(2); } : requestNextPermission}
-            className="w-full bg-primary text-white font-black py-4 text-lg rounded-2xl shadow-lg shadow-primary/30 active:scale-95 transition-all flex justify-center items-center gap-2"
+            className="w-full min-h-11 bg-primary text-white font-black py-4 text-lg rounded-2xl shadow-lg shadow-primary/30 active:scale-95 transition-all flex justify-center items-center gap-2"
           >
             {locationDenied && step === 1
               ? tr('pf_pm_continua')
@@ -316,8 +329,9 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
               questo file) da ProfileScreen come voce "Verifica permessi", così
               chi ha saltato o negato qui può riprovare in un secondo momento. */}
           <button
+            type="button"
             onClick={finishOnboarding}
-            className="w-full text-center mt-4 text-xs font-bold text-secondary/40 py-2 active:text-secondary/80 transition-colors"
+            className="w-full min-h-11 text-center mt-2 text-xs font-bold text-slate-600 underline underline-offset-2 py-2 active:text-primary transition-colors"
           >
             {tr('pf_pm_salta')}
           </button>

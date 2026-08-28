@@ -184,6 +184,8 @@ export const CATEGORY_LABELS_IT: Record<PoiCategory, string> = {
   chiese: 'Chiese',
   panorami: 'Panorami',
   enogastronomia: 'Vino e Gusto',
+  shopping: 'Turismo dello Shopping',
+  lusso: 'Turismo di Lusso',
   natura: 'Natura',
   beach: 'Spiaggia',
   bay: 'Baia',
@@ -247,6 +249,8 @@ export const CATEGORY_LABELS_IT: Record<PoiCategory, string> = {
 /** Colore marker per categoria (cluster mappa). */
 export const CATEGORY_COLORS: Record<PoiCategory, string> = {
   enogastronomia: '#7f1d1d',
+  shopping: '#c026d3',
+  lusso: '#581c87',
   museum: '#8b5cf6',
   monument: '#b45309',
   viewpoint: '#0ea5e9',
@@ -325,6 +329,8 @@ export const CATEGORY_COLORS: Record<PoiCategory, string> = {
 /** Emoji per categoria (popup/scheda). */
 export const CATEGORY_EMOJI: Record<PoiCategory, string> = {
   enogastronomia: '🍷',
+  shopping: '🏬',
+  lusso: '👑',
   museum: '🏛️',
   monument: '🗿',
   viewpoint: '🌄',

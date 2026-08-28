@@ -1,6 +1,49 @@
 import { createClient } from '@supabase/supabase-js';
+import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 
 const supabaseUrl = 'https://qfxxhzkkrkvbuekfknhh.supabase.co';
+
+/**
+ * STORAGE DELLA SESSIONE SU NATIVO (SEC-07, 28/08/2026).
+ *
+ * supabase-js di default tiene la sessione (refresh token compreso) in
+ * localStorage, che nella WebView e' un file SQLite in chiaro leggibile da
+ * qualunque backup/root. Su Android/iOS si passa a @capacitor/preferences
+ * (SharedPreferences / NSUserDefaults, dentro la sandbox dell'app; supabase-js
+ * accetta uno storage asincrono). Sul web resta localStorage.
+ *
+ * MIGRAZIONE: la prima lettura di una chiave assente nelle Preferences la
+ * cerca in localStorage (sessione delle build precedenti), la copia e la
+ * cancella da li': nessun utente viene sloggato dall'aggiornamento.
+ * Nessun altro punto di src/ legge `sb-<ref>-auth-token` direttamente
+ * (verificato con grep il 28/08/2026): tutto passa da supabase.auth.
+ */
+const isNativeStorage = typeof window !== 'undefined' && Capacitor.isNativePlatform();
+const nativeAuthStorage = {
+  async getItem(key: string): Promise<string | null> {
+    try {
+      const { value } = await Preferences.get({ key });
+      if (value != null) return value;
+    } catch { /* plugin non disponibile: si prova la migrazione sotto */ }
+    try {
+      const legacy = localStorage.getItem(key);
+      if (legacy != null) {
+        try { await Preferences.set({ key, value: legacy }); localStorage.removeItem(key); } catch { /* resta in localStorage */ }
+        return legacy;
+      }
+    } catch { /* storage bloccato */ }
+    return null;
+  },
+  async setItem(key: string, value: string): Promise<void> {
+    try { await Preferences.set({ key, value }); }
+    catch { try { localStorage.setItem(key, value); } catch { /* niente */ } }
+  },
+  async removeItem(key: string): Promise<void> {
+    try { await Preferences.remove({ key }); } catch { /* niente */ }
+    try { localStorage.removeItem(key); } catch { /* niente */ }
+  },
+};
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFmeHhoemtrcmt2YnVla2ZrbmhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMDM1ODcsImV4cCI6MjA5NDY3OTU4N30.4v8qFrPU4QOJ-Ko61CASjUoPVEBOM8J9rGeiAbNMpSs';
 
 const isPlaceholder = (val: string) => !val || val.includes('your-') || val.includes('placeholder');
@@ -173,6 +216,21 @@ const initMock = () => {
           : createClient(supabaseUrl, supabaseAnonKey, {
               global: {
                 fetch: fetchWithTimeout
-              }
+              },
+              auth: isNativeStorage
+                ? {
+                    storage: nativeAuthStorage,
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    // PKCE sul nativo: il code verifier vive nello stesso
+                    // storage cifrato; niente token nel frammento dell'URL.
+                    // Sul web resta il flusso di default: i link di recupero
+                    // password (PASSWORD_RECOVERY in App.tsx) arrivano ancora
+                    // col frammento implicito e cambiarli qui li romperebbe.
+                    flowType: 'pkce',
+                    // Nessun frammento OAuth da leggere in una WebView.
+                    detectSessionInUrl: false,
+                  }
+                : undefined,
             });
 
