@@ -1,0 +1,4 @@
+Video «Posizione in background» per la dichiarazione Play Console (29/08/2026)
+File: store/video/wip-posizione-background-FINALE-v3.mp4 (3:55)
+YouTube (non in elenco): https://youtu.be/N1QzrRvmv3A
+Da incollare in Play Console → Contenuti dell'app → Autorizzazioni sensibili → Posizione in background → link al video.
