@@ -1,34 +1,60 @@
-import React, { useState, useEffect } from 'react';
-import { MapPin, Bell, ShieldCheck, BatteryCharging, CheckCircle2, Settings } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { MapPin, Bell, BatteryCharging, Check, ShieldCheck, ArrowRight, Settings } from 'lucide-react';
 import { Geolocation } from '@capacitor/geolocation';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { Language, getTranslation } from '../lib/i18n';
-import ProminentDisclosure from './ProminentDisclosure';
+import { ItaintaBackgroundPoi, apriImpostazioniApp } from '../plugins/ItaintaBackgroundPoi';
 
 interface PermissionsModalProps {
   onComplete: () => void;
   language: Language;
 }
 
-// Contratto scoperto leggendo checkAndRequestPermissions in
-// android/app/src/main/java/com/itaintasca/app/plugin/ItaintaBackgroundPoiPlugin.kt
-// (righe 81-174) e il port Swift ios/App/App/ItaintaBackgroundPoiPlugin.swift:
-// una singola chiamata incatena posizione foreground -> posizione background
-// (Android Q+/iOS "Sempre", con prominent disclosure nativa) -> notifiche ->
-// batteria (solo Android). La promise si risolve al primo punto della catena
-// che richiede un'azione fuori dall'app (Impostazioni) o quando tutto è già
-// concesso; viene invece rigettata (call.reject) se la posizione foreground
-// viene negata. Valori di `status` osservati:
-// - 'all_granted'                    -> posizione fg+bg, notifiche e batteria OK
-// - 'requesting_battery_optimization'-> fg+bg e notifiche OK, Impostazioni batteria aperte (solo Android)
-// - 'requesting_background_location' -> fg OK, utente mandato alle Impostazioni per il background
-// - 'denied_background_location'     -> fg OK, utente ha rifiutato il background nel dialog nativo
+/**
+ * PERMESSI IN UNA SCHERMATA SOLA (29/08/2026, richiesta del committente:
+ * «troppe autorizzazioni, l'utente non può andare nelle impostazioni e fare
+ * tutti quei passaggi — meno e più efficaci»).
+ *
+ * Prima: quattro card in fila (super-poteri → dove ti trovi → rimani
+ * aggiornato → telefono in tasca), più la disclosure, più un dialogo nativo,
+ * più la scheda Info app in cui trovare da soli Autorizzazioni → Posizione →
+ * Consenti sempre, più la pagina batteria OEM. Una decina di schermate e due
+ * viaggi a mano nelle Impostazioni: sul Realme del committente nessuno
+ * arrivava in fondo.
+ *
+ * Ora: UNA schermata, nello stesso impaginato chiaro del carosello
+ * d'onboarding, con la prominent disclosure (cosa raccogliamo, perché, anche
+ * ad app chiusa, non per pubblicità — obbligatoria Play) in cima e sotto UNA
+ * RIGA PER PERMESSO col suo tasto «Attiva»: ogni tasto apre direttamente il
+ * dialogo o la pagina di sistema giusta (posizione: il plugin chiede il
+ * background DOPO il foreground e su Android 11+ il sistema apre la pagina
+ * «Posizione» col radio «Consenti sempre» — un tocco; notifiche: il permesso
+ * e, se il telefono le blocca, la pagina notifiche dell'app; batteria:
+ * facoltativa, la lista delle esenzioni). Le spunte si aggiornano da sole
+ * quando si torna nell'app. Niente più dialogo nativo di disclosure (era un
+ * doppione) e niente batteria obbligatoria.
+ *
+ * Contratto nativo: metodi granulari getPermissionsStatus /
+ * requestLocationPermissions / requestNotificationPermission /
+ * requestBatteryOptimization (Android, ItaintaBackgroundPoiPlugin.kt). Dove
+ * mancano (iOS: il plugin Swift ha solo checkAndRequestPermissions) si
+ * ripiega sulla catena unica, che su iOS è già di due dialoghi di sistema;
+ * il passaggio a «Sempre» lì lo propone iOS da solo, dopo qualche uso.
+ */
+
+// Valori di `status` della catena unica checkAndRequestPermissions (invariati):
+// - 'all_granted'                    -> posizione fg+bg e notifiche OK
+// - 'requesting_background_location' -> (iOS) fg OK, «Sempre» rimandato al sistema
+// - 'denied_background_location'     -> fg OK, background rifiutato
+// - 'requesting_notifications'       -> notifiche bloccate: pagina di sistema aperta
+// - 'denied_notifications'           -> notifiche rifiutate
+// - 'requesting_battery_optimization'-> (build vecchie) pagina batteria aperta
 interface NativePermResult { status?: string }
 
-const NativePermissionsPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlatform())
-  ? registerPlugin<{ checkAndRequestPermissions: () => Promise<NativePermResult> }>('ItaintaBackgroundPoiPlugin')
-  : null;
+const isNative = () => typeof window !== 'undefined' && Capacitor.isNativePlatform();
+const isAndroid = () => isNative() && Capacitor.getPlatform() === 'android';
+const NativePermissionsPlugin = isNative() ? ItaintaBackgroundPoi : null;
 
 // Chiavi granulari (un esito per step), mantenute ACCANTO al flag aggregato
 // legacy 'onboarding_permissions_done' che resta scritto per non rompere la
@@ -46,30 +72,25 @@ function setPermStatus(key: keyof typeof PERM_KEYS, value: PermValue) {
   try { localStorage.setItem(PERM_KEYS[key], value); } catch (e) { /* storage non disponibile */ }
 }
 
-// Applica alle chiavi granulari l'esito di checkAndRequestPermissions in base
-// a fin dove è arrivata la catena nativa (vedi commento sul contratto sopra).
+// Applica alle chiavi granulari l'esito della catena unica.
 function applyNativePermResult(result: NativePermResult | null | undefined) {
   const status = result?.status;
   if (status === 'all_granted') {
     setPermStatus('location', 'granted');
     setPermStatus('background', 'granted');
     setPermStatus('notifications', 'granted');
-    setPermStatus('battery', 'granted');
   } else if (status === 'requesting_battery_optimization') {
-    // La catena è arrivata fino alla batteria: posizione e notifiche già gestite.
     setPermStatus('location', 'granted');
     setPermStatus('background', 'granted');
     setPermStatus('notifications', 'granted');
-    setPermStatus('battery', 'skipped'); // impostazioni aperte, esito non noto da qui
+    setPermStatus('battery', 'skipped');
   } else if (status === 'requesting_background_location') {
     setPermStatus('location', 'granted');
-    setPermStatus('background', 'skipped'); // rimandato alle Impostazioni
+    setPermStatus('background', 'skipped');
   } else if (status === 'denied_background_location') {
     setPermStatus('location', 'granted');
     setPermStatus('background', 'denied');
   } else if (status === 'requesting_notifications') {
-    // (29/08/2026) Notifiche bloccate dall'interruttore di sistema: il
-    // nativo ha aperto la pagina giusta; l'esito si sapra' al prossimo check.
     setPermStatus('location', 'granted');
     setPermStatus('background', 'granted');
     setPermStatus('notifications', 'skipped');
@@ -80,11 +101,8 @@ function applyNativePermResult(result: NativePermResult | null | undefined) {
   }
 }
 
-// Esportata per riuso: incapsula l'INTERA catena nativa di permessi
-// (posizione fg/bg, notifiche, batteria) in una sola chiamata, aggiornando le
-// chiavi granulari. Un altro punto dell'app (es. un bottone "Verifica
-// permessi" in ProfileScreen, vedi TODO più sotto) può richiamarla per far
-// ripetere il check senza duplicare questa logica.
+// Esportata per riuso: la catena unica nativa (posizione fg/bg, notifiche) in
+// una chiamata, aggiornando le chiavi granulari. La usa anche il ripiego iOS.
 export async function requestBackgroundPermissionsFlow(): Promise<NativePermResult | null> {
   if (!NativePermissionsPlugin) return null;
   try {
@@ -98,15 +116,38 @@ export async function requestBackgroundPermissionsFlow(): Promise<NativePermResu
   }
 }
 
+/** Il metodo non esiste in questo plugin (iOS, o build vecchia): si ripiega. */
+function nonImplementato(e: any): boolean {
+  const code = String(e?.code || '');
+  const msg = String(e?.message || e || '');
+  return code === 'UNIMPLEMENTED' || /not implemented|UNIMPLEMENTED/i.test(msg);
+}
+
+type StatoPosizione = 'always' | 'whileInUse' | 'denied' | 'unknown';
+interface StatoPermessi {
+  location: StatoPosizione;
+  notifications: boolean | null;      // permesso E interruttore di sistema
+  notificationsEnabled: boolean | null; // solo interruttore (false = bloccate dal telefono)
+  battery: boolean | null;
+}
+
+const STATO_IGNOTO: StatoPermessi = { location: 'unknown', notifications: null, notificationsEnabled: null, battery: null };
+
+/** Un colore per la schermata, come nel carosello (cielo = camminare). */
+const ACCENTO = { alone: 'rgba(56, 189, 248, 0.20)', tinta: '#38bdf8' };
+
 export default function PermissionsModal({ onComplete, language }: PermissionsModalProps) {
   const [isVisible, setIsVisible] = useState(false);
-  const [step, setStep] = useState(0); // 0: intro, 1: location, 2: notifications, 3: battery
-  // Informativa Prominent Disclosure (obbligatoria Play) mostrata UNA volta
-  // prima di chiedere la posizione in background.
-  const [showDisclosure, setShowDisclosure] = useState(false);
-  // Posizione negata dall'utente: mostriamo spiegazione + "Apri Impostazioni"
-  // invece di ingoiare il diniego in silenzio.
+  const [stato, setStato] = useState<StatoPermessi>(STATO_IGNOTO);
+  const [occupato, setOccupato] = useState<'location' | 'notifications' | 'battery' | null>(null);
+  // Posizione negata dall'utente: spiegazione + «Apri Impostazioni» invece di
+  // ingoiare il diniego in silenzio.
   const [locationDenied, setLocationDenied] = useState(false);
+  // iOS senza metodi granulari: dopo la catena unica sappiamo solo lo stato
+  // riportato; il resto lo diciamo a parole (nota «Sempre lo propone iOS»).
+  const [ripiegoIos, setRipiegoIos] = useState(false);
+
+  const t = (key: string) => getTranslation(key, language);
 
   useEffect(() => {
     // Se non siamo in un'app nativa o l'utente ha già fatto il setup, nascondi
@@ -118,269 +159,358 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     setIsVisible(true);
   }, [onComplete]);
 
+  /** Rilegge lo stato dal nativo: le spunte. Dove il metodo manca resta ignoto. */
+  const rileggi = useCallback(async () => {
+    if (!NativePermissionsPlugin) return;
+    try {
+      const s = await NativePermissionsPlugin.getPermissionsStatus();
+      setStato({
+        location: (s?.location as StatoPosizione) || 'unknown',
+        notifications: typeof s?.notifications === 'boolean' ? s.notifications : null,
+        notificationsEnabled: typeof s?.notificationsEnabled === 'boolean' ? s.notificationsEnabled : null,
+        battery: typeof s?.battery === 'boolean' ? s.battery : null,
+      });
+    } catch (e) {
+      if (nonImplementato(e)) setRipiegoIos(true);
+    }
+  }, []);
+
+  // Al ritorno dalle pagine di sistema (Impostazioni, dialoghi) lo stato si
+  // rilegge da solo: è così che la spunta compare senza altri tocchi.
+  useEffect(() => {
+    if (!isVisible) return;
+    void rileggi();
+    const onVis = () => { if (document.visibilityState === 'visible') void rileggi(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', onVis);
+    let rimuoviApp: (() => void) | null = null;
+    (async () => {
+      try {
+        const { App } = await import('@capacitor/app');
+        const h = await App.addListener('appStateChange', ({ isActive }) => { if (isActive) void rileggi(); });
+        rimuoviApp = () => { void h.remove(); };
+      } catch { /* plugin App assente sul web */ }
+    })();
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onVis);
+      rimuoviApp?.();
+    };
+  }, [isVisible, rileggi]);
+
   const finishOnboarding = () => {
-    // Step mai raggiunti (skip anticipato): li marchiamo esplicitamente
-    // invece di lasciarli assenti, per distinguerli da "mai controllato".
-    (Object.keys(PERM_KEYS) as (keyof typeof PERM_KEYS)[]).forEach((k) => {
-      if (!localStorage.getItem(PERM_KEYS[k])) setPermStatus(k, 'skipped');
-    });
+    // Le chiavi granulari si scrivono da quello che si sa; ciò che non si
+    // sa resta «skipped», così una UI futura (Profilo → Verifica permessi)
+    // sa cosa riproporre.
+    setPermStatus('location', stato.location === 'denied' ? 'denied' : stato.location === 'unknown' ? 'skipped' : 'granted');
+    setPermStatus('background', stato.location === 'always' ? 'granted' : stato.location === 'whileInUse' ? 'denied' : 'skipped');
+    setPermStatus('notifications', stato.notifications === true ? 'granted' : stato.notifications === false ? 'denied' : 'skipped');
+    setPermStatus('battery', stato.battery === true ? 'granted' : 'skipped');
     localStorage.setItem('onboarding_permissions_done', 'true');
     setIsVisible(false);
     onComplete();
   };
 
-  // Richiesta effettiva del permesso di posizione con rilevamento del diniego.
-  // Su nativo passa dal plugin ItaintaBackgroundPoiPlugin, che gestisce anche
-  // background/notifiche/batteria in sequenza (vedi requestBackgroundPermissionsFlow
-  // sopra); su web (nessun plugin nativo) resta il fallback @capacitor/geolocation,
-  // che copre solo il permesso in foreground.
-  const requestLocationPermission = async () => {
-    let denied = false;
-    let nativeResult: NativePermResult | null = null;
-    if (NativePermissionsPlugin) {
-      nativeResult = await requestBackgroundPermissionsFlow();
-      denied = nativeResult === null;
-    } else {
-      try {
-        const status = await Geolocation.requestPermissions();
-        denied = (status as any)?.location === 'denied';
-      } catch (e) {
-        denied = true;
-      }
-    }
-    if (denied) {
-      // Diniego: NON proseguiamo in silenzio. Segnaliamo lo stato (banner ai
-      // prossimi avvii, gestito in App.tsx) e mostriamo "Apri Impostazioni".
-      localStorage.setItem('wip_location_denied', 'true');
-      setLocationDenied(true);
-      return;
-    }
-    localStorage.removeItem('wip_location_denied');
-    setLocationDenied(false);
-    // Se la catena nativa è arrivata fino a notifiche/batteria, quegli step
-    // sono già stati gestiti lato nativo: saltiamo direttamente allo step
-    // finale per non richiederli una seconda volta in JS (vedi contratto
-    // del plugin sopra).
-    const nativeStatus = nativeResult?.status;
-    // Anche 'requesting_notifications' / 'denied_notifications' (29/08/2026):
-    // la catena nativa ha gia' trattato le notifiche (pagina di sistema
-    // aperta, o rifiuto esplicito); richiederle di nuovo qui sarebbe un
-    // secondo dialogo per la stessa cosa.
-    if (nativeStatus === 'all_granted' || nativeStatus === 'requesting_battery_optimization'
-      || nativeStatus === 'requesting_notifications' || nativeStatus === 'denied_notifications') {
-      setStep(3);
-    } else {
-      setStep(2);
-    }
-  };
-
-  // Apre la schermata Impostazioni dell'app: prima via plugin nativo
-  // (src/plugins/ItaintaBackgroundPoi.ts, metodo openAppSettings), poi il
-  // vecchio best-effort con App.openUrl per le build che non lo espongono.
+  // Apre la scheda dell'app nelle Impostazioni: via plugin, poi best-effort.
   const openAppSettings = async () => {
-    try {
-      const { apriImpostazioniApp } = await import('../plugins/ItaintaBackgroundPoi');
-      if (await apriImpostazioniApp()) return;
-    } catch (e) {
-      // modulo assente o plugin senza il metodo: si prova la via vecchia
-    }
+    try { if (await apriImpostazioniApp()) return; } catch { /* plugin senza il metodo */ }
     try {
       const { App } = await import('@capacitor/app');
-      // openUrl non è nei tipi di @capacitor/app (servirebbe il plugin
-      // AppLauncher, non installato): cast best-effort, il catch degrada
-      // comunque alle istruzioni testuali.
-      if (Capacitor.getPlatform() === 'ios') {
-        await (App as any).openUrl({ url: 'app-settings:' });
+      if (Capacitor.getPlatform() === 'ios') await (App as any).openUrl({ url: 'app-settings:' });
+      else await (App as any).openUrl({ url: 'package:com.itaintasca.app' });
+    } catch { /* restano le istruzioni testuali */ }
+  };
+
+  /** Tasto «Attiva» della posizione. La disclosure è già in cima: toccare qui È il consenso. */
+  const attivaPosizione = async () => {
+    if (occupato) return;
+    setOccupato('location');
+    localStorage.setItem('wip_location_disclosure_accepted', 'true');
+    try {
+      if (NativePermissionsPlugin) {
+        try {
+          const r = await NativePermissionsPlugin.requestLocationPermissions();
+          const loc = (r?.location as StatoPosizione) || 'unknown';
+          setStato((s) => ({ ...s, location: loc }));
+          setLocationDenied(loc === 'denied');
+          if (loc === 'denied') localStorage.setItem('wip_location_denied', 'true');
+          else localStorage.removeItem('wip_location_denied');
+        } catch (e) {
+          if (!nonImplementato(e)) throw e;
+          // iOS (o build vecchia): catena unica — notifiche + posizione «Sempre».
+          setRipiegoIos(true);
+          const r = await requestBackgroundPermissionsFlow();
+          const s = r?.status;
+          if (r === null) {
+            setStato((x) => ({ ...x, location: 'denied' }));
+            setLocationDenied(true);
+          } else {
+            setLocationDenied(false);
+            setStato((x) => ({
+              ...x,
+              location: s === 'all_granted' ? 'always' : 'whileInUse',
+              notifications: s === 'denied_notifications' ? false : (s === 'requesting_notifications' ? x.notifications : true),
+            }));
+          }
+        }
       } else {
-        // Android: scheda dell'app nelle Impostazioni di sistema.
-        await (App as any).openUrl({ url: 'package:com.itaintasca.app' });
+        // Web (nessun plugin): solo il permesso foreground del browser.
+        try {
+          const status = await Geolocation.requestPermissions();
+          const ok = (status as any)?.location !== 'denied';
+          setStato((s) => ({ ...s, location: ok ? 'whileInUse' : 'denied' }));
+          setLocationDenied(!ok);
+        } catch { setLocationDenied(true); }
       }
-    } catch (e) {
-      // Nessun modo programmatico disponibile: restano le istruzioni testuali.
+    } finally {
+      setOccupato(null);
+      void rileggi();
     }
   };
 
-  const requestNextPermission = async () => {
-    if (step === 0) {
-      setStep(1);
-    } else if (step === 1) {
-      // Prima di chiedere la posizione (che su Android include il background)
-      // mostriamo l'informativa Prominent Disclosure, una sola volta.
-      const disclosureAccepted = localStorage.getItem('wip_location_disclosure_accepted') === 'true';
-      if (!disclosureAccepted) {
-        setShowDisclosure(true);
-        return;
-      }
-      await requestLocationPermission();
-    } else if (step === 2) {
-      // Notifiche: raggiunto solo quando il plugin nativo NON le ha già
-      // richieste (web senza plugin, oppure catena nativa fermata prima per
-      // la posizione in background — vedi requestLocationPermission).
-      // (29/08/2026) Sul nativo si RIPRENDE la catena del plugin: con la
-      // posizione «Sempre» ormai concessa nelle Impostazioni, passa alle
-      // notifiche (permesso E interruttore di sistema: sul Realme era
-      // «Rifiuta» e il cruscotto non compariva mai) e poi alla batteria,
-      // tutto nell'onboarding e col minimo di tocchi.
+  /** Tasto «Attiva» delle notifiche: permesso e, se bloccate dal telefono, la pagina giusta. */
+  const attivaNotifiche = async () => {
+    if (occupato) return;
+    setOccupato('notifications');
+    try {
       if (NativePermissionsPlugin) {
-        const r = await requestBackgroundPermissionsFlow();
-        const s = r?.status;
-        if (s === 'all_granted' || s === 'requesting_battery_optimization') setPermStatus('notifications', 'granted');
-        setStep(3);
-        return;
+        try {
+          const r = await NativePermissionsPlugin.requestNotificationPermission();
+          setStato((s) => ({
+            ...s,
+            notifications: !!r?.granted && r?.enabled !== false,
+            notificationsEnabled: typeof r?.enabled === 'boolean' ? r.enabled : s.notificationsEnabled,
+          }));
+          return;
+        } catch (e) {
+          if (!nonImplementato(e)) throw e;
+        }
       }
       try {
         const res = await LocalNotifications.requestPermissions();
-        setPermStatus('notifications', (res as any)?.display === 'granted' ? 'granted' : 'denied');
-      } catch (e) {
-        setPermStatus('notifications', 'denied');
+        setStato((s) => ({ ...s, notifications: (res as any)?.display === 'granted' }));
+      } catch {
+        setStato((s) => ({ ...s, notifications: false }));
       }
-      setStep(3);
-    } else if (step === 3) {
-      // Batteria (Fine)
-      // Su Android l'esenzione batteria è già stata richiesta dal plugin
-      // nativo quando la catena arriva fin qui (status
-      // 'requesting_battery_optimization', vedi sopra); se siamo arrivati a
-      // questo step passando per lo step 2 JS, non è stata richiesta.
-      if (!localStorage.getItem(PERM_KEYS.battery)) {
-        setPermStatus('battery', 'skipped');
-      }
-      finishOnboarding();
+    } finally {
+      setOccupato(null);
+      void rileggi();
     }
+  };
+
+  /** Tasto «Attiva» della batteria (solo Android, facoltativo): la lista di sistema. */
+  const attivaBatteria = async () => {
+    if (occupato || !NativePermissionsPlugin) return;
+    setOccupato('battery');
+    try { await NativePermissionsPlugin.requestBatteryOptimization(); } catch { /* metodo assente */ }
+    finally { setOccupato(null); }
   };
 
   if (!isVisible) return null;
 
-  // Traduzione nella lingua della UI (7 lingue, chiavi pf_pm_* in traduzioni/profilo)
-  const tr = (key: string) => getTranslation(key, language);
+  const posizioneOk = stato.location === 'always';
+  const notificheOk = stato.notifications === true;
+  const batteriaOk = stato.battery === true;
+  const mostraBatteria = isAndroid();
+
+  const sottotitoloPosizione = locationDenied
+    ? t('pf_pm_denied')
+    : stato.location === 'whileInUse'
+      ? (ripiegoIos ? t('pf_pm2_nota_ios') : t('pf_pm2_riga_pos_parziale'))
+      : t('pf_pm2_riga_pos_testo');
+  const sottotitoloNotifiche = stato.notificationsEnabled === false
+    ? t('pf_pm2_riga_notif_bloccate')
+    : t('pf_pm2_riga_notif_testo');
+
+  const Riga = ({
+    icona, titolo, testo, ok, facoltativo, occupata, onAttiva,
+  }: { icona: React.ReactNode; titolo: string; testo: string; ok: boolean; facoltativo?: boolean; occupata: boolean; onAttiva: () => void }) => (
+    <li className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white px-3.5 py-3 text-left shadow-sm">
+      <div
+        className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+        style={{ background: ok ? 'rgba(16,185,129,0.12)' : `${ACCENTO.tinta}1f`, color: ok ? '#059669' : '#0369a1' }}
+      >
+        {ok ? <Check className="h-5 w-5" strokeWidth={3} /> : icona}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[13.5px] font-bold leading-snug text-slate-900">
+          {titolo}
+          {facoltativo && (
+            <span className="ml-1.5 rounded-full border border-slate-200 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-500">
+              {t('pf_pm2_facoltativo')}
+            </span>
+          )}
+        </p>
+        <p className="mt-0.5 text-[11.5px] leading-snug text-slate-600">{testo}</p>
+      </div>
+      {ok ? (
+        <span className="shrink-0 self-center rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+          {t('pf_pm2_attivo')}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onAttiva}
+          disabled={occupata}
+          className="shrink-0 self-center rounded-xl px-3.5 py-2 text-[11px] font-black uppercase tracking-wider text-white shadow-md transition-all active:scale-95 disabled:opacity-60"
+          style={{ background: 'linear-gradient(100deg, #0284c7, #1e3a8a)' }}
+        >
+          {t('pf_pm2_attiva')}
+        </button>
+      )}
+    </li>
+  );
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-slate-900/80 backdrop-blur-xl flex items-center justify-center p-4">
-      {/* Pannello BIANCO: i colori qui sotto erano quelli di un pannello
-          scuro (oro, bianco/10) rimasti dopo il cambio di sfondo — titolo
-          oro su bianco a 2,1:1, «Salta» a 1,3:1 (UX-01, audit 28/08/2026). */}
-      <div className="bg-surface border border-primary/10 rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden flex flex-col animate-in fade-in slide-in-from-bottom-10 duration-500">
+    <div
+      className="fixed inset-0 z-[9999] flex flex-col bg-[#f6f7fb] text-slate-900 select-none overflow-hidden"
+      role="dialog"
+      aria-label={t('pf_pm2_tag')}
+    >
+      {/* Alone e griglia: gli stessi del carosello, così è la stessa app. */}
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage:
+            `radial-gradient(120% 80% at 78% 12%, ${ACCENTO.alone} 0%, transparent 62%),` +
+            'radial-gradient(90% 70% at 12% 92%, rgba(212,175,55,0.06) 0%, transparent 60%)',
+        }}
+      />
+      <div className="absolute inset-0 pointer-events-none opacity-50 bg-[linear-gradient(rgba(15,23,42,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.05)_1px,transparent_1px)] bg-[size:34px_34px]" />
 
-        {/* Intestazione Dinamica */}
-        <div className="p-8 pb-4 text-center relative bg-gradient-to-br from-primary/20 to-transparent">
-          <div className="w-20 h-20 mx-auto bg-primary text-white rounded-3xl flex items-center justify-center mb-6 shadow-xl shadow-primary/30 transform rotate-3 transition-all">
-            {step === 0 && <ShieldCheck className="w-10 h-10" />}
-            {step === 1 && <MapPin className="w-10 h-10 animate-bounce" />}
-            {step === 2 && <Bell className="w-10 h-10 animate-pulse" />}
-            {step === 3 && <BatteryCharging className="w-10 h-10" />}
-          </div>
-          <h2 className="text-2xl font-black text-primary mb-2 tracking-tight">
-            {step === 0 && tr('pf_pm_titolo0')}
-            {step === 1 && tr('pf_pm_titolo1')}
-            {step === 2 && tr('pf_pm_titolo2')}
-            {step === 3 && tr('pf_pm_titolo3')}
-          </h2>
-          <p className="text-sm text-on-surface-variant leading-relaxed font-medium min-h-16">
-            {step === 0 && tr('pf_pm_desc0')}
-            {step === 1 && tr('pf_pm_desc1')}
-            {step === 2 && tr('pf_pm_desc2')}
-            {step === 3 && tr('pf_pm_desc3')}
-          </p>
+      <header className="relative z-10 shrink-0 flex items-center justify-between px-6 pt-4 sm:px-10">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-serif font-black tracking-[0.18em] text-[#d4af37]">WIP</span>
+          <span className="w-1 h-1 rounded-full bg-[#d4af37]/70" />
+          <span className="text-[9px] font-bold uppercase tracking-[0.28em] text-slate-500">World in Pocket</span>
         </div>
+        <button
+          type="button"
+          onClick={finishOnboarding}
+          className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 rounded-lg px-3 py-2 transition-colors"
+        >
+          {t('vr_a_ob_skip')}
+        </button>
+      </header>
 
-        {/* Indicatori di Progresso */}
-        <div className="px-8 py-2 flex justify-center gap-2">
-          {[1, 2, 3].map((s) => (
+      <main className="relative z-10 flex-1 overflow-y-auto px-6 pb-3 pt-2 sm:px-10">
+        <div className="mx-auto flex w-full max-w-md flex-col items-center text-center">
+          {/* Medaglione, pill, titolo: l'impaginato del carosello. */}
+          {/* Intestazione compatta: sul Realme (1080x2400) con il medaglione
+              grande le tre righe finivano sotto la piega — e la schermata
+              esiste per quelle righe. */}
+          <div className="relative mb-3 flex items-center justify-center">
+            <span aria-hidden className="absolute h-20 w-20 rounded-full blur-xl" style={{ background: ACCENTO.alone }} />
             <div
-              key={s}
-              className={`h-1.5 rounded-full transition-all duration-300 ${step >= s ? 'w-8 bg-primary' : 'w-2 bg-primary/15'}`}
-            />
-          ))}
-        </div>
-
-        {/* Lista dei permessi (solo nello step 0) */}
-        {step === 0 && (
-          <div className="p-8 pt-4 flex-1">
-            <div className="space-y-4">
-              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
-                <div className="w-10 h-10 rounded-full bg-blue-500/15 text-blue-700 flex items-center justify-center shrink-0">
-                  <MapPin className="w-5 h-5" />
-                </div>
-                <div className="text-sm font-bold text-primary">{tr('pf_pm_gps')}</div>
-              </div>
-              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
-                <div className="w-10 h-10 rounded-full bg-amber-500/15 text-amber-700 flex items-center justify-center shrink-0">
-                  <Bell className="w-5 h-5" />
-                </div>
-                <div className="text-sm font-bold text-primary">{tr('pf_pm_notifiche')}</div>
-              </div>
-              <div className="flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/10">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/15 text-emerald-700 flex items-center justify-center shrink-0">
-                  <BatteryCharging className="w-5 h-5" />
-                </div>
-                <div className="text-sm font-bold text-primary">{tr('pf_pm_batteria')}</div>
-              </div>
+              className="relative flex h-14 w-14 items-center justify-center rounded-[18px] border"
+              style={{
+                borderColor: `${ACCENTO.tinta}59`,
+                background: 'linear-gradient(160deg, #ffffff, #eef1f7)',
+                boxShadow: `0 18px 50px -20px ${ACCENTO.tinta}80`,
+              }}
+            >
+              <ShieldCheck className="h-7 w-7" strokeWidth={1.6} style={{ color: ACCENTO.tinta }} />
             </div>
           </div>
-        )}
 
-        {/* Pulsanti Azione */}
-        <div className="p-8 pt-6">
-          {/* Diniego posizione: spiegazione + apri impostazioni (step 1) */}
-          {locationDenied && step === 1 && (
-            <div className="mb-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-left">
-              <p className="text-sm font-bold text-on-surface leading-relaxed mb-3">
-                {tr('pf_pm_denied')}
-              </p>
-              <button
-                type="button"
-                onClick={openAppSettings}
-                className="w-full min-h-11 bg-primary/10 text-primary font-bold py-3 rounded-xl border border-primary/20 active:scale-95 transition-all flex items-center justify-center gap-2"
-              >
-                <Settings className="w-4 h-4" />
-                {tr('pf_pm_apri_impostazioni')}
-              </button>
-            </div>
+          <span
+            className="mb-3 inline-block rounded-full border px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.22em]"
+            style={{ color: '#0369a1', borderColor: `${ACCENTO.tinta}60`, background: `${ACCENTO.tinta}1a` }}
+          >
+            {t('pf_pm2_tag')}
+          </span>
+
+          <h2 className="text-[22px] sm:text-[26px] font-serif font-black leading-[1.2] tracking-tight text-balance">
+            {t('pf_pm2_titolo')}{' '}
+            <span style={{ color: '#0284c7' }}>{t('pf_pm2_evidenza')}</span>
+          </h2>
+
+          {/* PROMINENT DISCLOSURE (policy Play): cosa, perché, anche ad app
+              chiusa, non per pubblicità — PRIMA di qualunque richiesta. */}
+          <p className="mt-2 max-w-sm text-[13px] leading-relaxed text-slate-700">
+            {t('vr_b_pd_body')}
+          </p>
+          <ul className="mt-3 flex flex-wrap justify-center gap-2">
+            {[t('vr_b_pd_b1'), t('vr_b_pd_b2'), t('vr_b_pd_b3')].map((p) => (
+              <li key={p} className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 shadow-sm">
+                <Check className="h-3 w-3 shrink-0" strokeWidth={3} style={{ color: ACCENTO.tinta }} />
+                {p}
+              </li>
+            ))}
+          </ul>
+
+          {/* UNA RIGA PER PERMESSO, col suo tasto «Attiva». */}
+          <ul className="mt-4 w-full space-y-2.5">
+            <Riga
+              icona={<MapPin className="h-5 w-5" />}
+              titolo={t('pf_pm2_riga_pos_titolo')}
+              testo={sottotitoloPosizione}
+              ok={posizioneOk}
+              occupata={occupato === 'location'}
+              onAttiva={attivaPosizione}
+            />
+            <Riga
+              icona={<Bell className="h-5 w-5" />}
+              titolo={t('pf_pm2_riga_notif_titolo')}
+              testo={sottotitoloNotifiche}
+              ok={notificheOk}
+              occupata={occupato === 'notifications'}
+              onAttiva={attivaNotifiche}
+            />
+            {mostraBatteria && (
+              <Riga
+                icona={<BatteryCharging className="h-5 w-5" />}
+                titolo={t('pf_pm2_riga_batt_titolo')}
+                testo={t('pf_pm2_riga_batt_testo')}
+                ok={batteriaOk}
+                facoltativo
+                occupata={occupato === 'battery'}
+                onAttiva={attivaBatteria}
+              />
+            )}
+          </ul>
+
+          {/* Posizione negata: si dice e si apre in un tocco la scheda dell'app. */}
+          {locationDenied && (
+            <button
+              type="button"
+              onClick={openAppSettings}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-[12px] font-bold text-amber-900 active:scale-[0.98]"
+            >
+              <Settings className="h-4 w-4" />
+              {t('pf_pm_apri_impostazioni')}
+            </button>
           )}
 
-          <button
-            type="button"
-            onClick={locationDenied && step === 1 ? () => { setLocationDenied(false); setStep(2); } : requestNextPermission}
-            className="w-full min-h-11 bg-primary text-white font-black py-4 text-lg rounded-2xl shadow-lg shadow-primary/30 active:scale-95 transition-all flex justify-center items-center gap-2"
-          >
-            {locationDenied && step === 1
-              ? tr('pf_pm_continua')
-              : (step === 0 ? tr('pf_pm_iniziamo') : (step === 3 ? tr('pf_pm_concludi') : tr('pf_pm_consenti')))}
-            {step > 0 && <CheckCircle2 className="w-5 h-5" />}
-          </button>
+          <p className="mt-3 text-[11px] leading-snug text-slate-500">{t('vr_b_pd_note')}</p>
+        </div>
+      </main>
 
-          {/* "Salta per ora" chiude il flusso ma NON è definitivo: le chiavi
-              granulari (PERM_KEYS) restano rilette da requestBackgroundPermissionsFlow,
-              che una UI futura può richiamare per far ripetere il check senza
-              riaprire tutto l'onboarding. */}
-          {/* TODO: richiamare requestBackgroundPermissionsFlow (esportata da
-              questo file) da ProfileScreen come voce "Verifica permessi", così
-              chi ha saltato o negato qui può riprovare in un secondo momento. */}
+      <footer className="relative z-10 shrink-0 px-6 pb-6 pt-2 sm:px-10">
+        <div className="mx-auto w-full max-w-md">
           <button
             type="button"
             onClick={finishOnboarding}
-            className="w-full min-h-11 text-center mt-2 text-xs font-bold text-slate-600 underline underline-offset-2 py-2 active:text-primary transition-colors"
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-[12px] font-black uppercase tracking-[0.18em] text-slate-950 transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
+            style={{
+              background: `linear-gradient(100deg, ${ACCENTO.tinta}, #d4af37)`,
+              boxShadow: `0 14px 40px -18px ${ACCENTO.tinta}`,
+            }}
           >
-            {tr('pf_pm_salta')}
+            {t('pf_pm2_continua')}
+            <ArrowRight className="h-4 w-4" strokeWidth={3} />
+          </button>
+          {/* «Più tardi» non è definitivo: le chiavi granulari restano, e da
+              Profilo si può ripetere il check (requestBackgroundPermissionsFlow). */}
+          <button
+            type="button"
+            onClick={finishOnboarding}
+            className="mt-2 w-full py-2 text-center text-[11px] font-bold text-slate-500 underline underline-offset-2 active:text-slate-900"
+          >
+            {t('pf_pm2_dopo')}
           </button>
         </div>
-      </div>
-
-      {/* Informativa posizione in background (Google Play) prima della richiesta */}
-      <ProminentDisclosure
-        isOpen={showDisclosure}
-        language={language}
-        onDecline={() => {
-          // L'utente non acconsente alla posizione in background: non la
-          // richiediamo (policy Play) e proseguiamo con le notifiche.
-          setShowDisclosure(false);
-          setStep(2);
-        }}
-        onAccept={async () => {
-          localStorage.setItem('wip_location_disclosure_accepted', 'true');
-          setShowDisclosure(false);
-          await requestLocationPermission();
-        }}
-      />
+      </footer>
     </div>
   );
 }

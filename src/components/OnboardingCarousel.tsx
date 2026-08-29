@@ -388,8 +388,9 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
       };
 
   return (
+    // TEMA CHIARO (29/08/2026, committente): stesso impaginato, fondo chiaro.
     <div
-      className="fixed inset-0 z-[100] flex flex-col bg-[#07090e] text-white select-none overflow-hidden"
+      className="fixed inset-0 z-[100] flex flex-col bg-[#f6f7fb] text-slate-900 select-none overflow-hidden"
       role="dialog"
       aria-label={t('vr_a_ob_dialog')}
       {...gesti}
@@ -404,7 +405,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
             'radial-gradient(90% 70% at 12% 92%, rgba(212,175,55,0.06) 0%, transparent 60%)',
         }}
       />
-      <div className="absolute inset-0 pointer-events-none opacity-50 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:34px_34px]" />
+      <div className="absolute inset-0 pointer-events-none opacity-50 bg-[linear-gradient(rgba(15,23,42,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.05)_1px,transparent_1px)] bg-[size:34px_34px]" />
 
       {/* Intestazione: marchio a sinistra, "salta" a destra e sempre
           raggiungibile — prima stava in fondo, dove su schermi piccoli
@@ -413,13 +414,13 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
         <div className="flex items-center gap-2">
           <span className="text-lg font-serif font-black tracking-[0.18em] text-[#d4af37]">WIP</span>
           <span className="w-1 h-1 rounded-full bg-[#d4af37]/70" />
-          <span className="text-[9px] font-bold uppercase tracking-[0.28em] text-white/45">
+          <span className="text-[9px] font-bold uppercase tracking-[0.28em] text-slate-500">
             World in Pocket
           </span>
         </div>
         <button
           onClick={onComplete}
-          className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/45 hover:text-white focus-visible:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 rounded-lg px-3 py-2 transition-colors"
+          className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 hover:text-slate-900 focus-visible:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 rounded-lg px-3 py-2 transition-colors"
         >
           {t('vr_a_ob_skip')}
         </button>
@@ -440,7 +441,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
               <span
                 className="block h-1 rounded-full transition-all duration-500"
                 style={{
-                  background: i <= indice ? accento.tinta : 'rgba(255,255,255,0.14)',
+                  background: i <= indice ? accento.tinta : 'rgba(15,23,42,0.12)',
                   boxShadow: i === indice ? `0 0 12px ${accento.alone}` : 'none',
                 }}
               />
@@ -462,7 +463,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
                 <h2 className="text-[24px] sm:text-[28px] font-serif font-black leading-[1.2] tracking-tight text-balance">
                   {tutto.titolo}
                 </h2>
-                <p className="mt-3 max-w-sm text-[13px] leading-relaxed text-white/60">
+                <p className="mt-3 max-w-sm text-[13px] leading-relaxed text-slate-600">
                   {tutto.sottotitolo}
                 </p>
                 {/* Una colonna sola: sono frasi, non etichette, e su due
@@ -473,10 +474,10 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
                   {tutto.voci.map(([emoji, testo]) => (
                     <li
                       key={testo}
-                      className="flex items-start gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-2.5"
+                      className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm"
                     >
                       <span aria-hidden className="text-base leading-none pt-0.5">{emoji}</span>
-                      <span className="text-[12.5px] leading-snug text-white/75">{testo}</span>
+                      <span className="text-[12.5px] leading-snug text-slate-700">{testo}</span>
                     </li>
                   ))}
                 </ul>
@@ -500,7 +501,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
                 className="relative flex h-24 w-24 items-center justify-center rounded-[28px] border transition-colors duration-700"
                 style={{
                   borderColor: `${accento.tinta}59`,
-                  background: 'linear-gradient(160deg, rgba(255,255,255,0.07), rgba(255,255,255,0.01))',
+                  background: 'linear-gradient(160deg, #ffffff, #eef1f7)',
                   boxShadow: `0 18px 50px -20px ${accento.tinta}80`,
                 }}
               >
@@ -526,7 +527,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
 
             {/* Testo piu' chiaro di prima (era bianco al 60%, quasi illeggibile
                 al sole) e leggermente piu' grande. */}
-            <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-white/75">
+            <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-slate-700">
               {s.testo}
             </p>
 
@@ -536,7 +537,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
               {s.prove.map((p) => (
                 <li
                   key={p}
-                  className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-[11px] font-medium text-white/70"
+                  className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-medium text-slate-700 shadow-sm"
                 >
                   <Check className="h-3 w-3 shrink-0" strokeWidth={3} style={{ color: accento.tinta }} />
                   {p}
@@ -556,7 +557,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
           <button
             onClick={indietro}
             disabled={indice === 0}
-            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 text-white/70 transition-all hover:bg-white/5 hover:text-white disabled:pointer-events-none disabled:opacity-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition-all hover:bg-slate-50 hover:text-slate-900 disabled:pointer-events-none disabled:opacity-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
             aria-label={t('vr_a_ob_prev')}
           >
             <ArrowLeft className="h-4 w-4" strokeWidth={2.5} />
@@ -564,7 +565,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
 
           <button
             onClick={avanti}
-            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl text-[12px] font-black uppercase tracking-[0.18em] text-slate-950 transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-2xl text-[12px] font-black uppercase tracking-[0.18em] text-slate-950 transition-all active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500"
             style={{
               background: `linear-gradient(100deg, ${accento.tinta}, #d4af37)`,
               boxShadow: `0 14px 40px -18px ${accento.tinta}`,
@@ -584,7 +585,7 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
           </button>
         </div>
 
-        <p className="mt-4 text-center text-[10px] uppercase tracking-[0.22em] text-white/25">
+        <p className="mt-4 text-center text-[10px] uppercase tracking-[0.22em] text-slate-400">
           {indice + 1} / {totale}
         </p>
       </footer>

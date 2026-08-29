@@ -32,6 +32,14 @@ import java.util.ArrayList
                 Manifest.permission.ACCESS_COARSE_LOCATION
             ]
         ),
+        // (29/08/2026) Alias a se' per il background: chiesto DOPO il foreground,
+        // da API 30 il sistema apre direttamente la pagina «Posizione» con il
+        // radio «Consenti sempre» (un tocco), invece della scheda Info app da
+        // cui l'utente doveva trovare Autorizzazioni → Posizione da solo.
+        Permission(
+            alias = "backgroundLocation",
+            strings = [Manifest.permission.ACCESS_BACKGROUND_LOCATION]
+        ),
         Permission(
             alias = "notifications",
             strings = [Manifest.permission.POST_NOTIFICATIONS]
@@ -102,44 +110,42 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
     }
 
+    private fun backgroundLocationGranted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /**
+     * POSIZIONE IN BACKGROUND IN UN TOCCO (29/08/2026, collaudo sul Realme).
+     * Prima: dialogo nativo di disclosure + scheda Info app, da cui l'utente
+     * doveva trovare da solo Autorizzazioni → Posizione → Consenti sempre
+     * (tre tocchi a mano, e sul telefono del committente nessuno li trovava).
+     * Ora la prominent disclosure Play la fa la schermata JS (una sola, con
+     * cosa/perché/anche ad app chiusa) PRIMA di chiamare il plugin, e qui si
+     * CHIEDE il permesso: su API 30+ il sistema apre direttamente la pagina
+     * «Posizione» col radio «Consenti sempre»; su API 29 e' un'opzione dello
+     * stesso dialogo. Il callback arriva quando l'utente torna: nessuna
+     * navigazione manuale. I valori di `status` restano quelli di prima.
+     */
     private fun checkBackgroundLocation(call: PluginCall) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                Handler(Looper.getMainLooper()).post {
-                    // Prominent disclosure richiesta dalla policy Play sulla
-                    // posizione in background: deve dire COSA si raccoglie,
-                    // PERCHÉ, e che avviene anche ad app chiusa.
-                    // (28/08/2026) Testo nella lingua scelta dall'utente
-                    // (NotificationStrings legge le prefs "language", non la
-                    // locale di sistema): era italiano fisso per tutto il mondo.
-                    AlertDialog.Builder(context)
-                        .setTitle(NotificationStrings.get(context, "bg_disclosure_title"))
-                        .setMessage(NotificationStrings.get(context, "bg_disclosure_text"))
-                        .setPositiveButton(NotificationStrings.get(context, "bg_disclosure_settings")) { _, _ ->
-                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                data = Uri.fromParts("package", context.packageName, null)
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            context.startActivity(intent)
-                            val ret = JSObject()
-                            ret.put("status", "requesting_background_location")
-                            call.resolve(ret)
-                        }
-                        // Nessuna richiesta di permesso qui: rifiutare deve
-                        // restare rifiutare (il consenso non cambia logica).
-                        .setNegativeButton(NotificationStrings.get(context, "bg_disclosure_later")) { dialog, _ ->
-                            dialog.dismiss()
-                            val ret = JSObject()
-                            ret.put("status", "denied_background_location")
-                            call.resolve(ret)
-                        }
-                        .setCancelable(false)
-                        .show()
-                }
-                return
-            }
+        if (!backgroundLocationGranted()) {
+            requestPermissionForAlias("backgroundLocation", call, "backgroundLocationCallback")
+            return
         }
         checkNotifications(call)
+    }
+
+    @PermissionCallback
+    private fun backgroundLocationCallback(call: PluginCall) {
+        if (backgroundLocationGranted()) {
+            checkNotifications(call)
+        } else {
+            // Rifiutare resta rifiutare: nessuna seconda richiesta, nessun
+            // dirottamento sulle Impostazioni. La schermata JS mostra lo stato
+            // e un tasto «Attiva» per riprovare quando vuole l'utente.
+            val ret = JSObject()
+            ret.put("status", "denied_background_location")
+            call.resolve(ret)
+        }
     }
 
     private fun checkNotifications(call: PluginCall) {
@@ -174,7 +180,15 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
         } catch (_: Exception) { true }
         if (abilitate) {
-            checkActivityRecognition(call)
+            // (29/08/2026) La catena dell'onboarding finisce QUI: posizione
+            // (fg+bg) e notifiche. Attivita' fisica e batteria erano altri due
+            // dialoghi/pagine di sistema in fila — e la pagina batteria OEM del
+            // Realme era pure sbagliata (interruttori «sfondo/avvio automatico»,
+            // non l'esenzione). Restano come tasti a parte nella schermata
+            // permessi (requestActivityRecognition / requestBatteryOptimization).
+            val ret = JSObject()
+            ret.put("status", "all_granted")
+            call.resolve(ret)
             return
         }
         Handler(Looper.getMainLooper()).post {
@@ -277,6 +291,128 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         }
         val ret = JSObject()
         ret.put("status", "all_granted")
+        call.resolve(ret)
+    }
+
+    // ── PERMESSI GRANULARI (29/08/2026) ─────────────────────────────────────
+    // La schermata permessi ha UNA riga per permesso con un tasto «Attiva»
+    // ciascuna: ogni tasto chiama uno di questi metodi, che apre direttamente
+    // il dialogo o la pagina di sistema giusta, e getPermissionsStatus rilegge
+    // lo stato per aggiornare le spunte quando l'utente torna nell'app.
+    // checkAndRequestPermissions (la catena unica) resta per compatibilita'
+    // e per iOS, dove il plugin Swift non ha questi metodi.
+
+    /** Stato di tutto in una lettura sola: le spunte della schermata. */
+    @PluginMethod
+    fun getPermissionsStatus(call: PluginCall) {
+        val fg = getPermissionState("location") == PermissionState.GRANTED
+        val bg = fg && backgroundLocationGranted()
+        val notifPermesso = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            getPermissionState("notifications") == PermissionState.GRANTED
+        // Permesso concesso ≠ notifiche consentite: l'interruttore di sistema
+        // (Realme «Gestisci notifiche: Rifiuta») lo vede solo areNotificationsEnabled.
+        val notifAbilitate = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val batteria = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || pm.isIgnoringBatteryOptimizations(context.packageName)
+        val attivita = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+            getPermissionState("activity") == PermissionState.GRANTED
+        val ret = JSObject()
+        ret.put("location", if (bg) "always" else if (fg) "whileInUse" else "denied")
+        ret.put("notifications", notifPermesso && notifAbilitate)
+        ret.put("notificationsPermission", notifPermesso)
+        ret.put("notificationsEnabled", notifAbilitate)
+        ret.put("battery", batteria)
+        ret.put("activity", attivita)
+        call.resolve(ret)
+    }
+
+    /**
+     * Tasto «Attiva» della posizione: foreground e poi background, con i
+     * dialoghi di sistema (API 30+: la pagina «Posizione» col radio «Consenti
+     * sempre»). Risponde con lo stato finale: always / whileInUse / denied.
+     */
+    @PluginMethod
+    fun requestLocationPermissions(call: PluginCall) {
+        if (getPermissionState("location") != PermissionState.GRANTED) {
+            requestPermissionForAlias("location", call, "locationOnlyCallback")
+            return
+        }
+        locationOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun locationOnlyCallback(call: PluginCall) {
+        if (getPermissionState("location") != PermissionState.GRANTED) {
+            val ret = JSObject(); ret.put("location", "denied"); call.resolve(ret); return
+        }
+        if (!backgroundLocationGranted()) {
+            requestPermissionForAlias("backgroundLocation", call, "backgroundOnlyCallback")
+            return
+        }
+        backgroundOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun backgroundOnlyCallback(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("location", if (backgroundLocationGranted()) "always" else "whileInUse")
+        call.resolve(ret)
+    }
+
+    /**
+     * Tasto «Attiva» delle notifiche: il permesso di runtime (API 33+) e, se
+     * l'interruttore di sistema e' spento, la pagina notifiche dell'app.
+     * Risponde { granted, enabled, opened }.
+     */
+    @PluginMethod
+    fun requestNotificationPermission(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            getPermissionState("notifications") != PermissionState.GRANTED
+        ) {
+            requestPermissionForAlias("notifications", call, "notificationOnlyCallback")
+            return
+        }
+        notificationOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun notificationOnlyCallback(call: PluginCall) {
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            getPermissionState("notifications") == PermissionState.GRANTED
+        val enabled = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        var opened = false
+        if (granted && !enabled) { apriImpostazioniNotifiche(); opened = true }
+        val ret = JSObject()
+        ret.put("granted", granted); ret.put("enabled", enabled); ret.put("opened", opened)
+        call.resolve(ret)
+    }
+
+    /** Tasto «Attiva» della batteria: la lista di sistema delle esenzioni (vedi checkBatteryOptimization). */
+    @PluginMethod
+    fun requestBatteryOptimization(call: PluginCall) {
+        checkBatteryOptimization(call)
+    }
+
+    /** Tasto facoltativo dell'attivita' fisica (sensori anti-teletrasporto). */
+    @PluginMethod
+    fun requestActivityRecognition(call: PluginCall) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            getPermissionState("activity") != PermissionState.GRANTED
+        ) {
+            requestPermissionForAlias("activity", call, "activityOnlyCallback")
+            return
+        }
+        activityOnlyCallback(call)
+    }
+
+    @PermissionCallback
+    private fun activityOnlyCallback(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("granted", Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || getPermissionState("activity") == PermissionState.GRANTED)
         call.resolve(ret)
     }
 

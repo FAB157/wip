@@ -253,6 +253,12 @@ export default function App() {
   // null quando il giro e` sospeso o non c'e`: basta escludere il giro finito.
   const vistaGiro = useVistaGiro();
   const [navTappa, setNavTappa] = useState<any | null>(null);
+  /**
+   * La card blu delle svolte chiusa con la X (scelta del committente, 29/08/2026:
+   * «X = nasconde la card, il giro continua»): resta nascosta per QUESTA tappa
+   * (indice) e ricompare da sola alla successiva.
+   */
+  const [cardSvolteNascostaPer, setCardSvolteNascostaPer] = useState<number | null>(null);
   // AVVIA IL GIRO DALLA MAPPA (28/08/2026, collaudo: «ci deve essere un tasto
   // per iniziare la navigazione di tutto il tour»). Il navigatore del giro
   // intero E` il giro: appena creato, il driver legge le svolte tratta per
@@ -1421,10 +1427,10 @@ export default function App() {
               tasto tondo verde — nascosto a giro avviato perche' riproponeva
               la scelta WIP Nav/Google. Il giro ha le stesse informazioni
               (svolta, metri, tappa, ETA): ora le mostra nella stessa card.
-              Senza X («quando c'e' il navigatore deve sempre esserci»): si
-              spegne solo fermando il giro dal cruscotto. */}
+              La X la NASCONDE per la tappa in corso (il giro continua) e
+              ricompare alla tappa dopo; fermare il giro si fa dal cruscotto. */}
           {vistaGiro && vistaGiro.avviato && !vistaGiro.inPausa && vistaGiro.stato !== 'FINITO'
-            && activeTab === "map" && (
+            && activeTab === "map" && cardSvolteNascostaPer !== vistaGiro.tappaCorrente && (
             <NavigationOverlay
               state="navigating"
               language={language}
@@ -1435,8 +1441,7 @@ export default function App() {
               etaSeconds={vistaGiro.metriRimanenti > 0 ? Math.round(vistaGiro.metriRimanenti / 1.11) : null}
               progress={vistaGiro.metriTotali > 0 ? 1 - vistaGiro.metriRimanenti / vistaGiro.metriTotali : null}
               poiName={vistaGiro.nomeTappa || undefined}
-              senzaChiudi
-              onStop={() => { /* niente X: il giro si ferma dal cruscotto */ }}
+              onStop={() => setCardSvolteNascostaPer(vistaGiro.tappaCorrente)}
               onRepeat={() => ripetiIstruzioneGiro()}
             />
           )}
@@ -1467,7 +1472,7 @@ export default function App() {
 
           <CategoryChips selectedIds={selectedCategories} onToggle={(id) => setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])} onEventClick={() => setActiveTab("events")} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} />
 
-          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} autoPlayNonce={poiAutoPlayNonce} guideMode={guideMode} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
+          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} autoPlayNonce={poiAutoPlayNonce} guideMode={guideMode} modalitaGiro={!!isRadarMode} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
         </div>
         
         {/* ALTRE TAB — i container restano montati (stato preservato), la

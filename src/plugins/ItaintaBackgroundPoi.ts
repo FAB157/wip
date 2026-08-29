@@ -27,6 +27,27 @@ export interface ItaintaBackgroundPoiPlugin {
   /** Apre la scheda dell'app nelle Impostazioni di sistema (permessi). */
   openAppSettings(): Promise<void>;
 
+  // ── Permessi (29/08/2026) ──────────────────────────────────────────────
+  /** Catena unica: posizione fg+bg → notifiche. Unico metodo presente anche su iOS. */
+  checkAndRequestPermissions(): Promise<{ status?: string; background?: string }>;
+  /** Solo Android: lo stato di tutto in una lettura (le spunte della schermata permessi). */
+  getPermissionsStatus(): Promise<{
+    location?: 'always' | 'whileInUse' | 'denied';
+    notifications?: boolean;
+    notificationsPermission?: boolean;
+    notificationsEnabled?: boolean;
+    battery?: boolean;
+    activity?: boolean;
+  }>;
+  /** Solo Android: foreground e poi background (API 30+: pagina «Posizione» col radio «Consenti sempre»). */
+  requestLocationPermissions(): Promise<{ location?: 'always' | 'whileInUse' | 'denied' }>;
+  /** Solo Android: permesso notifiche e, se bloccate dal telefono, la pagina notifiche dell'app. */
+  requestNotificationPermission(): Promise<{ granted?: boolean; enabled?: boolean; opened?: boolean }>;
+  /** Solo Android, facoltativo: la lista di sistema delle esenzioni batteria. */
+  requestBatteryOptimization(): Promise<{ status?: string }>;
+  /** Solo Android, facoltativo: ACTIVITY_RECOGNITION per i sensori. */
+  requestActivityRecognition(): Promise<{ granted?: boolean }>;
+
   startBackgroundPoiService(options: Record<string, any>): Promise<void>;
   stopBackgroundPoiService(): Promise<void>;
   syncManualSelection(options: { poisJson: string }): Promise<void>;
