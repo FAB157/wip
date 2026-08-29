@@ -6043,7 +6043,15 @@ function MapArea({
                 transition={{ duration: menoMovimento ? 0.08 : 0.16 }}
                 role="group"
                 aria-label={getTranslation('mp_livelli_mappa', language)}
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[70vh] overflow-y-auto"
+                // (29/08/2026) max-h-[70vh] fisso: con molti layer accesi (Vino
+                // e gusto, Fontanelle, Aree protette, Neve, Sole, Mare...) il
+                // pannello cresceva verso l'alto (col-reverse) fino a finire
+                // SOTTO la barra delle chip in cima (z-[2000], sempre in
+                // primo piano) — coperto a metà invece che scorrere dentro i
+                // suoi bordi. Il tetto ora è anche la vista meno lo spazio
+                // della barra chip + margine di rispetto, mai solo il 70%
+                // fisso dello schermo.
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[min(70vh,calc(100dvh-9rem-env(safe-area-inset-top)))] overflow-y-auto"
               >
                 {(['reti', 'condizioni'] as const).map((gruppo) => (
                   <Fragment key={gruppo}>
