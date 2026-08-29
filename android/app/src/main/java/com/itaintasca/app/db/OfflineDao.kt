@@ -7,6 +7,7 @@ import androidx.room.Query
 import androidx.room.RawQuery
 import androidx.room.Transaction
 import androidx.sqlite.db.SimpleSQLiteQuery
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteQuery
 import kotlin.math.cos
 
@@ -219,6 +220,61 @@ abstract class OfflineDao {
  */
 object OfflineRtree {
 
+    private const val TAG = "OfflineRtree"
+
+    /**
+     * IL MODULO `rtree` NON C'E' SU TUTTI I TELEFONI (29/08/2026, collaudo su
+     * Realme 8: «no such module: rtree»). L'SQLite di sistema e' compilato
+     * dal produttore, e alcuni lo compilano senza. Prima il DDL girava nel
+     * callback onCreate di Room e l'eccezione ammazzava il processo: il
+     * servizio ripartiva (START_STICKY), ripeteva «Posizione acquisita»,
+     * «Ricerca POI», e cadeva di nuovo — all'infinito, anche a guida
+     * spenta. Ora l'indice e' un'OTTIMIZZAZIONE: se il modulo manca si
+     * lavora con il riquadro lat/lon sulla tabella (poche migliaia di righe
+     * per pacchetto, millisecondi), e il risultato e' identico.
+     * null = mai verificato; true/false dopo la prima apertura del DB.
+     */
+    @Volatile var disponibile: Boolean? = null
+        private set
+
+    /**
+     * Crea (se mancano) tabella virtuale e trigger. Idempotente: si chiama in
+     * onCreate, onOpen, onDestructiveMigration e nella MIGRATION_4_5. Se
+     * l'SQLite del telefono non ha il modulo si segna e si va avanti; se e'
+     * un altro errore si segnala e basta — MAI si lascia risalire un'eccezione
+     * dal DDL: da qui si arriva a un crash dell'intero processo.
+     */
+    fun installa(db: SupportSQLiteDatabase): Boolean {
+        try {
+            for (sql in createSql()) db.execSQL(sql)
+            disponibile = true
+            return true
+        } catch (e: android.database.sqlite.SQLiteException) {
+            val moduloAssente = e.message?.contains("no such module", ignoreCase = true) == true
+            disponibile = false
+            if (moduloAssente) {
+                android.util.Log.w(TAG, "SQLite senza modulo rtree: ricerca offline con riquadro lat/lon")
+            } else {
+                android.util.Log.w(TAG, "Indice R-tree non installato: ${e.message}")
+            }
+            return false
+        } catch (e: Exception) {
+            disponibile = false
+            android.util.Log.w(TAG, "Indice R-tree non installato: ${e.message}")
+            return false
+        }
+    }
+
+    /** Pulizia orfani: solo se l'indice c'e', mai un'eccezione. */
+    fun vacuum(db: SupportSQLiteDatabase) {
+        if (disponibile != true) return
+        try {
+            db.execSQL(vacuumSql)
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Rtree vacuum failed: ${e.message}")
+        }
+    }
+
     fun createSql(): List<String> = listOf(
         "CREATE VIRTUAL TABLE IF NOT EXISTS offline_poi_rtree USING rtree(id, minLat, maxLat, minLon, maxLon)",
         "CREATE TRIGGER IF NOT EXISTS offline_pois_rtree_ins AFTER INSERT ON offline_pois BEGIN " +
@@ -242,6 +298,16 @@ object OfflineRtree {
     fun bboxQuery(lat: Double, lon: Double, radiusM: Double, limit: Int = 400): SimpleSQLiteQuery {
         val latDelta = radiusM / 111_000.0
         val lonDelta = radiusM / (111_320.0 * cos(Math.toRadians(lat)).coerceAtLeast(0.01))
+        // Senza il modulo rtree (vedi `disponibile`): stesso riquadro, stesse
+        // righe, direttamente sulle colonne lat/lon della tabella.
+        if (disponibile != true) {
+            return SimpleSQLiteQuery(
+                "SELECT * FROM offline_pois " +
+                    "WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? " +
+                    "LIMIT ?",
+                arrayOf<Any>(lat - latDelta, lat + latDelta, lon - lonDelta, lon + lonDelta, limit)
+            )
+        }
         return SimpleSQLiteQuery(
             "SELECT p.* FROM offline_pois p " +
                 "JOIN offline_poi_rtree r ON p.rowid = r.id " +

@@ -29,6 +29,8 @@
 		A11A2B3C4D5E6F70809100E1 /* NotificationStrings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F70809100E2 /* NotificationStrings.swift */; };
 		A11A2B3C4D5E6F70809100F1 /* BearingGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F70809100F2 /* BearingGate.swift */; };
 		A11A2B3C4D5E6F7080910101 /* WipApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910102 /* WipApi.swift */; };
+		A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */; };
+		A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -62,6 +64,8 @@
 		A11A2B3C4D5E6F70809100E2 /* NotificationStrings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationStrings.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F70809100F2 /* BearingGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BearingGate.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910102 /* WipApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipApi.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityNav.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavAttributes.swift; path = ../WipNavActivity/WipNavAttributes.swift; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -136,6 +140,8 @@
 				A11A2B3C4D5E6F70809100E2 /* NotificationStrings.swift */,
 				A11A2B3C4D5E6F70809100F2 /* BearingGate.swift */,
 				A11A2B3C4D5E6F7080910102 /* WipApi.swift */,
+				A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */,
+				A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -294,6 +300,8 @@
 				A11A2B3C4D5E6F70809100E1 /* NotificationStrings.swift in Sources */,
 				A11A2B3C4D5E6F70809100F1 /* BearingGate.swift in Sources */,
 				A11A2B3C4D5E6F7080910101 /* WipApi.swift in Sources */,
+				A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */,
+				A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

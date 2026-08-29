@@ -33,7 +33,30 @@ private enum WipNavColori {
 private struct WipNavVistaBlocco: View {
     let stato: WipNavAttributes.ContentState
 
+    /// La foto della tappa, se l'app l'ha gia' messa nell'App Group.
+    private var foto: UIImage? {
+        guard !stato.fotoPath.isEmpty else { return nil }
+        return UIImage(contentsOfFile: stato.fotoPath)
+    }
+
     var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // (29/08/2026) La foto del luogo verso cui si cammina, come i
+            // loghi delle squadre nel banner di SofaScore. Senza foto la
+            // colonna non c'e' e il testo prende tutta la larghezza.
+            if let img = foto {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            testo
+        }
+        .padding(14)
+    }
+
+    private var testo: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Riga 1 — la tappa: n/N e il nome, in grande.
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -96,7 +119,6 @@ private struct WipNavVistaBlocco: View {
                 Spacer(minLength: 0)
             }
         }
-        .padding(14)
     }
 }
 

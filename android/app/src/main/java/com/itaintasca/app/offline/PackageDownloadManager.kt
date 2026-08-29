@@ -602,7 +602,8 @@ class PackageDownloadManager(private val context: Context) {
     /** Ripulisce le entry R-tree orfane lasciate dagli upsert REPLACE (vedi OfflineRtree). */
     private fun vacuumRtree() {
         try {
-            db.openHelper.writableDatabase.execSQL(OfflineRtree.vacuumSql)
+            // Se il telefono non ha il modulo rtree non c'e' nulla da pulire.
+            OfflineRtree.vacuum(db.openHelper.writableDatabase)
         } catch (e: Exception) {
             Log.w(TAG, "Rtree vacuum failed: ${e.message}")
         }

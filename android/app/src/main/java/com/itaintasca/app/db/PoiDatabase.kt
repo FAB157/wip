@@ -93,7 +93,7 @@ abstract class PoiDatabase : RoomDatabase() {
                         "`poiId` TEXT NOT NULL, `credits` INTEGER NOT NULL, " +
                         "`ts` INTEGER NOT NULL)"
                 )
-                OfflineRtree.createSql().forEach { db.execSQL(it) }
+                OfflineRtree.installa(db)
             }
         }
 
@@ -229,13 +229,23 @@ abstract class PoiDatabase : RoomDatabase() {
 
         // L'R-tree non è un'entità Room: va (ri)creato anche sulle installazioni
         // fresche e dopo un'eventuale migration distruttiva pre-4.
+        // (29/08/2026) MAI un'eccezione da qui: onCreate gira dentro l'apertura
+        // del DB e un errore uccide il processo (successo davvero: modulo rtree
+        // assente sul Realme 8, servizio in crash-loop). OfflineRtree.installa
+        // assorbe l'errore e mette l'indice in modalita' «assente».
+        // onOpen serve per i DB gia' esistenti: e' li' che si scopre, una volta
+        // per processo, se l'indice si puo' usare (OfflineRtree.disponibile).
         private val rtreeCallback = object : Callback() {
             override fun onCreate(db: SupportSQLiteDatabase) {
-                OfflineRtree.createSql().forEach { db.execSQL(it) }
+                OfflineRtree.installa(db)
+            }
+
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                if (OfflineRtree.disponibile == null) OfflineRtree.installa(db)
             }
 
             override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
-                OfflineRtree.createSql().forEach { db.execSQL(it) }
+                OfflineRtree.installa(db)
             }
         }
 

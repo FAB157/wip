@@ -17,6 +17,17 @@
 //
 
 import Foundation
+
+/// L'App Group che app ed estensione condividono: e' l'unico posto dove
+/// l'app puo' scrivere la foto della tappa e il widget leggerla. Va
+/// abilitato in Xcode (Signing & Capabilities → App Groups) su ENTRAMBI i
+/// target; finche' non c'e', `containerURL` risponde nil e il cruscotto
+/// resta senza foto — mai un errore. Fuori dall'#if: lo usa anche l'app
+/// dove ActivityKit potrebbe non esserci.
+enum WipNavAppGroup {
+    static let id = "group.com.itaintasca.app"
+}
+
 #if canImport(ActivityKit)
 import ActivityKit
 
@@ -43,6 +54,11 @@ struct WipNavAttributes: ActivityAttributes {
         var eta: String
         /// Nome della tappa successiva. Vuoto = questa e' l'ultima.
         var nomeProssima: String
+        /// (29/08/2026) Percorso su disco della foto della tappa, gia'
+        /// scaricata dall'app nel contenitore dell'App Group (l'estensione
+        /// non puo' fare rete e lo stato ha un tetto di 4 KB: niente URL
+        /// remoti, niente byte). Vuoto = nessuna foto.
+        var fotoPath: String
     }
 
     /// Parte fissa per tutta la durata del giro: il titolo del giro, se c'e'.

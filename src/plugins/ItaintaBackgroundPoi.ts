@@ -67,6 +67,8 @@ export interface ItaintaBackgroundPoiPlugin {
     metriRimanenti?: number;
     eta?: string;
     nomeProssima?: string;
+    /** URL della foto della tappa (vuoto = nessuna): icona grande / miniatura. */
+    foto?: string;
   }): Promise<{ ok?: boolean; reason?: string }>;
 
   setDayPass(options: { expiresAt: number; cap: number; used: number }): Promise<void>;

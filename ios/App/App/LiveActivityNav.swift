@@ -23,6 +23,7 @@
 //
 
 import Foundation
+import UIKit
 #if canImport(ActivityKit)
 import ActivityKit
 #endif
@@ -65,7 +66,16 @@ final class LiveActivityNav {
         guard #available(iOS 16.1, *) else { return false }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return false }
 
-        let contenuto = LiveActivityNav.statoDaDizionario(stato)
+        LiveActivityNav.ultimoStato = stato
+        LiveActivityNav.ultimoTitolo = titoloGiro
+        var contenuto = LiveActivityNav.statoDaDizionario(stato)
+        // La foto della tappa: se e' gia' su disco entra subito nello stato,
+        // altrimenti parte il download e lo stato si aggiorna quando arriva.
+        let fotoUrl = (stato["foto"] as? String) ?? ""
+        contenuto.fotoPath = LiveActivityNav.fotoPronta(fotoUrl) ?? ""
+        if contenuto.fotoPath.isEmpty, !fotoUrl.isEmpty {
+            LiveActivityNav.scaricaFoto(fotoUrl)
+        }
 
         if let corrente = LiveActivityNav.attivita {
             Task { await LiveActivityNav.aggiornaAttivita(corrente, contenuto) }
@@ -130,6 +140,73 @@ final class LiveActivityNav {
         #endif
     }
 
+    // MARK: - Foto della tappa (29/08/2026)
+
+    /// URL dell'ultima foto richiesta: se ne arriva una diversa prima che il
+    /// download finisca, la vecchia non deve finire nel cruscotto.
+    private static var fotoUrlCorrente = ""
+    /// Ultimo stato spedito alla Live Activity: serve per ripubblicarlo con
+    /// la foto quando il download finisce, senza aspettare la svolta dopo.
+    private static var ultimoStato: [String: Any] = [:]
+    private static var ultimoTitolo = ""
+
+    /// Cartella condivisa con l'estensione (App Group). nil = App Group non
+    /// configurato in Xcode: si va avanti senza foto.
+    private static var cartellaFoto: URL? {
+        guard let base = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: WipNavAppGroup.id) else { return nil }
+        let dir = base.appendingPathComponent("wip-nav-foto", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func fileFoto(_ url: String) -> URL? {
+        guard let dir = cartellaFoto else { return nil }
+        // Nome stabile dall'URL: stessa foto, stesso file, nessun doppione.
+        let nome = String(url.hashValue, radix: 16, uppercase: false).replacingOccurrences(of: "-", with: "n")
+        return dir.appendingPathComponent("\(nome).jpg")
+    }
+
+    /// Il percorso se la foto e' gia' su disco, altrimenti nil.
+    private static func fotoPronta(_ url: String) -> String? {
+        guard url.hasPrefix("http"), let f = fileFoto(url) else { return nil }
+        return FileManager.default.fileExists(atPath: f.path) ? f.path : nil
+    }
+
+    /// Scarica, riduce a 256 px e salva nell'App Group; poi ripubblica lo
+    /// stato corrente con la foto. Tutto best-effort: un errore = niente foto.
+    private static func scaricaFoto(_ url: String) {
+        guard url.hasPrefix("http"), let remoto = URL(string: url), let destinazione = fileFoto(url) else { return }
+        guard fotoUrlCorrente != url else { return }   // gia' in corso
+        fotoUrlCorrente = url
+        var richiesta = URLRequest(url: remoto)
+        richiesta.timeoutInterval = 10
+        URLSession.shared.dataTask(with: richiesta) { dati, risposta, _ in
+            guard let dati = dati, (risposta as? HTTPURLResponse)?.statusCode ?? 200 < 300,
+                  let img = UIImage(data: dati) else { return }
+            // Quadrata e piccola: l'estensione ha poca memoria e la lock
+            // screen la mostra a 64 pt.
+            let lato = min(img.size.width, img.size.height)
+            let ritaglio = CGRect(x: (img.size.width - lato) / 2, y: (img.size.height - lato) / 2, width: lato, height: lato)
+            guard let cg = img.cgImage?.cropping(to: ritaglio.applying(CGAffineTransform(scaleX: img.scale, y: img.scale))) else { return }
+            let piccola = UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256)).image { _ in
+                UIImage(cgImage: cg, scale: 1, orientation: img.imageOrientation).draw(in: CGRect(x: 0, y: 0, width: 256, height: 256))
+            }
+            guard let jpg = piccola.jpegData(compressionQuality: 0.8) else { return }
+            do { try jpg.write(to: destinazione, options: .atomic) } catch { return }
+            // La tappa e' ancora questa? Allora si ripubblica con la foto.
+            DispatchQueue.main.async {
+                guard fotoUrlCorrente == url else { return }
+                #if canImport(ActivityKit)
+                if #available(iOS 16.1, *), let corrente = attivita {
+                    var stato = statoDaDizionario(ultimoStato)
+                    stato.fotoPath = destinazione.path
+                    Task { await aggiornaAttivita(corrente, stato) }
+                }
+                #endif
+            }
+        }.resume()
+    }
+
     // MARK: - Interno
 
     #if canImport(ActivityKit)
@@ -166,7 +243,8 @@ final class LiveActivityNav {
             metriAllaSvolta: numero("metriAllaSvolta", -1),
             metriRimanenti: max(numero("metriRimanenti", 0), 0),
             eta: stringa("eta"),
-            nomeProssima: stringa("nomeProssima")
+            nomeProssima: stringa("nomeProssima"),
+            fotoPath: ""
         )
     }
     #endif

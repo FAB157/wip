@@ -488,6 +488,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 putExtra("titolo", call.getString("titolo") ?: "")
                 putExtra("corpo", call.getString("corpo") ?: "")
                 putExtra("attivo", call.getBoolean("attivo") ?: false)
+                // (29/08/2026) URL della foto della tappa: icona grande della
+                // notifica sulla lock screen. Vuoto = nessuna foto.
+                putExtra("foto", call.getString("foto") ?: "")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

@@ -147,6 +147,8 @@ export interface VistaGiro {
   /** Coordinate della tappa corrente: il banner ci chiede il meteo. */
   tappaLat: number | null;
   tappaLon: number | null;
+  /** Foto della tappa corrente (URL) per il cruscotto a display spento. */
+  fotoTappa: string | null;
   istruzione: string | null;
   metriAllaSvolta: number | null;
   /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
@@ -343,6 +345,12 @@ export function tappaDaPoi(p: any): TappaGiro {
       : null,
     // Pranzo, pausa, trasferimento: tappe del percorso ma senza racconto.
     senzaGuida: p.senzaGuida === true || undefined,
+    // La foto del luogo per il cruscotto a display spento. Solo se e' del POI
+    // (niente ricerche per parola chiave: regola delle foto in CLAUDE.md).
+    foto: (() => {
+      const u = p.image_url || p.photo_url || p.imageUrl || p.foto || p.image || null;
+      return typeof u === 'string' && /^https?:\/\//.test(u) ? u : null;
+    })(),
   };
 }
 
@@ -1486,6 +1494,8 @@ class TourService {
       })(),
       tappaLat: t ? (t.ingresso?.lat ?? t.lat) : (rientro?.lat ?? null),
       tappaLon: t ? (t.ingresso?.lon ?? t.lon) : (rientro?.lon ?? null),
+      // In rientro non c'e' una tappa: niente foto.
+      fotoTappa: t?.foto ?? null,
       istruzione: this.navAttuale.istruzione,
       metriAllaSvolta: this.navAttuale.metri,
       suAttraversamento: this.navAttuale.attraversamento,

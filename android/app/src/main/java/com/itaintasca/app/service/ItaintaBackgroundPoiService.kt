@@ -448,7 +448,8 @@ class ItaintaBackgroundPoiService : Service() {
             applicaNavBanner(
                 intent.getStringExtra("titolo"),
                 intent.getStringExtra("corpo"),
-                intent.getBooleanExtra("attivo", false)
+                intent.getBooleanExtra("attivo", false),
+                intent.getStringExtra("foto")
             )
             return START_STICKY
         }
@@ -1897,19 +1898,76 @@ class ItaintaBackgroundPoiService : Service() {
 
     /** Parte della chiave anti-duplicato: senza, cambiando solo il banner la
      *  notifica non verrebbe ripubblicata. */
-    private fun navBannerKey(): String = "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}"
+    // (29/08/2026) LA FOTO DELLA TAPPA NEL CRUSCOTTO («la foto al cruscotto
+    // ok»). Sulla lock screen la notifica mostra l'icona grande accanto al
+    // testo: e' la foto del luogo verso cui si cammina — lo stesso effetto
+    // dei loghi delle squadre nel banner di SofaScore. Si scarica UNA volta
+    // per URL (fuori dal main thread, timeout corti, ridotta a 256 px) e si
+    // ripubblica la notifica quando arriva; finche' non c'e', o se non
+    // arriva, il cruscotto e' identico a prima. Mai una foto di un'altra
+    // tappa: se l'URL cambia la vecchia bitmap si butta subito.
+    @Volatile private var navBannerFotoUrl: String? = null
+    @Volatile private var navBannerFoto: android.graphics.Bitmap? = null
+    private val fotoHttp by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun navBannerKey(): String =
+        "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}|${if (navBannerFoto != null) navBannerFotoUrl.orEmpty() else ""}"
+
+    /** Scarica e riduce la foto della tappa, poi ripubblica la notifica. */
+    private fun caricaFotoBanner(url: String) {
+        serviceScope.launch {
+            try {
+                val bytes = fotoHttp.newCall(Request.Builder().url(url).build()).execute().use { r ->
+                    if (!r.isSuccessful) return@launch
+                    r.body?.bytes() ?: return@launch
+                }
+                // Decodifica a dimensione ridotta: una foto da 4 MB non deve
+                // finire intera in memoria per una miniatura da 256 px.
+                val misura = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, misura)
+                var scala = 1
+                while (misura.outWidth / scala > 512 || misura.outHeight / scala > 512) scala *= 2
+                val opzioni = android.graphics.BitmapFactory.Options().apply { inSampleSize = scala }
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opzioni) ?: return@launch
+                // Quadrata, centrata: e' cosi' che la lock screen la ritaglia.
+                val lato = minOf(bmp.width, bmp.height)
+                val quadrata = android.graphics.Bitmap.createBitmap(bmp, (bmp.width - lato) / 2, (bmp.height - lato) / 2, lato, lato)
+                val finale = if (lato > 256) android.graphics.Bitmap.createScaledBitmap(quadrata, 256, 256, true) else quadrata
+                // Nel frattempo la tappa puo' essere cambiata: la foto e'
+                // di quella di prima, si scarta.
+                if (navBannerFotoUrl != url || navBannerTitolo == null) return@launch
+                navBannerFoto = finale
+                applicaNavBanner(navBannerTitolo, navBannerCorpo, true, url)
+            } catch (e: Exception) {
+                Log.w(TAG, "Foto del cruscotto non scaricata: ${e.message}")
+            }
+        }
+    }
 
     /**
      * Accende/spegne il cruscotto e ripubblica subito la notifica persistente.
      * Con `attivo=false` si torna all'ultimo titolo/testo del radar.
      */
-    private fun applicaNavBanner(titolo: String?, corpo: String?, attivo: Boolean) {
+    private fun applicaNavBanner(titolo: String?, corpo: String?, attivo: Boolean, foto: String? = null) {
         if (attivo) {
             navBannerTitolo = titolo?.trim()?.takeIf { it.isNotEmpty() }
             navBannerCorpo = corpo?.trim()
+            val url = foto?.trim()?.takeIf { it.startsWith("http") }
+            if (url != navBannerFotoUrl) {
+                navBannerFotoUrl = url
+                navBannerFoto = null
+                if (url != null) caricaFotoBanner(url)
+            }
         } else {
             navBannerTitolo = null
             navBannerCorpo = null
+            navBannerFotoUrl = null
+            navBannerFoto = null
         }
         try {
             val suffix = dayPassSuffix()
@@ -1944,6 +2002,8 @@ class ItaintaBackgroundPoiService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setContentIntent(pOpen)
         if (bannerAttivo) {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(testoFinale))
+            // La foto della tappa, se e' gia' arrivata (vedi caricaFotoBanner).
+            navBannerFoto?.let { builder.setLargeIcon(it) }
             // Il cruscotto ha senso solo nell'ordine in cui e' arrivato:
             // niente suono/vibrazione, e in cima al gruppo delle "in corso".
             builder.setOnlyAlertOnce(true)

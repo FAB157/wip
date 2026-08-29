@@ -6972,6 +6972,8 @@ export default function PlanScreen({
                                   category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
                                   city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
                                   senzaGuida: SENZA_RACCONTO.some((s) => tipo.includes(s)) || undefined,
+                                  // La foto della tappa, se il piano la porta: va nel cruscotto a display spento.
+                                  image_url: t.image_url || t.foto || t.immagine || t.photo_url || null,
                                 };
                               });
                               if (poi.length === 0) return;

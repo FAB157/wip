@@ -351,7 +351,10 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             "metriAllaSvolta": call.getDouble("metriAllaSvolta") ?? -1,
             "metriRimanenti": call.getDouble("metriRimanenti") ?? 0,
             "eta": call.getString("eta") ?? "",
-            "nomeProssima": call.getString("nomeProssima") ?? ""
+            "nomeProssima": call.getString("nomeProssima") ?? "",
+            // (29/08/2026) URL della foto della tappa: la scarica
+            // LiveActivityNav nell'App Group, il widget la legge da li'.
+            "foto": call.getString("foto") ?? ""
         ]
         // Le API di ActivityKit vogliono il main thread.
         DispatchQueue.main.async {

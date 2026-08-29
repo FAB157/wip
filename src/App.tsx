@@ -351,6 +351,8 @@ export default function App() {
       metriRimanenti: vistaGiro.metriRimanenti,
       eta: eta ? eta.replace(/^ · /, '') : '',
       nomeProssima: vistaGiro.nomeProssima || '',
+      // La foto della tappa, quando il POI ce l'ha (29/08/2026).
+      foto: vistaGiro.fotoTappa || '',
     }).catch(() => {});
   }, [vistaGiro]);
 

@@ -76,6 +76,12 @@ export interface TappaGiro {
    * pre-scaricata, ne' letta all'arrivo, ne' pagata.
    */
   senzaGuida?: boolean;
+  /**
+   * Foto del luogo (URL), se il POI ce l'ha. Va nel cruscotto a display
+   * spento (icona grande della notifica Android, miniatura della Live
+   * Activity iOS). Assente = cruscotto solo testo, mai una foto di ripiego.
+   */
+  foto?: string | null;
 }
 
 /**
