@@ -31,6 +31,12 @@ interface NavigationOverlayProps {
   onRepeat?: () => void;
   /** Lingua UI: l'overlay era l'unica schermata del cammino hardcoded in IT. */
   language?: Language;
+  /**
+   * (29/08/2026) Per il giro «Dieci Tappe»: niente X. Il committente vuole la
+   * card sempre presente finche' il navigatore e' in corso; il giro si ferma
+   * dal cruscotto, non da qui.
+   */
+  senzaChiudi?: boolean;
 }
 
 function fmtMeters(m: number | null): string {
@@ -94,6 +100,7 @@ export default function NavigationOverlay({
   onNextStop,
   onRepeat,
   language = 'IT',
+  senzaChiudi = false,
 }: NavigationOverlayProps) {
   if (state === 'idle') return null;
 
@@ -200,13 +207,15 @@ export default function NavigationOverlay({
               </div>
 
               <div className="shrink-0 flex flex-col gap-2">
-                <button
-                  onClick={onStop}
-                  aria-label={t('nav_stop')}
-                  className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
-                >
-                  <X size={18} />
-                </button>
+                {!senzaChiudi && (
+                  <button
+                    onClick={onStop}
+                    aria-label={t('nav_stop')}
+                    className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
                 {onRepeat && (
                   <button
                     onClick={onRepeat}

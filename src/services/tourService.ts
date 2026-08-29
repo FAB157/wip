@@ -151,6 +151,8 @@ export interface VistaGiro {
   fotoTappa: string | null;
   istruzione: string | null;
   metriAllaSvolta: number | null;
+  /** Tipo/verso della manovra OSRM (per la freccia della card in alto). */
+  manovra: { type: string; modifier: string } | null;
   /** La prossima manovra e' un attraversamento e siamo a ridosso: il direttore audio tace. */
   suAttraversamento: boolean;
   inPausa: boolean;
@@ -418,7 +420,7 @@ class TourService {
   private lingua = 'it';
   private passoCorrente = 0;
   private tappaDelPasso = -1;
-  private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean } = { istruzione: null, metri: null, attraversamento: false };
+  private navAttuale: { istruzione: string | null; metri: number | null; attraversamento: boolean; manovra: { type: string; modifier: string } | null } = { istruzione: null, metri: null, attraversamento: false, manovra: null };
   private ultimoRicalcoloDeviazione = 0;
   private posizioneCache: { p: { lat: number; lon: number }; ts: number } | null = null;
   private prescarico: StatoPrescarico = { ...PRESCARICO_VUOTO };
@@ -594,7 +596,7 @@ class TourService {
       // della barra di avanzamento. Cambiarlo qui farebbe saltare indietro
       // l'avanzamento a giro quasi finito.
       this.passoCorrente = 0; this.tappaDelPasso = -1;
-      this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+      this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
       this.salva();
     } catch { /* senza rete si tiene la linea che c'era; la meta` e` gia` cambiata */ }
     this.avvisa();
@@ -1166,7 +1168,7 @@ class TourService {
     const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
     const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
     if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
-    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false }; return; }
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; return; }
     const punto = (s: any) => {
       const l = s?.maneuver?.location;
       return Array.isArray(l) && l.length >= 2 ? { lat: Number(l[1]), lon: Number(l[0]) } : null;
@@ -1189,6 +1191,9 @@ class TourService {
       // OSRM foot non ha un tipo di manovra "crossing" proprio: si legge dal
       // tipo, dal nome della via o dalle classi dell'intersezione, se ci sono.
       attraversamento: m != null && m <= 20 && stepEAttraversamento(s),
+      // Tipo e verso della manovra OSRM: la card in alto disegna la freccia
+      // giusta (destra, sinistra, rotonda…) invece di un'icona generica.
+      manovra: s?.maneuver ? { type: String(s.maneuver.type || ''), modifier: String(s.maneuver.modifier || '') } : null,
     };
   }
 
@@ -1403,7 +1408,7 @@ class TourService {
         giro.problemi = g.problemi || [];
         this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
         this.passoCorrente = 0; this.tappaDelPasso = -1;
-        this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+        this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
         this.salva(); this.avvisa();
         void this.cercaLungoLaStradaGiro();
         return true;
@@ -1427,7 +1432,7 @@ class TourService {
     giro.tratte = [...posizioniTenute.map(p => giro.tratte[p]).filter(Boolean), ...(ritorno ? [ritorno] : [])];
     this.stato = { ...this.stato, tappaCorrente: 0, stato: 'IN_CAMMINO', da: Date.now() };
     this.passoCorrente = 0; this.tappaDelPasso = -1;
-    this.navAttuale = { istruzione: null, metri: null, attraversamento: false };
+    this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
     this.salva(); this.avvisa();
     // Ordine aggiornato ma SENZA rotta nuova: non e' un ricalcolo riuscito.
     return false;
@@ -1528,6 +1533,7 @@ class TourService {
       fotoTappa: t?.foto ?? null,
       istruzione: this.navAttuale.istruzione,
       metriAllaSvolta: this.navAttuale.metri,
+      manovra: this.navAttuale.manovra,
       suAttraversamento: this.navAttuale.attraversamento,
       inPausa: this.stato.stato === 'IN_PAUSA',
       avviato: this.avviato,

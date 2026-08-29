@@ -102,6 +102,20 @@ function parla(testo: string, lingua: string, abbassa = false): void {
   }
   speakInstruction(testo, lingua);
 }
+/**
+ * Ripete a voce la svolta corrente del giro (tasto 🔊 della card blu in
+ * alto, 29/08/2026). Senza istruzione non dice niente.
+ */
+export function ripetiIstruzioneGiro(): void {
+  try {
+    const v = tourService.vista();
+    if (!v || !v.istruzione) return;
+    const metri = v.metriAllaSvolta != null && v.metriAllaSvolta > 25
+      ? (v.metriAllaSvolta >= 1000 ? `${(v.metriAllaSvolta / 1000).toFixed(1)} km` : `${Math.round(v.metriAllaSvolta)} m`)
+      : '';
+    parla(metri ? `${v.istruzione}, ${metri}` : v.istruzione, linguaUi());
+  } catch { /* niente */ }
+}
 function onSpeechEnded(): void {
   if (duckingAttivo) {
     duckingAttivo = false;
