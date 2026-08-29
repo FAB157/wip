@@ -43,6 +43,8 @@ import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
 import NavChoiceSheet from "./components/NavChoiceSheet";
+import NavigationOverlay from "./components/NavigationOverlay";
+import { ripetiIstruzioneGiro } from "./lib/tour/giroDriver";
 import { useVistaGiro, useBozzaGiro } from "./lib/tour/useGiro";
 import { tourService } from "./services/tourService";
 import { avviaGiroDriver } from "./lib/tour/giroDriver";
@@ -1411,6 +1413,33 @@ export default function App() {
               <PoiRadarPanel pois={radarPois} onClose={() => setIsRadarMode(false)} onFocus={(poi) => window.dispatchEvent(new CustomEvent('focus-poi', { detail: poi }))} onRemove={handleRemoveRadarPoi} language={language} />
             )}
           </AnimatePresence>
+
+          {/* LA CARD BLU DELLE SVOLTE, IN ALTO, ANCHE PER IL GIRO (29/08/2026,
+              collaudo: «il banner blu con le indicazioni del navigatore che
+              era in alto non c'e' piu'?»). Era la card di WIP Nav verso la
+              singola tappa (PlanScreen/useWalkingNavigation), che partiva dal
+              tasto tondo verde — nascosto a giro avviato perche' riproponeva
+              la scelta WIP Nav/Google. Il giro ha le stesse informazioni
+              (svolta, metri, tappa, ETA): ora le mostra nella stessa card.
+              Senza X («quando c'e' il navigatore deve sempre esserci»): si
+              spegne solo fermando il giro dal cruscotto. */}
+          {vistaGiro && vistaGiro.avviato && !vistaGiro.inPausa && vistaGiro.stato !== 'FINITO'
+            && activeTab === "map" && (
+            <NavigationOverlay
+              state="navigating"
+              language={language}
+              currentInstruction={vistaGiro.istruzione}
+              currentManeuver={vistaGiro.manovra}
+              distanceToNext={vistaGiro.metriAllaSvolta}
+              distanceToDestination={vistaGiro.metriAllaTappa}
+              etaSeconds={vistaGiro.metriRimanenti > 0 ? Math.round(vistaGiro.metriRimanenti / 1.11) : null}
+              progress={vistaGiro.metriTotali > 0 ? 1 - vistaGiro.metriRimanenti / vistaGiro.metriTotali : null}
+              poiName={vistaGiro.nomeTappa || undefined}
+              senzaChiudi
+              onStop={() => { /* niente X: il giro si ferma dal cruscotto */ }}
+              onRepeat={() => ripetiIstruzioneGiro()}
+            />
+          )}
 
           {/* Dieci Tappe: il cruscotto del giro. Compare solo con un giro in
               corso e solo sulla mappa — altrove coprirebbe contenuto senza
