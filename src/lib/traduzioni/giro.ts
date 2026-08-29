@@ -122,6 +122,24 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Маршрут с несколькими точками входит в Day Pass. Активируйте его в профиле, чтобы им пользоваться.',
     ZH: '多站点路线包含在 Day Pass 中。请在个人资料中激活后使用。',
   },
+  // Cruscotto: ridurre a barretta / riaprire, e la conferma prima di chiudere il giro.
+  gr_riduci_cruscotto: {
+    IT: 'Riduci il cruscotto', EN: 'Minimise the dashboard', FR: 'Réduire le tableau de bord',
+    ES: 'Reducir el panel', DE: 'Cockpit verkleinern', RU: 'Свернуть панель', ZH: '收起面板',
+  },
+  gr_espandi_cruscotto: {
+    IT: 'Apri il cruscotto', EN: 'Open the dashboard', FR: 'Ouvrir le tableau de bord',
+    ES: 'Abrir el panel', DE: 'Cockpit öffnen', RU: 'Развернуть панель', ZH: '展开面板',
+  },
+  gr_chiudi_giro_conferma: {
+    IT: 'Chiudere il giro? Tappe fatte e percorso andranno persi. Per nasconderlo e basta usa la freccia in basso.',
+    EN: 'End the tour? Completed stops and the route will be lost. To just hide it, use the arrow at the bottom.',
+    FR: "Terminer le parcours ? Les étapes faites et l'itinéraire seront perdus. Pour seulement le masquer, utilisez la flèche en bas.",
+    ES: 'Terminar el recorrido? Las paradas hechas y la ruta se perderán. Para solo ocultarlo usa la flecha de abajo.',
+    DE: 'Rundgang beenden? Erledigte Stationen und Route gehen verloren. Zum Ausblenden den Pfeil unten verwenden.',
+    RU: 'Завершить маршрут? Пройденные точки и путь будут потеряны. Чтобы просто скрыть, нажмите стрелку внизу.',
+    ZH: '结束路线？已完成的站点和路径将丢失。只想隐藏请用底部箭头。',
+  },
   gr_giro_non_riuscito: {
     IT: 'Giro non riuscito.',
     EN: 'Could not create the tour.',

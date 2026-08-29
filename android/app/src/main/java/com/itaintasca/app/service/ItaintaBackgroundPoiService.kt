@@ -48,6 +48,8 @@ class ItaintaBackgroundPoiService : Service() {
     companion object {
         const val TAG = "ItaintaPoiService"
         const val CHANNEL_ID = "geofencing_channel"
+        /** Cruscotto del navigatore: importanza normale, silenzioso, visibile sulla lock screen. */
+        const val NAV_CHANNEL_ID = "wip_navigatore"
         const val ALERT_CHANNEL_ID = "itainta_alerts_channel"
         const val NOTIF_ID = 4004
         const val ACTION_STOP = "com.itaintasca.app.STOP"
@@ -2030,15 +2032,24 @@ class ItaintaBackgroundPoiService : Service() {
         val bannerAttivo = !bannerTitolo.isNullOrBlank()
         val titoloFinale = if (bannerAttivo) bannerTitolo!! else title
         val testoFinale = if (bannerAttivo) navBannerCorpo.orEmpty() else (text + suffix)
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID).setSmallIcon(R.mipmap.ic_launcher).setContentTitle(titoloFinale).setContentText(testoFinale)
-            .setPriority(NotificationCompat.PRIORITY_LOW).setOngoing(true).setContentIntent(pOpen)
+        // Col cruscotto acceso la notifica passa sul canale del navigatore
+        // (importanza normale → resta sulla lock screen; silenzioso). Lo
+        // stesso NOTIF_ID cambia canale senza problemi: e' sempre la
+        // notifica del foreground service.
+        val builder = NotificationCompat.Builder(this, if (bannerAttivo) NAV_CHANNEL_ID else CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher).setContentTitle(titoloFinale).setContentText(testoFinale)
+            .setPriority(if (bannerAttivo) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true).setContentIntent(pOpen)
+            // Mai un suono o una vibrazione da questa notifica: si aggiorna
+            // ogni pochi secondi.
+            .setOnlyAlertOnce(true).setSilent(true)
         if (bannerAttivo) {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(testoFinale))
             // La foto della tappa, se e' gia' arrivata (vedi caricaFotoBanner).
             navBannerFoto?.let { builder.setLargeIcon(it) }
-            // Il cruscotto ha senso solo nell'ordine in cui e' arrivato:
-            // niente suono/vibrazione, e in cima al gruppo delle "in corso".
-            builder.setOnlyAlertOnce(true)
+            // Sulla lock screen si legge tutto (tappa e svolta): e' il suo scopo.
+            builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
         }
         // (AUD-14) Con la voce nativa in corso (teaser o guida del Day Pass
         // nel MediaPlayer del receiver, senza MediaSession) l'unico comando
@@ -2090,8 +2101,18 @@ class ItaintaBackgroundPoiService : Service() {
             nm.notify(NOTIF_ID, buildNotification(title, text, suffix))
         }
         RadarState.updateStatus(text)
-        sendEventToPlugin("statusUpdate", text)
+        // (29/08/2026, collaudo) L'evento al JS SOLO quando il testo cambia.
+        // updateDistanceNotification arriva qui ogni 5 s con lo stesso «41
+        // luoghi monitorati», e il JS lo mostrava come banner sulla mappa a
+        // ogni arrivo: un toast blu ogni cinque secondi, per sempre.
+        // RadarState (stato, idempotente) si aggiorna comunque.
+        if (text != ultimoStatoInviatoAlJs) {
+            ultimoStatoInviatoAlJs = text
+            sendEventToPlugin("statusUpdate", text)
+        }
     }
+
+    @Volatile private var ultimoStatoInviatoAlJs: String? = null
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -2099,6 +2120,24 @@ class ItaintaBackgroundPoiService : Service() {
             
             val chan = NotificationChannel(CHANNEL_ID, "Audioguida Background", NotificationManager.IMPORTANCE_LOW)
             nm.createNotificationChannel(chan)
+
+            // (29/08/2026, collaudo sul Realme) CANALE DEL CRUSCOTTO. Con
+            // IMPORTANCE_LOW Realme UI marca la notifica «non importante»
+            // (mUnimportant=true nel dumpsys) e sulla lock screen non la
+            // mostra: a display spento il cruscotto spariva. Importanza
+            // NORMALE, ma senza suono ne' vibrazione (e la notifica e'
+            // posted con setSilent/setOnlyAlertOnce): resta fissa sul
+            // display bloccato, non disturba. Un canale nuovo perche'
+            // l'importanza di un canale esistente non si puo' alzare da codice.
+            val navChan = NotificationChannel(NAV_CHANNEL_ID, "Navigatore del giro", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Tappa, svolta e distanza mentre cammini, anche a schermo bloccato"
+                setSound(null, null)
+                enableVibration(false)
+                enableLights(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setShowBadge(false)
+            }
+            nm.createNotificationChannel(navChan)
 
             val alertChan = NotificationChannel(ALERT_CHANNEL_ID, "Avvisi Arrivo POI", NotificationManager.IMPORTANCE_HIGH).apply {
                 description = "Notifiche quando arrivi vicino a un punto di interesse"

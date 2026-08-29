@@ -1117,8 +1117,17 @@ export default function App() {
     };
     window.addEventListener('wip-poi-trigger', handleOpenPoiFromEvent);
 
+    // STATI DI ROUTINE DEL RADAR (29/08/2026, collaudo: «perche' il telefono
+    // continua a inviare il banner "41 luoghi monitorati"?»). Il conteggio,
+    // il POI piu' vicino, «ricerca in corso», «posizione acquisita» sono lo
+    // stato normale del servizio: stanno gia' nella notifica persistente e
+    // nel pannello del radar. Come toast sulla mappa erano solo rumore.
+    // Restano i toast per tutto il resto (permessi, errori, esiti).
+    const statoDiRoutine = (t: string) =>
+      /luoghi monitorati|places monitored|lieux surveill|lugares monitor|Orte überwacht|мест|个地点|^Prossimo: |Ricerca POI|Posizione acquisita|Acquisizione posizione|dal pacchetto offline|Giro concluso/i.test(t);
     const handleGuideStatus = (e: any) => {
       const text = typeof e.detail === 'string' ? e.detail : e.detail?.text;
+      if (text && statoDiRoutine(String(text))) return;
       if (text) {
         console.log(`[App] Guide Status: ${text}`);
         // Show status banner
@@ -1170,6 +1179,9 @@ export default function App() {
     const onGuideStatus = (e: any) => {
       const text = typeof e?.detail === 'string' ? e.detail : e?.detail?.text;
       if (!text) return;
+      // Gli stati di routine del radar (conteggio, POI piu' vicino, ricerca
+      // in corso) non sono notifiche: riempivano la campanella a ogni fix.
+      if (/luoghi monitorati|places monitored|^Prossimo: |Ricerca POI|Posizione acquisita|Acquisizione posizione/i.test(String(text))) return;
       recordNotification({ tipo: 'audioguida', titolo: '🎧 Stato audioguida', corpo: String(text) });
     };
     window.addEventListener('wip-poi-trigger', onPoiTrigger);
@@ -1367,7 +1379,12 @@ export default function App() {
                   non in bozza (non c'e` una tappa corrente) e non a giro
                   finito. Nel collaudo del 28/08 «non si trovava» perche` il
                   giro non veniva mai creato: il server negava il pass. */}
-              {tappaDaNavigare && (
+              {/* (29/08/2026, collaudo: «se clicco di nuovo sul tasto verde mi
+                  richiede di avviare il navigatore, e' normale?») No: a giro
+                  AVVIATO il navigatore e' gia' in corso, e riproporre la scelta
+                  WIP Nav / Google confonde. Il tasto resta solo per il giro
+                  creato ma non ancora partito, accanto ad «Avvia». */}
+              {tappaDaNavigare && !vistaGiro?.avviato && (
                 <motion.button
                   initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                   whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}

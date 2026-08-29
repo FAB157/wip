@@ -17,7 +17,7 @@
  *    Un giro camminato una volta diventa contenuto che resta.
  */
 import { useEffect, useState } from 'react';
-import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag } from 'lucide-react';
+import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag, ChevronDown, ChevronUp } from 'lucide-react';
 import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
 
@@ -46,6 +46,8 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
   const [salvato, setSalvato] = useState<{ id: string; link: string | null } | null>(null);
   const [salvando, setSalvando] = useState(false);
   const [avviso, setAvviso] = useState<string | null>(null);
+  /** Cruscotto ridotto a una barretta (vedi chiudiGiro): si riapre con un tocco. */
+  const [ridotto, setRidotto] = useState(false);
 
   useEffect(() => tourService.ascolta(setV), []);
   useEffect(() => {
@@ -124,9 +126,61 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
 
   const finito = v.stato === 'FINITO';
 
+  // CHIUDERE NON E` NASCONDERE (29/08/2026, collaudo: «se tolgo la finestra
+  // in basso del navigatore, come faccio a riprenderla?»). La X chiude il
+  // giro per davvero, e prima lo faceva senza chiedere: un tocco distratto
+  // buttava via tappe fatte e percorso. Ora chiede conferma. Chi vuole solo
+  // piu` mappa ha il tasto «riduci»: resta una barretta con tappa e svolta,
+  // e un tocco la riapre.
+  const chiudiGiro = () => {
+    const ok = typeof window !== 'undefined' && typeof window.confirm === 'function'
+      ? window.confirm(t('gr_chiudi_giro_conferma'))
+      : true;
+    if (!ok) return;
+    tourService.termina();
+    onChiudi?.();
+  };
+
+  if (ridotto && !finito) {
+    const istr = istruzione ?? v.istruzione;
+    return (
+      <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
+        <button
+          onClick={() => setRidotto(false)}
+          title={t('gr_espandi_cruscotto')}
+          className="mx-auto max-w-md w-full rounded-full bg-white shadow-2xl pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 text-left active:scale-[0.99]"
+        >
+          <Navigation2 className="w-4 h-4 text-blue-600 flex-shrink-0" />
+          <span className="flex-1 min-w-0 truncate text-[12px] font-bold text-gray-900">
+            {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)}/{v.tappeTotali}
+            {v.nomeTappa ? ` · ${v.nomeTappa}` : ''}
+            {istr && !v.inPausa ? <span className="font-normal text-gray-500"> · {istr}</span> : null}
+          </span>
+          {v.metriAllaTappa != null && v.metriAllaTappa > 25 && (
+            <span className="text-[11px] font-bold text-blue-600 tabular-nums flex-shrink-0">{distanza(v.metriAllaTappa)}</span>
+          )}
+          <ChevronUp className="w-4 h-4 text-gray-500 flex-shrink-0" />
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="fixed left-0 right-0 bottom-0 z-[9000] px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] pointer-events-none">
-      <div className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto">
+    /* SOPRA LA BARRA DELLE SCHEDE (29/08/2026, collaudo: «il banner
+       inferiore mi copre la barra di navigazione»): prima stava a bottom-0
+       e nascondeva Esplora/Itinerario/Eventi. */
+    <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
+      <div className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto relative">
+        {!finito && (
+          <button
+            onClick={() => setRidotto(true)}
+            title={t('gr_riduci_cruscotto')}
+            aria-label={t('gr_riduci_cruscotto')}
+            className="absolute right-2 top-2 w-7 h-7 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center active:scale-95 z-10"
+          >
+            <ChevronDown className="w-4 h-4 text-gray-600" />
+          </button>
+        )}
 
         {/* Avanzamento: una riga sola, ma dice tutto a colpo d'occhio */}
         <div className="h-1 bg-gray-100">
@@ -288,7 +342,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                   <Play className="w-4 h-4" /> {t('gr_avvia_navigazione')}
                 </button>
                 <button
-                  onClick={() => { tourService.termina(); onChiudi?.(); }}
+                  onClick={chiudiGiro}
                   title={t('tour_termina')}
                   className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
                 >
@@ -319,7 +373,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 <SkipForward className="w-4 h-4 text-gray-700" />
               </button>
               <button
-                onClick={() => { tourService.termina(); onChiudi?.(); }}
+                onClick={chiudiGiro}
                 title={t('tour_termina')}
                 className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
               >

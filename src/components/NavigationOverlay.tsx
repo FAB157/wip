@@ -110,8 +110,11 @@ export default function NavigationOverlay({
   // trigger audio) — un fixed dentro un antenato nascosto sparisce. Col
   // portal il banner resta visibile durante tutta la navigazione.
   return createPortal(
+    /* z-[2100] (29/08/2026, collaudo: «il banner del navigatore rimane
+       dietro le chips»): le chips delle categorie stanno a z-[2000] e
+       coprivano la svolta. Camminando, la svolta vale piu' dei filtri. */
     <div
-      className="fixed top-0 left-0 right-0 z-[1200] px-3 pointer-events-none"
+      className="fixed top-0 left-0 right-0 z-[2100] px-3 pointer-events-none"
       style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}
     >
       <div className="mx-auto max-w-md overflow-hidden rounded-[1.75rem] bg-primary text-white shadow-2xl ring-1 ring-white/10 pointer-events-auto">

@@ -272,9 +272,17 @@ class LocationService {
             }
           });
 
+          // (29/08/2026, collaudo) Lo stesso stato ripetuto non e' una
+          // notizia: il servizio lo rimandava ogni 5 s («41 luoghi
+          // monitorati») e sulla mappa compariva un toast a ogni giro. Le
+          // build native vecchie lo mandano ancora: si filtra anche qui.
+          let ultimoStatoNativo = '';
           ItaintaBackgroundPoiPlugin.addListener('statusUpdate', (data: any) => {
             if (data && data.data) {
-               window.dispatchEvent(new CustomEvent('audioguide-status', { detail: data.data }));
+               const testo = String(data.data);
+               if (testo === ultimoStatoNativo) return;
+               ultimoStatoNativo = testo;
+               window.dispatchEvent(new CustomEvent('audioguide-status', { detail: testo }));
             }
           });
 

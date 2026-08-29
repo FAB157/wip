@@ -268,16 +268,35 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             }
         }
         
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        // (29/08/2026, collaudo sul Realme) MAI senza try/catch. Su Android
+        // 12+ startForegroundService da un'app NON in primo piano (schermo
+        // bloccato, ripresa in background, avvio da notifica differito)
+        // lancia ForegroundServiceStartNotAllowedException: qui era l'unico
+        // punto scoperto del plugin e faceva cadere l'intera app (FATAL su
+        // thread CapacitorPlugins). Ora si degrada come altrove: le prefs
+        // sono gia' scritte (isServiceActive=true, categorie), si arma il
+        // retry con backoff del watchdog e si risponde ok=false — il JS
+        // sa che il servizio partira' appena l'app torna davanti.
+        var avviato = true
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            avviato = false
+            Log.w("ItaintaPoiPlugin", "startBackgroundPoiService: avvio rifiutato (app in background?): ${e.message}")
+            com.itaintasca.app.service.ServiceWatchdog.scheduleRetry(context)
         }
         com.itaintasca.app.service.ServiceWatchdog.schedule(context)
         // Idempotente: copre il caso "permesso ACTIVITY_RECOGNITION appena
         // concesso a servizio già vivo" (onCreate non viene richiamato).
         com.itaintasca.app.geofence.ActivityMonitor.start(context)
-        call.resolve()
+        val ret = JSObject()
+        ret.put("ok", avviato)
+        if (!avviato) ret.put("reason", "foreground_start_not_allowed")
+        call.resolve(ret)
     }
 
     @PluginMethod
