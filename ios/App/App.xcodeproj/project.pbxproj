@@ -31,6 +31,10 @@
 		A11A2B3C4D5E6F7080910101 /* WipApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910102 /* WipApi.swift */; };
 		A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */; };
 		A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
+		B22A0000000000000000A0A1 /* WipNavActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */; };
+		B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */; };
+		B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
+		B22A0000000000000000A0A4 /* WipNavActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B4 /* WipNavActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
@@ -66,6 +70,12 @@
 		A11A2B3C4D5E6F7080910102 /* WipApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipApi.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityNav.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavAttributes.swift; path = ../WipNavActivity/WipNavAttributes.swift; sourceTree = "<group>"; };
+		B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavActivityBundle.swift; sourceTree = "<group>"; };
+		B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavLiveActivity.swift; sourceTree = "<group>"; };
+		B22A0000000000000000B0B3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B22A0000000000000000B0B4 /* WipNavActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WipNavActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B22A0000000000000000B0B5 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
+		B22A0000000000000000B0B6 /* WipNavActivity.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WipNavActivity.entitlements; sourceTree = "<group>"; };
 		504EC30C1FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/Main.storyboard; sourceTree = "<group>"; };
 		504EC30E1FED79650016851F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		504EC3111FED79650016851F /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
@@ -78,12 +88,43 @@
 		FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.debug.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXContainerItemProxy section */
+		B22A0000000000000000E0E2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B22A0000000000000000D0D1;
+			remoteInfo = WipNavActivity;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B22A0000000000000000E0E3 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B22A0000000000000000A0A4 /* WipNavActivity.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFrameworksBuildPhase section */
 		504EC3011FED79650016851F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				A084ECDBA7D38E1E42DFC39D /* Pods_App.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B22A0000000000000000D0D3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3061FED79650016851F /* App */,
+				B22A0000000000000000C0C1 /* WipNavActivity */,
 				504EC3051FED79650016851F /* Products */,
 				7F8756D8B27F46E3366F6CEA /* Pods */,
 				27E2DDA53C4D2A4D1A88CE4A /* Frameworks */,
@@ -112,8 +154,20 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				B22A0000000000000000B0B4 /* WipNavActivity.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		B22A0000000000000000C0C1 /* WipNavActivity */ = {
+			isa = PBXGroup;
+			children = (
+				B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */,
+				B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */,
+				B22A0000000000000000B0B3 /* Info.plist */,
+				B22A0000000000000000B0B6 /* WipNavActivity.entitlements */,
+			);
+			path = WipNavActivity;
 			sourceTree = "<group>";
 		};
 		504EC3061FED79650016851F /* App */ = {
@@ -142,6 +196,7 @@
 				A11A2B3C4D5E6F7080910102 /* WipApi.swift */,
 				A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */,
 				A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */,
+				B22A0000000000000000B0B5 /* App.entitlements */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -175,15 +230,34 @@
 				504EC3011FED79650016851F /* Frameworks */,
 				504EC3021FED79650016851F /* Resources */,
 				9592DBEFFC6D2A0C8D5DEB22 /* [CP] Embed Pods Frameworks */,
+				B22A0000000000000000E0E3 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B22A0000000000000000E0E1 /* PBXTargetDependency */,
 			);
 			name = App;
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B22A0000000000000000D0D1 /* WipNavActivity */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B22A0000000000000000D0D5 /* Build configuration list for PBXNativeTarget "WipNavActivity" */;
+			buildPhases = (
+				B22A0000000000000000D0D2 /* Sources */,
+				B22A0000000000000000D0D3 /* Frameworks */,
+				B22A0000000000000000D0D4 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WipNavActivity;
+			productName = WipNavActivity;
+			productReference = B22A0000000000000000B0B4 /* WipNavActivity.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -197,6 +271,10 @@
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
+						ProvisioningStyle = Automatic;
+					};
+					B22A0000000000000000D0D1 = {
+						CreatedOnToolsVersion = 15.0;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -217,6 +295,7 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				B22A0000000000000000D0D1 /* WipNavActivity */,
 			);
 		};
 /* End PBXProject section */
@@ -234,6 +313,13 @@
 				2FAD9763203C412B000D30F8 /* config.xml in Resources */,
 				A11A2B3C4D5E6F7080910019 /* PrivacyInfo.xcprivacy in Resources */,
 				A11A2B3C4D5E6F7080910201 /* InfoPlist.strings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B22A0000000000000000D0D4 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -305,7 +391,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B22A0000000000000000D0D2 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B22A0000000000000000A0A1 /* WipNavActivityBundle.swift in Sources */,
+				B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */,
+				B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B22A0000000000000000E0E1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B22A0000000000000000D0D1 /* WipNavActivity */;
+			targetProxy = B22A0000000000000000E0E2 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -447,6 +551,7 @@
 			baseConfigurationReference = FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
@@ -467,6 +572,7 @@
 			baseConfigurationReference = AF51FD2D460BCFE21FA515B2 /* Pods-App.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = App/App.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = App/Info.plist;
@@ -475,6 +581,46 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.itaintasca.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		B22A0000000000000000D0D6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WipNavActivity/WipNavActivity.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WipNavActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.itaintasca.app.WipNavActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B22A0000000000000000D0D7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = WipNavActivity/WipNavActivity.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WipNavActivity/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.itaintasca.app.WipNavActivity;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
@@ -498,6 +644,15 @@
 			buildConfigurations = (
 				504EC3171FED79650016851F /* Debug */,
 				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B22A0000000000000000D0D5 /* Build configuration list for PBXNativeTarget "WipNavActivity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B22A0000000000000000D0D6 /* Debug */,
+				B22A0000000000000000D0D7 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

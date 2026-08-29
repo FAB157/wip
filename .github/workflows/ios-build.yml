@@ -2,7 +2,10 @@ name: Build iOS
 
 on:
   push:
-    branches: [ main, master ]
+    # (29/08/2026) Anche il ramo di lavoro: la build iOS esiste SOLO qui
+    # (niente Mac), e le modifiche al progetto Xcode fatte a mano vanno
+    # provate PRIMA di finire su main.
+    branches: [ main, master, onboarding-e-garanzia-pioggia ]
   workflow_dispatch:
 
 jobs:

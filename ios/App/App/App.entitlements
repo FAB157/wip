@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Group condiviso con l'estensione WipNavActivity: e' dove l'app
+	     scrive la foto della tappa e la Live Activity la legge
+	     (WipNavAppGroup.id in WipNavAttributes.swift). Lo stesso identificatore
+	     va abilitato sull'App ID nel portale sviluppatori Apple prima della
+	     firma; la build NON firmata della CI lo ignora. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.itaintasca.app</string>
+	</array>
+</dict>
+</plist>
