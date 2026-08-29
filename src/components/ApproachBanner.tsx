@@ -376,7 +376,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
   return (
     <div
       className="absolute left-4 right-4 z-[99999] flex flex-col gap-3 pointer-events-none transition-[bottom] duration-300"
-      style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + env(safe-area-inset-bottom, 0px))` }}
+      style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + var(--wip-cruscotto-h, 0px) + env(safe-area-inset-bottom, 0px))` /* + il cruscotto del giro (TourBanner pubblica --wip-cruscotto-h): le due card non si sovrappongono */ }}
     >
       <AnimatePresence>
         {entries.slice(0, 2).map((entry, index) => {

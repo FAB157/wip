@@ -36,6 +36,20 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import AppLockGate from './components/AppLockGate';
 import { Capacitor } from '@capacitor/core';
 import { Purchases, LOG_LEVEL } from '@revenuecat/purchases-capacitor';
+import { registerSW } from 'virtual:pwa-register';
+
+// SERVICE WORKER (29/08/2026). Prima lo registrava uno script iniettato da
+// vite-plugin-pwa che faceva solo register(): dopo un aggiornamento
+// dell'app (APK nuovo, o deploy sul web) il primo avvio serviva ancora il
+// bundle VECCHIO dalla precache, e le correzioni si vedevano solo al
+// secondo avvio — visto sul Realme col telefono collegato. Con
+// registerType 'autoUpdate' il modulo virtuale ricarica la pagina appena
+// il SW nuovo prende il controllo: il codice in esecuzione e' sempre
+// quello installato. Sul nativo il SW resta: serve alle tile offline
+// (cache runtime di CARTO/OSM/roads in vite.config.ts).
+try {
+  registerSW({ immediate: true });
+} catch { /* browser senza service worker: la PWA funziona lo stesso */ }
 
 // Inizializza RevenueCat solo su piattaforme native (Android/iOS)
 if (Capacitor.isNativePlatform()) {

@@ -12,7 +12,14 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        injectRegister: 'auto',
+        // (29/08/2026, collaudo sul Realme) La registrazione la fa main.tsx
+        // con `virtual:pwa-register`, non lo script iniettato: quello si
+        // limitava a register() e, dopo un aggiornamento dell'APK, il primo
+        // avvio girava ancora con il bundle VECCHIO precachato dal service
+        // worker (la WebView Android e' http://localhost, il SW ci gira).
+        // Col modulo virtuale, quando il SW nuovo prende il controllo la
+        // pagina si ricarica e il codice e' quello dell'APK installato.
+        injectRegister: null,
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg', 'icon.png'],
         manifest: {
           name: 'WIP - World in pocket',

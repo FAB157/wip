@@ -16,7 +16,7 @@
  *  - il GIRO FINITO: salvare nei propri itinerari e condividere il link.
  *    Un giro camminato una volta diventa contenuto che resta.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw, SkipForward, X, Navigation2, Check, Share2, BookmarkPlus, Flag, ChevronDown, ChevronUp } from 'lucide-react';
 import { tourService, type VistaGiro } from '../services/tourService';
 import { Language, getTranslation } from '../lib/i18n';
@@ -48,6 +48,22 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
   const [avviso, setAvviso] = useState<string | null>(null);
   /** Cruscotto ridotto a una barretta (vedi chiudiGiro): si riapre con un tocco. */
   const [ridotto, setRidotto] = useState(false);
+  // L'ALTEZZA DEL CRUSCOTTO, DETTA AGLI ALTRI (29/08/2026, collaudo: la card
+  // di avvicinamento «Perticata · Ascolta» si sovrapponeva al cruscotto,
+  // tutte e due ancorate in basso). Si pubblica in una variabile CSS sul
+  // documento; ApproachBanner ci si appoggia sopra. A cruscotto smontato
+  // torna a zero.
+  const contenitoreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = contenitoreRef.current;
+    const radice = document.documentElement;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const aggiorna = () => radice.style.setProperty('--wip-cruscotto-h', `${Math.ceil(el.getBoundingClientRect().height) + 8}px`);
+    aggiorna();
+    const ro = new ResizeObserver(aggiorna);
+    ro.observe(el);
+    return () => { ro.disconnect(); radice.style.setProperty('--wip-cruscotto-h', '0px'); };
+  }, [ridotto, v?.stato, v?.avviato]);
 
   useEffect(() => tourService.ascolta(setV), []);
   useEffect(() => {
@@ -146,6 +162,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
     return (
       <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
         <button
+          ref={contenitoreRef as any}
           onClick={() => setRidotto(false)}
           title={t('gr_espandi_cruscotto')}
           className="mx-auto max-w-md w-full rounded-full bg-white shadow-2xl pointer-events-auto flex items-center gap-2.5 px-4 py-2.5 text-left active:scale-[0.99]"
@@ -170,7 +187,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
        inferiore mi copre la barra di navigazione»): prima stava a bottom-0
        e nascondeva Esplora/Itinerario/Eventi. */
     <div className="fixed left-0 right-0 z-[9000] px-3 pointer-events-none" style={{ bottom: 'calc(5.75rem + env(safe-area-inset-bottom, 0px))' }}>
-      <div className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto relative">
+      <div ref={contenitoreRef} className="mx-auto max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden pointer-events-auto relative">
         {!finito && (
           <button
             onClick={() => setRidotto(true)}
