@@ -45,7 +45,12 @@ object NotificationStrings {
             "bg_disclosure_title" to "Posizione in background",
             "bg_disclosure_text" to "WIP raccoglie i dati della tua posizione in background per riprodurre automaticamente le audioguide quando ti avvicini a un punto di interesse, anche quando l'app è chiusa o non in uso (schermo spento o telefono in tasca). La posizione non viene usata per pubblicità. Per attivare la funzione vai su Impostazioni → Permessi → Posizione e scegli 'Consenti sempre'.",
             "bg_disclosure_settings" to "Vai alle Impostazioni",
-            "bg_disclosure_later" to "Non ora"
+            "bg_disclosure_later" to "Non ora",
+            // (29/08/2026) Notifiche bloccate dall'interruttore di sistema
+            // (Realme «Gestisci notifiche: Rifiuta»): senza, niente cruscotto
+            // sulla lock screen e niente avvisi di arrivo.
+            "notif_blocked_title" to "Notifiche disattivate",
+            "notif_blocked_text" to "Il telefono blocca le notifiche di WIP: senza, il cruscotto del navigatore non compare a schermo spento e non ricevi gli avvisi di arrivo. Nella pagina che si apre attiva «Consenti notifiche».",
         ),
         "en" to mapOf(
             "checkin_title" to "Stop completed! ✅",
@@ -66,7 +71,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "Background location",
             "bg_disclosure_text" to "WIP collects your location data in the background to play audio guides automatically when you get close to a point of interest, even when the app is closed or not in use (screen off or phone in your pocket). Your location is never used for advertising. To turn the feature on, go to Settings → Permissions → Location and choose 'Allow all the time'.",
             "bg_disclosure_settings" to "Open Settings",
-            "bg_disclosure_later" to "Not now"
+            "bg_disclosure_later" to "Not now",
+            "notif_blocked_title" to "Notifications turned off",
+            "notif_blocked_text" to "Your phone is blocking WIP's notifications: without them the navigator dashboard can't appear on the lock screen and you won't get arrival alerts. On the page that opens, turn on 'Allow notifications'.",
         ),
         "fr" to mapOf(
             "checkin_title" to "Étape terminée ! ✅",
@@ -87,7 +94,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "Position en arrière-plan",
             "bg_disclosure_text" to "WIP collecte les données de votre position en arrière-plan pour lancer automatiquement les audioguides lorsque vous approchez d'un point d'intérêt, même quand l'application est fermée ou inutilisée (écran éteint ou téléphone dans la poche). Votre position n'est jamais utilisée à des fins publicitaires. Pour activer la fonction, allez dans Paramètres → Autorisations → Localisation et choisissez « Toujours autoriser ».",
             "bg_disclosure_settings" to "Ouvrir les paramètres",
-            "bg_disclosure_later" to "Pas maintenant"
+            "bg_disclosure_later" to "Pas maintenant",
+            "notif_blocked_title" to "Notifications désactivées",
+            "notif_blocked_text" to "Votre téléphone bloque les notifications de WIP : sans elles, le tableau de bord du navigateur n'apparaît pas sur l'écran verrouillé et vous ne recevez pas les alertes d'arrivée. Dans la page qui s'ouvre, activez « Autoriser les notifications ».",
         ),
         "es" to mapOf(
             "checkin_title" to "¡Parada completada! ✅",
@@ -108,7 +117,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "Ubicación en segundo plano",
             "bg_disclosure_text" to "WIP recopila los datos de tu ubicación en segundo plano para reproducir automáticamente las audioguías cuando te acercas a un punto de interés, incluso con la app cerrada o sin usar (pantalla apagada o teléfono en el bolsillo). La ubicación nunca se usa con fines publicitarios. Para activar la función ve a Ajustes → Permisos → Ubicación y elige «Permitir siempre».",
             "bg_disclosure_settings" to "Ir a Ajustes",
-            "bg_disclosure_later" to "Ahora no"
+            "bg_disclosure_later" to "Ahora no",
+            "notif_blocked_title" to "Notificaciones desactivadas",
+            "notif_blocked_text" to "El teléfono bloquea las notificaciones de WIP: sin ellas, el panel del navegador no aparece con la pantalla bloqueada y no recibes los avisos de llegada. En la página que se abre, activa «Permitir notificaciones».",
         ),
         "de" to mapOf(
             "checkin_title" to "Etappe abgeschlossen! ✅",
@@ -129,7 +140,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "Standort im Hintergrund",
             "bg_disclosure_text" to "WIP erfasst Ihre Standortdaten im Hintergrund, um Audioguides automatisch abzuspielen, wenn Sie sich einem interessanten Ort nähern – auch wenn die App geschlossen oder nicht in Gebrauch ist (Bildschirm aus oder Telefon in der Tasche). Der Standort wird nie für Werbung verwendet. Um die Funktion zu aktivieren, gehen Sie zu Einstellungen → Berechtigungen → Standort und wählen Sie „Immer zulassen“.",
             "bg_disclosure_settings" to "Zu den Einstellungen",
-            "bg_disclosure_later" to "Jetzt nicht"
+            "bg_disclosure_later" to "Jetzt nicht",
+            "notif_blocked_title" to "Benachrichtigungen deaktiviert",
+            "notif_blocked_text" to "Ihr Telefon blockiert die Benachrichtigungen von WIP: ohne sie erscheint das Navigations-Cockpit nicht auf dem Sperrbildschirm und Sie erhalten keine Ankunftshinweise. Aktivieren Sie auf der Seite, die sich öffnet, „Benachrichtigungen zulassen“.",
         ),
         // (23/08/2026) Russo e cinese: prima cadevano sull'inglese, quindi un
         // utente RU/ZH sentiva il teaser nella sua lingua e leggeva la
@@ -156,7 +169,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "Геолокация в фоновом режиме",
             "bg_disclosure_text" to "WIP собирает данные о вашем местоположении в фоновом режиме, чтобы автоматически включать аудиогид, когда вы приближаетесь к интересному месту, — даже если приложение закрыто или не используется (экран выключен или телефон в кармане). Местоположение никогда не используется для рекламы. Чтобы включить функцию, откройте Настройки → Разрешения → Местоположение и выберите «Разрешать всегда».",
             "bg_disclosure_settings" to "Открыть настройки",
-            "bg_disclosure_later" to "Не сейчас"
+            "bg_disclosure_later" to "Не сейчас",
+            "notif_blocked_title" to "Уведомления отключены",
+            "notif_blocked_text" to "Телефон блокирует уведомления WIP: без них панель навигатора не появится на экране блокировки, и вы не получите оповещения о прибытии. На открывшейся странице включите «Разрешить уведомления».",
         ),
         "zh" to mapOf(
             "checkin_title" to "行程点已完成！✅",
@@ -177,7 +192,9 @@ object NotificationStrings {
             "bg_disclosure_title" to "后台定位",
             "bg_disclosure_text" to "WIP 会在后台收集你的位置数据，以便你靠近兴趣点时自动播放语音导览，即使应用已关闭或未在使用（息屏或手机放在口袋里）也一样。位置数据绝不会用于广告。要开启该功能，请前往 设置 → 权限 → 位置信息，选择「始终允许」。",
             "bg_disclosure_settings" to "前往设置",
-            "bg_disclosure_later" to "暂不"
+            "bg_disclosure_later" to "暂不",
+            "notif_blocked_title" to "通知已关闭",
+            "notif_blocked_text" to "手机屏蔽了 WIP 的通知：没有通知，导航面板无法在锁屏上显示，也收不到到达提醒。请在打开的页面中启用「允许通知」。",
         )
     )
 

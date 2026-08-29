@@ -67,6 +67,16 @@ function applyNativePermResult(result: NativePermResult | null | undefined) {
   } else if (status === 'denied_background_location') {
     setPermStatus('location', 'granted');
     setPermStatus('background', 'denied');
+  } else if (status === 'requesting_notifications') {
+    // (29/08/2026) Notifiche bloccate dall'interruttore di sistema: il
+    // nativo ha aperto la pagina giusta; l'esito si sapra' al prossimo check.
+    setPermStatus('location', 'granted');
+    setPermStatus('background', 'granted');
+    setPermStatus('notifications', 'skipped');
+  } else if (status === 'denied_notifications') {
+    setPermStatus('location', 'granted');
+    setPermStatus('background', 'granted');
+    setPermStatus('notifications', 'denied');
   }
 }
 
@@ -152,7 +162,12 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     // finale per non richiederli una seconda volta in JS (vedi contratto
     // del plugin sopra).
     const nativeStatus = nativeResult?.status;
-    if (nativeStatus === 'all_granted' || nativeStatus === 'requesting_battery_optimization') {
+    // Anche 'requesting_notifications' / 'denied_notifications' (29/08/2026):
+    // la catena nativa ha gia' trattato le notifiche (pagina di sistema
+    // aperta, o rifiuto esplicito); richiederle di nuovo qui sarebbe un
+    // secondo dialogo per la stessa cosa.
+    if (nativeStatus === 'all_granted' || nativeStatus === 'requesting_battery_optimization'
+      || nativeStatus === 'requesting_notifications' || nativeStatus === 'denied_notifications') {
       setStep(3);
     } else {
       setStep(2);
@@ -201,6 +216,18 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
       // Notifiche: raggiunto solo quando il plugin nativo NON le ha già
       // richieste (web senza plugin, oppure catena nativa fermata prima per
       // la posizione in background — vedi requestLocationPermission).
+      // (29/08/2026) Sul nativo si RIPRENDE la catena del plugin: con la
+      // posizione «Sempre» ormai concessa nelle Impostazioni, passa alle
+      // notifiche (permesso E interruttore di sistema: sul Realme era
+      // «Rifiuta» e il cruscotto non compariva mai) e poi alla batteria,
+      // tutto nell'onboarding e col minimo di tocchi.
+      if (NativePermissionsPlugin) {
+        const r = await requestBackgroundPermissionsFlow();
+        const s = r?.status;
+        if (s === 'all_granted' || s === 'requesting_battery_optimization') setPermStatus('notifications', 'granted');
+        setStep(3);
+        return;
+      }
       try {
         const res = await LocalNotifications.requestPermissions();
         setPermStatus('notifications', (res as any)?.display === 'granted' ? 'granted' : 'denied');

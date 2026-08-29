@@ -149,12 +149,85 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 return
             }
         }
-        checkActivityRecognition(call)
+        checkNotificheBloccate(call)
     }
 
     @PermissionCallback
     private fun notificationCallback(call: PluginCall) {
-        checkActivityRecognition(call)
+        checkNotificheBloccate(call)
+    }
+
+    /**
+     * (29/08/2026, collaudo sul Realme) NOTIFICHE BLOCCATE DAL TELEFONO. Il
+     * permesso POST_NOTIFICATIONS era concesso, ma nelle impostazioni
+     * dell'app Realme UI aveva «Gestisci notifiche: Rifiuta»: nessuna
+     * notifica di WIP arrivava — nemmeno quella del foreground service, cioe'
+     * il cruscotto sulla lock screen, ed e' per questo che «il banner non
+     * resta a display spento». Il permesso di runtime non lo vede: lo vede
+     * areNotificationsEnabled(). Non si puo' riaccendere da codice (Android
+     * lo vieta): si spiega e si apre in un tocco la pagina esatta delle
+     * notifiche dell'app. Fa parte dell'onboarding, come la posizione
+     * «Sempre»: il committente vuole tutto all'inizio, col minimo di tocchi.
+     */
+    private fun checkNotificheBloccate(call: PluginCall) {
+        val abilitate = try {
+            androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        } catch (_: Exception) { true }
+        if (abilitate) {
+            checkActivityRecognition(call)
+            return
+        }
+        Handler(Looper.getMainLooper()).post {
+            AlertDialog.Builder(context)
+                .setTitle(NotificationStrings.get(context, "notif_blocked_title"))
+                .setMessage(NotificationStrings.get(context, "notif_blocked_text"))
+                .setPositiveButton(NotificationStrings.get(context, "bg_disclosure_settings")) { _, _ ->
+                    apriImpostazioniNotifiche()
+                    val ret = JSObject()
+                    ret.put("status", "requesting_notifications")
+                    call.resolve(ret)
+                }
+                .setNegativeButton(NotificationStrings.get(context, "bg_disclosure_later")) { dialog, _ ->
+                    dialog.dismiss()
+                    val ret = JSObject()
+                    ret.put("status", "denied_notifications")
+                    call.resolve(ret)
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    /** La pagina delle notifiche dell'app (Android 8+), non quella generale dell'app. */
+    private fun apriImpostazioniNotifiche() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try { context.startActivity(intent) } catch (e: Exception) {
+            Log.w("ItaintaPoiPlugin", "Impostazioni notifiche non apribili: ${e.message}")
+        }
+    }
+
+    /** Per il JS: le notifiche arrivano davvero? (permesso E interruttore di sistema). */
+    @PluginMethod
+    fun areNotificationsEnabled(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("enabled", try { androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled() } catch (_: Exception) { true })
+        call.resolve(ret)
+    }
+
+    /** Un tocco: la pagina delle notifiche dell'app nelle Impostazioni. */
+    @PluginMethod
+    fun openNotificationSettings(call: PluginCall) {
+        apriImpostazioniNotifiche()
+        call.resolve()
     }
 
     /**

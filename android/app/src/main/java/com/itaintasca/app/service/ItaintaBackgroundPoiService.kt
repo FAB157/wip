@@ -2041,8 +2041,12 @@ class ItaintaBackgroundPoiService : Service() {
             .setPriority(if (bannerAttivo) NotificationCompat.PRIORITY_DEFAULT else NotificationCompat.PRIORITY_LOW)
             .setOngoing(true).setContentIntent(pOpen)
             // Mai un suono o una vibrazione da questa notifica: si aggiorna
-            // ogni pochi secondi.
-            .setOnlyAlertOnce(true).setSilent(true)
+            // ogni pochi secondi. Il silenzio lo danno i CANALI (senza suono
+            // ne' vibrazione) e setOnlyAlertOnce — NON setSilent: quello
+            // marca la notifica «silenziosa» (groupKey=silent) e Realme UI le
+            // tiene fuori dalla lock screen. Visto col telefono: canale giusto,
+            // notifiche consentite, e il cruscotto a display spento non c'era.
+            .setOnlyAlertOnce(true)
         if (bannerAttivo) {
             builder.setStyle(NotificationCompat.BigTextStyle().bigText(testoFinale))
             // La foto della tappa, se e' gia' arrivata (vedi caricaFotoBanner).
