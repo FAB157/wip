@@ -815,11 +815,31 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             return
         }
 
+        // (29/08/2026) RAGGIO A SCALARE, come su Android: a 5 km la RPC
+        // nearby_pois supera i 3 s di statement_timeout del ruolo anonimo
+        // dove i POI sono decine di migliaia (HTTP 500, 57014); a 2 km
+        // risponde. Prima un fallimento lasciava il radar vuoto per tutto il
+        // backoff e ritentava lo stesso raggio. Ora si ripiega subito.
+        let raggi = [radiusKm, radiusKm / 2.5, 1.0]
+        fetchPoisConRipiego(at: location, raggi: raggi, indice: 0)
+    }
+
+    private func fetchPoisConRipiego(at location: CLLocation, raggi: [Double], indice: Int) {
         supabase.fetchPoisNearby(
             lat: location.coordinate.latitude, lon: location.coordinate.longitude,
-            radiusKm: radiusKm, uiCategories: selectedCategories, lang: appLanguage
+            radiusKm: raggi[indice], uiCategories: selectedCategories, lang: appLanguage
         ) { [weak self] result in
             guard let self = self else { return }
+            // Fallito e c'e' ancora un raggio piu' stretto da provare: si
+            // riprova SUBITO, senza toccare isFetching ne' il backoff.
+            if case .failure(let e) = result, indice + 1 < raggi.count {
+                NSLog("[BackgroundPoiManager] fetch a %.1f km fallito (%@), provo piu' stretto", raggi[indice], e.localizedDescription)
+                self.fetchPoisConRipiego(at: location, raggi: raggi, indice: indice + 1)
+                return
+            }
+            if indice > 0, case .success = result {
+                NSLog("[BackgroundPoiManager] radar caricato con raggio ridotto a %.1f km", raggi[indice])
+            }
             self.workQueue.async {
                 defer { self.isFetching = false }
                 switch result {

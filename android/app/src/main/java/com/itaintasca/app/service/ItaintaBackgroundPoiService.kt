@@ -1509,7 +1509,33 @@ class ItaintaBackgroundPoiService : Service() {
                         return@launch
                     }
 
-                    val rawPois = supabase.fetchPoisNearby(location.latitude, location.longitude, radiusKm, selectedCategories, appLanguage)
+                    // (29/08/2026, collaudo sul Realme a Carrara) RAGGIO A
+                    // SCALARE. A 5 km la RPC nearby_pois supera i 3 s di
+                    // statement_timeout del ruolo anonimo (HTTP 500, codice
+                    // 57014) nelle zone dove i POI importati negli ultimi
+                    // giorni sono decine di migliaia; a 2 km risponde in 1,4 s,
+                    // a 500 m in 0,35 s. Prima il fallimento lasciava il
+                    // radar VUOTO per 30 s di backoff e poi ritentava lo stesso
+                    // raggio: «Ricerca POI in corso...» per sempre. Ora si
+                    // ripiega subito su un raggio piu' piccolo: in citta' 120
+                    // POI entro 2 km ci sono comunque; in campagna, dove il
+                    // raggio largo serve davvero, la query e' leggera e il
+                    // primo tentativo riesce.
+                    val raggi = listOf(radiusKm, radiusKm / 2.5, 1.0).distinct()
+                    var rawPois: List<PoiEntity> = emptyList()
+                    var ultimoErrore: Exception? = null
+                    for ((i, r) in raggi.withIndex()) {
+                        try {
+                            rawPois = supabase.fetchPoisNearby(location.latitude, location.longitude, r, selectedCategories, appLanguage)
+                            if (i > 0) Log.w(TAG, "Radar caricato con raggio ridotto a ${"%.1f".format(r)} km")
+                            ultimoErrore = null
+                            break
+                        } catch (e: Exception) {
+                            ultimoErrore = e
+                            Log.w(TAG, "Fetch a ${"%.1f".format(r)} km fallito (${e.message}), provo piu' stretto")
+                        }
+                    }
+                    ultimoErrore?.let { throw it }
 
                     // ✅ [DE-DUPLICAZIONE NATIVA] - Allineamento con App.tsx
                     val seenNames = mutableSetOf<String>()
