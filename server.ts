@@ -19972,9 +19972,16 @@ ${testo}`;
       // diverse: ora e' uno solo, quello che si sa funzionare.
       const userId = await verifyUserToken(req);
       if (!userId) { console.warn('[passValido] verifyUserToken non ha riconosciuto il Bearer'); return { ok: false, motivo: 'utente non riconosciuto' }; }
+      // INTESTAZIONI ESPLICITE (29/08/2026, collaudo col telefono). Qui
+      // c'era `{ headers, timeout }`: ma in questo scope `headers` NON
+      // esiste — il file e' @ts-nocheck, quindi compilava, e a runtime la
+      // riga lanciava ReferenceError, catturato sotto come «verifica del
+      // pass non riuscita». Risultato: pass VALIDO sul database (0/40) e 402
+      // a ogni «Crea il giro». Riprodotto dal PC col token dell'utente.
+      const intestazioniServizio = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
       const p = await axios.get(
         `${supabaseUrl}/rest/v1/user_passes?user_id=eq.${userId}&expires_at=gt.${new Date().toISOString()}&select=expires_at,guides_used,guides_cap&order=expires_at.desc&limit=1`,
-        { headers, timeout: 8000 });
+        { headers: intestazioniServizio, timeout: 8000 });
       const row = p.data?.[0];
       if (!row) { console.warn(`[passValido] nessuna riga user_passes attiva per ${userId}`); return { ok: false, motivo: 'nessun pass attivo' }; }
       if (Number(row.guides_used) >= Number(row.guides_cap)) return { ok: false, motivo: 'audioguide del pass esaurite' };

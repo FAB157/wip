@@ -273,7 +273,15 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
             {!v.avviato ? (
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 <button
-                  onClick={() => tourService.avvia()}
+                  onClick={() => {
+                    // Le svolte si scaricano adesso, col Day Pass: se manca il
+                    // server lo dice e il giro resta «pronto».
+                    tourService.avvia().catch((e: any) => {
+                      const m = String(e?.message || '');
+                      const dettaglio = m.startsWith('PASS_RICHIESTO:') ? m.slice('PASS_RICHIESTO:'.length).trim() : '';
+                      setAvviso(m.startsWith('PASS_RICHIESTO') ? `${t('gr_pass_richiesto')}${dettaglio ? ` (${dettaglio})` : ''}` : (m || t('gr_giro_non_riuscito')));
+                    });
+                  }}
                   title={t('gr_avvia_navigazione')}
                   className="h-10 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[12px] font-black flex items-center gap-1.5 transition-colors active:scale-95"
                 >

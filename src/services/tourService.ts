@@ -842,7 +842,14 @@ class TourService {
     this.passMancante = false;
     // La sequenza e` gia` in ordine di cammino (del server o dell'utente):
     // si passa com'e`, cosi` il giro e` quello che si e` visto in anteprima.
-    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false, senzaLimite: !!this.bozzaStato.senzaLimite });
+    // CREARE IL GIRO E` GRATIS (29/08/2026, committente: «il crea giro puo'
+    // essere gratis e la funzione navigatore solo col Day Pass»). Qui si
+    // chiede la rotta in ANTEPRIMA — percorso, ordine, metri, minuti, senza
+    // le svolte — che il server da` a chiunque sia loggato. Il Day Pass lo
+    // si chiede in avvia(), quando servono le istruzioni: prima, chi non
+    // aveva il pass (o a cui il server non lo riconosceva) non vedeva mai
+    // il tasto verde e restava con una bozza in mano.
+    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false, senzaLimite: !!this.bozzaStato.senzaLimite, anteprima: true });
     this.bozzaSvuota();
     return giro;
   }
@@ -850,7 +857,7 @@ class TourService {
   // ── GIRO ─────────────────────────────────────────────────────────────────
 
   /** Crea il giro: chiede l'ordine al server e prepara le tappe. */
-  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number }; senzaLimite?: boolean }): Promise<GiroInCorso> {
+  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number }; senzaLimite?: boolean; anteprima?: boolean }): Promise<GiroInCorso> {
     if (tappe.length === 0) throw new Error('nessuna tappa');
     const tetto = opzioni.senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE;
     if (tappe.length > tetto) throw new Error(opzioni.senzaLimite ? `il percorso accetta al massimo ${MAX_TAPPE_ESTESO} tappe` : 'il giro accetta al massimo dieci tappe');
@@ -901,8 +908,31 @@ class TourService {
    * creazione — che le tappe entrano nel geofencing nativo e il driver
    * comincia a leggere le svolte.
    */
-  avvia() {
+  async avvia(): Promise<void> {
     if (!this.giro || this.avviato) return;
+    // IL NAVIGATORE SI PAGA QUI (29/08/2026). Il giro creato in anteprima ha
+    // il percorso ma non le svolte (`steps` vuoti in ogni tratta): sono le
+    // istruzioni a essere premium. Si richiede la rotta completa — stesso
+    // ordine, stessa partenza — e il server risponde 402 senza Day Pass:
+    // l'errore risale al tasto, che lo scrive, e il giro resta «pronto».
+    // Un giro ripreso che le svolte le ha gia` non le richiede.
+    const senzaSvolte = !(this.giro.tratte || []).some((l: any) => Array.isArray(l?.steps) && l.steps.length > 0);
+    if (senzaSvolte) {
+      const giro = this.giro;
+      const tappe = giro.ordine.map((i: number) => giro.tappe[i]).filter((t: TappaGiro | undefined): t is TappaGiro => !!t && !t.esclusa);
+      const { g, dati } = await this.chiediRotta(tappe, {
+        partenza: giro.partenzaCorrente,
+        anello: giro.anello,
+        ordina: false,
+        rientro: giro.anello ? this.puntoDiRientro() : null,
+      });
+      if (this.giro !== giro) return; // chiuso nel frattempo
+      giro.tratte = dati.routes?.[0]?.legs || giro.tratte;
+      const geometria = (dati.routes?.[0]?.geometry?.coordinates || []).map((c: number[]) => [c[1], c[0]]);
+      if (geometria.length > 1) giro.geometria = geometria;
+      if (Number.isFinite(g?.metri_totali)) giro.metri = g.metri_totali;
+      if (Number.isFinite(g?.minuti_cammino)) giro.minutiCammino = g.minuti_cammino;
+    }
     this.avviato = true;
     this.pausaManuale = false;
     this.stato = { ...this.stato, stato: 'IN_CAMMINO', da: Date.now(), fermoDa: null };
@@ -1838,5 +1868,15 @@ export function metri(a: { lat: number; lon: number }, b: { lat: number; lon: nu
 
 export { primaFrase };
 export const tourService = new TourService();
+// PASS APPENA ATTIVATO → SI RIPROVA DA SOLI (29/08/2026, collaudo Realme).
+// `passMancante` si accende al primo 402 e si spegneva solo toccando
+// «Riprova» o «Crea il giro»: chi attivava il Day Pass dal pannello stesso
+// (evento DAY_PASS_UPDATED_EVENT di dayPassService) si vedeva ancora
+// chiedere di attivarlo. Stringa letterale, non l'import: e` un solo nome
+// di evento, e tenere i due servizi senza dipendenze reciproche vale piu`
+// della costante condivisa.
+if (typeof window !== 'undefined') {
+  window.addEventListener('wip-daypass-updated', () => tourService.riprovaPass());
+}
 export { raggruppaTappeVicine };
 export type { TappaGiro, LivelloIngresso, PoiLungoStrada };

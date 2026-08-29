@@ -1347,7 +1347,15 @@ export default function App() {
                 <motion.button
                   initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                   whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                  onClick={() => tourService.avvia()}
+                  onClick={() => {
+                    // Il navigatore (le svolte) si paga col Day Pass: creare il
+                    // giro e' gratis, e' qui che il server puo' dire di no.
+                    tourService.avvia().catch((e: any) => {
+                      const m = String(e?.message || '');
+                      const dettaglio = m.startsWith('PASS_RICHIESTO:') ? m.slice('PASS_RICHIESTO:'.length).trim() : '';
+                      notify(m.startsWith('PASS_RICHIESTO') ? `${getTranslation('gr_pass_richiesto', language)}${dettaglio ? ` (${dettaglio})` : ''}` : (m || getTranslation('gr_giro_non_riuscito', language)));
+                    });
+                  }}
                   title={getTranslation('gr_avvia_navigazione', language)}
                   className="h-12 px-4 rounded-full shadow-2xl bg-emerald-600 text-white ring-4 ring-emerald-600/25 flex items-center gap-2 font-black text-[12px] transition-all animate-pulse"
                 >

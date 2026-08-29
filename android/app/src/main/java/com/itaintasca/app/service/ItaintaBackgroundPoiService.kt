@@ -1821,9 +1821,15 @@ class ItaintaBackgroundPoiService : Service() {
                 // (23/08/2026) Stessi timeout, ma su newBuilder() del client
                 // condiviso (WipHttp): pool e dispatcher sono quelli di
                 // SupabaseClient, che ha appena parlato con lo stesso host.
+                // (29/08/2026, collaudo) 25 s non bastano: il server genera
+                // fino a 20 teaser con l'AI in parallelo e, quando Groq
+                // rallenta, risponde in 30-40 s. Qui nessuno aspetta (e' una
+                // coroutine di sfondo), e chiudere la connessione prima non
+                // ferma il server: si aspettava per niente e si loggava un
+                // errore per un lavoro che intanto andava a buon fine.
                 val client = WipHttp.client.newBuilder()
                     .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(25, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
                     .build()
                 val body = JSONObject().apply {
                     put("poiIds", JSONArray(poiIds))
