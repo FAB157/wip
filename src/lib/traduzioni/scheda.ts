@@ -26,6 +26,15 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_descrizione_non_disponibile_momento: { IT: "Descrizione non disponibile al momento.", EN: "Description not available at the moment.", FR: "Description non disponible pour le moment.", ES: "Descripción no disponible por el momento.", DE: "Beschreibung im Moment nicht verfügbar.", RU: "Описание сейчас недоступно.", ZH: "描述暂时不可用。" },
   sk_chiesa_luogo_culto: { IT: "Chiesa / Luogo di Culto", EN: "Church / Place of Worship", FR: "Église / Lieu de culte", ES: "Iglesia / Lugar de culto", DE: "Kirche / Gotteshaus", RU: "Церковь / место культа", ZH: "教堂／宗教场所" },
   sk_luogo: { IT: "Luogo", EN: "Place", FR: "Lieu", ES: "Lugar", DE: "Ort", RU: "Место", ZH: "地点" },
+  // Le opere girate o ambientate nel luogo (works_json, 29/08/2026).
+  sk_qui_hanno_girato: { IT: "Qui hanno girato", EN: "Filmed here", FR: "Tourné ici", ES: "Rodado aquí", DE: "Hier gedreht", RU: "Здесь снимали", ZH: "在此取景" },
+  sk_ambientato_qui: { IT: "Ambientato qui", EN: "Set here", FR: "Se déroule ici", ES: "Ambientado aquí", DE: "Spielt hier", RU: "Действие происходит здесь", ZH: "故事发生地" },
+  // La scheda del locale da locali_pois (Overture, 29/08/2026).
+  sk_scheda_locale: { IT: "Il locale", EN: "The venue", FR: "L'établissement", ES: "El local", DE: "Das Lokal", RU: "Заведение", ZH: "店铺信息" },
+  sk_chiama: { IT: "Chiama", EN: "Call", FR: "Appeler", ES: "Llamar", DE: "Anrufen", RU: "Позвонить", ZH: "致电" },
+  sk_sito_web: { IT: "Sito", EN: "Website", FR: "Site", ES: "Sitio web", DE: "Website", RU: "Сайт", ZH: "网站" },
+  sk_catena: { IT: "Catena", EN: "Chain", FR: "Chaîne", ES: "Cadena", DE: "Kette", RU: "Сеть", ZH: "连锁" },
+  sk_chiuso_definitivamente: { IT: "Chiuso definitivamente", EN: "Permanently closed", FR: "Fermé définitivement", ES: "Cerrado permanentemente", DE: "Dauerhaft geschlossen", RU: "Закрыто навсегда", ZH: "已永久关闭" },
 
   // ── Frasi generate localmente per locali/ristoranti ─────────────────────
   sk_locale_posiziona_zona: { IT: "Questo locale si posiziona come {type} nel cuore della zona.", EN: "This venue stands out as a {type} in the heart of the area.", FR: "Cet établissement se présente comme {type} au cœur du quartier.", ES: "Este local se posiciona como {type} en el corazón de la zona.", DE: "Dieses Lokal präsentiert sich als {type} im Herzen der Gegend.", RU: "Это заведение — {type} в самом сердце района.", ZH: "这家店是本区域中心的一家{type}。" },

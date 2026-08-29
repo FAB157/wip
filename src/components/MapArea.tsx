@@ -4203,6 +4203,50 @@ function MapArea({
           ? bounds.getCenter()
           : { lat: INITIAL_CENTER[0], lng: INITIAL_CENTER[1] };
 
+        // (29/08/2026) PRIMA LA TABELLA locali_pois: i locali di Overture
+        // importati in casa (nome, cucina, indirizzo con civico, sito,
+        // telefono, marchio, stato). Foursquare ha esaurito il credito e
+        // rispondeva 429 a ogni chiamata; TripAdvisor consuma quota a ogni
+        // spostamento della mappa. Le due API restano SOLO come rete di
+        // sicurezza per i riquadri dove la tabella e' vuota.
+        if (bounds.isValid() && (bounds.getNorth() - bounds.getSouth()) < 0.6) {
+          try {
+            const { data: locali } = await supabase
+              .from('locali_pois')
+              .select('id,name,lat,lon,sub_category,cucina,brand,address,city,website,phone,socials,operating_status,confidence')
+              .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+              .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+              .neq('operating_status', 'closed')
+              .order('confidence', { ascending: false })
+              .limit(400);
+            if (locali && locali.length > 0) {
+              return locali.map((l: any) => ({
+                id: l.id,
+                lat: Number(l.lat),
+                lon: Number(l.lon),
+                name: l.name,
+                category: 'locali',
+                baseCategory: 'locali',
+                subCategory: l.sub_category || 'ristorante',
+                poi_type: l.cucina || null,
+                brand: l.brand || null,
+                address: l.address || null,
+                city: l.city || null,
+                contact_website: l.website || null,
+                contact_phone: l.phone || null,
+                socials: Array.isArray(l.socials) ? l.socials : null,
+                operating_status: l.operating_status || null,
+                source: 'overture',
+                status: 'verified',
+                is_gem: false,
+                isFromDb: true,
+              }));
+            }
+          } catch (e) {
+            console.warn('[MapArea] locali_pois non leggibile, passo alle API live', e);
+          }
+        }
+
         const fsqPromise = (async () => {
           logApiCall('foursquare', 'mappa_ricerca_locali');
           try {

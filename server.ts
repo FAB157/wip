@@ -8743,6 +8743,69 @@ ${description}
     }
   });
 
+  // (29/08/2026) LA SCHEDA DEL LOCALE (locali_pois, id ov-…): TripAdvisor
+  // UNA volta per locale. Il voto, il numero di recensioni, la fascia di
+  // prezzo e il location_id si salvano sulla riga (ta_*); per 30 giorni le
+  // aperture successive leggono dalla tabella e non consumano quota
+  // (search+details = 2 chiamate risparmiate a ogni apertura). Solo API
+  // gratuite: Overture in tabella + TripAdvisor free tier.
+  app.get("/api/locali/scheda", async (req, res) => {
+    try {
+      const id = String(req.query.id || '');
+      if (!/^ov-[A-Za-z0-9_-]{8,80}$/.test(id)) return res.status(400).json({ error: 'id non valido' });
+      if (!supabaseUrl || !supabaseServiceKey) return res.status(500).json({ error: 'Supabase non configurato' });
+      const hdr = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const rRow = await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}&select=id,name,lat,lon,city,ta_location_id,ta_rating,ta_num_reviews,ta_price_level,ta_updated_at&limit=1`, { headers: hdr, signal: AbortSignal.timeout(8000) });
+      const righe = rRow.ok ? await rRow.json() : [];
+      const riga = righe?.[0];
+      if (!riga) return res.status(404).json({ error: 'locale non trovato' });
+
+      const fresco = riga.ta_updated_at && (Date.now() - new Date(riga.ta_updated_at).getTime()) < 30 * 86400000;
+      const risposta = (extra: any = {}) => res.json({
+        id: riga.id,
+        location_id: riga.ta_location_id || null,
+        rating: riga.ta_rating ?? null,
+        num_reviews: riga.ta_num_reviews ?? null,
+        price_level: riga.ta_price_level || null,
+        web_url: null, // l'URL della pagina lo da' solo /details: non si inventa
+        cercato: !!riga.ta_updated_at,
+        ...extra,
+      });
+      if (fresco) return risposta({ fresh: true });
+
+      const key = process.env.TRIPADVISOR_API_KEY || process.env.VITE_TRIPADVISOR_API_KEY;
+      if (!key || !(await tripAdvisorBudgetOk())) return risposta({ fresh: false });
+
+      // Ricerca per nome vicino alle coordinate; si accetta il primo risultato
+      // solo se sta entro 300 m (TripAdvisor riporta la distanza in km).
+      let locationId: string | null = null;
+      try {
+        const sUrl = `https://api.content.tripadvisor.com/api/v1/location/search?searchQuery=${encodeURIComponent(riga.name)}&latLong=${riga.lat},${riga.lon}&radius=1&radiusUnit=km&category=restaurants&language=it&key=${key}`;
+        const sRes = await axios.get(sUrl, { headers: { Accept: 'application/json' }, timeout: 8000 });
+        const primo = (sRes.data?.data || [])[0];
+        const dist = primo?.distance != null ? parseFloat(primo.distance) : null;
+        if (primo?.location_id && (dist == null || dist <= 0.3)) locationId = String(primo.location_id);
+      } catch { /* niente: si segna comunque il tentativo */ }
+
+      const patch: any = { ta_updated_at: new Date().toISOString() };
+      if (locationId) {
+        patch.ta_location_id = locationId;
+        try {
+          const dRes = await axios.get(`https://api.content.tripadvisor.com/api/v1/location/${locationId}/details?language=it&key=${key}`, { headers: { Accept: 'application/json' }, timeout: 8000 });
+          const d = dRes.data || {};
+          if (d.rating != null) patch.ta_rating = parseFloat(d.rating);
+          if (d.num_reviews != null) patch.ta_num_reviews = parseInt(d.num_reviews, 10);
+          if (d.price_level) patch.ta_price_level = String(d.price_level).slice(0, 12);
+        } catch { /* dettagli mancanti: resta il location_id */ }
+      }
+      await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { ...hdr, Prefer: 'return=minimal' }, body: JSON.stringify(patch), signal: AbortSignal.timeout(8000) }).catch(() => {});
+      Object.assign(riga, patch);
+      return risposta({ fresh: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // Proxy for Nominatim Reverse
   // Lingua per Nominatim (accept-language) da lista chiusa, default it.
   const nominatimLang = (raw: any): string => {

@@ -56,6 +56,7 @@ import wipLogo from '../assets/images/wip-icon.png';
 import { SUBCATEGORY_DETAILS } from "../data/subcategoryDetails";
 import ActionButton from "./ui/ActionButton";
 import NavChoiceSheet from "./NavChoiceSheet";
+import { BottoneGiro } from "./PoiPopupContent";
 
 import {
   getCachedPoiDetails,
@@ -165,6 +166,8 @@ interface PoiDetailSheetProps {
   onSetSubFilter?: (filter: string | null) => void;
   nearbyPois?: any[];
   onSelectNearby?: (poi: any) => void;
+  /** Radar acceso: la scheda serve a DECIDERE se il posto entra nel giro. */
+  modalitaGiro?: boolean;
   language: Language;
 }
 
@@ -201,6 +204,7 @@ export default function PoiDetailSheet({
   onSetSubFilter,
   nearbyPois: propNearbyPois = [],
   onSelectNearby,
+  modalitaGiro,
   language,
 }: PoiDetailSheetProps) {
   const [nearbyPois, setNearbyPois] = useState<any[]>(propNearbyPois);
@@ -282,6 +286,33 @@ export default function PoiDetailSheet({
       }, () => { /* best-effort: nessun indirizzo, nessuna riga */ });
     return () => { alive = false; };
   }, [poi?.id]);
+
+  // ── LE OPERE GIRATE O AMBIENTATE QUI (works_json, 29/08/2026) ──────────
+  // Committente: «attacchiamo l'opera al POI, ma creiamo nella categoria
+  // tematici un POI specifico che da' informazioni sul film». Le opere stanno
+  // in shared_pois.works_json — sia sul luogo (Marina Corricella resta un
+  // porto e in fondo dice «qui hanno girato…») sia sul POI dedicato
+  // (category='cinema'). La RPC della mappa non porta la colonna: mini-fetch
+  // alla prima apertura, come per l'indirizzo.
+  type Opera = { qid?: string; titolo: string; anno?: number | null; tipo?: string; ruolo?: string; regista?: string | null; autore?: string | null; attori?: string[]; scena?: string | null; immagine?: string | null };
+  const [opere, setOpere] = useState<Opera[]>(() => (Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : []));
+  useEffect(() => {
+    let alive = true;
+    const locali = Array.isArray((poi as any)?.works_json) ? (poi as any).works_json : null;
+    setOpere(locali || []);
+    if (!poi?.id || locali) return;
+    supabase
+      .from('shared_pois')
+      .select('works_json')
+      .eq('id', String(poi.id))
+      .maybeSingle()
+      .then(({ data }) => {
+        if (alive && Array.isArray((data as any)?.works_json)) setOpere((data as any).works_json);
+      }, () => { /* niente opere, niente sezione */ });
+    return () => { alive = false; };
+  }, [poi?.id]);
+  /** La locandina/immagine di Commons in piccolo: Special:FilePath accetta ?width. */
+  const miniatura = (u?: string | null) => (u && /commons\.wikimedia\.org|upload\.wikimedia\.org/.test(u) ? `${u}${u.includes('?') ? '&' : '?'}width=96` : null);
 
   const [tripData, setTripData] = useState<{
     rating?: string | null;
@@ -2179,21 +2210,49 @@ export default function PoiDetailSheet({
         }
       }
 
-      // 3. Fallback TripAdvisor API
-      const TRIPADVISOR_KEY = "B054515DAED943B9884DD6FB4A73F4B1";
+      // 3. Fallback TripAdvisor API (la chiave sta SOLO sul server: qui c'era
+      // una costante cablata, finita nel bundle pubblico — tolta il 29/08/2026)
       if (!loaded) {
-        const searchRes = await fetch(
-          `/api/trip/search?searchQuery=${encodeURIComponent(poi.name || "")}&latLong=${poi.lat},${poi.lon}`,
-        );
-        if (searchRes.ok) {
-          const searchData = await searchRes.json();
+        // (29/08/2026) Locale di locali_pois (id ov-…): il server cerca su
+        // TripAdvisor UNA volta e salva voto/recensioni/prezzo/location_id
+        // sulla riga (ta_*); le aperture successive non consumano quota per
+        // search+details. Solo API gratuite, per ordine del committente.
+        let schedaLocale: any = null;
+        if (poi.category === 'locali' && String(poi.id).startsWith('ov-')) {
+          try {
+            const sRes = await fetch(`/api/locali/scheda?id=${encodeURIComponent(String(poi.id))}`);
+            if (sRes.ok) schedaLocale = await sRes.json();
+          } catch { /* si passa alla ricerca classica */ }
+        }
+        let searchData: any = null;
+        if (schedaLocale?.location_id) {
+          searchData = { data: [{ location_id: schedaLocale.location_id }] };
+        } else if (!schedaLocale?.cercato) {
+          const searchRes = await fetch(
+            `/api/trip/search?searchQuery=${encodeURIComponent(poi.name || "")}&latLong=${poi.lat},${poi.lon}`,
+          );
+          if (searchRes.ok) searchData = await searchRes.json();
+        }
+        if (searchData) {
           const locationId = searchData.data?.[0]?.location_id;
 
           if (locationId) {
-            const detailsRes = await fetch(
-              `/api/trip/details?locationId=${locationId}`,
-            );
-            const detailsData = detailsRes.ok ? await detailsRes.json() : {};
+            let detailsData: any = {};
+            if (schedaLocale?.location_id && schedaLocale?.rating != null) {
+              // Dettagli gia' in tabella: niente chiamata /details.
+              detailsData = {
+                rating: schedaLocale.rating,
+                num_reviews: schedaLocale.num_reviews,
+                price_level: schedaLocale.price_level,
+                web_url: schedaLocale.web_url,
+                address_obj: { address_string: (poi as any).address || '', city: (poi as any).city || '' },
+              };
+            } else {
+              const detailsRes = await fetch(
+                `/api/trip/details?locationId=${locationId}`,
+              );
+              detailsData = detailsRes.ok ? await detailsRes.json() : {};
+            }
 
             const photosRes = await fetch(
               `/api/trip/photos?locationId=${locationId}`,
@@ -2810,6 +2869,42 @@ export default function PoiDetailSheet({
                 </span>
               </button>
             )}
+
+            {/* QUI HANNO GIRATO (29/08/2026). Una riga per opera: titolo, anno,
+                regista (o autore per i libri), la scena quando la conosciamo, e
+                la locandina di Commons se c'e'. Massimo otto: un luogo come
+                Cinecitta' ne ha trenta e la scheda non e' un catalogo. */}
+            {opere.length > 0 && (
+              <div className="mt-4 rounded-2xl bg-slate-50 border border-black/5 p-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-primary/60 mb-2">
+                  🎬 {opere.some(o => o.ruolo === 'riprese') ? getTranslation('sk_qui_hanno_girato', language) : getTranslation('sk_ambientato_qui', language)}
+                  {opere.length > 8 ? ` · ${opere.length}` : ''}
+                </p>
+                <ul className="space-y-2">
+                  {opere.slice(0, 8).map((o, i) => {
+                    const img = miniatura(o.immagine);
+                    const chi = o.regista || o.autore;
+                    return (
+                      <li key={`${o.qid || o.titolo}-${i}`} className="flex items-start gap-2.5">
+                        {img ? (
+                          <img src={img} alt="" loading="lazy" className="w-9 h-12 rounded-md object-cover shrink-0 bg-black/5" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                        ) : (
+                          <span className="w-9 h-12 rounded-md bg-black/5 flex items-center justify-center text-base shrink-0">{o.tipo === 'libro' ? '📖' : o.tipo === 'serie' ? '📺' : '🎬'}</span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-bold text-primary leading-snug">
+                            {o.titolo}{o.anno ? <span className="text-primary/50 font-semibold"> ({o.anno})</span> : null}
+                          </p>
+                          {chi && <p className="text-[11px] text-primary/60 leading-snug">{chi}{o.attori?.length ? ` · ${o.attori.slice(0, 3).join(', ')}` : ''}</p>}
+                          {o.scena && <p className="text-[11px] text-primary/70 italic leading-snug mt-0.5">{o.scena}</p>}
+                          {o.ruolo === 'ambientazione' && <p className="text-[10px] text-primary/40 leading-snug">{getTranslation('sk_ambientato_qui', language)}</p>}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
             {/* Contatti strutturati (telefono / sito / orari) da OSM+Wikidata,
                 resi come bottoni d'azione — SOLO per le categorie turistico-
                 culturali (musei, monumenti, chiese, archeo, teatri, attrazioni),
@@ -2971,6 +3066,51 @@ export default function PoiDetailSheet({
                 </div>
               </div>
             )}
+            {/* La scheda del locale (29/08/2026): i dati di Overture letti da
+                locali_pois — cucina, catena, indirizzo con civico, telefono,
+                sito, social, stato. Niente API: e' tutto gia' sul pin. Il
+                voto/foto/recensioni arrivano dal fallback TripAdvisor sopra. */}
+            {poi.category === "locali" && ((poi as any).address || (poi as any).contact_phone || (poi as any).contact_website || (poi as any).brand || (poi as any).poi_type) && (
+              <div className="mb-6 bg-white p-4 rounded-[2rem] border border-rose-100/60 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-black text-rose-600 uppercase tracking-widest px-2 py-0.5 bg-rose-100 rounded-md">
+                    {getTranslation('sk_scheda_locale', language)}
+                  </span>
+                  {(poi as any).operating_status === 'closed' && (
+                    <span className="text-[10px] font-black text-red-700 bg-red-100 px-2 py-0.5 rounded-md">{getTranslation('sk_chiuso_definitivamente', language)}</span>
+                  )}
+                </div>
+                {(poi as any).poi_type && (
+                  <p className="text-[12px] font-bold text-primary/80 capitalize">{String((poi as any).poi_type).replace(/_/g, ' ')}</p>
+                )}
+                {(poi as any).brand && (
+                  <p className="text-[11px] text-primary/60">{getTranslation('sk_catena', language)}: {(poi as any).brand}</p>
+                )}
+                {(poi as any).address && (
+                  <p className="text-[12px] text-primary/70 mt-1">{(poi as any).address}{(poi as any).city ? `, ${(poi as any).city}` : ''}</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-3">
+                  {(poi as any).contact_phone && (
+                    <a href={`tel:${String((poi as any).contact_phone).replace(/\s+/g, '')}`} className="px-4 py-2 bg-rose-600 text-white rounded-2xl text-[11px] font-black shadow-sm active:scale-95 transition-all">
+                      📞 {getTranslation('sk_chiama', language)}
+                    </a>
+                  )}
+                  {(poi as any).contact_website && (
+                    <a href={String((poi as any).contact_website).startsWith('http') ? (poi as any).contact_website : `https://${(poi as any).contact_website}`} target="_blank" rel="noopener noreferrer" className="px-4 py-2 bg-white border border-rose-200 text-rose-900 rounded-2xl text-[11px] font-black shadow-sm active:scale-95 transition-all">
+                      🌐 {getTranslation('sk_sito_web', language)}
+                    </a>
+                  )}
+                  {Array.isArray((poi as any).socials) && (poi as any).socials.slice(0, 3).map((s: string) => {
+                    const dominio = String(s).replace(/^https?:\/\/(www\.)?/, '').split('/')[0].split('.')[0];
+                    return (
+                      <a key={s} href={s} target="_blank" rel="noopener noreferrer" className="px-3 py-2 bg-white border border-rose-100 text-rose-800 rounded-2xl text-[11px] font-bold capitalize active:scale-95 transition-all">
+                        {dominio}
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Special Parking Section */}
             {poi.category === "utilita" && (
               <div className="bg-blue-50 rounded-2xl p-4 mb-6 border border-blue-100 flex flex-col gap-3">
@@ -3059,6 +3199,14 @@ export default function PoiDetailSheet({
                 </span>
               </div>
             </div>
+
+            {/* DIECI TAPPE ANCHE QUI (29/08/2026, collaudo Realme). Col radar
+                acceso, dalla lista «Vicino a te» si apre QUESTA scheda, non il
+                popup della mappa — e qui il tasto «Aggiungi al giro» non
+                c'era: restavano solo la stella dei preferiti e il cuore, e il
+                committente aggiungeva tappe col cuore senza sapere perche'
+                funzionasse. Stesso bottone del popup, stessa bozza. */}
+            {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
 
             <div className="grid grid-cols-2 gap-3 mb-6">
               <ActionButton

@@ -47,7 +47,7 @@ interface PoiPopupContentProps {
  * essere in disaccordo. Il numero e` la posizione nel giro come lo
  * camminerai (ordine del server), non l'ordine in cui hai toccato.
  */
-function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
+export function BottoneGiro({ poi, language }: { poi: any; language: Language }) {
   const bozza = useBozzaGiro();
   const id = poi?.id ?? poi?.poiId;
   const dentro = id != null && tourService.bozzaHa(id);
