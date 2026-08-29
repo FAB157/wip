@@ -41,14 +41,32 @@ export async function getDayPassState(): Promise<DayPassState> {
   if (isNativeOfflineSupported()) {
     try {
       const s = await plugin.getDayPassState();
-      return {
-        active: !!s?.active,
-        expiresAt: Number(s?.expiresAt) || 0,
-        used: Number(s?.used) || 0,
-        cap: Number(s?.cap) || 0,
-      };
+      // (29/08/2026, collaudo) Il mirror nativo e' una COPIA: dopo un reset
+      // dei dati, un telefono nuovo o un'attivazione fatta sul web dice
+      // «inattivo» anche con un pass valido sul server — e l'app proponeva
+      // di comprare il Day Pass a chi lo aveva. Se il nativo dice si' ci si
+      // fida (vale anche offline); se dice no si chiede al server e, se il
+      // pass c'e', si riallinea il mirror.
+      if (s?.active) {
+        return {
+          active: true,
+          expiresAt: Number(s?.expiresAt) || 0,
+          used: Number(s?.used) || 0,
+          cap: Number(s?.cap) || 0,
+        };
+      }
+      const dalServer = await leggiPassDalServer();
+      if (dalServer.active) {
+        try { await plugin.setDayPass({ expiresAt: dalServer.expiresAt, cap: dalServer.cap, used: dalServer.used }); } catch { /* mirror non aggiornabile: si usa lo stato del server */ }
+      }
+      return dalServer;
     } catch { /* fallthrough al server */ }
   }
+  return leggiPassDalServer();
+}
+
+/** Lo stato del pass com'e' sul server (user_passes), senza mirror. */
+async function leggiPassDalServer(): Promise<DayPassState> {
   try {
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData?.user?.id;
