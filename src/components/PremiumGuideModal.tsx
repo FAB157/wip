@@ -31,11 +31,6 @@ interface PremiumGuideModalProps {
 
 type Phase = 'select_style' | 'generating' | 'preview' | 'error';
 
-/** Lingua della sintesi vocale del podcast della guida (era IT/EN soltanto). */
-const UTTERANCE_LANG: Record<string, string> = {
-  IT: 'it-IT', EN: 'en-US', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN',
-};
-
 const STYLES: GuideStyle[] = ['art', 'family', 'shopping', 'food', 'essential'];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,14 +186,13 @@ export default function PremiumGuideModal({
       const data = await res.json();
       notifyCreditsChanged({ userId });
       if (data.text) {
-        if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(data.text);
-          utterance.lang = UTTERANCE_LANG[String(language).toUpperCase()] || 'it-IT';
-          utterance.onend = () => setPlayingPodcast(false);
-          utterance.onerror = () => setPlayingPodcast(false);
-          window.speechSynthesis.speak(utterance);
-        }
+        // (29/08/2026) Prima solo speechSynthesis: nella WebView Android
+        // spesso non esiste e il podcast pagato restava muto. Ora la catena
+        // completa di ttsService: Azure/Google, poi la voce di sistema
+        // nativa, poi Web Speech. Se nessuna voce parte, il tasto si sblocca.
+        const { speakAudioguide, isSpeechActive } = await import('../services/ttsService');
+        await speakAudioguide(String(data.text), String(language), 'nicky', () => setPlayingPodcast(false));
+        if (!isSpeechActive()) setPlayingPodcast(false);
       } else {
         setPlayingPodcast(false);
       }

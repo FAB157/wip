@@ -488,6 +488,10 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     FR: 'zone indicative (limites communales), pas le cahier des charges', ES: 'zona indicativa (límites municipales), no el pliego de condiciones',
     DE: 'ungefähres Gebiet (Gemeindegrenzen), nicht die Produktspezifikation', RU: 'ориентировочная зона (границы муниципалитетов), не спецификация', ZH: '示意区域（市镇边界），并非产品规范',
   },
+  poi_prenota_su: {
+    IT: 'Biglietti e visite su', EN: 'Tickets and tours on', FR: 'Billets et visites sur', ES: 'Entradas y visitas en',
+    DE: 'Tickets und Touren auf', RU: 'Билеты и экскурсии на', ZH: '门票与游览：',
+  },
   poi_scheda_rcdb: {
     IT: 'Scheda su RCDB', EN: 'RCDB entry', FR: 'Fiche RCDB', ES: 'Ficha en RCDB', DE: 'RCDB-Eintrag', RU: 'Карточка RCDB', ZH: 'RCDB 资料页',
   },

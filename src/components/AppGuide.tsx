@@ -8,7 +8,8 @@ import {
   Globe, CreditCard, Star, Compass, MapPin,
   Play, Pause, RefreshCw, Plus, CheckCircle,
   History, Bookmark, User, ShoppingCart, Trash2,
-  ChevronDown, Ticket, WifiOff, KeyRound, Users
+  ChevronDown, Ticket, WifiOff, KeyRound, Users,
+  Calendar, PartyPopper
 } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS } from '../lib/pricing';
@@ -281,13 +282,23 @@ export default function AppGuide({ language }: AppGuideProps) {
       title: t('vr_a_guide_sec_navbar'),
       icon: Smartphone,
       content: (
-        <ul className="mb-2">
-          <Li><strong><Map className="w-4 h-4 inline" /> Mappa</strong> — la schermata principale: luoghi intorno a te, filtri per categoria, radar e audioguida.</Li>
-          <Li><strong><Compass className="w-4 h-4 inline" /> Pianifica</strong> — WIP l'Esperto crea itinerari su misura giorno per giorno.</Li>
-          <Li><strong><Camera className="w-4 h-4 inline" /> Vision</strong> — fotografa un monumento e scopri cos'è; da qui attivi il <strong>Pass Museo</strong> e proponi luoghi nuovi alla <strong>Community</strong>.</Li>
-          <Li><strong><Star className="w-4 h-4 inline" /> Eventi</strong> — concerti, mostre ed esperienze nella zona.</Li>
-          <Li><strong><User className="w-4 h-4 inline" /> Profilo</strong> — crediti, missioni, passaporto e diario, <strong>Le mie Vision</strong>, mappe offline, impostazioni, assistenza e questo manuale.</Li>
-        </ul>
+        <>
+          <P>In fondo allo schermo ci sono <strong>sei comandi</strong>. Cinque aprono una schermata; uno, <strong>Guida</strong>, non apre nulla: accende e spegne l'audioguida.</P>
+          <ul className="mb-2">
+            <Li><strong><Map className="w-4 h-4 inline" /> Esplora</strong> — la schermata principale: la mappa dei luoghi intorno a te, i filtri per categoria, il radar e la ricerca per città.</Li>
+            <Li><strong><Calendar className="w-4 h-4 inline" /> Itinerario</strong> — i tuoi piani giorno per giorno e la Libreria di itinerari già pronti.</Li>
+            <Li><strong><PartyPopper className="w-4 h-4 inline" /> Eventi</strong> — concerti, mostre, sagre e mercatini nei giorni in cui ci sei.</Li>
+            <Li><strong><Camera className="w-4 h-4 inline" /> WIP</strong> — il pulsante tondo al centro: inquadra un monumento e scopri cos'è. Da qui attivi il <strong>Pass Museo</strong> e proponi luoghi nuovi alla <strong>Community</strong>.</Li>
+            <Li><strong><Headphones className="w-4 h-4 inline" /> Guida</strong> — <strong>l'interruttore dell'audioguida</strong>, il comando più importante dell'app. Acceso, WIP ti segue mentre cammini e parla quando arrivi. Vedi sotto.</Li>
+            <Li><strong><User className="w-4 h-4 inline" /> Profilo</strong> — crediti, missioni, passaporto e diario, <strong>Le mie Vision</strong>, mappe offline, impostazioni, assistenza e questo manuale.</Li>
+          </ul>
+          <H>Il tasto Guida, in dettaglio</H>
+          <ul className="mb-2">
+            <Li>È un <strong>interruttore, non una schermata</strong>: toccandolo non cambi pagina, accendi o spegni l'ascolto. Quando è acceso il simbolo pulsa.</Li>
+            <Li>Ad audioguida accesa compare <strong>sopra il tasto</strong> un secondo comando tondo per <strong>silenziare</strong> (🔊 / 🔇): serve a zittire la voce <em>senza</em> spegnere il servizio. Sono due cose diverse — silenziare tiene attivo il rilevamento dei luoghi, spegnere lo interrompe.</Li>
+            <Li><strong>Spegnere la Guida sospende anche il giro in corso</strong>: se stai seguendo un itinerario, quello resta in attesa e riprende quando riaccendi.</Li>
+          </ul>
+        </>
       ),
     },
     {
@@ -387,6 +398,15 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li><strong>Offline</strong>: salva il testo gratis, oppure scarica il <strong>bundle audio</strong> con la voce premium ({PRICING_LIST.audio_guide + PRICING_LIST.poi_detail} crediti/tappa — file tuoi per sempre).</Li>
             <Li><strong>PDF e stampa</strong>: esporta l'itinerario; la <strong>Guida Premium</strong> ({PRICING_LIST.premium_guide_daily} crediti/giorno) crea un libretto illustrato.</Li>
           </ul>
+          <H>Portare il giorno sulla mappa: a piedi o in auto</H>
+          <P>Il tasto dell'audioguida di un giorno ora <strong>chiede prima come lo fai</strong>, perché chi guida non usa una guida pensata per chi cammina.</P>
+          <ul className="mb-2">
+            <Li><strong>A piedi</strong>: le tappe del giorno diventano un giro nel radar, con il tracciato, l'ordine del piano e le aggiunte che incontri per strada.</Li>
+            <Li><strong>In auto</strong>: si esce su Google Maps con <strong>tutte</strong> le tappe come sosta, non solo la prima. Google ne accetta al massimo dieci: se il giorno ne ha di più, restano la prima, l'ultima e le intermedie prese a distanza regolare.</Li>
+          </ul>
+          <H>Le tappe che non parlano</H>
+          <P>Sulla mappa del giorno compaiono <strong>tutte</strong> le tappe, pranzi, pause e trasferimenti compresi: senza, il tracciato passerebbe altrove e non sarebbe più la giornata che hai pianificato.</P>
+          <P>Ristoranti e pause però sono <strong>tappe mute</strong>: il percorso ci passa e all'arrivo senti il nome — <em>"Sei arrivato a: Trattoria da Mario"</em> — ma non si apre nessuna scheda, non parte nessuna audioguida e <strong>non ti viene addebitato nulla</strong>. Non entrano nemmeno nei pacchetti offline: pagare il racconto di una trattoria sarebbe spesa buttata.</P>
         </>
       ),
     },
@@ -418,6 +438,13 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>Le indicazioni vocali usano la <strong>stessa voce dell'audioguida</strong>: non devi guardare lo schermo.</Li>
             <Li>Mentre cammini le audioguide <strong>continuano a funzionare</strong>: se passi davanti a qualcosa di interessante lungo la strada, te lo racconta.</Li>
             <Li>Le tappe del tuo itinerario non costano nulla in più; un luogo trovato per strada segue le regole normali dell'audioguida.</Li>
+          </ul>
+          <H>Il cruscotto resta acceso a schermo spento</H>
+          <P>Durante la navigazione trovi <strong>fisso</strong> sulla schermata di blocco un riquadro con la tappa (n° su totale), la manovra, i metri alla svolta e l'orario di arrivo previsto: non devi sbloccare il telefono per sapere dove girare.</P>
+          <ul className="mb-2">
+            <Li>Su <strong>Android</strong> prende il posto della notifica dell'audioguida, che è già fissa: resta una notifica sola, e i tasti Pausa / Riprendi / Salta restano tutti raggiungibili.</Li>
+            <Li>Su <strong>iPhone</strong> usa le <strong>Attività in tempo reale</strong> (schermata di blocco e Dynamic Island), da iOS 16.1 in poi. Se le hai disattivate nelle impostazioni di sistema, WIP torna alla notifica normale.</Li>
+            <Li>Il cruscotto compare solo con l'audioguida accesa, e si spegne da solo a giro finito.</Li>
           </ul>
           <P>In auto WIP non fa da navigatore: apre Google Maps o Apple Mappe, che lo fanno meglio.</P>
         </>

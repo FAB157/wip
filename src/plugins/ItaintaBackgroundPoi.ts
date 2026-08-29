@@ -35,7 +35,17 @@ export interface ItaintaBackgroundPoiPlugin {
   getTeaserState(): Promise<{ isSpeaking: boolean; speakingPoiId: string; lastPoiId: string; lastFinishedAt: number }>;
   stopNativeTeaser(): Promise<void>;
   getPendingDeepLink(): Promise<any>;
-  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number }): Promise<{ ok?: boolean }>;
+  /**
+   * Voce TTS di sistema. Senza `force` entra nella coda dei teaser e, a
+   * servizio in background spento, risponde ok:false. Con `force:true`
+   * (29/08/2026) a servizio spento parla COMUNQUE con un motore tutto del
+   * plugin — il ripiego che non muore mai quando Azure/Google non rispondono
+   * — e risponde `direct:true, id`: la fine arriva con l'evento
+   * `directSpeechFinished {id}`, non stimata.
+   */
+  speakText(options: { text: string; poiId?: string; kind?: string; priority?: number; force?: boolean }): Promise<{ ok?: boolean; direct?: boolean; id?: string; reason?: string }>;
+  /** Ferma la voce diretta avviata con speakText({force:true}). */
+  stopSpeakText(): Promise<void>;
 
   /**
    * Cruscotto del navigatore a display spento. Android: riscrive la notifica
@@ -83,6 +93,11 @@ export interface ItaintaBackgroundPoiPlugin {
   addListener(
     eventName: 'audioguideCreditsRequired',
     listener: (data: { poiId?: string; poiName?: string; lat?: number; lon?: number; ts?: number; data?: string }) => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /** Fine (o errore) della voce diretta avviata con speakText({force:true}). */
+  addListener(
+    eventName: 'directSpeechFinished',
+    listener: (data: { id?: string }) => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
   addListener(
     eventName: string,

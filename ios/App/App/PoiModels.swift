@@ -420,7 +420,8 @@ enum PoiCategories {
                    "desert", "deserto", "tree", "albero", "national_park"],
         "locali": ["restaurant", "cafe", "bar", "fast_food", "pub", "locali"],
         // ev_charging (27/08/2026): colonnine EV da OpenChargeMap.
-        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "marketplace", "mercato", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"],
+        // marketplace/mercato tolti (29/08/2026): verticale Mercatini, senza audioguida.
+        "utilita": ["pharmacy", "hospital", "police", "taxi", "utilita", "drinking_water", "station", "subway_entrance", "toll_booth", "ev_charging"],
         "famiglie": ["playground", "theme_park", "aquarium", "zoo", "famiglie", "water_park"],
         /// Vino e Gusto (20/08/2026): 199.280 luoghi del gusto importati da
         /// OpenStreetMap. Chip OFF di default. Allineato a CategoryMap.kt.

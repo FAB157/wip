@@ -71,28 +71,57 @@ export async function fetchServicesAround(lat: number, lon: number): Promise<Ser
   // cinque, e dal server Vercel non risponde mai.
   try {
     const { supabase } = await import('./supabase');
-    const g = RADIUS_M / 111000; // gradi corrispondenti al raggio
-    const { data } = await supabase
+    const gLat = RADIUS_M / 111000; // gradi di latitudine per il raggio
+    // In longitudine i gradi si accorciano col coseno: a Oslo un riquadro
+    // uguale in gradi sarebbe la meta` in metri.
+    const gLon = gLat / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+    const tipoDa: Record<string, ServiceType> = { fontanella: 'drinking_water', bagni_pubblici: 'toilets' };
+    // UNA QUERY PER TIPO, CIASCUNA COL SUO TETTO (29/08/2026, collaudo: «i
+    // bagni non sono mostrati»). Prima era una sola query da 180 righe senza
+    // distinzione: in citta` entro 2 km ci sono centinaia di fontanelle, che
+    // riempivano le 180 righe da sole, e i bagni non entravano mai.
+    const risposte = await Promise.all(Object.keys(tipoDa).map((sub) => supabase
       .from('utility_pois')
       .select('id,name,lat,lon,sub_category')
-      .in('sub_category', ['fontanella', 'bagni_pubblici'])
-      .gte('lat', lat - g).lte('lat', lat + g)
-      .gte('lon', lon - g).lte('lon', lon + g)
-      .limit(MAX_PER_TYPE * 3);
-    if (data && data.length) {
-      const tipoDa: Record<string, ServiceType> = { fontanella: 'drinking_water', bagni_pubblici: 'toilets' };
-      const punti: ServicePoint[] = data
-        .map((p: any) => ({
-          id: `svc-${p.id}`,
-          type: tipoDa[String(p.sub_category)] as ServiceType,
-          lat: Number(p.lat), lon: Number(p.lon),
-          name: p.name || undefined,
-        }))
-        .filter((p) => p.type && isFinite(p.lat) && isFinite(p.lon));
-      if (punti.length) {
-        try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti })); } catch {}
-        return punti;
-      }
+      .eq('sub_category', sub)
+      .gte('lat', lat - gLat).lte('lat', lat + gLat)
+      .gte('lon', lon - gLon).lte('lon', lon + gLon)
+      .limit(MAX_PER_TYPE)));
+    const punti: ServicePoint[] = risposte
+      .flatMap((r: any) => (r?.data || []))
+      .map((p: any) => ({
+        id: `svc-${p.id}`,
+        type: tipoDa[String(p.sub_category)] as ServiceType,
+        lat: Number(p.lat), lon: Number(p.lon),
+        name: p.name || undefined,
+      }))
+      .filter((p) => p.type && isFinite(p.lat) && isFinite(p.lon));
+    if (punti.length) {
+      // LE PANCHINE NON SONO NEL DATABASE (non sono mai state importate: in
+      // citta` sono decine di migliaia). Si chiedono a Overpass IN AGGIUNTA,
+      // con un timeout corto e in silenzio: se risponde compaiono, se non
+      // risponde fontanelle e bagni si vedono lo stesso. Prima, trovato
+      // qualcosa nel database, non si chiedeva piu` niente a nessuno — e le
+      // panchine dell'icona 🪑 non comparivano mai.
+      try {
+        const q = `[out:json][timeout:8];nwr["amenity"="bench"](around:${RADIUS_M},${lat},${lon});out center ${MAX_PER_TYPE};`;
+        const res = await fetch(OVERPASS_ENDPOINTS[0], {
+          method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `data=${encodeURIComponent(q)}`, signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          for (const el of (j.elements || []).slice(0, MAX_PER_TYPE)) {
+            const eLat = typeof el.lat === "number" ? el.lat : el.center?.lat;
+            const eLon = typeof el.lon === "number" ? el.lon : el.center?.lon;
+            if (typeof eLat === "number" && typeof eLon === "number") {
+              punti.push({ id: `svc-${el.type}-${el.id}`, type: "bench", lat: eLat, lon: eLon, name: el.tags?.name || undefined });
+            }
+          }
+        }
+      } catch { /* niente panchine stavolta: il resto del layer non ne risente */ }
+      try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), points: punti })); } catch {}
+      return punti;
     }
   } catch { /* database non raggiungibile: si tenta il server, poi Overpass */ }
 

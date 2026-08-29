@@ -158,6 +158,6 @@ Learned from the two PDFs of 22/08/2026. Check these before touching
 Local config goes in `.env.local` / `.env` (all `.env*` are gitignored). The server reads unprefixed names first and falls back to `VITE_`-prefixed ones for most keys.
 
 Required for anything to work: `VITE_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_ANON_KEY`.
-Feature-gated: `GROQ_API_KEY` (+`_2`/`_3` rotation), `DEEPSEEK_API_KEY`, `TOGETHER_API_KEY`, `GEMINI_API_KEY` (+`_2`/`_3`), `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`, `GOOGLE_TTS_API_KEY`, `ELEVENLABS_API_KEY`, `FOURSQUARE_API_KEY`, `TRIPADVISOR_API_KEY`, `VITE_MAPBOX_TOKEN`, `GEOAPIFY_API_KEY`, `VITE_GOOGLE_MAPS_API_KEY`, `UNSPLASH_ACCESS_KEY`, `TICKETMASTER_API_KEY`, `VIATOR_API_KEY`, `GYG_API_KEY`, `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `CRON_SECRET`.
+Feature-gated: `GROQ_API_KEY` (+`_2`/`_3` rotation), `DEEPSEEK_API_KEY`, `TOGETHER_API_KEY`, `GEMINI_API_KEY` (+`_2`/`_3`), `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`, `GOOGLE_TTS_API_KEY`, `ELEVENLABS_API_KEY`, `FOURSQUARE_API_KEY`, `TRIPADVISOR_API_KEY`, `VITE_MAPBOX_TOKEN`, `VITE_CARTO_API_KEY` (basemap tiles — CARTO stopped serving anonymous requests 26/08/2026, free key from carto.com/basemaps/apikey/, 5M req/month, commercial use allowed), `GEOAPIFY_API_KEY`, `VITE_GOOGLE_MAPS_API_KEY`, `UNSPLASH_ACCESS_KEY`, `TICKETMASTER_API_KEY`, `VIATOR_API_KEY`, `GYG_API_KEY`, `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `CRON_SECRET`.
 
 Routes degrade to an error response rather than crashing when a key is absent.

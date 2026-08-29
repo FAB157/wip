@@ -25,8 +25,8 @@ android {
         // risparmiare solo le traduzioni delle librerie, e su AGP 9
         // `resConfigs` e' sostituito da androidResources.localeFilters.
         // Non si tocca senza una build di prova.
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
         buildConfigField "String", "SUPABASE_URL", "\"https://qfxxhzkkrkvbuekfknhh.supabase.co\""

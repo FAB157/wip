@@ -15,7 +15,7 @@ import { isBearingGateEnabled } from '../lib/geofencing/bearingGate';
 // c'era una copia identica che prima o poi sarebbe divergita. L'import e'
 // circolare (ttsService importa locationService) ma sicuro: nessuno dei due
 // usa l'altro al caricamento del modulo, solo dentro le funzioni.
-import { azureVoiceName, pickVoice } from './ttsService';
+import { azureVoiceName, pickVoice, speakNativeSystemVoice, stopSystemVoice, pauseSystemVoice, resumeSystemVoice } from './ttsService';
 import { VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
 
 import { Capacitor } from '@capacitor/core';
@@ -113,6 +113,12 @@ class LocationService {
   private fallbackUtterance: SpeechSynthesisUtterance | null = null;
   /** Timer del progresso stimato per il fallback Web Speech (nessun evento nativo). */
   private fallbackProgressTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * (29/08/2026) La traccia corrente è letta dalla VOCE DI SISTEMA nativa
+   * (ttsService.speakNativeSystemVoice): il ripiego che non muore mai quando
+   * /api/tts/smart non risponde e la WebView non ha speechSynthesis.
+   */
+  private nativeVoiceActive = false;
   /** Guardia anti-rientranza per stopGuideAudio: chi ascolta 'wip-audio-stopped'
    *  (PoiAudioPlayer, giroDriver) puo' a sua volta richiamare stopGuideAudio. */
   private isStoppingGuide = false;
@@ -1578,8 +1584,10 @@ class LocationService {
     } catch (e) {
       console.error("[LocationService] Generazione audio TTS fallita:", e);
       // Degradazione: se c'è un testo da leggere non falliamo mai in silenzio.
-      // Web Speech (voce di sistema, lingua corrente) legge il testo già pronto.
-      const spoken = this.speakWithWebSpeech(text, character || this.guideMode);
+      // Prima la voce di sistema NATIVA (app: parla anche a servizio spento e
+      // senza speechSynthesis), poi Web Speech (browser).
+      const spoken = (await this.speakWithNativeVoice(text, character || this.guideMode))
+        || this.speakWithWebSpeech(text, character || this.guideMode);
       if (spoken) {
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
           detail: { textToSpeak: text, poiName }
@@ -1591,6 +1599,58 @@ class LocationService {
       this.notifyAudioState();
       return false;
     }
+  }
+
+  /**
+   * Barra di avanzamento STIMATA (~15 caratteri/secondo alla velocità
+   * corrente) per le letture senza durata né posizione (voce di sistema
+   * nativa, Web Speech). `stillCurrent` dice se la lettura è ancora quella
+   * partita: appena non lo è, il timer si spegne da solo.
+   */
+  private startEstimatedProgress(text: string, rate: number, stillCurrent: () => boolean) {
+    const estimatedDuration = Math.max(3, text.length / (15 * (rate || 1)));
+    this.audioState.duration = estimatedDuration;
+    this.audioState.currentTime = 0;
+    this.audioState.progress = 0;
+    const startedAt = Date.now();
+    if (this.fallbackProgressTimer) clearInterval(this.fallbackProgressTimer);
+    this.fallbackProgressTimer = setInterval(() => {
+      if (!stillCurrent()) {
+        if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
+        return;
+      }
+      const elapsed = (Date.now() - startedAt) / 1000;
+      this.audioState.currentTime = Math.min(elapsed, estimatedDuration);
+      this.audioState.progress = Math.min(100, (elapsed / estimatedDuration) * 100);
+      this.notifyAudioState();
+    }, 500);
+  }
+
+  /**
+   * (29/08/2026) Ripiego sulla VOCE DI SISTEMA NATIVA quando /api/tts/smart
+   * non risponde (Azure e Google giù, quota finita, rete assente). Sull'app
+   * parla sempre: coda dei teaser se il servizio è acceso, motore del plugin
+   * altrimenti — senza questo, nella WebView Android (spesso senza
+   * speechSynthesis) l'audioguida on the fly restava muta. La fine arriva
+   * dall'evento nativo; la barra è stimata come per Web Speech.
+   * Su web ritorna false e si passa a speakWithWebSpeech.
+   */
+  private async speakWithNativeVoice(text: string, character?: 'nicky' | 'dante'): Promise<boolean> {
+    if (!Capacitor.isNativePlatform() || !text) return false;
+    const ok = await speakNativeSystemVoice(text, this.language, character || this.guideMode, () => {
+      if (!this.nativeVoiceActive) return; // stop esplicito nel frattempo
+      this.nativeVoiceActive = false;
+      if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
+      this.handlePlaybackFinished();
+    });
+    if (!ok) return false;
+    this.nativeVoiceActive = true;
+    this.audioState.isPlaying = true;
+    this.audioState.isActive = true;
+    this.startEstimatedProgress(text, this.audioState.playbackSpeed || 1, () => this.nativeVoiceActive);
+    this.notifyAudioState();
+    this.recordPlaybackStart().catch(() => {});
+    return true;
   }
 
   /**
@@ -1955,6 +2015,7 @@ class LocationService {
 
   public pauseGuideAudio() {
     if (this.activeGuideAudio) this.activeGuideAudio.pause();
+    if (this.nativeVoiceActive) pauseSystemVoice();
     if (this.fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try { window.speechSynthesis.pause(); } catch { /* ignore */ }
     }
@@ -1968,6 +2029,7 @@ class LocationService {
 
   public resumeGuideAudio() {
     if (this.activeGuideAudio) this.activeGuideAudio.play().catch(() => {});
+    if (this.nativeVoiceActive) resumeSystemVoice();
     if (this.fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try { window.speechSynthesis.resume(); } catch { /* ignore */ }
     }
@@ -2005,6 +2067,13 @@ class LocationService {
         if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
           try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
         }
+      }
+      if (this.nativeVoiceActive) {
+        // Stessa cautela: flag giù PRIMA dello stop, così la callback di fine
+        // (se il nativo la manda) non richiama handlePlaybackFinished.
+        this.nativeVoiceActive = false;
+        if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
+        stopSystemVoice();
       }
       if (this.isNativePlayback || Capacitor.isNativePlatform()) {
         WipBackgroundAudio.stop().catch(() => {});

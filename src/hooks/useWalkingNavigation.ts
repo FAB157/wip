@@ -603,8 +603,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               setCurrentInstruction(step.instruction);
               setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
               speakInstruction(step.instruction, language);
-              // Trigger local notification for background Android
-              locationService.sendLocalNotification(getTranslation('nav_indicazione', (language || 'it').toUpperCase() as Language), step.instruction);
+              // Notifica locale per il display spento. L'ISTRUZIONE e` il
+              // titolo (28/08/2026): con «Indicazione stradale» come titolo e
+              // «gira a sinistra» sotto, sulla lock screen si leggeva prima
+              // l'etichetta e poi la cosa che conta. La via, se c'e`, va nel
+              // corpo: «gira a sinistra» da solo non dice dove.
+              locationService.sendLocalNotification(
+                step.instruction,
+                [step.name, getTranslation('nav_indicazione', (language || 'it').toUpperCase() as Language)].filter(Boolean).join(' · '),
+              );
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;

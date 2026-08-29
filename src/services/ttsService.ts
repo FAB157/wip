@@ -1,9 +1,17 @@
 // =====================================================================
 // ITAINTA · Text-To-Speech
 // - Audioguide (testo ricco)  -> Azure neural via /api/tts/smart (qualita')
-//   con fallback Web Speech se offline / errore.
+//   con fallback sulla VOCE DI SISTEMA se offline / errore (speakWithSystemVoice:
+//   TTS nativo del telefono su app, Web Speech su browser).
 // - Avvisi & turn-by-turn (frasi brevi) -> Web Speech API (gratis, istantaneo).
 // - Fix iOS: sblocco di speechSynthesis al primo gesto utente.
+//
+// REGOLA (29/08/2026, decisione utente): se Azure/Google non rispondono, si
+// ripiega SEMPRE sul TTS nativo, che non muore mai. Prima la coda nativa
+// rifiutava a servizio in background spento e nella WebView Android
+// speechSynthesis spesso non esiste: l'audioguida on the fly restava muta.
+// Ora il plugin (speakText force:true) parla con un motore proprio anche a
+// servizio spento e avvisa a fine lettura (directSpeechFinished).
 // =====================================================================
 
 import type { GuideCharacter } from '../types/poi';
@@ -98,6 +106,7 @@ if (typeof window !== 'undefined') {
     pendingOnEnd = null;
     clearFallback();
     activeUtterance = null;
+    stopNativeDirect();
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     emitAudioState(false, false);
   });
@@ -256,29 +265,177 @@ const nativePoiPlugin = (typeof window !== 'undefined' && Capacitor.isNativePlat
   : null;
 
 /**
- * Pronuncia una frase breve con la voce TTS di SISTEMA, accodandola alla coda
+ * Voce DIRETTA del plugin (speakText force:true): la lettura in corso, con la
+ * callback di fine che il nativo scatena via evento `directSpeechFinished`.
+ * Una sola alla volta: il motore nativo è uno. Si tiene anche il testo per la
+ * ripresa dopo una pausa (il TTS di sistema non sa riprendere: si rilegge).
+ */
+let directSpeech: { id: string; text: string; lang: string; character: GuideCharacter; onEnd?: () => void } | null = null;
+let directListenerReady = false;
+function ensureDirectListener() {
+  if (directListenerReady || !nativePoiPlugin) return;
+  directListenerReady = true;
+  try {
+    nativePoiPlugin.addListener('directSpeechFinished', (data: { id?: string }) => {
+      const cur = directSpeech;
+      if (!cur || !data?.id || data.id !== cur.id) return; // stop/pausa: già azzerato
+      directSpeech = null;
+      const cb = cur.onEnd;
+      if (cb) cb();
+    });
+  } catch { /* build nativa senza l'evento: la fine sarà stimata */ }
+}
+
+/** Ferma la voce diretta SENZA chiamare onEnd (stop voluto, non fine lettura). */
+function stopNativeDirect() {
+  if (!directSpeech) return;
+  directSpeech = null; // prima dello stop: l'evento che segue non trova nulla
+  try { nativePoiPlugin?.stopSpeakText?.().catch?.(() => {}); } catch { /* ignore */ }
+}
+
+/**
+ * Pronuncia una frase con la voce TTS di SISTEMA, accodandola alla coda
  * nativa dei teaser (unica coda: "Sei arrivato" e il teaser non si accavallano).
- * Ritorna true solo se la frase è stata davvero presa in carico: se il servizio
- * in background non è attivo la coda scarterebbe l'item, quindi si risponde
- * false e il chiamante ripiega sul TTS di rete.
+ * Ritorna true solo se la frase è stata davvero presa in carico; quando lo è,
+ * `onEnd` viene chiamata UNA volta: dall'evento nativo se la lettura è diretta
+ * (force, servizio spento), altrimenti da una stima (la coda non ha callback
+ * per questa chiamata).
+ * Senza `force`, a servizio in background spento la coda scarterebbe l'item:
+ * si risponde false e il chiamante ripiega. Con `force` (audioguida, turn by
+ * turn) si parla comunque col motore del plugin.
  * `priority` 0 = massima, come gli item d'itinerario.
  */
 async function speakViaNativeQueue(
   text: string,
-  opts?: { poiId?: string; kind?: string; priority?: number },
+  opts?: { poiId?: string; kind?: string; priority?: number; force?: boolean; lang?: string; character?: GuideCharacter },
+  onEnd?: () => void,
 ): Promise<boolean> {
   if (!nativePoiPlugin) return false;
   try {
+    ensureDirectListener();
     const res = await nativePoiPlugin.speakText({
       text,
       poiId: opts?.poiId,
       kind: opts?.kind || 'nav',
       priority: opts?.priority ?? 0,
+      force: opts?.force === true,
     });
-    return res?.ok === true;
+    if (res?.ok !== true) return false;
+    if (res.direct && res.id) {
+      // Il nativo ha già sostituito la lettura precedente (flush): qui si
+      // dimentica soltanto il record vecchio — NON stopSpeakText, che
+      // fermerebbe la lettura appena partita. La onEnd della precedente non
+      // viene chiamata, come dopo uno stop.
+      directSpeech = { id: String(res.id), text, lang: opts?.lang || 'it', character: opts?.character || 'nicky', onEnd };
+      return true;
+    }
+    if (onEnd) setTimeout(onEnd, Math.max(2500, (text.length / 15) * 1000) + 1000);
+    return true;
   } catch {
     // Metodo assente (build nativa più vecchia del JS) o errore: si ripiega.
     return false;
+  }
+}
+
+/**
+ * Voce di sistema NATIVA (app Android/iOS) per un testo lungo: coda dei
+ * teaser se il servizio è acceso, motore del plugin altrimenti. Su web
+ * ritorna false. `onEnd` è chiamata una volta sola a fine lettura, mai dopo
+ * uno stop esplicito.
+ */
+export async function speakNativeSystemVoice(
+  text: string,
+  lang: string,
+  character: GuideCharacter,
+  onEnd?: () => void,
+): Promise<boolean> {
+  if (!nativePoiPlugin || !text) return false;
+  return speakViaNativeQueue(text, { kind: 'guide', priority: 2, force: true, lang, character }, onEnd);
+}
+
+/**
+ * IL RIPIEGO CHE NON MUORE MAI. Legge `text` con la voce di sistema: nativo
+ * (coda o motore diretto) sull'app, Web Speech nel browser. Ritorna false
+ * solo se il dispositivo non ha nessuna voce; in quel caso `onEnd` non viene
+ * chiamata. Chi la usa: l'audioguida on the fly quando Azure/Google non
+ * rispondono, la Guida d'Autore, il podcast.
+ */
+export async function speakWithSystemVoice(
+  text: string,
+  lang: string,
+  character: GuideCharacter,
+  onEnd?: () => void,
+): Promise<boolean> {
+  if (!text) return false;
+  if (await speakNativeSystemVoice(text, lang, character, onEnd)) {
+    try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
+    clearFallback();
+    emitAudioState(true, true);
+    return true;
+  }
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
+  try {
+    try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = bcp47(lang);
+    const v = pickVoice(lang, character);
+    if (v) u.voice = v;
+    const finish = () => {
+      if (fallbackUtterance !== u) return; // nel frattempo è partita un'altra traccia
+      clearFallback();
+      emitAudioState(false, false);
+      if (onEnd) onEnd();
+    };
+    u.onend = finish;
+    u.onerror = finish;
+    window.speechSynthesis.cancel();
+    fallbackUtterance = u;
+    window.speechSynthesis.speak(u);
+    emitAudioState(true, true);
+    // Watchdog: alcuni motori non emettono 'end' se l'utente esce dall'app.
+    fallbackWatchdog = setTimeout(finish, Math.max(3000, (text.length / 15) * 1000) + 2000);
+    return true;
+  } catch {
+    clearFallback();
+    return false;
+  }
+}
+
+/** Ferma la voce di sistema (nativa o Web Speech) senza chiamare onEnd. */
+export function stopSystemVoice(): void {
+  stopNativeDirect();
+  clearFallback();
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Pausa della voce di sistema. Il TTS nativo non sa riprendere a metà: si
+ * ferma e alla ripresa si rilegge da capo (come fa la coda dei teaser). Web
+ * Speech invece ha pause/resume veri.
+ */
+let directPaused: { text: string; lang: string; character: GuideCharacter; onEnd?: () => void } | null = null;
+export function pauseSystemVoice(): void {
+  const cur = directSpeech;
+  if (cur) {
+    directPaused = { text: cur.text, lang: cur.lang, character: cur.character, onEnd: cur.onEnd };
+    stopNativeDirect();
+    return;
+  }
+  if (fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try { window.speechSynthesis.pause(); } catch { /* ignore */ }
+  }
+}
+export function resumeSystemVoice(): void {
+  const p = directPaused;
+  if (p) {
+    directPaused = null;
+    void speakNativeSystemVoice(p.text, p.lang, p.character, p.onEnd);
+    return;
+  }
+  if (fallbackUtterance && typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) {
+    try { window.speechSynthesis.resume(); } catch { /* ignore */ }
   }
 }
 
@@ -306,11 +463,17 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
   //    e chiede il fuoco audio come un navigatore (USAGE_ASSISTANCE_
   //    NAVIGATION_GUIDANCE / .voicePrompt+.duckOthers): abbassa l'audioguida
   //    e ci parla sopra invece di restare muta come faceva prima.
-  if (await speakViaNativeQueue(text)) {
-    // La coda nativa non ha un callback di fine per questa chiamata: la
-    // fine si stima, cosi' chi aspetta il silenzio (giroDriver) non resta
-    // appeso.
-    setTimeout(() => emitSpeechEnded(text), Math.max(2500, (text.length / 15) * 1000) + 1000);
+  //    force: a servizio spento (utente in app, guida non avviata) parla lo
+  //    stesso il motore del plugin — prima si scendeva su Azure, e senza
+  //    Azure la svolta restava muta. La fine arriva dall'evento nativo se la
+  //    lettura è diretta, stimata se è in coda: chi aspetta il silenzio
+  //    (giroDriver) non resta appeso.
+  //    Non si forza se un'audioguida sta suonando sul player nativo: la coda
+  //    (servizio acceso) la mette in pausa e riprende (AUD-01), il motore
+  //    diretto invece le parlerebbe sopra — in quel caso si resta al
+  //    comportamento di prima (frase a schermo, riaccodata dal direttore).
+  const guidaInCorso = nativePlaybackActive || (() => { try { return !!locationService.getAudioState()?.isActive; } catch { return false; } })();
+  if (await speakViaNativeQueue(text, { force: !guidaInCorso, lang, character }, () => emitSpeechEnded(text))) {
     return;
   }
 
@@ -362,6 +525,8 @@ export function stopSpeech(): void {
     pendingOnEnd = null;
     clearFallback();
     activeUtterance = null;
+    directPaused = null;
+    stopNativeDirect();
     if (activeAudio) {
       activeAudio.pause();
       activeAudio = null;
@@ -383,6 +548,7 @@ export function pauseSpeech(): void {
   try {
     if (nativePlaybackActive) WipBackgroundAudio.pause().catch(() => {});
     if (activeAudio) activeAudio.pause();
+    if (directSpeech) pauseSystemVoice();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.pause();
     }
@@ -397,6 +563,7 @@ export function resumeSpeech(): void {
   try {
     if (nativePlaybackActive) WipBackgroundAudio.resume().catch(() => {});
     if (activeAudio) activeAudio.play().catch(() => {});
+    if (directPaused) resumeSystemVoice();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
@@ -411,7 +578,7 @@ export function resumeSpeech(): void {
  * Speech dell'audioguida, o una frase breve del navigatore ancora in corso.
  */
 export function isSpeechActive(): boolean {
-  return nativePlaybackActive || activeAudio !== null || fallbackUtterance !== null || activeUtterance !== null;
+  return nativePlaybackActive || activeAudio !== null || fallbackUtterance !== null || activeUtterance !== null || directSpeech !== null;
 }
 
 /**
@@ -488,65 +655,23 @@ export async function speakAudioguide(
     }
   }
 
-  // Fallback NATIVO senza rete: nella WebView Android `speechSynthesis` spesso
-  // NON esiste, quindi offline l'audioguida restava del tutto MUTA. La si legge
-  // con la voce di sistema (stessa coda dei teaser, che ducka la musica). La
-  // fine resta stimata come nel ramo Web Speech qui sotto: la coda nativa non
-  // espone un callback di fine per questa chiamata.
-  if (await speakViaNativeQueue(text, { kind: 'guide', priority: 2 })) {
-    try {
-      window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
-    } catch { /* ignore */ }
-    clearFallback();
-    emitAudioState(true, true);
-    const estimatedMs = Math.max(3000, (text.length / 15) * 1000) + 2000;
-    fallbackWatchdog = setTimeout(() => {
-      emitAudioState(false, false);
-      if (onEnd) onEnd();
-    }, estimatedMs);
-    return;
-  }
-
-  // Fallback gratuito (Web Speech). Usiamo un'utterance PROPRIA con onend/onerror
-  // REALI: prima si delegava a speakInstruction e la fine era un timer stimato
-  // che (a) faceva partire onEnd anche se la voce continuava o era già stata
-  // fermata, e (b) non veniva mai cancellato. Ora il timer è solo un watchdog,
-  // azzerato alla fine vera o allo stop.
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    try {
-      window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
-    } catch { /* ignore */ }
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = bcp47(lang);
-    const v = pickVoice(lang, character);
-    if (v) u.voice = v;
-    const finish = () => {
-      // Se nel frattempo è partita un'altra traccia, non toccare lo stato.
-      if (fallbackUtterance !== u) return;
-      clearFallback();
-      emitAudioState(false, false);
-      if (onEnd) onEnd();
-    };
-    u.onend = finish;
-    u.onerror = finish;
-    window.speechSynthesis.cancel();
-    fallbackUtterance = u;
-    window.speechSynthesis.speak(u);
-    emitAudioState(true, true);
-    // Watchdog: alcuni motori non emettono 'end' se l'utente esce dall'app.
-    const estimatedMs = Math.max(3000, (text.length / 15) * 1000) + 2000;
-    fallbackWatchdog = setTimeout(finish, estimatedMs);
-    return;
-  }
-
-  // Nessun Web Speech (es. nativo offline): tentativo nativo + stima onEnd.
-  speakInstruction(text, lang, character);
-  emitAudioState(true, true);
-  const estimatedMs = Math.max(3000, (text.length / 15) * 1000);
-  setTimeout(() => {
+  // RIPIEGO SULLA VOCE DI SISTEMA (il ripiego che non muore mai): motore
+  // nativo del telefono sull'app — coda dei teaser o motore diretto del
+  // plugin, anche a servizio spento — Web Speech nel browser. Prima, a
+  // servizio spento e senza speechSynthesis (WebView Android), qui si
+  // restava muti.
+  if (await speakWithSystemVoice(text, lang, character, () => {
     emitAudioState(false, false);
     if (onEnd) onEnd();
-  }, estimatedMs);
+  })) return;
+
+  // Nessuna voce sul dispositivo: l'unica cosa onesta è chiudere subito, così
+  // chi aspetta la fine (giro, coda) non resta appeso. Il testo è comunque a
+  // schermo (wip-nav-instruction).
+  console.warn('[ttsService] nessuna voce disponibile: audioguida non letta');
+  try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
+  emitAudioState(false, false);
+  if (onEnd) onEnd();
 }
 
 // Pre-carica le voci (alcuni browser le popolano in modo asincrono)

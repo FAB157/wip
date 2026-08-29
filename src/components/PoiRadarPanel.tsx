@@ -1,11 +1,12 @@
 import { X, Navigation, Trash2, MapPin, ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 import { motion, AnimatePresence, Reorder } from "motion/react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { CATEGORY_COLORS, CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language, getTranslation } from "../lib/i18n";
 import { tourService, MAX_TAPPE, metri as metriFra } from "../services/tourService";
 import { getGuideCharacter } from "../lib/guideSettings";
 import { useBozzaGiro } from "../lib/tour/useGiro";
+import { getDayPassState } from "../services/dayPassService";
 
 /** "Ho un'ora": i tagli di tempo fra cui scegliere. `null` = tutto il giro. */
 const TEMPI: { min: number | null; label: string }[] = [
@@ -64,15 +65,30 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       onClose();
     } catch (e: any) {
       const m = String(e?.message || '');
+      // Il "motivo" del server (dopo i due punti) prima si scartava (29/08/2026).
+      const dettaglio = m.startsWith('PASS_RICHIESTO:') ? m.slice('PASS_RICHIESTO:'.length).trim() : '';
       setErrore(m.startsWith('PASS_RICHIESTO')
-        ? tr('gr_pass_richiesto')
+        ? `${tr('gr_pass_richiesto')}${dettaglio ? ` (${dettaglio})` : ''}`
         : m || tr('gr_giro_non_riuscito'));
     } finally { setCreando(false); }
   };
 
   // La riga sotto il conteggio: prima diceva sempre la stessa frase; ora dice
   // il giro che ne esce — km e minuti — appena il server ha risposto.
-  const passRichiesto = errore === tr('gr_pass_richiesto') || bozza.errore === 'PASS_RICHIESTO';
+  const passRichiesto = (!!errore && errore.startsWith(tr('gr_pass_richiesto'))) || bozza.errore === 'PASS_RICHIESTO';
+  // IL PASS CE L'HO, MA IL PANNELLO DICE DI ATTIVARLO (28/08/2026, collaudo).
+  // Il 402 del server arriva anche quando la VERIFICA fallisce, non solo
+  // quando il pass manca; e il pannello lo traduceva sempre in «attiva il
+  // Day Pass», a chi lo aveva appena pagato. Si guarda lo stato locale del
+  // pass: se e` attivo, il messaggio dice la verita` — non riconosciuto, non
+  // assente — e offre «Riprova» invece di una seconda cassa.
+  const [passLocale, setPassLocale] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!passRichiesto) return;
+    let vivo = true;
+    getDayPassState().then(s => { if (vivo) setPassLocale(!!s?.active); }).catch(() => { if (vivo) setPassLocale(false); });
+    return () => { vivo = false; };
+  }, [passRichiesto]);
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
   // PERCORSO APERTO: dove si finisce, DETTO PRIMA (28/08/2026). Il giro aperto
   // ottimizza una cosa sola — camminare il meno possibile per fare tutte le
@@ -103,7 +119,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
     : bozza.calcolando
       ? tr('gr_calcolo_percorso')
       : bozza.errore === 'PASS_RICHIESTO'
-        ? tr('gr_anteprima_pass')
+        ? (bozza.erroreDettaglio ? `${tr('gr_anteprima_pass')} (${bozza.erroreDettaglio})` : tr('gr_anteprima_pass'))
         : bozza.errore === 'POSIZIONE'
           ? tr('gr_serve_posizione')
           : bozza.metri > 0
@@ -144,6 +160,11 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
     onFocus(poi);
   };
 
+  // MEZZO SCHERMO, NON TRE QUARTI (28/08/2026, collaudo). A 78dvh il pannello
+  // copriva tutto tranne le chip: la mappa — che e` la cosa su cui si sta
+  // decidendo — spariva. A 56dvh restano tracciato e pin in vista sopra, e la
+  // lista scorre sotto; su schermo largo il pannello e` una colonna laterale e
+  // puo` restare alto.
   return (
     <motion.div
       initial={{ y: "100%", opacity: 0 }}
@@ -153,7 +174,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       }}
       exit={{ y: "100%", opacity: 0 }}
       transition={{ type: "spring", stiffness: 250, damping: 30 }}
-      className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[78dvh] bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl shadow-2xl rounded-t-[2.5rem] md:rounded-[2rem] z-[1100] flex flex-col overflow-hidden border border-black/5"
+      className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[56dvh] md:max-h-[78dvh] bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl shadow-2xl rounded-t-[2.5rem] md:rounded-[2rem] z-[1100] flex flex-col overflow-hidden border border-black/5"
     >
       {/* Header con tasto Riduzione/Espansione */}
       <div
@@ -226,7 +247,20 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       {/* Senza pass il cancello sta sul server (402). La riga di testo da sola
           non bastava: chi ha appena scelto le tappe deve poter attivare il pass
           da qui, non andare a cercarlo nel profilo (22/08/2026). */}
-      {!isCollapsed && passRichiesto && (
+      {!isCollapsed && passRichiesto && passLocale === true && (
+        <div className="px-4 py-2.5 border-b border-black/5 bg-amber-50 flex items-center gap-3">
+          <p className="flex-1 text-[11px] text-amber-800 leading-snug">
+            {tr('gr_pass_non_riconosciuto')}{bozza.erroreDettaglio ? ` (${bozza.erroreDettaglio})` : ''}
+          </p>
+          <button
+            onClick={(e) => { e.stopPropagation(); setErrore(null); tourService.riprovaPass(); }}
+            className="px-3 py-2 rounded-xl bg-[#1e3a8a] text-white text-[11px] font-black shadow-md hover:bg-blue-800 active:scale-95 shrink-0"
+          >
+            {tr('gr_riprova')}
+          </button>
+        </div>
+      )}
+      {!isCollapsed && passRichiesto && passLocale !== true && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-amber-50 flex items-center gap-3">
           <p className="flex-1 text-[11px] text-amber-800 leading-snug">
             {tr('gr_daypass_incluso')}

@@ -2970,6 +2970,18 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   everything_group_neve: {
     IT: "Neve", EN: "Snow", FR: "Neige", ES: "Nieve", DE: "Schnee", RU: "Снег", ZH: "雪",
   },
+  // 29/08/2026: "Tutto nel raggio" raggruppa come le chip; i percorsi sono un
+  // gruppo solo (CAI/OSM/cammini/bici/gusto distinti dall'icona della riga).
+  everything_group_percorsi: {
+    IT: "Percorsi e sentieri", EN: "Routes and trails", FR: "Itinéraires et sentiers", ES: "Rutas y senderos",
+    DE: "Routen und Wanderwege", RU: "Маршруты и тропы", ZH: "路线与步道",
+  },
+  everything_crea_percorso: {
+    IT: "Percorso", EN: "Route", FR: "Itinéraire", ES: "Ruta", DE: "Route", RU: "Маршрут", ZH: "路线",
+  },
+  everything_group_altro: {
+    IT: "Altro", EN: "Other", FR: "Autre", ES: "Otros", DE: "Sonstiges", RU: "Прочее", ZH: "其他",
+  },
   everything_group_fontanelle: {
     IT: "Fontanelle", EN: "Water fountains", FR: "Fontaines", ES: "Fuentes", DE: "Trinkbrunnen", RU: "Питьевые фонтаны", ZH: "饮水点",
   },

@@ -271,9 +271,22 @@ public class WipBackgroundAudioService extends Service {
                 .build();
 
         exoPlayer = new ExoPlayer.Builder(this)
-                // true => ExoPlayer richiede/abbandona l'audio focus da solo in base
-                // agli AudioAttributes sopra: duck (non pausa) la musica di altre app.
-                .setAudioAttributes(attrs, true)
+                // false => IL FOCUS SE LO GESTISCE L'APP (29/08/2026).
+                //
+                // Con `true` media3 solleva IllegalArgumentException in fase di
+                // costruzione: «Automatic handling of audio focus is only
+                // available for USAGE_MEDIA and USAGE_GAME» — e con
+                // ASSISTANCE_NAVIGATION_GUIDANCE (scelta voluta, vedi sopra)
+                // non lo e'. Finche' il servizio nasceva solo alla prima
+                // riproduzione il difetto restava latente; da quando il plugin
+                // lo avvia insieme all'app (correzione AUD-02), l'eccezione
+                // arriva in onCreate e l'APP NON SI APRE PIU'.
+                //
+                // Il focus lo si chiede a mano in play() con
+                // AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK: e' esattamente cio' che
+                // ExoPlayer avrebbe fatto da solo, ed e' la stessa richiesta
+                // gia' usata dalla voce nativa in GeofenceBroadcastReceiver.
+                .setAudioAttributes(attrs, false)
                 // false => cuffie staccate: la guida CONTINUA dall'altoparlante
                 // (decisione di prodotto 28/08/2026, stessa regola della voce
                 // nativa del 23/08). Con true ExoPlayer si metteva in pausa da
@@ -345,9 +358,67 @@ public class WipBackgroundAudioService extends Service {
         }
     }
 
+    /**
+     * IL FOCUS AUDIO, CHIESTO A MANO (29/08/2026).
+     *
+     * ExoPlayer non puo' gestirlo da solo con USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+     * (vedi ensurePlayer). Si chiede quindi qui, con la stessa richiesta che
+     * avrebbe fatto lui e che usa gia' la voce nativa: GAIN_TRANSIENT_MAY_DUCK,
+     * cioe' «abbassate, non fermatevi» — la musica di sottofondo dell'utente
+     * cala mentre la guida racconta e torna su alla fine.
+     *
+     * Se il sistema nega il focus (una telefonata in corso) si riproduce
+     * comunque: la telefonata ha gia' la sua priorita' a livello di sistema, e
+     * un'audioguida che tace senza dire perche' sembra un'app rotta.
+     */
+    private Object focusRequest; // AudioFocusRequest (API 26+), tenuto come Object per l'SDK minimo
+
+    private void richiediFocusAudio() {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.media.AudioAttributes a = new android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build();
+                android.media.AudioFocusRequest req = new android.media.AudioFocusRequest.Builder(
+                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(a)
+                        .setWillPauseWhenDucked(false)
+                        .build();
+                focusRequest = req;
+                am.requestAudioFocus(req);
+            } else {
+                am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC,
+                        android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Richiesta focus audio fallita: " + e.getMessage());
+        }
+    }
+
+    private void rilasciaFocusAudio() {
+        try {
+            android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) return;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (focusRequest instanceof android.media.AudioFocusRequest) {
+                    am.abandonAudioFocusRequest((android.media.AudioFocusRequest) focusRequest);
+                }
+                focusRequest = null;
+            } else {
+                am.abandonAudioFocus(null);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Rilascio focus audio fallito: " + e.getMessage());
+        }
+    }
+
     public void play(String url, String title, String subtitle) {
         try {
             ensurePlayer();
+            richiediFocusAudio();
             currentTitle = title != null ? title : "WIP";
             currentSubtitle = subtitle != null ? subtitle : "Audioguida";
 
@@ -399,6 +470,10 @@ public class WipBackgroundAudioService extends Service {
         if (exoPlayer == null) return;
         if (exoPlayer.getPlaybackState() == Player.STATE_IDLE) return;
         startForegroundSafe();
+        // Il focus era stato rilasciato mettendo in pausa: si richiede, altrimenti
+        // si riprende a raccontare sopra la musica di un'altra app invece di
+        // abbassarla.
+        richiediFocusAudio();
         exoPlayer.play();
     }
 

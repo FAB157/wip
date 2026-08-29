@@ -48,7 +48,7 @@ import { fetchServicesAround, SERVICE_EMOJI, SERVICE_LABEL } from "../lib/servic
 import { markVisited, getVisitedCells, cityCoveragePercent, FOG_CELL_DEG } from "../lib/visitedFog";
 import { startZtlWatch, stopZtlWatch, fetchZtlZonesAround } from "../lib/ztlAlert";
 import { tasteRoutesInBounds, TASTE_KIND_LABELS } from "../lib/wineRoutesCatalog";
-import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS } from "../lib/poiTaxonomy";
+import { ENO_PRODUTTORI, ENO_BOTTEGHE, TEMATICI_KEYS, ENO_SUB_BY_TYPE, MERCATI_TYPES } from "../lib/poiTaxonomy";
 import { fetchRouteLines, drawRouteLines, drawRouteStops, creaGruppoPercorsi, livelloDaZoom, setRouteAttribution, ATTRIB_SENTIERI, ATTRIB_GUSTO } from "../lib/routeLines";
 import { TASTE_ROUTE_LINES } from "../lib/tasteRouteLines";
 import { decodeSegments } from "../lib/polyline";
@@ -116,7 +116,9 @@ const EVERYTHING_CANON: Record<string, string> = (() => {
     'skyscraper', 'cemetery', 'library', 'windmill', 'aqueduct', 'observatory', 'stadium', 'memorial',
     'sculpture', 'university', 'town_hall', 'city_gate', 'city_walls', 'villa', 'amphitheatre',
     'mausoleum', 'obelisk', 'triumphal_arch', 'archaeological_park', 'archaeological_site', 'ruins',
-    'archeo', 'castle', 'castello', 'castelli', 'fortress', 'stronghold', 'harbour', 'pier', 'mine']);
+    'archeo', 'castle', 'castello', 'castelli', 'fortress', 'stronghold', 'harbour', 'pier', 'mine', 'quarry']);
+  // Famiglie: parchi, zoo, acquari e le montagne russe importate il 28/08
+  add('famiglie', ['theme_park', 'parco_divertimenti', 'zoo', 'aquarium', 'acquario', 'water_park', 'playground', 'parco_giochi', 'roller_coaster']);
   add('musei', ['museum', 'museo', 'gallery', 'art_museum', 'art_gallery', 'natural_history_museum',
     'house_museum']);
   add('panorami', ['viewpoint', 'panorama', 'belvedere', 'lighthouse', 'faro', 'scenic_road', 'aerialway',
@@ -135,11 +137,53 @@ function everythingCanonKey(raw: string): string {
   const k = String(raw || '').toLowerCase().trim();
   return EVERYTHING_CANON[k] || k;
 }
+
+/**
+ * GRUPPO DI UNA RIGA DI "TUTTO NEL RAGGIO" (29/08/2026): gli stessi gruppi
+ * delle chip, decisi dalla stessa tassonomia (`resolvePoiTaxonomy`), non da
+ * una mappa locale. Prima Carrara a 5 km dava 50 gruppi, con «formaggi»,
+ * «pasticceria» e «cantina» separati da «Vino e Gusto» e «marketplace» fra
+ * le utilità. Regola del committente: pochi gruppi, quelli delle chip,
+ * mercati sotto Mercatini, gemme per prime.
+ * Le fonti che non sono POI (neve, fontanelle, beni vincolati, percorsi)
+ * hanno il loro gruppo fisso.
+ */
+const EVERYTHING_ORDER = [
+  'gemme', 'monumenti', 'chiese', 'musei', 'panorami', 'natura', 'localita', 'enogastronomia',
+  'famiglie', 'locali', 'mercati', 'terme', 'cinema', 'cieli', 'street_art', 'fioriture', 'memoria', 'lento',
+  'shopping', 'lusso', 'beni_culturali', 'community', 'neve', 'fontanelle', 'percorsi', 'utilita', 'altro',
+];
+function everythingGroupOf(row: { category: string; sub_category: string | null; fonte: string; group_key: string; is_gem?: boolean }): string {
+  if (row.is_gem === true || row.group_key === 'gemme') return 'gemme';
+  const raw = String(row.category || '').toLowerCase().trim();
+  const sub = String(row.sub_category || '').toLowerCase().trim();
+  if (row.fonte === 'route_geometries' || row.group_key.startsWith('percorsi_')) return 'percorsi';
+  if (row.fonte === 'beni_culturali') return 'beni_culturali';
+  if (row.fonte === 'utility_pois') {
+    if (raw === 'neve') return 'neve';
+    if (raw === 'fontanelle' || sub === 'drinking_water' || sub === 'fontanella') return 'fontanelle';
+    return 'utilita';
+  }
+  // Vino e Gusto: sia le righe con category='enogastronomia' sia quelle
+  // vecchie col tipo direttamente in category (cantina, formaggi, pasticceria…)
+  if (raw === 'enogastronomia' || raw in ENO_SUB_BY_TYPE || ENO_PRODUTTORI.includes(raw) || ENO_BOTTEGHE.includes(raw)) return 'enogastronomia';
+  if (MERCATI_TYPES.includes(raw)) return 'mercati';
+  if (raw === 'shopping' || raw === 'lusso') return raw;
+  const t = resolvePoiTaxonomy({ category: raw, subCategory: sub });
+  if (t.macro === 'tematiche') return t.subId || 'altro';
+  if (t.macro === 'monumenti') return t.subId === 'chiese' || t.subId === 'musei' || t.subId === 'panorami' ? t.subId : 'monumenti';
+  if (t.macro) return t.macro;
+  return everythingCanonKey(raw) in EVERYTHING_LABEL_KEY ? everythingCanonKey(raw) : 'altro';
+}
 /** Chiavi canoniche che hanno una voce in i18n (le stesse delle chip). */
 const EVERYTHING_LABEL_KEY: Record<string, string> = {
   monumenti: 'monumenti', chiese: 'chiese', musei: 'musei', panorami: 'panorami', natura: 'natura',
   gemme: 'gemme', localita: 'localita', utilita: 'utilita', enogastronomia: 'enogastronomia',
-  beni_culturali: 'beni_culturali',
+  beni_culturali: 'beni_culturali', famiglie: 'famiglie', locali: 'locali', community: 'community',
+  // Verticali tematici e i due nuovi del 28/08: la chiave è già quella i18n
+  terme: 'terme', cinema: 'cinema', cieli: 'cieli', street_art: 'street_art', mercati: 'mercati',
+  fioriture: 'fioriture', memoria: 'memoria', lento: 'lento', shopping: 'shopping', lusso: 'lusso',
+  percorsi: 'everything_group_percorsi', altro: 'everything_group_altro',
 };
 
 const CATEGORY_BORDER_COLORS: Record<string, string> = {
@@ -926,6 +970,8 @@ function MapArea({
     id: string; name: string; lat: number; lon: number;
     category: string; sub_category: string | null; image_url: string | null;
     distanza_m: number; fonte: string; group_key: string; group_count: number;
+    /** Dalla migration 20260829100000: le gemme arrivano già nel gruppo 'gemme'. */
+    is_gem?: boolean;
   }
   const [showEverythingPanel, setShowEverythingPanel] = useState(false);
   const [everythingRadius, setEverythingRadius] = useState(15000);
@@ -976,7 +1022,7 @@ function MapArea({
       // sommato e gli elementi in ordine di distanza.
       const byKey = new Map<string, { items: EverythingItem[]; count: number; raw: Set<string> }>();
       for (const row of rows) {
-        const key = everythingCanonKey(row.group_key);
+        const key = everythingGroupOf(row);
         let g = byKey.get(key);
         if (!g) { g = { items: [], count: 0, raw: new Set() }; byKey.set(key, g); }
         g.items.push(row);
@@ -988,8 +1034,15 @@ function MapArea({
           count: Math.max(g.count, g.items.length),
           items: g.items.sort((a, b) => a.distanza_m - b.distanza_m),
         }))
-        .sort((a, b) => b.count - a.count);
+        // Ordine FISSO, quello delle chip: l'utente trova i gruppi sempre allo
+        // stesso posto; le gemme per prime.
+        .sort((a, b) => {
+          const ia = EVERYTHING_ORDER.indexOf(a.key), ib = EVERYTHING_ORDER.indexOf(b.key);
+          return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || b.count - a.count;
+        });
       setEverythingGroups(groups);
+      // Le gemme già aperte: sono il motivo per cui si apre il pannello.
+      if (groups.some((g) => g.key === 'gemme')) setExpandedGroups((prev) => (prev.size ? prev : new Set(['gemme'])));
       setEverythingFullLoaded(perGroup > 50);
       everythingCenterRef.current = { lat: centerPoint.lat, lng: centerPoint.lng, radius: radiusM };
     } catch (e) {
@@ -1062,6 +1115,21 @@ function MapArea({
     percorsi_osm: { emoji: '🥾', label: getTranslation('everything_group_percorsi_osm', language) },
     percorsi_pdipr: { emoji: '🥾', label: getTranslation('everything_group_percorsi_pdipr', language) },
     percorsi_gusto: { emoji: '🍷', label: getTranslation('everything_group_percorsi_gusto', language) },
+    percorsi: { emoji: '🥾', label: getTranslation('everything_group_percorsi', language) },
+    mercati: { emoji: '🧺', label: getTranslation('mercati', language) },
+    altro: { emoji: '📍', label: getTranslation('everything_group_altro', language) },
+  };
+  /** Icona della SOTTO-categoria di una riga (in colonna sotto quella del
+   * gruppo): il tipo del POI se ha un'emoji, altrimenti la categoria grezza. */
+  const everythingRowEmoji = (item: EverythingItem, groupEmoji: string): string | null => {
+    const sub = String(item.sub_category || '').toLowerCase();
+    const cat = String(item.category || '').toLowerCase();
+    if (item.fonte === 'route_geometries') {
+      const k = item.group_key.replace('percorsi_', '');
+      return k === 'gusto' ? '🍷' : k === 'bici' ? '🚲' : '🥾';
+    }
+    const e = (SUB_CATEGORY_EMOJIS as any)[sub] || (SUB_CATEGORY_EMOJIS as any)[cat] || (CATEGORY_EMOJIS as any)[cat] || null;
+    return e && e !== groupEmoji ? e : null;
   };
   const everythingGroupInfo = (key: string): { emoji: string; label: string } => {
     if (EVERYTHING_GROUP_FALLBACK[key]) return EVERYTHING_GROUP_FALLBACK[key];
@@ -1080,7 +1148,7 @@ function MapArea({
    * focusPoiOnMap, ma l'oggetto arriva dalla RPC (forma diversa da Poi),
    * quindi qui si costruisce l'oggetto minimo che il popup/scheda si
    * aspetta invece di forzare un cast. */
-  const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null }) => {
+  const openEverythingItem = (item: { id: string; name: string; lat: number; lon: number; category: string; sub_category: string | null; is_gem?: boolean }) => {
     setShowEverythingPanel(false);
     // Alla riapertura la lista non si rifà (e lo scroll torna dov'era).
     everythingKeepRef.current = true;
@@ -1091,6 +1159,8 @@ function MapArea({
       lon: item.lon,
       category: item.category,
       subCategory: item.sub_category || undefined,
+      // Serve al percorso (29/08): una gemma parla qualunque sia la categoria.
+      is_gem: item.is_gem === true,
     } as unknown as Poi;
     // Resta segnato sulla mappa anche quando si tocca il luogo successivo.
     setEverythingPinned((prev) => (prev.some((p) => p.id === poi.id) ? prev : [...prev, poi]));
@@ -1889,13 +1959,12 @@ function MapArea({
       const next = !prev;
       try {
         localStorage.setItem('wip_strade_gusto_enabled', next ? '1' : '0');
-        // Il verticale è uno solo: acceso il layer, l'audioguida può
-        // raccontare la cantina davanti a cui si passa; spento, tace.
-        // La chiave è quella che leggono anche il servizio Android e iOS.
-        const obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {};
-        obj.enogastronomia = next;
-        localStorage.setItem('wip_active_subcategories', JSON.stringify(obj));
-        window.dispatchEvent(new CustomEvent('wip-settings-updated'));
+        // (28/08/2026, collaudo) IL LIVELLO MOSTRA, NON RACCONTA. Prima qui si
+        // scriveva `enogastronomia: true` in wip_active_subcategories — l'oggetto
+        // che il servizio nativo legge come «categorie da raccontare» — e chi
+        // accendeva le strade del vino PER VEDERLE si sentiva partire
+        // l'audioguida di una pasticceria (Martinelli, Carrara). Le categorie
+        // dell'audioguida le decide SOLO il setup (Profilo → GeoControl).
       } catch { /* storage pieno */ }
       return next;
     });
@@ -2732,10 +2801,20 @@ function MapArea({
     }
   }, []);
 
+  // Ritentativo finche' Leaflet non esiste (29/08/2026): l'effetto gira una
+  // volta all'apertura del tab e, se la mappa non e` ancora creata, usciva
+  // con `return` senza riprovare — il listener di moveend non veniva mai
+  // agganciato e la chip meteo non compariva piu` (visto in produzione:
+  // nessuna richiesta a /api/meteo/punto nemmeno spostando la mappa). Stesso
+  // schema del layer balneazione: un tick ogni mezzo secondo finche' non c'e`.
+  const [meteoTick, setMeteoTick] = useState(0);
   useEffect(() => {
     if (activeTab !== undefined && activeTab !== "map") return;
     const map = mapRef.current;
-    if (!map) return;
+    if (!map) {
+      const retry = setTimeout(() => setMeteoTick((t) => t + 1), 500);
+      return () => clearTimeout(retry);
+    }
     try {
       const c = map.getCenter();
       refreshMeteo(c.lat, c.lng);
@@ -2748,7 +2827,7 @@ function MapArea({
     };
     map.on("moveend", onMoveEnd);
     return () => { map.off("moveend", onMoveEnd); };
-  }, [activeTab, refreshMeteo]);
+  }, [activeTab, refreshMeteo, meteoTick]);
 
   // Cleanup completo per gli unmount reali (hot reload, error boundary):
   // il timer di debounce e i fetch in volo non devono sopravvivere al componente.
@@ -6348,14 +6427,37 @@ function MapArea({
                   </h2>
                   <div className="flex items-center gap-1.5">
                     {everythingPinned.length > 0 && (
-                      <button
-                        onClick={() => { setEverythingPinned([]); }}
-                        title={getTranslation('everything_pinned_clear', language)}
-                        aria-label={getTranslation('everything_pinned_clear', language)}
-                        className="min-h-9 px-2.5 rounded-full bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center gap-1 hover:bg-[#1e3a8a]/20 transition-colors"
-                      >
-                        📍 {everythingPinned.length} <X className="w-3.5 h-3.5" />
-                      </button>
+                      <>
+                        {/* PERCORSO DALLE TAPPE SELEZIONATE (29/08/2026, committente):
+                            le stesse regole di Dieci Tappe e degli itinerari —
+                            chi ha l'audioguida la ascolta (al volo o col Day
+                            Pass), chi non ce l'ha (ristorante, fontanella…) e`
+                            solo una tappa del navigatore — ma senza il vincolo
+                            delle dieci tappe. La bozza si riempie e si apre il
+                            radar, dove il percorso e` gia` disegnato e c'e`
+                            «Crea il giro» con pass e pagamento come sempre. */}
+                        <button
+                          onClick={() => {
+                            const n = tourService.bozzaDaTappe(everythingPinned, { senzaLimite: true, ordinaServer: true });
+                            if (!n) return;
+                            setShowEverythingPanel(false);
+                            window.dispatchEvent(new CustomEvent('wip-apri-radar'));
+                          }}
+                          title={getTranslation('everything_crea_percorso', language)}
+                          aria-label={getTranslation('everything_crea_percorso', language)}
+                          className="min-h-9 px-3 rounded-full bg-emerald-600 text-white text-[11px] font-black flex items-center gap-1.5 hover:bg-emerald-700 transition-colors shadow-sm"
+                        >
+                          🧭 {getTranslation('everything_crea_percorso', language)}
+                        </button>
+                        <button
+                          onClick={() => { setEverythingPinned([]); }}
+                          title={getTranslation('everything_pinned_clear', language)}
+                          aria-label={getTranslation('everything_pinned_clear', language)}
+                          className="min-h-9 px-2.5 rounded-full bg-[#1e3a8a]/10 text-[#1e3a8a] text-[11px] font-black flex items-center gap-1 hover:bg-[#1e3a8a]/20 transition-colors"
+                        >
+                          📍 {everythingPinned.length} <X className="w-3.5 h-3.5" />
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => setShowEverythingPanel(false)}
@@ -6430,6 +6532,12 @@ function MapArea({
                                 onClick={() => openEverythingItem(item)}
                                 className="w-full flex items-center gap-3 p-2.5 bg-white/60 dark:bg-white/5 hover:bg-white/90 dark:hover:bg-white/15 rounded-xl transition-all text-left"
                               >
+                                {/* Colonna icone: sopra il gruppo, sotto la sotto-categoria
+                                    (regola del committente 29/08) — poi il nome. */}
+                                <span className="flex flex-col items-center justify-center w-7 shrink-0 leading-none">
+                                  <span className="text-[13px]">{info.emoji}</span>
+                                  {(() => { const sub = everythingRowEmoji(item, info.emoji); return sub ? <span className="text-[11px] mt-0.5 opacity-80">{sub}</span> : null; })()}
+                                </span>
                                 <span className="flex-1 font-bold text-[#1e3a8a] dark:text-white text-xs line-clamp-1">
                                   {item.name}
                                 </span>

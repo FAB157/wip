@@ -242,7 +242,10 @@ export const PANORAMI_TYPES = [
 export const MONUMENTI_TYPES = ["monument", "monumenti", "monumento", "artwork", "attraction", "attrazioni", "castle", "castelli", "ruins", "archaeological_site", "archeo", "memorial", "fort", "tower"];
 export const LOCALI_TYPES = ["locali", "restaurant", "ristorante", "ristoranti", "cafe", "bar", "fast_food", "pub", "ice_cream", "gelateria", "bakery", "nightclub", "biergarten", "food_court"];
 export const FAMIGLIE_TYPES = ["famiglie", "playground", "parco_giochi", "theme_park", "parco_divertimenti", "aquarium", "acquario", "zoo", "water_park", "roller_coaster"];
-export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "marketplace", "mercato", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking", "ev_charging", "charging_station"];
+// I mercati (marketplace/mercato) NON stanno più in Utilità (29/08/2026,
+// decisione del committente): sono il verticale Mercatini, vedi resolvePoiTaxonomy.
+export const UTILITA_TYPES = ["utilita", "pharmacy", "farmacia", "hospital", "ospedale", "clinic", "doctors", "police", "polizia", "taxi", "drinking_water", "fontanelle", "station", "stazione_ferroviaria", "subway_entrance", "metropolitana", "toll_booth", "casello_autostradale", "post_office", "parking", "ev_charging", "charging_station"];
+export const MERCATI_TYPES = ["marketplace", "mercato", "mercati", "market", "market_hall", "farmers_market", "flea_market"];
 
 /**
  * ENOGASTRONOMIA — dal `poi_type` importato da OSM al sub-chip.
@@ -371,6 +374,9 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   if ((TEMATICI_KEYS as readonly string[]).includes(raw)) {
     return { macro: "tematiche", subId: raw };
   }
+  // MERCATI (29/08/2026): un mercato OSM (`marketplace`) è il verticale
+  // Mercatini, non un servizio. Prima stava in Utilità con farmacie e taxi.
+  if (MERCATI_TYPES.includes(raw)) return { macro: "tematiche", subId: "mercati" };
   if (raw === "tematiche") {
     const chiave = String(p.category || "").toLowerCase();
     return { macro: "tematiche", subId: (TEMATICI_KEYS as readonly string[]).includes(chiave) ? chiave : "" };

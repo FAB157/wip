@@ -24,7 +24,7 @@ import { getApiUrl, apiFetch } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import { postForAudioBlob } from '../lib/audioFetch';
-import { getGuideCharacter } from '../lib/guideSettings';
+import { getGuideCharacter, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
 import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine, SOGLIE,
@@ -39,6 +39,14 @@ import { locationService } from './locationService';
 
 /** Il tetto delle tappe: decisione di prodotto, non tecnica. */
 export const MAX_TAPPE = 10;
+/**
+ * IL PERCORSO DA «TUTTO NEL RAGGIO» (29/08/2026). Committente: le tappe
+ * selezionate nel pannello diventano un percorso «senza vincolo delle dieci
+ * tappe». Il tetto qui e` tecnico (la matrice OSRM), non di prodotto, ed e`
+ * lo stesso del server (TOUR_MAX_TAPPE). Vale solo per le bozze marcate
+ * `senzaLimite`; Dieci Tappe resta a dieci.
+ */
+export const MAX_TAPPE_ESTESO = 30;
 
 /** Quanto si stima di ascoltare a una tappa di cui non si ha ancora il testo. */
 const ASCOLTO_STIMATO_S = 180;
@@ -94,6 +102,8 @@ export interface GiroInCorso {
   incontri?: string[];
   /** Citta` del giro, se la sappiamo: serve al titolo quando lo si salva. */
   citta?: string | null;
+  /** Nato da «Tutto nel raggio»: il tetto delle tappe vive e` MAX_TAPPE_ESTESO. */
+  senzaLimite?: boolean;
 }
 
 export interface PropostaSostituta {
@@ -213,6 +223,8 @@ export interface BozzaGiro {
   erroreDettaglio: string | null;
   /** L'utente ha trascinato le tappe: l'ordine e` il suo, il server non lo tocca. */
   ordineManuale: boolean;
+  /** Bozza nata da «Tutto nel raggio»: tetto MAX_TAPPE_ESTESO invece di dieci. */
+  senzaLimite?: boolean;
   /** "Ho un'ora": il giro si taglia alle tappe che ci stanno. null = nessun limite. */
   minutiDisponibili: number | null;
   /** Quante tappe, in ordine di cammino, stanno nel tempo. null = nessun limite. */
@@ -268,16 +280,17 @@ function leggiBozzaSalvata(): Partial<BozzaGiro> | null {
   try {
     const grezzo = localStorage.getItem(CHIAVE_BOZZA);
     if (!grezzo) return null;
-    const { tappe, minutiDisponibili, ordineManuale, quando } = JSON.parse(grezzo);
+    const { tappe, minutiDisponibili, ordineManuale, senzaLimite, quando } = JSON.parse(grezzo);
     // Una bozza di ieri non si riprende: si e` cambiata citta`, non idea.
     if (!Array.isArray(tappe) || tappe.length === 0 || Date.now() - Number(quando || 0) > 12 * 60 * 60 * 1000) {
       localStorage.removeItem(CHIAVE_BOZZA);
       return null;
     }
     return {
-      tappe: tappe.filter((t: any) => t && Number.isFinite(Number(t.lat)) && Number.isFinite(Number(t.lon))).slice(0, MAX_TAPPE),
+      tappe: tappe.filter((t: any) => t && Number.isFinite(Number(t.lat)) && Number.isFinite(Number(t.lon))).slice(0, senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE),
       minutiDisponibili: Number.isFinite(Number(minutiDisponibili)) ? Number(minutiDisponibili) : null,
       ordineManuale: !!ordineManuale,
+      senzaLimite: !!senzaLimite,
     };
   } catch { return null; }
 }
@@ -299,6 +312,20 @@ function livelloIngresso(p: any): LivelloIngresso {
   const dichiarato = p?.entrance_level ?? p?.entrance_livello ?? p?.ingresso_livello;
   if (dichiarato === 'dichiarato' || dichiarato === 'civico' || dichiarato === 'indirizzo') return dichiarato;
   return 'civico';
+}
+
+/**
+ * IL POI PUO` PARLARE? (29/08/2026). Regola del committente per il percorso
+ * da «Tutto nel raggio»: «se ha l'audioguida la ascolti (o la paghi al volo
+ * o col Day Pass), se non ce l'ha (ristorante ecc.) e` solo una tappa del
+ * navigatore». La risposta e` la stessa dell'audioguida in cammino
+ * (guideSettings.isCategoryAllowed) con TUTTI gli interruttori accesi: cosi`
+ * un ristorante, una fontanella o un murale sono tappe mute, una gemma parla
+ * qualunque sia la sua categoria.
+ */
+const TUTTO_ACCESO: Record<string, boolean> = Object.fromEntries([...CHIAVI_NATIVO_AUDIOGUIDA].map((k) => [k, true]));
+export function puoParlare(p: any): boolean {
+  return isCategoryAllowed({ category: p?.category || p?.poiType || p?.baseCategory || null, is_gem: p?.is_gem === true, premium: p?.premium === true }, TUTTO_ACCESO);
 }
 
 /** Da un POI qualsiasi (radar, mappa, scheda) alla tappa del giro. */
@@ -439,7 +466,9 @@ class TourService {
 
   bozza(): BozzaGiro { return this.bozzaStato; }
   bozzaHa(id: string | number): boolean { return this.bozzaStato.tappe.some(t => String(t.id) === String(id)); }
-  bozzaPiena(): boolean { return this.bozzaStato.tappe.length >= MAX_TAPPE; }
+  /** Il tetto della bozza: dieci, o trenta se nata da «Tutto nel raggio». */
+  bozzaTetto(): number { return this.bozzaStato.senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE; }
+  bozzaPiena(): boolean { return this.bozzaStato.tappe.length >= this.bozzaTetto(); }
 
   /** Posizione della tappa nel giro (1-based): l'ordine del server se c'e`, altrimenti quello di scelta. */
   bozzaNumero(id: string | number): number | null {
@@ -649,12 +678,23 @@ class TourService {
    * li` in poi e` un giro come gli altri — tracciato, aggiunte lungo la
    * strada, X sui pin, «Crea il giro». Ritorna quante tappe sono entrate.
    */
-  bozzaDaTappe(poi: any[]): number {
+  bozzaDaTappe(poi: any[], opzioni: { senzaLimite?: boolean; ordinaServer?: boolean } = {}): number {
     this.bozzaSvuota();
+    // «Tutto nel raggio» (29/08/2026): niente vincolo delle dieci tappe, e le
+    // tappe che non hanno un'audioguida (ristoranti, fontanelle, murales)
+    // entrano MUTE — tappe del navigatore, non del racconto.
+    if (opzioni.senzaLimite) this.bozzaStato = { ...this.bozzaStato, senzaLimite: true };
     let n = 0;
-    for (const p of poi) { if (n >= MAX_TAPPE) break; if (this.bozzaAggiungi(p)) n++; }
+    const tetto = this.bozzaTetto();
+    for (const p of poi) {
+      if (n >= tetto) break;
+      const conVoce = opzioni.senzaLimite ? puoParlare(p) : p?.senzaGuida !== true;
+      if (this.bozzaAggiungi(conVoce ? p : { ...p, senzaGuida: true })) n++;
+    }
     // L'ordine del piano e` una scelta dell'autore: il server non lo tocca.
-    if (n > 1) this.bozzaStato = { ...this.bozzaStato, ordineManuale: true };
+    // Le tappe scelte dal pannello invece non hanno un ordine: lo decide il server.
+    if (n > 1 && !opzioni.ordinaServer) this.bozzaStato = { ...this.bozzaStato, ordineManuale: true };
+    this.programmaAnteprima();
     return n;
   }
 
@@ -794,7 +834,7 @@ class TourService {
     this.passMancante = false;
     // La sequenza e` gia` in ordine di cammino (del server o dell'utente):
     // si passa com'e`, cosi` il giro e` quello che si e` visto in anteprima.
-    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false });
+    const giro = await this.crea(tappe, { partenza, anello: this.bozzaStato.anello, ordina: false, senzaLimite: !!this.bozzaStato.senzaLimite });
     this.bozzaSvuota();
     return giro;
   }
@@ -802,9 +842,10 @@ class TourService {
   // ── GIRO ─────────────────────────────────────────────────────────────────
 
   /** Crea il giro: chiede l'ordine al server e prepara le tappe. */
-  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number } }): Promise<GiroInCorso> {
+  async crea(tappe: TappaGiro[], opzioni: { anello?: boolean; ordina?: boolean; partenza: { lat: number; lon: number }; senzaLimite?: boolean }): Promise<GiroInCorso> {
     if (tappe.length === 0) throw new Error('nessuna tappa');
-    if (tappe.length > MAX_TAPPE) throw new Error('il giro accetta al massimo dieci tappe');
+    const tetto = opzioni.senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE;
+    if (tappe.length > tetto) throw new Error(opzioni.senzaLimite ? `il percorso accetta al massimo ${MAX_TAPPE_ESTESO} tappe` : 'il giro accetta al massimo dieci tappe');
 
     const { g, dati } = await this.chiediRotta(tappe, opzioni);
 
@@ -824,6 +865,7 @@ class TourService {
       creatoIl: Date.now(),
       incontri: [],
       citta: tappe.map(t => t.citta).find(Boolean) || null,
+      senzaLimite: !!opzioni.senzaLimite,
     };
     const d = durataGiro(giro.tappe, g.minuti_cammino * 60);
     giro.minutiAscolto = d.ascolto_min;
@@ -1265,7 +1307,7 @@ class TourService {
     if (!Number.isFinite(t.lat) || !Number.isFinite(t.lon)) return false;
     if (this.giroHa(t.id)) return false;
     const vive = giro.tappe.filter(x => !x.esclusa).length;
-    if (vive >= MAX_TAPPE) return false;
+    if (vive >= (giro.senzaLimite ? MAX_TAPPE_ESTESO : MAX_TAPPE)) return false;
     giro.tappe.push({ ...t, durata_ascolto_s: t.durata_ascolto_s ?? durataAscolto(t.testo) });
     // Era FINITO (ultima tappa fatta) e si vuole proseguire: si riparte.
     await this.ricalcola();
@@ -1763,7 +1805,7 @@ class TourService {
       const b = this.bozzaStato;
       if (b.tappe.length === 0) { localStorage.removeItem(CHIAVE_BOZZA); return; }
       localStorage.setItem(CHIAVE_BOZZA, JSON.stringify({
-        tappe: b.tappe, minutiDisponibili: b.minutiDisponibili, ordineManuale: b.ordineManuale, quando: Date.now(),
+        tappe: b.tappe, minutiDisponibili: b.minutiDisponibili, ordineManuale: b.ordineManuale, senzaLimite: !!b.senzaLimite, quando: Date.now(),
       }));
     } catch { /* niente spazio: la bozza resta comunque in memoria */ }
   }

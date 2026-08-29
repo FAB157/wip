@@ -65,6 +65,10 @@
     {
       "path": "/api/cron/mostre-refresh",
       "schedule": "40 */4 * * *"
+    },
+    {
+      "path": "/api/geofence/calibrate-radius",
+      "schedule": "0 4 * * *"
     }
   ]
 }

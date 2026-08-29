@@ -229,7 +229,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 {t('tour_tappa')} {Math.min(v.tappeFatte + 1, v.tappeTotali)} / {v.tappeTotali}
               </p>
               <p className="text-[14px] font-bold text-gray-900 truncate">
-                {v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
+                {!v.avviato ? t('gr_pronto_a_partire') : v.inPausa ? t('tour_in_pausa') : (v.nomeTappa || '—')}
                 {/* Metri alla PORTA della tappa (linea d'aria): il dato che
                     manca all'istruzione, che parla solo della svolta. */}
                 {!v.inPausa && v.metriAllaTappa != null && v.metriAllaTappa > 25 && (
@@ -267,6 +267,27 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
               </p>
             </div>
 
+            {/* PRONTO, NON PARTITO (28/08/2026): un solo tasto grande,
+                «Avvia la navigazione», e la X. Pausa, riascolta e salta
+                appartengono a un giro in cammino. */}
+            {!v.avviato ? (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onClick={() => tourService.avvia()}
+                  title={t('gr_avvia_navigazione')}
+                  className="h-10 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[12px] font-black flex items-center gap-1.5 transition-colors active:scale-95"
+                >
+                  <Play className="w-4 h-4" /> {t('gr_avvia_navigazione')}
+                </button>
+                <button
+                  onClick={() => { tourService.termina(); onChiudi?.(); }}
+                  title={t('tour_termina')}
+                  className="w-10 h-10 rounded-full bg-red-50 hover:bg-red-100 flex items-center justify-center transition-colors active:scale-95"
+                >
+                  <X className="w-4 h-4 text-red-600" />
+                </button>
+              </div>
+            ) : (
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <button
                 onClick={() => { const p = !pausaManuale; setPausaManuale(p); tourService.impostaPausa(p); }}
@@ -297,6 +318,7 @@ export default function TourBanner({ language, istruzione, metriAllaSvolta, onRi
                 <X className="w-4 h-4 text-red-600" />
               </button>
             </div>
+            )}
           </div>
         )}
 

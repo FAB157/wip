@@ -110,11 +110,37 @@ function engineInPausa(engine: string): boolean {
   return true;
 }
 
-function segnaQuotaEsaurita(engine: string, err: any): void {
+function isErroreQuota(err: any): boolean {
   const msg = String(err?.response?.data?.error?.message || err?.message || '').toLowerCase();
   const status = Number(err?.status || err?.response?.status || 0);
-  const isQuota = status === 429 || /rate.?limit|quota|tokens per day|tpd|too many requests|resource.?exhausted/i.test(msg);
-  if (!isQuota) return;
+  return status === 429 || /rate.?limit|quota|tokens per day|tpd|too many requests|resource.?exhausted/i.test(msg);
+}
+
+// 29/08/2026: Groq e Gemini pescavano UNA chiave a caso per chiamata; se
+// usciva quella a quota esaurita (dal vivo: Groq 1 su 3, Gemini 1 su 5) il
+// motore INTERO finiva "in pausa" per 10 minuti-3 ore mentre le altre chiavi
+// erano libere, e l'utente on the fly scivolava su Agnes. Ora si prova ogni
+// chiave, partendo da una a caso, e si dichiara il motore esaurito solo
+// quando lo sono tutte. Gli errori non di quota (400, 500, timeout) fermano
+// subito: non è un problema di chiave.
+async function tentaConRotazione<T>(clients: any[], fn: (client: any) => Promise<T>): Promise<T> {
+  if (!clients.length) throw new Error('nessuna chiave configurata');
+  const inizio = Math.floor(Math.random() * clients.length);
+  let ultimo: any = null;
+  for (let i = 0; i < clients.length; i++) {
+    try {
+      return await fn(clients[(inizio + i) % clients.length]);
+    } catch (e: any) {
+      if (!isErroreQuota(e)) throw e;
+      ultimo = e;
+    }
+  }
+  throw ultimo;
+}
+
+function segnaQuotaEsaurita(engine: string, err: any): void {
+  if (!isErroreQuota(err)) return;
+  const msg = String(err?.response?.data?.error?.message || err?.message || '').toLowerCase();
   // "Please try again in 19m41.088s" / "in 32.5s"
   const m = msg.match(/try again in\s+(?:(\d+)m)?([\d.]+)s/i);
   let attesaMs = m
@@ -231,8 +257,7 @@ async function callUniversalAi(
     }
 
     if (engine === "groq") {
-      const groqInstance = getGroqClient();
-      if (!groqInstance) return false;
+      if (!getGroqClient()) return false;
       // llama-3.3-70b-versatile dismesso da Groq il 16/08/2026:
       // openai/gpt-oss-120b è il rimpiazzo raccomandato (stesso tier gratuito).
       finalModel = options.model || "openai/gpt-oss-120b";
@@ -241,11 +266,12 @@ async function callUniversalAi(
       // farebbero un 400 — vanno tolti qui, una volta per tutte, invece di
       // ricordarsi caso per caso di non impostarli.
       const { strictEngine: _se, excludeEngines: _ee, ...groqOptions } = options as any;
-      const r = await groqInstance.chat.completions.create({
+      // Tutte le chiavi prima di arrendersi (vedi tentaConRotazione).
+      const r = await tentaConRotazione(groqClients, (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
         ...groqOptions
-      });
+      }));
       textContent = r.choices?.[0]?.message?.content || "";
       responseData = r;
       tokensUsed = r.usage?.total_tokens || 0;
@@ -284,14 +310,15 @@ async function callUniversalAi(
       if (!ai) return false;
       finalModel = options.model?.startsWith('gemini') ? options.model : "gemini-3.5-flash-lite";
       const prompt = messages.map((m: any) => `${String(m.role).toUpperCase()}: ${m.content}`).join("\n");
-      const genRes = await ai.models.generateContent({
+      // Tutte le chiavi prima di arrendersi (vedi tentaConRotazione).
+      const genRes = await tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
         model: finalModel,
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         // Senza questo Gemini incornicia il JSON in un blocco markdown.
         ...(options.response_format?.type === 'json_object'
           ? { config: { responseMimeType: 'application/json' } }
           : {}),
-      });
+      }));
       textContent = (genRes?.text || "").trim();
       if (!textContent) return false;
       responseData = genRes;
@@ -323,7 +350,13 @@ async function callUniversalAi(
       const cerebrasKeys = [process.env.CEREBRAS_API_KEY, process.env.CEREBRAS_API_KEY_2, process.env.CEREBRAS_API_KEY_3, process.env.CEREBRAS_API_KEY_4].filter(Boolean);
       if (cerebrasKeys.length === 0) return false;
       const cerebrasKey = cerebrasKeys[cerebrasKeyCounter++ % cerebrasKeys.length];
-      finalModel = options.model?.startsWith('llama') || options.model?.startsWith('gpt-oss') || options.model?.startsWith('qwen') ? options.model : "llama-3.3-70b";
+      // 29/08/2026, verificato dal vivo: il catalogo Cerebras oggi è solo
+      // gpt-oss-120b e gemma-4-31b (llama-3.3-70b non esiste più: 404), e
+      // TUTTE le nostre chiavi rispondono 402 "Payment required" — il piano
+      // gratuito è finito. Nella catena Cerebras fallisce in 0,2 s e si passa
+      // ad Agnes, che funziona (3-18 s su prompt corti). Il default resta
+      // corretto per il giorno in cui lo si finanzia.
+      finalModel = options.model?.startsWith('llama') || options.model?.startsWith('gpt-oss') || options.model?.startsWith('qwen') || options.model?.startsWith('gemma') ? options.model : "gpt-oss-120b";
       const res = await axios.post("https://api.cerebras.ai/v1/chat/completions", {
         model: finalModel,
         messages,
@@ -394,7 +427,15 @@ async function callUniversalAi(
   // chiedendoli: ora fanno da rete quando groq esaurisce il tetto giornaliero
   // (200k token) — prima in quel caso restava solo agnes e ogni chiamata
   // costava 2-4 minuti.
-  const FREE_ENGINES = ["groq", "cerebras", "agnes", "together", "mistral", "gemini"];
+  // 29/08/2026, dopo la prova dal vivo di tutti i motori: Gemini
+  // (gemini-3.5-flash-lite, 4 chiavi libere, ~1 s) passa SUBITO dopo groq,
+  // perché in un picco di 429 su groq l'utente in cammino aspettava Agnes
+  // (5-18 s) mentre Gemini avrebbe risposto in un secondo. Cerebras esce
+  // dalla coda: il piano gratuito è finito (402 su tutte le chiavi) ed era
+  // solo un anello a vuoto; resta chiamabile come motore esplicito per il
+  // giorno in cui lo si finanzia. Together e Mistral sono a credito zero ma
+  // restano in fondo, non costano nulla a provarli.
+  const FREE_ENGINES = ["groq", "gemini", "agnes", "together", "mistral"];
   const baseQueue = options.strictEngine
     ? [primaryEngine]
     : primaryEngine === "deepseek"
@@ -444,10 +485,10 @@ async function callUniversalAi(
     try {
       console.log("[Universal AI] Final Fallback: Attempting Gemini 2.5 Flash...");
       const prompt = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
-      const genRes = await ai.models.generateContent({
+      const genRes = await tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
         model: "gemini-3.5-flash-lite",
         contents: [{ role: "user", parts: [{ text: prompt }] }]
-      });
+      }));
       textContent = (genRes?.text || "").trim();
       if (textContent) {
         finalModel = "gemini-3.5-flash-lite";
@@ -2532,6 +2573,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       const GenAIConstructor = (GoogleGenAI as any).default || GoogleGenAI;
       const clients = geminiKeys.map(k => new GenAIConstructor({ apiKey: k }));
       ai = {
+        // Elenco completo per chi vuole ruotare su tutte le chiavi
+        // (tentaConRotazione in callUniversalAi); `models` resta la pesca
+        // casuale per le rotte che chiamano Gemini direttamente.
+        clients,
         get models() {
           const client = clients[Math.floor(Math.random() * clients.length)];
           return client.models;
@@ -19705,7 +19750,12 @@ ${testo}`;
   // finisce vale piu' di uno lungo abbandonato a meta'. Ma aiuta anche qui,
   // perche' sotto le dodici il commesso viaggiatore si risolve bene.
   // ════════════════════════════════════════════════════════════════════════
-  const TOUR_MAX_TAPPE = 10;
+  // 29/08/2026: era 10 (il tetto di prodotto di Dieci Tappe, che il client
+  // continua a imporre). Il percorso creato da «Tutto nel raggio» con le tappe
+  // selezionate NON ha quel vincolo (committente): qui il limite serve solo a
+  // non far esplodere la matrice OSRM — 30 punti sono 900 celle, ancora una
+  // chiamata sola.
+  const TOUR_MAX_TAPPE = 30;
 
   const distanzaMetri = (a: number[], b: number[]) => {
     const R = 6371000, rad = Math.PI / 180;
@@ -19909,25 +19959,30 @@ ${testo}`;
    */
   const passValido = async (req: any): Promise<{ ok: boolean; motivo?: string; scade?: number }> => {
     const auth = String(req.headers?.authorization || '');
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-    if (!token) return { ok: false, motivo: 'nessun token' };
+    if (!auth.startsWith('Bearer ')) return { ok: false, motivo: 'nessun token' };
     try {
-      const u = await axios.get(`${supabaseUrl}/auth/v1/user`, {
-        headers: { apikey: process.env.VITE_SUPABASE_ANON_KEY || supabaseServiceKey, Authorization: `Bearer ${token}` },
-        timeout: 8000,
-      });
-      const userId = u.data?.id;
-      if (!userId) return { ok: false, motivo: 'utente non riconosciuto' };
+      // LA STESSA VERIFICA DELL'ANTEPRIMA (28/08/2026, collaudo). Prima qui
+      // il token si controllava con `apikey: VITE_SUPABASE_ANON_KEY`; con la
+      // migrazione della chiave pubblica (29/08) quella variabile e' rimasta
+      // indietro su Vercel, la chiamata falliva e «in dubbio si nega» faceva
+      // il resto: un utente col pass VALIDO (0/40 usate, verificato sul
+      // database) si sentiva chiedere il Day Pass a ogni «Crea il giro»,
+      // mentre l'anteprima — che passa da verifyUserToken con la chiave di
+      // servizio — funzionava. Due cancelli sulla stessa porta con due chiavi
+      // diverse: ora e' uno solo, quello che si sa funzionare.
+      const userId = await verifyUserToken(req);
+      if (!userId) { console.warn('[passValido] verifyUserToken non ha riconosciuto il Bearer'); return { ok: false, motivo: 'utente non riconosciuto' }; }
       const p = await axios.get(
         `${supabaseUrl}/rest/v1/user_passes?user_id=eq.${userId}&expires_at=gt.${new Date().toISOString()}&select=expires_at,guides_used,guides_cap&order=expires_at.desc&limit=1`,
         { headers, timeout: 8000 });
       const row = p.data?.[0];
-      if (!row) return { ok: false, motivo: 'nessun pass attivo' };
+      if (!row) { console.warn(`[passValido] nessuna riga user_passes attiva per ${userId}`); return { ok: false, motivo: 'nessun pass attivo' }; }
       if (Number(row.guides_used) >= Number(row.guides_cap)) return { ok: false, motivo: 'audioguide del pass esaurite' };
       return { ok: true, scade: new Date(row.expires_at).getTime() };
     } catch (e: any) {
       // Se il controllo non si puo' fare, si NEGA. In dubbio si chiude, non si
       // apre: e' l'unica scelta difendibile su un cancello.
+      console.warn('[passValido] eccezione:', e?.response?.status, e?.response?.data || e?.message);
       return { ok: false, motivo: 'verifica del pass non riuscita' };
     }
   };

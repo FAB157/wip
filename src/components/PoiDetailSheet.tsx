@@ -123,6 +123,7 @@ import PoiAudioPlayer from "./poi/PoiAudioPlayer";
 import PoiExtraDetails from "./poi/PoiExtraDetails";
 import PoiBiodiversity from "./poi/PoiBiodiversity";
 import DenominazioniZona from "./DenominazioniZona";
+import { ensureAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import PoiNearbyList from "./poi/PoiNearbyList";
 
 interface PoiDetailSheetProps {
@@ -314,6 +315,11 @@ export default function PoiDetailSheet({
     wwd_url?: string;
     artista?: string;
     anno?: string;
+    // Prenotazioni (28/08/2026, regola del committente: ogni POI abbinato a
+    // GYG/Viator/Tiqets porta il link CON il codice affiliato). Gli URL
+    // stanno in technical_data (viator_url/tiqets_url/gyg_url) e finora la
+    // scheda non li mostrava affatto: commissione zero.
+    prenota?: Array<{ fornitore: string; url: string }>;
   } | null>(null);
 
   const [generatedText, setGeneratedText] = useState<string | null>(null);
@@ -978,7 +984,16 @@ export default function PoiDetailSheet({
                   wwd_url: techData.wwd_url || undefined,
                   artista: techData.artista || techData.artist_name || undefined,
                   anno: techData.anno || undefined,
+                  // Link di prenotazione, sempre passati da ensureAffiliateUrl:
+                  // Tiqets arriva già col partner, Viator/GYG vengono completati.
+                  prenota: ([
+                    ['Viator', techData.viator_url], ['Tiqets', techData.tiqets_url],
+                    ['GetYourGuide', techData.gyg_url || techData.getyourguide_url],
+                  ] as Array<[string, unknown]>)
+                    .filter(([, u]) => typeof u === 'string' && /^https?:\/\//.test(u))
+                    .map(([fornitore, u]) => ({ fornitore, url: ensureAffiliateUrl(String(u)) })),
                 };
+                if (!techPayload.prenota?.length) delete (techPayload as any).prenota;
                 const hasTechData = Object.values(techPayload).some(Boolean);
                 // I POI appena importati (montagne russe, cascate, murales) hanno
                 // i link e i dati tecnici ma ancora nessuna descrizione: le chip
@@ -3238,6 +3253,18 @@ export default function PoiDetailSheet({
                     💧 {getTranslation('poi_scheda_wwd', language)} ↗
                   </a>
                 )}
+                {technicalData.prenota?.map((b) => (
+                  <a
+                    key={b.fornitore}
+                    href={b.url}
+                    target="_blank"
+                    rel="noopener"
+                    onClick={() => trackAffiliateClick(b.url, String(poi?.name || ''), String((poi as any)?.city || ''), 'poi_sheet')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-emerald-200 bg-emerald-50 text-emerald-900 text-[11px] font-bold rounded-xl shadow-sm hover:bg-emerald-100"
+                  >
+                    🎟 {getTranslation('poi_prenota_su', language)} {b.fornitore} ↗
+                  </a>
+                ))}
               </div>
             )}
 

@@ -270,11 +270,22 @@ export default function App() {
       setIsRadarMode(false);
     } catch (e: any) {
       const m = String(e?.message || '');
-      notify(m.startsWith('PASS_RICHIESTO') ? getTranslation('gr_pass_richiesto', L) : (m || getTranslation('gr_giro_non_riuscito', L)));
+      // Il "motivo" del server (dopo i due punti) prima si scartava: si
+      // vedeva sempre «attiva il Day Pass» anche a chi il pass ce l'aveva,
+      // senza modo di distinguere «non riconosciuto» da «assente» (29/08/2026).
+      const dettaglio = m.startsWith('PASS_RICHIESTO:') ? m.slice('PASS_RICHIESTO:'.length).trim() : '';
+      notify(m.startsWith('PASS_RICHIESTO') ? `${getTranslation('gr_pass_richiesto', L)}${dettaglio ? ` (${dettaglio})` : ''}` : (m || getTranslation('gr_giro_non_riuscito', L)));
       // Col pannello aperto si legge il perche` (pass, posizione) e si riprova.
       setIsRadarMode(true);
     } finally { setAvviandoGiro(false); }
   }, [avviandoGiro]);
+  // «Percorso» dal pannello "Tutto nel raggio" (29/08/2026): MapArea riempie
+  // la bozza e chiede di aprire il radar, dove il giro si vede e si avvia.
+  useEffect(() => {
+    const apri = () => setIsRadarMode(true);
+    window.addEventListener('wip-apri-radar', apri);
+    return () => window.removeEventListener('wip-apri-radar', apri);
+  }, []);
   const tappaDaNavigare = useMemo(() => {
     if (!vistaGiro || vistaGiro.stato === 'FINITO') return null;
     const t = tourService.tappaAttuale();
@@ -1040,7 +1051,12 @@ export default function App() {
     // 'tematiche': la macro è solo il contenitore della riga di chip e non ha
     // POI propri, mentre terme/cinema/cieli/… si accendono e si spengono una
     // per una, qui come in GeoControl.
-    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
+    // (29/08/2026, collaudo: «le localita' restano attive anche se non
+    // selezionate») `localita` MANCAVA da questa lista, in entrambe le copie:
+    // spegnendo la chip non si scriveva mai `localita: false`, il valore
+    // salvato restava vero, e al primo evento di impostazioni la chip — e i
+    // suoi pin — tornavano da soli. Ogni chip della barra deve stare qui.
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'localita', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
       'terme', 'cinema', 'cieli', 'street_art', 'mercati', 'fioriture', 'memoria', 'lento'];
         const cats = MAP_FILTER_KEYS.filter(k => parsed[k]);
         // Anche la lista vuota va rispettata ("Deseleziona tutti"): prima
@@ -1206,7 +1222,12 @@ export default function App() {
     // 'tematiche': la macro è solo il contenitore della riga di chip e non ha
     // POI propri, mentre terme/cinema/cieli/… si accendono e si spengono una
     // per una, qui come in GeoControl.
-    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
+    // (29/08/2026, collaudo: «le localita' restano attive anche se non
+    // selezionate») `localita` MANCAVA da questa lista, in entrambe le copie:
+    // spegnendo la chip non si scriveva mai `localita: false`, il valore
+    // salvato restava vero, e al primo evento di impostazioni la chip — e i
+    // suoi pin — tornavano da soli. Ogni chip della barra deve stare qui.
+    const MAP_FILTER_KEYS = ['gemme', 'monumenti', 'natura', 'localita', 'locali', 'utilita', 'famiglie', 'community', 'beni_culturali',
       'terme', 'cinema', 'cieli', 'street_art', 'mercati', 'fioriture', 'memoria', 'lento'];
     let obj: Record<string, boolean> = {};
     try { obj = JSON.parse(localStorage.getItem('wip_active_subcategories') || '{}') || {}; } catch { obj = {}; }
@@ -1347,14 +1368,6 @@ export default function App() {
                 >
                   <Navigation2 className="w-6 h-6" />
                 </motion.button>
-              )}
-              {isFollowingItinerary && (
-                <motion.div
-                  initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
-                  className="w-10 h-10 bg-rose-600 rounded-full flex items-center justify-center shadow-lg border-2 border-white shrink-0"
-                >
-                  <MapPin className="w-5 h-5 text-white" />
-                </motion.div>
               )}
               <DayPassBadge />
             </div>

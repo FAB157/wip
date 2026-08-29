@@ -842,7 +842,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
          * I nomi delle voci Android hanno la forma `it-it-x-kda#female_1-local`:
          * il marcatore `#female`/`#male` è la fonte affidabile del genere.
          */
-        private fun applyTtsGender(tts: TextToSpeech, appContext: Context) {
+        // Non più private (29/08/2026): la usa anche la voce diretta del plugin
+        // (ItaintaBackgroundPoiPlugin.speakDirect), stesso genere del personaggio.
+        fun applyTtsGender(tts: TextToSpeech, appContext: Context) {
             try {
                 // Stessa preferenza letta da resolveGuideVoice (persistita dal
                 // plugin): qui non si può chiamare, è nel corpo della classe.
@@ -890,7 +892,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{2190}-\\x{21FF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{20E3}\\x{2122}\\x{2139}\\x{00A9}\\x{00AE}]"
         )
 
-        private fun speakableText(text: String): String {
+        // Non più private (29/08/2026): la usa anche la voce diretta del plugin.
+        fun speakableText(text: String): String {
             val cleaned = EMOJI_REGEX.replace(text, "").replace(Regex("\\s+"), " ").trim()
             // Mai utterance vuota (item tutto-emoji): la coda resterebbe bloccata.
             return cleaned.ifBlank { text.trim() }

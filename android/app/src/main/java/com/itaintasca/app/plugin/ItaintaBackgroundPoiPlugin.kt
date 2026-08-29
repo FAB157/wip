@@ -786,6 +786,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      * priority: 0 = massima (arrivo/itinerario), 2 = normale.
      * Se il servizio non è attivo la coda scarta gli item: si risponde
      * ok=false così il JS ripiega sul TTS di rete invece di restare muto.
+     * Con `force=true` (29/08/2026) a servizio spento si parla COMUNQUE con
+     * il motore diretto del plugin (vedi speakDirect): è il ripiego che non
+     * muore mai quando Azure/Google non rispondono.
      */
     @PluginMethod
     fun speakText(call: PluginCall) {
@@ -794,9 +797,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         val ret = JSObject()
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("isServiceActive", false)) {
-            ret.put("ok", false)
-            ret.put("reason", "service_inactive")
-            return call.resolve(ret)
+            if (call.getBoolean("force") != true) {
+                ret.put("ok", false)
+                ret.put("reason", "service_inactive")
+                return call.resolve(ret)
+            }
+            val id = "direct_${System.currentTimeMillis()}"
+            initDirectTts { engine ->
+                val out = JSObject()
+                if (engine != null && speakDirect(text, id)) {
+                    out.put("ok", true)
+                    out.put("direct", true)
+                    out.put("id", id)
+                } else {
+                    out.put("ok", false)
+                    out.put("reason", "direct_tts_failed")
+                }
+                call.resolve(out)
+            }
+            return
         }
         return try {
             com.itaintasca.app.geofence.GeofenceBroadcastReceiver.enqueue(
@@ -817,6 +836,184 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             ret.put("reason", e.message ?: "enqueue_failed")
             call.resolve(ret)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // VOCE DI SISTEMA DIRETTA (29/08/2026): il ripiego che non muore mai.
+    // La coda dei teaser vive nel servizio in background e, a servizio
+    // spento, scarta tutto: l'app in primo piano con Azure/Google giù
+    // restava MUTA (nella WebView Android speechSynthesis spesso non
+    // esiste). Qui un TextToSpeech tutto del plugin, indipendente dal
+    // servizio: parla finché il telefono ha una voce. Spezza i testi lunghi
+    // (il motore rifiuta oltre getMaxSpeechInputLength, 4000 caratteri) e
+    // avvisa il JS a fine lettura con l'evento directSpeechFinished {id}.
+    // ------------------------------------------------------------------
+    private var directTts: android.speech.tts.TextToSpeech? = null
+    @Volatile private var directTtsReady = false
+    @Volatile private var directSpeechId: String? = null
+    @Volatile private var directLastChunkId: String? = null
+
+    private fun initDirectTts(onReady: (android.speech.tts.TextToSpeech?) -> Unit) {
+        val existing = directTts
+        if (existing != null && directTtsReady) return onReady(existing)
+        var created: android.speech.tts.TextToSpeech? = null
+        created = android.speech.tts.TextToSpeech(context.applicationContext) { status ->
+            val engine = created
+            if (status == android.speech.tts.TextToSpeech.SUCCESS && engine != null) {
+                engine.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) { }
+                    override fun onDone(utteranceId: String?) { onDirectChunkFinished(utteranceId) }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) { onDirectChunkFinished(utteranceId) }
+                    override fun onError(utteranceId: String?, errorCode: Int) { onDirectChunkFinished(utteranceId) }
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) { onDirectChunkFinished(utteranceId) }
+                })
+                directTts = engine
+                directTtsReady = true
+                onReady(engine)
+            } else {
+                directTtsReady = false
+                Log.e("ItaintaPlugin", "TTS diretto: inizializzazione fallita ($status)")
+                onReady(null)
+            }
+        }
+    }
+
+    /** Fine dell'ULTIMO pezzo = fine della lettura: si avvisa il JS una volta sola. */
+    private fun onDirectChunkFinished(utteranceId: String?) {
+        val id = directSpeechId ?: return
+        if (utteranceId == null || utteranceId != directLastChunkId) return
+        directSpeechId = null
+        directLastChunkId = null
+        abandonDirectFocus()
+        val data = JSObject()
+        data.put("id", id)
+        notifyListeners("directSpeechFinished", data, true)
+    }
+
+    /**
+     * Fuoco audio della voce diretta: TextToSpeech da solo non lo chiede, e
+     * senza fuoco Spotify/la radio non si abbassano. Transitorio con ducking,
+     * come fa la coda dei teaser (requestFocus in GeofenceBroadcastReceiver).
+     */
+    private var directFocusRequest: android.media.AudioFocusRequest? = null
+    private fun requestDirectFocus() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val attrs = android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+                val req = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(attrs)
+                    .build()
+                directFocusRequest = req
+                am.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            }
+        } catch (_: Exception) { }
+    }
+    private fun abandonDirectFocus() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                directFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+                directFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        } catch (_: Exception) { }
+    }
+
+    /**
+     * Spezza il testo in pezzi che il motore accetta, ai confini di frase;
+     * una frase più lunga del tetto viene tagliata agli spazi.
+     */
+    private fun spezzaPerVoce(text: String, max: Int): List<String> {
+        val pulito = text.replace(Regex("\\s+"), " ").trim()
+        if (pulito.isEmpty()) return emptyList()
+        if (pulito.length <= max) return listOf(pulito)
+        val frasi = Regex("[^.!?…]+[.!?…]+\\s*|[^.!?…]+$").findAll(pulito).map { it.value }.toList()
+        val pezzi = ArrayList<String>()
+        val cur = StringBuilder()
+        for (f in frasi) {
+            if (f.length > max) {
+                if (cur.isNotBlank()) { pezzi.add(cur.toString().trim()); cur.setLength(0) }
+                var resto = f
+                while (resto.length > max) {
+                    val taglio = resto.lastIndexOf(' ', max).let { if (it < max / 2) max else it }
+                    pezzi.add(resto.substring(0, taglio).trim())
+                    resto = resto.substring(taglio).trim()
+                }
+                if (resto.isNotBlank()) cur.append(resto).append(' ')
+                continue
+            }
+            if (cur.length + f.length > max && cur.isNotBlank()) { pezzi.add(cur.toString().trim()); cur.setLength(0) }
+            cur.append(f)
+        }
+        if (cur.isNotBlank()) pezzi.add(cur.toString().trim())
+        return pezzi.filter { it.isNotBlank() }
+    }
+
+    /** Parla subito col motore del plugin. true = presa in carico. */
+    private fun speakDirect(text: String, id: String): Boolean {
+        val tts = directTts ?: return false
+        val appContext = context.applicationContext
+        val prefs = appContext.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+        try {
+            // Stessa classe audio del navigatore: abbassa la musica, esce in auto.
+            tts.setAudioAttributes(
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+        } catch (_: Exception) { }
+        val lang = prefs.getString("language", "it") ?: "it"
+        try { tts.setLanguage(com.itaintasca.app.geofence.GeofenceBroadcastReceiver.localeForLang(lang)) } catch (_: Exception) { }
+        com.itaintasca.app.geofence.GeofenceBroadcastReceiver.applyTtsGender(tts, appContext)
+
+        val tetto = (try { android.speech.tts.TextToSpeech.getMaxSpeechInputLength() } catch (_: Exception) { 4000 })
+            .coerceIn(500, 3800) - 100
+        val pezzi = spezzaPerVoce(com.itaintasca.app.geofence.GeofenceBroadcastReceiver.speakableText(text), tetto)
+        if (pezzi.isEmpty()) return false
+
+        directSpeechId = id
+        directLastChunkId = "$id#${pezzi.size - 1}"
+        requestDirectFocus()
+        val params = android.os.Bundle()
+        params.putFloat(android.speech.tts.TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        for ((i, pezzo) in pezzi.withIndex()) {
+            val modo = if (i == 0) android.speech.tts.TextToSpeech.QUEUE_FLUSH else android.speech.tts.TextToSpeech.QUEUE_ADD
+            val r = tts.speak(pezzo, modo, params, "$id#$i")
+            if (r != android.speech.tts.TextToSpeech.SUCCESS) {
+                if (i == 0) {
+                    directSpeechId = null
+                    directLastChunkId = null
+                    abandonDirectFocus()
+                    return false
+                }
+                // I pezzi già accodati si leggono; la fine sarà l'ultimo accettato,
+                // così il JS riceve comunque il suo evento.
+                directLastChunkId = "$id#${i - 1}"
+                break
+            }
+        }
+        return true
+    }
+
+    /** Ferma la voce diretta. Gli id vanno giù PRIMA: l'onStop non deve avvisare il JS. */
+    @PluginMethod
+    fun stopSpeakText(call: PluginCall) {
+        directSpeechId = null
+        directLastChunkId = null
+        try { directTts?.stop() } catch (_: Exception) { }
+        abandonDirectFocus()
+        call.resolve()
     }
 
     // ------------------------------------------------------------------
@@ -1154,6 +1351,12 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         try {
             context.unregisterReceiver(receiver)
         } catch (e: Exception) { }
+        // Il motore della voce diretta è del plugin: si chiude con lui.
+        directSpeechId = null
+        directLastChunkId = null
+        try { directTts?.stop(); directTts?.shutdown() } catch (_: Exception) { }
+        directTts = null
+        directTtsReady = false
         super.handleOnDestroy()
     }
 }

@@ -40,6 +40,8 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "checkOfflineTtsVoice", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openTtsVoiceInstall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "speakText", returnType: CAPPluginReturnPromise),
+        // (29/08/2026) Ferma la voce diretta di speakText(force:true)
+        CAPPluginMethod(name: "stopSpeakText", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setUserContext", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setWalletBalance", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setSilentMode", returnType: CAPPluginReturnPromise),
@@ -64,8 +66,19 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     private var permissionManager: CLLocationManager?
     private var pendingPermissionCall: CAPPluginCall?
 
+    // (29/08/2026) Voce di sistema DIRETTA, fuori dalla coda dei teaser: il
+    // ripiego che non muore mai quando Azure/Google non rispondono e il
+    // servizio in background è spento (la coda in quel caso scarta tutto).
+    // Port di speakDirect Android. Fine lettura → evento directSpeechFinished.
+    private let directSynth = AVSpeechSynthesizer()
+    private let directDelegate = DirectSpeechDelegate()
+    private var directSpeechId: String?
+    private var directUtterance: AVSpeechUtterance?
+
     override public func load() {
         super.load()
+        directDelegate.onFinished = { [weak self] utterance in self?.directFinished(utterance) }
+        directSynth.delegate = directDelegate
         // Ponte eventi nativo → JS, equivalente del BroadcastReceiver Android.
         // retainUntilConsumed=true: se la WebView si sta ancora svegliando,
         // l'evento viene consegnato appena il listener JS si registra.
@@ -482,6 +495,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         let text = (call.getString("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return call.reject("Missing text") }
         guard prefs.bool(forKey: "isServiceActive") else {
+            // force (29/08/2026): a servizio spento si parla comunque, col
+            // sintetizzatore del plugin — vedi speakDirect.
+            if call.getBool("force") == true { return speakDirect(text, call: call) }
             return call.resolve(["ok": false, "reason": "service_inactive"])
         }
         SpeechQueue.shared.enqueue(SpeechQueue.SpeechItem(
@@ -493,6 +509,61 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             kind: call.getString("kind") ?? "nav"
         ))
         call.resolve(["ok": true])
+    }
+
+    /**
+     * Parla subito con AVSpeechSynthesizer del plugin, stessa voce/genere
+     * della coda (SpeechQueue.voiceForLanguage/installedVoice) e stessa
+     * sessione audio del navigatore (.voicePrompt + duckOthers). Risponde
+     * {ok, direct:true, id}; a fine lettura il JS riceve directSpeechFinished.
+     * Senza una voce installata per la lingua: ok=false, il JS ripiega.
+     */
+    private func speakDirect(_ text: String, call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            let spoken = SpeechQueue.speakableText(text)
+            let lang = self.prefs.string(forKey: "language") ?? "it"
+            guard !spoken.isEmpty, let base = SpeechQueue.installedVoice(for: lang) else {
+                return call.resolve(["ok": false, "reason": "voice_not_installed"])
+            }
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .voicePrompt, options: [.duckOthers, .interruptSpokenAudioAndMixWithOthers])
+                try session.setActive(true)
+            } catch {
+                // Sessione già configurata da altri (player JS): si parla comunque.
+            }
+            let utterance = AVSpeechUtterance(string: spoken)
+            let scelta = SpeechQueue.voiceForLanguage(lang, character: self.prefs.string(forKey: "guideCharacter"))
+            let prefisso = String(SpeechQueue.regionalCode(for: lang).prefix(2))
+            utterance.voice = (scelta?.language.hasPrefix(prefisso) == true) ? scelta : base
+            utterance.volume = 1.0
+            let id = "direct_\(Int(Date().timeIntervalSince1970 * 1000))"
+            // Id giù prima dello stop: il didCancel della lettura precedente
+            // non deve avvisare il JS come se fosse una fine.
+            self.directSpeechId = nil
+            self.directUtterance = nil
+            self.directSynth.stopSpeaking(at: .immediate)
+            self.directSpeechId = id
+            self.directUtterance = utterance
+            self.directSynth.speak(utterance)
+            call.resolve(["ok": true, "direct": true, "id": id])
+        }
+    }
+
+    fileprivate func directFinished(_ utterance: AVSpeechUtterance) {
+        guard utterance === directUtterance, let id = directSpeechId else { return }
+        directSpeechId = nil
+        directUtterance = nil
+        notifyListeners("directSpeechFinished", data: ["id": id], retainUntilConsumed: true)
+    }
+
+    @objc func stopSpeakText(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            self.directSpeechId = nil
+            self.directUtterance = nil
+            self.directSynth.stopSpeaking(at: .immediate)
+            call.resolve()
+        }
     }
 
     // MARK: - Billing offline (stesse chiavi prefs di Android)
@@ -699,5 +770,21 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         HealthStats.shared.fetch { result in
             call.resolve(result)
         }
+    }
+}
+
+/**
+ * Delegate del sintetizzatore della voce diretta (speakDirect). Classe a sé
+ * perché il plugin è già CLLocationManagerDelegate: un oggetto piccolo con una
+ * closure è più chiaro di una seconda conformance. didCancel (stop voluto)
+ * arriva con gli id già azzerati e non produce eventi.
+ */
+private final class DirectSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
+    var onFinished: ((AVSpeechUtterance) -> Void)?
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        onFinished?(utterance)
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        onFinished?(utterance)
     }
 }
