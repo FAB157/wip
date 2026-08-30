@@ -177,11 +177,19 @@ jobs:
             echo "::error title=PEM incompleto::Nel secret devono esserci ENTRAMBI: la chiave privata e il certificato."
             exit 1
           fi
-          PW="$(openssl rand -hex 16)"
+          PW="$(/usr/bin/openssl rand -hex 16)"
           echo "::add-mask::$PW"
-          openssl pkcs12 -export \
+          # CIFRATURA VECCHIA, OBBLIGATORIA (build #84). `security` di macOS
+          # legge solo i PKCS#12 in 3DES con MAC SHA-1: con i default di
+          # OpenSSL 3 (AES-256, MAC SHA-256) l'import fallisce con un errore
+          # che accusa la password — «MAC verification failed during PKCS12
+          # import (wrong password?)» — mentre la password e' giustissima.
+          # Anche il binario conta: su questi runner `openssl` nel PATH e'
+          # OpenSSL 3 di Homebrew, mentre /usr/bin/openssl e' quello di Apple.
+          /usr/bin/openssl pkcs12 -export \
                   -inkey "$RUNNER_TEMP/dist.pem" -in "$RUNNER_TEMP/dist.pem" \
                   -name "WIP Distribution" \
+                  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
                   -passout "pass:$PW" -out "$RUNNER_TEMP/dist.p12"
           echo "P12_PASSWORD=$PW" >> "$GITHUB_ENV"
           echo "Certificato pronto ($(wc -c < "$RUNNER_TEMP/dist.p12") byte)."
