@@ -41,8 +41,27 @@ platform :ios do
       in_house: false
     )
 
-    # Certificato di DISTRIBUZIONE (lo crea la prima volta, poi lo riusa).
-    get_certificates(api_key: api_key, development: false)
+    # CERTIFICATO IMPORTATO, NON CREATO (30/08/2026, dopo la build #77).
+    #
+    # Prima qui c'era `get_certificates`, che crea il certificato di
+    # distribuzione se non lo trova. Sembrava comodo e invece e' una trappola:
+    # la chiave privata nasceva nel portachiavi temporaneo del runner e moriva
+    # con lui, quindi al giro dopo il certificato sul portale c'era ma era
+    # inservibile, e fastlane ne creava un altro. Apple ne concede due:
+    #   [!] Could not create another Distribution certificate, reached the
+    #       maximum number of available Distribution certificates.
+    # In due build il conto era pieno di gusci vuoti.
+    #
+    # Ora il certificato e' UNO, creato una volta sola da una CSR generata sul
+    # PC del committente, e la CI si limita a importarlo. Il .p12 e la chiave
+    # privata stanno nel backup su E:, come il keystore Android: perderli
+    # significa revocare e rifare tutto.
+    import_certificate(
+      certificate_path: ENV.fetch("APPLE_DIST_CERT_PATH"),
+      certificate_password: ENV.fetch("APPLE_DIST_CERT_PASSWORD"),
+      keychain_name: "fastlane_tmp_keychain",
+      keychain_password: ""
+    )
 
     # Un profilo App Store per ciascun bundle id. Apple pretende che
     # l'estensione sia firmata quanto l'app: se ne manca uno, l'archivio

@@ -148,6 +148,19 @@ jobs:
       # TUTTI i target insieme, ma qui i target sono due (l'app e l'estensione
       # della Live Activity) e ognuno vuole il SUO profilo. La lane scrive la
       # firma nel progetto target per target, archivia, esporta e carica.
+      # Il certificato di distribuzione e' UNO e non si crea qui: vedi la nota
+      # in Fastfile. Arriva come .p12 in un secret, si scrive su file e basta.
+      - name: Certificato di distribuzione dal secret
+        if: steps.asc.outputs.firma == 'si'
+        env:
+          APPLE_DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+        run: |
+          if [ -z "$APPLE_DIST_CERT_P12" ]; then
+            echo "::error title=Certificato assente::Manca il secret APPLE_DIST_CERT_P12 (il .p12 del certificato di distribuzione, in base64). Senza, la firma non parte."
+            exit 1
+          fi
+          printf '%s' "$APPLE_DIST_CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+
       - name: Firma, archivia e carica su TestFlight
         if: steps.asc.outputs.firma == 'si'
         working-directory: ios/App
@@ -155,6 +168,8 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_DIST_CERT_PATH: ${{ runner.temp }}/dist.p12
+          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
           # Senza, fastlane si ferma su domande che nessuno leggera'.
           FASTLANE_SKIP_UPDATE_CHECK: '1'
           FASTLANE_HIDE_CHANGELOG: '1'

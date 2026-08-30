@@ -28,3 +28,7 @@ translate_trivia.cjs
 temp_db.cjs
 test_agnes.ts
 enrich_pois_wiki.cjs
+
+# Chiave privata e certificato di firma iOS: MAI nel repo (che e' pubblico).
+# Il .p12 sta nel backup su E:, come il keystore Android.
+certificati-ios/
