@@ -123,8 +123,61 @@ END $$;
 
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 6) VERIFICA: dopo la 3 e la 4, questa deve rispondere in decine di
---    millisecondi e il piano deve nominare l'indice qui sopra.
+-- 6) LE ALTRE DUE TABELLE DELLA MAPPA: utility_pois e locali_pois
+--
+-- `shared_pois` non e' l'unica a essere interrogata mentre si guarda la mappa.
+--    · utility_pois  → farmacie, fontanelle, bagni… la legge get_utility_pois,
+--      con la STESSA espressione geography di nearby_pois;
+--    · locali_pois   → ~10 milioni di righe da Overture, lette pero' NON con
+--      PostGIS ma con intervalli su lat e lon (`lat >= .. and lat <= ..`).
+--      Per quel tipo di query l'indice giusto e' un B-tree su (lat, lon), non
+--      un GIST: un indice spaziale non verrebbe nemmeno preso in considerazione.
+--
+-- Anche le query a griglia che la mappa fa ora su shared_pois (il riquadro
+-- diviso in celle, per avere i pin sparsi su tutta la vista e non ammassati)
+-- passano da lat/lon, non da PostGIS: quindi (lat, lon) serve anche li'.
+--
+-- Prima di eseguire, guardare com'e' messa ciascuna: se anche queste hanno le
+-- date a NULL, sono nella stessa condizione di shared_pois.
+-- ───────────────────────────────────────────────────────────────────────────
+SELECT relname AS tabella, n_live_tup AS righe_vive, n_dead_tup AS righe_morte,
+       last_analyze, last_autoanalyze, last_vacuum, last_autovacuum
+FROM pg_stat_user_tables
+WHERE schemaname = 'public'
+  AND relname IN ('shared_pois', 'utility_pois', 'locali_pois')
+ORDER BY relname;
+
+-- Statistiche e manutenzione, come per shared_pois.
+ANALYZE public.utility_pois;
+ANALYZE public.locali_pois;
+
+ALTER TABLE public.utility_pois SET (
+  autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 20000,
+  autovacuum_vacuum_scale_factor  = 0, autovacuum_vacuum_threshold  = 20000
+);
+ALTER TABLE public.locali_pois SET (
+  autovacuum_analyze_scale_factor = 0, autovacuum_analyze_threshold = 50000,
+  autovacuum_vacuum_scale_factor  = 0, autovacuum_vacuum_threshold  = 50000
+);
+
+-- Gli indici. Ognuno DA SOLO (CONCURRENTLY), uno alla volta.
+-- a) utility_pois: spaziale, stessa espressione di get_utility_pois
+CREATE INDEX CONCURRENTLY IF NOT EXISTS utility_pois_geog_idx
+  ON public.utility_pois
+  USING gist ((st_setsrid(st_makepoint(lon, lat), 4326)::geography));
+
+-- b) locali_pois: intervalli su lat e lon
+CREATE INDEX CONCURRENTLY IF NOT EXISTS locali_pois_lat_lon_idx
+  ON public.locali_pois (lat, lon);
+
+-- c) shared_pois: intervalli su lat e lon (le query a griglia della mappa)
+CREATE INDEX CONCURRENTLY IF NOT EXISTS shared_pois_lat_lon_idx
+  ON public.shared_pois (lat, lon);
+
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 7) VERIFICA: dopo la 3 e la 4, questa deve rispondere in decine di
+--    millisecondi e il piano deve nominare l'indice spaziale.
 -- ───────────────────────────────────────────────────────────────────────────
 EXPLAIN (ANALYZE, BUFFERS)
 SELECT * FROM public.nearby_pois(43.7696, 11.2558, 2000, 400);
