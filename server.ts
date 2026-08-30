@@ -32,6 +32,9 @@ import Stripe from 'stripe';
 // mezzo a un file ESM: qui bundlato da esbuild in CJS, ma eseguito anche
 // da `tsx` in sviluppo, dove `require` non è garantito nello scope del modulo.
 import * as SentryNode from '@sentry/node';
+// POSTHOG (30/08/2026): analytics di prodotto, non errori. Server-side, non
+// autocapture — vedi capturaEvento più sotto e CLAUDE.md § Monitoring.
+import { PostHog } from 'posthog-node';
 
 const StripeConstructor = (Stripe as any).default || Stripe;
 const stripeClient = process.env.STRIPE_SECRET_KEY ? new (StripeConstructor as any)(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any }) : null;
@@ -69,6 +72,31 @@ if (sentryServerAttivo) {
   } catch (e: any) {
     console.warn('⚠️ [STARTUP] Sentry init fallita:', e?.message);
   }
+}
+
+// POSTHOG (30/08/2026, richiesta utente: "integriamo posthog"): il buco
+// trovato analizzando il codice — zero analytics di prodotto, solo
+// api_usage_logs (costi AI) e qualche tabella isolata. Region EU
+// obbligata (utenti europei, posizione GPS, 4 pagine di compliance già
+// esistenti). SOLO eventi scelti a mano, MAI autocapture: un'app con
+// milioni di POI sfonderebbe il milione di eventi/mese gratuito in
+// giorni se si tracciasse ogni visualizzazione. Oggi tre eventi, i più
+// vicini ai soldi: 'credits_purchased' (creditPurchase, unico punto per
+// Stripe E RevenueCat), 'audioguide_generated' (/api/tts/smart, solo sui
+// cache-miss: un cache-hit non è un segnale di prodotto, è un replay),
+// 'quota_exceeded' (l'attrito vero: chi arriva al tetto e non converte).
+const posthogAttivo = !!process.env.POSTHOG_API_KEY;
+const posthogClient = posthogAttivo
+  ? new PostHog(process.env.POSTHOG_API_KEY!, { host: 'https://eu.posthog.com' })
+  : null;
+function capturaEvento(distinctId: string, event: string, properties?: Record<string, any>) {
+  if (!posthogClient) return;
+  try {
+    posthogClient.capture({ distinctId, event, properties });
+    // flush(), non shutdown(): il client resta vivo per la prossima invocazione
+    // a caldo della function serverless. shutdown() lo chiuderebbe per sempre.
+    posthogClient.flush().catch(() => {});
+  } catch { /* mai bloccare la richiesta per l'analytics */ }
 }
 
 function isGenericUtilityName(name?: string | null): boolean {
@@ -1838,7 +1866,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       { p_user_id: userId, p_amount: amount, p_source: source, p_event_id: eventId, p_description: description || null },
       { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
     );
-    return rpc.data === true;
+    const ok = rpc.data === true;
+    // Unico punto per Stripe E RevenueCat: vedi capturaEvento più sopra.
+    if (ok) capturaEvento(userId, 'credits_purchased', { amount, source });
+    return ok;
   };
 
   app.post('/api/stripe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -20866,6 +20897,8 @@ out center tags;`;
       if (!(await cancelloGenerazione(req, res))) return;
       const quota = await checkAndIncrementQuota(req, 'audioguide');
       if (!quota.allowed) {
+        // L'attrito vero del funnel: chi arriva al tetto senza convertire.
+        if (quota.userId) capturaEvento(quota.userId, 'quota_exceeded', { feature: 'audioguide' });
         return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
       }
 
@@ -20883,7 +20916,12 @@ out center tags;`;
 
       res.setHeader("Content-Type", "audio/mpeg");
       res.setHeader("X-TTS-Provider", provider);
-      if (quota.userId) await incrementQuotaCount(quota.userId, 'audioguide').catch(e => console.error(e));
+      if (quota.userId) {
+        await incrementQuotaCount(quota.userId, 'audioguide').catch(e => console.error(e));
+        // Solo qui, non nel ramo preloadOnly sopra: quello è un prefetch in
+        // background (POI in avvicinamento), non un ascolto voluto.
+        capturaEvento(quota.userId, 'audioguide_generated', { provider });
+      }
       res.send(audioBuffer);
     } catch (e: any) {
       console.error("Smart TTS final fail:", e?.message || e);

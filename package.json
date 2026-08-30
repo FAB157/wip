@@ -73,6 +73,7 @@
     "node-ssh": "^13.2.1",
     "openai": "^6.44.0",
     "pg": "^8.21.0",
+    "posthog-node": "^5.51.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-leaflet": "^5.0.0",
