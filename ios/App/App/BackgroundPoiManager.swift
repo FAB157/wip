@@ -80,6 +80,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
     private var isFetching = false
     private var lastFetchFailedAt: Double = 0
     private var isRunning = false
+    /// Ultimo testo di stato spedito al JS (30/08/2026, parità con
+    /// ItaintaBackgroundPoiService.updateNotificationAndStatus). `updateStatus`
+    /// passa a ogni fix con lo stesso «41 luoghi monitorati» e il JS lo
+    /// mostrava come banner sulla mappa ogni volta: si manda solo se cambia.
+    /// Android l'ha chiuso nel nativo il 29/08 — il JS ha già le sue due
+    /// barriere, questa toglie anche il traffico inutile sul ponte.
+    private var ultimoStatoInviatoAlJs: String?
 
     /// Ultima posizione vista dal manager, copia CONFINATA nella workQueue.
     /// Sostituisce le letture di `locationManager.location` fatte fuori dal
@@ -2245,6 +2252,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
             req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["poiIds": poiIds, "lang": appLanguage])
+        // (30/08/2026, parità con Android) I 60 s di default non bastano: il
+        // server genera fino a 20 teaser con l'AI in parallelo e, quando Groq
+        // rallenta, risponde in 30-40 s — ma con l'app in background la sveglia
+        // è breve e la richiesta parte tardi. Qui nessuno aspetta (nessuno
+        // legge la risposta) e chiudere prima non ferma il server: si buttava
+        // via un lavoro già pagato e si loggava un errore per niente.
+        req.timeoutInterval = 90
         URLSession.shared.dataTask(with: req) { _, response, error in
             if let error = error {
                 NSLog("[WIP] batch-teaser: errore di rete \(error.localizedDescription)")
@@ -2256,8 +2270,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Eventi verso il plugin
 
+    /// Confinato nella workQueue come tutto lo stato mutabile: `updateStatus`
+    /// si chiama solo da lì (vedi il blocco CONFINAMENTO DI THREAD in cima).
     private func updateStatus(_ title: String, _ text: String) {
-        sendEvent("statusUpdate", data1: text + dayPassSuffix())
+        let testo = text + dayPassSuffix()
+        guard testo != ultimoStatoInviatoAlJs else { return }
+        ultimoStatoInviatoAlJs = testo
+        sendEvent("statusUpdate", data1: testo)
     }
 
     /// Con Day Pass attivo mostra le guide rimaste, come la notifica Android.

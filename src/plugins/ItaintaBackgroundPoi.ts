@@ -27,25 +27,34 @@ export interface ItaintaBackgroundPoiPlugin {
   /** Apre la scheda dell'app nelle Impostazioni di sistema (permessi). */
   openAppSettings(): Promise<void>;
 
-  // ── Permessi (29/08/2026) ──────────────────────────────────────────────
-  /** Catena unica: posizione fg+bg → notifiche. Unico metodo presente anche su iOS. */
+  // ── Permessi (29/08/2026, portati su iOS il 30/08/2026) ────────────────
+  /** Catena unica: posizione fg+bg → notifiche. Presente su entrambe. */
   checkAndRequestPermissions(): Promise<{ status?: string; background?: string }>;
-  /** Solo Android: lo stato di tutto in una lettura (le spunte della schermata permessi). */
+  /** Lo stato di tutto in una lettura (le spunte della schermata permessi). */
   getPermissionsStatus(): Promise<{
-    location?: 'always' | 'whileInUse' | 'denied';
+    /** `unknown` = mai chiesto (iOS: .notDetermined): non e' un rifiuto. */
+    location?: 'always' | 'whileInUse' | 'denied' | 'unknown';
     notifications?: boolean;
     notificationsPermission?: boolean;
     notificationsEnabled?: boolean;
     battery?: boolean;
     activity?: boolean;
   }>;
-  /** Solo Android: foreground e poi background (API 30+: pagina «Posizione» col radio «Consenti sempre»). */
-  requestLocationPermissions(): Promise<{ location?: 'always' | 'whileInUse' | 'denied' }>;
-  /** Solo Android: permesso notifiche e, se bloccate dal telefono, la pagina notifiche dell'app. */
+  /**
+   * Foreground e poi background. Android: API 30+ apre la pagina «Posizione»
+   * col radio «Consenti sempre». iOS: il prompt di sistema e, da «Mentre usi
+   * l'app», la richiesta di «Sempre» (che iOS mostra una volta sola).
+   */
+  requestLocationPermissions(): Promise<{ location?: 'always' | 'whileInUse' | 'denied' | 'unknown'; opened?: boolean }>;
+  /**
+   * Permesso notifiche e, se non ripropinibile, la pagina di sistema:
+   * su Android quando l'interruttore dell'app le blocca, su iOS quando
+   * l'utente le aveva gia' negate (`opened: true` in entrambi i casi).
+   */
   requestNotificationPermission(): Promise<{ granted?: boolean; enabled?: boolean; opened?: boolean }>;
-  /** Solo Android, facoltativo: la lista di sistema delle esenzioni batteria. */
+  /** Facoltativo. Android: la lista di sistema delle esenzioni batteria. iOS: non esiste, risponde e basta. */
   requestBatteryOptimization(): Promise<{ status?: string }>;
-  /** Solo Android, facoltativo: ACTIVITY_RECOGNITION per i sensori. */
+  /** Facoltativo, sensori del gate anti-teletrasporto: ACTIVITY_RECOGNITION / Motion & Fitness. */
   requestActivityRecognition(): Promise<{ granted?: boolean }>;
 
   startBackgroundPoiService(options: Record<string, any>): Promise<void>;

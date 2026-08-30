@@ -1,6 +1,7 @@
 import Foundation
 import Capacitor
 import CoreLocation
+import CoreMotion
 import AVFoundation
 import UserNotifications
 import UIKit
@@ -22,6 +23,18 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     public let jsName = "ItaintaBackgroundPoiPlugin"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "checkAndRequestPermissions", returnType: CAPPluginReturnPromise),
+        // (30/08/2026) Permessi granulari della schermata unica: DEVONO
+        // esistere anche qui. Su iOS un metodo non dichiarato non viene
+        // rifiutato — il bridge logga e basta (CapacitorBridge.swift, "No
+        // method found") — quindi la promise del JS non si risolve MAI: il
+        // tasto «Attiva» restava disabilitato e il ripiego nel catch non
+        // partiva. Risultato: su iOS le notifiche non venivano piu' chieste
+        // da nessuno. Vedi PermissionsModal.tsx.
+        CAPPluginMethod(name: "getPermissionsStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestLocationPermissions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestNotificationPermission", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestBatteryOptimization", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestActivityRecognition", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "startBackgroundPoiService", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "syncManualSelection", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearManualSelection", returnType: CAPPluginReturnPromise),
@@ -65,6 +78,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     private let packageManager = WipPackageDownloadManager()
     private var permissionManager: CLLocationManager?
     private var pendingPermissionCall: CAPPluginCall?
+    /// Chiamata appesa di requestLocationPermissions (tasto «Attiva» della
+    /// posizione): risponde { location }, non gli `status` della catena unica,
+    /// quindi ha una casella sua e non si mescola con pendingPermissionCall.
+    private var pendingLocationOnlyCall: CAPPluginCall?
+    /// Lo stato posizione al momento della richiesta: il delegate risponde
+    /// solo quando cambia davvero (vedi locationManagerDidChangeAuthorization).
+    private var statoPosizionePartenza: CLAuthorizationStatus?
+    /// Vivo solo per la durata della query che fa comparire il prompt Motion.
+    private var motionPermissionManager: CMMotionActivityManager?
 
     // (29/08/2026) Voce di sistema DIRETTA, fuori dalla coda dei teaser: il
     // ripiego che non muore mai quando Azure/Google non rispondono e il
@@ -173,12 +195,30 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
     /// solo a chiamata già risolta: mai mentre il prompt di sistema è aperto,
     /// o si perde il callback di autorizzazione.
     private func rilasciaPermissionManager() {
-        guard pendingPermissionCall == nil else { return }
+        guard pendingPermissionCall == nil, pendingLocationOnlyCall == nil else { return }
         permissionManager?.delegate = nil
         permissionManager = nil
     }
 
     public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        // Tasto «Attiva» della posizione (requestLocationPermissions): risposta
+        // nel suo vocabolario, appena il prompt si chiude. `.notDetermined` e'
+        // il prompt ancora aperto: si aspetta.
+        if let solaPosizione = pendingLocationOnlyCall {
+            let stato: CLAuthorizationStatus
+            if #available(iOS 14.0, *) { stato = manager.authorizationStatus }
+            else { stato = CLLocationManager.authorizationStatus() }
+            // Solo un cambio VERO risponde. Da iOS 14 il delegate viene
+            // chiamato una prima volta appena lo si assegna, con lo stato che
+            // c'era gia': senza questo confronto la promise si chiudeva con
+            // «whileInUse» mentre il prompt «Sempre» era ancora sullo schermo.
+            if stato != statoPosizionePartenza {
+                pendingLocationOnlyCall = nil
+                solaPosizione.resolve(["location": statoPosizioneCorrente(manager)])
+                rilasciaPermissionManager()
+            }
+            return
+        }
         guard let call = pendingPermissionCall else { return }
         let status: CLAuthorizationStatus
         if #available(iOS 14.0, *) { status = manager.authorizationStatus }
@@ -201,6 +241,203 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // Risposta data (o prompt ancora aperto: allora è un no-op, la guardia
         // controlla pendingPermissionCall): il manager dei permessi si rilascia.
         rilasciaPermissionManager()
+    }
+
+    // ── PERMESSI GRANULARI (30/08/2026) ─────────────────────────────────────
+    // Port di getPermissionsStatus / requestLocationPermissions /
+    // requestNotificationPermission / requestBatteryOptimization /
+    // requestActivityRecognition (ItaintaBackgroundPoiPlugin.kt): la schermata
+    // permessi unica (PermissionsModal.tsx) ha UNA riga per permesso con il
+    // suo tasto «Attiva», e ogni tasto chiama uno di questi metodi.
+    //
+    // Erano solo Android, e il JS contava su un rifiuto UNIMPLEMENTED per
+    // ripiegare sulla catena unica. Su iOS quel rifiuto NON arriva: il bridge
+    // scarta in silenzio le chiamate a metodi non dichiarati (CapacitorBridge
+    // .swift, "No method found"), la promise resta appesa per sempre e il
+    // tasto non torna mai disponibile — con la conseguenza che il permesso
+    // NOTIFICHE su iOS non veniva piu' chiesto da nessuno. Implementati qui,
+    // l'esperienza e' la stessa delle due piattaforme.
+
+    /// Stato di tutto in una lettura sola: le spunte della schermata.
+    /// Stesso payload di Android; `battery` non esiste su iOS (nessuna
+    /// esenzione da chiedere) e vale sempre true, cosi' la riga — che il JS
+    /// mostra solo su Android — non risulta mai "da fare".
+    @objc func getPermissionsStatus(_ call: CAPPluginCall) {
+        // CLLocationManager si crea e si interroga sul main (non e'
+        // thread-safe e i metodi del plugin NON arrivano sul main).
+        DispatchQueue.main.async {
+            let manager = self.permissionManager ?? CLLocationManager()
+            let status: CLAuthorizationStatus
+            if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+            else { status = CLLocationManager.authorizationStatus() }
+            let posizione: String
+            switch status {
+            case .authorizedAlways: posizione = "always"
+            case .authorizedWhenInUse: posizione = "whileInUse"
+            // «Mai chiesto» non e' «negato»: il JS lo tiene come `unknown` e
+            // non mostra ne' la spunta ne' il messaggio di rifiuto.
+            case .notDetermined: posizione = "unknown"
+            default: posizione = "denied"
+            }
+
+            var attivita = false
+            if CMMotionActivityManager.isActivityAvailable() {
+                if #available(iOS 11.0, *) {
+                    attivita = CMMotionActivityManager.authorizationStatus() == .authorized
+                }
+            }
+
+            // Le notifiche si leggono in asincrono: la risposta parte da li'.
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                // Su iOS non c'e' l'interruttore di sistema separato di Android
+                // (permesso concesso + notifiche spente dall'app): le due voci
+                // coincidono, e restano entrambe nel payload per avere un
+                // contratto solo con il JS.
+                let concesse = settings.authorizationStatus == .authorized ||
+                    settings.authorizationStatus == .provisional ||
+                    settings.authorizationStatus == .ephemeral
+                call.resolve([
+                    "location": posizione,
+                    "notifications": concesse,
+                    "notificationsPermission": concesse,
+                    "notificationsEnabled": concesse,
+                    "battery": true,
+                    "activity": attivita
+                ])
+            }
+        }
+    }
+
+    /// Tasto «Attiva» della posizione: il prompt di sistema e, da «Mentre usi
+    /// l'app», la richiesta di «Sempre». Risponde con lo stato finale
+    /// (always / whileInUse / denied), come locationOnlyCallback su Android.
+    @objc func requestLocationPermissions(_ call: CAPPluginCall) {
+        // Tutto sul main, come la catena unica (requestLocation): i metodi di
+        // CLLocationManager lo pretendono, e il delegate risponde li'.
+        DispatchQueue.main.async { self.richiediPosizioneGranulare(call) }
+    }
+
+    private func richiediPosizioneGranulare(_ call: CAPPluginCall) {
+        let manager = permissionManager ?? CLLocationManager()
+        manager.delegate = self
+        permissionManager = manager
+
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+        else { status = CLLocationManager.authorizationStatus() }
+
+        switch status {
+        case .authorizedAlways:
+            call.resolve(["location": "always"])
+            rilasciaPermissionManager()
+        case .authorizedWhenInUse where prefs.bool(forKey: "wip_always_gia_chiesto"):
+            // L'upgrade a «Sempre» iOS lo propone UNA volta sola: al secondo
+            // tocco il prompt non comparirebbe e il tasto sembrerebbe rotto.
+            // Si apre la scheda dell'app, com'e' su Android quando il permesso
+            // va concesso a mano. Lo stato resta whileInUse: la spunta la
+            // aggiorna `rileggi()` al rientro nell'app.
+            apriImpostazioniApp()
+            call.resolve(["location": "whileInUse", "opened": true])
+            rilasciaPermissionManager()
+        case .authorizedWhenInUse, .notDetermined:
+            // Stessa scala della catena unica: da notDetermined iOS mostra il
+            // prompt, da whileInUse chiede l'upgrade a «Sempre». Il flag si
+            // scrive SOLO nel secondo caso: da notDetermined il prompt di
+            // «Sempre» non e' ancora stato speso, e segnarlo qui manderebbe il
+            // tocco successivo nelle Impostazioni invece che sul dialogo.
+            if status == .authorizedWhenInUse { prefs.set(true, forKey: "wip_always_gia_chiesto") }
+            pendingLocationOnlyCall = call
+            statoPosizionePartenza = status
+            manager.requestAlwaysAuthorization()
+            // Rete di sicurezza: se il prompt non compare (gia' chiesto in
+            // passato: iOS lo mostra una volta sola) il delegate non scatta e
+            // la promise resterebbe appesa — l'esatto difetto che stiamo
+            // chiudendo. 8 s: il tempo di leggere il dialogo e rispondere,
+            // altrimenti il tasto tornava attivo mentre il prompt era ancora
+            // aperto. Se l'utente risponde dopo, `rileggi()` aggiorna la
+            // spunta al rientro nell'app.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                guard let self = self, let pending = self.pendingLocationOnlyCall else { return }
+                self.pendingLocationOnlyCall = nil
+                pending.resolve(["location": self.statoPosizioneCorrente(manager)])
+                self.rilasciaPermissionManager()
+            }
+        default:
+            call.resolve(["location": "denied"])
+            rilasciaPermissionManager()
+        }
+    }
+
+    /// Tasto «Attiva» delle notifiche. Risponde { granted, enabled, opened }
+    /// come Android; `opened` = si e' aperta la pagina di sistema, che qui
+    /// serve quando l'utente aveva gia' negato (iOS non ripropone il prompt).
+    @objc func requestNotificationPermission(_ call: CAPPluginCall) {
+        let centro = UNUserNotificationCenter.current()
+        centro.getNotificationSettings { settings in
+            if settings.authorizationStatus == .denied {
+                DispatchQueue.main.async {
+                    self.apriImpostazioniApp()
+                    call.resolve(["granted": false, "enabled": false, "opened": true])
+                }
+                return
+            }
+            centro.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                call.resolve(["granted": granted, "enabled": granted, "opened": false])
+            }
+        }
+    }
+
+    /// Su iOS non esistono le esenzioni dal risparmio energetico: niente da
+    /// chiedere. Si risponde come una catena gia' completa, cosi' il JS non
+    /// resta appeso (la riga batteria la mostra comunque solo su Android).
+    @objc func requestBatteryOptimization(_ call: CAPPluginCall) {
+        call.resolve(["status": "all_granted"])
+    }
+
+    /// Attivita' fisica (Motion & Fitness): il gate anti-teletrasporto GPS.
+    /// Facoltativo su entrambe le piattaforme — negato, il gate resta inerte.
+    @objc func requestActivityRecognition(_ call: CAPPluginCall) {
+        guard CMMotionActivityManager.isActivityAvailable() else {
+            call.resolve(["granted": false])
+            return
+        }
+        if #available(iOS 11.0, *) {
+            if CMMotionActivityManager.authorizationStatus() == .authorized {
+                call.resolve(["granted": true])
+                return
+            }
+        }
+        // Il prompt di sistema (NSMotionUsageDescription) lo mostra la prima
+        // query: un'interrogazione cortissima basta a farlo comparire. Il
+        // manager sta in una proprieta' e non in una locale: rilasciato
+        // dall'ARC prima della risposta, il callback non arriverebbe mai.
+        let manager = motionPermissionManager ?? CMMotionActivityManager()
+        motionPermissionManager = manager
+        let ora = Date()
+        manager.queryActivityStarting(from: ora.addingTimeInterval(-60), to: ora, to: .main) { [weak self] _, _ in
+            var concesso = false
+            if #available(iOS 11.0, *) {
+                concesso = CMMotionActivityManager.authorizationStatus() == .authorized
+            }
+            self?.motionPermissionManager = nil
+            call.resolve(["granted": concesso])
+        }
+    }
+
+    /// Lo stato posizione nel vocabolario della schermata permessi.
+    private func statoPosizioneCorrente(_ manager: CLLocationManager) -> String {
+        let status: CLAuthorizationStatus
+        if #available(iOS 14.0, *) { status = manager.authorizationStatus }
+        else { status = CLLocationManager.authorizationStatus() }
+        switch status {
+        case .authorizedAlways: return "always"
+        case .authorizedWhenInUse: return "whileInUse"
+        // Prompt ancora aperto quando scade la rete di sicurezza: «non lo so»,
+        // non «negato» — il JS mostrerebbe «permesso rifiutato» a un utente
+        // che sta ancora leggendo il dialogo.
+        case .notDetermined: return "unknown"
+        default: return "denied"
+        }
     }
 
     // MARK: - Servizio
@@ -622,6 +859,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                 call.resolve(["opened": ok])
             }
         }
+    }
+
+    /// La scheda dell'app nelle Impostazioni, senza una chiamata JS di mezzo
+    /// (la usa requestNotificationPermission quando iOS non ripropone il
+    /// prompt). Da chiamare sul main thread.
+    private func apriImpostazioniApp() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url, options: [:], completionHandler: nil)
     }
 
     @objc func setWalletBalance(_ call: CAPPluginCall) {

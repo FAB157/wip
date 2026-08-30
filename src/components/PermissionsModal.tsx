@@ -37,10 +37,14 @@ interface PermissionsModalProps {
  *
  * Contratto nativo: metodi granulari getPermissionsStatus /
  * requestLocationPermissions / requestNotificationPermission /
- * requestBatteryOptimization (Android, ItaintaBackgroundPoiPlugin.kt). Dove
- * mancano (iOS: il plugin Swift ha solo checkAndRequestPermissions) si
- * ripiega sulla catena unica, che su iOS è già di due dialoghi di sistema;
- * il passaggio a «Sempre» lì lo propone iOS da solo, dopo qualche uso.
+ * requestBatteryOptimization, implementati su ENTRAMBE le piattaforme
+ * (ItaintaBackgroundPoiPlugin.kt e .swift). Fino al 30/08/2026 erano solo
+ * Android e su iOS questa schermata restava muta: nessun dialogo, tasto
+ * bloccato, permesso notifiche mai chiesto (vedi `conScadenza` qui sotto).
+ * Le differenze di piattaforma che restano sono di sistema, non di prodotto:
+ * su iOS il salto a «Sempre» lo propone il sistema da solo dopo qualche uso
+ * (nota `pf_pm2_nota_ios`) e non esiste l'esenzione batteria, quindi quella
+ * riga — facoltativa — si mostra solo su Android.
  */
 
 // Valori di `status` della catena unica checkAndRequestPermissions (invariati):
@@ -116,11 +120,30 @@ export async function requestBackgroundPermissionsFlow(): Promise<NativePermResu
   }
 }
 
-/** Il metodo non esiste in questo plugin (iOS, o build vecchia): si ripiega. */
+/** Il metodo non esiste in questo plugin (build vecchia): si ripiega. */
 function nonImplementato(e: any): boolean {
   const code = String(e?.code || '');
   const msg = String(e?.message || e || '');
-  return code === 'UNIMPLEMENTED' || /not implemented|UNIMPLEMENTED/i.test(msg);
+  return code === 'UNIMPLEMENTED' || code === 'TIMEOUT' || /not implemented|UNIMPLEMENTED/i.test(msg);
+}
+
+/**
+ * Chiamata nativa con scadenza (30/08/2026). Android rifiuta con UNIMPLEMENTED
+ * un metodo che non ha; iOS NO: il bridge scarta in silenzio le chiamate a
+ * metodi non dichiarati (CapacitorBridge.swift, «No method found») e la
+ * promise non si risolve MAI. Senza scadenza il tasto «Attiva» restava
+ * disabilitato per sempre e il ripiego qui sotto non partiva. La scadenza e'
+ * larga: il nativo risponde da solo entro pochi secondi anche quando l'utente
+ * lascia aperto il dialogo di sistema, quindi scatta solo se il metodo non
+ * c'e' proprio — e allora non e' stato chiesto niente, nessun doppio dialogo.
+ */
+function conScadenza<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(Object.assign(new Error('metodo nativo senza risposta'), { code: 'TIMEOUT' })), ms),
+    ),
+  ]);
 }
 
 type StatoPosizione = 'always' | 'whileInUse' | 'denied' | 'unknown';
@@ -143,9 +166,11 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   // Posizione negata dall'utente: spiegazione + «Apri Impostazioni» invece di
   // ingoiare il diniego in silenzio.
   const [locationDenied, setLocationDenied] = useState(false);
-  // iOS senza metodi granulari: dopo la catena unica sappiamo solo lo stato
-  // riportato; il resto lo diciamo a parole (nota «Sempre lo propone iOS»).
-  const [ripiegoIos, setRipiegoIos] = useState(false);
+  // Nota iOS: li' «Mentre usi l'app» e' uno stato normale di passaggio — il
+  // salto a «Sempre» lo propone il sistema da solo dopo qualche uso, non c'e'
+  // una pagina da aprire come su Android. Acceso su iOS in partenza (e anche
+  // su una build nativa che non avesse i metodi granulari, vedi sotto).
+  const [ripiegoIos, setRipiegoIos] = useState(() => isNative() && Capacitor.getPlatform() === 'ios');
   // L'utente ha gia' premuto «Attiva» almeno una volta: da qui in poi uno
   // stato «denied» riletto dal nativo e' un rifiuto suo, non un «mai
   // chiesto», e va spiegato (collaudo 29/08: il dialogo di sistema puo'
@@ -177,7 +202,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   const rileggi = useCallback(async () => {
     if (!NativePermissionsPlugin) return;
     try {
-      const s = await NativePermissionsPlugin.getPermissionsStatus();
+      const s = await conScadenza(NativePermissionsPlugin.getPermissionsStatus(), 4000);
       setStato({
         location: (s?.location as StatoPosizione) || 'unknown',
         notifications: typeof s?.notifications === 'boolean' ? s.notifications : null,
@@ -244,7 +269,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     try {
       if (NativePermissionsPlugin) {
         try {
-          const r = await NativePermissionsPlugin.requestLocationPermissions();
+          const r = await conScadenza(NativePermissionsPlugin.requestLocationPermissions(), 30000);
           const loc = (r?.location as StatoPosizione) || 'unknown';
           setStato((s) => ({ ...s, location: loc }));
           setLocationDenied(loc === 'denied');
@@ -290,7 +315,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     try {
       if (NativePermissionsPlugin) {
         try {
-          const r = await NativePermissionsPlugin.requestNotificationPermission();
+          const r = await conScadenza(NativePermissionsPlugin.requestNotificationPermission(), 30000);
           setStato((s) => ({
             ...s,
             notifications: !!r?.granted && r?.enabled !== false,
@@ -317,7 +342,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   const attivaBatteria = async () => {
     if (occupato || !NativePermissionsPlugin) return;
     setOccupato('battery');
-    try { await NativePermissionsPlugin.requestBatteryOptimization(); } catch { /* metodo assente */ }
+    try { await conScadenza(NativePermissionsPlugin.requestBatteryOptimization(), 30000); } catch { /* metodo assente */ }
     finally { setOccupato(null); }
   };
 
