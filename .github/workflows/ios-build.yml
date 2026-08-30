@@ -148,32 +148,43 @@ jobs:
       # TUTTI i target insieme, ma qui i target sono due (l'app e l'estensione
       # della Live Activity) e ognuno vuole il SUO profilo. La lane scrive la
       # firma nel progetto target per target, archivia, esporta e carica.
-      # Il certificato di distribuzione e' UNO e non si crea qui: vedi la nota
-      # in Fastfile. Arriva come .p12 in un secret, si scrive su file e basta.
+      # IL .p12 SE LO COSTRUISCE IL RUNNER (30/08/2026, dopo cinque build).
+      #
+      # Nel secret stanno chiave e certificato in PEM, non un .p12 gia' fatto.
+      # Il motivo e' una stranezza di macOS che ci e' costata tre giri:
+      # `security import` RIFIUTA i PKCS#12 con password vuota (fallisce la
+      # verifica del MAC), mentre OpenSSL li apre senza battere ciglio — cosi'
+      # il file sembrava sano da ogni verifica fatta sul PC e moriva solo sul
+      # runner. Con una password, invece, tornavano ad essere due segreti da
+      # far combaciare al carattere: uno spazio invisibile in coda ha fatto
+      # fallire due build con un errore che parlava d'altro.
+      # Qui la password esiste (serve a macOS) ma non passa da mani umane: la
+      # inventa il runner, vive dieci secondi e non e' scritta da nessuna parte.
       - name: Certificato di distribuzione dal secret
         if: steps.asc.outputs.firma == 'si'
         env:
-          APPLE_DIST_CERT_P12: ${{ secrets.APPLE_DIST_CERT_P12 }}
+          APPLE_DIST_CERT_PEM: ${{ secrets.APPLE_DIST_CERT_PEM }}
         run: |
-          if [ -z "$APPLE_DIST_CERT_P12" ]; then
-            echo "::error title=Certificato assente::Manca il secret APPLE_DIST_CERT_P12 (il .p12 del certificato di distribuzione, in base64). Senza, la firma non parte."
+          if [ -z "$APPLE_DIST_CERT_PEM" ]; then
+            echo "::error title=Certificato assente::Manca il secret APPLE_DIST_CERT_PEM: chiave privata e certificato di distribuzione, in un unico PEM codificato base64."
             exit 1
           fi
-          if ! printf '%s' "$APPLE_DIST_CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12" 2>/dev/null; then
-            echo "::error title=Base64 non valido::Il secret APPLE_DIST_CERT_P12 non e' base64 leggibile. Di solito succede quando il valore nuovo viene incollato IN CODA al vecchio invece che al suo posto: svuota il campo prima di incollare."
+          if ! printf '%s' "$APPLE_DIST_CERT_PEM" | base64 --decode > "$RUNNER_TEMP/dist.pem" 2>/dev/null; then
+            echo "::error title=Base64 non valido::Il secret non e' base64 leggibile. Succede quando il valore nuovo viene incollato IN CODA al vecchio: svuota il campo prima di incollare."
             exit 1
           fi
-          # (30/08/2026) IL CONTROLLO CHE MANCAVA. Per quattro build l'errore
-          # e' arrivato in ritardo e travestito: `security` di macOS importava
-          # il .p12 in silenzio senza importarlo, e fastlane si lamentava DUE
-          # passi dopo di non trovare «a matching code signing identity for
-          # type AppStore», mandando a cercare fra i profili. Qui il file si
-          # apre subito: se non si apre, si sa perche' e si sa dove.
-          if ! openssl pkcs12 -in "$RUNNER_TEMP/dist.p12" -nokeys -passin pass: -info >/dev/null 2>&1; then
-            echo "::error title=Certificato illeggibile::Il .p12 non si apre. Va esportato SENZA password e con la cifratura vecchia, l'unica che macOS legge: openssl pkcs12 -export -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 -passout pass:"
+          if ! grep -q "PRIVATE KEY" "$RUNNER_TEMP/dist.pem" || ! grep -q "BEGIN CERTIFICATE" "$RUNNER_TEMP/dist.pem"; then
+            echo "::error title=PEM incompleto::Nel secret devono esserci ENTRAMBI: la chiave privata e il certificato."
             exit 1
           fi
-          echo "Certificato decodificato e leggibile ($(wc -c < "$RUNNER_TEMP/dist.p12") byte)."
+          PW="$(openssl rand -hex 16)"
+          echo "::add-mask::$PW"
+          openssl pkcs12 -export \
+                  -inkey "$RUNNER_TEMP/dist.pem" -in "$RUNNER_TEMP/dist.pem" \
+                  -name "WIP Distribution" \
+                  -passout "pass:$PW" -out "$RUNNER_TEMP/dist.p12"
+          echo "P12_PASSWORD=$PW" >> "$GITHUB_ENV"
+          echo "Certificato pronto ($(wc -c < "$RUNNER_TEMP/dist.p12") byte)."
 
       - name: Firma, archivia e carica su TestFlight
         if: steps.asc.outputs.firma == 'si'
@@ -183,6 +194,7 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_DIST_CERT_PATH: ${{ runner.temp }}/dist.p12
+          APPLE_DIST_CERT_PASSWORD: ${{ env.P12_PASSWORD }}
           # Senza, fastlane si ferma su domande che nessuno leggera'.
           FASTLANE_SKIP_UPDATE_CHECK: '1'
           FASTLANE_HIDE_CHANGELOG: '1'

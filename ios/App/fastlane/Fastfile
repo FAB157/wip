@@ -68,16 +68,19 @@ platform :ios do
     #     -out certificato.p12 -passout pass:
     # (`-legacy` non basta: in OpenSSL 3.5 vuole il provider legacy caricato.)
     # `-passout pass:` senza niente dopo = nessuna password: vedi sotto.
-    # SENZA PASSWORD, per scelta (30/08/2026). Con la password erano due
-    # segreti a doversi corrispondere, e uno spazio invisibile in coda alla
-    # password ha fatto fallire due build con un errore che parlava d'altro:
+    # La password del .p12 la inventa il runner a ogni build (vedi il passo
+    # «Certificato di distribuzione dal secret» nel workflow). Non e' una
+    # complicazione gratuita: macOS RIFIUTA i PKCS#12 con password vuota
     #   security: SecKeychainItemImport: MAC verification failed during
     #   PKCS12 import (wrong password?)
-    # Il .p12 e' gia' protetto dall'essere un segreto di GitHub: aggiungerci
-    # una password non lo rendeva piu' sicuro, solo piu' fragile.
+    # mentre OpenSSL li apre tranquillamente, quindi un .p12 senza password
+    # supera ogni verifica fatta sul PC e muore solo qui. Una password scritta
+    # in un secret, pero', e' due valori da far combaciare al carattere: uno
+    # spazio invisibile ci e' costato due build. Cosi' non c'e' niente da
+    # trascrivere e niente da sbagliare.
     import_certificate(
       certificate_path: ENV.fetch("APPLE_DIST_CERT_PATH"),
-      certificate_password: "",
+      certificate_password: ENV.fetch("APPLE_DIST_CERT_PASSWORD"),
       keychain_name: "fastlane_tmp_keychain",
       keychain_password: ""
     )
