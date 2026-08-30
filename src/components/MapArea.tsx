@@ -6075,7 +6075,18 @@ function MapArea({
           Gemme copriva il tasto dei livelli, e la riga dei sotto-chip anche
           il meteo. In basso nessuna riga cresce, e il pannello dei livelli
           si apre verso l'alto (flex-col-reverse). */}
-      <div className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 z-[1000] flex flex-col-reverse items-start gap-2 pointer-events-none">
+      {/* z-index PIU` ALTO DELLE CHIP QUANDO IL PANNELLO E` APERTO
+          (31/08/2026, richiesta del committente: «magari sovrasta le chips
+          finché non si chiude»).
+
+          Le chip delle categorie stanno a z-[2000] e sono sempre in primo
+          piano. Tenendo il pannello sotto, con tutti i layer accesi restava
+          una fessura che scorre: leggibile, ma scomoda. Mentre si SCEGLIE un
+          livello le chip non servono — si sta guardando l'elenco, non la
+          barra — quindi il pannello sale sopra di loro e usa tutta l'altezza.
+          Appena si chiude torna sotto, e le chip riappaiono: nessuno stato da
+          ricordare, nessun pulsante in piu'. */}
+      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none`}>
         {/* Chip meteo (Open-Meteo, cache 30 min) */}
         {meteo && (
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
@@ -6197,15 +6208,34 @@ function MapArea({
                 transition={{ duration: menoMovimento ? 0.08 : 0.16 }}
                 role="group"
                 aria-label={getTranslation('mp_livelli_mappa', language)}
-                // (29/08/2026) max-h-[70vh] fisso: con molti layer accesi (Vino
-                // e gusto, Fontanelle, Aree protette, Neve, Sole, Mare...) il
-                // pannello cresceva verso l'alto (col-reverse) fino a finire
-                // SOTTO la barra delle chip in cima (z-[2000], sempre in
-                // primo piano) — coperto a metà invece che scorrere dentro i
-                // suoi bordi. Il tetto ora è anche la vista meno lo spazio
-                // della barra chip + margine di rispetto, mai solo il 70%
-                // fisso dello schermo.
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[min(70vh,calc(100dvh-9rem-env(safe-area-inset-top)))] overflow-y-auto"
+                // IL TETTO DI ALTEZZA, PER DAVVERO (31/08/2026).
+                //
+                // Con molti layer accesi il pannello cresce verso l'alto
+                // (col-reverse) e finiva SOTTO la barra delle chip, che sta a
+                // z-[2000] ed e' sempre in primo piano: coperto a meta' invece
+                // di scorrere dentro i suoi bordi.
+                //
+                // Il 29/08 era stato messo un tetto, ma non ha mai funzionato
+                // per DUE motivi:
+                //  1. era scritto `calc(100dvh-9rem-env(...))`. In CSS il meno
+                //     dentro calc() vuole gli spazi attorno, e in Tailwind gli
+                //     spazi si scrivono con l'underscore: senza, la regola e'
+                //     sintatticamente invalida e il browser la SCARTA. Il
+                //     pannello restava quindi senza alcun tetto.
+                //  2. il conto era comunque incompleto: sottraeva la barra
+                //     delle chip ma non i 5,25rem a cui questo blocco e'
+                //     ancorato dal basso, ne' il pulsante da 2,75rem sotto al
+                //     pannello.
+                //
+                // Ora il tetto sottrae solo cio' che sta DAVVERO sotto il
+                // pannello — le due aree di sicurezza, l'ancoraggio dal basso
+                // (5,25rem), il pulsante col suo spazio (3,25rem) e un margine
+                // di respiro in cima — e non piu' la barra delle chip, perche'
+                // il pannello ora le passa sopra (vedi lo z-index qui sopra).
+                // Cosi' anche con tutti i layer accesi si legge tutto, e se
+                // proprio non ci sta scorre dentro i suoi bordi invece di
+                // finire tagliato.
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[calc(100dvh_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom)_-_10.5rem)] overflow-y-auto overscroll-contain"
               >
                 {(['reti', 'condizioni'] as const).map((gruppo) => (
                   <Fragment key={gruppo}>

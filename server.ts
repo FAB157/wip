@@ -178,6 +178,29 @@ function isErroreQuota(err: any): boolean {
 // chiave, partendo da una a caso, e si dichiara il motore esaurito solo
 // quando lo sono tutte. Gli errori non di quota (400, 500, timeout) fermano
 // subito: non è un problema di chiave.
+/**
+ * Vale la pena provare un'ALTRA chiave dopo questo errore? (31/08/2026)
+ *
+ * Prima si cambiava chiave solo sugli errori di quota, con la motivazione che
+ * «400, 500 e timeout non sono un problema di chiave». Per il 400 e' vero. Per
+ * gli altri no:
+ *  · 401/403 → una chiave revocata o scaduta fra le tre: le altre funzionano;
+ *  · 5xx e timeout → guasti transitori, spesso legati alla singola sessione;
+ *    riprovare costa un secondo e la chiamata dopo passa.
+ * Fermarsi al primo di questi voleva dire buttare via due chiavi buone su tre
+ * e scivolare su Agnes (5-18 s) mentre Groq era perfettamente disponibile.
+ *
+ * Resta il fermo immediato su 400 e 422: li' il problema e' la NOSTRA
+ * richiesta — prompt malformato, parametro non valido — e riprovarla identica
+ * con un'altra chiave darebbe lo stesso errore tre volte.
+ */
+function valeLaPenaAltraChiave(err: any): boolean {
+  if (isErroreQuota(err)) return true;
+  const status = Number(err?.status || err?.response?.status || 0);
+  if (status === 400 || status === 422) return false;
+  return true;
+}
+
 async function tentaConRotazione<T>(clients: any[], fn: (client: any) => Promise<T>): Promise<T> {
   if (!clients.length) throw new Error('nessuna chiave configurata');
   const inizio = Math.floor(Math.random() * clients.length);
@@ -186,8 +209,12 @@ async function tentaConRotazione<T>(clients: any[], fn: (client: any) => Promise
     try {
       return await fn(clients[(inizio + i) % clients.length]);
     } catch (e: any) {
-      if (!isErroreQuota(e)) throw e;
       ultimo = e;
+      if (!valeLaPenaAltraChiave(e)) throw e;
+      if (i < clients.length - 1) {
+        const status = Number(e?.status || e?.response?.status || 0);
+        console.warn(`[rotazione chiavi] chiave ${i + 1}/${clients.length} fallita (${status || e?.message}), provo la successiva`);
+      }
     }
   }
   throw ultimo;
