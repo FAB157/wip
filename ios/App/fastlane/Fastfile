@@ -65,9 +65,10 @@ platform :ios do
     # Serve la cifratura vecchia, quindi il file va creato cosi':
     #   openssl pkcs12 -export -inkey chiave.key -in certificato.pem \
     #     -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
-    #     -out certificato.p12 -passout pass:
-    # (`-legacy` non basta: in OpenSSL 3.5 vuole il provider legacy caricato.)
-    # `-passout pass:` senza niente dopo = nessuna password: vedi sotto.
+    #     -out certificato.p12 -passout pass:LA_PASSWORD
+    # (`-legacy` non basta: in OpenSSL 3.5 vuole il provider legacy caricato,
+    # e sui runner `openssl` nel PATH e' quello di Homebrew, non di Apple.)
+    #
     # La password del .p12 la inventa il runner a ogni build (vedi il passo
     # «Certificato di distribuzione dal secret» nel workflow). Non e' una
     # complicazione gratuita: macOS RIFIUTA i PKCS#12 con password vuota
@@ -108,10 +109,10 @@ platform :ios do
     # l'estensione sia firmata quanto l'app: se ne manca uno, l'archivio
     # fallisce sul target che resta scoperto.
     get_provisioning_profile(api_key: api_key, app_identifier: APP_ID, readonly: false)
-    profilo_app = lane_context[SharedValues::SIGH_PROFILE_NAME]
+    profilo_app = lane_context[SharedValues::SIGH_NAME]
 
     get_provisioning_profile(api_key: api_key, app_identifier: EXT_ID, readonly: false)
-    profilo_ext = lane_context[SharedValues::SIGH_PROFILE_NAME]
+    profilo_ext = lane_context[SharedValues::SIGH_NAME]
 
     UI.message("Profili: app «#{profilo_app}» · estensione «#{profilo_ext}»")
 
