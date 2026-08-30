@@ -69,7 +69,39 @@ jobs:
           cd ios/App
           pod install
 
+      # ─────────────────────────────────────────────────────────────────────
+      # FIRMA (30/08/2026). Senza i segreti Apple il job si comporta ESATTAMENTE
+      # come prima: archivio non firmato + artefatto, che serve a sapere se il
+      # codice compila. Con i segreti, invece, firma davvero e carica su
+      # TestFlight — nessun Mac, nessun certificato da esportare a mano.
+      #
+      # Si usa la chiave API di App Store Connect (`-allowProvisioningUpdates`):
+      # e' Xcode stesso, sul runner, a creare/scaricare certificato di
+      # distribuzione e profili per i DUE bundle id (app + estensione Live
+      # Activity). La via classica — certificato .p12 + profili esportati da un
+      # Mac e messi nei segreti — qui non e' praticabile: un Mac non c'e'.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Chiave API App Store Connect
+        id: asc
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$ASC_KEY_P8" ] || [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning title=Firma iOS non configurata::Mancano i secret Apple (ASC_KEY_P8, ASC_KEY_ID, ASC_ISSUER_ID, APPLE_TEAM_ID): build NON firmata, nessun caricamento su TestFlight."
+            echo "firma=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # xcodebuild cerca le chiavi qui per nome: AuthKey_<KEYID>.p8.
+          mkdir -p ~/private_keys
+          printf '%s' "$ASC_KEY_P8" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          echo "firma=si" >> "$GITHUB_OUTPUT"
+
       - name: Archive App (unsigned)
+        if: steps.asc.outputs.firma != 'si'
         run: |
           xcodebuild -workspace ios/App/App.xcworkspace \
                      -scheme App \
@@ -82,6 +114,7 @@ jobs:
                      archive
 
       - name: Package unsigned IPA
+        if: steps.asc.outputs.firma != 'si'
         run: |
           mkdir -p build/Payload
           cp -R build/App.xcarchive/Products/Applications/App.app build/Payload/
@@ -89,8 +122,86 @@ jobs:
           zip -qry WIP-unsigned.ipa Payload
 
       - name: Upload IPA artifact
+        if: steps.asc.outputs.firma != 'si'
         uses: actions/upload-artifact@v4
         with:
           name: WIP-iOS-unsigned
           path: build/WIP-unsigned.ipa
+          retention-days: 30
+
+      # ── Da qui in giu': solo con i segreti Apple presenti ──────────────────
+
+      - name: Numero di build progressivo
+        if: steps.asc.outputs.firma == 'si'
+        run: |
+          # App Store Connect rifiuta due caricamenti con lo stesso
+          # CFBundleVersion. Il numero del run e' unico e cresce sempre, e va
+          # scritto su ENTRAMBI i target (app ed estensione: Apple pretende
+          # che combacino). La versione utente (MARKETING_VERSION) resta
+          # quella del progetto — 1.3, come Android.
+          cd ios/App
+          agvtool new-version -all ${{ github.run_number }}
+
+      - name: Archive App (firmato)
+        if: steps.asc.outputs.firma == 'si'
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace \
+                     -scheme App \
+                     -configuration Release \
+                     -destination 'generic/platform=iOS' \
+                     -archivePath build/App.xcarchive \
+                     -allowProvisioningUpdates \
+                     -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+                     -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+                     -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }} \
+                     DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
+                     CODE_SIGN_STYLE=Automatic \
+                     archive
+
+      - name: Export IPA
+        if: steps.asc.outputs.firma == 'si'
+        run: |
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+                     -archivePath build/App.xcarchive \
+                     -exportPath build/export \
+                     -exportOptionsPlist build/ExportOptions.plist \
+                     -allowProvisioningUpdates \
+                     -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+                     -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+                     -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Carica su TestFlight
+        if: steps.asc.outputs.firma == 'si'
+        run: |
+          IPA=$(ls build/export/*.ipa | head -n 1)
+          echo "Carico $IPA"
+          # `--validate-app` prima: gli errori di validazione (icone, chiavi
+          # Info.plist, entitlement) si leggono qui invece che come mail di
+          # rigetto mezz'ora dopo.
+          xcrun altool --validate-app -f "$IPA" -t ios \
+                       --apiKey ${{ secrets.ASC_KEY_ID }} \
+                       --apiIssuer ${{ secrets.ASC_ISSUER_ID }}
+          xcrun altool --upload-app -f "$IPA" -t ios \
+                       --apiKey ${{ secrets.ASC_KEY_ID }} \
+                       --apiIssuer ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Upload IPA artifact (firmato)
+        if: steps.asc.outputs.firma == 'si'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WIP-iOS-signed
+          path: build/export/*.ipa
           retention-days: 30
