@@ -54,8 +54,19 @@ platform :ios do
     #
     # Ora il certificato e' UNO, creato una volta sola da una CSR generata sul
     # PC del committente, e la CI si limita a importarlo. Il .p12 e la chiave
-    # privata stanno nel backup su E:, come il keystore Android: perderli
-    # significa revocare e rifare tutto.
+    # privata stanno nel backup insieme al keystore Android: perderli significa
+    # revocare e rifare tutto.
+    #
+    # COME VA GENERATO IL .p12 (build #79, un'ora buttata qui). OpenSSL 3
+    # cifra i PKCS#12 in AES-256, e lo strumento `security` di macOS NON sa
+    # leggerli: l'import passa senza lamentarsi e il portachiavi resta vuoto.
+    # Il sintomo arriva un passo dopo, ed e' fuorviante:
+    #   [!] Could not find a matching code signing identity for type 'AppStore'
+    # Serve la cifratura vecchia, quindi il file va creato cosi':
+    #   openssl pkcs12 -export -inkey chiave.key -in certificato.pem \
+    #     -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+    #     -out certificato.p12 -passout pass:LA_PASSWORD
+    # (`-legacy` non basta: in OpenSSL 3.5 vuole il provider legacy caricato.)
     import_certificate(
       certificate_path: ENV.fetch("APPLE_DIST_CERT_PATH"),
       certificate_password: ENV.fetch("APPLE_DIST_CERT_PASSWORD"),
