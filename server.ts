@@ -9054,11 +9054,31 @@ ${description}
       // impossibile scaricare mappe/cercare città fuori dall'Italia. Il filtro
       // resta disponibile come parametro opzionale per i chiamanti che lo vogliono.
       const cc = countrycodes ? `&countrycodes=${encodeURIComponent(String(countrycodes))}` : "";
+
+      // CACHE + FRENO + User-Agent vero (30/08/2026).
+      //
+      // Questa rotta chiamava l'istanza PUBBLICA di OSM senza cache, senza
+      // freno e con lo User-Agent generico «AIAudioGuideApp/1.0». La politica
+      // d'uso di Nominatim chiede l'opposto: un massimo di una richiesta al
+      // secondo, un'applicazione identificabile con un contatto, e di mettere
+      // in cache i risultati. Senza, il rischio concreto e' il blocco
+      // dell'IP — e su Vercel l'IP e' condiviso, quindi si porterebbe giu'
+      // anche il resto. Si riusa lo stesso freno e lo stesso User-Agent della
+      // catena di searchPlaces, che erano gia' a norma.
+      const chiaveCache = `nominatim_search_${crypto.createHash('md5').update(`${q}|${lang}|${cc}`).digest('hex')}`;
+      const inCache = await getFromCache(chiaveCache);
+      if (inCache?.text_content) {
+        try { return res.json(JSON.parse(inCache.text_content)); } catch { /* cache corrotta: si richiede */ }
+      }
+
+      const attesa = nominatimLastCall + 1100 - Date.now();
+      if (attesa > 0) await new Promise((r) => setTimeout(r, attesa));
+      nominatimLastCall = Date.now();
+
       const url = `https://nominatim.openstreetmap.org/search?format=json${cc}&q=${encodeURIComponent(String(q).slice(0, 200))}&accept-language=${lang}&limit=5`;
-      const nRes = await fetch(url, {
-         headers: { "User-Agent": "AIAudioGuideApp/1.0" }
-      });
+      const nRes = await fetch(url, { headers: { "User-Agent": NOMINATIM_UA } });
       const nData = await nRes.json();
+      if (Array.isArray(nData) && nData.length) saveToCache(chiaveCache, 'geocode', JSON.stringify(nData));
       res.json(nData);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
