@@ -142,6 +142,53 @@ jobs:
           cd ios/App
           agvtool new-version -all ${{ github.run_number }}
 
+      # (30/08/2026) CERTIFICATO E PROFILI PRIMA DELL'ARCHIVIO.
+      #
+      # Con il solo `-allowProvisioningUpdates` la prima build e' morta cosi':
+      #   ** ARCHIVE FAILED **
+      #   error: Communication with Apple failed: Your team has no devices
+      #   from which to generate a provisioning profile.
+      # Il team non aveva ancora NESSUN certificato di distribuzione, e la
+      # firma automatica ha ripiegato su un profilo di SVILUPPO — che pretende
+      # almeno un iPhone registrato nel portale. Registrare un telefono non
+      # c'entra niente con una build per l'App Store: e' il certificato che
+      # mancava. Qui lo si crea prima, con la stessa chiave API, e con i due
+      # profili gia' installati l'archivio non ha piu' niente da inventare.
+      - name: Certificato e profili di distribuzione
+        if: steps.asc.outputs.firma == 'si'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          # fastlane vuole la chiave API come JSON, con il .p8 dentro.
+          jq -n --arg kid "${{ secrets.ASC_KEY_ID }}" \
+                --arg iss "${{ secrets.ASC_ISSUER_ID }}" \
+                --arg key "$ASC_KEY_P8" \
+                '{key_id:$kid, issuer_id:$iss, key:$key, in_house:false}' \
+                > /tmp/asc_api_key.json
+
+          # Portachiavi temporaneo: la chiave privata del certificato deve
+          # pur stare da qualche parte, e quello di sistema sul runner e'
+          # bloccato.
+          security create-keychain -p wipci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p wipci build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+
+          # `cert` senza --development crea (o riusa) il certificato di
+          # DISTRIBUZIONE; `sigh` senza flag scarica il profilo App Store.
+          # Servono entrambi i bundle id: Apple pretende che l'estensione
+          # Live Activity sia firmata quanto l'app.
+          fastlane cert --api_key_path /tmp/asc_api_key.json \
+                        --keychain-path ~/Library/Keychains/build.keychain-db \
+                        --keychain-password wipci \
+                        --output_path /tmp/certs
+          fastlane sigh --api_key_path /tmp/asc_api_key.json \
+                        --app_identifier com.itaintasca.app \
+                        --platform ios --output_path /tmp/profiles
+          fastlane sigh --api_key_path /tmp/asc_api_key.json \
+                        --app_identifier com.itaintasca.app.WipNavActivity \
+                        --platform ios --output_path /tmp/profiles
+
       - name: Archive App (firmato)
         if: steps.asc.outputs.firma == 'si'
         run: |
@@ -156,6 +203,7 @@ jobs:
                      -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }} \
                      DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
                      CODE_SIGN_STYLE=Automatic \
+                     CODE_SIGN_IDENTITY="Apple Distribution" \
                      archive
 
       - name: Export IPA
