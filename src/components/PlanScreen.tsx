@@ -1854,10 +1854,11 @@ export default function PlanScreen({
               lon: lon,
               description_ai: tappa.attivita || '',
               source: 'itinerary',
-              // status: 'auto' (27/08/2026) — mancava, e isDownloadablePoiStatus
-              // tratta i record senza status come non scaricabili: queste POI
-              // "per il GPS tracking" restavano escluse proprio dal trigger
-              // offline/background per cui esistono.
+              // Lo status lo decide il SERVER (30/08/2026): serve comunque —
+              // isDownloadablePoiStatus scarta i record senza status, e queste
+              // POI nascono proprio per il trigger offline/background — ma
+              // quale valore sia ammesso dipende dal vincolo della tabella,
+              // che solo la rotta sa gestire. Qui resta a titolo indicativo.
               status: 'auto',
               created_at: new Date().toISOString()
             });
@@ -1866,10 +1867,41 @@ export default function PlanScreen({
       });
 
       if (allPoisToUpsert.length > 0) {
-        supabase.from('shared_pois').upsert(allPoisToUpsert, { onConflict: "id" })
-          .then(({ error }) => {
-            if (error) console.warn("[PlanScreen] Bulk upsert error:", error);
-          });
+        // DAL SERVER, NON PIU` DAL CLIENT (30/08/2026). Questa scrittura e`
+        // l'unico punto in cui le tappe di un itinerario diventano POI: se
+        // fallisce, niente pin sulla mappa, niente foto, niente descrizione,
+        // niente audioguida in cache. Ed e` fallita in silenzio per giorni,
+        // per DUE motivi che si sommavano:
+        //  1) `status: 'auto'` non e` ammesso dal vincolo CHECK di shared_pois
+        //     (23514) — in tabella ci sono ZERO righe 'auto' su 7,8 milioni;
+        //  2) anche senza quello, la RLS ammette in INSERT solo
+        //     `coalesce(status,'auto') = 'auto'`: dal client, con la chiave
+        //     anon, era comunque un vicolo cieco.
+        // La rotta scrive con la chiave di servizio (niente RLS), ripiega su
+        // uno status ammesso finche' la migration non e` applicata, ritenta i
+        // timeout di Postgres (57014) e RIPORTA l'esito, che ora finisce nel
+        // registro errori invece che in un console.warn che nessuno guarda.
+        (async () => {
+          try {
+            const risposta = await apiFetch(getApiUrl('/api/poi/from-itinerary'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pois: allPoisToUpsert }),
+            }, 45000);
+            const esito = await risposta.json().catch(() => ({}));
+            if (!risposta.ok || esito?.falliti > 0) {
+              throw new Error(esito?.errori?.[0]?.messaggio || esito?.error || `HTTP ${risposta.status}`);
+            }
+          } catch (e: any) {
+            console.warn('[PlanScreen] tappe non diventate POI:', e?.message || e);
+            import('../lib/errorLogger').then(({ logSystemError }) => {
+              logSystemError(`Tappe itinerario non salvate come POI: ${e?.message || 'errore sconosciuto'}`, {
+                level: 'error',
+                context: { tappe: allPoisToUpsert.length, primo_id: allPoisToUpsert[0]?.id },
+              });
+            }).catch(() => { /* logger non disponibile: resta il warn */ });
+          }
+        })();
       }
     }
     // `loading` nelle dipendenze: l'upsert parte quando la generazione termina (loading -> false)
