@@ -1834,16 +1834,15 @@ export default function PlanScreen({
         giorno.tappe.forEach(tappa => {
           const lat = tappa.coordinate?.lat || 0;
           const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-          // Pasti e spostamenti NON diventano POI geofenceabili: un POI in
-          // shared_pois è ciò che fa scattare l'audioguida del servizio nativo,
-          // e una cena che «parla» come un monumento è proprio ciò che si
-          // voleva evitare (come il 'trasferimento' del roadtrip, che è il
-          // centro della città di arrivo e non un luogo visitabile).
-          // La regola sta in tappaDiventaPoi (30/08/2026): l'elenco a mano che
-          // c'era qui — ristorante/pausa/spostamento/trasferimento — non
-          // corrispondeva al vocabolario dell'AI, che scrive 'pranzo' e 'cena'
-          // (92 volte sui 93 itinerari salvati), 'colazione', 'trasporto'…
-          // e tutti passavano.
+          // Ogni tappa nella sua categoria (30/08/2026): i pasti in 'locali',
+          // le stazioni in 'utilita', i musei in 'musei'. Restano fuori solo
+          // le tappe che non sono un posto — 'trasferimento'/'spostamento'
+          // (nel roadtrip sono le coordinate del centro della città di
+          // arrivo, non un luogo visitabile: come POI il servizio nativo
+          // scatterebbe solo passando vicino alla città) e 'pausa'.
+          // La regola sta in tappaDiventaPoi, un posto solo; che una cena non
+          // «parli» lo garantisce AUDIOGUIDABLE_CATEGORIES, non un'esclusione
+          // qui: 'locali' e 'utilita' non ne fanno parte.
           if (lat !== 0 && lon !== 0 && tappaDiventaPoi(tappa.tipo || '')) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le

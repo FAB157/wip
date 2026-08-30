@@ -16931,12 +16931,10 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
           if (!p?.id || !p?.name || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
           if (lat === 0 && lon === 0) return null;
           if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
-          // I pasti non diventano POI geofenceabili: un POI in shared_pois fa
-          // scattare l'audioguida del servizio nativo, e una cena che «parla»
-          // come un monumento non deve esistere. Il client filtra gia' per
-          // tipo (tappaDiventaPoi), qui si ricontrolla sulla categoria — cosi'
-          // vale anche per le build vecchie e per chiamate diverse.
-          if (String(p?.category || '').toLowerCase() === 'locali') return null;
+          // Ogni tappa nella sua categoria: i pasti entrano come 'locali', le
+          // stazioni come 'utilita'. Non si scarta nulla qui — l'audioguida
+          // non parte per quelle categorie (AUDIOGUIDABLE_CATEGORIES lato
+          // client, CATEGORY_MAP lato nativo), che e' il presidio giusto.
           return {
             id: String(p.id).slice(0, 120),
             name: String(p.name).slice(0, 300),

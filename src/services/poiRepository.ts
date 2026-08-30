@@ -766,43 +766,41 @@ export interface AutoPoiInput {
 export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['category'] {
   const t = aiType.toLowerCase();
   if (t.match(/museo|galleria|arte|museum|gallery/)) return 'musei';
-  if (t.match(/ristorante|cena|pranzo|colazione|degustazione|pub|caff|bar|food/)) return 'locali';
+  // Vocabolario ampliato il 30/08/2026: l'AI degli itinerari non scrive
+  // «ristorante», scrive «pranzo» (56 volte sui 93 itinerari salvati), «cena»
+  // (36), «colazione», «aperitivo», «enoteca», «catering»… Prima finivano
+  // tutti nel fallback 'monumenti', cioe' una cena diventava un monumento.
+  if (t.match(/ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|pub|caff|bar|food|cibo|catering|agriturismo/)) return 'locali';
   if (t.match(/monumento|statua|storico|castello|rovina|monument/)) return 'monumenti';
   if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia/)) return 'chiese';
   if (t.match(/parco|giardino|natura|spiaggia|panoramic|viewpoint|park/)) return 'panorami';
   if (t.match(/evento/)) return 'eventi';
+  // Stazioni, porti, aeroporti: sono luoghi veri, ma di servizio — categoria
+  // 'utilita', non 'monumenti' (30/08/2026, «ogni tappa la sua categoria»).
+  if (t.match(/stazione|aeroporto|porto|trasporto|traghetto|metro/)) return 'utilita';
   // 'esperienze_locali' non esiste più come categoria mappa: fallback neutro
   return 'monumenti';
 }
 
 /**
- * Questa tappa deve diventare un POI geofenceabile in shared_pois? (30/08/2026)
+ * Questa tappa è un LUOGO, e quindi diventa un POI in shared_pois? (30/08/2026)
  *
- * NO per i pasti e per i puri spostamenti: un POI in shared_pois è ciò che il
- * servizio nativo usa per far scattare l'audioguida, e una cena che «parla»
- * come un monumento è esattamente ciò che si voleva evitare — i pasti stanno
- * sulla mappa del giorno, ma non parlano.
+ * Regola: ogni tappa va nella sua categoria — i pasti in 'locali', le stazioni
+ * in 'utilita', i musei in 'musei'. Non si esclude nulla per il timore che
+ * «parli»: il presidio contro le audioguide fuori posto sta già al livello
+ * giusto, in AUDIOGUIDABLE_CATEGORIES (qui sotto), dove 'locali' e 'utilita'
+ * NON compaiono. Una cena finisce sulla mappa fra i locali e non parla.
  *
- * Prima la lista era `ristorante | pausa | spostamento | trasferimento`, ma
- * l'AI non usa quel vocabolario: sui 93 itinerari salvati scrive `pranzo` 56
- * volte, `cena` 36, `colazione` 9, e poi `trasporto`, `stazione`, `aeroporto`,
- * `aperitivo`, `caffetteria`, `enoteca`, `catering`… Nessuno di questi veniva
- * escluso, e finivano tutti fra i POI parlanti.
- *
- * La parte sui pasti riusa DI PROPOSITO la stessa espressione con cui
- * mapItineraryCategoryToMapCategory riconosce i 'locali': se una tappa è
- * classificata come locale, per definizione è un posto dove si mangia.
+ * Restano fuori SOLO le tappe che non sono un posto:
+ *  • 'trasferimento' e 'spostamento' — nel roadtrip sono le coordinate del
+ *    centro della città di arrivo, non un luogo visitabile: come POI il
+ *    servizio nativo scatterebbe passando vicino alla città;
+ *  • 'pausa' — non ha un luogo per definizione.
  */
-const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento|trasporto|stazione|aeroporto|relax/;
-// Superset di quella dei 'locali': copre anche i termini che l'AI usa davvero
-// e che la mappatura categorie non intercetta (enogastronomia, cibo, brunch…).
-const TAPPE_PASTO = /ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|caff|\bbar\b|pub|food|cibo|catering|agriturismo/;
+const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento/;
 
 export function tappaDiventaPoi(aiType: string = ""): boolean {
-  const t = String(aiType).toLowerCase();
-  if (TAPPE_NON_LUOGO.test(t)) return false;
-  if (TAPPE_PASTO.test(t)) return false;
-  return mapItineraryCategoryToMapCategory(t) !== 'locali';
+  return !TAPPE_NON_LUOGO.test(String(aiType).toLowerCase());
 }
 
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */
