@@ -74,6 +74,25 @@ platform :ios do
       keychain_password: ""
     )
 
+    # DIAGNOSI, non decorazione. Quando l'import fallisce lo fa in SILENZIO e
+    # l'errore salta fuori un passo dopo, travestito da problema di profili
+    # («Could not find a matching code signing identity for type AppStore»).
+    # Qui si vede subito se nel portachiavi c'e' davvero un'identita' di
+    # firma: stampa il nome del certificato, mai la chiave.
+    UI.message("── Identita' di firma nel portachiavi dopo l'import ──")
+    sh("security list-keychains -d user || true")
+    identita = sh("security find-identity -v -p codesigning || true", log: true)
+    if identita.include?("Apple Distribution")
+      UI.success("Certificato di distribuzione presente.")
+    else
+      UI.user_error!(
+        "Nessuna identita' «Apple Distribution» nel portachiavi: l'import del " \
+        ".p12 non ha prodotto nulla. Le due cause possibili sono la password " \
+        "sbagliata (secret APPLE_DIST_CERT_PASSWORD) o un .p12 cifrato in " \
+        "AES-256, che `security` di macOS non sa leggere — vedi la nota qui sopra."
+      )
+    end
+
     # Un profilo App Store per ciascun bundle id. Apple pretende che
     # l'estensione sia firmata quanto l'app: se ne manca uno, l'archivio
     # fallisce sul target che resta scoperto.
