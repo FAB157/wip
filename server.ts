@@ -506,7 +506,33 @@ async function callUniversalAi(
   // compreso. Resta utile per vietare un motore specifico (es. escludere dal
   // revisore lo stesso motore che ha generato).
   const vietati = new Set((options.excludeEngines || []).map((e: string) => String(e)));
-  const consentiti = baseQueue.filter((e) => !vietati.has(e));
+  let consentiti = baseQueue.filter((e) => !vietati.has(e));
+
+  // ULTIMA SPIAGGIA A PAGAMENTO (31/08/2026, richiesta del committente).
+  //
+  // La rete gratuita e' piu' sottile di quanto sembri. Provati dal vivo oggi:
+  // groq risponde (0,8 s), agnes risponde (1,4 s), gemini dipende dalla chiave
+  // su Vercel — ma together, mistral e cerebras rispondono tutti e tre 402,
+  // credito esaurito. Sono anelli morti: falliscono in due decimi di secondo
+  // e non salvano niente.
+  //
+  // Quindi se groq esaurisce il tetto giornaliero e agnes e' giu', chi sta
+  // davanti al monumento non riceve l'audioguida. Per QUEI casi — e solo per
+  // quelli — si mette DeepSeek in fondo alla coda: costa, ma e' l'ultimo
+  // anello prima del nulla, e risponde in mezzo secondo (misurato: 511 ms).
+  //
+  // Non cambia la regola del 18/08: DeepSeek resta fuori da OGNI coda per
+  // difetto e non entra mai nei lavori di massa. Ci arriva solo chi lo chiede
+  // esplicitamente con questo flag, cioe' i percorsi dove un utente sta
+  // aspettando in diretta. Ogni punto che lo attiva si vede nel codice.
+  if (
+    options.ultimaSpiaggiaPagante &&
+    !vietati.has('deepseek') &&
+    !consentiti.includes('deepseek') &&
+    !!deepseekKey
+  ) {
+    consentiti = [...consentiti, 'deepseek'];
+  }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
   // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
@@ -1847,11 +1873,16 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   // ma metadata.amount (il valore accreditato) veniva dal body → amount:100000
   // costava 19,99€ e accreditava 100.000 crediti. Tenere allineato a
   // src/lib/pricing.ts e al mapping RevenueCat.
+  // Prezzi ALLINEATI a Google Play/RevenueCat (30/08/2026, richiesta del
+  // committente): lo stesso pacchetto deve costare uguale sul web (Stripe) e
+  // nell'app (store). Se si ritoccano i prezzi su Play/RevenueCat vanno
+  // aggiornati anche qui: /api/shop/pacchetti e il Checkout leggono questa
+  // tabella.
   const CREDIT_PACKS: Record<string, { credits: number; cents: number }> = {
-    package_500:  { credits: 500,  cents: 499 },
-    package_1100: { credits: 1100, cents: 999 },
-    package_2600: { credits: 2600, cents: 1999 },
-    package_2500: { credits: 2500, cents: 1999 }, // storico Google Play
+    package_500:  { credits: 500,  cents: 599 },
+    package_1100: { credits: 1100, cents: 1199 },
+    package_2600: { credits: 2600, cents: 2399 },
+    package_2500: { credits: 2500, cents: 2399 }, // storico Google Play
   };
   const packFromAmount = (amt: number) =>
     Object.values(CREDIT_PACKS).find(p => p.credits === amt);
@@ -2174,6 +2205,22 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       console.error('Create checkout error:', e);
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // Listino PUBBLICO dei pacchetti crediti per il web (30/08/2026): lo shop
+  // mostrava «Prezzo al pagamento» perche' non voleva cablare un importo
+  // diverso da quello addebitato. L'importo autorevole e' CREDIT_PACKS, la
+  // stessa tabella che /api/stripe/create-checkout mette in unit_amount:
+  // esporla qui rende i due valori identici per costruzione. Sul nativo
+  // continua a valere il priceString dello store (RevenueCat).
+  app.get('/api/shop/pacchetti', (_req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json({
+      currency: 'eur',
+      pacchetti: Object.entries(CREDIT_PACKS)
+        .filter(([id]) => id !== 'package_2500')
+        .map(([id, p]) => ({ id, credits: p.credits, cents: p.cents })),
+    });
   });
 
   // --- IN-MEMORY RATE LIMITER MIDDLEWARE (SECURITY HARDENING) ---
@@ -7183,7 +7230,12 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     const sUrl = process.env.VITE_SUPABASE_URL || '';
     const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
     let response = await callUniversalAi(
-      "groq", [{ role: "user", content: prompt }], { temperature: 0.7 },
+      // `ultimaSpiaggiaPagante` (31/08/2026): questa e' l'audioguida, cioe' il
+      // prodotto, e chi la chiede sta fermo davanti al monumento. Se tutti i
+      // gratuiti cadono, meglio pagare qualche centesimo di DeepSeek che
+      // lasciarlo senza niente. DeepSeek entra SOLO come ultimo anello, dopo
+      // che groq, gemini e agnes hanno fallito.
+      "groq", [{ role: "user", content: prompt }], { temperature: 0.7, ultimaSpiaggiaPagante: true },
       "rigenerazione_audio", sUrl, sKey, getGroqClient()
     );
     if (response?.truncated) {
@@ -7194,7 +7246,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       console.warn("[regenerateAudioguideText] Output troncato, retry con max_tokens esplicito raddoppiato.");
       try {
         response = await callUniversalAi(
-          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096 },
+          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096, ultimaSpiaggiaPagante: true },
           "rigenerazione_audio_retry_troncato", sUrl, sKey, getGroqClient()
         );
       } catch (retryErr: any) {
@@ -17478,7 +17530,15 @@ ${extract || "Nessuna fonte trovata"}
 </materiale>`;
           }
 
-          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" } }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
+          // `ultimaSpiaggiaPagante` SOLO quando c'e' davvero qualcuno che
+          // aspetta (31/08/2026). Questa rotta ha due usi: l'utente che apre
+          // la scheda di un POI nuovo — e allora sta fermo a guardare uno
+          // schermo vuoto — e gli script di arricchimento di sfondo, che
+          // passano `engine` esplicitamente e per i quali la latenza non la
+          // vede nessuno. Il flag si accende solo nel primo caso, cosi' i
+          // lavori di massa non finiscono mai su un motore a pagamento.
+          const utenteInAttesa = !requestedEngine;
+          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
           const parsed = parseSafeJSON(aiResponse.data || "{}");
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale
