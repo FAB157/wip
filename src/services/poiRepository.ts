@@ -777,7 +777,12 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
   // espressione NON veniva riconosciuto e cadeva nel fallback 'monumenti'
   // (30/08/2026 — sette Monte/Poggio finiti fra i monumenti).
   if (t.match(/parco|giardino|natura|spiaggia|panoram|viewpoint|park|isola|lago|monte|vetta|cascata|mare|paesaggio|vista/)) return 'panorami';
-  if (t.match(/evento/)) return 'eventi';
+  // NIENTE 'eventi' (30/08/2026). Esiste la chip Eventi, ma si alimenta da
+  // un'altra fonte (Ticketmaster/Viator), non da shared_pois: 'eventi' non
+  // compare in nessuna lista di resolvePoiTaxonomy, quindi un POI con quella
+  // categoria esce con `macro: null` e la mappa lo scarta — invisibile sotto
+  // OGNI chip. Una tappa «Evento: concerto in piazza» e' comunque un luogo:
+  // finisce nel fallback 'monumenti', dove almeno si vede.
   // Stazioni, porti, aeroporti: sono luoghi veri, ma di servizio — categoria
   // 'utilita', non 'monumenti' (30/08/2026, «ogni tappa la sua categoria»).
   if (t.match(/stazione|aeroporto|porto|trasporto|traghetto|metro/)) return 'utilita';
