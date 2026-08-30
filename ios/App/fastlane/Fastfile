@@ -1,0 +1,103 @@
+# =====================================================================
+# WIP · firma e caricamento su TestFlight, senza un Mac in casa.
+#
+# Questo file esiste perche' tre build di fila sono morte provando a
+# convincere `xcodebuild` a firmare da solo (30/08/2026):
+#
+#   #74  «Your team has no devices from which to generate a provisioning
+#        profile» — nel team non c'era ancora nessun certificato di
+#        distribuzione, e la firma automatica ripiegava su un profilo di
+#        SVILUPPO, che pretende un iPhone registrato.
+#   #75  «App has conflicting provisioning settings» — imporre
+#        CODE_SIGN_IDENTITY insieme a CODE_SIGN_STYLE=Automatic non si puo'.
+#   #76  «No profiles ... couldn't find any iOS App Development provisioning
+#        profiles» — con la firma automatica e' il PROGETTO a decidere il tipo
+#        di profilo, e quello generato da Capacitor chiede «Apple Development».
+#        I profili App Store scaricati poco prima restavano li' inutilizzati.
+#
+# Da riga di comando non se ne esce: le impostazioni di firma passate a
+# `xcodebuild` valgono per TUTTI i target insieme, mentre qui i target sono
+# due e ognuno vuole il SUO profilo (l'app e l'estensione della Live
+# Activity). Quindi: firma MANUALE, profilo per profilo, scritta nel progetto
+# prima di archiviare.
+# =====================================================================
+
+default_platform(:ios)
+
+APP_ID = "com.itaintasca.app"
+EXT_ID = "com.itaintasca.app.WipNavActivity"
+
+platform :ios do
+  desc "Archivia, firma e carica la build su TestFlight"
+  lane :beta do
+    # Portachiavi temporaneo del runner: senza, il certificato non ha dove
+    # stare e `get_certificates` fallisce a meta'.
+    setup_ci if ENV["CI"]
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: File.expand_path("~/private_keys/AuthKey_#{ENV.fetch('ASC_KEY_ID')}.p8"),
+      in_house: false
+    )
+
+    # Certificato di DISTRIBUZIONE (lo crea la prima volta, poi lo riusa).
+    get_certificates(api_key: api_key, development: false)
+
+    # Un profilo App Store per ciascun bundle id. Apple pretende che
+    # l'estensione sia firmata quanto l'app: se ne manca uno, l'archivio
+    # fallisce sul target che resta scoperto.
+    get_provisioning_profile(api_key: api_key, app_identifier: APP_ID, readonly: false)
+    profilo_app = lane_context[SharedValues::SIGH_PROFILE_NAME]
+
+    get_provisioning_profile(api_key: api_key, app_identifier: EXT_ID, readonly: false)
+    profilo_ext = lane_context[SharedValues::SIGH_PROFILE_NAME]
+
+    UI.message("Profili: app «#{profilo_app}» · estensione «#{profilo_ext}»")
+
+    # Si scrive la firma manuale NEL PROGETTO, un target alla volta: e'
+    # l'unico modo per dare a ciascuno il suo profilo.
+    update_code_signing_settings(
+      path: "App.xcodeproj",
+      use_automatic_signing: false,
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      targets: ["App"],
+      profile_name: profilo_app,
+      code_sign_identity: "Apple Distribution",
+      bundle_identifier: APP_ID
+    )
+    update_code_signing_settings(
+      path: "App.xcodeproj",
+      use_automatic_signing: false,
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      targets: ["WipNavActivity"],
+      profile_name: profilo_ext,
+      code_sign_identity: "Apple Distribution",
+      bundle_identifier: EXT_ID
+    )
+
+    build_app(
+      workspace: "App.xcworkspace",
+      scheme: "App",
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "../../build",
+      output_name: "WIP.ipa",
+      export_options: {
+        provisioningProfiles: {
+          APP_ID => profilo_app,
+          EXT_ID => profilo_ext
+        }
+      }
+    )
+
+    # `skip_waiting_for_build_processing`: l'elaborazione di Apple dura
+    # anche mezz'ora e non ha senso tenere occupato un runner ad aspettarla.
+    # La build compare in TestFlight da sola quando e' pronta.
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true,
+      skip_submission: true
+    )
+  end
+end

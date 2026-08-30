@@ -142,118 +142,28 @@ jobs:
           cd ios/App
           agvtool new-version -all ${{ github.run_number }}
 
-      # (30/08/2026) CERTIFICATO E PROFILI PRIMA DELL'ARCHIVIO.
-      #
-      # Con il solo `-allowProvisioningUpdates` la prima build e' morta cosi':
-      #   ** ARCHIVE FAILED **
-      #   error: Communication with Apple failed: Your team has no devices
-      #   from which to generate a provisioning profile.
-      # Il team non aveva ancora NESSUN certificato di distribuzione, e la
-      # firma automatica ha ripiegato su un profilo di SVILUPPO — che pretende
-      # almeno un iPhone registrato nel portale. Registrare un telefono non
-      # c'entra niente con una build per l'App Store: e' il certificato che
-      # mancava. Qui lo si crea prima, con la stessa chiave API, e con i due
-      # profili gia' installati l'archivio non ha piu' niente da inventare.
-      - name: Certificato e profili di distribuzione
+      # (30/08/2026) FIRMA MANUALE VIA FASTLANE — le tre build fallite prima di
+      # arrivarci sono annotate per esteso in ios/App/fastlane/Fastfile.
+      # In breve: le impostazioni di firma passate a `xcodebuild` valgono per
+      # TUTTI i target insieme, ma qui i target sono due (l'app e l'estensione
+      # della Live Activity) e ognuno vuole il SUO profilo. La lane scrive la
+      # firma nel progetto target per target, archivia, esporta e carica.
+      - name: Firma, archivia e carica su TestFlight
         if: steps.asc.outputs.firma == 'si'
+        working-directory: ios/App
         env:
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-        run: |
-          # fastlane vuole la chiave API come JSON, con il .p8 dentro.
-          jq -n --arg kid "${{ secrets.ASC_KEY_ID }}" \
-                --arg iss "${{ secrets.ASC_ISSUER_ID }}" \
-                --arg key "$ASC_KEY_P8" \
-                '{key_id:$kid, issuer_id:$iss, key:$key, in_house:false}' \
-                > /tmp/asc_api_key.json
-
-          # Portachiavi temporaneo: la chiave privata del certificato deve
-          # pur stare da qualche parte, e quello di sistema sul runner e'
-          # bloccato.
-          security create-keychain -p wipci build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p wipci build.keychain
-          security set-keychain-settings -lut 3600 build.keychain
-
-          # `cert` senza --development crea (o riusa) il certificato di
-          # DISTRIBUZIONE; `sigh` senza flag scarica il profilo App Store.
-          # Servono entrambi i bundle id: Apple pretende che l'estensione
-          # Live Activity sia firmata quanto l'app.
-          fastlane cert --api_key_path /tmp/asc_api_key.json \
-                        --keychain-path ~/Library/Keychains/build.keychain-db \
-                        --keychain-password wipci \
-                        --output_path /tmp/certs
-          fastlane sigh --api_key_path /tmp/asc_api_key.json \
-                        --app_identifier com.itaintasca.app \
-                        --platform ios --output_path /tmp/profiles
-          fastlane sigh --api_key_path /tmp/asc_api_key.json \
-                        --app_identifier com.itaintasca.app.WipNavActivity \
-                        --platform ios --output_path /tmp/profiles
-
-      - name: Archive App (firmato)
-        if: steps.asc.outputs.firma == 'si'
-        run: |
-          xcodebuild -workspace ios/App/App.xcworkspace \
-                     -scheme App \
-                     -configuration Release \
-                     -destination 'generic/platform=iOS' \
-                     -archivePath build/App.xcarchive \
-                     -allowProvisioningUpdates \
-                     -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
-                     -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
-                     -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }} \
-                     DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
-                     CODE_SIGN_STYLE=Automatic \
-                     archive
-          # NIENTE CODE_SIGN_IDENTITY qui: imporla a mano con la firma
-          # automatica fa fallire l'archivio con «App has conflicting
-          # provisioning settings» (build #75). L'identita' giusta la sceglie
-          # Xcode, ora che il certificato di distribuzione e i due profili
-          # App Store sono gia' nel portachiavi (passo precedente).
-
-      - name: Export IPA
-        if: steps.asc.outputs.firma == 'si'
-        run: |
-          cat > build/ExportOptions.plist <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
-            <key>signingStyle</key><string>automatic</string>
-            <key>uploadSymbols</key><true/>
-            <key>destination</key><string>export</string>
-          </dict>
-          </plist>
-          PLIST
-          xcodebuild -exportArchive \
-                     -archivePath build/App.xcarchive \
-                     -exportPath build/export \
-                     -exportOptionsPlist build/ExportOptions.plist \
-                     -allowProvisioningUpdates \
-                     -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
-                     -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
-                     -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}
-
-      - name: Carica su TestFlight
-        if: steps.asc.outputs.firma == 'si'
-        run: |
-          IPA=$(ls build/export/*.ipa | head -n 1)
-          echo "Carico $IPA"
-          # `--validate-app` prima: gli errori di validazione (icone, chiavi
-          # Info.plist, entitlement) si leggono qui invece che come mail di
-          # rigetto mezz'ora dopo.
-          xcrun altool --validate-app -f "$IPA" -t ios \
-                       --apiKey ${{ secrets.ASC_KEY_ID }} \
-                       --apiIssuer ${{ secrets.ASC_ISSUER_ID }}
-          xcrun altool --upload-app -f "$IPA" -t ios \
-                       --apiKey ${{ secrets.ASC_KEY_ID }} \
-                       --apiIssuer ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Senza, fastlane si ferma su domande che nessuno leggera'.
+          FASTLANE_SKIP_UPDATE_CHECK: '1'
+          FASTLANE_HIDE_CHANGELOG: '1'
+        run: fastlane beta
 
       - name: Upload IPA artifact (firmato)
         if: steps.asc.outputs.firma == 'si'
         uses: actions/upload-artifact@v4
         with:
           name: WIP-iOS-signed
-          path: build/export/*.ipa
+          path: build/WIP.ipa
           retention-days: 30
