@@ -3815,8 +3815,28 @@ function MapArea({
               p_lon: center.lng,
               radius_m: Math.min(radius, 25000),
               limit_num: 500,
+              // La lingua serve al teaser: la funzione ne restituisce UNO,
+              // quello giusto, invece dei sette che c'erano prima. Senza,
+              // fuori dall'italiano la scheda del pin mostrerebbe per un
+              // istante il testo italiano prima di correggersi.
+              p_lang: String(language || 'it').toLowerCase(),
             });
             if (!leggera.error) return leggera;
+
+            // Ripiego intermedio: la prima versione di `nearby_pois_map` non
+            // aveva il parametro della lingua. Se sul database c'e' ancora
+            // quella, va usata lo stesso — e' comunque leggera (undici colonne
+            // invece di trentatre): si perde solo il teaser tradotto, non il
+            // guadagno di velocita'. Senza questo passaggio si finiva dritti
+            // sulla funzione pesante.
+            const senzaLingua = await supabase.rpc('nearby_pois_map', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+            });
+            if (!senzaLingua.error) return senzaLingua;
+
             console.warn('[MapArea] nearby_pois_map non disponibile, uso nearby_pois:', leggera.error.message);
             return supabase.rpc('nearby_pois', {
               p_lat: center.lat,
@@ -3874,6 +3894,13 @@ function MapArea({
             baseCategory: derivedCategory,
             subCategory: item.sub_category || item.category,
             description: item.description_ai || item.description_short,
+            description_short: item.description_short,
+            // La funzione leggera restituisce UN teaser, gia' nella lingua
+            // dell'utente. La scheda del pin lo cerca in `teaser_text_<lingua>`
+            // (PoiPopupContent), quindi lo si rimette li' con quel nome: cosi'
+            // il testo giusto compare SUBITO, senza aspettare la chiamata di
+            // dettaglio.
+            ...(item.teaser ? { [`teaser_text_${String(language || 'it').toLowerCase()}`]: item.teaser } : {}),
             image_url: item.image_url,
             is_gem: item.is_gem || item.category === 'gemme',
             isFromDb: true,
