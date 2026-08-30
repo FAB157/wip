@@ -8412,8 +8412,17 @@ ${description}
     const limit = Math.min(10, Math.max(1, opts.limit || 5));
     const lang = /^[a-z]{2}$/i.test(String(opts.lang || "")) ? String(opts.lang).toLowerCase() : "it";
     const types = /^[a-z,]+$/i.test(String(opts.types || "")) ? String(opts.types) : "poi,place,address";
+    // Vedi il commento sotto, alla chiamata Mapbox: si interroga nella lingua
+    // dell'utente PIU` l'inglese. Sta qui, e non li', perche' deve entrare
+    // nella chiave di cache: altrimenti le risposte vecchie (una lingua sola)
+    // continuerebbero a essere servite e la correzione non si vedrebbe.
+    const lingueRicerca = lang === 'en' ? 'en' : `${lang},en`;
 
-    const cacheKey = `places_${crypto.createHash("md5").update(`${q}|${limit}|${lang}|${types}`).digest("hex")}`;
+    // `v2` nella chiave: quando cambia il MODO di interrogare (una chiamata →
+    // due, una per lingua) le risposte gia' in cache sono vecchie e
+    // continuerebbero a essere servite per sempre, nascondendo la correzione.
+    // Si alza questo numero ogni volta che cambia la logica di ricerca.
+    const cacheKey = `places_${crypto.createHash("md5").update(`v3|${q}|${limit}|${lingueRicerca}|${types}`).digest("hex")}`;
     const cached = await getFromCache(cacheKey);
     if (cached?.text_content) {
       try {
@@ -8428,27 +8437,63 @@ ${description}
     const mbToken = process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN;
     if (mbToken) {
       try {
-        // DUE LINGUE, NON UNA (30/08/2026).
+        // DUE INTERROGAZIONI, NON UNA (30/08/2026).
         //
         // Con `language=it` la ricerca di «Paris» tornava Paris, Texas: nei
         // dati italiani la citta' francese si chiama «Parigi», quindi la
         // parola «Paris» combaciava solo con gli omonimi americani. Un ospite
         // straniero che scrive il nome nella SUA lingua non trovava la citta'.
-        // Mapbox accetta piu' lingue separate da virgola: si chiede quella
-        // dell'utente e, a seguire, l'inglese — che e' l'esonimo piu' diffuso.
-        // La prima resta quella con cui vengono ETICHETTATI i risultati.
-        const lingueRicerca = lang === 'en' ? 'en' : `${lang},en`;
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
-          + `?access_token=${mbToken}&limit=${limit}&types=${encodeURIComponent(types)}&language=${encodeURIComponent(lingueRicerca)}`;
-        const r = await axios.get(url, { timeout: 6000 });
-        out = (r.data?.features || []).map((f: any) => ({
-          id: f.id,
-          name: f.text,
-          display_name: f.place_name,
-          lat: f.center?.[1],
-          lon: f.center?.[0],
-          provider: "mapbox",
-        }));
+        //
+        // Passare due lingue insieme (`language=it,en`) NON basta: quel
+        // parametro cambia le ETICHETTE e l'ordinamento, non aggiunge la
+        // corrispondenza sugli esonimi — provato, «Paris» in italiano
+        // continuava a dare il Texas. Servono due chiamate separate, una per
+        // lingua, unite per rilevanza. La chiamata in inglese si fa solo se
+        // l'utente non e' gia' in inglese, e le due partono in parallelo:
+        // il costo in tempo e' quello di una sola.
+        const chiedi = async (lingua: string) => {
+          const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
+            + `?access_token=${mbToken}&limit=${limit}&types=${encodeURIComponent(types)}&language=${encodeURIComponent(lingua)}`;
+          const r = await axios.get(url, { timeout: 6000 });
+          return (r.data?.features || []) as any[];
+        };
+
+        const [nellaSua, inInglese] = await Promise.all([
+          chiedi(lang),
+          lang === 'en' ? Promise.resolve([] as any[]) : chiedi('en').catch(() => [] as any[]),
+        ]);
+
+        // UNIONE ALTERNATA, non concatenata.
+        //
+        // Prima univo i due elenchi e tagliavo a `limit`: per «Paris» in
+        // italiano i tre risultati italiani (Texas, Tennessee, Ontario) si
+        // prendevano tutti i posti e Parigi, che stava nell'elenco inglese,
+        // veniva buttata fuori dal taglio. Ordinare per rilevanza non aiuta:
+        // sono tutti a 1. Si alternano invece i due elenchi — primo italiano,
+        // primo inglese, secondo italiano, secondo inglese… — cosi' la citta'
+        // cercata nella propria lingua compare sempre entro i primi due.
+        const visti = new Set<string>();
+        const alternati: any[] = [];
+        for (let i = 0; i < Math.max(nellaSua.length, inInglese.length); i++) {
+          if (nellaSua[i]) alternati.push(nellaSua[i]);
+          if (inInglese[i]) alternati.push(inInglese[i]);
+        }
+        out = alternati
+          .filter((f: any) => {
+            const chiave = String(f.id || `${f.center?.[0]},${f.center?.[1]}`);
+            if (visti.has(chiave)) return false;
+            visti.add(chiave);
+            return true;
+          })
+          .slice(0, limit)
+          .map((f: any) => ({
+            id: f.id,
+            name: f.text,
+            display_name: f.place_name,
+            lat: f.center?.[1],
+            lon: f.center?.[0],
+            provider: "mapbox",
+          }));
       } catch (e: any) {
         console.warn("[searchPlaces] Mapbox fallito, provo Geoapify:", e.message);
       }
