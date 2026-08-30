@@ -20,7 +20,18 @@
 //   npx checkly test         (esegue i check in locale, senza pubblicarli)
 //   npx checkly deploy       (pubblica i check — da lì partono gli alert email)
 import { defineConfig } from 'checkly';
-import { Frequency } from 'checkly/constructs';
+import { Frequency, EmailAlertChannel } from 'checkly/constructs';
+
+// (30/08/2026) Un check che fallisce senza un canale di alert collegato non
+// avvisa NESSUNO — resta solo nella dashboard finché qualcuno non la apre.
+// Il commento sopra diceva "da lì partono gli alert email" ma non c'era
+// nessun EmailAlertChannel: bug trovato e corretto lo stesso giorno.
+const email = new EmailAlertChannel('wip-email-alert', {
+  address: 'marmidicarrara@gmail.com',
+  sendRecovery: true,   // avvisa anche quando torna verde, non solo quando si rompe
+  sendFailure: true,
+  sendDegraded: false,  // "degradato" (più lento del solito) non è un guasto
+});
 
 export default defineConfig({
   projectName: 'WIP - World in Pocket',
@@ -32,9 +43,11 @@ export default defineConfig({
     tags: ['wip', 'produzione'],
     runtimeId: '2024.02',
     checkMatch: '__checks__/**/*.check.ts',
+    alertChannels: [email],
     browserChecks: {
       frequency: Frequency.EVERY_1H,
       testMatch: '__checks__/**/*.spec.ts',
+      alertChannels: [email],
     },
   },
   cli: {
