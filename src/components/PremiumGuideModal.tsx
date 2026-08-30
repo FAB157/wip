@@ -408,14 +408,19 @@ export default function PremiumGuideModal({
             {/* ── PHASE: preview ── */}
             {phase === 'preview' && guideContent && (
               <div>
-                {/* Action bar */}
-                <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant bg-[#f8f5f0]">
-                  <p className="text-sm font-bold text-[#0a6c44] flex items-center gap-1.5">
+                {/* Action bar.
+                    flex-wrap (30/08/2026): su un telefono i quattro tasti non
+                    ci stavano in riga, «Rigenera» finiva FUORI dallo schermo e
+                    l'etichetta a sinistra veniva schiacciata su quattro righe
+                    («La tua / guida / è / pronta!»). Ora l'etichetta resta su
+                    una riga e i tasti vanno a capo. */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 border-b border-outline-variant bg-[#f8f5f0]">
+                  <p className="text-sm font-bold text-[#0a6c44] flex items-center gap-1.5 shrink-0 whitespace-nowrap">
                     <span>✓</span>
                     <span>{getTranslation('premium_guide_ready', language)}</span>
                   </p>
-                  <div className="flex gap-2">
-                    
+                  <div className="flex flex-wrap gap-2">
+
                     <button
                       onClick={() => handleShareGuide()}
                       className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary hover:bg-primary/20 transition-colors"

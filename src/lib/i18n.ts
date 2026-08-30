@@ -4938,8 +4938,15 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   pg_historical_detail: { IT: "Dettaglio storico & architettonico", EN: "Historical & architectural detail", FR: "Détail historique & architectural", ES: "Detalle histórico y arquitectónico", DE: "Historisches & architektonisches Detail", RU: "Исторические и архитектурные детали", ZH: "历史与建筑细节" },
   pg_insider_tip: { IT: "Consiglio insider", EN: "Insider tip", FR: "Conseil d'initié", ES: "Consejo de experto", DE: "Insider-Tipp", RU: "Совет знатока", ZH: "内行建议" },
   pg_must_order: { IT: "Da ordinare assolutamente", EN: "Must-order dishes", FR: "À commander absolument", ES: "Imprescindible pedir", DE: "Unbedingt bestellen", RU: "Обязательно закажите", ZH: "必点菜品" },
-  pg_back_cover_tagline: { IT: "La tua guida di viaggio intelligente.", EN: "Your smart travel guide.", FR: "Votre guide de voyage intelligent.", ES: "Tu guía de viaje inteligente.", DE: "Dein smarter Reiseführer.", RU: "Ваш умный путеводитель.", ZH: "您的智能旅行指南。" },
-  pg_back_cover_sources: { IT: "Generata con Wikipedia, Wikivoyage, Foursquare e TripAdvisor.", EN: "Generated with Wikipedia, Wikivoyage, Foursquare and TripAdvisor.", FR: "Générée avec Wikipedia, Wikivoyage, Foursquare et TripAdvisor.", ES: "Generada con Wikipedia, Wikivoyage, Foursquare y TripAdvisor.", DE: "Erstellt mit Wikipedia, Wikivoyage, Foursquare und TripAdvisor.", RU: "Создано с помощью Wikipedia, Wikivoyage, Foursquare и TripAdvisor.", ZH: "基于 Wikipedia、Wikivoyage、Foursquare 和 TripAdvisor 生成。" },
+  // La guida e' di WIP (30/08/2026, richiesta del committente): niente
+  // «intelligente/smart», che rimanda all'AI, e niente «Generata con», che
+  // fa sembrare il documento assemblato da altri.
+  pg_back_cover_tagline: { IT: "La tua guida di viaggio.", EN: "Your travel guide.", FR: "Votre guide de voyage.", ES: "Tu guía de viaje.", DE: "Dein Reiseführer.", RU: "Ваш путеводитель.", ZH: "您的旅行指南。" },
+  // Restano SOLO Wikipedia e Wikivoyage, e non per scelta editoriale: sono
+  // CC BY-SA, e la licenza impone di attribuire quando se ne riusa il
+  // contenuto. Foursquare e TripAdvisor sono usciti dalla riga. Ridotta a
+  // «Fonti:», in fondo alla quarta di copertina.
+  pg_back_cover_sources: { IT: "Fonti: Wikipedia, Wikivoyage (CC BY-SA).", EN: "Sources: Wikipedia, Wikivoyage (CC BY-SA).", FR: "Sources : Wikipedia, Wikivoyage (CC BY-SA).", ES: "Fuentes: Wikipedia, Wikivoyage (CC BY-SA).", DE: "Quellen: Wikipedia, Wikivoyage (CC BY-SA).", RU: "Источники: Wikipedia, Wikivoyage (CC BY-SA).", ZH: "来源：Wikipedia、Wikivoyage（CC BY-SA）。" },
 
   // ── Guida Premium: modale ────────────────────────────────────────────
   premium_guide_share_text: { IT: "Guarda la mia Guida Premium per", EN: "Check out my Premium Guide for", FR: "Découvrez mon Guide Premium pour", ES: "Mira mi Guía Premium de", DE: "Schau dir meinen Premium-Guide für", RU: "Посмотрите мой премиум-гид по", ZH: "看看我的高级指南：" },

@@ -340,18 +340,38 @@ export async function downloadGuideAsPdf(
     return null;
   }
 
+  // LARGHEZZA DEL FOGLIO, NON DELLO SCHERMO (30/08/2026).
+  //
+  // Prima: `windowWidth: element.scrollWidth`. Sul telefono vale ~360 px,
+  // quindi il PDF veniva disegnato su una colonna da telefono e poi scalato
+  // ad A4: caratteri enormi, una colonna sola, e un documento DIVERSO da
+  // quello generato dal computer. Il PDF invece deve essere lo stesso ovunque
+  // — si legge su telefono, tablet e computer, e si stampa.
+  //
+  // 794 px = 210 mm a 96 dpi, la larghezza di un A4. Fissandola qui, sia le
+  // unita' `vw` sia le griglie `auto-fit` del renderer si risolvono contro il
+  // FOGLIO: due colonne dove le vuole l'impaginato, margini pieni, corpi al
+  // massimo. onclone tocca solo la copia usata per la cattura, non la pagina
+  // che l'utente sta guardando.
+  const A4_PX = 794;
   const opt = {
     margin:       [10, 12, 15, 12],
     filename:     filename,
     image:        { type: 'jpeg', quality: 0.95 },
-    html2canvas:  { 
-      scale: 2, 
-      useCORS: true, 
-      logging: false, 
+    html2canvas:  {
+      scale: 2,
+      useCORS: true,
+      logging: false,
       allowTaint: true,
       scrollY: 0,
-      windowHeight: element.scrollHeight,
-      windowWidth: element.scrollWidth
+      windowWidth: A4_PX,
+      onclone: (doc: Document) => {
+        const clone = doc.getElementById(elementId) as HTMLElement | null;
+        if (clone) {
+          clone.style.width = `${A4_PX}px`;
+          clone.style.maxWidth = 'none';
+        }
+      },
     },
     jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
     pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] },

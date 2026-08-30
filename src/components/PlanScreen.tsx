@@ -6898,7 +6898,19 @@ export default function PlanScreen({
                             margin: [10, 12, 15, 12],
                             filename: nomeFile,
                             image: { type: 'jpeg', quality: 0.95 },
-                            html2canvas: { scale: 2, useCORS: true, logging: false, allowTaint: true, scrollY: 0, windowWidth: elemento.scrollWidth, windowHeight: elemento.scrollHeight },
+                            // Larghezza del FOGLIO (794 px = 210 mm a 96 dpi),
+                            // non dello schermo: dal telefono `scrollWidth`
+                            // valeva ~360 px e il PDF usciva come una colonna
+                            // da telefono ingrandita ad A4, diversa da quella
+                            // fatta dal computer. Vedi premiumGuideService.
+                            html2canvas: {
+                              scale: 2, useCORS: true, logging: false, allowTaint: true, scrollY: 0,
+                              windowWidth: 794,
+                              onclone: (doc: Document) => {
+                                const clone = doc.getElementById('itinerary-print-view') as HTMLElement | null;
+                                if (clone) { clone.style.width = '794px'; clone.style.maxWidth = 'none'; }
+                              },
+                            },
                             jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
                             pagebreak: { mode: ['css', 'legacy'] },
                           }).from(elemento).outputPdf('blob');

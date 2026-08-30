@@ -90,15 +90,28 @@ const CoverPage = ({
           tra mare e borghi» occupava mezza copertina e schiacciava tutto il
           resto in fondo. Ora la misura segue la lunghezza — i titoli corti
           restano grandi, quelli lunghi rientrano — e il tetto è 44px. */}
+      {/* SCALA TIPOGRAFICA UNICA (30/08/2026, richiesta del committente:
+          «titoli un po' piu' piccoli, armonizzare tutte le scritte»).
+          Quattro gradi soli, gli stessi in tutta la guida — copertina, indice,
+          intro, giorno, POI — cosi' il documento resta coerente anche una
+          volta convertito in EPUB, dove i corpi in px vengono riscalati dal
+          lettore e una scala disordinata si nota subito.
+            H1 copertina  clamp(24, 5.6vw, 36)
+            H2 sezione    clamp(20, 5.2vw, 28)
+            H3 POI        clamp(19, 5vw,   26)
+          Il minimo tiene la riga leggibile su un telefono, il massimo vale in
+          stampa e su schermo grande. */}
       <h1 style={{
         color: C.white,
-        fontSize: (content.guida_titolo || '').length > 44 ? '32px'
-          : (content.guida_titolo || '').length > 26 ? '38px' : '44px',
+        fontSize: (content.guida_titolo || '').length > 44 ? 'clamp(22px, 5vw, 28px)'
+          : (content.guida_titolo || '').length > 26 ? 'clamp(23px, 5.4vw, 32px)'
+          : 'clamp(24px, 5.6vw, 36px)',
         fontWeight: 900,
-        lineHeight: 1.08,
+        lineHeight: 1.1,
         letterSpacing: '-0.5px',
         margin: '0 0 12px',
         maxWidth: '680px',
+        overflowWrap: 'break-word',
       }}>
         {content.guida_titolo || t('premium_guide')}
       </h1>
@@ -222,12 +235,12 @@ const TocPage = ({ giorni, anchorPrefix, t }: { giorni: any[]; anchorPrefix: str
   return (
     <div style={{
       background: C.white,
-      padding: '48px 48px',
+      padding: 'clamp(20px, 5vw, 48px)',
       pageBreakBefore: 'always',
       pageBreakAfter: 'always',
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', borderBottom: `3px solid ${C.gold}`, paddingBottom: '14px', marginBottom: '28px' }}>
-        <h2 style={{ color: C.navy, fontSize: '34px', fontWeight: 900, margin: 0 }}>{t('toc')}</h2>
+        <h2 style={{ color: C.navy, fontSize: 'clamp(20px, 5.2vw, 28px)', fontWeight: 900, margin: 0 }}>{t('toc')}</h2>
         <span style={{ color: C.light, fontSize: '12px', letterSpacing: '2px', textTransform: 'uppercase' }}>{t('toc_sub')}</span>
       </div>
       {giorni.map((giorno: any, gIdx: number) => {
@@ -300,11 +313,15 @@ const CityIntroPage = ({
   return (
     <div style={{
       background: C.white,
-      padding: '48px 48px',
+      // clamp e non 48px fissi (30/08/2026): su un telefono da 360 px i due
+      // padding da 48 lasciavano 264 px di colonna, e il titolo si spezzava a
+      // meta' parola («sorprender / e»). In stampa il vw e' grande, quindi
+      // clamp resta bloccato su 48px: il PDF non cambia di un millimetro.
+      padding: 'clamp(20px, 5vw, 48px)',
       pageBreakBefore: 'always',
       pageBreakAfter: 'always',
     }}>
-      <h2 style={{ color: C.navy, fontSize: '38px', fontWeight: 900, marginBottom: '24px', lineHeight: 1.1 }}>
+      <h2 style={{ color: C.navy, fontSize: 'clamp(20px, 5.2vw, 28px)', fontWeight: 900, marginBottom: '24px', lineHeight: 1.15, overflowWrap: 'break-word' }}>
         {citta_intro.titolo || t('discover_destination')}
       </h2>
 
@@ -316,7 +333,11 @@ const CityIntroPage = ({
       )}
 
       {/* History & Culture columns */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px', marginBottom: '32px' }}>
+      {/* auto-fit e non '1fr 1fr' (30/08/2026): due colonne fisse su un
+          telefono davano tre parole per riga, illeggibili. Con auto-fit la
+          seconda colonna scende sotto quando non ci sta; in stampa, dove la
+          pagina e' larga, restano affiancate come prima. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '32px', marginBottom: '32px' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
             <span style={{ fontSize: '20px' }}>🏛️</span>
@@ -380,7 +401,7 @@ const CityIntroPage = ({
 const DayDivider = ({ giorno, tema, t }: { giorno: any; tema?: string; t: T }) => (
   <div style={{
     background: C.navy,
-    padding: '40px 48px 32px',
+    padding: 'clamp(24px, 5vw, 40px) clamp(20px, 5vw, 48px) clamp(20px, 4vw, 32px)',
     pageBreakBefore: 'always',
     pageBreakAfter: 'avoid',
     borderBottom: `4px solid ${C.gold}`,
@@ -404,7 +425,7 @@ const DayDivider = ({ giorno, tema, t }: { giorno: any; tema?: string; t: T }) =
       }}>
         {t('day')} {giorno.giorno}
       </div>
-      <h2 style={{ color: C.white, fontSize: '32px', fontWeight: 900, margin: 0, lineHeight: 1.1 }}>
+      <h2 style={{ color: C.white, fontSize: 'clamp(20px, 5.2vw, 28px)', fontWeight: 900, margin: 0, lineHeight: 1.15, overflowWrap: 'break-word' }}>
         {giorno.titolo_giorno}
       </h2>
     </div>
@@ -469,7 +490,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
       )}
 
       {/* Content area */}
-      <div style={{ padding: '36px 48px' }}>
+      <div style={{ padding: 'clamp(20px, 5vw, 36px) clamp(18px, 5vw, 48px)' }}>
 
         {/* Without image: category pill shown here */}
         {!imgUrl && (
@@ -494,12 +515,13 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
 
         {/* Title */}
         <h3 style={{
-          fontSize: '34px',
+          fontSize: 'clamp(19px, 5vw, 26px)',
           fontWeight: 900,
           color: C.dark,
           margin: '0 0 6px',
-          lineHeight: 1.1,
-          letterSpacing: '-0.5px',
+          lineHeight: 1.15,
+          letterSpacing: '-0.3px',
+          overflowWrap: 'break-word',
         }}>
           {poi.titolo}
         </h3>
@@ -524,7 +546,7 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
         {/* Practical info bar */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
           gap: '10px',
           background: C.bg,
           border: `1px solid ${C.border}`,
@@ -535,37 +557,44 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
           color: C.mid,
         }}>
           {poi.indirizzo && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>📍</span>
               <div><strong style={{ color: C.dark }}>{t('address')}</strong><br />{poi.indirizzo}</div>
             </div>
           )}
           {poi.trasporti && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🚌</span>
               <div><strong style={{ color: C.dark }}>{t('how_to_get')}</strong><br />{poi.trasporti}</div>
             </div>
           )}
-          {poi.info_utili?.orari && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+          {/* Gli orari NON si ripetono (30/08/2026): l'AI riempie sia
+              `orario_visita` (la pillola qui sopra) sia `info_utili.orari`, e
+              nella guida di Parigi la stessa frase compariva due volte a
+              quattro righe di distanza — la seconda incolonnata su undici
+              righe strettissime. Se dicono la stessa cosa, si stampa una
+              volta sola. */}
+          {poi.info_utili?.orari &&
+           String(poi.info_utili.orari).trim() !== String(poi.orario_visita || '').trim() && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🕐</span>
               <div><strong style={{ color: C.dark }}>{t('hours')}</strong><br />{poi.info_utili.orari}</div>
             </div>
           )}
           {poi.info_utili?.prezzo && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>🎫</span>
               <div><strong style={{ color: C.dark }}>{t('admission')}</strong><br />{poi.info_utili.prezzo}</div>
             </div>
           )}
           {poi.info_utili?.best_time && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>⭐</span>
               <div><strong style={{ color: C.dark }}>{t('best_time')}</strong><br />{poi.info_utili.best_time}</div>
             </div>
           )}
           {(poi.info_utili?.telefono || poi.info_utili?.sito_web) && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', minWidth: 0, overflowWrap: 'anywhere' }}>
               <span style={{ fontSize: '16px', flexShrink: 0 }}>📞</span>
               <div>
                 <strong style={{ color: C.dark }}>{t('contacts')}</strong><br />
@@ -664,7 +693,9 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
         {(poi.dettaglio_storico_tecnico || poi.consiglio_insider) && (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: poi.dettaglio_storico_tecnico && poi.consiglio_insider ? '1fr 1fr' : '1fr',
+            gridTemplateColumns: poi.dettaglio_storico_tecnico && poi.consiglio_insider
+              ? 'repeat(auto-fit, minmax(240px, 1fr))'
+              : '1fr',
             gap: '20px',
             marginBottom: '24px',
           }}>
@@ -831,7 +862,7 @@ export default function PremiumGuideRenderer({
       {/* ── BACK COVER ── */}
       <div style={{
         background: C.navy,
-        padding: '60px 48px',
+        padding: 'clamp(28px, 6vw, 60px) clamp(20px, 5vw, 48px)',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
