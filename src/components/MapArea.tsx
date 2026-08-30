@@ -3787,21 +3787,45 @@ function MapArea({
 
       const [{ data, error }, utilRes] = await Promise.all([
         runPoiRpc(
-          () => supabase.rpc('nearby_pois', {
-            p_lat: center.lat,
-            p_lon: center.lng,
-            radius_m: Math.min(radius, 25000),
-            // REGOLA (30/08/2026): sulla mappa compaiono TUTTI i pin di quel
-            // livello di zoom, e allargando se ne aggiungono FINO A 500. Il
-            // tetto era 1000: oltre la meta' non erano pin in piu' ma peso in
-            // piu' — piu' righe da trasferire e da disegnare, su una RPC che
-            // gia' oggi ondeggia intorno al timeout. Il raggio resta quello
-            // del cerchio circoscritto al riquadro visibile, quindi la vista
-            // e' coperta per intero anche agli angoli; quando i POI sono piu'
-            // di 500 si tengono i 500 PIU` VICINI al centro dello schermo.
-            limit_num: 500
-          }),
-          'nearby_pois',
+          // FUNZIONE LEGGERA PER LA MAPPA (30/08/2026).
+          //
+          // `nearby_pois` restituisce TRENTATRE colonne per POI, fra cui
+          // `description_ai` (testo lungo) e SETTE campi teaser, uno per
+          // lingua. Per disegnare un pin ne servono undici: nome, coordinate,
+          // categoria, foto, descrizione breve, gemma, stato. Moltiplicato per
+          // 500 pin a ogni spostamento della mappa, quel peso si paga tre
+          // volte — il database lo legge dal disco (e su istanza MICRO, con
+          // 1 GB di RAM, nulla sta in cache), la rete lo trasporta, il
+          // telefono lo interpreta. I testi lunghi si scaricano quando si
+          // APRE la scheda di un POI, uno per volta.
+          //
+          // Foto e descrizione breve restano nel primo giro di proposito: sono
+          // quello che si vede subito toccando il pin.
+          //
+          // Ripiego: se `nearby_pois_map` non c'e' ancora sul database si
+          // ricade su `nearby_pois`, cosi' il client funziona prima e dopo.
+          //
+          // REGOLA sul tetto (30/08/2026): sulla mappa compaiono TUTTI i pin
+          // di quel livello di zoom, e allargando se ne aggiungono FINO A 500.
+          // Il raggio e' quello del cerchio circoscritto al riquadro visibile,
+          // quindi la vista e' coperta per intero anche agli angoli.
+          async () => {
+            const leggera = await supabase.rpc('nearby_pois_map', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+            });
+            if (!leggera.error) return leggera;
+            console.warn('[MapArea] nearby_pois_map non disponibile, uso nearby_pois:', leggera.error.message);
+            return supabase.rpc('nearby_pois', {
+              p_lat: center.lat,
+              p_lon: center.lng,
+              radius_m: Math.min(radius, 25000),
+              limit_num: 500,
+            });
+          },
+          'nearby_pois_map',
         ),
         wantsUtility
           ? runPoiRpc(

@@ -50,7 +50,7 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     let vivo = true;
     if (!iapAttivo) {
       const localeDi: Record<string, string> = { IT: 'it-IT', EN: 'en-GB', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN' };
-      fetch(`${getApiUrl()}/api/shop/pacchetti`)
+      fetch(getApiUrl('/api/shop/pacchetti'))
         .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
         .then((d: { currency?: string; pacchetti?: { id: string; cents: number }[] }) => {
           if (!vivo) return;
