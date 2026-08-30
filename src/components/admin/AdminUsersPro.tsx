@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { getApiUrl } from '../../lib/api';
 import { notify } from '../../lib/toast';
+import { notifyCreditsChanged } from '../../lib/pricing';
 import {
   Users, Search, RefreshCw, Download, ChevronLeft, ChevronRight, Loader2,
   AlertTriangle, ShieldCheck, ShieldOff, Wallet, Gauge, Activity, X,
@@ -661,6 +662,13 @@ function UserDetailPanel({ user, onClose, onChanged }: {
       });
       setAmount('');
       setReason('');
+      // IL SALDO IN CIMA RESTAVA QUELLO VECCHIO (29/08/2026, collaudo): la
+      // rettifica scriveva sul database e la scheda admin si riallineava, ma
+      // l'intestazione del Profilo continuava a mostrare i crediti di prima
+      // fino al riavvio dell'app — chi si accredita un rimborso pensava non
+      // fosse arrivato. `notifyCreditsChanged` e` lo stesso canale che usano
+      // gli acquisti (pricing.ts): riallinea header, shop e badge.
+      notifyCreditsChanged({ userId: user.id });
       const applied = data?.applied != null ? data.applied : amt;
       return `Rettifica applicata: ${applied >= 0 ? '+' : ''}${applied} crediti ${wallet === 'purchased' ? 'acquistati' : 'ottenuti'}.`;
     });

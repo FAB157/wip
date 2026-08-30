@@ -16,6 +16,7 @@ import { printScoped } from '../lib/printScoped';
 import { getApiUrl, apiFetch } from '../lib/api';
 import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
+import { Capacitor } from '@capacitor/core';
 import { ensureAffiliateUrl, trackAffiliateClick } from '../lib/affiliates';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import { Language, getTranslation, linguaCorrente } from '../lib/i18n';
@@ -6836,14 +6837,47 @@ export default function PlanScreen({
                     destCoords={destCoords ? { lat: destCoords.lat, lon: destCoords.lon } : null}
                   />
                   <button
-                    onClick={() => {
-                      const oldTitle = document.title;
+                    onClick={async () => {
                       const d = new Date();
                       const gg = String(d.getDate()).padStart(2, '0');
                       const mm = String(d.getMonth() + 1).padStart(2, '0');
                       const aa = String(d.getFullYear()).slice(-2);
                       const t = generatedPlan?.titolo || getTranslation('itinerary', language);
-                      document.title = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
+                      const nomeFile = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
+
+                      // SUL TELEFONO NON ESISTE window.print() (29/08/2026,
+                      // collaudo sul Realme: il tasto non faceva NULLA, senza
+                      // nemmeno un errore in console). Il WebView Android non
+                      // implementa la stampa: si genera il PDF con html2pdf
+                      // dalla vista di stampa e lo si salva nei Documenti,
+                      // come fa gia' il manuale (AppGuide) e la Guida Premium.
+                      if (Capacitor.isNativePlatform()) {
+                        const elemento = document.getElementById('itinerary-print-view');
+                        if (!elemento) { notify(getTranslation('pf_pdf_non_riuscito', language)); return; }
+                        try {
+                          notify(getTranslation('pf_pdf_in_corso', language));
+                          const mod: any = await import('html2pdf.js');
+                          const html2pdf = mod.default || mod;
+                          const blob: Blob = await html2pdf().set({
+                            margin: [10, 12, 15, 12],
+                            filename: nomeFile,
+                            image: { type: 'jpeg', quality: 0.95 },
+                            html2canvas: { scale: 2, useCORS: true, logging: false, allowTaint: true, scrollY: 0, windowWidth: elemento.scrollWidth, windowHeight: elemento.scrollHeight },
+                            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                            pagebreak: { mode: ['css', 'legacy'] },
+                          }).from(elemento).outputPdf('blob');
+                          const { saveBlobAsFile } = await import('../services/premiumGuideService');
+                          const ok = await saveBlobAsFile(blob, nomeFile);
+                          notify(getTranslation(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito', language));
+                        } catch (e) {
+                          console.error('[PlanScreen] PDF itinerario non riuscito', e);
+                          notify(getTranslation('pf_pdf_non_riuscito', language));
+                        }
+                        return;
+                      }
+
+                      const oldTitle = document.title;
+                      document.title = nomeFile;
                       // Il titolo torna quello vecchio ad anteprima chiusa
                       // ('afterprint'); ma l'evento non arriva su tutti i
                       // browser (annulla su iOS/WebView) e il titolo restava

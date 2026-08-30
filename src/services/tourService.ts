@@ -998,7 +998,16 @@ class TourService {
     } catch { /* senza sessione il server rispondera` 402, ed e` giusto cosi` */ }
 
     const r2 = opzioni.anello && opzioni.rientro ? `&rientro=${opzioni.rientro.lon},${opzioni.rientro.lat}` : '';
-    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}`);
+    // LA LINGUA DELLE SVOLTE (29/08/2026, committente: «anche il navigatore
+    // deve essere nella lingua dell'utente»). Il server la legge da
+    // `?language=` (server.ts, /api/tour/foot) e la passa a OSRM per le
+    // istruzioni passo-passo — ma qui non gliela mandava NESSUNO: un utente
+    // inglese o tedesco si sentiva dire «Gira a destra in Via Carducci».
+    // linguaCorrente() PRIMA di this.lingua: quest'ultima nasce 'it' e la
+    // imposta il driver del giro, che parte DOPO questa chiamata — usarla per
+    // prima avrebbe lasciato tutti in italiano lo stesso.
+    const linguaGiro = String(linguaCorrente() || this.lingua || 'it').toLowerCase().slice(0, 2) || 'it';
+    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}&language=${linguaGiro}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}`);
     // 45 s: il server ottimizza l'ordine e chiede OSRM per ogni tratta; oltre
     // e' rete morta, e prima la promise restava appesa per sempre (ITI-07).
     const r = await apiFetch(url, { headers: intestazioni }, 45000);

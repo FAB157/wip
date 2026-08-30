@@ -146,6 +146,11 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   // iOS senza metodi granulari: dopo la catena unica sappiamo solo lo stato
   // riportato; il resto lo diciamo a parole (nota «Sempre lo propone iOS»).
   const [ripiegoIos, setRipiegoIos] = useState(false);
+  // L'utente ha gia' premuto «Attiva» almeno una volta: da qui in poi uno
+  // stato «denied» riletto dal nativo e' un rifiuto suo, non un «mai
+  // chiesto», e va spiegato (collaudo 29/08: il dialogo di sistema puo'
+  // comparire DOPO che la promise del plugin e' gia' tornata).
+  const [tentativoFatto, setTentativoFatto] = useState(false);
 
   const t = (key: string) => getTranslation(key, language);
 
@@ -158,6 +163,15 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
     }
     setIsVisible(true);
   }, [onComplete]);
+
+  // RIAPERTURA DAL PROFILO (29/08/2026, committente: «tutte queste
+  // autorizzazioni si possono fare anche dal setup dell'utente?»). La stessa
+  // schermata, con le spunte rilette dal nativo: Profilo → Setup → «Permessi».
+  useEffect(() => {
+    const apri = () => { if (Capacitor.isNativePlatform()) setIsVisible(true); };
+    window.addEventListener('wip-apri-permessi', apri);
+    return () => window.removeEventListener('wip-apri-permessi', apri);
+  }, []);
 
   /** Rilegge lo stato dal nativo: le spunte. Dove il metodo manca resta ignoto. */
   const rileggi = useCallback(async () => {
@@ -225,6 +239,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   const attivaPosizione = async () => {
     if (occupato) return;
     setOccupato('location');
+    setTentativoFatto(true);
     localStorage.setItem('wip_location_disclosure_accepted', 'true');
     try {
       if (NativePermissionsPlugin) {
@@ -313,7 +328,8 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
   const batteriaOk = stato.battery === true;
   const mostraBatteria = isAndroid();
 
-  const sottotitoloPosizione = locationDenied
+  const mostraNegata = locationDenied || (tentativoFatto && stato.location === 'denied');
+  const sottotitoloPosizione = mostraNegata
     ? t('pf_pm_denied')
     : stato.location === 'whileInUse'
       ? (ripiegoIos ? t('pf_pm2_nota_ios') : t('pf_pm2_riga_pos_parziale'))
@@ -471,7 +487,7 @@ export default function PermissionsModal({ onComplete, language }: PermissionsMo
           </ul>
 
           {/* Posizione negata: si dice e si apre in un tocco la scheda dell'app. */}
-          {locationDenied && (
+          {mostraNegata && (
             <button
               type="button"
               onClick={openAppSettings}

@@ -2076,6 +2076,28 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               {/* Dove si apre la mappa (22/08/2026): non più Carrara per tutti */}
               <MapStartSetting language={language} />
 
+              {/* PERMESSI DAL SETUP (29/08/2026, committente: «tutte queste
+                  autorizzazioni si possono fare anche dal setup dell'utente?»).
+                  Riapre la stessa schermata dell'onboarding (PermissionsModal,
+                  una riga per permesso col tasto «Attiva» e le spunte rilette
+                  dal telefono). Solo sul nativo: sul web non c'è niente da
+                  attivare. */}
+              {Capacitor.isNativePlatform() && (
+                <button
+                  type="button"
+                  onClick={() => window.dispatchEvent(new CustomEvent('wip-apri-permessi'))}
+                  className="w-full flex items-center gap-3 rounded-2xl border border-primary/10 bg-white px-4 py-3 text-left shadow-sm active:scale-[0.99] transition-transform"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-primary">
+                    <ShieldCheck className="w-5 h-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-bold text-gray-900 leading-snug">{getTranslation('pf_permessi_riapri', language)}</span>
+                    <span className="block text-[11px] text-gray-500 leading-snug">{getTranslation('pf_permessi_riapri_testo', language)}</span>
+                  </span>
+                </button>
+              )}
+
               {/* Setup Consumi e Costi Dashboard Section */}
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
                 <div className="flex items-center gap-3 mb-5 border-b border-gray-100/60 pb-3">

@@ -74,9 +74,9 @@ const CostBadge = ({ cost }: { cost: string }) => (
     <CreditCard className="w-3 h-3" /> {cost}
   </span>
 );
-const FreeBadge = () => (
+const FreeBadge = ({ label }: { label: string }) => (
   <span className="inline-flex items-center text-[10px] font-black bg-green-50 text-green-700 border border-green-100 px-2 py-0.5 rounded-full align-middle">
-    GRATIS
+    {label}
   </span>
 );
 
@@ -126,13 +126,19 @@ export default function AppGuide({ language }: AppGuideProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportMsg, setExportMsg] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<string | null>('intro');
-  const isItalian = language === 'IT';
-  const t = (k: string) => getTranslation(k, language);
-  // I CORPI delle sezioni sono ancora in italiano: quando la UI non è in IT
-  // il manuale lo dichiara con una riga tradotta in testa. In IT la riga non
-  // esiste (getTranslation con stringa vuota ricadrebbe sull'inglese, quindi
-  // il caso IT si gestisce qui).
-  const soloItaliano = isItalian ? '' : t('vr_a_guide_only_it');
+  // Come in OfflineMapsTab: `t` accetta placeholder {n}/{h}/{m}/{file}, così le
+  // frasi con un numero o un nome file dentro restano UNA sola chiave per
+  // lingua invece di essere spezzate in pezzi non ricomponibili.
+  const t = (k: string, vars?: Record<string, string | number>) => {
+    let s = getTranslation(k, language);
+    if (vars) for (const [key, v] of Object.entries(vars)) s = s.split(`{${key}}`).join(String(v));
+    return s;
+  };
+  // Piccoli formattatori di prezzo riusati nei badge: stessa unità "N crediti"
+  // in tutte le lingue, con il suffisso giusto (/giorno, /10 messaggi).
+  const cr = (n: number) => t('man_u_crediti', { n });
+  const crGiorno = (n: number) => t('man_u_crediti_giorno', { n });
+  const cr10Msg = (n: number) => t('man_u_crediti_10msg', { n });
 
   const toggleSection = (section: string) => {
     setOpenSection(openSection === section ? null : section);
@@ -167,9 +173,7 @@ export default function AppGuide({ language }: AppGuideProps) {
         if (isNative) {
           // window.print() non è supportato dal WebView Android: senza
           // html2pdf non c'è un percorso alternativo sul nativo.
-          setExportMsg(isItalian
-            ? 'Generazione PDF non disponibile su questo dispositivo. Riprova dal sito web.'
-            : 'PDF generation is not available on this device. Please try from the website.');
+          setExportMsg(t('man_pdf_unavailable'));
         } else {
           const { printScoped } = await import('../lib/printScoped');
           printScoped('manual');
@@ -199,12 +203,8 @@ export default function AppGuide({ language }: AppGuideProps) {
       if (isNative) {
         const where = await writePdfNative(pdfBlob, PDF_FILENAME);
         setExportMsg(where === 'documents'
-          ? (isItalian
-            ? `PDF completo salvato nella cartella "Documenti" del telefono (${PDF_FILENAME}).`
-            : `Full PDF saved to your phone's "Documents" folder (${PDF_FILENAME}).`)
-          : (isItalian
-            ? 'PDF salvato nei file dell\'app (Android/data/com.itaintasca.app/files).'
-            : 'PDF saved in the app files (Android/data/com.itaintasca.app/files).'));
+          ? t('man_pdf_saved_documents', { file: PDF_FILENAME })
+          : t('man_pdf_saved_appfiles'));
       } else {
         const dlUrl = URL.createObjectURL(pdfBlob);
         const a = document.createElement('a');
@@ -217,9 +217,7 @@ export default function AppGuide({ language }: AppGuideProps) {
       }
     } catch (e) {
       console.error('[AppGuide] PDF Export failed', e);
-      setExportMsg(isItalian
-        ? 'Esportazione PDF non riuscita. Riprova.'
-        : 'PDF export failed. Please try again.');
+      setExportMsg(t('man_pdf_export_failed'));
     } finally {
       setIsExporting(false);
     }
@@ -234,24 +232,24 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: BookOpen,
       content: (
         <>
-          <P><strong>WIP — World in Pocket</strong> è la tua audioguida intelligente: mentre cammini o guidi, l'app riconosce i luoghi intorno a te e te li racconta a voce, anche con il telefono in tasca e lo schermo spento.</P>
-          <H>Come funzionano i crediti</H>
-          <P>Alla registrazione ricevi <strong>100 crediti in omaggio</strong>, accreditati appena <strong>confermi l'email</strong> (il link che ti arriva dopo l'iscrizione). Molte funzioni sono gratuite; quelle premium consumano crediti, ricaricabili dallo Shop. Il saldo è sempre visibile in alto nel Profilo.</P>
+          <P><strong>WIP — World in Pocket</strong> {t('man_intro_p1')}</P>
+          <H>{t('man_intro_h_crediti')}</H>
+          <P>{t('man_intro_p2a')}<strong>{t('man_intro_p2b')}</strong>{t('man_intro_p2c')}<strong>{t('man_intro_p2d')}</strong>{t('man_intro_p2e')}</P>
           <ul className="mb-2">
-            <Li>Esplorare la mappa, gli avvisi di vicinanza e i <strong>teaser vocali</strong>: <FreeBadge /></Li>
-            <Li>Audioguida completa di un luogo: <CostBadge cost={`${PRICING_LIST.audio_guide} crediti`} /> (una volta acquistata resta tua per sempre)</Li>
-            <Li><strong>Day Pass 24h</strong> — tutto automatico, fino a {DAY_PASS_GUIDE_CAP} guide: <CostBadge cost={`${PRICING_LIST.day_pass} crediti`} /></Li>
-            <Li>Scheda dettagliata di un luogo: <CostBadge cost={`${PRICING_LIST.poi_detail} crediti`} /></Li>
-            <Li>Itinerario AI: <CostBadge cost={`${PRICING_LIST.itinerary_daily} crediti/giorno`} /> — include <strong>10 messaggi di chat gratis</strong> con WIP</Li>
-            <Li>Chat WIP oltre i messaggi inclusi: <CostBadge cost={`${PRICING_LIST.chat_session} crediti / 10 messaggi`} /></Li>
-            <Li>Riconoscimento foto (Vision): <CostBadge cost={`${PRICING_LIST.photo_search} crediti`} /></Li>
-            <Li><strong>Pass Museo</strong> — riconoscimenti Vision illimitati per {MUSEUM_PASS_HOURS} ore: <CostBadge cost={`${PRICING_LIST.museum_pass} crediti`} /></Li>
-            <Li>Libreria itinerari già pronti e verificati: <FreeBadge /></Li>
-            <Li>Proporre un luogo alla <strong>WIP Community</strong>: <FreeBadge /> — e se approvato <strong>ti fa guadagnare crediti</strong></Li>
-            <Li>Guida PDF Premium: <CostBadge cost={`${PRICING_LIST.premium_guide_daily} crediti/giorno`} /> · Podcast: <CostBadge cost={`${PRICING_LIST.podcast_daily} crediti/giorno`} /></Li>
-            <Li>Mappe/pacchetti offline: <FreeBadge /></Li>
+            <Li>{t('man_intro_li_map')} <FreeBadge label={t('man_gratis')} /></Li>
+            <Li>{t('man_intro_li_audio_1')} <CostBadge cost={cr(PRICING_LIST.audio_guide)} /> {t('man_intro_li_audio_2')}</Li>
+            <Li><strong>Day Pass 24h</strong> {t('man_intro_li_daypass', { n: DAY_PASS_GUIDE_CAP })} <CostBadge cost={cr(PRICING_LIST.day_pass)} /></Li>
+            <Li>{t('man_intro_li_poidetail')} <CostBadge cost={cr(PRICING_LIST.poi_detail)} /></Li>
+            <Li>{t('man_intro_li_itin_1')} <CostBadge cost={crGiorno(PRICING_LIST.itinerary_daily)} /> {t('man_intro_li_itin_2')} <strong>{t('man_intro_li_itin_3')}</strong> {t('man_intro_li_itin_4')} WIP</Li>
+            <Li>{t('man_intro_li_chat')} <CostBadge cost={cr10Msg(PRICING_LIST.chat_session)} /></Li>
+            <Li>{t('man_intro_li_vision')} <CostBadge cost={cr(PRICING_LIST.photo_search)} /></Li>
+            <Li><strong>{t('museum_pass_title')}</strong> {t('man_intro_li_museumpass', { h: MUSEUM_PASS_HOURS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></Li>
+            <Li>{t('man_intro_li_library')} <FreeBadge label={t('man_gratis')} /></Li>
+            <Li>{t('man_intro_li_community_1')} <strong>WIP Community</strong>{t('man_intro_li_community_2')} <FreeBadge label={t('man_gratis')} /> {t('man_intro_li_community_3')} <strong>{t('man_intro_li_community_4')}</strong></Li>
+            <Li>{t('man_intro_li_guidapremium')} <CostBadge cost={crGiorno(PRICING_LIST.premium_guide_daily)} /> · {t('man_intro_li_podcast')} <CostBadge cost={crGiorno(PRICING_LIST.podcast_daily)} /></Li>
+            <Li>{t('man_intro_li_offline')} <FreeBadge label={t('man_gratis')} /></Li>
           </ul>
-          <P>Puoi anche <strong>guadagnare crediti gratis</strong> completando le Missioni (vedi sezione dedicata).</P>
+          <P>{t('man_intro_p3')}</P>
         </>
       ),
     },
@@ -261,19 +259,20 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: KeyRound,
       content: (
         <>
-          <H>Creare un account</H>
-          <P>Registrati con <strong>email e password</strong>: inserisci il tuo nome (comparirà nel profilo), l'email e una password di almeno 6 caratteri.</P>
-          <H>Password dimenticata</H>
-          <P>Nella schermata di accesso tocca <em>"Hai dimenticato la password?"</em>, inserisci la tua email e riceverai un link: aprilo, imposta la nuova password e rientra nell'app.</P>
-          <H>Sblocco con impronta / volto</H>
-          <P>Se il tuo telefono ha il sensore, dopo il primo accesso puoi entrare con l'impronta o il volto senza reinserire la password. Si attiva/disattiva da <strong>Profilo → Impostazioni → Sicurezza</strong>; disattivandolo le credenziali salvate vengono rimosse dal dispositivo.</P>
-          <H>Cambiare password, nome e foto</H>
+          <H>{t('man_acc_h_create')}</H>
+          <P>{t('man_acc_p_create')}</P>
+          <p className="text-xs text-gray-500 -mt-2 mb-3">{t('man_acc_note_login')}</p>
+          <H>{t('man_acc_h_forgot')}</H>
+          <P>{t('man_acc_p_forgot_1')} <em>{t('man_acc_p_forgot_2')}</em>{t('man_acc_p_forgot_3')}</P>
+          <H>{t('man_acc_h_biometric')}</H>
+          <P>{t('man_acc_p_biometric')} <strong>{t('man_acc_bc_sicurezza')}</strong>{t('man_acc_p_biometric_2')}</P>
+          <H>{t('man_acc_h_change')}</H>
           <ul className="mb-2">
-            <Li><strong>Password</strong>: Profilo → Impostazioni → Sicurezza → "Cambia password" (serve la password attuale).</Li>
-            <Li><strong>Nome e foto</strong>: Profilo → Impostazioni → Area Personale. Puoi usare un'emoji, un URL o caricare una foto (max 1 MB).</Li>
+            <Li><strong>{t('man_acc_li_pw_label')}</strong>{t('man_acc_li_pw')}</Li>
+            <Li><strong>{t('man_acc_li_name_label')}</strong>{t('man_acc_li_name')}</Li>
           </ul>
-          <H>Eliminare l'account</H>
-          <P>Da Profilo → Impostazioni, in fondo: digita "elimina" per confermare. La cancellazione è definitiva (account e dati profilo).</P>
+          <H>{t('man_acc_h_delete')}</H>
+          <P>{t('man_acc_p_delete')}</P>
         </>
       ),
     },
@@ -283,20 +282,20 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Smartphone,
       content: (
         <>
-          <P>In fondo allo schermo ci sono <strong>sei comandi</strong>. Cinque aprono una schermata; uno, <strong>Guida</strong>, non apre nulla: accende e spegne l'audioguida.</P>
+          <P>{t('man_nav_p_intro')}</P>
           <ul className="mb-2">
-            <Li><strong><Map className="w-4 h-4 inline" /> Esplora</strong> — la schermata principale: la mappa dei luoghi intorno a te, i filtri per categoria, il radar e la ricerca per città.</Li>
-            <Li><strong><Calendar className="w-4 h-4 inline" /> Itinerario</strong> — i tuoi piani giorno per giorno e la Libreria di itinerari già pronti.</Li>
-            <Li><strong><PartyPopper className="w-4 h-4 inline" /> Eventi</strong> — concerti, mostre, sagre e mercatini nei giorni in cui ci sei.</Li>
-            <Li><strong><Camera className="w-4 h-4 inline" /> WIP</strong> — il pulsante tondo al centro: inquadra un monumento e scopri cos'è. Da qui attivi il <strong>Pass Museo</strong> e proponi luoghi nuovi alla <strong>Community</strong>.</Li>
-            <Li><strong><Headphones className="w-4 h-4 inline" /> Guida</strong> — <strong>l'interruttore dell'audioguida</strong>, il comando più importante dell'app. Acceso, WIP ti segue mentre cammini e parla quando arrivi. Vedi sotto.</Li>
-            <Li><strong><User className="w-4 h-4 inline" /> Profilo</strong> — crediti, missioni, passaporto e diario, <strong>Le mie Vision</strong>, mappe offline, impostazioni, assistenza e questo manuale.</Li>
+            <Li><strong><Map className="w-4 h-4 inline" /> {t('man_nav_li_esplora_label')}</strong> — {t('man_nav_li_esplora_desc')}</Li>
+            <Li><strong><Calendar className="w-4 h-4 inline" /> {t('man_nav_li_itin_label')}</strong> — {t('man_nav_li_itin_desc')}</Li>
+            <Li><strong><PartyPopper className="w-4 h-4 inline" /> {t('man_nav_li_eventi_label')}</strong> — {t('man_nav_li_eventi_desc')}</Li>
+            <Li><strong><Camera className="w-4 h-4 inline" /> {t('man_nav_li_wip_label')}</strong> — {t('man_nav_li_wip_desc')}</Li>
+            <Li><strong><Headphones className="w-4 h-4 inline" /> {t('man_nav_li_guida_label')}</strong> — {t('man_nav_li_guida_desc')}</Li>
+            <Li><strong><User className="w-4 h-4 inline" /> {t('man_nav_li_profilo_label')}</strong> — {t('man_nav_li_profilo_desc')}</Li>
           </ul>
-          <H>Il tasto Guida, in dettaglio</H>
+          <H>{t('man_nav_h_guida')}</H>
           <ul className="mb-2">
-            <Li>È un <strong>interruttore, non una schermata</strong>: toccandolo non cambi pagina, accendi o spegni l'ascolto. Quando è acceso il simbolo pulsa.</Li>
-            <Li>Ad audioguida accesa compare <strong>sopra il tasto</strong> un secondo comando tondo per <strong>silenziare</strong> (🔊 / 🔇): serve a zittire la voce <em>senza</em> spegnere il servizio. Sono due cose diverse — silenziare tiene attivo il rilevamento dei luoghi, spegnere lo interrompe.</Li>
-            <Li><strong>Spegnere la Guida sospende anche il giro in corso</strong>: se stai seguendo un itinerario, quello resta in attesa e riprende quando riaccendi.</Li>
+            <Li>{t('man_nav_li_switch')}</Li>
+            <Li>{t('man_nav_li_mute')}</Li>
+            <Li>{t('man_nav_li_pause')}</Li>
           </ul>
         </>
       ),
@@ -307,20 +306,24 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Map,
       content: (
         <>
-          <P>La mappa mostra i luoghi d'interesse intorno a te: monumenti, musei, chiese, panorami, locali e le <strong>Gemme</strong> 💎 (luoghi speciali selezionati).</P>
+          <P>{t('man_map_p_intro')}</P>
           <ul className="mb-2">
-            <Li><strong>Chips categorie</strong> (in alto): attiva/disattiva le categorie che ti interessano. Valgono anche per gli avvisi vocali.</Li>
-            <Li><strong>Tocca un pin</strong>: si apre la scheda del luogo con descrizione, foto e tasto Ascolta.</Li>
-            <Li><strong>Tasto cuffie</strong> <Headphones className="w-4 h-4 inline" /> (in basso a sinistra): accende l'audioguida automatica e la vista radar. Con il Day Pass attivo accanto compare il badge 🎫 con le guide rimaste.</Li>
-            <Li><strong>Vista radar</strong>: tu al centro, i luoghi intorno ordinati per distanza — è anche la vista usata offline, dove la mappa di sfondo non è disponibile.</Li>
+            <Li>{t('man_map_li_chips')}</Li>
+            <Li>{t('man_map_li_pin')}</Li>
+            <Li><Headphones className="w-4 h-4 inline" /> {t('man_map_li_cuffie')}</Li>
+            <Li>{t('man_map_li_radar')}</Li>
           </ul>
-          <H>La chip 🏺 Beni Culturali</H>
-          <P>Oltre ai luoghi turistici, WIP contiene l'<strong>atlante dei beni vincolati</strong> e i <strong>musei di tutto il mondo</strong> raccolti dai registri ufficiali dei ministeri e da Wikidata. Sono centinaia di migliaia di voci: chiese minori, ville, torri, aree archeologiche, palazzi storici che non compaiono in nessuna guida.</P>
+          <H>{t('man_map_h_giro')}</H>
+          <P>{t('man_map_p_giro_1')} <strong>{t('gr_crea_giro')}</strong> {t('man_map_p_giro_2')} <strong>{t('gr_avvia_navigazione')}</strong>{t('man_map_p_giro_3')}</P>
+          <H>{t('man_map_h_beni')}</H>
+          <P>{t('man_map_p_beni_1')}</P>
           <ul className="mb-2">
-            <Li>Si accendono con la chip <strong>🏺 Beni Culturali</strong> e compaiono da uno <strong>zoom ravvicinato</strong> in poi: a mappa larga sarebbero migliaia di pin sovrapposti.</Li>
-            <Li>Hanno una scheda più essenziale (nome, tipo, vincolo, posizione): sono un livello informativo, non tutti hanno una storia da raccontare.</Li>
-            <Li>Quelli più importanti sono anche normali luoghi WIP, con audioguida e foto.</Li>
+            <Li>{t('man_map_li_beni_1')}</Li>
+            <Li>{t('man_map_li_beni_2')}</Li>
+            <Li>{t('man_map_li_beni_3')}</Li>
           </ul>
+          <H>{t('man_map_h_locali')}</H>
+          <P>{t('man_map_p_locali')}</P>
         </>
       ),
     },
@@ -330,17 +333,17 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Headphones,
       content: (
         <>
-          <P>È il cuore di WIP: attiva le cuffie, metti il telefono in tasca e cammina. Funziona anche a <strong>schermo spento</strong>.</P>
-          <H>Cosa succede quando ti avvicini a un luogo</H>
+          <P>{t('man_geo_p_intro')}</P>
+          <H>{t('man_geo_h_avvicini')}</H>
           <ul className="mb-2">
-            <Li><strong>1. Avviso di avvicinamento</strong> (~150 m a piedi, ~300 m in auto): vibrazione + "Ti stai avvicinando a…". <FreeBadge /></Li>
-            <Li><strong>2. Arrivo + teaser</strong>: un assaggio vocale di ciò che rende speciale il luogo. <FreeBadge /></Li>
-            <Li><strong>3. Audioguida completa</strong>: con il <strong>Day Pass</strong> parte da sola (modalità automatica); senza pass tocchi <em>Ascolta</em> e paghi {PRICING_LIST.audio_guide} crediti — solo la prima volta: i luoghi acquistati restano sbloccati per sempre.</Li>
+            <Li>{t('man_geo_li_1')} <FreeBadge label={t('man_gratis')} /></Li>
+            <Li>{t('man_geo_li_2')} <FreeBadge label={t('man_gratis')} /></Li>
+            <Li>{t('man_geo_li_3', { n: PRICING_LIST.audio_guide })}</Li>
           </ul>
-          <H>Modalità automatica vs semiautomatica</H>
-          <P>In <strong>automatica</strong> la guida parte da sola all'arrivo (col pass o per i luoghi già acquistati). In <strong>semiautomatica</strong> ricevi avviso e teaser, e decidi tu quando toccare Ascolta. Si sceglie da Profilo → Impostazioni.</P>
-          <H>A piedi o in auto</H>
-          <P>WIP capisce da solo se cammini o guidi e adatta le distanze di avviso (regolabili in Impostazioni → GeoControl). In auto funziona anche con <strong>Android Auto</strong>.</P>
+          <H>{t('man_geo_h_modalita')}</H>
+          <P>{t('man_geo_p_modalita')}</P>
+          <H>{t('man_geo_h_trasporto')}</H>
+          <P>{t('man_geo_p_trasporto')}</P>
         </>
       ),
     },
@@ -350,14 +353,14 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Ticket,
       content: (
         <>
-          <P>Il modo più comodo di visitare: <strong>{PRICING_LIST.day_pass} crediti</strong> e per <strong>24 ore</strong> non devi fare più nulla — solo attivare le cuffie.</P>
+          <P>{t('man_dp_p_intro', { n: PRICING_LIST.day_pass })}</P>
           <ul className="mb-2">
-            <Li>Avviso, teaser e <strong>audioguida completa automatici</strong> per ogni luogo che incontri, fino a <strong>{DAY_PASS_GUIDE_CAP} guide</strong>.</Li>
-            <Li>Funziona <strong>anche offline</strong> (con un pacchetto area scaricato) e a schermo spento.</Li>
-            <Li>Include un livello di <strong>informazioni aggiuntive</strong> dopo ogni guida.</Li>
-            <Li>Le guide rimaste le vedi nel badge 🎫 accanto alle cuffie e nella notifica dell'audioguida.</Li>
+            <Li>{t('man_dp_li_1', { n: DAY_PASS_GUIDE_CAP })}</Li>
+            <Li>{t('man_dp_li_2')}</Li>
+            <Li>{t('man_dp_li_3')}</Li>
+            <Li>{t('man_dp_li_4')}</Li>
           </ul>
-          <P>Si attiva da: Profilo → Mappe Offline, dall'itinerario appena creato, o dal popup che compare quando attivi le cuffie in una zona ricca di luoghi. <em>Conviene dal {Math.floor(PRICING_LIST.day_pass / PRICING_LIST.audio_guide) + 1}° ascolto in poi — se in un giorno visiti più di {Math.floor(PRICING_LIST.day_pass / PRICING_LIST.audio_guide)} luoghi, risparmi.</em></P>
+          <P><em>{t('man_dp_p_footer', { m: Math.floor(PRICING_LIST.day_pass / PRICING_LIST.audio_guide) })}</em></P>
         </>
       ),
     },
@@ -367,19 +370,19 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: WifiOff,
       content: (
         <>
-          <P>Prima di partire per una zona con poca rete, scarica <strong>gratis</strong> il pacchetto dell'area da Profilo → Mappe Offline: cerca la città, scegli il raggio (50/100/200 km) e scarica. Pochi MB, pochi secondi.</P>
-          <H>Cosa funziona senza rete</H>
+          <P>{t('man_off_p_intro')}</P>
+          <H>{t('man_off_h_cosa')}</H>
           <ul className="mb-2">
-            <Li><strong>Tutto il flusso automatico</strong>: avvisi, teaser e audioguide anche a schermo spento, letti dalla voce di sistema del telefono.</Li>
-            <Li><strong>Vista radar</strong> al posto della mappa (la mappa di sfondo richiede rete).</Li>
-            <Li><strong>Day Pass</strong>: se attivo, copre anche gli ascolti offline.</Li>
-            <Li><strong>Ascolto a crediti</strong>: funziona anche offline — la spesa viene annotata e regolarizzata al ritorno della rete.</Li>
+            <Li>{t('man_off_li_1')}</Li>
+            <Li>{t('man_off_li_2')}</Li>
+            <Li>{t('man_off_li_3')}</Li>
+            <Li>{t('man_off_li_4')}</Li>
           </ul>
-          <H>Consigli</H>
+          <H>{t('man_off_h_consigli')}</H>
           <ul className="mb-2">
-            <Li>Al download l'app verifica che la <strong>voce offline</strong> della tua lingua sia installata e ti aiuta a scaricarla.</Li>
-            <Li>I pacchetti si aggiornano col tasto <RefreshCw className="w-3.5 h-3.5 inline" /> (scarica solo le novità, gratis) e si eliminano col cestino.</Li>
-            <Li>Puoi scaricare più aree: si attiva da sola quella in cui ti trovi, zero selezioni manuali.</Li>
+            <Li>{t('man_off_li_5')}</Li>
+            <Li>{t('man_off_li_6').split('⟳')[0]}<RefreshCw className="w-3.5 h-3.5 inline" />{t('man_off_li_6').split('⟳')[1]}</Li>
+            <Li>{t('man_off_li_7')}</Li>
           </ul>
         </>
       ),
@@ -390,23 +393,23 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Compass,
       content: (
         <>
-          <P>Dì a WIP dove vai, per quanti giorni e cosa ti piace: ricevi un itinerario completo con orari, tappe, pause e spostamenti. <CostBadge cost={`${PRICING_LIST.itinerary_daily} crediti/giorno`} /></P>
+          <P>{t('man_plan_p_intro')} <CostBadge cost={crGiorno(PRICING_LIST.itinerary_daily)} /></P>
           <ul className="mb-2">
-            <Li><strong>10 messaggi di chat inclusi</strong> con ogni itinerario: chiedi modifiche ("aggiungi un museo", "e se piove?") direttamente in chat.</Li>
-            <Li><strong>Rigenera</strong> ricrea il piano mantenendo le tappe che hai bloccato col lucchetto.</Li>
-            <Li><strong>Segui itinerario</strong>: le tappe entrano nel radar con priorità e check-in automatico all'arrivo.</Li>
-            <Li><strong>Offline</strong>: salva il testo gratis, oppure scarica il <strong>bundle audio</strong> con la voce premium ({PRICING_LIST.audio_guide + PRICING_LIST.poi_detail} crediti/tappa — file tuoi per sempre).</Li>
-            <Li><strong>PDF e stampa</strong>: esporta l'itinerario; la <strong>Guida Premium</strong> ({PRICING_LIST.premium_guide_daily} crediti/giorno) crea un libretto illustrato.</Li>
+            <Li>{t('man_plan_li_chat')}</Li>
+            <Li>{t('man_plan_li_rigenera')}</Li>
+            <Li>{t('man_plan_li_segui')}</Li>
+            <Li>{t('man_plan_li_offline', { n: PRICING_LIST.audio_guide + PRICING_LIST.poi_detail })}</Li>
+            <Li>{t('man_plan_li_pdf', { n: PRICING_LIST.premium_guide_daily })}</Li>
           </ul>
-          <H>Portare il giorno sulla mappa: a piedi o in auto</H>
-          <P>Il tasto dell'audioguida di un giorno ora <strong>chiede prima come lo fai</strong>, perché chi guida non usa una guida pensata per chi cammina.</P>
+          <H>{t('man_plan_h_giorno')}</H>
+          <P>{t('man_plan_p_giorno')}</P>
           <ul className="mb-2">
-            <Li><strong>A piedi</strong>: le tappe del giorno diventano un giro nel radar, con il tracciato, l'ordine del piano e le aggiunte che incontri per strada.</Li>
-            <Li><strong>In auto</strong>: si esce su Google Maps con <strong>tutte</strong> le tappe come sosta, non solo la prima. Google ne accetta al massimo dieci: se il giorno ne ha di più, restano la prima, l'ultima e le intermedie prese a distanza regolare.</Li>
+            <Li>{t('man_plan_li_piedi')}</Li>
+            <Li>{t('man_plan_li_auto')}</Li>
           </ul>
-          <H>Le tappe che non parlano</H>
-          <P>Sulla mappa del giorno compaiono <strong>tutte</strong> le tappe, pranzi, pause e trasferimenti compresi: senza, il tracciato passerebbe altrove e non sarebbe più la giornata che hai pianificato.</P>
-          <P>Ristoranti e pause però sono <strong>tappe mute</strong>: il percorso ci passa e all'arrivo senti il nome — <em>"Sei arrivato a: Trattoria da Mario"</em> — ma non si apre nessuna scheda, non parte nessuna audioguida e <strong>non ti viene addebitato nulla</strong>. Non entrano nemmeno nei pacchetti offline: pagare il racconto di una trattoria sarebbe spesa buttata.</P>
+          <H>{t('man_plan_h_mute')}</H>
+          <P>{t('man_plan_p_mute_1')}</P>
+          <P>{t('man_plan_p_mute_2')}</P>
         </>
       ),
     },
@@ -416,12 +419,12 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Bookmark,
       content: (
         <>
-          <P>Prima di far generare un itinerario da zero, guarda in <strong>📚 Libreria</strong>: contiene itinerari <strong>già costruiti e verificati</strong>, pronti da usare senza spendere crediti. <FreeBadge /></P>
+          <P>{t('man_lib_p_intro')} <FreeBadge label={t('man_gratis')} /></P>
           <ul className="mb-2">
-            <Li>Si cerca per <strong>città, porto o tema</strong>, e si filtra per durata: poche ore per una sosta, oppure giorni interi.</Li>
-            <Li>Gli itinerari già in libreria portano il bollino <strong>"✓ Verificato"</strong>: sono stati controllati, non generati al momento.</Li>
-            <Li>Tocca una scheda per vedere l'anteprima completa (tappe, orari, budget) e poi <strong>"Usa questo itinerario"</strong>: entra nei tuoi piani come se l'avessi creato tu, e da lì lo modifichi.</Li>
-            <Li>Se un tema c'è ma l'itinerario non è ancora stato generato, la scheda te lo dice e puoi farlo generare al momento (al costo normale).</Li>
+            <Li>{t('man_lib_li_1')}</Li>
+            <Li>{t('man_lib_li_2')}</Li>
+            <Li>{t('man_lib_li_3')}</Li>
+            <Li>{t('man_lib_li_4')}</Li>
           </ul>
         </>
       ),
@@ -432,21 +435,21 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Navigation,
       content: (
         <>
-          <P>Da una scheda o da una tappa dell'itinerario puoi farti <strong>accompagnare a piedi</strong>: WIP Nav disegna il percorso e ti guida con la voce, come un navigatore d'auto ma pensato per chi cammina. <FreeBadge /></P>
+          <P>{t('man_wn_p_intro')} <FreeBadge label={t('man_gratis')} /></P>
           <ul className="mb-2">
-            <Li>Freccia della manovra, distanza alla svolta, tempo e <strong>orario di arrivo previsto</strong>.</Li>
-            <Li>Le indicazioni vocali usano la <strong>stessa voce dell'audioguida</strong>: non devi guardare lo schermo.</Li>
-            <Li>Mentre cammini le audioguide <strong>continuano a funzionare</strong>: se passi davanti a qualcosa di interessante lungo la strada, te lo racconta.</Li>
-            <Li>Le tappe del tuo itinerario non costano nulla in più; un luogo trovato per strada segue le regole normali dell'audioguida.</Li>
+            <Li>{t('man_wn_li_1')}</Li>
+            <Li>{t('man_wn_li_2')}</Li>
+            <Li>{t('man_wn_li_3')}</Li>
+            <Li>{t('man_wn_li_4')}</Li>
           </ul>
-          <H>Il cruscotto resta acceso a schermo spento</H>
-          <P>Durante la navigazione trovi <strong>fisso</strong> sulla schermata di blocco un riquadro con la tappa (n° su totale), la manovra, i metri alla svolta e l'orario di arrivo previsto: non devi sbloccare il telefono per sapere dove girare.</P>
+          <H>{t('man_wn_h_cruscotto')}</H>
+          <P>{t('man_wn_p_cruscotto')}</P>
           <ul className="mb-2">
-            <Li>Su <strong>Android</strong> prende il posto della notifica dell'audioguida, che è già fissa: resta una notifica sola, e i tasti Pausa / Riprendi / Salta restano tutti raggiungibili.</Li>
-            <Li>Su <strong>iPhone</strong> usa le <strong>Attività in tempo reale</strong> (schermata di blocco e Dynamic Island), da iOS 16.1 in poi. Se le hai disattivate nelle impostazioni di sistema, WIP torna alla notifica normale.</Li>
-            <Li>Il cruscotto compare solo con l'audioguida accesa, e si spegne da solo a giro finito.</Li>
+            <Li>{t('man_wn_li_5')}</Li>
+            <Li>{t('man_wn_li_6')}</Li>
+            <Li>{t('man_wn_li_7')}</Li>
           </ul>
-          <P>In auto WIP non fa da navigatore: apre Google Maps o Apple Mappe, che lo fanno meglio.</P>
+          <P>{t('man_wn_p_auto')}</P>
         </>
       ),
     },
@@ -456,13 +459,13 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Compass,
       content: (
         <>
-          <H>🥾 Cammini storici</H>
-          <P>Vie di pellegrinaggio e cammini di tutto il mondo, divisi in <strong>tappe reali</strong>, con i luoghi da vedere lungo il percorso e dove dormire a fine giornata. Utile sia per farli davvero, sia per prendersene un pezzo in giornata.</P>
-          <H>⚓ Fughe da porto e aeroporto</H>
-          <P>Hai uno scalo o una sosta da crociera e poche ore? Scegli il porto o l'aeroporto e la durata — <strong>4, 6 o 8 ore</strong> — e WIP costruisce un giro che ti riporta indietro in tempo, contando davvero gli spostamenti.</P>
+          <H>{t('man_tr_h_cammini')}</H>
+          <P>{t('man_tr_p_cammini')}</P>
+          <H>{t('man_tr_h_fughe')}</H>
+          <P>{t('man_tr_p_fughe')}</P>
           <ul className="mb-2">
-            <Li>Ogni giro ha sempre una <strong>versione a costo zero</strong> accanto a quella con biglietti.</Li>
-            <Li>I tempi di rientro sono calcolati con margine: il rischio di perdere la nave o il volo è il motivo per cui questa funzione esiste.</Li>
+            <Li>{t('man_tr_li_1')}</Li>
+            <Li>{t('man_tr_li_2')}</Li>
           </ul>
         </>
       ),
@@ -473,13 +476,14 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Star,
       content: (
         <>
-          <P>La scheda <strong>Eventi</strong> mostra cosa succede dove ti trovi nei giorni in cui ci sei: concerti, mostre, sagre, spettacoli. <FreeBadge /></P>
+          <P>{t('man_ev_p_intro')} <FreeBadge label={t('man_gratis')} /></P>
           <ul className="mb-2">
-            <Li><strong>Biglietti e visite guidate</strong> prenotabili direttamente, spesso con salta-fila.</Li>
-            <Li>Accanto a ogni proposta a pagamento trovi sempre, quando esiste, <strong>l'alternativa gratuita</strong>: WIP non nasconde che a una chiesa si entra gratis.</Li>
-            <Li>Sui percorsi stagionali (fioriture, foliage, presepi, mercatini) c'è un catalogo dedicato che cambia col periodo dell'anno.</Li>
+            <Li>{t('man_ev_li_switch')}</Li>
+            <Li>{t('man_ev_li_1')}</Li>
+            <Li>{t('man_ev_li_2')}</Li>
+            <Li>{t('man_ev_li_3')}</Li>
           </ul>
-          <p className="text-[11px] text-gray-500 leading-relaxed mb-3">Se prenoti da WIP, l'app riceve una commissione dal fornitore: il prezzo per te è lo stesso.</p>
+          <p className="text-[11px] text-gray-500 leading-relaxed mb-3">{t('man_ev_p_commission')}</p>
         </>
       ),
     },
@@ -489,12 +493,12 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: ShieldCheck,
       content: (
         <>
-          <P>Se il giorno che avevi pianificato è stato rovinato dalla pioggia, <strong>ti restituiamo i crediti di quel giorno</strong>.</P>
+          <P>{t('man_rain_p_intro')}</P>
           <ul className="mb-2">
-            <Li>Vale quando ha piovuto <strong>almeno 6 ore</strong> oppure sono caduti <strong>almeno 20 mm</strong>: non una pioggia passeggera, una giornata persa.</Li>
-            <Li>Si richiede entro <strong>7 giorni</strong> dal giorno in questione, dal link sotto l'itinerario nel Profilo.</Li>
-            <Li>Il controllo lo fa il server sul <strong>meteo realmente registrato</strong> in quel punto e in quel giorno: non serve allegare niente.</Li>
-            <Li>Anche quando la richiesta viene respinta ti mostriamo <strong>quanti mm e quante ore</strong> sono stati misurati, così sai perché.</Li>
+            <Li>{t('man_rain_li_1')}</Li>
+            <Li>{t('man_rain_li_2')}</Li>
+            <Li>{t('man_rain_li_3')}</Li>
+            <Li>{t('man_rain_li_4')}</Li>
           </ul>
         </>
       ),
@@ -505,14 +509,14 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Target,
       content: (
         <>
-          <H>Passaporto WIP</H>
-          <P>Ogni destinazione visitata lascia un <strong>timbro</strong> nel tuo passaporto, con la data della prima visita. Si costruisce da solo: non c'è niente da attivare.</P>
-          <H>Salute del viaggio</H>
-          <P>Se lo autorizzi, il Profilo mostra <strong>passi, chilometri e piani saliti</strong> della giornata, letti dal contapassi del telefono. È un dato che resta sul dispositivo.</P>
-          <H>Impronta di CO₂</H>
-          <P>Ogni itinerario stima le <strong>emissioni degli spostamenti</strong> e confronta le alternative: spesso a piedi o in treno si arriva quasi come in auto, e si vede subito.</P>
-          <H>Esporta nel calendario</H>
-          <P>Un itinerario può essere <strong>esportato nel calendario del telefono</strong>: ogni tappa diventa un appuntamento con orario e luogo, utile anche per condividerlo con chi viaggia con te.</P>
+          <H>{t('man_db_h_passaporto')}</H>
+          <P>{t('man_db_p_passaporto')}</P>
+          <H>{t('man_db_h_salute')}</H>
+          <P>{t('man_db_p_salute')}</P>
+          <H>{t('man_db_h_co2')}</H>
+          <P>{t('man_db_p_co2')}</P>
+          <H>{t('man_db_h_calendario')}</H>
+          <P>{t('man_db_p_calendario')}</P>
         </>
       ),
     },
@@ -522,11 +526,11 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: MessageSquare,
       content: (
         <>
-          <P>WIP risponde a domande sui luoghi, la storia, i consigli pratici, e può <strong>modificare il tuo itinerario</strong> in tempo reale (meteo, eventi, alternative).</P>
+          <P>{t('man_chat_p_intro')}</P>
           <ul className="mb-2">
-            <Li><strong>Dall'itinerario</strong>: la chat è in basso nella schermata del piano. <strong>10 messaggi inclusi</strong> con ogni itinerario; finiti quelli, {PRICING_LIST.chat_session} crediti ogni 10 messaggi.</Li>
-            <Li><strong>Dalla scheda di un luogo</strong>: tocca 💬 "Chiedi a WIP". Qui non ci sono messaggi inclusi: {PRICING_LIST.chat_session} crediti per 10 messaggi.</Li>
-            <Li>Puoi <strong>dettare</strong> i messaggi col microfono.</Li>
+            <Li>{t('man_chat_li_1', { n: PRICING_LIST.chat_session })}</Li>
+            <Li>{t('man_chat_li_2', { n: PRICING_LIST.chat_session })}</Li>
+            <Li>{t('man_chat_li_3')}</Li>
           </ul>
         </>
       ),
@@ -537,15 +541,15 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Camera,
       content: (
         <>
-          <P>Inquadra un monumento, una statua o un dettaglio architettonico: WIP lo riconosce e ti racconta cosa stai guardando. <CostBadge cost={`${PRICING_LIST.photo_search} crediti`} /></P>
-          <P>Dal risultato puoi aprire la scheda completa del luogo, ascoltare l'audioguida o chiedere approfondimenti in chat.</P>
-          <H>Dentro un museo: il Pass Museo</H>
-          <P>Nei musei il GPS non arriva e le opere sono decine: pagare ogni singolo riconoscimento non avrebbe senso. Il <strong>Pass Museo</strong> apre <strong>{MUSEUM_PASS_HOURS} ore di riconoscimenti illimitati</strong>. <CostBadge cost={`${PRICING_LIST.museum_pass} crediti`} /></P>
+          <P>{t('man_vis_p_1')} <CostBadge cost={cr(PRICING_LIST.photo_search)} /></P>
+          <P>{t('man_vis_p_2')}</P>
+          <H>{t('man_vis_h_museo')}</H>
+          <P>{t('man_vis_p_museo', { h: MUSEUM_PASS_HOURS })} <CostBadge cost={cr(PRICING_LIST.museum_pass)} /></P>
           <ul className="mb-2">
-            <Li>Si attiva <strong>dalla schermata Vision</strong>: quando è attivo vedi in alto il tempo che resta.</Li>
-            <Li>Mentre è attivo la posizione non viene usata per il riconoscimento: conta solo quello che inquadri, quindi funziona anche al chiuso.</Li>
-            <Li>Conviene dal {Math.floor(PRICING_LIST.museum_pass / PRICING_LIST.photo_search) + 1}° scatto in poi: sotto quella soglia costa meno pagare i singoli riconoscimenti.</Li>
-            <Li>Inquadra il <strong>cartellino</strong> dell'opera insieme al quadro: il testo aiuta il riconoscimento più di qualunque altra cosa.</Li>
+            <Li>{t('man_vis_li_1')}</Li>
+            <Li>{t('man_vis_li_2')}</Li>
+            <Li>{t('man_vis_li_3', { h: MUSEUM_PASS_HOURS, m: Math.floor(PRICING_LIST.museum_pass / PRICING_LIST.photo_search) })}</Li>
+            <Li>{t('man_vis_li_4')}</Li>
           </ul>
         </>
       ),
@@ -556,21 +560,21 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Users,
       content: (
         <>
-          <P>Nessuna mappa è completa. Se trovi una cappella di campagna, un murale, un lavatoio, una fontana storica che su WIP non c'è, <strong>puoi aggiungerlo tu</strong>: fotografalo dalla schermata Vision e proponilo. <FreeBadge /></P>
-          <H>Come funziona, passo per passo</H>
+          <P>{t('man_com_p_intro')} <FreeBadge label={t('man_gratis')} /></P>
+          <H>{t('man_com_h_come')}</H>
           <ul className="mb-2">
-            <Li><strong>1. Scatta e proponi</strong>: la foto parte con la posizione del punto in cui ti trovi. Puoi aggiungere un nome e due righe di descrizione, ma non è obbligatorio.</Li>
-            <Li><strong>2. Un controllo automatico</strong> scarta subito le foto che non c'entrano (persone, schermi, cibo) e i luoghi già presenti a pochi metri.</Li>
-            <Li><strong>3. Una persona approva</strong>: nessuna foto diventa un luogo pubblico senza revisione umana.</Li>
-            <Li><strong>4. Diventa un luogo WIP</strong> visibile a tutti, con la tua foto e la tua attribuzione, e <strong>a te tornano crediti</strong>.</Li>
+            <Li>{t('man_com_li_1')}</Li>
+            <Li>{t('man_com_li_2')}</Li>
+            <Li>{t('man_com_li_3')}</Li>
+            <Li>{t('man_com_li_4')}</Li>
           </ul>
-          <H>Le tue proposte</H>
-          <P>Le ritrovi in <strong>Profilo → Le mie Vision</strong>, con lo stato di ciascuna (in attesa, approvata, non accettata) e il motivo di un eventuale rifiuto. Le foto restano tue: le usiamo solo dentro WIP per mostrare il luogo che hai proposto, e puoi chiederne la rimozione in qualsiasi momento.</P>
-          <H>Cosa conviene fotografare</H>
+          <H>{t('man_com_h_proposte')}</H>
+          <P>{t('man_com_p_proposte')}</P>
+          <H>{t('man_com_h_cosa')}</H>
           <ul className="mb-2">
-            <Li>Sì: edicole votive, murales, fontane, lavatoi, ponti, torri, cippi, chiese minori, punti panoramici.</Li>
-            <Li>No: interni privati, persone riconoscibili, opere ancora sotto copyright fotografate come soggetto principale, cartelli e insegne commerciali.</Li>
-            <Li>Fotografa <strong>di giorno e da lontano abbastanza</strong> da far capire il contesto: è la foto che gli altri vedranno per primi.</Li>
+            <Li>{t('man_com_li_5')}</Li>
+            <Li>{t('man_com_li_6')}</Li>
+            <Li>{t('man_com_li_7')}</Li>
           </ul>
         </>
       ),
@@ -581,10 +585,10 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: History,
       content: (
         <>
-          <P>Nel Profilo trovi la cronologia dei luoghi visitati e delle audioguide ascoltate: il tuo diario si costruisce da solo mentre esplori.</P>
+          <P>{t('man_jr_p_intro')}</P>
           <ul className="mb-2">
-            <Li>I luoghi con audioguida acquistata restano <strong>sbloccati per sempre</strong>: riascolti senza ripagare.</Li>
-            <Li>I <strong>preferiti</strong> <Heart className="w-3.5 h-3.5 inline text-rose-500" /> salvati dalle schede si ritrovano qui e sulla mappa.</Li>
+            <Li>{t('man_jr_li_1')}</Li>
+            <Li><Heart className="w-3.5 h-3.5 inline text-rose-500" /> {t('man_jr_li_2')}</Li>
           </ul>
         </>
       ),
@@ -594,7 +598,7 @@ export default function AppGuide({ language }: AppGuideProps) {
       title: t('vr_a_guide_sec_livetour'),
       icon: Navigation,
       content: (
-        <P>Per visite in compagnia: un capogruppo guida il tour e i partecipanti sentono le stesse audioguide, sincronizzati. Si crea/si entra con un codice dalla schermata dedicata nel Profilo.</P>
+        <P>{t('man_lt_p')}</P>
       ),
     },
     {
@@ -603,8 +607,8 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Award,
       content: (
         <>
-          <P>Esplorare premia: ogni luogo visitato e audioguida ascoltata vale <strong>punti XP</strong> che fanno salire di livello, e le <strong>Missioni</strong> (es. "visita 3 chiese") regalano <strong>crediti gratis</strong> al completamento.</P>
-          <P>Trovi missioni, badge e progressi nel Profilo, sotto il riepilogo crediti.</P>
+          <P>{t('man_ms_p_1')}</P>
+          <P>{t('man_ms_p_2')}</P>
         </>
       ),
     },
@@ -614,11 +618,11 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: ShoppingCart,
       content: (
         <ul className="mb-2">
-          <Li><strong>Ricarica</strong>: dal <strong>WIP Shop</strong> nel Profilo, con carta (web) o acquisto in-app (Android). I crediti acquistati non scadono.</Li>
-          <Li><strong>Ordine di consumo</strong>: prima i crediti guadagnati (missioni/omaggi), poi quelli acquistati.</Li>
-          <Li><strong>Voucher/Coupon</strong>: se hai un codice (es. da una struttura partner), riscattalo nel WIP Shop.</Li>
-          <Li><strong>Rimborsi automatici</strong>: se un acquisto in-app non va a buon fine (audio non riprodotto, download fallito), i crediti tornano da soli.</Li>
-          <Li><strong>Listino completo</strong>: sempre visibile in Profilo → Listino Servizi.</Li>
+          <Li>{t('man_cr_li_1')}</Li>
+          <Li>{t('man_cr_li_2')}</Li>
+          <Li>{t('man_cr_li_3')}</Li>
+          <Li>{t('man_cr_li_4')}</Li>
+          <Li>{t('man_cr_li_5')}</Li>
         </ul>
       ),
     },
@@ -628,15 +632,15 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: Settings,
       content: (
         <ul className="mb-2">
-          <Li><strong>Area Personale</strong>: nome mostrato nel profilo e foto/emoji avatar.</Li>
-          <Li><strong>Sicurezza</strong>: cambio password e sblocco con impronta/volto.</Li>
-          <Li><strong>Lingua</strong>: 7 lingue (IT/EN/FR/ES/DE/RU/ZH) per interfaccia e voce.</Li>
-          <Li><strong>Voce narrante</strong>: Nicky (la Guida) o Dante (l'Esploratore).</Li>
-          <Li><strong>GeoControl</strong>: modalità automatica/semiautomatica, trasporto (auto-rilevato o forzato), raggi di avviso e arrivo a piedi e in auto.</Li>
-          <Li><strong>Categorie attive</strong>: quali tipi di luoghi generano avvisi vocali.</Li>
-          <Li><strong>Posizione predefinita</strong>: la città di partenza della mappa.</Li>
-          <Li><strong>Permessi</strong>: per l'audioguida a schermo spento servono Posizione "Consenti sempre", Notifiche e l'esenzione dal risparmio batteria — l'app li richiede guidandoti.</Li>
-          <Li><strong>Esci / Elimina account</strong>: in fondo alla pagina.</Li>
+          <Li>{t('man_st_li_1')}</Li>
+          <Li>{t('man_st_li_2')}</Li>
+          <Li>{t('man_st_li_3')}</Li>
+          <Li>{t('man_st_li_4')}</Li>
+          <Li>{t('man_st_li_5')}</Li>
+          <Li>{t('man_st_li_6')}</Li>
+          <Li>{t('man_st_li_7')}</Li>
+          <Li>{t('man_st_li_8')}</Li>
+          <Li>{t('man_st_li_9')}</Li>
         </ul>
       ),
     },
@@ -646,16 +650,16 @@ export default function AppGuide({ language }: AppGuideProps) {
       icon: LifeBuoy,
       content: (
         <>
-          <H>Contatti</H>
+          <H>{t('man_sp_h_contatti')}</H>
           <ul className="mb-2">
-            <Li><Mail className="w-3.5 h-3.5 inline" /> <strong>Email assistenza</strong>: <a href="mailto:support@wip.guide" className="text-primary font-bold underline">support@wip.guide</a> — rispondiamo entro 48 ore lavorative.</Li>
-            <Li><strong>Segnala un problema tecnico</strong>: da Profilo → Supporto, il tasto dedicato prepara un'email con i dati del dispositivo già compilati.</Li>
-            <Li><strong>Segnala un errore su un luogo</strong>: dalla scheda del POI (informazioni errate, luogo chiuso, foto sbagliata).</Li>
+            <Li><Mail className="w-3.5 h-3.5 inline" /> {t('man_sp_li_1').split('support@wip.guide')[0]}<a href="mailto:support@wip.guide" className="text-primary font-bold underline">support@wip.guide</a>{t('man_sp_li_1').split('support@wip.guide')[1]}</Li>
+            <Li>{t('man_sp_li_2')}</Li>
+            <Li>{t('man_sp_li_3')}</Li>
             {/* (28/08/2026) Tolta la voce «Strutture e partner (B2B)»: la sezione
                 Hotel/Partner non esiste piu' in nessuna piattaforma. */}
           </ul>
-          <H>Privacy in breve</H>
-          <P>La posizione serve solo a farti da guida (anche in background, se lo autorizzi) e non viene venduta a terzi. I dati del profilo sono protetti da Supabase con crittografia; i pagamenti passano da Stripe/Google Play e non vediamo mai la tua carta. L'informativa completa è in Profilo → Privacy, dove trovi anche i tuoi diritti GDPR (accesso, rettifica, cancellazione).</P>
+          <H>{t('man_sp_h_privacy')}</H>
+          <P>{t('man_sp_p_privacy')}</P>
           <p className="text-[10px] text-gray-500 font-bold mt-2">ItaInta / WIP — World in Pocket · Carrara (MS), Italia</p>
         </>
       ),
@@ -705,13 +709,6 @@ export default function AppGuide({ language }: AppGuideProps) {
         </div>
       )}
 
-      {/* Manuale ancora in italiano: avviso tradotto quando la UI non è IT */}
-      {soloItaliano && (
-        <div className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-          {soloItaliano}
-        </div>
-      )}
-
       {/* Accordion a schermo */}
       <div id="app-user-guide-content" className="space-y-2">
         {sections.map((s) => (
@@ -748,17 +745,11 @@ export default function AppGuide({ language }: AppGuideProps) {
             <div style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
               {t('vr_a_guide_subtitle')}
               {' · '}
-              {new Date().toLocaleDateString(isItalian ? 'it-IT' : 'en-GB')}
+              {new Date().toLocaleDateString(t('pf_locale'))}
             </div>
           </div>
           <img src="/logo.jpg" alt="World in Pocket" style={{ width: 72, height: 72, objectFit: 'contain', borderRadius: 12, flexShrink: 0 }} />
         </div>
-
-        {soloItaliano && (
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '6px 10px', marginBottom: 16 }}>
-            {soloItaliano}
-          </div>
-        )}
 
         {/* Tutte le sezioni, sempre espanse */}
         {sections.map((s, i) => (

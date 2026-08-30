@@ -356,8 +356,12 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
 
     @PermissionCallback
     private fun backgroundOnlyCallback(call: PluginCall) {
+        // Sulla pagina «Posizione» l'utente puo' anche scegliere «Non
+        // consentire»: il foreground se ne va insieme al background. Si
+        // rilegge TUTTO, non solo il background (29/08/2026, collaudo).
+        val fg = getPermissionState("location") == PermissionState.GRANTED
         val ret = JSObject()
-        ret.put("location", if (backgroundLocationGranted()) "always" else "whileInUse")
+        ret.put("location", if (!fg) "denied" else if (backgroundLocationGranted()) "always" else "whileInUse")
         call.resolve(ret)
     }
 

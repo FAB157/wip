@@ -10,8 +10,28 @@ import './index.css';
 // Request, non solo le stringhe come faceva la versione inline qui.
 import { installNativeApiFetch } from './lib/api';
 installNativeApiFetch();
+// SENTRY (30/08/2026): attivo solo se VITE_SENTRY_DSN è impostata — senza
+// chiave l'app funziona identica a prima. Nessuna integrazione automatica
+// (integrations:[] sostituisce i default, non li aggiunge): gli errori
+// arrivano dal punto unico in errorLogger.ts, che ha già dedupe e
+// rate-limit (5/min) — con le integrazioni di default ogni errore verrebbe
+// contato DUE volte sul piano gratuito (5.000/mese), una da Sentry stesso
+// e una dal nostro logger. Niente session replay: la mappa mostra la
+// posizione GPS in tempo reale, e non è un dato da registrare di default.
+import * as Sentry from '@sentry/react';
+const sentryDsn = import.meta.env.VITE_SENTRY_DSN;
+if (sentryDsn) {
+  Sentry.init({
+    dsn: sentryDsn,
+    environment: import.meta.env.PROD ? 'production' : 'development',
+    tracesSampleRate: 0,
+    integrations: [],
+  });
+}
+
 // Logging errori runtime → tabella system_errors (tab admin "Errori di
-// sistema", che senza uno scrittore restava sempre vuota).
+// sistema", che senza uno scrittore restava sempre vuota) e, se attivo, a
+// Sentry (vedi errorLogger.ts).
 import { installGlobalErrorLogger } from './lib/errorLogger';
 installGlobalErrorLogger();
 // Feature flag (kill switch dal pannello admin): fetch all'avvio, fail-open.

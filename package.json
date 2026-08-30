@@ -23,7 +23,9 @@
     "enrich-bg": "npx tsx scripts/mass_enrich_background.ts",
     "fix-photos": "npx tsx scripts/fix_poi_photos.ts",
     "test:data": "npx tsx scripts/tests/taxonomy.test.ts && npx tsx scripts/tests/wiki.test.ts",
-    "test-google-tts": "node scratch/test_google_tts.cjs"
+    "test-google-tts": "node scratch/test_google_tts.cjs",
+    "checkly:test": "checkly test",
+    "checkly:deploy": "checkly deploy"
   },
   "dependencies": {
     "@capacitor-community/native-audio": "^8.0.0",
@@ -41,6 +43,8 @@
     "@capgo/capacitor-native-biometric": "^6.0.0",
     "@google/genai": "^1.29.0",
     "@revenuecat/purchases-capacitor": "^11.3.2",
+    "@sentry/node": "^10.72.0",
+    "@sentry/react": "^10.72.0",
     "@stripe/stripe-js": "^9.6.0",
     "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.1.14",
@@ -85,6 +89,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "checkly": "^8.23.2",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

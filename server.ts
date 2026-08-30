@@ -27,6 +27,11 @@ import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
 // con cache in memoria: niente nel bundle, niente filesystem della lambda,
 // e i cataloghi si aggiornano con un import in shared_pois, senza redeploy.
 import Stripe from 'stripe';
+// SENTRY (30/08/2026): import incondizionato come Stripe qui sopra — si
+// attiva solo se SENTRY_DSN è impostata, vedi sotto. Mai `require()` in
+// mezzo a un file ESM: qui bundlato da esbuild in CJS, ma eseguito anche
+// da `tsx` in sviluppo, dove `require` non è garantito nello scope del modulo.
+import * as SentryNode from '@sentry/node';
 
 const StripeConstructor = (Stripe as any).default || Stripe;
 const stripeClient = process.env.STRIPE_SECRET_KEY ? new (StripeConstructor as any)(process.env.STRIPE_SECRET_KEY, { apiVersion: '2023-10-16' as any }) : null;
@@ -42,6 +47,28 @@ try {
   if (dotenvObj && dotenvObj.config) dotenvObj.config();
 } catch (e) {
   // Ignore dotenv error
+}
+
+// SENTRY (30/08/2026): errori in tempo reale, non solo il canarino delle 5
+// del mattino. Attivo solo se SENTRY_DSN è impostata — senza chiave l'app
+// funziona identica a prima, come ogni altro provider opzionale qui dentro.
+// tracesSampleRate:0 = niente performance tracing: vogliamo solo gli errori,
+// che sul piano gratuito (5.000/mese) bastano e avanzano per la nostra scala;
+// le tracce (5M/mese gratis) non ci servono e le lasciamo a zero apposta.
+// setupExpressErrorHandler va chiamato DOPO tutte le rotte: vedi in fondo al
+// file, subito dopo il 404 handler.
+const sentryServerAttivo = !!process.env.SENTRY_DSN;
+if (sentryServerAttivo) {
+  try {
+    SentryNode.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+      tracesSampleRate: 0,
+    });
+    console.log('✅ [STARTUP] Sentry (server) attivo.');
+  } catch (e: any) {
+    console.warn('⚠️ [STARTUP] Sentry init fallita:', e?.message);
+  }
 }
 
 function isGenericUtilityName(name?: string | null): boolean {
@@ -587,6 +614,13 @@ async function insertApiUsageLog(payload: any) {
 // richiesta che sta loggando. `context` finisce nel jsonb `context`; source/
 // error_message/details vengono duplicati per compatibilità col pannello.
 async function logSystemError(level: 'critical' | 'error' | 'warning' | 'info', message: string, context: any = {}) {
+  // SENTRY (30/08/2026): stesso punto unico da cui passano già tutti gli
+  // errori server (incluso il canarino /api/canary/run) — non un canale
+  // nuovo da tenere sincronizzato. Solo critical/error: warning/info sono
+  // rumore di routine e sprecherebbero le 5.000 email/mese gratuite.
+  if (sentryServerAttivo && (level === 'critical' || level === 'error')) {
+    try { SentryNode.captureMessage(`[${level}] ${message}`, level === 'critical' ? 'fatal' : 'error'); } catch { /* mai bloccare il log */ }
+  }
   try {
     const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'return=minimal' };
     const msg = String(message || 'Errore sconosciuto').slice(0, 2000);
@@ -1024,6 +1058,37 @@ ${JSON.stringify(snippets)}`
 // onComplete: callback awaited PRIMA di scrivere [DONE] — usato per salvare il
 // risultato su Supabase lato server (service role) senza rischiare che la
 // serverless function venga congelata dopo res.end().
+/**
+ * Esegue `lavori` a ondate di al massimo `limite` alla volta, mantenendo
+ * l'ORDINE dei risultati.
+ *
+ * PERCHE' ESISTE (30/08/2026, collaudo della Guida d'Autore): la guida
+ * lanciava tutti i giorni con un solo `Promise.all`, e ogni giorno lanciava a
+ * sua volta tutti i suoi blocchi. Un itinerario di 4 giorni da 6 tappe faceva
+ * 13 chiamate simultanee a DeepSeek; uno da 7 giorni ne fa 22. Il fornitore
+ * limita la frequenza, i blocchi tornano vuoti, e la guida fallisce INTERA con
+ * rimborso totale — che e' esattamente il guasto osservato sul telefono, due
+ * volte di fila. A ondate le stesse chiamate passano: si perde qualche secondo,
+ * non la guida.
+ */
+async function mappaConLimite<T, R>(
+  elementi: T[],
+  limite: number,
+  lavoro: (elemento: T, indice: number) => Promise<R>,
+): Promise<R[]> {
+  const risultati = new Array<R>(elementi.length);
+  let prossimo = 0;
+  const operaio = async () => {
+    for (;;) {
+      const i = prossimo++;
+      if (i >= elementi.length) return;
+      risultati[i] = await lavoro(elementi[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limite, elementi.length)) }, operaio));
+  return risultati;
+}
+
 async function streamUniversalAi(
   primaryEngine: "deepseek" | "deepseek_native" | "groq" | "together",
   messages: any[],
@@ -1263,6 +1328,13 @@ async function _streamDeepSeekNative(messages: any[], options: any, res: any, ac
   );
 
   let buffer = "";
+  // TRONCAMENTO, NON MISTERO (30/08/2026). Quando la risposta sbatte contro
+  // max_tokens, DeepSeek chiude con finish_reason "length": il JSON arriva
+  // TAGLIATO a meta' e il parse a valle fallisce con un generico «guida/
+  // itinerario non riuscito». Nessuno leggeva quel campo, quindi il sintomo
+  // era indistinguibile da un guasto di rete. Un itinerario lungo (la rotta
+  // ne accetta fino a 30 giorni in UNA chiamata) ci finisce dentro davvero.
+  let troncato = false;
   await new Promise<void>((resolve, reject) => {
     dsRes.data.on("data", (chunk: Buffer) => {
       buffer += chunk.toString();
@@ -1274,6 +1346,7 @@ async function _streamDeepSeekNative(messages: any[], options: any, res: any, ac
         if (trimmed.startsWith("data: ")) {
           try {
             const parsed = JSON.parse(trimmed.slice(6));
+            if (parsed.choices?.[0]?.finish_reason === "length") troncato = true;
             const content = parsed.choices?.[0]?.delta?.content || "";
             if (content) {
               fullText += content;
@@ -1287,6 +1360,9 @@ async function _streamDeepSeekNative(messages: any[], options: any, res: any, ac
     dsRes.data.on("end", resolve);
     dsRes.data.on("error", reject);
   });
+  if (troncato) {
+    console.error(`[DeepSeek] Risposta TRONCATA dal tetto di ${dsBody.max_tokens} token (~${Math.ceil(fullText.length / 4)} token generati): il JSON e' incompleto. Serve spezzare la richiesta in blocchi piu' piccoli.`);
+  }
   return fullText;
 }
 
@@ -2454,8 +2530,23 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
    * blocca ogni scrittura crediti dal client, quindi TUTTI i consumi devono
    * passare da qui. Ritorna 'ok' | 'insufficient' | 'error'.
    */
-  async function consumeCreditsServer(userId: string, amount: number): Promise<'ok' | 'insufficient' | 'error'> {
+  async function consumeCreditsServer(userId: string, amount: number, causale?: string): Promise<'ok' | 'insufficient' | 'error'> {
     if (amount <= 0) return 'ok';
+    // LA CAUSALE (29/08/2026, collaudo): il libro mastro registrava importo e
+    // ora, ma `description` restava NULL su OGNI consumo — davanti a un
+    // «perche' mi avete tolto 200 crediti?» si leggeva solo «consume -200».
+    // La versione a TRE argomenti della RPC (migration
+    // 20260829200000_consume_credits_causale.sql) scrive anche la causale;
+    // finche' quella migration non e' applicata la chiamata fallisce e si
+    // ripiega su quella a due, esattamente come prima.
+    if (causale) {
+      try {
+        const rpc3 = await axios.post(`${supabaseUrl}/rest/v1/rpc/consume_credits`,
+          { p_user_id: userId, p_amount: amount, p_description: causale }, { headers: CREDIT_SVC_HEADERS });
+        if (rpc3.data === true) return 'ok';
+        if (rpc3.data === false) return 'insufficient';
+      } catch { /* migration non applicata → si prova la versione a due */ }
+    }
     try {
       const rpc = await axios.post(`${supabaseUrl}/rest/v1/rpc/consume_credits`,
         { p_user_id: userId, p_amount: amount }, { headers: CREDIT_SVC_HEADERS });
@@ -2477,7 +2568,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
       // logga da sé): serve alla guardia anti-conio di /api/credits/refund, che
       // rimborsa solo fino a quanto risulta realmente consumato in credit_transactions.
       await axios.post(`${supabaseUrl}/rest/v1/credit_transactions`,
-        { user_id: userId, amount: -amount, type: 'consume', source: 'server' },
+        { user_id: userId, amount: -amount, type: 'consume', source: 'server', description: causale ? String(causale).slice(0, 200) : null },
         { headers: CREDIT_SVC_HEADERS }).catch(() => {});
       return 'ok';
     } catch { return 'error'; }
@@ -2524,7 +2615,10 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     const unit = (feature in SERVER_PRICING) ? await prezzoDi(feature) : undefined;
     if (unit === undefined) { res.status(500).json({ error: 'unknown_feature' }); return null; }
     const cost = unit * Math.max(1, Math.floor(units));
-    const outcome = await consumeCreditsServer(userId, cost);
+    // La causale nel libro mastro e` il NOME della feature (piu` le unita`,
+    // quando sono piu` d'una: «itinerary_daily ×4» si legge, «-40» no).
+    const causale = units > 1 ? `${feature} ×${Math.floor(units)}` : feature;
+    const outcome = await consumeCreditsServer(userId, cost, causale);
     if (outcome === 'insufficient') { res.status(402).json({ error: 'insufficient_credits', cost }); return null; }
     if (outcome === 'error') { res.status(500).json({ error: 'charge_failed' }); return null; }
     return { userId, cost };
@@ -3211,7 +3305,7 @@ ${dayLines.join("\n")}
         const prof = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${itinUserId}&select=earned_credits`, { headers: CREDIT_SVC_HEADERS, timeout: 4000 });
         earnedBefore = Number(prof.data?.[0]?.earned_credits) || 0;
       } catch { /* best-effort: senza lettura si assume tutto da purchased */ }
-      const chargeOutcome = await consumeCreditsServer(itinUserId, itinCost);
+      const chargeOutcome = await consumeCreditsServer(itinUserId, itinCost, `itinerary_daily ×${requestedDays}`);
       if (chargeOutcome === 'insufficient') {
         res.write(`data: ${JSON.stringify({ error: "INSUFFICIENT_CREDITS", cost: itinCost })}\n\n`);
         return res.end();
@@ -3719,7 +3813,7 @@ RICORDA: È ASSOLUTAMENTE TASSATIVO RISPETTARE QUESTE REGOLE. PENA: FALLIMENTO T
       const freeOk = !!isFree && dayKey && usedFree < FREE_REPLACEMENTS_PER_DAY_SERVER;
       if (!freeOk) {
         replCost = await prezzoDi('replace_stop');
-        const outcome = await consumeCreditsServer(replUserId, replCost);
+        const outcome = await consumeCreditsServer(replUserId, replCost, 'replace_stop');
         if (outcome === 'insufficient') return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', cost: replCost });
         if (outcome === 'error') return res.status(500).json({ error: 'CHARGE_FAILED' });
       }
@@ -3810,7 +3904,7 @@ ${JSON.stringify(currentItinerary)}
       sugUserId = await verifyUserToken(req);
       if (!sugUserId) return res.status(401).json({ error: 'UNAUTHORIZED' });
       sugCost = await prezzoDi('replace_stop');
-      const sugOutcome = await consumeCreditsServer(sugUserId, sugCost);
+      const sugOutcome = await consumeCreditsServer(sugUserId, sugCost, 'replace_stop (suggerimento)');
       if (sugOutcome === 'insufficient') return res.status(402).json({ error: 'INSUFFICIENT_CREDITS', cost: sugCost });
       if (sugOutcome === 'error') return res.status(500).json({ error: 'CHARGE_FAILED' });
 
@@ -7261,7 +7355,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       let audioChargeUser: string | null = null;
       let audioChargeCost = 0;
       if (!haDiritto && consensoAddebito) {
-        const outcome = await consumeCreditsServer(callerUserId, unit);
+        const outcome = await consumeCreditsServer(callerUserId, unit, 'audio_guide');
         if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: unit });
         if (outcome === 'error') return res.status(500).json({ error: 'charge_failed' });
         audioChargeUser = callerUserId; audioChargeCost = unit;
@@ -9380,7 +9474,10 @@ ${description}
       const userId = await verifyUserToken(req);
       if (!userId) return res.status(401).json({ error: 'login_required' });
       const amount = Math.floor(Number(req.body?.amount) || 0);
-      const outcome = await consumeCreditsServer(userId, amount);
+      // La causale arriva dal client (`feature`): e` indicativa, non fa testo
+      // sull'importo — quello lo decide comunque il server.
+      const featureCliente = String(req.body?.feature || '').replace(/[^\w .×-]/g, '').slice(0, 60);
+      const outcome = await consumeCreditsServer(userId, amount, featureCliente || 'credits/consume');
       if (outcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits' });
       if (outcome === 'error') return res.status(500).json({ error: 'consume_failed' });
       res.json({ success: true });
@@ -9784,6 +9881,24 @@ ${description}
       })
     ]);
   };
+
+  // MONITOR ESTERNI (30/08/2026, UptimeRobot/Checkly): a differenza del
+  // canarino sopra — che chiama 17 API a pagamento/quota e per questo resta
+  // dietro CRON_SECRET/admin — questa è la rotta economica da interrogare
+  // ogni pochi minuti da fuori: un solo select leggero su Supabase, nessuna
+  // chiave esterna consumata. Pubblica apposta (un monitor esterno non ha un
+  // Bearer), ma dietro rateLimiter come ogni altra rotta pubblica.
+  app.get("/api/health", rateLimiter, async (req, res) => {
+    let db = false;
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?select=id&limit=1`, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000
+      });
+      db = Array.isArray(r.data);
+    } catch { /* db resta false */ }
+    const ok = db;
+    res.status(ok ? 200 : 503).json({ ok, ts: new Date().toISOString(), checks: { db } });
+  });
 
   app.get("/api/admin/health-checks", rateLimiter, requireAdmin, async (req, res) => {
     res.json({ checks: await runAllHealthChecks() });
@@ -18444,7 +18559,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       const EXT_COST_FULL = await prezzoDi('extend_itinerary_day');
       const EXT_COST_CACHED = Math.round(EXT_COST_FULL / 2);
       extCost = EXT_COST_FULL;
-      const chargeOutcome = await consumeCreditsServer(extUserId, extCost);
+      const chargeOutcome = await consumeCreditsServer(extUserId, extCost, 'extend_itinerary_day');
       if (chargeOutcome === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: extCost });
       if (chargeOutcome === 'error') return res.status(500).json({ error: 'charge_failed' });
 
@@ -22081,13 +22196,32 @@ Restituisci ESATTAMENTE questo schema JSON:
       "info_utili": { "orari": "string", "best_time": "string", "prezzo": "string", "telefono": "string", "sito_web": "string" }
     }`;
 
-        const dayPromises = (enrichedItinerary.giorni || []).map(async (giorno: any) => {
+        // CONCORRENZA A TETTO (30/08/2026): vedi mappaConLimite. Il numero e`
+        // il totale di chiamate in volo verso DeepSeek, non per giorno: con 4
+        // si resta sotto il limite di frequenza del fornitore anche su una
+        // guida da 7 giorni (che altrimenti ne lancerebbe 22 insieme).
+        //
+        // Tre giorni per volta, due blocchi per giorno: al massimo 6 chiamate
+        // in volo, quale che sia la durata del viaggio. Il numero e` un
+        // compromesso MISURATO sul vincolo vero: Vercel taglia la funzione a
+        // 300 s (`maxDuration` in vercel.json, gia` al massimo del piano), e
+        // una guida da 7 giorni sono ~21 chiamate. A 6 per ondata sono ~4
+        // ondate e ci si sta; a 4 sarebbero 6 ondate, piu` sicure ma a rischio
+        // timeout proprio sui viaggi lunghi. Il committente ha accettato che
+        // le guide lunghe ci mettano di piu`, non che falliscano.
+        const PG_GIORNI_PARALLELI = 3;
+        const PG_PARALLELE = 2;
+        const giorniDaFare: any[] = enrichedItinerary.giorni || [];
+        // FUNZIONE, non promessa gia` avviata: `map(async ...)` fa partire
+        // TUTTI i giorni all'istante, e il tetto sui blocchi non servirebbe a
+        // niente. Cosi` invece li avvia mappaConLimite, a ondate.
+        const generaGiorno = async (giorno: any) => {
           const tappe: any[] = giorno.tappe || [];
           const chunks: any[][] = [];
           for (let i = 0; i < tappe.length; i += POI_CHUNK) chunks.push(tappe.slice(i, i + POI_CHUNK));
           if (chunks.length === 0) chunks.push([]);
 
-          const chunkResults = await Promise.all(chunks.map((chunkTappe, ci) => {
+          const chunkResults = await mappaConLimite(chunks, PG_PARALLELE, (async (chunkTappe: any[], ci: number) => {
             const dayPrompt = `Stai scrivendo il Giorno ${giorno.giorno} ("${giorno.titolo_giorno || ''}") della guida. Questo blocco copre SOLO le tappe ${ci * POI_CHUNK + 1}-${ci * POI_CHUNK + chunkTappe.length} di ${tappe.length} del giorno (le altre sono generate a parte, NON aggiungerle).
 Tappe di QUESTO blocco con contesto reale (Wikipedia/Foursquare):
 ${JSON.stringify(chunkTappe, null, 2)}
@@ -22103,7 +22237,13 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
     ${poiSchema}
   ]
 }`;
-            return callUniversalAi(
+            // UN RITENTATIVO, PERCHE' LA GUIDA E` TUTTO-O-NIENTE (30/08/2026):
+            // basta UN blocco caduto su venti e l'intera guida viene buttata e
+            // rimborsata. Un rate limit e` transitorio: mezzo secondo dopo la
+            // stessa chiamata passa. Senza ritentativo, piu` la guida e` lunga
+            // piu` e` probabile che almeno un blocco cada — cioe` le guide da
+            // 7 giorni fallirebbero quasi sempre.
+            const chiediBlocco = async () => callUniversalAi(
               "deepseek",
               [
                 { role: "system", content: baseSystemPrompt },
@@ -22120,11 +22260,25 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
             ).then(r => {
                try { return JSON.parse(r.data || "{}"); }
                catch { return null; }
-            }).catch(err => {
-               console.error(`[Premium Guide] Generation failed for Day ${giorno.giorno} block ${ci + 1}:`, err.message);
-               return null;
             });
-          }));
+
+            for (let tentativo = 1; tentativo <= 2; tentativo++) {
+              try {
+                const esito = await chiediBlocco();
+                if (esito && Array.isArray(esito.pois) && esito.pois.length > 0) return esito;
+                console.warn(`[Premium Guide] Giorno ${giorno.giorno} blocco ${ci + 1}: risposta vuota o non parsabile (tentativo ${tentativo}/2)`);
+              } catch (err: any) {
+                // L'errore VERO, non solo «fallito»: nel collaudo del 29/08 la
+                // guida moriva due volte e dai log non si capiva perche'
+                // (status del fornitore, rate limit, timeout).
+                const st = err?.response?.status;
+                const det = err?.response?.data?.error?.message || err?.response?.data?.message || err?.message;
+                console.error(`[Premium Guide] Giorno ${giorno.giorno} blocco ${ci + 1} fallito${st ? ` (HTTP ${st})` : ''} (tentativo ${tentativo}/2): ${det}`);
+              }
+              if (tentativo === 1) await new Promise(r => setTimeout(r, 1500));
+            }
+            return null;
+          }) as any);
 
           // Ricucitura: se anche un solo blocco è nullo o vuoto, il giorno è
           // fallito (il controllo tutto-o-niente a valle rimborsa).
@@ -22140,10 +22294,13 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
             tema_giorno: firstMeta.tema_giorno || "",
             pois: mergedPois
           };
-        });
+        };
 
-        // ESEGUI TUTTO IN PARALLELO
-        const [introRes, ...daysRes] = await Promise.all([introPromise, ...dayPromises]);
+        // Intro (una sola chiamata, leggera) insieme ai giorni a ondate.
+        const [introRes, daysRes] = await Promise.all([
+          introPromise,
+          mappaConLimite(giorniDaFare, PG_GIORNI_PARALLELI, (g: any) => generaGiorno(g)),
+        ]);
 
         // Merge intro
         if (introRes.guida_titolo) generatedContent.guida_titolo = introRes.guida_titolo;
@@ -22794,7 +22951,7 @@ ${c.sottotitolo ? `<p class="sub">${pgXmlEsc(c.sottotitolo)}</p>` : ""}
 
       // METÀ del prezzo pieno della guida (premium_guide_daily × giorni / 2).
       const cost = Math.round(((await prezzoDi('premium_guide_daily')) * numDays) / 2);
-      const outcome = await consumeCreditsServer(userId, cost);
+      const outcome = await consumeCreditsServer(userId, cost, `premium_guide_audiobook ×${numDays} (meta' prezzo)`);
       if (outcome === "insufficient") return res.status(402).json({ error: "insufficient_credits", cost });
       if (outcome === "error") return res.status(500).json({ error: "charge_failed" });
       trCharge = { userId, cost };
@@ -23789,6 +23946,14 @@ out body;`;
   app.all("/api/*", (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
   });
+
+  // SENTRY (30/08/2026): DEVE stare dopo tutte le rotte (incluso il 404
+  // handler appena sopra) e prima di qualunque altro error handler — è la
+  // rete di sicurezza per le eccezioni che non passano da logSystemError
+  // (crash non previsti dentro una rotta, non solo gli errori loggati a mano).
+  if (sentryServerAttivo) {
+    try { SentryNode.setupExpressErrorHandler(app); } catch (e: any) { console.warn('⚠️ Sentry error handler non installato:', e?.message); }
+  }
 
   // Vite middleware for development or local production serving
   const isLocalRun = process.argv.some(arg => arg.includes('server.ts') || arg.includes('server.cjs'));
