@@ -904,6 +904,13 @@ function MapArea({
   }, [activeTab]);
 
   const [searchQuery, setSearchQuery] = useState("");
+  // La riga di ricerca si APRE sopra la barra (30/08/2026). Prima il campo
+  // stava in mezzo ai tasti, con flex-1: su ~360 px i tasti shrink-0 si
+  // prendevano tutta la riga e il campo collassava a larghezza ZERO —
+  // restava solo la lente, e sembrava un tasto rotto. La barra ora resta
+  // una riga sola e la ricerca ha una riga tutta sua, sopra.
+  const [ricercaAperta, setRicercaAperta] = useState(false);
+  const campoRicercaRef = useRef<HTMLInputElement | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   // Accessibilità ricerca: indice del suggerimento evidenziato (frecce ↑↓)
@@ -4268,7 +4275,8 @@ function MapArea({
         const taPromise = (async () => {
           logApiCall('tripadvisor', 'mappa_ricerca_locali');
           try {
-            const res = await fetch(`/api/trip/search?searchQuery=ristorante&latLong=${center.lat},${center.lng}`);
+            // getApiUrl: percorso relativo = bundle locale sull'app nativa.
+            const res = await fetch(getApiUrl(`/api/trip/search?searchQuery=ristorante&latLong=${center.lat},${center.lng}`));
             if (!res.ok) return [];
             const data = await res.json();
             const rows = (data.data || []).slice(0, 8);
@@ -4942,6 +4950,9 @@ function MapArea({
     // Immediate feedback: clear suggestions
     setSuggestions([]);
     setNostri([]);
+    // Scelto un risultato, la riga di ricerca si richiude: la mappa e' quello
+    // che si vuole guardare, non la casella (30/08/2026).
+    setRicercaAperta(false);
 
     // I nostri risultati (23/08/2026).
     if (suggestion.kind === 'categoria') {
@@ -4998,9 +5009,13 @@ function MapArea({
     }, 8000);
 
     try {
-      // Remove viewbox restriction to allow worldwide search
+      // getApiUrl e non un percorso relativo (30/08/2026): sull'app nativa la
+      // pagina sta su capacitor://localhost, quindi «/api/...» puntava al
+      // bundle dentro l'APK e la ricerca non trovava NIENTE — mentre sulla
+      // PWA, dove l'origine e' wip.guide, funzionava. E` la ragione per cui la
+      // ricerca della citta' andava sul sito e non nell'app.
       const response = await fetch(
-        `/api/nominatim/search?q=${encodeURIComponent(searchQuery)}&format=json`,
+        getApiUrl(`/api/nominatim/search?q=${encodeURIComponent(searchQuery)}&format=json&lang=${language.toLowerCase()}`),
         { signal: searchAbort.signal }
       );
 
@@ -6627,6 +6642,13 @@ function MapArea({
       </AnimatePresence>
 
       <div
+        /* UNA RIGA SOLA (30/08/2026): due tasti di pari larghezza, la lente e
+           il mirino. Prima qui dentro c'era anche il campo di ricerca, con
+           flex-1: su ~360 px i tasti shrink-0 si prendevano tutta la riga e il
+           campo collassava a larghezza ZERO — restava solo la lente e
+           sembrava un tasto rotto. E` il motivo per cui la ricerca della
+           citta' «non funzionava» nell'app mentre sulla PWA, in una finestra
+           larga, andava. Il campo ora si apre in una riga SOPRA la barra. */
         className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[1000] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation"
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
@@ -6639,10 +6661,14 @@ function MapArea({
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={handleFindNear}
-            className="px-4 py-2.5 bg-[#1e3a8a] text-white rounded-[1.5rem] font-black text-[11px] shadow-[0_4px_16px_rgba(30,58,138,0.4)] hover:bg-[#123628] transition-all flex items-center justify-center gap-2 group shrink-0"
+            /* flex-1 e non shrink-0 (30/08/2026): «Trova vicino» e «Trova
+               tutto» ora dividono in parti uguali lo spazio della barra —
+               prima il primo si prendeva tutto con l'etichetta intera e il
+               secondo restava una sola emoji. */
+            className="flex-1 min-w-0 px-2.5 py-2.5 bg-[#1e3a8a] text-white rounded-[1.5rem] font-black text-[10px] shadow-[0_4px_16px_rgba(30,58,138,0.4)] hover:bg-[#123628] transition-all flex items-center justify-center gap-1.5 group"
           >
-            <MapPin className="w-4 h-4 fill-white/20" />
-            <span className="uppercase tracking-[0.1em]">{getTranslation("find_near", language)}</span>
+            <MapPin className="w-4 h-4 fill-white/20 shrink-0" />
+            <span className="uppercase tracking-[0.06em] truncate">{getTranslation("find_near", language)}</span>
             <span className="min-w-5 h-5 px-1 bg-[#2c6e54] text-white rounded-full flex items-center justify-center text-[11px] font-black shadow-inner">
               {
                 visiblePois.filter((p) => {
@@ -6672,23 +6698,65 @@ function MapArea({
             whileTap={{ scale: 0.95 }}
             onClick={handleOpenEverythingPanel}
             title={getTranslation('everything_nearby_title', language)}
-            className="px-3 py-2.5 bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-[1.5rem] font-black text-[11px] shadow-sm hover:bg-white/90 dark:hover:bg-white/20 transition-all flex items-center justify-center gap-1.5 shrink-0 border border-[#1e3a8a]/10"
+            /* Stessa misura di «Trova vicino» e etichetta SEMPRE visibile:
+               con `hidden sm:inline` sul telefono restava solo la bussola e
+               non si capiva cosa fosse. */
+            className="flex-1 min-w-0 px-2.5 py-2.5 bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white rounded-[1.5rem] font-black text-[10px] shadow-sm hover:bg-white/90 dark:hover:bg-white/20 transition-all flex items-center justify-center gap-1.5 border border-[#1e3a8a]/10"
           >
-            <span className="text-sm leading-none">🧭</span>
-            <span className="uppercase tracking-[0.1em] hidden sm:inline">{getTranslation('everything_nearby_button', language)}</span>
+            <span className="text-sm leading-none shrink-0">🧭</span>
+            <span className="uppercase tracking-[0.06em] truncate">{getTranslation('everything_nearby_button', language)}</span>
           </motion.button>
         )}
 
-        <div className="flex-1 relative flex items-center bg-transparent px-3">
-          <Search className="w-5 h-5 text-[#1e3a8a] mr-2 shrink-0" />
+        {/* LENTE: apre e chiude la riga di ricerca qui sopra. */}
+        <button
+          type="button"
+          onClick={() => {
+            setRicercaAperta((aperta) => {
+              if (aperta) {
+                setSearchQuery("");
+                setSuggestions([]);
+                setNostri([]);
+                setSearchNoResults(false);
+                return false;
+              }
+              setTimeout(() => campoRicercaRef.current?.focus(), 80);
+              return true;
+            });
+          }}
+          aria-label={getTranslation("search_city_placeholder", language)}
+          aria-expanded={ricercaAperta}
+          className={`shrink-0 p-2 rounded-full transition-all active:scale-90 ${
+            ricercaAperta
+              ? 'bg-[#1e3a8a] text-white shadow-md'
+              : 'bg-white/60 dark:bg-white/10 text-[#1e3a8a] dark:text-white border border-[#1e3a8a]/10'
+          }`}
+        >
+          <Search className="w-5 h-5" />
+        </button>
+
+        {/* LA RIGA DI RICERCA, sopra la barra: qui il campo ha tutta la
+            larghezza dello schermo, non i quattro pixel che gli restavano
+            fra i tasti. */}
+        <AnimatePresence>
+          {ricercaAperta && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ type: "spring", stiffness: 320, damping: 26 }}
+              className="absolute bottom-full left-0 right-0 mb-2 flex items-center gap-1 px-4 py-1 bg-white/90 dark:bg-[#1C1C1E]/90 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10"
+            >
+              <Search className="w-5 h-5 text-[#1e3a8a] dark:text-white mr-1 shrink-0" />
           <form
             onSubmit={handleSearch}
-            className="flex-1 flex items-center"
+            className="flex-1 min-w-0 flex items-center"
           >
             <input
+              ref={campoRicercaRef}
               type="text"
               placeholder={getTranslation("search_city_placeholder", language)}
-              className="flex-1 bg-transparent py-2 text-base font-bold focus:outline-none text-[#1e3a8a] placeholder:text-[#1e3a8a]/50 w-full"
+              className="flex-1 min-w-0 bg-transparent py-2 text-base font-bold focus:outline-none text-[#1e3a8a] dark:text-white placeholder:text-[#1e3a8a]/50 w-full"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               role="combobox"
@@ -6720,18 +6788,21 @@ function MapArea({
               }}
             />
           </form>
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => { setSearchQuery(""); campoRicercaRef.current?.focus(); }}
+                  aria-label={getTranslation('a11y_cancella_ricerca', language)}
+                  className="shrink-0 min-w-11 min-h-11 flex items-center justify-center hover:bg-surface-container rounded-full transition-colors text-[#1e3a8a] dark:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-          <div className="flex items-center gap-0.5 ml-1">
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                aria-label={getTranslation('a11y_cancella_ricerca', language)}
-                className="min-w-11 min-h-11 -my-2 flex items-center justify-center hover:bg-surface-container rounded-full transition-colors text-[#1e3a8a]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
+        <div className="flex items-center gap-0.5 shrink-0">
             {isSearching || isLoadingPois ? (
               <div className="p-1">
                 <Loader2 className="w-4 h-4 text-primary animate-spin" />
@@ -6792,7 +6863,10 @@ function MapArea({
                 id="map-search-results"
                 role="listbox"
                 aria-label={getTranslation("search_city_placeholder", language)}
-                className="absolute bottom-full mb-4 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
+                /* mb-16 e non mb-4: i risultati stanno SOPRA la riga di
+                   ricerca, che ora e' anch'essa sopra la barra. Con mb-4 le
+                   due cose si sovrapponevano. */
+                className="absolute bottom-full mb-16 left-0 right-0 bg-white/95 dark:bg-[#1C1C1E]/95 backdrop-blur-3xl rounded-[2rem] shadow-[0_16px_64px_rgba(0,0,0,0.2)] border border-white/50 dark:border-white/10 overflow-hidden max-h-[300px] overflow-y-auto overscroll-none select-none touch-pan-y"
               >
                 {displayedSuggestions.length === 0 ? (
                   <div className="px-5 py-4 text-[15px] font-bold text-[#1e3a8a]/70 flex items-center gap-3" aria-live="polite">
@@ -6846,7 +6920,6 @@ function MapArea({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
       </div>
 
       <div className="absolute top-0 left-0 w-full h-32 bg-gradient-to-b from-black/10 to-transparent pointer-events-none z-10" />

@@ -8428,8 +8428,18 @@ ${description}
     const mbToken = process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN;
     if (mbToken) {
       try {
+        // DUE LINGUE, NON UNA (30/08/2026).
+        //
+        // Con `language=it` la ricerca di «Paris» tornava Paris, Texas: nei
+        // dati italiani la citta' francese si chiama «Parigi», quindi la
+        // parola «Paris» combaciava solo con gli omonimi americani. Un ospite
+        // straniero che scrive il nome nella SUA lingua non trovava la citta'.
+        // Mapbox accetta piu' lingue separate da virgola: si chiede quella
+        // dell'utente e, a seguire, l'inglese — che e' l'esonimo piu' diffuso.
+        // La prima resta quella con cui vengono ETICHETTATI i risultati.
+        const lingueRicerca = lang === 'en' ? 'en' : `${lang},en`;
         const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json`
-          + `?access_token=${mbToken}&limit=${limit}&types=${encodeURIComponent(types)}&language=${lang}`;
+          + `?access_token=${mbToken}&limit=${limit}&types=${encodeURIComponent(types)}&language=${encodeURIComponent(lingueRicerca)}`;
         const r = await axios.get(url, { timeout: 6000 });
         out = (r.data?.features || []).map((f: any) => ({
           id: f.id,
