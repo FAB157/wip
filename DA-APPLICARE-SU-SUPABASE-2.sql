@@ -97,7 +97,33 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS shared_pois_geog_knn_idx
 
 
 -- ───────────────────────────────────────────────────────────────────────────
--- 5) VERIFICA: dopo la 3 e la 4, questa deve rispondere in decine di
+-- 5) LA CHIAMATA NON DEVE ESSERE TRONCATA (decisione del committente:
+--    «il nostro database non deve bloccare la chiamata anche se dura 10
+--    secondi»).
+--
+-- Oggi il ruolo che esegue la RPC ha statement_timeout 8 s: una risposta che
+-- ne impiega 10 non arriva mai — viene uccisa a meta' con 57014, e per il
+-- telefono e' un errore, non una lentezza. Il timeout si puo' alzare SULLA
+-- SINGOLA FUNZIONE, senza toccare il ruolo: cosi' vale per la mappa e per il
+-- radar, e non allenta i limiti sul resto del database (una query impazzita
+-- altrove continua a essere fermata come prima).
+--
+-- 25 s e' largo di proposito: serve a NON troncare, non a rendere normale
+-- l'attesa. Con l'indice e le statistiche a posto (sezioni 3 e 4) le
+-- chiamate tornano in decine di millisecondi e questo tetto non si sfiora.
+-- ───────────────────────────────────────────────────────────────────────────
+ALTER FUNCTION public.nearby_pois(float, float, int, int) SET statement_timeout = '25s';
+
+DO $$
+BEGIN
+  IF to_regprocedure('public.get_utility_pois(double precision, double precision, integer, integer)') IS NOT NULL THEN
+    EXECUTE 'ALTER FUNCTION public.get_utility_pois(double precision, double precision, integer, integer) SET statement_timeout = ''25s''';
+  END IF;
+END $$;
+
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- 6) VERIFICA: dopo la 3 e la 4, questa deve rispondere in decine di
 --    millisecondi e il piano deve nominare l'indice qui sopra.
 -- ───────────────────────────────────────────────────────────────────────────
 EXPLAIN (ANALYZE, BUFFERS)

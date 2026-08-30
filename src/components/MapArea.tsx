@@ -3124,15 +3124,54 @@ function MapArea({
     tipiDb: string[], macro: string, limite = 500,
   ): Promise<Poi[]> => {
     try {
-      const { data } = await supabase
-        .from('shared_pois')
-        // 'sub_category' non esiste sulla tabella: vedi il commento in
-        // fetchGemmePoisInBounds qui sopra, stesso bug corretto.
-        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem')
-        .in('category', tipiDb)
-        .gte('lat', south).lte('lat', north)
-        .gte('lon', west).lte('lon', east)
-        .limit(limite);
+      // CAMPIONE SPARSO SU TUTTA LA VISTA, non un grumo (30/08/2026).
+      //
+      // Prima: UNA select sul riquadro con `.limit(n)` e NESSUN ordinamento.
+      // Postgres in quel caso restituisce le righe nell'ordine in cui le
+      // trova sul disco, cioe' nell'ordine in cui sono state importate — e i
+      // POI sono stati importati per paese e per regione. Risultato: con
+      // l'Europa sullo schermo i 600 pin venivano tutti dalla stessa zona, e
+      // il resto del continente restava vuoto. Non era un tetto troppo
+      // basso: era il campione preso male.
+      //
+      // Ora il riquadro si divide in una griglia e si chiede una quota a
+      // OGNI cella, in parallelo. Ogni interrogazione lavora su un rettangolo
+      // piccolo — quindi e' anche piu' rapida della singola grande — e i pin
+      // risultano distribuiti su tutta la vista. A vista stretta la griglia
+      // non serve e si resta a una sola interrogazione.
+      const COLONNE = 'id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden, country, city, is_gem';
+      const altezza = Math.abs(north - south);
+      const larghezza = Math.abs(east - west);
+      const lato = (altezza > 1 || larghezza > 1) ? 3 : 1;   // 3×3 = 9 celle
+      const perCella = Math.max(20, Math.ceil(limite / (lato * lato)));
+
+      const richieste: any[] = [];
+      for (let r = 0; r < lato; r++) {
+        for (let c = 0; c < lato; c++) {
+          const s = south + (altezza * r) / lato;
+          const n = south + (altezza * (r + 1)) / lato;
+          const w = west + (larghezza * c) / lato;
+          const e = west + (larghezza * (c + 1)) / lato;
+          richieste.push(
+            supabase.from('shared_pois').select(COLONNE)
+              .in('category', tipiDb)
+              .gte('lat', s).lte('lat', n)
+              .gte('lon', w).lte('lon', e)
+              .limit(perCella)
+              .then((res: any) => res.data || [], () => []),
+          );
+        }
+      }
+      const perCelle = await Promise.all(richieste);
+      // Le celle confinano: lo stesso POI puo' tornare da due riquadri.
+      const visti = new Set<string>();
+      const data = perCelle.flat().filter((i: any) => {
+        const k = String(i?.id ?? '');
+        if (!k || visti.has(k)) return false;
+        visti.add(k);
+        return true;
+      }).slice(0, limite);
+
       const { isVisiblePoiStatus } = await import('../services/poiRepository');
       return (data || [])
         .filter((i: any) => isVisiblePoiStatus(i) && i.name)
@@ -3716,35 +3755,32 @@ function MapArea({
       const UTILITY_UI_CATS = ['locali', 'utilita', 'famiglie'];
       const wantsUtility = activeCategories.some(c => UTILITY_UI_CATS.includes(c));
 
-      // Circuit breaker condiviso con poiRepository.ts (src/lib/circuitBreaker.ts):
-      // le due RPC del fetch mappa passano da qui invece che dritte su
-      // supabase.rpc(). Se il breaker è aperto (troppi fallimenti di rete
-      // recenti) la chiamata viene rifiutata subito e, oltre al log, lo
-      // segnaliamo con mapDataDegraded invece di lasciare la mappa
-      // silenziosamente vuota.
+      // NIENTE PAUSA DI SICUREZZA SULLA MAPPA (30/08/2026, decisione del
+      // committente: «il nostro database non deve bloccare la chiamata anche
+      // se dura 10 secondi — la pausa di sicurezza non deve esistere»).
+      //
+      // Qui prima passava il circuit breaker condiviso con poiRepository: dopo
+      // qualche risposta lenta si apriva e da quel momento le chiamate al
+      // database venivano RIFIUTATE SUBITO, senza nemmeno provare. La mappa
+      // restava senza POI — e quindi senza foto — e compariva «Troppi errori
+      // di rete recenti». Era il rimedio peggiore del male: il database e'
+      // lento, non irraggiungibile, e una risposta lenta e' comunque una
+      // risposta.
+      //
+      // Ora ogni chiamata viene sempre tentata. Un errore singolo si limita a
+      // lasciare i pin che c'erano: la fetch successiva riprova. Il breaker
+      // resta in uso altrove (poiRepository, geofencing), dove serve davvero
+      // a non consumare batteria a vuoto in background.
       const runPoiRpc = async (
         fn: () => Promise<{ data: any; error: any }>,
         label: string,
       ): Promise<{ data: any; error: any }> => {
         try {
-          return await supabaseCircuitBreaker.execute(async () => {
-            const res = await fn();
-            if (res.error) throw new Error(res.error.message);
-            return res;
-          });
+          const res = await fn();
+          if (res.error) throw new Error(res.error.message);
+          return res;
         } catch (e: any) {
-          if (/circuit breaker is open/i.test(e?.message || "")) {
-            console.warn(`[MapArea] Circuit breaker aperto, salto ${label}`);
-            setMapDataDegraded(true);
-            // Riusa lo stesso banner/chiave "db" del listener wip-radar-degraded:
-            // stessa causa di fondo (RPC dati luoghi non raggiungibile).
-            setFetchErrors((prev) => ({
-              ...prev,
-              db: getTranslation('mp_db_pausa', language),
-            }));
-          } else {
-            console.warn(`[MapArea] ${label} fallita:`, e?.message || e);
-          }
+          console.warn(`[MapArea] ${label} fallita (si riprovera' al prossimo spostamento):`, e?.message || e);
           return { data: null, error: e };
         }
       };
@@ -3755,7 +3791,15 @@ function MapArea({
             p_lat: center.lat,
             p_lon: center.lng,
             radius_m: Math.min(radius, 25000),
-            limit_num: 1000
+            // REGOLA (30/08/2026): sulla mappa compaiono TUTTI i pin di quel
+            // livello di zoom, e allargando se ne aggiungono FINO A 500. Il
+            // tetto era 1000: oltre la meta' non erano pin in piu' ma peso in
+            // piu' — piu' righe da trasferire e da disegnare, su una RPC che
+            // gia' oggi ondeggia intorno al timeout. Il raggio resta quello
+            // del cerchio circoscritto al riquadro visibile, quindi la vista
+            // e' coperta per intero anche agli angoli; quando i POI sono piu'
+            // di 500 si tengono i 500 PIU` VICINI al centro dello schermo.
+            limit_num: 500
           }),
           'nearby_pois',
         ),

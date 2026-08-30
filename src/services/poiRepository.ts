@@ -158,35 +158,40 @@ export async function getNearbyPois(
 
   // Primary: RPC nearby_pois (legge da shared_pois con PostGIS) e get_utility_pois
   if (hasRpc()) {
-    // Dentro il CIRCUIT BREAKER (ITI-14): fino al 28/08/2026 solo
-    // get_geofence_pois ci passava, e con Supabase giu' il radar rifaceva le
-    // due RPC ogni 15 s fino al timeout di 20 s ciascuna. Con il breaker
-    // aperto si legge subito da Dexie, come offline.
+    // NIENTE CIRCUIT BREAKER SUI LUOGHI (30/08/2026, decisione del
+    // committente: «il nostro database non deve bloccare la chiamata anche se
+    // dura 10 secondi — la pausa di sicurezza non deve esistere»).
+    //
+    // Qui il breaker si apriva dopo qualche risposta lenta e da quel momento
+    // RIFIUTAVA le chiamate senza provarle, facendo leggere solo Dexie: il
+    // radar e la mappa restavano senza POI, e senza foto, mostrando
+    // «Impossibile aggiornare i luoghi vicini». Ma il database e' lento, non
+    // irraggiungibile: una risposta lenta e' comunque una risposta, e va
+    // aspettata. Dexie resta il ripiego per quando la chiamata fallisce
+    // davvero — non piu' per quando qualcuno ha deciso di non provarci.
     let sharedRes: any;
     let utilityRes: any;
     try {
-      [sharedRes, utilityRes] = await supabaseCircuitBreaker.execute(async () => {
-        const risultati = await Promise.all([
-          supabase.rpc('nearby_pois', {
-            p_lat: lat,
-            p_lon: lon,
-            radius_m: radiusMeters,
-            limit_num: 400
-          }),
-          supabase.rpc('get_utility_pois', {
-            user_lat: lat,
-            user_lon: lon,
-            radius_meters: radiusMeters,
-            limit_num: 400
-          }),
-        ]);
-        // Entrambe fallite = problema di rete/DB, conta per il breaker. Una
-        // sola fallita (funzione mancante, timeout isolato) NO: l'altra basta.
-        if (risultati[0].error && risultati[1].error) throw new Error(risultati[0].error.message || 'rpc failed');
-        return risultati;
-      });
+      const risultati = await Promise.all([
+        supabase.rpc('nearby_pois', {
+          p_lat: lat,
+          p_lon: lon,
+          radius_m: radiusMeters,
+          limit_num: 400
+        }),
+        supabase.rpc('get_utility_pois', {
+          user_lat: lat,
+          user_lon: lon,
+          radius_meters: radiusMeters,
+          limit_num: 400
+        }),
+      ]);
+      // Entrambe fallite: si passa a Dexie. Una sola fallita (funzione
+      // mancante, timeout isolato) no: l'altra basta.
+      if (risultati[0].error && risultati[1].error) throw new Error(risultati[0].error.message || 'rpc failed');
+      [sharedRes, utilityRes] = risultati;
     } catch (e) {
-      console.warn('[poiRepository] nearby RPC non disponibili (breaker/rete): leggo da Dexie', e);
+      console.warn('[poiRepository] entrambe le RPC dei luoghi fallite: leggo da Dexie', e);
       try {
         const localPois = await db.pois.toArray();
         return localPois
