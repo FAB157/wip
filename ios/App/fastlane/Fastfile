@@ -65,11 +65,19 @@ platform :ios do
     # Serve la cifratura vecchia, quindi il file va creato cosi':
     #   openssl pkcs12 -export -inkey chiave.key -in certificato.pem \
     #     -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
-    #     -out certificato.p12 -passout pass:LA_PASSWORD
+    #     -out certificato.p12 -passout pass:
     # (`-legacy` non basta: in OpenSSL 3.5 vuole il provider legacy caricato.)
+    # `-passout pass:` senza niente dopo = nessuna password: vedi sotto.
+    # SENZA PASSWORD, per scelta (30/08/2026). Con la password erano due
+    # segreti a doversi corrispondere, e uno spazio invisibile in coda alla
+    # password ha fatto fallire due build con un errore che parlava d'altro:
+    #   security: SecKeychainItemImport: MAC verification failed during
+    #   PKCS12 import (wrong password?)
+    # Il .p12 e' gia' protetto dall'essere un segreto di GitHub: aggiungerci
+    # una password non lo rendeva piu' sicuro, solo piu' fragile.
     import_certificate(
       certificate_path: ENV.fetch("APPLE_DIST_CERT_PATH"),
-      certificate_password: ENV.fetch("APPLE_DIST_CERT_PASSWORD"),
+      certificate_password: "",
       keychain_name: "fastlane_tmp_keychain",
       keychain_password: ""
     )

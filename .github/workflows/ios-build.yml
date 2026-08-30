@@ -159,7 +159,21 @@ jobs:
             echo "::error title=Certificato assente::Manca il secret APPLE_DIST_CERT_P12 (il .p12 del certificato di distribuzione, in base64). Senza, la firma non parte."
             exit 1
           fi
-          printf '%s' "$APPLE_DIST_CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          if ! printf '%s' "$APPLE_DIST_CERT_P12" | base64 --decode > "$RUNNER_TEMP/dist.p12" 2>/dev/null; then
+            echo "::error title=Base64 non valido::Il secret APPLE_DIST_CERT_P12 non e' base64 leggibile. Di solito succede quando il valore nuovo viene incollato IN CODA al vecchio invece che al suo posto: svuota il campo prima di incollare."
+            exit 1
+          fi
+          # (30/08/2026) IL CONTROLLO CHE MANCAVA. Per quattro build l'errore
+          # e' arrivato in ritardo e travestito: `security` di macOS importava
+          # il .p12 in silenzio senza importarlo, e fastlane si lamentava DUE
+          # passi dopo di non trovare «a matching code signing identity for
+          # type AppStore», mandando a cercare fra i profili. Qui il file si
+          # apre subito: se non si apre, si sa perche' e si sa dove.
+          if ! openssl pkcs12 -in "$RUNNER_TEMP/dist.p12" -nokeys -passin pass: -info >/dev/null 2>&1; then
+            echo "::error title=Certificato illeggibile::Il .p12 non si apre. Va esportato SENZA password e con la cifratura vecchia, l'unica che macOS legge: openssl pkcs12 -export -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 -passout pass:"
+            exit 1
+          fi
+          echo "Certificato decodificato e leggibile ($(wc -c < "$RUNNER_TEMP/dist.p12") byte)."
 
       - name: Firma, archivia e carica su TestFlight
         if: steps.asc.outputs.firma == 'si'
@@ -169,7 +183,6 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_DIST_CERT_PATH: ${{ runner.temp }}/dist.p12
-          APPLE_DIST_CERT_PASSWORD: ${{ secrets.APPLE_DIST_CERT_PASSWORD }}
           # Senza, fastlane si ferma su domande che nessuno leggera'.
           FASTLANE_SKIP_UPDATE_CHECK: '1'
           FASTLANE_HIDE_CHANGELOG: '1'
