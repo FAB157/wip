@@ -16838,11 +16838,20 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
       'Content-Type': 'application/json',
       Prefer: 'resolution=merge-duplicates,return=minimal',
     };
-    const LOTTO = 20;
-    for (let i = 0; i < righe.length; i += LOTTO) {
-      const lotto = righe.slice(i, i + LOTTO);
-      let scritto = false;
-      for (let tentativo = 0; tentativo < 3 && !scritto; tentativo++) {
+    // (30/08/2026, primo errore reale catturato da Sentry) shared_pois è una
+    // tabella da 8,5 milioni di righe con scritture concorrenti frequenti
+    // (moderazione, deduplica, import): un diagnostico dal vivo durante
+    // l'incidente ha trovato altre due UPDATE massive in corso che leggevano
+    // fisicamente da disco per 7+ secondi. Il piano della singola scrittura
+    // resta economico (indice sulla PK), ma sotto quella contesa 3 tentativi
+    // con backoff fisso non bastavano ad aspettarla. Ora: più tentativi,
+    // backoff più lungo, e — se anche quello non basta — il lotto si DIMEZZA
+    // e si ritenta diviso: un lotto piccolo ha meno probabilità di collidere
+    // con una scansione lunga, e isola quale porzione (se una sola) è
+    // davvero il problema invece di perdere l'intero lotto.
+    async function scriviLotto(lotto: any[]): Promise<boolean> {
+      if (lotto.length === 0) return true;
+      for (let tentativo = 0; tentativo < 5; tentativo++) {
         const corpo = ripiegoStatusAttivo
           ? lotto.map((r: any) => ({ ...r, status: STATUS_POI_RIPIEGO }))
           : lotto;
@@ -16851,20 +16860,32 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
             headers: intestazioni,
             timeout: 25000,
           });
-          scritto = true;
+          return true;
         } catch (e: any) {
           const codice = e?.response?.data?.code;
           if (codice === '23514' && !ripiegoStatusAttivo) {
             ripiegoStatusAttivo = true;
             console.warn(
-              `[${etichetta}] shared_pois rifiuta status '${STATUS_POI_AUTO}' (23514): ripiego su '${STATUS_POI_RIPIEGO}'. ` +
+              `[shared_pois] rifiuta status '${STATUS_POI_AUTO}' (23514): ripiego su '${STATUS_POI_RIPIEGO}'. ` +
               `APPLICARE supabase/migrations/20260830090000_shared_pois_status_auto.sql per tornare allo stato corretto.`
             );
-            continue; // stesso lotto, subito, con lo status ammesso
-          }
-          if (codice === '57014' && tentativo < 2) {
-            await new Promise((r) => setTimeout(r, 1200 * (tentativo + 1)));
+            tentativo--; // non conta come tentativo: stesso lotto, subito, con lo status ammesso
             continue;
+          }
+          if (codice === '57014') {
+            if (tentativo < 4) {
+              await new Promise((r) => setTimeout(r, 1500 * (tentativo + 1)));
+              continue;
+            }
+            // Ultima spiaggia: un lotto solo si ritenta diviso, non si arrende
+            // all'intero — a 1 riga non si divide oltre, quella riga fallisce.
+            if (lotto.length > 1) {
+              const meta = Math.ceil(lotto.length / 2);
+              const [a, b] = [lotto.slice(0, meta), lotto.slice(meta)];
+              const okA = await scriviLotto(a);
+              const okB = await scriviLotto(b);
+              return okA && okB;
+            }
           }
           esito.falliti += lotto.length;
           esito.errori.push({
@@ -16872,10 +16893,16 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
             messaggio: e?.response?.data?.message || e?.message,
             primo_id: lotto[0]?.id,
           });
-          break;
+          return false;
         }
       }
-      if (scritto) esito.scritti += lotto.length;
+      return false;
+    }
+
+    const LOTTO = 20;
+    for (let i = 0; i < righe.length; i += LOTTO) {
+      const lotto = righe.slice(i, i + LOTTO);
+      if (await scriviLotto(lotto)) esito.scritti += lotto.length;
     }
     esito.ripiego = ripiegoStatusAttivo;
     if (esito.falliti > 0) console.warn(`[${etichetta}] POI non scritti: ${esito.falliti}/${righe.length}`, esito.errori[0]);
@@ -16904,6 +16931,12 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
           if (!p?.id || !p?.name || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
           if (lat === 0 && lon === 0) return null;
           if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+          // I pasti non diventano POI geofenceabili: un POI in shared_pois fa
+          // scattare l'audioguida del servizio nativo, e una cena che «parla»
+          // come un monumento non deve esistere. Il client filtra gia' per
+          // tipo (tappaDiventaPoi), qui si ricontrolla sulla categoria — cosi'
+          // vale anche per le build vecchie e per chiamate diverse.
+          if (String(p?.category || '').toLowerCase() === 'locali') return null;
           return {
             id: String(p.id).slice(0, 120),
             name: String(p.name).slice(0, 300),
