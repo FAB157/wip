@@ -775,6 +775,36 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
   return 'monumenti';
 }
 
+/**
+ * Questa tappa deve diventare un POI geofenceabile in shared_pois? (30/08/2026)
+ *
+ * NO per i pasti e per i puri spostamenti: un POI in shared_pois è ciò che il
+ * servizio nativo usa per far scattare l'audioguida, e una cena che «parla»
+ * come un monumento è esattamente ciò che si voleva evitare — i pasti stanno
+ * sulla mappa del giorno, ma non parlano.
+ *
+ * Prima la lista era `ristorante | pausa | spostamento | trasferimento`, ma
+ * l'AI non usa quel vocabolario: sui 93 itinerari salvati scrive `pranzo` 56
+ * volte, `cena` 36, `colazione` 9, e poi `trasporto`, `stazione`, `aeroporto`,
+ * `aperitivo`, `caffetteria`, `enoteca`, `catering`… Nessuno di questi veniva
+ * escluso, e finivano tutti fra i POI parlanti.
+ *
+ * La parte sui pasti riusa DI PROPOSITO la stessa espressione con cui
+ * mapItineraryCategoryToMapCategory riconosce i 'locali': se una tappa è
+ * classificata come locale, per definizione è un posto dove si mangia.
+ */
+const TAPPE_NON_LUOGO = /pausa|spostamento|trasferimento|trasporto|stazione|aeroporto|relax/;
+// Superset di quella dei 'locali': copre anche i termini che l'AI usa davvero
+// e che la mappatura categorie non intercetta (enogastronomia, cibo, brunch…).
+const TAPPE_PASTO = /ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|caff|\bbar\b|pub|food|cibo|catering|agriturismo/;
+
+export function tappaDiventaPoi(aiType: string = ""): boolean {
+  const t = String(aiType).toLowerCase();
+  if (TAPPE_NON_LUOGO.test(t)) return false;
+  if (TAPPE_PASTO.test(t)) return false;
+  return mapItineraryCategoryToMapCategory(t) !== 'locali';
+}
+
 /** Inserisce POI auto-popolati (source=overpass_auto/foursquare, status=auto). */
 export async function insertAutoPois(rows: AutoPoiInput[]): Promise<number> {
   if (rows.length === 0) return 0;

@@ -46,7 +46,7 @@ import DayPassCard from './DayPassCard';
 import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
-import { mapItineraryCategoryToMapCategory } from '../services/poiRepository';
+import { mapItineraryCategoryToMapCategory, tappaDiventaPoi } from '../services/poiRepository';
 import BudgetTable from './itinerary/BudgetTable';
 import CalendarExportButton from './CalendarExportButton';
 import ItineraryStop from './itinerary/ItineraryStop';
@@ -1834,12 +1834,17 @@ export default function PlanScreen({
         giorno.tappe.forEach(tappa => {
           const lat = tappa.coordinate?.lat || 0;
           const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
-          // 'trasferimento' (roadtrip, ondata 7): coordinate del centro della
-          // città di arrivo, non un luogo visitabile — non deve diventare un
-          // POI geofenceable, altrimenti il servizio nativo lo attiverebbe
-          // semplicemente passando vicino alla città, leggendo il racconto
-          // del viaggio come se fosse l'audioguida di un luogo reale.
-          if (lat !== 0 && lon !== 0 && tappa.tipo !== 'ristorante' && tappa.tipo !== 'pausa' && tappa.tipo !== 'spostamento' && tappa.tipo !== 'trasferimento') {
+          // Pasti e spostamenti NON diventano POI geofenceabili: un POI in
+          // shared_pois è ciò che fa scattare l'audioguida del servizio nativo,
+          // e una cena che «parla» come un monumento è proprio ciò che si
+          // voleva evitare (come il 'trasferimento' del roadtrip, che è il
+          // centro della città di arrivo e non un luogo visitabile).
+          // La regola sta in tappaDiventaPoi (30/08/2026): l'elenco a mano che
+          // c'era qui — ristorante/pausa/spostamento/trasferimento — non
+          // corrispondeva al vocabolario dell'AI, che scrive 'pranzo' e 'cena'
+          // (92 volte sui 93 itinerari salvati), 'colazione', 'trasporto'…
+          // e tutti passavano.
+          if (lat !== 0 && lon !== 0 && tappaDiventaPoi(tappa.tipo || '')) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
             // città con un Duomo, e teneva la foto e il testo della prima.
