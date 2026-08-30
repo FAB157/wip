@@ -203,8 +203,12 @@ jobs:
                      -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }} \
                      DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
                      CODE_SIGN_STYLE=Automatic \
-                     CODE_SIGN_IDENTITY="Apple Distribution" \
                      archive
+          # NIENTE CODE_SIGN_IDENTITY qui: imporla a mano con la firma
+          # automatica fa fallire l'archivio con «App has conflicting
+          # provisioning settings» (build #75). L'identita' giusta la sceglie
+          # Xcode, ora che il certificato di distribuzione e i due profili
+          # App Store sono gia' nel portachiavi (passo precedente).
 
       - name: Export IPA
         if: steps.asc.outputs.firma == 'si'
