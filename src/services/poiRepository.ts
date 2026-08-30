@@ -771,9 +771,12 @@ export function mapItineraryCategoryToMapCategory(aiType: string = ""): Poi['cat
   // (36), «colazione», «aperitivo», «enoteca», «catering»… Prima finivano
   // tutti nel fallback 'monumenti', cioe' una cena diventava un monumento.
   if (t.match(/ristorante|osteria|trattoria|pizzeria|cena|pranzo|colazione|brunch|merenda|aperitivo|degustazione|enogastronom|gastronom|enoteca|pub|caff|bar|food|cibo|catering|agriturismo/)) return 'locali';
-  if (t.match(/monumento|statua|storico|castello|rovina|monument/)) return 'monumenti';
-  if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia/)) return 'chiese';
-  if (t.match(/parco|giardino|natura|spiaggia|panoramic|viewpoint|park/)) return 'panorami';
+  if (t.match(/monumento|statua|storico|castello|castle|rovina|rocca|fortezza|torre|palazzo|monument|archeolog|nuraghe/)) return 'monumenti';
+  if (t.match(/chiesa|basilica|cattedrale|duomo|abbazia|santuario|cappella|church|monastero/)) return 'chiese';
+  // «panoram» e non «panoramic»: l'AI scrive «panorama», che con la vecchia
+  // espressione NON veniva riconosciuto e cadeva nel fallback 'monumenti'
+  // (30/08/2026 — sette Monte/Poggio finiti fra i monumenti).
+  if (t.match(/parco|giardino|natura|spiaggia|panoram|viewpoint|park|isola|lago|monte|vetta|cascata|mare|paesaggio|vista/)) return 'panorami';
   if (t.match(/evento/)) return 'eventi';
   // Stazioni, porti, aeroporti: sono luoghi veri, ma di servizio — categoria
   // 'utilita', non 'monumenti' (30/08/2026, «ogni tappa la sua categoria»).
