@@ -9935,6 +9935,114 @@ ${description}
     res.json({ checks: await runAllHealthChecks() });
   });
 
+  // ── MONITORAGGIO ESTERNO: pannello unico (30/08/2026) ───────────────────
+  // I quattro servizi (Sentry/Checkly/PostHog/UptimeRobot) vivono ognuno sulla
+  // propria dashboard: qui si aggregano le statistiche di lettura per non
+  // dover aprire quattro siti diversi dal tab admin "Diagnostica". Ogni
+  // fornitore ha la SUA chiave di lettura (diversa da quella di scrittura già
+  // usata altrove: SENTRY_DSN scrive errori, SENTRY_AUTH_TOKEN li legge;
+  // POSTHOG_API_KEY scrive eventi, POSTHOG_PERSONAL_API_KEY li legge) — senza
+  // quella chiave il fornitore risponde `configured:false`, mai un errore che
+  // fa cadere gli altri tre. Promise.allSettled apposta: un fornitore giù non
+  // deve mai spegnere gli altri.
+  async function statoChecklyLettura() {
+    const key = process.env.CHECKLY_API_KEY;
+    const accountId = process.env.CHECKLY_ACCOUNT_ID;
+    if (!key || !accountId) return { configured: false };
+    try {
+      const r = await axios.get('https://api.checklyhq.com/v1/check-statuses', {
+        headers: { Authorization: `Bearer ${key}`, 'X-Checkly-Account': accountId }, timeout: 8000
+      });
+      const rows = Array.isArray(r.data) ? r.data : [];
+      return {
+        configured: true,
+        checks: rows.map((c: any) => ({
+          name: c.name, ok: !c.hasErrors && !c.hasFailures,
+          lastRunAt: c.updated_at || c.lastRunAt || null,
+        })),
+      };
+    } catch (e: any) {
+      return { configured: true, error: e?.response?.data?.message || e?.message };
+    }
+  }
+
+  async function statoSentryLettura() {
+    const token = process.env.SENTRY_AUTH_TOKEN;
+    const org = process.env.SENTRY_ORG_SLUG;
+    if (!token || !org) return { configured: false };
+    try {
+      const r = await axios.get(`https://sentry.io/api/0/organizations/${org}/issues/?statsPeriod=24h&query=is:unresolved`, {
+        headers: { Authorization: `Bearer ${token}` }, timeout: 8000
+      });
+      const rows = Array.isArray(r.data) ? r.data : [];
+      return {
+        configured: true,
+        issuesLast24h: rows.length,
+        topIssues: rows.slice(0, 5).map((i: any) => ({ title: i.title, count: i.count, level: i.level, permalink: i.permalink })),
+      };
+    } catch (e: any) {
+      return { configured: true, error: e?.response?.data?.detail || e?.message };
+    }
+  }
+
+  async function statoUptimeRobotLettura() {
+    const key = process.env.UPTIMEROBOT_API_KEY;
+    if (!key) return { configured: false };
+    try {
+      const r = await axios.post('https://api.uptimerobot.com/v2/getMonitors',
+        new URLSearchParams({ api_key: key, format: 'json', custom_uptime_ratios: '30' }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 8000 });
+      if (r.data?.stat !== 'ok') throw new Error(r.data?.error?.message || 'risposta anomala');
+      const monitors = Array.isArray(r.data?.monitors) ? r.data.monitors : [];
+      // status: 2=up, 8/9=down, 0=paused, 1=non ancora controllato.
+      return {
+        configured: true,
+        monitors: monitors.map((m: any) => ({
+          name: m.friendly_name, up: m.status === 2, status: m.status,
+          uptime30gg: m.custom_uptime_ratio ? Number(m.custom_uptime_ratio) : null,
+        })),
+      };
+    } catch (e: any) {
+      return { configured: true, error: e?.message };
+    }
+  }
+
+  async function statoPosthogLettura() {
+    const key = process.env.POSTHOG_PERSONAL_API_KEY;
+    const projectId = process.env.POSTHOG_PROJECT_ID;
+    if (!key || !projectId) return { configured: false };
+    try {
+      const dopo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      // Un GET per evento: elenco eventi (non un'aggregazione vera), ma
+      // basta a un colpo d'occhio "quanti nelle ultime 24h" — vedi capturaEvento.
+      const eventi = ['credits_purchased', 'audioguide_generated', 'quota_exceeded'];
+      const conteggi = await Promise.all(eventi.map(async (ev) => {
+        try {
+          const r = await axios.get(`https://eu.posthog.com/api/projects/${projectId}/events/`, {
+            headers: { Authorization: `Bearer ${key}` },
+            params: { event: ev, after: dopo, limit: 100 }, timeout: 8000
+          });
+          const risultati = Array.isArray(r.data?.results) ? r.data.results : [];
+          // limit:100 — se è pieno il vero conteggio è "100+", non esatto.
+          return { event: ev, count24h: risultati.length, approssimato: risultati.length >= 100 };
+        } catch { return { event: ev, count24h: null }; }
+      }));
+      return { configured: true, eventi: conteggi };
+    } catch (e: any) {
+      return { configured: true, error: e?.message };
+    }
+  }
+
+  app.get("/api/admin/monitoring-status", rateLimiter, requireAdmin, async (req, res) => {
+    const [checkly, sentry, uptimerobot, posthog] = await Promise.allSettled([
+      statoChecklyLettura(), statoSentryLettura(), statoUptimeRobotLettura(), statoPosthogLettura()
+    ]);
+    const esito = (r: PromiseSettledResult<any>) => r.status === 'fulfilled' ? r.value : { configured: false, error: (r as any).reason?.message };
+    res.json({
+      checkly: esito(checkly), sentry: esito(sentry), uptimerobot: esito(uptimerobot), posthog: esito(posthog),
+    });
+  });
+
   // --- CANARINO API: smoke test schedulato (cron Vercel, vedi vercel.json) ---
   // Salva lo snapshot in api_cache (niente migration) e scrive un errore
   // critical in system_errors SOLO per i check passati da verde a rosso:
@@ -16652,7 +16760,7 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
           // umana e prima promuoveva anche le allucinazioni, annullando il
           // denylist di nearby_pois). is_gem NON viene più impostato dall'LLM
           // (era un giudizio inventato): resta il valore esistente della riga.
-          await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${poi.id}`, {
+          const campiArricchimento: any = {
             description_short: result.description_short,
             description_long: result.description_long,
             description_ai: result.description_long,
@@ -16661,7 +16769,21 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
             enriched_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             enrichment_source: "gemini-cron"
-          }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: "return=minimal" } });
+          };
+          const intestazioniPatch = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: "return=minimal" };
+          try {
+            await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${poi.id}`, campiArricchimento, { headers: intestazioniPatch });
+          } catch (patchErr: any) {
+            // 23514: il vincolo CHECK non ammette 'auto' (vedi lo scrittore
+            // comune poco sotto). Prima l'INTERA PATCH saltava e il cron non
+            // scriveva NULLA — niente descrizioni, niente audio_script, per
+            // ogni POI di ogni notte. Si riscrive senza toccare lo status:
+            // l'arricchimento arriva, e lo stato della riga resta quello che
+            // era (nessuna promozione indebita, che era il timore originario).
+            if (patchErr?.response?.data?.code !== '23514') throw patchErr;
+            const { status: _scartato, ...senzaStatus } = campiArricchimento;
+            await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${poi.id}`, senzaStatus, { headers: intestazioniPatch });
+          }
 
           enrichedCount++;
           // Small delay to prevent rate limiting
@@ -16679,8 +16801,132 @@ Rispondi ESATTAMENTE E SOLO con un JSON valido con questa struttura (nessun cara
     }
   });
 
-  
-  
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SCRITTURA POI AUTOMATICI (30/08/2026)
+  //
+  // Collaudo: delle 23 tappe di «4 Giorni a Parigi» ZERO erano diventate POI.
+  // Causa: shared_pois ha un vincolo CHECK (`shared_pois_status_check`, creato
+  // a mano dal pannello Supabase — non c'e' in nessuna migration) che NON
+  // ammette il valore 'auto'. Ma 'auto' e' lo stato che TUTTO il codice usa per
+  // i POI generati dalla macchina: il cron notturno, batch-ensure, la discovery
+  // Overpass, insertAutoPois, le edge function. Ogni scrittura falliva con
+  // 23514, e in tabella infatti ci sono ZERO righe 'auto' su 7,8 milioni.
+  //
+  // La correzione vera e' la migration 20260830090000_shared_pois_status_auto.sql
+  // (allinea il vincolo al codice). Finche' non e' applicata, qui si ripiega:
+  // al primo 23514 si riscrive lo stesso lotto con 'verified' — l'unico valore
+  // ammesso che sia anche VISIBILE sulla mappa e SCARICABILE offline ('draft' e
+  // NULL non lo sono: isDownloadablePoiStatus li scarta). Il ripiego si ricorda
+  // per il resto del processo, cosi' non si ritenta 'auto' a ogni lotto, e
+  // smette da solo quando la migration arriva.
+  //
+  // Gestisce anche il 57014 (statement timeout): su una tabella da 7,8 milioni
+  // di righe l'upsert va in timeout a intermittenza sotto carico, e senza
+  // ritentativo le tappe si perdevano lo stesso.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const STATUS_POI_AUTO = 'auto';
+  const STATUS_POI_RIPIEGO = 'verified';
+  let ripiegoStatusAttivo = false;
+
+  async function scriviPoiServizio(righe: any[], etichetta: string) {
+    const esito: any = { scritti: 0, falliti: 0, ripiego: false, errori: [] };
+    if (!Array.isArray(righe) || righe.length === 0) return esito;
+    const intestazioni = {
+      apikey: supabaseServiceKey,
+      Authorization: `Bearer ${supabaseServiceKey}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+    };
+    const LOTTO = 20;
+    for (let i = 0; i < righe.length; i += LOTTO) {
+      const lotto = righe.slice(i, i + LOTTO);
+      let scritto = false;
+      for (let tentativo = 0; tentativo < 3 && !scritto; tentativo++) {
+        const corpo = ripiegoStatusAttivo
+          ? lotto.map((r: any) => ({ ...r, status: STATUS_POI_RIPIEGO }))
+          : lotto;
+        try {
+          await axios.post(`${supabaseUrl}/rest/v1/shared_pois?on_conflict=id`, corpo, {
+            headers: intestazioni,
+            timeout: 25000,
+          });
+          scritto = true;
+        } catch (e: any) {
+          const codice = e?.response?.data?.code;
+          if (codice === '23514' && !ripiegoStatusAttivo) {
+            ripiegoStatusAttivo = true;
+            console.warn(
+              `[${etichetta}] shared_pois rifiuta status '${STATUS_POI_AUTO}' (23514): ripiego su '${STATUS_POI_RIPIEGO}'. ` +
+              `APPLICARE supabase/migrations/20260830090000_shared_pois_status_auto.sql per tornare allo stato corretto.`
+            );
+            continue; // stesso lotto, subito, con lo status ammesso
+          }
+          if (codice === '57014' && tentativo < 2) {
+            await new Promise((r) => setTimeout(r, 1200 * (tentativo + 1)));
+            continue;
+          }
+          esito.falliti += lotto.length;
+          esito.errori.push({
+            codice,
+            messaggio: e?.response?.data?.message || e?.message,
+            primo_id: lotto[0]?.id,
+          });
+          break;
+        }
+      }
+      if (scritto) esito.scritti += lotto.length;
+    }
+    esito.ripiego = ripiegoStatusAttivo;
+    if (esito.falliti > 0) console.warn(`[${etichetta}] POI non scritti: ${esito.falliti}/${righe.length}`, esito.errori[0]);
+    return esito;
+  }
+
+  // --- TAPPE DI UN ITINERARIO → POI (30/08/2026) ---
+  // Prima lo faceva il client (PlanScreen) con la chiave anon: oltre al vincolo
+  // CHECK, quella strada sbatteva anche sulla RLS — la policy di INSERT ammette
+  // solo `coalesce(status,'auto') = 'auto'`, cioe' esattamente il valore che la
+  // tabella rifiutava. Qui si passa dalla chiave di servizio, che la RLS la
+  // scavalca, e l'esito torna al client invece di finire in un console.warn.
+  app.post("/api/poi/from-itinerary", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: "Autenticazione richiesta" });
+
+      const inArrivo = Array.isArray(req.body?.pois) ? req.body.pois : [];
+      if (inArrivo.length === 0) return res.status(400).json({ error: "Nessuna tappa" });
+      if (inArrivo.length > 300) return res.status(400).json({ error: "Troppe tappe (max 300)" });
+
+      // Solo le colonne attese, e coordinate valide: il corpo arriva dal client.
+      const puliti = inArrivo
+        .map((p: any) => {
+          const lat = Number(p?.lat), lon = Number(p?.lon);
+          if (!p?.id || !p?.name || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+          if (lat === 0 && lon === 0) return null;
+          if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+          return {
+            id: String(p.id).slice(0, 120),
+            name: String(p.name).slice(0, 300),
+            category: String(p.category || 'monumenti').slice(0, 60),
+            lat, lon,
+            description_ai: String(p.description_ai || '').slice(0, 4000),
+            source: 'itinerary',
+            status: STATUS_POI_AUTO,
+            created_at: new Date().toISOString(),
+          };
+        })
+        .filter(Boolean);
+
+      if (puliti.length === 0) return res.status(400).json({ error: "Nessuna tappa valida" });
+
+      const esito = await scriviPoiServizio(puliti, 'poi/from-itinerary');
+      res.json({ success: esito.falliti === 0, totale: puliti.length, ...esito });
+    } catch (e: any) {
+      console.error("[/api/poi/from-itinerary]", e?.message);
+      res.status(500).json({ error: e?.message || 'errore' });
+    }
+  });
+
   // --- BATCH ENSURE POIS (From Itinerary) ---
   app.post("/api/poi/batch-ensure", rateLimiter, async (req, res) => {
     try {
@@ -16809,14 +17055,14 @@ Wikipedia: <materiale>${String(extract || "Nessuna fonte trovata").replace(/<\/?
             updated_at: new Date().toISOString()
           };
 
-          await axios.post(`${supabaseUrl}/rest/v1/shared_pois`, updatePayload, {
-            headers: {
-              apikey: supabaseServiceKey,
-              Authorization: `Bearer ${supabaseServiceKey}`,
-              Prefer: 'resolution=merge-duplicates'
-            }
-          });
-          
+          // Passa dallo scrittore comune (30/08/2026): anche questa rotta
+          // scriveva status 'auto' e falliva in silenzio con 23514, quindi i
+          // POI arricchiti — foto, descrizione e audioguida — non nascevano mai.
+          const esitoScrittura = await scriviPoiServizio([updatePayload], 'poi/batch-ensure');
+          if (esitoScrittura.falliti > 0) {
+            throw new Error(esitoScrittura.errori[0]?.messaggio || 'scrittura POI fallita');
+          }
+
           if (jsonResponse.audio_script) {
              // Persistenza SERVER-SIDE (service role) in poi_audioguides: il
              // vecchio upsertAudioguide client è un no-op dopo il lock RLS.

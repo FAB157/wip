@@ -160,6 +160,8 @@ Local config goes in `.env.local` / `.env` (all `.env*` are gitignored). The ser
 Required for anything to work: `VITE_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_ANON_KEY`.
 Feature-gated: `GROQ_API_KEY` (+`_2`/`_3` rotation), `DEEPSEEK_API_KEY`, `TOGETHER_API_KEY`, `GEMINI_API_KEY` (+`_2`/`_3`), `OPENAI_API_KEY`, `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`, `GOOGLE_TTS_API_KEY`, `ELEVENLABS_API_KEY`, `FOURSQUARE_API_KEY`, `TRIPADVISOR_API_KEY`, `VITE_MAPBOX_TOKEN`, `VITE_CARTO_API_KEY` (basemap tiles — CARTO stopped serving anonymous requests 26/08/2026, free key from carto.com/basemaps/apikey/, 5M req/month, commercial use allowed), `GEOAPIFY_API_KEY`, `VITE_GOOGLE_MAPS_API_KEY`, `UNSPLASH_ACCESS_KEY`, `TICKETMASTER_API_KEY`, `VIATOR_API_KEY`, `GYG_API_KEY`, `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `CRON_SECRET`, `SENTRY_DSN`/`VITE_SENTRY_DSN` (error tracking, added 30/08/2026), `POSTHOG_API_KEY` (product analytics, added 30/08/2026) — see "Monitoring" below.
 
+Read-only keys for the admin "Diagnostica" → Monitoraggio esterno panel (`/api/admin/monitoring-status`), separate from the write keys above and each optional independently: `CHECKLY_API_KEY`/`CHECKLY_ACCOUNT_ID` (same values used locally for `npx checkly deploy`, also needed server-side here), `SENTRY_AUTH_TOKEN`/`SENTRY_ORG_SLUG`, `UPTIMEROBOT_API_KEY`, `POSTHOG_PERSONAL_API_KEY`/`POSTHOG_PROJECT_ID`.
+
 Routes degrade to an error response rather than crashing when a key is absent.
 
 ## Monitoring (added 30/08/2026)
