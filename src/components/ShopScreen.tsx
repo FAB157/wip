@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { ShoppingCart, Coins, ShieldCheck, Ticket } from 'lucide-react';
+import { ShoppingCart, Coins, ShieldCheck } from 'lucide-react';
 import { getWalletBalance, WalletBalance } from '../lib/pricing';
-import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
 import { getTranslation, type Language } from '../lib/i18n';
 import { Capacitor } from '@capacitor/core';
@@ -26,7 +25,6 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
   const t = (key: string) => getTranslation(key, lang);
   const [balance, setBalance] = useState<WalletBalance | null>(null);
   const [loading, setLoading] = useState(false);
-  const [voucherCode, setVoucherCode] = useState('');
   const [isFreeFeaturesOpen, setIsFreeFeaturesOpen] = useState(false);
   // PREZZI VERI dal negozio dell'utente (RevenueCat → App Store / Play Store):
   // già in valuta e formato locali. `null` = non ancora letti, `{}` = offerte
@@ -44,9 +42,26 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
   }, []);
 
   // Le offerte si leggono una volta all'apertura dello shop.
+  // Sul web (30/08/2026) i prezzi arrivano da /api/shop/pacchetti: e' la stessa
+  // tabella che il server mette nel Checkout Stripe, quindi il prezzo mostrato
+  // e quello addebitato coincidono per costruzione. Formattati nella lingua
+  // dell'utente (la valuta e' quella del listino, l'euro).
   useEffect(() => {
     let vivo = true;
-    if (!iapAttivo) { setPrezzi({}); return; }
+    if (!iapAttivo) {
+      const localeDi: Record<string, string> = { IT: 'it-IT', EN: 'en-GB', FR: 'fr-FR', ES: 'es-ES', DE: 'de-DE', RU: 'ru-RU', ZH: 'zh-CN' };
+      fetch(`${getApiUrl()}/api/shop/pacchetti`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+        .then((d: { currency?: string; pacchetti?: { id: string; cents: number }[] }) => {
+          if (!vivo) return;
+          const fmt = new Intl.NumberFormat(localeDi[lang] || 'it-IT', { style: 'currency', currency: String(d.currency || 'eur').toUpperCase() });
+          const p: Record<string, string> = {};
+          for (const x of d.pacchetti || []) p[x.id] = fmt.format(x.cents / 100);
+          setPrezzi(p);
+        })
+        .catch(() => { if (vivo) setPrezzi({}); });
+      return () => { vivo = false; };
+    }
     leggiPrezziPacchetti().then(p => { if (vivo) setPrezzi(p); }).catch(() => { if (vivo) setPrezzi({}); });
     return () => { vivo = false; };
   }, [iapAttivo]);
@@ -60,11 +75,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
    *   un euro che potrebbe non essere la valuta dell'utente.
    */
   const prezzoPacchetto = (priceId: string): string | null => {
-    if (!iapAttivo) return t('iap_prezzo_al_checkout');
     if (!prezzi) return null; // ancora in caricamento
     const alias = priceId === 'package_500' ? ['package_500', 'crediti_500'] : [priceId];
     for (const k of alias) { if (prezzi[k]) return prezzi[k]; }
-    return null;
+    // Web senza listino raggiungibile: il prezzo autorevole lo mostra comunque
+    // Stripe Checkout un attimo dopo, quindi l'acquisto resta possibile.
+    return iapAttivo ? null : t('iap_prezzo_al_checkout');
   };
   /** Acquisto possibile solo se sappiamo davvero quanto costa. */
   const acquistoAbilitato = (priceId: string): boolean => !iapAttivo || !!prezzoPacchetto(priceId);
@@ -178,42 +194,12 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
     }
   };
 
-  const redeemVoucher = async () => {
-    const code = voucherCode.trim().toUpperCase();
-    if (!code) return;
-    setLoading(true);
-
-    try {
-      // Riscatto SERVER-SIDE: valida, consuma il coupon e accredita i crediti
-      // con la service key. Il vecchio percorso client scriveva earned_credits
-      // direttamente — bloccato dalle policy di sicurezza → riscatto a vuoto.
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData?.session?.access_token;
-      if (!token) {
-        notify(t('vr_b_shop_login_redeem'));
-        try { window.dispatchEvent(new CustomEvent('wip-open-login')); } catch { /* SSR */ }
-        return;
-      }
-      const res = await fetch(getApiUrl('/api/coupon/redeem'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ code })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'Riscatto non riuscito.');
-
-      notify(t('vr_b_shop_voucher_ok')
-        .replace('{name}', data.structureName ? ` ${data.structureName}` : '')
-        .replace('{credits}', String(data.credits)));
-      setVoucherCode('');
-      await fetchBalance();
-    } catch (e: any) {
-      console.error(e);
-      notify(e?.message || t('vr_b_shop_voucher_err'));
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Il riscatto dei voucher delle strutture partner e' stato TOLTO dallo shop
+  // (30/08/2026, richiesta del committente in vista della pubblicazione iOS):
+  // e' una funzione B2B, che nel negozio dell'app finale non ha destinatari e
+  // che Apple guarda male sotto la 3.1.1 (sblocchi che non passano dagli
+  // acquisti in-app). La rotta /api/coupon/redeem resta viva sul server: la
+  // usa il pannello delle strutture, non l'app.
 
   return (
     <div className="flex flex-col h-full bg-slate-50 text-slate-800">
@@ -331,39 +317,6 @@ export default function ShopScreen({ userId, language, onClose }: ShopScreenProp
             {ripristinoInCorso ? t('iap_ripristino_corso') : t('iap_ripristina')}
           </button>
         )}
-
-        <h3 className="font-bold text-slate-500 uppercase text-xs mb-2 ml-1 mt-6 tracking-wider">
-          {t('vr_b_shop_voucher_head')}
-        </h3>
-        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-          <div className="flex items-center gap-3 p-4 pb-3">
-            <div className="w-11 h-11 rounded-xl bg-[#1e3a8a]/10 flex items-center justify-center shrink-0">
-              <Ticket className="w-5 h-5 text-[#1e3a8a]" />
-            </div>
-            <div className="min-w-0">
-              <h4 className="font-black text-slate-800 leading-tight">{t('vr_b_shop_partner_q')}</h4>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {t('vr_b_shop_partner_sub')}
-              </p>
-            </div>
-          </div>
-          <div className="px-4 pb-4 flex gap-2">
-            <input
-              type="text"
-              placeholder={t('vr_b_shop_voucher_ph')}
-              className="flex-1 min-w-0 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-[#1e3a8a] focus:bg-white transition-colors font-bold uppercase tracking-widest text-slate-800 placeholder:normal-case placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400"
-              value={voucherCode}
-              onChange={(e) => setVoucherCode(e.target.value)}
-            />
-            <button
-              onClick={redeemVoucher}
-              disabled={loading || !voucherCode.trim()}
-              className="shrink-0 bg-[#1e3a8a] text-white font-bold px-5 py-3 rounded-xl hover:bg-blue-900 active:scale-95 transition disabled:opacity-40"
-            >
-              {t('vr_b_shop_redeem')}
-            </button>
-          </div>
-        </div>
 
         <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">
           <ShieldCheck className="w-4 h-4" /> {t('vr_b_shop_secure')}
