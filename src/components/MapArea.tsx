@@ -4140,10 +4140,12 @@ function MapArea({
 
     const queriedCats = new Set<string>();
 
-    // Categorie pratiche con Overpass come fallback. "locali" incluso:
-    // Foursquare è la fonte primaria, ma se il DB/Foursquare hanno poco
-    // (<15 risultati in zona) OSM fa da rete di sicurezza.
-    const allowedOverpassCats = ["locali", "utilita", "famiglie", "eventi"];
+    // Categorie pratiche con Overpass come fallback. "locali" TOLTO
+    // (31/08/2026, ordine del committente: i locali vengono da Supabase):
+    // con 10 milioni di righe in locali_pois la rete di sicurezza Overpass
+    // non serve piu', e i mirror giu' facevano comparire l'errore
+    // «OpenStreetMap non raggiungibile» proprio sulla chip Locali.
+    const allowedOverpassCats = ["utilita", "famiglie", "eventi"];
     
     const categoriesToIterate = activeCategories.length > 0 
       ? activeCategories.filter(c => allowedOverpassCats.includes(c))
@@ -4318,7 +4320,10 @@ function MapArea({
               .select('id,name,lat,lon,sub_category,cucina,brand,address,city,website,phone,socials,operating_status,confidence')
               .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
               .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
-              .neq('operating_status', 'closed')
+              // NEQ scarta anche i NULL (trappola PostgREST già vista): quasi
+              // tutti i locali hanno operating_status vuoto e la chip mostrava
+              // 0 su 607 a Carrara (31/08). Il filtro giusto: vuoto O non chiuso.
+              .or('operating_status.is.null,operating_status.neq.closed')
               .order('confidence', { ascending: false })
               .limit(400);
             if (locali && locali.length > 0) {
