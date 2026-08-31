@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.media.audiofx.Equalizer;
 import android.media.audiofx.LoudnessEnhancer;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
@@ -415,7 +416,7 @@ public class WipBackgroundAudioService extends Service {
         }
     }
 
-    public void play(String url, String title, String subtitle) {
+    public void play(String url, String title, String subtitle, String imageUri) {
         try {
             ensurePlayer();
             richiediFocusAudio();
@@ -438,12 +439,25 @@ public class WipBackgroundAudioService extends Service {
 
             Log.d(TAG, "Preparazione riproduzione URL: " + url);
 
+            // (31/08/2026) Copertina: Media3 la risolve da solo in modo
+            // asincrono per la notifica MediaStyle e la MediaSession — la
+            // stessa che qualunque auto collegata via Bluetooth legge come
+            // "album art" del brano. Nessuna foto (POI senza immagine, o
+            // trigger dal navigatore/podcast che non ne passa una): il
+            // titolo resta comunque il nome del POI, come prima.
+            MediaMetadata.Builder metadataBuilder = new MediaMetadata.Builder()
+                    .setTitle(currentTitle)
+                    .setArtist(currentSubtitle);
+            if (imageUri != null && !imageUri.isEmpty()) {
+                try {
+                    metadataBuilder.setArtworkUri(Uri.parse(imageUri));
+                } catch (Exception e) {
+                    Log.w(TAG, "Copertina non valida, si prosegue senza: " + e.getMessage());
+                }
+            }
             MediaItem mediaItem = new MediaItem.Builder()
-                    .setUri(android.net.Uri.parse(url))
-                    .setMediaMetadata(new MediaMetadata.Builder()
-                            .setTitle(currentTitle)
-                            .setArtist(currentSubtitle)
-                            .build())
+                    .setUri(Uri.parse(url))
+                    .setMediaMetadata(metadataBuilder.build())
                     .build();
 
             // Il foreground va avviato prima della riproduzione: se il sistema lo nega

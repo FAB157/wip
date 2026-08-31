@@ -1466,7 +1466,7 @@ export default function PoiDetailSheet({
         const { getOfflineAudioUrl } = await import('../lib/offlineStorage');
         const ownedUrl = await getOfflineAudioUrl(`${String(poi?.id)}_${localGuideMode}`);
         if (ownedUrl) {
-          await locationService.playAudioUrl(ownedUrl, String(poi?.id), poi?.name);
+          await locationService.playAudioUrl(ownedUrl, String(poi?.id), poi?.name, poi?.photo_url || poi?.image_url);
           return;
         }
       } catch { /* nessun file locale: si prosegue con pass/per-listen */ }
@@ -1512,7 +1512,7 @@ export default function PoiDetailSheet({
       if (alreadyUnlocked) {
         console.log("[PoiDetailSheet] POI già sbloccato, avvio riproduzione...");
         if (ownedUrl) {
-          await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name);
+          await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name, poi?.photo_url || poi?.image_url);
           return;
         }
         if (language !== 'IT' && !generatedText) {
@@ -1522,7 +1522,7 @@ export default function PoiDetailSheet({
         if (textToSpeak) {
           // Il personaggio selezionato nella scheda decide la voce TTS:
           // Nicky = femminile, Dante = maschile (in ogni lingua).
-          await locationService.playAudio(textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode);
+          await locationService.playAudio(textToSpeak, poi?.name, poi?.category, String(poi?.id), localGuideMode, undefined, poi?.photo_url || poi?.image_url);
         }
         return;
       }
@@ -1554,6 +1554,7 @@ export default function PoiDetailSheet({
               if (!ok) passEsaurito = true;
               return ok;
             },
+            poi?.photo_url || poi?.image_url,
           );
           if (esito || !passEsaurito) {
             // Errore tecnico di riproduzione: MAI il modale crediti a chi ha
@@ -1607,7 +1608,7 @@ export default function PoiDetailSheet({
             console.log("[DetailSheet] Audioguida da cache poi_audioguides:", poi?.name);
             setGeneratedText(cachedGuide.audio_text);
             if (autoPlay) {
-              await locationService.playAudio(cachedGuide.audio_text, poi?.name, poi?.category, String(poi?.id), modeToUse);
+              await locationService.playAudio(cachedGuide.audio_text, poi?.name, poi?.category, String(poi?.id), modeToUse, undefined, poi?.photo_url || poi?.image_url);
             }
             return;
           }
@@ -1655,7 +1656,7 @@ export default function PoiDetailSheet({
           }).catch(() => {});
         }
         if (autoPlay) {
-          const played = await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse);
+          const played = await locationService.playAudio(data.result, poi?.name, poi?.category, String(poi?.id), modeToUse, undefined, poi?.photo_url || poi?.image_url);
           // Ritorna l'esito reale: il chiamante a pagamento (onConfirm non-IT)
           // rimborsa se la riproduzione fallisce. Prima la funzione inghiottiva
           // ogni errore e non lanciava mai → il refund era codice morto.
@@ -3594,6 +3595,7 @@ export default function PoiDetailSheet({
               if (ok) addebitato = true; else rifiutato = true;
               return ok;
             },
+            poi?.photo_url || poi?.image_url,
           );
           if (rifiutato) { creditiInsufficienti(); return; }
           if (esito === 'started' && addebitato) {

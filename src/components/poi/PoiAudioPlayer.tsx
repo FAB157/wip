@@ -234,7 +234,7 @@ export default function PoiAudioPlayer({
       setAskAnswer(answer);
       // La risposta viene letta con la voce del personaggio; id dedicato per
       // non sporcare la posizione salvata dell'audioguida principale.
-      locationService.playAudio(answer, getTranslation('sk_risposta_suffisso', language).replace('{name}', String(poi?.name || '')), poi?.category, `${String(poi?.id)}_ask`, localGuideMode);
+      locationService.playAudio(answer, getTranslation('sk_risposta_suffisso', language).replace('{name}', String(poi?.name || '')), poi?.category, `${String(poi?.id)}_ask`, localGuideMode, undefined, poi?.photo_url || poi?.image_url);
     } catch {
       setAskAnswer(getTranslation('sk_risposta_errore', language));
     } finally {

@@ -60,6 +60,16 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     // storico e compariva nel Now Playing / schermata di blocco.
     private var currentTitle = "WIP"
     private var currentSubtitle = "Audioguida"
+    /// (31/08/2026) Copertina per il Now Playing — la stessa schermata che
+    /// CarPlay mostra di sistema per qualunque audio in corso, senza bisogno
+    /// di un'app CarPlay dedicata (che WIP non ha). L'URL arriva dal JS
+    /// (foto del POI); l'immagine si scarica una volta e si mette in cache
+    /// per quell'URL, cosi' un ascolto ripetuto dello stesso POI non la
+    /// riscarica. nil = nessuna foto per questo POI: il titolo resta comunque
+    /// il nome del POI, come prima di questa modifica.
+    private var currentArtworkUrl: String?
+    private var currentArtwork: MPMediaItemArtwork?
+    private var artworkDownloadTask: URLSessionDataTask?
     private var remoteCommandsConfigured = false
     /// Spegnimento differito della sessione audio quando si resta in pausa
     /// (vedi `programmaSpegnimentoSessione`).
@@ -158,6 +168,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         currentTitle = call.getString("title") ?? "WIP"
         currentSubtitle = call.getString("subtitle") ?? "Audioguida"
+        loadArtwork(urlString: call.getString("imageUri"))
 
         // Filesystem.getUri restituisce file:///…; le tracce remote sono https.
         let url: URL?
@@ -502,7 +513,41 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         if duration.isFinite && duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = duration
         }
+        if let artwork = currentArtwork {
+            info[MPMediaItemPropertyArtwork] = artwork
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    /// Scarica la foto del POI e la mette nel Now Playing appena pronta —
+    /// mai a costo di ritardare l'avvio della riproduzione (che parte subito
+    /// in `play()`, senza aspettare questo metodo). Un URL diverso dal
+    /// precedente annulla il download in corso: se l'utente passa da un POI
+    /// all'altro rapidamente, non deve arrivare la foto sbagliata in ritardo.
+    private func loadArtwork(urlString: String?) {
+        artworkDownloadTask?.cancel()
+        artworkDownloadTask = nil
+        guard currentArtworkUrl != urlString else {
+            // Stesso POI di prima (o entrambi nil): l'artwork già in cache
+            // (o l'assenza di foto) resta valida, si aggiorna solo il testo.
+            updateNowPlayingInfo()
+            return
+        }
+        currentArtworkUrl = urlString
+        currentArtwork = nil
+        updateNowPlayingInfo() // il titolo non deve aspettare la foto
+        guard let urlString = urlString, let url = URL(string: urlString) else { return }
+        let richiesta = urlString
+        artworkDownloadTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, error in
+            guard let self = self, let data = data, error == nil, let image = UIImage(data: data) else { return }
+            DispatchQueue.main.async {
+                // La foto è di un POI che nel frattempo è stato superato da un altro.
+                guard self.currentArtworkUrl == richiesta else { return }
+                self.currentArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+                self.updateNowPlayingInfo()
+            }
+        }
+        artworkDownloadTask?.resume()
     }
 
     /// Non più `private` (AUD-14): SpeechQueue la chiama quando fa partire

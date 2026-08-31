@@ -164,6 +164,9 @@ public class WipBackgroundAudioPlugin extends Plugin {
         String url = call.getString("url");
         String title = call.getString("title", "WIP");
         String subtitle = call.getString("subtitle", "Audioguida");
+        // (31/08/2026) Copertina per MediaSession: qualunque auto collegata
+        // via Bluetooth normale la mostra, senza bisogno di Android Auto.
+        String imageUri = call.getString("imageUri");
 
         if (url == null || url.isEmpty()) {
             call.reject("URL is required");
@@ -172,7 +175,7 @@ public class WipBackgroundAudioPlugin extends Plugin {
 
         ensureServiceStarted();
         withService(call, (service, c) -> {
-            service.play(url, title, subtitle);
+            service.play(url, title, subtitle, imageUri);
             JSObject ret = new JSObject();
             ret.put("playing", true);
             c.resolve(ret);

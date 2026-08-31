@@ -106,9 +106,11 @@ class LocationService {
   private speechPlayer: HTMLAudioElement | null = null;
   private activeGuideAudio: HTMLAudioElement | null = null;
   private audioUnlocked = false;
-  private audioQueue: Array<{ text?: string, url?: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean> }> = [];
+  private audioQueue: Array<{ text?: string, url?: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string }> = [];
   /** Personaggio della traccia corrente (per i metadati Media Session). */
   private currentCharacter: 'nicky' | 'dante' = 'nicky';
+  /** Foto del POI in riproduzione, per la copertina su MediaSession/Now Playing. */
+  private currentPoiPhotoUrl: string | null = null;
   /** Utterance Web Speech del fallback degradato (TTS server irraggiungibile). */
   private fallbackUtterance: SpeechSynthesisUtterance | null = null;
   /** Timer del progresso stimato per il fallback Web Speech (nessun evento nativo). */
@@ -1485,7 +1487,7 @@ class LocationService {
    * truthy. Chi addebita deve guardare 'started' o passare `authorize`, che
    * viene chiamata solo al vero avvio anche per le tracce accodate.
    */
-  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>): Promise<'started' | 'queued' | false> {
+  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string): Promise<'started' | 'queued' | false> {
     if (this.isGuideMuted || !text) return false;
 
     // 🤫 «Solo vibrazione + testo»: se il play nasce da un trigger geofencing
@@ -1513,7 +1515,7 @@ class LocationService {
     if (this.isGuidePlaybackActive()) {
       // NB: l'eventuale autorizzazione/addebito NON avviene all'accodamento,
       // ma quando la traccia parte davvero (vedi sotto).
-      this.audioQueue.push({ text, poiName, poiCategory, poiId, character, authorize });
+      this.audioQueue.push({ text, poiName, poiCategory, poiId, character, authorize, poiPhotoUrl });
       return 'queued';
     }
 
@@ -1541,6 +1543,10 @@ class LocationService {
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
     this.currentCharacter = character || this.guideMode;
+    // Foto del POI per la copertina in auto (MediaSession Android / Now
+    // Playing iOS): letta da playAudioBlob al momento di avviare il player
+    // nativo, come currentCharacter qui sopra.
+    this.currentPoiPhotoUrl = poiPhotoUrl || null;
     // Origine trigger → a fine ascolto (o allo stop) parte la barra feedback.
     this.currentPlaybackFromTrigger = fromTrigger;
     // 🎧 Coordinate del POI per il pan direzionale (best-effort, async).
@@ -1793,7 +1799,7 @@ class LocationService {
     return ok;
   }
 
-  public async playAudioUrl(url: string, poiId?: string, poiName?: string): Promise<'started' | 'queued' | false> {
+  public async playAudioUrl(url: string, poiId?: string, poiName?: string, poiPhotoUrl?: string): Promise<'started' | 'queued' | false> {
     if (this.isGuideMuted || !url) return false;
     // Stesso cancello di playAudio: un MP3 gia' scaricato/acquistato che parte
     // da un trigger di prossimita' deve rispettare la modalita' silenziosa.
@@ -1809,7 +1815,7 @@ class LocationService {
     if (this.isGuidePlaybackActive()) {
       // Player occupato: accoda invece di scartare (la traccia partirà a fine
       // riproduzione via checkAudioQueue, come per playAudio).
-      this.audioQueue.push({ url, poiId, poiName });
+      this.audioQueue.push({ url, poiId, poiName, poiPhotoUrl });
       return 'queued';
     }
 
@@ -1821,6 +1827,7 @@ class LocationService {
 
     this.audioState.poiId = poiId || null;
     this.audioState.poiName = poiName || null;
+    this.currentPoiPhotoUrl = poiPhotoUrl || null;
     // 🎧 Coordinate per il pan direzionale anche sugli MP3 offline/acquistati
     if (poiId) this.resolveCurrentPoiCoords(String(poiId));
     this.notifyAudioState();
@@ -1853,7 +1860,11 @@ class LocationService {
         await WipBackgroundAudio.play({
           url: nativeUri,
           title: this.audioState.poiName || `WIP ${getTranslation('audioguida_label', this.language)}`,
-          subtitle: getTranslation('narrazione_in_corso', this.language)
+          subtitle: getTranslation('narrazione_in_corso', this.language),
+          // (31/08/2026) Copertina in auto/lock screen: qualunque auto
+          // collegata via Bluetooth normale la legge dalla MediaSession,
+          // senza bisogno di Android Auto/CarPlay veri e propri.
+          imageUri: this.currentPoiPhotoUrl || undefined,
         });
         await WipBackgroundAudio.setSpeed({ speed: this.audioState.playbackSpeed }).catch(() => {});
 
@@ -1992,11 +2003,11 @@ class LocationService {
     const next = this.audioQueue.shift();
     if (!next) return;
     if (next.url) {
-      this.playAudioUrl(next.url, next.poiId, next.poiName);
+      this.playAudioUrl(next.url, next.poiId, next.poiName, next.poiPhotoUrl);
     } else if (next.text) {
       // authorize viene passato oltre: l'addebito avviene solo ORA che la
       // traccia parte davvero, non quando era stata accodata.
-      this.playAudio(next.text, next.poiName, next.poiCategory, next.poiId, next.character, next.authorize);
+      this.playAudio(next.text, next.poiName, next.poiCategory, next.poiId, next.character, next.authorize, next.poiPhotoUrl);
     }
   }
 
