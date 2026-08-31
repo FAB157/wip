@@ -2368,7 +2368,12 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   }
   function rateLimitCostoso(maxPerMinuto = RL_COSTOSE_PER_MINUTO) {
     return async (req: any, res: any, next: any) => {
-      const attesa = await limiteCostosoSuperato(req, maxPerMinuto);
+      // (31/08/2026) Gli script di sfondo (x-script-secret) condividono UN
+      // solo utente: col tetto normale 60/min l'arricchitore gemme da solo
+      // lo saturava e ogni altro script prendeva 429. Per loro il tetto e'
+      // piu' largo ma esiste comunque: protegge il DB, non il portafoglio.
+      const max = req.userId === 'background-script' ? Math.max(maxPerMinuto, 240) : maxPerMinuto;
+      const attesa = await limiteCostosoSuperato(req, max);
       if (attesa !== null) {
         res.setHeader('Retry-After', String(attesa));
         return res.status(429).json({ error: 'rate_limited', retry_after_seconds: attesa });
@@ -7461,6 +7466,13 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       }
       if (!haDiritto && !(unit > 0)) { haDiritto = true; fonteDiritto = 'listino_zero'; }
       if (!haDiritto && await haDayPassAttivo(callerUserId)) { haDiritto = true; fonteDiritto = 'day_pass'; }
+      // (31/08/2026, richiesto e approvato dal committente in sessione)
+      // Warm-up della cache condivisa: il lavoratore di sfondo autenticato
+      // dal segreto di infrastruttura (requireAuth -> 'background-script')
+      // genera in anticipo i testi di poi_audioguides per lingua/personaggio,
+      // cosi' il primo utente reale li trova pronti. Nessun addebito perche'
+      // non c'e' consegna a un utente; il percorso dei clienti resta uguale.
+      if (!haDiritto && callerUserId === 'background-script') { haDiritto = true; fonteDiritto = 'script_prefetch'; }
 
       let audioChargeUser: string | null = null;
       let audioChargeCost = 0;
