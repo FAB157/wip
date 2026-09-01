@@ -17436,6 +17436,19 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       }
 
 
+      // 1-bis. (1/9/2026) MATERIALE PORTATO DALLO SCRIPT DI SFONDO: fonti
+      // attendibili che questa rotta non interroga (Wikivoyage, CC BY-SA)
+      // arrivano gia' estratte in `materiale` con la loro `materiale_url`.
+      // Accettato SOLO dal lavoratore autenticato dal segreto (mai dal
+      // client): il testo passa poi nello stesso prompt <materiale>, con le
+      // stesse regole anti-invenzione. Fonti del committente: Wikipedia,
+      // Wikidata, Wikivoyage, Commons e altre attendibili.
+      if (!extract && userId === 'background-script' && typeof req.body?.materiale === 'string' && req.body.materiale.trim().length >= 80) {
+        extract = String(req.body.materiale).slice(0, 4000);
+        pageUrl = typeof req.body?.materiale_url === 'string' ? req.body.materiale_url.slice(0, 500) : '';
+        distanceKm = 0;
+      }
+
       // 2. Wikipedia Client Fallback (Improved)
       if (!extract && clientWikipedia) {
         const titleMatch = clientWikipedia.match(/wiki\/([^#?]+)/);
