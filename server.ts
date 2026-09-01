@@ -1823,6 +1823,29 @@ async function tripAdvisorBudgetOk(): Promise<boolean> {
   }
 }
 
+// ── BUDGET MENSILE FOURSQUARE (solo campi Pro gratuiti) ──
+// Stesso schema di tripAdvisorBudgetOk. Tetto 500/mese: e' esattamente
+// l'allowance gratuita degli endpoint Pro (search+details con i FREE_FIELDS,
+// vedi /api/fsq/details). I campi Premium (rating/prezzo/orari/foto) NON
+// hanno mai un piano gratuito su Foursquare (si paga dalla prima chiamata):
+// per questo il fallback qui sotto li ignora e non li richiede mai.
+const FOURSQUARE_MONTHLY_BUDGET = 500;
+async function foursquareBudgetOk(): Promise<boolean> {
+  try {
+    const key = `foursquare_budget_${new Date().toISOString().slice(0, 7)}`;
+    const row = await getFromCache(key);
+    const count = Number(row?.text_content) || 0;
+    if (count >= FOURSQUARE_MONTHLY_BUDGET) {
+      console.warn(`[Foursquare] Budget mensile esaurito (${count}/${FOURSQUARE_MONTHLY_BUDGET})`);
+      return false;
+    }
+    saveToCache(key, 'counter', String(count + 1));
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 async function saveAudioToStorageAndCache(cacheKey: string, audioBuffer: Buffer): Promise<string | null> {
   try {
      const fileName = `${cacheKey}.mp3`;
@@ -9033,7 +9056,7 @@ ${description}
       if (!/^ov-[A-Za-z0-9_-]{8,80}$/.test(id)) return res.status(400).json({ error: 'id non valido' });
       if (!supabaseUrl || !supabaseServiceKey) return res.status(500).json({ error: 'Supabase non configurato' });
       const hdr = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
-      const rRow = await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}&select=id,name,lat,lon,city,ta_location_id,ta_rating,ta_num_reviews,ta_price_level,ta_updated_at&limit=1`, { headers: hdr, signal: AbortSignal.timeout(8000) });
+      const rRow = await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}&select=id,name,lat,lon,city,phone,website,ta_location_id,ta_rating,ta_num_reviews,ta_price_level,ta_updated_at,fsq_id,fsq_updated_at&limit=1`, { headers: hdr, signal: AbortSignal.timeout(8000) });
       const righe = rRow.ok ? await rRow.json() : [];
       const riga = righe?.[0];
       if (!riga) return res.status(404).json({ error: 'locale non trovato' });
@@ -9046,39 +9069,85 @@ ${description}
         num_reviews: riga.ta_num_reviews ?? null,
         price_level: riga.ta_price_level || null,
         web_url: null, // l'URL della pagina lo da' solo /details: non si inventa
+        phone: riga.phone || null,
+        website: riga.website || null,
         cercato: !!riga.ta_updated_at,
         ...extra,
       });
       if (fresco) return risposta({ fresh: true });
 
       const key = process.env.TRIPADVISOR_API_KEY || process.env.VITE_TRIPADVISOR_API_KEY;
-      if (!key || !(await tripAdvisorBudgetOk())) return risposta({ fresh: false });
+      const taBudgetOk = key ? await tripAdvisorBudgetOk() : false;
 
-      // Ricerca per nome vicino alle coordinate; si accetta il primo risultato
-      // solo se sta entro 300 m (TripAdvisor riporta la distanza in km).
       let locationId: string | null = null;
-      try {
-        const sUrl = `https://api.content.tripadvisor.com/api/v1/location/search?searchQuery=${encodeURIComponent(riga.name)}&latLong=${riga.lat},${riga.lon}&radius=1&radiusUnit=km&category=restaurants&language=it&key=${key}`;
-        const sRes = await axios.get(sUrl, { headers: { Accept: 'application/json' }, timeout: 8000 });
-        const primo = (sRes.data?.data || [])[0];
-        const dist = primo?.distance != null ? parseFloat(primo.distance) : null;
-        if (primo?.location_id && (dist == null || dist <= 0.3)) locationId = String(primo.location_id);
-      } catch { /* niente: si segna comunque il tentativo */ }
-
-      const patch: any = { ta_updated_at: new Date().toISOString() };
-      if (locationId) {
-        patch.ta_location_id = locationId;
+      const patch: any = {};
+      if (taBudgetOk) {
+        // Ricerca per nome vicino alle coordinate; si accetta il primo
+        // risultato solo se sta entro 300 m (TripAdvisor riporta la
+        // distanza in km).
         try {
-          const dRes = await axios.get(`https://api.content.tripadvisor.com/api/v1/location/${locationId}/details?language=it&key=${key}`, { headers: { Accept: 'application/json' }, timeout: 8000 });
-          const d = dRes.data || {};
-          if (d.rating != null) patch.ta_rating = parseFloat(d.rating);
-          if (d.num_reviews != null) patch.ta_num_reviews = parseInt(d.num_reviews, 10);
-          if (d.price_level) patch.ta_price_level = String(d.price_level).slice(0, 12);
-        } catch { /* dettagli mancanti: resta il location_id */ }
+          const sUrl = `https://api.content.tripadvisor.com/api/v1/location/search?searchQuery=${encodeURIComponent(riga.name)}&latLong=${riga.lat},${riga.lon}&radius=1&radiusUnit=km&category=restaurants&language=it&key=${key}`;
+          const sRes = await axios.get(sUrl, { headers: { Accept: 'application/json' }, timeout: 8000 });
+          const primo = (sRes.data?.data || [])[0];
+          const dist = primo?.distance != null ? parseFloat(primo.distance) : null;
+          if (primo?.location_id && (dist == null || dist <= 0.3)) locationId = String(primo.location_id);
+        } catch { /* niente: si segna comunque il tentativo */ }
+
+        patch.ta_updated_at = new Date().toISOString();
+        if (locationId) {
+          patch.ta_location_id = locationId;
+          try {
+            const dRes = await axios.get(`https://api.content.tripadvisor.com/api/v1/location/${locationId}/details?language=it&key=${key}`, { headers: { Accept: 'application/json' }, timeout: 8000 });
+            const d = dRes.data || {};
+            if (d.rating != null) patch.ta_rating = parseFloat(d.rating);
+            if (d.num_reviews != null) patch.ta_num_reviews = parseInt(d.num_reviews, 10);
+            if (d.price_level) patch.ta_price_level = String(d.price_level).slice(0, 12);
+          } catch { /* dettagli mancanti: resta il location_id */ }
+        }
       }
-      await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { ...hdr, Prefer: 'return=minimal' }, body: JSON.stringify(patch), signal: AbortSignal.timeout(8000) }).catch(() => {});
-      Object.assign(riga, patch);
-      return risposta({ fresh: true });
+
+      // Fallback Foursquare (30/08/2026): SOLO se TripAdvisor non ha trovato
+      // il locale o ha esaurito il budget mensile, E solo campi Pro gratuiti
+      // (nome/indirizzo/telefono/sito). Niente voto/prezzo/foto: su
+      // Foursquare sono Premium, mai gratis (si paga dalla prima chiamata) -
+      // vedi FREE_FIELDS in /api/fsq/details. Riempie solo telefono/sito se
+      // ancora mancanti sulla riga, e solo una volta ogni 30 giorni.
+      const fsqStale = !riga.fsq_updated_at || (Date.now() - new Date(riga.fsq_updated_at).getTime()) >= 30 * 86400000;
+      const fsqUseful = !riga.phone || !riga.website;
+      if (!locationId && fsqStale && fsqUseful) {
+        const fsqKey = process.env.FOURSQUARE_API_KEY || process.env.VITE_FOURSQUARE_API_KEY;
+        if (fsqKey && (await foursquareBudgetOk())) {
+          try {
+            const fsqSearchUrl = `https://places-api.foursquare.com/places/search?ll=${riga.lat},${riga.lon}&query=${encodeURIComponent(riga.name)}&limit=1`;
+            const fsqSearchRes = await axios.get(fsqSearchUrl, {
+              headers: { Authorization: `Bearer ${fsqKey}`, Accept: 'application/json', 'X-Places-Api-Version': '2025-06-17' },
+              timeout: 6000,
+            });
+            const fsqPlace = (fsqSearchRes.data?.results || [])[0];
+            const fsqId = fsqPlace?.fsq_place_id || fsqPlace?.fsq_id;
+            if (fsqId) {
+              patch.fsq_id = String(fsqId);
+              try {
+                const fsqDetailsUrl = `https://places-api.foursquare.com/places/${fsqId}?fields=name,website,tel`;
+                const fsqDetailsRes = await axios.get(fsqDetailsUrl, {
+                  headers: { Authorization: `Bearer ${fsqKey}`, Accept: 'application/json', 'X-Places-Api-Version': '2025-06-17' },
+                  timeout: 6000,
+                });
+                const fd = fsqDetailsRes.data || {};
+                if (!riga.phone && fd.tel) patch.phone = String(fd.tel).slice(0, 40);
+                if (!riga.website && fd.website) patch.website = String(fd.website).slice(0, 300);
+              } catch { /* dettagli mancanti: resta il fsq_id */ }
+            }
+            patch.fsq_updated_at = new Date().toISOString();
+          } catch { /* ricerca Foursquare fallita: si riprova al prossimo giro */ }
+        }
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await fetch(`${supabaseUrl}/rest/v1/locali_pois?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', headers: { ...hdr, Prefer: 'return=minimal' }, body: JSON.stringify(patch), signal: AbortSignal.timeout(8000) }).catch(() => {});
+        Object.assign(riga, patch);
+      }
+      return risposta({ fresh: taBudgetOk });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
@@ -17704,7 +17773,11 @@ ${extract || "Nessuna fonte trovata"}
         audio_script_extended: (jsonResponse as any).audio_script_extended,
         thumbnail,
         pageUrl,
-        is_gem: !!jsonResponse.is_gem,
+        // (1/9/2026) Le LOCALITA' non le promuove il modello: gemma solo se
+        // davvero speciale (Colonnata, Volterra, Capri, Monterosso), decisione
+        // di assegna-gemme-v2 su visite Wikipedia ≥ 1.000/mese — mai «in base
+        // all'importanza» percepita dal modello (Avenza, Marina di Carrara…).
+        is_gem: String(category || '').toLowerCase() === 'localita' ? false : !!jsonResponse.is_gem,
         source: fast ? "wikipedia/google" : "groq-curator",
         distanceKm: distanceKm !== null ? parseFloat(distanceKm.toFixed(3)) : null,
         address: undefined,
@@ -17943,7 +18016,9 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
           patch.description_ai = parsed.description_long || parsed.description_short;
           patch.description_short = parsed.description_short || String(parsed.description_long).substring(0, 200);
           patch.audio_script = parsed.audio_script || null;
-          if (typeof parsed.is_gem === "boolean") patch.is_gem = parsed.is_gem;
+          // Stessa regola di /api/poi/enrich (1/9/2026): una localita' non
+          // diventa gemma per giudizio del modello.
+          if (typeof parsed.is_gem === "boolean" && String(category || '').toLowerCase() !== 'localita') patch.is_gem = parsed.is_gem;
         }
 
         // FOTO: fuori dall'if sopra e mai una seconda ricerca — una foto reale
