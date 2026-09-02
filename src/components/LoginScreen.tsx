@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User } from 'lucide-react';
+import { ArrowLeft, Loader2, Fingerprint, CheckCircle2, User, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
@@ -318,11 +318,21 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   // but if unavailable we use a slick fallback showing WIP
   return (
     <div className="fixed inset-0 bg-surface z-50 flex flex-col items-center justify-center p-6 sm:p-12 overflow-y-auto">
-      {/* (29/08/2026) Qui c'erano la X e il link «continua senza account»:
-          l'accesso e' tornato OBBLIGATORIO per decisione del committente, e
-          una via d'uscita dal login non deve esistere. `onClose` resta nella
-          firma perche' App.tsx apre questa stessa schermata quando la sessione
-          SCADE durante l'uso — li' non si esce, si rientra. */}
+      {/* LA VIA D'USCITA (rimessa il 02/09/2026 col ritorno della modalita'
+          ospite). Compare SOLO con `onClose`, cioe' quando questa schermata e'
+          un modale sopra l'app: da li' si torna alla mappa. Al gate d'avvio
+          (caricamento sessione, reset password) `onClose` non c'e' e la via
+          d'uscita non deve esistere: non c'e' un "dietro" a cui tornare. */}
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('guest_continua_senza')}
+          className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-black/5 flex items-center justify-center active:scale-95 transition-transform"
+        >
+          <X className="w-5 h-5 text-[#1e3a8a]/70" />
+        </button>
+      )}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -632,6 +642,19 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
             </motion.form>
           ) : null}
         </AnimatePresence>
+
+        {/* Modalita' ospite: la via d'uscita esplicita, non solo la X in alto.
+            Sta sotto il modulo perche' e' la seconda scelta, non la prima: chi
+            arriva qui in genere vuole entrare. */}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full text-center text-sm font-bold text-[#1e3a8a]/70 underline mt-6 py-2 active:scale-95 transition-transform"
+          >
+            {t('guest_continua_senza')}
+          </button>
+        )}
 
         <p className="text-center text-xs text-on-surface-variant/60 mt-8 mb-4">
           {t('vr_a_login_terms_pre')}{' '}

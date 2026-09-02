@@ -12,6 +12,7 @@ import PoiContactButtons from './PoiContactButtons';
 import PoiTicketsButtons from './PoiTicketsButtons';
 import PoiGallery from './PoiGallery';
 import AttribuzioneFoto from './AttribuzioneFoto';
+import AttribuzioneDati from './AttribuzioneDati';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { saveOfflineAudio, getOfflineAudioUrl } from "../lib/offlineStorage";
@@ -332,6 +333,11 @@ export default function PoiDetailSheet({
 
   // Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona)
   // mostrati come chip con icone lucide, separati dal testo descrittivo/TTS.
+  // Provenienza del dato (shared_pois.source), letta da /api/poi/details: la
+  // RPC del radar ha colonne fisse e non la restituisce, quindi `poi.source`
+  // e' spesso assente e non ci si puo' contare. Vedi AttribuzioneDati.
+  const [fonteDati, setFonteDati] = useState<string | null>(null);
+
   const [technicalData, setTechnicalData] = useState<{
     inception?: string;
     architect?: string;
@@ -748,6 +754,10 @@ export default function PoiDetailSheet({
     setWikiData(null);
     setParkingData(null);
     setTechnicalData(null);
+    // Il credito riparte da quello che il chiamante ci ha passato: se la rotta
+    // dei dettagli risponde lo sovrascrive, se non risponde non resta appeso
+    // il credito del POI precedente (che sarebbe un'attribuzione FALSA).
+    setFonteDati(((poi as any)?.source as string) || null);
     setIsTyping(false);
     setDisplayedText("");
     
@@ -997,6 +1007,10 @@ export default function PoiDetailSheet({
                    }
                    return;
                 }
+
+                // Provenienza del dato: dal DB, che e' l'unica versione
+                // attendibile (il POI del radar spesso non ce l'ha).
+                if (active && dbData.source) setFonteDati(String(dbData.source));
 
                 const fullDesc = dbData.full_description || dbData.description_long || dbData.description_ai;
                 const techData = dbData.technical_data || {};
@@ -3342,6 +3356,11 @@ export default function PoiDetailSheet({
                 </div>
               </div>
             )}
+
+            {/* Provenienza del DATO (non della foto: quella e' AttribuzioneFoto
+                sotto l'immagine). Sta qui, subito dopo la descrizione, perche'
+                il credito va accanto a cio' che accredita. */}
+            <AttribuzioneDati source={fonteDati} />
 
             {/* Dati tecnici (anno, architetto, stile, materiale, altezza, comune, zona):
                 chip con icone lucide al posto delle emoji native, fuori dal testo/TTS. */}
