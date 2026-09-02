@@ -23,6 +23,7 @@ import { clearNativeUserContext, pushUserContextToNative } from "./plugins/Itain
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl, invalidaTokenCache } from "./lib/api";
+import NavChoiceSheet from "./components/NavChoiceSheet";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
 import { Headphones, MapPin, Loader2, Navigation2 } from "lucide-react";
@@ -42,7 +43,6 @@ import VisionCardSheet from "./components/VisionCardSheet";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
-import NavChoiceSheet from "./components/NavChoiceSheet";
 import NavigationOverlay from "./components/NavigationOverlay";
 import { ripetiIstruzioneGiro } from "./lib/tour/giroDriver";
 import { useVistaGiro, useBozzaGiro } from "./lib/tour/useGiro";
@@ -100,6 +100,14 @@ const DEFAULT_EVENTS_RADIUS_KM = 100;
 export default function App() {
   // --- 1. Basic App State ---
   const [session, setSession] = useState<any>(null);
+  // Copia sempre aggiornata della sessione, leggibile dagli ascoltatori di
+  // eventi che non possono dipendere da `session` senza riagganciarsi a ogni
+  // cambio (vedi 'wip-auth-required').
+  const sessionRef = useRef<any>(null);
+  useEffect(() => { sessionRef.current = session; }, [session]);
+  // "Sto girando da ospite": scelta esplicita fatta sulla schermata d'accesso.
+  // Volutamente in memoria e non in localStorage — vedi il gate piu' sotto.
+  const [ospite, setOspite] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   // Utente della sessione precedente: serve a distinguere un semplice
   // refresh del token da un vero cambio account / logout.
@@ -294,8 +302,18 @@ export default function App() {
     window.addEventListener('wip-apri-radar', apri);
     return () => window.removeEventListener('wip-apri-radar', apri);
   }, []);
+  // LA REGOLA DEI DUE TASTI (31/08/2026, committente). Il GIRO multi-tappa
+  // e' premium: si avvia SOLO con «Avvia la navigazione», che passa dal
+  // cancello del server (passValido → Day Pass). La navigazione verso UNA
+  // tappa sola e' gratis (come /api/route/foot): si avvia SOLO col tasto
+  // verde tondo. Mai tutti e due insieme — col tasto tondo visibile accanto
+  // ad «Avvia», WIP Nav verso la tappa corrente aggirava il pass, tappa
+  // dopo tappa (collaudo di stamattina).
   const tappaDaNavigare = useMemo(() => {
     if (!vistaGiro || vistaGiro.stato === 'FINITO') return null;
+    // Solo col giro di UNA tappa: la navigazione singola e' gratis, quella
+    // dell'itinerario no e ha il suo tasto.
+    if ((vistaGiro.tappeTotali ?? 0) > 1) return null;
     const t = tourService.tappaAttuale();
     if (!t) return null;
     // Il POI vero (con il suo id): NavChoiceSheet cerca la porta da li`.
@@ -534,12 +552,13 @@ export default function App() {
 
   // 401 {error:'auth_required'} dal server (audioguide, enrich, tts…).
   //
-  // Da quando esiste la MODALITÀ OSPITE (28/08/2026) questo evento ha due
-  // vuol dire che la SESSIONE È SCADUTA mentre si usava l'app (l'accesso è
-  // obbligatorio, quindi un 401 non può venire da un ospite). Si prova prima
-  // un refresh silenzioso e, se non torna nessuna sessione, si riapre il
-  // login: `setSession(null)` da solo riporterebbe al gate d'avvio buttando
-  // via quello che si stava facendo.
+  // Con la MODALITÀ OSPITE (28/08/2026, ripristinata il 02/09) un 401 ha due
+  // significati diversi, e vanno detti con parole diverse: se non c'è nessuna
+  // sessione l'utente è un OSPITE e gli serve un account; se una sessione
+  // c'era, è SCADUTA mentre lavorava. Si prova prima un refresh silenzioso e,
+  // se non torna nessuna sessione, si riapre il login come modale:
+  // `setSession(null)` da solo, ora che il gate non blocca più, lascerebbe
+  // l'ospite senza capire perché l'azione non è andata a buon fine.
   // Cooldown di 30 s: una schermata può generare più 401 di fila e non deve
   // sparare una raffica di toast e di modali.
   useEffect(() => {
@@ -548,6 +567,13 @@ export default function App() {
     const onAuthRequired = async () => {
       if (inCorso) return;
       inCorso = true;
+      // `eraLoggato` va letto PRIMA del refresh: dopo, la sessione è comunque
+      // nulla e i due casi diventerebbero indistinguibili. Si legge dalla ref
+      // e non da `session`: questo effetto dipende solo da `language`, quindi
+      // la variabile catturata nella chiusura resterebbe quella del montaggio
+      // (sempre nulla) e ogni 401 direbbe «serve un account» anche a chi un
+      // account ce l'ha.
+      const eraLoggato = !!sessionRef.current;
       try {
         invalidaTokenCache();
         const { data } = await supabase.auth.refreshSession();
@@ -555,7 +581,7 @@ export default function App() {
           setSession(null);
           if (Date.now() - ultimoInvito > 30_000) {
             ultimoInvito = Date.now();
-            notify(getTranslation('auth_sessione_scaduta', language));
+            notify(getTranslation(eraLoggato ? 'auth_sessione_scaduta' : 'guest_azione_richiede_account', language));
             setShowLogin(true);
           }
         }
@@ -1282,17 +1308,42 @@ export default function App() {
 
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('has_seen_onboarding'));
   if (showOnboarding) return <OnboardingCarousel language={language} onComplete={() => { localStorage.setItem('has_seen_onboarding', 'true'); setShowOnboarding(false); }} />;
-  // GATE RIDOTTO AL MINIMO (28/08/2026): resta a tutto schermo solo mentre si
-  // legge la sessione (spinner) e durante il reset password via link email —
-  // LOGIN OBBLIGATORIO (decisione del committente, 29/08/2026): niente
-  // modalità ospite. Il 28/08 era stata introdotta per il timore di un rilievo
-  // App Store (5.1.1), ma qui l'account regge davvero il prodotto — audioguide
-  // a crediti, acquisti, Day Pass, itinerari e preferiti personali — e il
-  // login e' solo email+password, quindi non scatta nemmeno l'obbligo di
-  // "Accedi con Apple" (4.8), che vale solo con i login social.
+  // GATE RIDOTTO AL MINIMO: resta a tutto schermo solo mentre si legge la
+  // sessione (spinner) e durante il reset password via link email.
+  //
+  // MODALITA' OSPITE RIPRISTINATA (02/09/2026, decisione del committente).
+  // Il 29/08 il login era stato reso obbligatorio: mappa, POI e anteprime
+  // erano dietro un muro. In tre giorni quel muro ha prodotto due grane
+  // distinte, che avevano la STESSA causa:
+  //   1. Apple ha respinto la 1.3 il 01/09 (Guideline 2.1): il revisore ha
+  //      trovato il login e le note di verifica dicevano che non serviva
+  //      account. Vedi la memoria del rifiuto iOS.
+  //   2. Wikicaves/Grottocenter ci ha scritto il 02/09 contestando l'uso dei
+  //      loro dati sulle grotte (129.508 POI) proprio perche' "users must log
+  //      in to access your site".
+  // L'account continua a reggere quello che deve reggere — crediti, acquisti,
+  // Day Pass, preferiti, itinerari salvati, profilo — e chi prova a fare una
+  // di quelle cose da ospite si vede aprire il modale di login (`showLogin`).
+  // Quello che torna libero e' la CONSULTAZIONE: guardare la mappa e leggere
+  // le schede.
+  //
+  // MA L'INGRESSO RESTA IL LOGIN (02/09/2026, dopo la prova sul telefono).
+  // Non si entra dritti sulla mappa: la prima schermata e' sempre l'accesso,
+  // con "Continua senza account" bene in vista. Cosi' chi ha un account non
+  // finisce per errore a girare da ospite — scoprendolo solo quando un'azione
+  // a crediti gli chiede di accedere a meta' strada — e chi non lo vuole entra
+  // lo stesso con un tocco. Per Apple e per Wikicaves quello che conta e' che
+  // la porta si apra senza account, non che sia gia' aperta.
+  //
+  // `ospite` NON e' persistito di proposito: a ogni avvio si ripassa da qui.
+  // Persisterlo vorrebbe dire che chi tocca "continua senza account" una volta
+  // non rivede mai piu' il login, ed e' esattamente il modo per restare
+  // ospite senza saperlo.
+  //
   // isRecovering va azzerato al successo, altrimenti l'utente resta in loop sul
   // form "Nuova Password".
-  if (authLoading || !session || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
+  if (authLoading || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
+  if (!session && !ospite) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setOspite(false); }} onClose={() => setOspite(true)} />;
 
   return (
     <div className="min-h-[100dvh] bg-[#323639] flex justify-center items-center p-0 sm:p-4">
@@ -1363,7 +1414,10 @@ export default function App() {
                   {getTranslation('gr_crea_giro', language)}
                 </motion.button>
               )}
-              {vistaGiro && !vistaGiro.avviato && vistaGiro.stato !== 'FINITO' && (
+              {/* Multi-tappa = premium: solo «Avvia la navigazione» (il server
+                  verifica il Day Pass). Con una tappa sola questo tasto non
+                  compare: c'e' il tondo verde gratis qui sotto (31/08/2026). */}
+              {vistaGiro && !vistaGiro.avviato && vistaGiro.stato !== 'FINITO' && (vistaGiro.tappeTotali ?? 0) > 1 && (
                 <motion.button
                   initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                   whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
@@ -1383,15 +1437,11 @@ export default function App() {
                   {getTranslation('gr_avvia_navigazione', language)}
                 </motion.button>
               )}
-              {/* Il navigatore: solo con un giro CREATO e ancora da camminare —
-                  non in bozza (non c'e` una tappa corrente) e non a giro
-                  finito. Nel collaudo del 28/08 «non si trovava» perche` il
-                  giro non veniva mai creato: il server negava il pass. */}
-              {/* (29/08/2026, collaudo: «se clicco di nuovo sul tasto verde mi
-                  richiede di avviare il navigatore, e' normale?») No: a giro
-                  AVVIATO il navigatore e' gia' in corso, e riproporre la scelta
-                  WIP Nav / Google confonde. Il tasto resta solo per il giro
-                  creato ma non ancora partito, accanto ad «Avvia». */}
+              {/* Tappa SINGOLA = gratis: il tondo verde apre la doppia scelta
+                  (WIP Nav / Google) verso quell'unica tappa. Compare solo se
+                  il giro non e' multi-tappa (vedi tappaDaNavigare): mai
+                  accanto ad «Avvia la navigazione», dove faceva da bypass
+                  del Day Pass (31/08/2026, committente). */}
               {tappaDaNavigare && !vistaGiro?.avviato && (
                 <motion.button
                   initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
@@ -1408,10 +1458,8 @@ export default function App() {
             </div>
           )}
 
-          {/* La stessa doppia scelta di tutto il resto dell'app: 🚶 WIP Nav o
-              🚗 Google Maps / Mappe, verso la PORTA della tappa corrente. Il
-              driver vocale del giro continua per conto suo: qui non si calcola
-              un secondo percorso, si consegna la destinazione. */}
+          {/* La doppia scelta 🚶 WIP Nav / 🚗 Google Maps verso la PORTA
+              dell'unica tappa: e' la navigazione singola, gratis. */}
           <NavChoiceSheet poi={navTappa} language={language} onClose={() => setNavTappa(null)} />
 
           <AnimatePresence>
@@ -1550,7 +1598,7 @@ export default function App() {
             transition={{ type: "tween", duration: 0.22, ease: "easeOut" }}
           >
           <Suspense fallback={<TabLoadingFallback />}>
-          <ProfileScreen guideMode={guideMode} setGuideMode={setGuideMode} itinerary={itinerary} onSelectPoi={handleSelectPoi} defaultLocation={defaultLocation} setDefaultLocation={updateDefaultLocation} userSession={session} onSignOut={session ? async () => { await supabase.auth.signOut(); setSession(null); } : undefined} onRemovePoi={removePoiById} onClearItinerary={async () => setItinerary([])} language={language} setLanguage={setLanguage} />
+          <ProfileScreen guideMode={guideMode} setGuideMode={setGuideMode} itinerary={itinerary} onSelectPoi={handleSelectPoi} defaultLocation={defaultLocation} setDefaultLocation={updateDefaultLocation} userSession={session} onSignOut={session ? async () => { await supabase.auth.signOut(); setSession(null); setOspite(false); } : undefined} onRemovePoi={removePoiById} onClearItinerary={async () => setItinerary([])} language={language} setLanguage={setLanguage} />
           </Suspense>
           </motion.div>
         </div>
@@ -1645,15 +1693,17 @@ export default function App() {
             l'ospite deve poter tornare alla mappa senza fare l'account.
             Si apre dal tasto "Accedi", dall'evento 'wip-open-login' e da
             qualsiasi 401 della nostra API. */}
-        {/* Con il login obbligatorio qui non si arriva mai senza sessione (il
-            gate sopra rimanda a LoginScreen). Il modale resta per il caso in
-            cui la sessione scada MENTRE si usa l'app: un 401 lo apre, si
-            rientra e si riprende da dove si era, invece di essere buttati
-            fuori perdendo quello che si stava facendo. */}
+        {/* Serve in due casi diversi, e in entrambi si deve poter chiudere
+            (02/09/2026): l'OSPITE che tocca un'azione da account e ci ripensa
+            deve tornare alla mappa, e chi ha la sessione SCADUTA a meta' lavoro
+            non deve perdere quello che stava facendo. Senza `onClose` la X e il
+            "continua senza account" non compaiono e si resta in trappola. */}
         {showLogin && !session && (
           <div className="absolute inset-0 z-[3000] bg-surface">
             <LoginScreen
-              onLoginSuccess={(s) => { setSession(s); setShowLogin(false); }}
+              onLoginSuccess={(s) => { setSession(s); setShowLogin(false); setOspite(false); }}
+              onClose={() => setShowLogin(false)}
+              comeModale
             />
           </div>
         )}

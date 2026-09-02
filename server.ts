@@ -518,48 +518,61 @@ async function callUniversalAi(
   // giorno in cui lo si finanzia. Together e Mistral sono a credito zero ma
   // restano in fondo, non costano nulla a provarli.
   const FREE_ENGINES = ["groq", "gemini", "agnes", "together", "mistral"];
-  const baseQueue = options.strictEngine
-    ? [primaryEngine]
-    : primaryEngine === "deepseek"
+
+  // INTERRUTTORE GENERALE DI DEEPSEEK (02/09/2026).
+  //
+  // A `true` DeepSeek non viene chiamato da nessuna parte, comunque lo si
+  // chieda: chi lo domanda come primario parte da groq e scorre i gratuiti.
+  // Sta QUI e in un solo altro punto (streamUniversalAi) invece che nelle
+  // dieci rotte che scrivono "deepseek", perche' e' stato il "punto per
+  // punto" a far scappare la spesa due volte (17-18/08 e 31/08-02/09).
+  //
+  // OGGI E' `false`: decisione del committente del 02/09 — DeepSeek resta
+  // acceso per la parte in diretta (itinerari on the fly, podcast, guide
+  // premium), che sono gli unici punti a chiederlo come `primaryEngine`.
+  // Quello che e' stato tolto per davvero e' la porta laterale: il flag
+  // `ultimaSpiaggiaPagante` (vedi sotto), che lo accodava dopo i gratuiti e
+  // ci faceva finire i lavori di sfondo.
+  //
+  // Mettere `true` (qui e in streamUniversalAi) e' la leva d'emergenza se la
+  // spesa riparte: spegne tutto senza toccare altro.
+  const DEEPSEEK_SPENTO = false;
+  const engineRichiesto = (DEEPSEEK_SPENTO && primaryEngine === "deepseek") ? "groq" : primaryEngine;
+  const strictReale = options.strictEngine && !(DEEPSEEK_SPENTO && primaryEngine === "deepseek");
+
+  const baseQueue = strictReale
+    ? [engineRichiesto]
+    : engineRichiesto === "deepseek"
       // Richiesto esplicitamente: parte da DeepSeek, ma se cade ripiega sui
       // gratuiti invece di insistere a pagamento.
       ? ["deepseek", ...FREE_ENGINES]
       // Il motore richiesto per PRIMO (prima "mistral" o "together" come
       // primari venivano ignorati e si partiva comunque da groq), poi gli
       // altri gratuiti. DeepSeek non entra mai qui.
-      : [primaryEngine, ...FREE_ENGINES.filter((e) => e !== primaryEngine)];
+      : [engineRichiesto, ...FREE_ENGINES.filter((e) => e !== engineRichiesto)];
 
   // options.excludeEngines = motori vietati per QUESTA chiamata, fallback
   // compreso. Resta utile per vietare un motore specifico (es. escludere dal
   // revisore lo stesso motore che ha generato).
   const vietati = new Set((options.excludeEngines || []).map((e: string) => String(e)));
+  if (DEEPSEEK_SPENTO) vietati.add('deepseek'); // rete di sicurezza: nessun percorso lo riporta in coda
   let consentiti = baseQueue.filter((e) => !vietati.has(e));
 
-  // ULTIMA SPIAGGIA A PAGAMENTO (31/08/2026, richiesta del committente).
+  // NIENTE "ultima spiaggia a pagamento" (revocata il 02/09/2026 dal
+  // committente). Dal 31/08 al 02/09 esisteva un flag `ultimaSpiaggiaPagante`
+  // che accodava DeepSeek dopo i gratuiti "solo per chi aspetta in diretta".
+  // In tre giorni ha prodotto 39.245 chiamate SENZA alcun user_id — 24.806
+  // dalla pre-generazione di poi_audioguides e 14.423 dall'arricchimento POI
+  // — per 13,31 $: i lavori di sfondo passano dalle stesse funzioni degli
+  // utenti in diretta, quindi qualunque flag "in diretta" e' una promessa che
+  // il chiamante non puo' mantenere. E' la seconda volta (la prima il
+  // 17-18/08 con la semina della libreria).
   //
-  // La rete gratuita e' piu' sottile di quanto sembri. Provati dal vivo oggi:
-  // groq risponde (0,8 s), agnes risponde (1,4 s), gemini dipende dalla chiave
-  // su Vercel — ma together, mistral e cerebras rispondono tutti e tre 402,
-  // credito esaurito. Sono anelli morti: falliscono in due decimi di secondo
-  // e non salvano niente.
-  //
-  // Quindi se groq esaurisce il tetto giornaliero e agnes e' giu', chi sta
-  // davanti al monumento non riceve l'audioguida. Per QUEI casi — e solo per
-  // quelli — si mette DeepSeek in fondo alla coda: costa, ma e' l'ultimo
-  // anello prima del nulla, e risponde in mezzo secondo (misurato: 511 ms).
-  //
-  // Non cambia la regola del 18/08: DeepSeek resta fuori da OGNI coda per
-  // difetto e non entra mai nei lavori di massa. Ci arriva solo chi lo chiede
-  // esplicitamente con questo flag, cioe' i percorsi dove un utente sta
-  // aspettando in diretta. Ogni punto che lo attiva si vede nel codice.
-  if (
-    options.ultimaSpiaggiaPagante &&
-    !vietati.has('deepseek') &&
-    !consentiti.includes('deepseek') &&
-    !!deepseekKey
-  ) {
-    consentiti = [...consentiti, 'deepseek'];
-  }
+  // La regola torna quella del 18/08, senza eccezioni: DeepSeek entra SOLO
+  // come `primaryEngine` esplicito, cioe' itinerari on the fly, podcast e
+  // guide premium. Se i gratuiti cadono tutti si fallisce: un'audioguida
+  // mancante e' un disservizio circoscritto, una coda a pagamento aperta a
+  // ogni lavoro di massa e' una fattura senza tetto.
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
   // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
@@ -982,13 +995,91 @@ ${JSON.stringify(compact)}`;
   return { checked: stops.length, flagged };
 }
 
-// ── RETRIEVAL PASTI REALI (TripAdvisor + Foursquare) ────────────────────
+// osm_diet in locali_pois è un JSON tipo {"vegan":true,"gluten_free":true},
+// non una stringa: va formattato, mai stampato com'è (finirebbe "[object
+// Object]" nel prompt).
+function formatOsmDiet(osmDiet: any): string {
+  if (!osmDiet || typeof osmDiet !== 'object') return '';
+  const attive = Object.entries(osmDiet).filter(([, v]) => v === true).map(([k]) => k);
+  return attive.length ? ` [diete: ${attive.join(', ')}]` : '';
+}
+
+// Parole chiave → filtro reale su locali_pois. Mappa richieste in linguaggio
+// naturale (specialRequests/interessi) a un filtro verificabile: sub_category
+// (cucina, ben coperta) e/o osm_diet (dieta certificata, più raro ma reale).
+// Più corrispondenze si combinano in un OR unico (una sola query).
+const DIET_KEYWORD_MAP: Array<{ re: RegExp; label: string; subCats?: string[]; dietKey?: string }> = [
+  { re: /senza\s*glutine|gluten[\s-]?free|celiac/i, label: 'senza glutine', dietKey: 'gluten_free' },
+  { re: /vegan/i, label: 'vegano', dietKey: 'vegan' },
+  { re: /vegetarian/i, label: 'vegetariano', dietKey: 'vegetarian', subCats: ['vegetariano'] },
+  { re: /halal/i, label: 'halal', dietKey: 'halal' },
+  { re: /kosher/i, label: 'kosher', dietKey: 'kosher' },
+  { re: /pesc[ei]|seafood|fish/i, label: 'pesce', subCats: ['pesce', 'sushi'] },
+  { re: /carne|meat|grill|steak|braceria/i, label: 'carne', subCats: ['carne'] },
+  { re: /sushi/i, label: 'sushi', subCats: ['sushi'] },
+  { re: /pizz/i, label: 'pizza', subCats: ['pizzeria'] },
+];
+function detectDietConstraints(text: string): Array<{ label: string; subCats?: string[]; dietKey?: string }> {
+  if (!text) return [];
+  return DIET_KEYWORD_MAP.filter((m) => m.re.test(text));
+}
+
+// Fallback/completamento su locali_pois: gratis, illimitato, gia' coperto a
+// livello mondiale (Overture + merge OSM). Con un vincolo riconosciuto
+// (constraints) filtra DAVVERO per cucina/dieta, invece di lasciare che sia
+// l'AI a indovinare su una lista generica — TripAdvisor/Foursquare qui non
+// portano nessun filtro di questo tipo.
+async function fetchDatabaseDiningFallback(lat: number, lon: number, constraints: Array<{ label: string; subCats?: string[]; dietKey?: string }> = []): Promise<string[]> {
+  if (!supabaseUrl || !supabaseServiceKey) return [];
+  const dLat = 0.045; // ~5 km
+  const dLon = 0.045 / Math.max(0.15, Math.cos(lat * Math.PI / 180));
+  const cats = ['ristorante', 'pizzeria', 'pesce', 'carne', 'sushi', 'vegetariano', 'fast_food', 'caffe', 'pasticceria', 'bar'];
+  let url = `${supabaseUrl}/rest/v1/locali_pois?select=name,address,cucina,osm_cuisine,osm_diet&lat=gte.${lat - dLat}&lat=lte.${lat + dLat}&lon=gte.${lon - dLon}&lon=lte.${lon + dLon}`;
+  let tagLabel = '';
+  if (constraints.length) {
+    // OR tra tutte le condizioni riconosciute (es. "pesce o carne" → entrambe)
+    const orParts: string[] = [];
+    constraints.forEach((c) => {
+      if (c.subCats?.length) orParts.push(`sub_category.in.(${c.subCats.join(',')})`);
+      if (c.dietKey) orParts.push(`osm_diet->>${c.dietKey}.eq.true`);
+    });
+    if (orParts.length) {
+      url += `&or=(${orParts.join(',')})`;
+      tagLabel = constraints.map((c) => c.label).join('/');
+    }
+  } else {
+    url += `&sub_category=in.(${cats.join(',')})`;
+  }
+  url += '&limit=30';
+  try {
+    const r = await fetch(url, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return [];
+    const rows = await r.json();
+    return (Array.isArray(rows) ? rows : []).map((p: any) => {
+      const cucina = p.cucina || p.osm_cuisine || '';
+      const diete = formatOsmDiet(p.osm_diet);
+      const fonte = tagLabel ? `Database - verificato ${tagLabel}` : 'Database';
+      return `- ${p.name}${cucina ? ` (${cucina})` : ''}${p.address ? ` — ${p.address}` : ''}${diete} [${fonte}]`;
+    });
+  } catch { return []; }
+}
+
+// ── RETRIEVAL PASTI REALI (TripAdvisor + Foursquare, fallback locali_pois) ──
 // Ancora colazione/pranzo/cena a locali REALI: lista compatta di ristoranti
 // verificati vicino alla destinazione, iniettata nel prompt del generatore.
 // Le due API partono in parallelo; fail-open: senza chiavi o su errore
-// restituisce stringa vuota e il prompt resta quello di prima.
-async function fetchRealDiningContext(lat: number, lon: number): Promise<string> {
+// restituisce stringa vuota e il prompt resta quello di prima. Se insieme
+// danno meno di 3 risultati (quota esaurita, zona scoperta) si completa con
+// locali_pois: gratis, senza tetto mensile, con cucina/diete quando le abbiamo.
+async function fetchRealDiningContext(lat: number, lon: number, constraintText: string = ''): Promise<string> {
   if (typeof lat !== 'number' || typeof lon !== 'number') return '';
+
+  // Vincolo alimentare/cucina riconosciuto (es. "senza glutine", "pesce"):
+  // TripAdvisor/Foursquare qui non filtrano per questo, solo locali_pois lo
+  // sa fare davvero. Query SEMPRE (non solo a corto di risultati) cosi' i
+  // locali verificati compaiono per primi nell'elenco dato all'AI.
+  const dietConstraints = detectDietConstraints(constraintText);
+  const dietPromise = dietConstraints.length ? fetchDatabaseDiningFallback(lat, lon, dietConstraints) : Promise.resolve<string[]>([]);
 
   const fsqKey = process.env.FOURSQUARE_API_KEY || process.env.VITE_FOURSQUARE_API_KEY;
   const taKey = process.env.TRIPADVISOR_API_KEY || process.env.VITE_TRIPADVISOR_API_KEY;
@@ -1012,22 +1103,33 @@ async function fetchRealDiningContext(lat: number, lon: number): Promise<string>
     return `- ${p.name}${addr ? ` — ${addr}` : ""} [TripAdvisor]`;
   })).catch(() => []) : Promise.resolve([]);
 
-  const [fsq, ta] = await Promise.all([fsqPromise, taPromise]);
+  const [fsq, ta, dietRows] = await Promise.all([fsqPromise, taPromise, dietPromise]);
 
-  // Dedup per nome (stesso locale presente su entrambe le piattaforme)
+  // Dedup per nome (stesso locale presente su piu' fonti). I verificati per
+  // dieta/cucina vanno PRIMA: sono l'unica garanzia reale sul vincolo.
   const seen = new Set<string>();
   const results: string[] = [];
-  [...ta, ...fsq].forEach((line: string) => {
+  [...dietRows, ...ta, ...fsq].forEach((line: string) => {
     const nameKey = line.slice(2).split(" — ")[0].split(" (")[0].trim().toLowerCase();
     if (nameKey && !seen.has(nameKey)) { seen.add(nameKey); results.push(line); }
   });
 
+  if (results.length < 3) {
+    const dbResults = await fetchDatabaseDiningFallback(lat, lon);
+    dbResults.forEach((line) => {
+      const nameKey = line.slice(2).split(" — ")[0].split(" (")[0].trim().toLowerCase();
+      if (nameKey && !seen.has(nameKey)) { seen.add(nameKey); results.push(line); }
+    });
+  }
   if (results.length < 3) return '';
+  const dietNote = dietConstraints.length
+    ? ` I locali con "[Database - verificato ...]" hanno il vincolo (${dietConstraints.map((c) => c.label).join('/')}) confermato dai dati: usali PRIMA degli altri per le tappe pasto interessate.`
+    : '';
   return `
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RISTORANTI E LOCALI REALI VERIFICATI (TripAdvisor + Foursquare, vicino alla destinazione)
+RISTORANTI E LOCALI REALI VERIFICATI (vicino alla destinazione)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Per le tappe COLAZIONE, PRANZO e CENA scegli PREFERIBILMENTE da questo elenco di locali reali, rispettando SEMPRE i vincoli dell'utente (es. gluten free): se nessun locale dell'elenco è adatto ai vincoli, puoi proporre un locale fuori elenco di cui sei CERTO che esista. Nel campo "fonte" della tappa riporta la piattaforma tra parentesi quadre del locale scelto (es. "TripAdvisor").
+Per le tappe COLAZIONE, PRANZO e CENA scegli PREFERIBILMENTE da questo elenco di locali reali, rispettando SEMPRE i vincoli dell'utente (es. gluten free): se nessun locale dell'elenco è adatto ai vincoli, puoi proporre un locale fuori elenco di cui sei CERTO che esista. Nel campo "fonte" della tappa riporta la piattaforma tra parentesi quadre del locale scelto (es. "TripAdvisor").${dietNote}
 ${results.slice(0, 30).join("\n")}`;
 }
 
@@ -1197,7 +1299,11 @@ async function streamUniversalAi(
     // Come nella versione non-streaming, DeepSeek NON è in coda a Groq: è
     // l'unico a pagamento e ci finiva dentro di nascosto. Ci si arriva solo
     // chiedendolo come primario (guide premium, podcast, itinerari in diretta).
-    const wantsGroqFirst = primaryEngine === "groq";
+    // Gemello dell'interruttore di callUniversalAi (02/09/2026): a `true` chi
+    // chiedeva DeepSeek (itinerari in diretta, guide premium) parte da groq e
+    // ripiega su agnes. Oggi `false`: la parte in diretta resta su DeepSeek.
+    const DEEPSEEK_SPENTO = false;
+    const wantsGroqFirst = primaryEngine === "groq" || (DEEPSEEK_SPENTO && primaryEngine === "deepseek");
     const engineQueue = wantsGroqFirst
       ? ["groq", "agnes"]
       : ["deepseek", "agnes", "groq"];
@@ -3468,10 +3574,11 @@ ${dayLines.join("\n")}
         // il roadtrip è comunque limitato a 6 città) e si etichetta ciascun
         // blocco con la città di appartenenza.
         (async (): Promise<string> => {
+          const dietText = `${specialRequests || ''} ${interestsArr.join(' ')}`;
           if (isRoadtrip) {
             const perCity = await Promise.all(legsArr.map(async (leg) => {
               const ctx = await Promise.race([
-                fetchRealDiningContext(leg.lat, leg.lon),
+                fetchRealDiningContext(leg.lat, leg.lon, dietText),
                 new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
               ]).catch(() => "");
               return ctx ? `\n### Ristoranti a ${leg.city}:${ctx}` : "";
@@ -3480,7 +3587,7 @@ ${dayLines.join("\n")}
           }
           if (typeof lat === "number" && typeof lon === "number") {
             return await Promise.race([
-              fetchRealDiningContext(lat, lon),
+              fetchRealDiningContext(lat, lon, dietText),
               new Promise<string>((resolve) => setTimeout(() => resolve(""), 6000)),
             ]).catch(() => "");
           }
@@ -7213,6 +7320,11 @@ Regole:
     const base = v.split('_')[0];
     return base === 'dante' ? 'dante' : 'nicky';
   }
+  // Questa funzione gira SEMPRE sui motori gratuiti (02/09/2026). Serve sia
+  // l'utente in diretta sia la pre-generazione di cache degli script di
+  // sfondo, e dall'interno non si distinguono: per tre giorni un flag
+  // "ultimaSpiaggiaPagante" ha provato a distinguerli e ha mandato 24.806
+  // chiamate di sfondo su DeepSeek. Niente motori a pagamento qui.
   async function regenerateAudioguideText(opts: { text: string; poiName: string; mode?: string; location?: string; previousText?: string; lang?: string; focusInstruction?: string; }): Promise<string> {
     const { text, poiName, mode, location, previousText, lang = "it", focusInstruction } = opts;
     const targetLangName = LANG_NAMES[String(lang).toLowerCase()] || "italiano";
@@ -7285,12 +7397,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     const sUrl = process.env.VITE_SUPABASE_URL || '';
     const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
     let response = await callUniversalAi(
-      // `ultimaSpiaggiaPagante` (31/08/2026): questa e' l'audioguida, cioe' il
-      // prodotto, e chi la chiede sta fermo davanti al monumento. Se tutti i
-      // gratuiti cadono, meglio pagare qualche centesimo di DeepSeek che
-      // lasciarlo senza niente. DeepSeek entra SOLO come ultimo anello, dopo
-      // che groq, gemini e agnes hanno fallito.
-      "groq", [{ role: "user", content: prompt }], { temperature: 0.7, ultimaSpiaggiaPagante: true },
+      "groq", [{ role: "user", content: prompt }], { temperature: 0.7 },
       "rigenerazione_audio", sUrl, sKey, getGroqClient()
     );
     if (response?.truncated) {
@@ -7301,7 +7408,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       console.warn("[regenerateAudioguideText] Output troncato, retry con max_tokens esplicito raddoppiato.");
       try {
         response = await callUniversalAi(
-          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096, ultimaSpiaggiaPagante: true },
+          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096 },
           "rigenerazione_audio_retry_troncato", sUrl, sKey, getGroqClient()
         );
       } catch (retryErr: any) {
@@ -9364,7 +9471,12 @@ ${description}
       // Commons la licenza piu' diffusa e' CC BY-SA, che l'uso commerciale lo
       // consente A CONDIZIONE di citare l'autore. WIP vende crediti: senza la
       // riga di credito sotto l'immagine quelle foto non sono utilizzabili.
-      const selectFields = "id,name,category,lat,lon,description_ai,description_short,description_long,full_description,audio_script,practical_info,technical_data,image_url,photo_url,image_source,image_attribution,image_license,is_gem,status,alert_radius,geofence_radius";
+      // `source` (02/09/2026): la provenienza del DATO, non della foto. Serve
+      // alla riga di credito in fondo alla scheda (AttribuzioneDati) dopo il
+      // richiamo di Wikicaves sui 129.508 POI presi da Grottocenter. La RPC
+      // nearby_pois ha colonne fisse e non lo restituisce, quindi l'unico
+      // punto in cui il client puo' saperlo e' questa rotta.
+      const selectFields = "id,name,category,lat,lon,description_ai,description_short,description_long,full_description,audio_script,practical_info,technical_data,image_url,photo_url,image_source,image_attribution,image_license,is_gem,status,alert_radius,geofence_radius,source";
       const reqHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, "Content-Type": "application/json" };
       let foundData: any[] | null = null;
 
@@ -10105,6 +10217,89 @@ ${description}
         if (budget > 0 && spent > budget) throw new Error(`SFORATO: $${spent.toFixed(2)} spesi su budget mensile di $${budget.toFixed(2)}`);
         return budget > 0 ? `$${spent.toFixed(2)} su budget $${budget.toFixed(2)}` : `$${spent.toFixed(2)} questo mese (nessun budget impostato)`;
       }),
+      // ── Allarmi a soglia (02/09/2026): non guasti "secchi" delle API ma
+      // condizioni di business che devono suonare da sole. A soglia superata
+      // il check scrive DIRETTAMENTE in system_errors via logSystemError e —
+      // per (a) e (c) — diventa anche rosso nello snapshot: l'alert diretto
+      // rifiora a ogni giro finché la condizione dura (voluto: un costo
+      // fuori controllo merita un promemoria al giorno, non uno solo). ──
+      runCheck('Allarme costo AI giornaliero', async () => {
+        const soglia = Number(process.env.COSTO_AI_SOGLIA_GIORNO) || 10;
+        const da24h = new Date(Date.now() - 86400000).toISOString();
+        let speso = 0;
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/api_usage_logs?select=cost_estimation&created_at=gte.${encodeURIComponent(da24h)}&limit=20000`, {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: TIMEOUT_MS
+          });
+          speso = (Array.isArray(r.data) ? r.data : []).reduce((s: number, x: any) => s + (Number(x.cost_estimation) || 0), 0);
+        } catch {
+          return 'costi non tracciati (migrazione observability non applicata)';
+        }
+        if (speso > soglia) {
+          await logSystemError('critical', `Costo AI ultime 24h: $${speso.toFixed(2)} oltre la soglia di $${soglia.toFixed(2)} (env COSTO_AI_SOGLIA_GIORNO)`, {
+            source: 'canary-soglie', speso, soglia
+          });
+          throw new Error(`SFORATO: $${speso.toFixed(2)} nelle ultime 24h su soglia $${soglia.toFixed(2)}`);
+        }
+        return `$${speso.toFixed(2)} nelle ultime 24h (soglia $${soglia.toFixed(2)})`;
+      }),
+      // Zero registrazioni in 3gg: SOLO warning e SOLO se prima c'erano
+      // stati utenti — pre-lancio non deve gridare al lupo. Mai rosso.
+      runCheck('Allarme registrazioni ferme (3gg)', async () => {
+        const contaProfili = async (filtro: string) => {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?select=id${filtro}`, {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'count=exact', Range: '0-0' },
+            timeout: TIMEOUT_MS, validateStatus: (s: number) => s === 200 || s === 206
+          });
+          const tot = Number(String(r.headers?.['content-range'] || '').split('/')[1]);
+          if (!Number.isFinite(tot)) throw new Error('conteggio non leggibile');
+          return tot;
+        };
+        let nuovi3gg = 0, precedenti = 0;
+        try {
+          const da3gg = new Date(Date.now() - 3 * 86400000).toISOString();
+          [nuovi3gg, precedenti] = await Promise.all([
+            contaProfili(`&created_at=gte.${encodeURIComponent(da3gg)}`),
+            contaProfili(`&created_at=lt.${encodeURIComponent(da3gg)}`),
+          ]);
+        } catch {
+          return 'created_at non interrogabile su user_profiles: controllo saltato';
+        }
+        if (nuovi3gg === 0 && precedenti > 0) {
+          // Senza await: questo check non deve MAI diventare rosso, nemmeno
+          // per un timeout della scrittura del warning (logSystemError è
+          // comunque best-effort e non propaga errori).
+          void logSystemError('warning', `Zero nuovi utenti registrati negli ultimi 3 giorni (${precedenti} registrati in precedenza)`, {
+            source: 'canary-soglie', precedenti
+          });
+          return `ATTENZIONE: 0 nuovi utenti in 3gg (${precedenti} storici) — warning scritto in system_errors`;
+        }
+        return precedenti === 0
+          ? `pre-lancio (${nuovi3gg} utenti totali): nessun allarme`
+          : `${nuovi3gg} nuovi utenti negli ultimi 3gg`;
+      }),
+      runCheck('Allarme errori critici (24h)', async () => {
+        const da24h = new Date(Date.now() - 86400000).toISOString();
+        let critici = 0;
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/system_errors?select=id&level=eq.critical&created_at=gte.${encodeURIComponent(da24h)}`, {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'count=exact', Range: '0-0' },
+            timeout: TIMEOUT_MS, validateStatus: (s: number) => s === 200 || s === 206
+          });
+          const tot = Number(String(r.headers?.['content-range'] || '').split('/')[1]);
+          if (!Number.isFinite(tot)) throw new Error('conteggio non leggibile');
+          critici = tot;
+        } catch {
+          return 'system_errors non interrogabile (migrazione observability non applicata)';
+        }
+        if (critici > 20) {
+          await logSystemError('critical', `${critici} errori critici in system_errors nelle ultime 24h (soglia 20)`, {
+            source: 'canary-soglie', critici
+          });
+          throw new Error(`${critici} errori critici in 24h (soglia 20)`);
+        }
+        return `${critici} errori critici nelle ultime 24h (soglia 20)`;
+      }),
       // ── Replay geofencing: la matematica dei trigger web simulata sulle
       // tracce GPS di riferimento caricate dall'admin (api_cache
       // 'canary_gps_traces'). Senza tracce → SKIP (mai rosso). ──
@@ -10283,6 +10478,627 @@ ${description}
     res.json({
       checkly: esito(checkly), sentry: esito(sentry), uptimerobot: esito(uptimerobot), posthog: esito(posthog),
     });
+  });
+
+  // --- STATISTICHE SOCIAL DEL BRAND (scheda "Social" del pannello admin) ---
+  // Aggrega YouTube / Meta (Facebook+Instagram) / TikTok (manuale) / visite
+  // sito da PostHog. Snapshot in api_cache ('social_stats', TTL 1 ora,
+  // ?fresh=1 per bypassare) — i profili sono appena nati, i numeri cambiano
+  // piano: inutile martellare le API a ogni apertura del pannello.
+  const SOCIAL_YT_CHANNEL_ID = process.env.YOUTUBE_CHANNEL_ID || 'UC-ZZZfl2U1ubD-UzKzpN16A';
+
+  async function socialYouTube() {
+    const key = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
+    if (!key) return {
+      stato: 'chiave_mancante',
+      nota: 'Crea una API key su console.cloud.google.com (progetto qualsiasi → abilita "YouTube Data API v3" → Credenziali → Crea chiave API) e mettila su Vercel come YOUTUBE_API_KEY.',
+      profilo: 'https://www.youtube.com/@wipguide',
+    };
+    try {
+      const base = 'https://www.googleapis.com/youtube/v3';
+      const ch = await axios.get(`${base}/channels`, {
+        params: { part: 'statistics,snippet', id: SOCIAL_YT_CHANNEL_ID, key }, timeout: 10000
+      });
+      const canale = ch.data?.items?.[0];
+      if (!canale) return { stato: 'errore', errore: `canale ${SOCIAL_YT_CHANNEL_ID} non trovato`, profilo: 'https://www.youtube.com/@wipguide' };
+      const st = canale.statistics || {};
+
+      // Ultimi video (search) + statistiche dei singoli (videos). Un canale
+      // appena nato non ha video: le due chiamate degradano a lista vuota.
+      let video: any[] = [];
+      try {
+        const sr = await axios.get(`${base}/search`, {
+          params: { part: 'snippet', channelId: SOCIAL_YT_CHANNEL_ID, order: 'date', maxResults: 10, type: 'video', key }, timeout: 10000
+        });
+        const ids = (sr.data?.items || []).map((v: any) => v?.id?.videoId).filter(Boolean);
+        if (ids.length > 0) {
+          const vr = await axios.get(`${base}/videos`, {
+            params: { part: 'statistics,snippet', id: ids.join(','), key }, timeout: 10000
+          });
+          video = (vr.data?.items || []).map((v: any) => ({
+            id: v.id,
+            titolo: v.snippet?.title,
+            pubblicatoIl: v.snippet?.publishedAt,
+            views: Number(v.statistics?.viewCount ?? 0),
+            likes: Number(v.statistics?.likeCount ?? 0),
+            url: `https://www.youtube.com/watch?v=${v.id}`,
+          }));
+        }
+      } catch (e: any) {
+        console.error('[Social] YouTube video list:', e?.message);
+      }
+
+      return {
+        stato: 'ok',
+        profilo: 'https://www.youtube.com/@wipguide',
+        nome: canale.snippet?.title || 'WIP.guide',
+        iscritti: Number(st.subscriberCount ?? 0),
+        viewsTotali: Number(st.viewCount ?? 0),
+        numeroVideo: Number(st.videoCount ?? 0),
+        video,
+      };
+    } catch (e: any) {
+      return { stato: 'errore', errore: e?.response?.data?.error?.message || e?.message, profilo: 'https://www.youtube.com/@wipguide' };
+    }
+  }
+
+  async function socialMeta() {
+    const pageId = process.env.FB_PAGE_ID || '61594265810569';
+    const token = process.env.FB_PAGE_TOKEN;
+    if (!token) return {
+      stato: 'chiave_mancante',
+      nota: 'Su developers.facebook.com crea un\'app Business, collega la pagina «WIP.guide», poi da Graph API Explorer genera un Page Access Token (permessi pages_read_engagement, read_insights) e rendilo long-lived. Mettilo su Vercel come FB_PAGE_TOKEN.',
+      profilo: `https://www.facebook.com/${pageId}`,
+      profiloInstagram: 'https://www.instagram.com/wipguide',
+    };
+    try {
+      const g = 'https://graph.facebook.com/v21.0';
+      const r = await axios.get(`${g}/${pageId}`, {
+        params: { fields: 'name,link,fan_count,followers_count,instagram_business_account{username,followers_count,media_count}', access_token: token },
+        timeout: 10000
+      });
+      const p = r.data || {};
+      const ig = p.instagram_business_account || null;
+      return {
+        stato: 'ok',
+        profilo: p.link || `https://www.facebook.com/${pageId}`,
+        nome: p.name || 'WIP.guide',
+        follower: Number(p.followers_count ?? 0),
+        fan: Number(p.fan_count ?? 0),
+        instagram: ig ? {
+          stato: 'ok',
+          username: ig.username || 'wipguide',
+          follower: Number(ig.followers_count ?? 0),
+          post: Number(ig.media_count ?? 0),
+          profilo: `https://www.instagram.com/${ig.username || 'wipguide'}`,
+        } : {
+          stato: 'chiave_mancante',
+          nota: 'Nessun account Instagram business collegato alla pagina: da Meta Business Suite collega @wipguide alla pagina «WIP.guide» (l\'account deve essere Business o Creator).',
+          profilo: 'https://www.instagram.com/wipguide',
+        },
+      };
+    } catch (e: any) {
+      return {
+        stato: 'errore',
+        errore: e?.response?.data?.error?.message || e?.message,
+        profilo: `https://www.facebook.com/${pageId}`,
+        profiloInstagram: 'https://www.instagram.com/wipguide',
+      };
+    }
+  }
+
+  // TikTok non espone statistiche pubbliche senza un'app approvata: i numeri
+  // si inseriscono a mano dal pannello (POST /api/admin/social-stats/manual).
+  async function socialTikTok() {
+    const row = await getFromCache('social_manual');
+    const man = (row?.text_content && typeof row.text_content === 'object') ? row.text_content : {};
+    const tk = man.tiktok || null;
+    return {
+      stato: 'manuale',
+      profilo: 'https://www.tiktok.com/@wipguide',
+      nota: 'TikTok non ha una API pubblica senza approvazione: aggiorna i numeri a mano dal pannello.',
+      follower: Number(tk?.follower ?? 0),
+      miPiace: Number(tk?.miPiace ?? 0),
+      video: Number(tk?.video ?? 0),
+      aggiornatoIl: tk?.aggiornatoIl || null,
+    };
+  }
+
+  // Visite del sito da PostHog (stesse chiavi di lettura di monitoring-status).
+  // NB: il client non manda $pageview in autocapture (scelta deliberata, vedi
+  // CLAUDE.md): finché non lo si attiva, qui si vede 0 — non è un errore.
+  async function socialSito() {
+    const key = process.env.POSTHOG_PERSONAL_API_KEY;
+    const projectId = process.env.POSTHOG_PROJECT_ID;
+    if (!key || !projectId) return {
+      stato: 'chiave_mancante',
+      nota: 'Su eu.posthog.com crea una Personal API Key (Settings → Personal API Keys) e mettila su Vercel come POSTHOG_PERSONAL_API_KEY insieme a POSTHOG_PROJECT_ID.',
+    };
+    try {
+      const conta = async (giorni: number) => {
+        const r = await axios.post(`https://eu.posthog.com/api/projects/${projectId}/query/`, {
+          query: { kind: 'HogQLQuery', query: `SELECT count() FROM events WHERE event = '$pageview' AND timestamp > now() - INTERVAL ${giorni} DAY` }
+        }, { headers: { Authorization: `Bearer ${key}` }, timeout: 12000 });
+        return Number(r.data?.results?.[0]?.[0] ?? 0);
+      };
+      const [g7, g30] = await Promise.all([conta(7), conta(30)]);
+      return { stato: 'ok', pageview7gg: g7, pageview30gg: g30 };
+    } catch (e: any) {
+      return { stato: 'errore', errore: e?.response?.data?.detail || e?.message };
+    }
+  }
+
+  // --- RICAVI: Stripe (incassi) + Supabase (crediti) -----------------------
+  async function launchRicavi() {
+    const risultato: any = { stato: 'ok' };
+
+    // Stripe: incassato lordo 7/30 giorni dai charge riusciti.
+    if (!stripeClient) {
+      risultato.stripe = { stato: 'chiave_mancante', nota: 'Manca STRIPE_SECRET_KEY su Vercel (dashboard.stripe.com → Developers → API keys).' };
+    } else {
+      try {
+        const da30 = Math.floor((Date.now() - 30 * 86400000) / 1000);
+        const da7 = Math.floor((Date.now() - 7 * 86400000) / 1000);
+        // Lancio appena partito: 100 charge in 30 giorni bastano e avanzano.
+        const charges = await stripeClient.charges.list({ created: { gte: da30 }, limit: 100 });
+        const riusciti = (charges.data || []).filter((c: any) => c.status === 'succeeded' && !c.refunded);
+        const somma = (arr: any[]) => arr.reduce((s: number, c: any) => s + (c.amount || 0), 0) / 100;
+        const ultimi7 = riusciti.filter((c: any) => c.created >= da7);
+        risultato.stripe = {
+          stato: 'ok',
+          valuta: riusciti[0]?.currency?.toUpperCase() || 'EUR',
+          incassato7gg: somma(ultimi7),
+          incassato30gg: somma(riusciti),
+          pagamenti7gg: ultimi7.length,
+          pagamenti30gg: riusciti.length,
+          // has_more=true con 100 righe: numeri parziali, lo si dice.
+          approssimato: charges.has_more === true,
+          ultimiPagamenti: riusciti.slice(0, 5).map((c: any) => ({
+            importo: (c.amount || 0) / 100,
+            valuta: c.currency?.toUpperCase(),
+            quando: new Date(c.created * 1000).toISOString(),
+            descrizione: c.description || c.statement_descriptor || null,
+          })),
+        };
+      } catch (e: any) {
+        risultato.stripe = { stato: 'errore', errore: e?.message };
+      }
+    }
+
+    // Crediti: libro mastro credit_transactions (venduti = amount>0 con
+    // type purchase-like, consumati = amount<0). Query leggera: 30 giorni,
+    // colonne minime, limit esplicito.
+    try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      const { data: rows } = await axios.get(
+        `${supabaseUrl}/rest/v1/credit_transactions?select=user_id,amount,type,created_at&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=20000`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 12000 }
+      );
+      const da7 = Date.now() - 7 * 86400000;
+      const agg = (arr: any[]) => {
+        let venduti = 0, consumati = 0;
+        const acquirenti = new Set<string>();
+        for (const r of arr) {
+          const amt = Number(r.amount) || 0;
+          const tipo = String(r.type || '');
+          if (amt > 0 && /purchase|topup|buy|stripe|revenuecat/i.test(tipo)) { venduti += amt; if (r.user_id) acquirenti.add(r.user_id); }
+          else if (amt < 0 || tipo === 'consume') consumati += Math.abs(amt);
+        }
+        return { venduti, consumati, acquirentiUnici: acquirenti.size };
+      };
+      const tutte = Array.isArray(rows) ? rows : [];
+      risultato.crediti = {
+        stato: 'ok',
+        gg7: agg(tutte.filter((r: any) => new Date(r.created_at).getTime() >= da7)),
+        gg30: agg(tutte),
+      };
+    } catch (e: any) {
+      risultato.crediti = { stato: 'errore', errore: e?.message };
+    }
+    return risultato;
+  }
+
+  // --- USO APP: api_usage_logs + user_profiles (query leggere, 1h di cache) ---
+  async function launchUsoApp() {
+    const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+    const risultato: any = { stato: 'ok' };
+    try {
+      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      const { data: rows } = await axios.get(
+        `${supabaseUrl}/rest/v1/api_usage_logs?select=api_name,cost_estimation,user_id,created_at&created_at=gte.${encodeURIComponent(since)}&order=created_at.desc&limit=20000`,
+        { headers, timeout: 12000 }
+      );
+      const tutte = Array.isArray(rows) ? rows : [];
+      const da7 = Date.now() - 7 * 86400000;
+      const agg = (arr: any[]) => {
+        let costo = 0;
+        const perProvider: Record<string, number> = {};
+        const attivi = new Set<string>();
+        for (const r of arr) {
+          const c = Number(r.cost_estimation) || 0;
+          costo += c;
+          const prov = String(r.api_name || 'altro');
+          perProvider[prov] = (perProvider[prov] || 0) + c;
+          if (r.user_id) attivi.add(r.user_id);
+        }
+        return {
+          costo: Math.round(costo * 10000) / 10000,
+          chiamate: arr.length,
+          utentiAttivi: attivi.size,
+          perProvider: Object.fromEntries(Object.entries(perProvider)
+            .sort((a, b) => b[1] - a[1]).slice(0, 8)
+            .map(([k, v]) => [k, Math.round(v * 10000) / 10000])),
+        };
+      };
+      risultato.gg7 = agg(tutte.filter((r: any) => new Date(r.created_at).getTime() >= da7));
+      risultato.gg30 = agg(tutte);
+      risultato.approssimato = tutte.length >= 20000;
+    } catch (e: any) {
+      risultato.stato = 'errore';
+      risultato.errore = e?.message;
+    }
+
+    // Utenti registrati: solo conteggi via header Content-Range (Range 0-0:
+    // il DB conta, non trasferisce righe — niente scan pesanti lato nostro).
+    try {
+      const conta = async (filtro: string) => {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?select=id${filtro}`, {
+          headers: { ...headers, Prefer: 'count=exact', Range: '0-0' },
+          timeout: 10000, validateStatus: (s: number) => s < 500
+        });
+        const range = String(r.headers?.['content-range'] || '');
+        const tot = Number(range.split('/')[1]);
+        return Number.isFinite(tot) ? tot : null;
+      };
+      const since7 = new Date(Date.now() - 7 * 86400000).toISOString();
+      risultato.utentiTotali = await conta('');
+      // created_at potrebbe non esserci su questa tabella: in tal caso null.
+      risultato.utentiNuovi7gg = await conta(`&created_at=gte.${encodeURIComponent(since7)}`).catch(() => null);
+    } catch { /* i contatori restano assenti, la card lo dice */ }
+    return risultato;
+  }
+
+  // --- FUNNEL PRODOTTO: i 3 eventi PostHog scelti a mano (vedi capturaEvento) ---
+  async function launchFunnel() {
+    const key = process.env.POSTHOG_PERSONAL_API_KEY;
+    const projectId = process.env.POSTHOG_PROJECT_ID;
+    if (!key || !projectId) return {
+      stato: 'chiave_mancante',
+      nota: 'Servono POSTHOG_PERSONAL_API_KEY e POSTHOG_PROJECT_ID (eu.posthog.com → Settings → Personal API Keys).',
+    };
+    try {
+      const eventi = ['audioguide_generated', 'credits_purchased', 'quota_exceeded'];
+      const r = await axios.post(`https://eu.posthog.com/api/projects/${projectId}/query/`, {
+        query: {
+          kind: 'HogQLQuery',
+          query: `SELECT event,
+                    countIf(timestamp > now() - INTERVAL 7 DAY) AS gg7,
+                    countIf(timestamp > now() - INTERVAL 30 DAY) AS gg30
+                  FROM events
+                  WHERE event IN (${eventi.map(e => `'${e}'`).join(',')})
+                    AND timestamp > now() - INTERVAL 30 DAY
+                  GROUP BY event`
+        }
+      }, { headers: { Authorization: `Bearer ${key}` }, timeout: 12000 });
+      const righe = Array.isArray(r.data?.results) ? r.data.results : [];
+      const perEvento: Record<string, { gg7: number; gg30: number }> = {};
+      for (const ev of eventi) perEvento[ev] = { gg7: 0, gg30: 0 };
+      for (const riga of righe) {
+        const nome = String(riga?.[0] || '');
+        if (perEvento[nome]) perEvento[nome] = { gg7: Number(riga?.[1] ?? 0), gg30: Number(riga?.[2] ?? 0) };
+      }
+      return { stato: 'ok', eventi: perEvento };
+    } catch (e: any) {
+      return { stato: 'errore', errore: e?.response?.data?.detail || e?.message };
+    }
+  }
+
+  // --- INSTALL ANDROID: segnaposto documentato -----------------------------
+  // La Play Developer Reporting API non espone un conteggio install semplice
+  // (i report install veri stanno negli export su Google Cloud Storage):
+  // implementarlo bene richiede OAuth service-account + lettura CSV da GCS,
+  // ben oltre il perimetro. Si lascia il segnaposto con le istruzioni.
+  async function launchInstallAndroid() {
+    if (!process.env.PLAY_REPORTING_KEY_JSON) {
+      return {
+        stato: 'chiave_mancante',
+        package: 'com.itaintasca.app',
+        nota: 'Play Console → Impostazioni → Accesso API: crea un service account con ruolo "Visualizza informazioni app e scarica report", scarica la chiave JSON e mettila su Vercel come PLAY_REPORTING_KEY_JSON. Nota: i conteggi install stanno nei report CSV su Google Cloud Storage (bucket pubsite_prod_...), non in una API diretta — per ora si guardano in Play Console → Statistiche.',
+      };
+    }
+    return {
+      stato: 'manuale',
+      package: 'com.itaintasca.app',
+      nota: 'Chiave presente, ma i conteggi install di Play arrivano solo dagli export CSV su Google Cloud Storage: integrazione rimandata. Intanto: Play Console → Statistiche → Acquisizione utenti.',
+    };
+  }
+
+  // --- INSTALL iOS: App Store Connect salesReports (JWT ES256 nativo) ------
+  // jsonwebtoken NON è tra le dipendenze: si firma con crypto (ES256 =
+  // ECDSA P-256 + SHA-256, dsaEncoding ieee-p1363), zero librerie nuove.
+  async function launchInstallIos() {
+    const keyId = process.env.ASC_KEY_ID;
+    const issuerId = process.env.ASC_ISSUER_ID;
+    let privateKey = process.env.ASC_PRIVATE_KEY;
+    if (!keyId || !issuerId || !privateKey) {
+      return {
+        stato: 'chiave_mancante',
+        nota: 'App Store Connect → Users and Access → Integrations → Keys: crea una chiave API (ruolo Sales and Reports), scarica il .p8. Su Vercel: ASC_KEY_ID (ID chiave), ASC_ISSUER_ID (in cima alla pagina Keys), ASC_PRIVATE_KEY (contenuto del .p8, con \\n al posto degli a-capo).',
+      };
+    }
+    try {
+      const cryptoMod = await import('crypto');
+      const zlibMod = await import('zlib');
+      // Le env multiriga su Vercel spesso arrivano con \n letterali.
+      privateKey = privateKey.replace(/\\n/g, '\n');
+      const b64url = (obj: any) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+      const now = Math.floor(Date.now() / 1000);
+      const header = b64url({ alg: 'ES256', kid: keyId, typ: 'JWT' });
+      const payload = b64url({ iss: issuerId, iat: now, exp: now + 10 * 60, aud: 'appstoreconnect-v1' });
+      const firma = cryptoMod.sign('sha256', Buffer.from(`${header}.${payload}`), {
+        key: privateKey, dsaEncoding: 'ieee-p1363' as any
+      }).toString('base64url');
+      const jwt = `${header}.${payload}.${firma}`;
+
+      // Report DAILY degli ultimi 7 giorni (con 2 giorni di ritardo: Apple
+      // pubblica in differita). TSV gzippato; unità con productTypeIdentifier
+      // che inizia per '1' = download/install dell'app.
+      const giorni: string[] = [];
+      for (let i = 2; i < 9; i++) giorni.push(new Date(Date.now() - i * 86400000).toISOString().slice(0, 10));
+      const perGiorno = await Promise.allSettled(giorni.map(async (giorno) => {
+        const r = await axios.get('https://api.appstoreconnect.apple.com/v1/salesReports', {
+          params: {
+            'filter[frequency]': 'DAILY', 'filter[reportDate]': giorno,
+            'filter[reportSubType]': 'SUMMARY', 'filter[reportType]': 'SALES',
+            'filter[vendorNumber]': process.env.ASC_VENDOR_NUMBER || '',
+          },
+          headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/a-gzip' },
+          responseType: 'arraybuffer', timeout: 15000,
+          validateStatus: (s: number) => s === 200 || s === 404,
+        });
+        if (r.status === 404) return { giorno, unita: 0 }; // nessuna vendita quel giorno
+        const tsv = zlibMod.gunzipSync(Buffer.from(r.data)).toString('utf8');
+        const righe = tsv.split('\n').filter(Boolean);
+        const intestazioni = righe[0].split('\t');
+        const iUnits = intestazioni.indexOf('Units');
+        const iTipo = intestazioni.indexOf('Product Type Identifier');
+        let unita = 0;
+        for (const riga of righe.slice(1)) {
+          const campi = riga.split('\t');
+          // '1', '1F', '1T', '1E'... = download app (no IAP, no update '7')
+          if (String(campi[iTipo] || '').startsWith('1')) unita += Number(campi[iUnits]) || 0;
+        }
+        return { giorno, unita };
+      }));
+      const validi = perGiorno.filter((p): p is PromiseFulfilledResult<any> => p.status === 'fulfilled').map(p => p.value);
+      if (validi.length === 0) {
+        const motivo = (perGiorno[0] as any)?.reason?.response?.status === 401
+          ? 'credenziali rifiutate (controlla ASC_KEY_ID/ASC_ISSUER_ID/ASC_PRIVATE_KEY)'
+          : ((perGiorno[0] as any)?.reason?.message || 'nessun report leggibile');
+        return { stato: 'errore', errore: motivo, nota: !process.env.ASC_VENDOR_NUMBER ? 'Manca anche ASC_VENDOR_NUMBER (App Store Connect → Payments and Financial Reports, in alto).' : undefined };
+      }
+      return {
+        stato: 'ok',
+        download7gg: validi.reduce((s, v) => s + v.unita, 0),
+        perGiorno: validi,
+        nota: 'Apple pubblica i report con ~2 giorni di ritardo: la finestra è spostata indietro di conseguenza.',
+      };
+    } catch (e: any) {
+      return { stato: 'errore', errore: e?.message };
+    }
+  }
+
+  // --- ASCOLTI: «Dove ascolta il mondo» ------------------------------------
+  // Schema di user_listening_history VERIFICATO sul DB (02/09/2026): id,
+  // user_id, poi_id, poi_name, category, image_url, listened_at, created_at.
+  // La città NON è in tabella: si ricava da shared_pois con una in.() sui
+  // soli poi_id coinvolti (mai scan — incidente atlante docet). Conteggi via
+  // header Content-Range, righe con filtro temporale + limit esplicito.
+  async function launchAscolti() {
+    const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+    try {
+      const conta = async (giorni: number) => {
+        const since = new Date(Date.now() - giorni * 86400000).toISOString();
+        const r = await axios.get(`${supabaseUrl}/rest/v1/user_listening_history?select=id&listened_at=gte.${encodeURIComponent(since)}`, {
+          headers: { ...headers, Prefer: 'count=exact', Range: '0-0' },
+          timeout: 10000, validateStatus: (s: number) => s === 200 || s === 206
+        });
+        const tot = Number(String(r.headers?.['content-range'] || '').split('/')[1]);
+        return Number.isFinite(tot) ? tot : 0;
+      };
+      const [ascolti7gg, ascolti30gg] = await Promise.all([conta(7), conta(30)]);
+
+      // Righe degli ultimi 30 giorni: colonne minime, limit esplicito.
+      const since30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const { data: rows } = await axios.get(
+        `${supabaseUrl}/rest/v1/user_listening_history?select=poi_id,poi_name&listened_at=gte.${encodeURIComponent(since30)}&order=listened_at.desc&limit=5000`,
+        { headers, timeout: 12000 }
+      );
+      const tutte = Array.isArray(rows) ? rows : [];
+      const perPoi = new Map<string, { nome: string; ascolti: number }>();
+      for (const r of tutte) {
+        const id = String(r.poi_id || '');
+        if (!id) continue;
+        const cur = perPoi.get(id) || { nome: String(r.poi_name || id), ascolti: 0 };
+        cur.ascolti += 1;
+        perPoi.set(id, cur);
+      }
+      const ordinati = [...perPoi.entries()].sort((a, b) => b[1].ascolti - a[1].ascolti);
+
+      // Città/paese: join leggero, SOLO gli id ascoltati (tetto 150).
+      const idCoinvolti = ordinati.slice(0, 150).map(([id]) => id);
+      const luogoPerId = new Map<string, { citta: string | null; paese: string | null }>();
+      if (idCoinvolti.length > 0) {
+        try {
+          const inList = idCoinvolti.map(id => `"${id.replace(/["\\,()]/g, '')}"`).join(',');
+          const { data: pois } = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?select=id,city,country&id=in.(${encodeURIComponent(inList)})&limit=150`,
+            { headers, timeout: 12000 }
+          );
+          for (const p of (Array.isArray(pois) ? pois : [])) {
+            luogoPerId.set(String(p.id), { citta: p.city || null, paese: p.country || null });
+          }
+        } catch { /* niente città: la classifica resta coi soli nomi */ }
+      }
+
+      const topPoi = ordinati.slice(0, 10).map(([id, v]) => ({
+        poiId: id,
+        nome: v.nome,
+        ascolti: v.ascolti,
+        citta: luogoPerId.get(id)?.citta ?? null,
+        paese: luogoPerId.get(id)?.paese ?? null,
+      }));
+
+      const perCitta = new Map<string, { citta: string; paese: string | null; ascolti: number }>();
+      const perPaese = new Map<string, number>();
+      for (const [id, v] of ordinati) {
+        const luogo = luogoPerId.get(id);
+        if (!luogo) continue;
+        if (luogo.citta) {
+          const k = `${luogo.citta}|${luogo.paese || ''}`;
+          const cur = perCitta.get(k) || { citta: luogo.citta, paese: luogo.paese, ascolti: 0 };
+          cur.ascolti += v.ascolti;
+          perCitta.set(k, cur);
+        }
+        if (luogo.paese) perPaese.set(luogo.paese, (perPaese.get(luogo.paese) || 0) + v.ascolti);
+      }
+
+      return {
+        stato: 'ok',
+        ascolti7gg,
+        ascolti30gg,
+        topPoi,
+        citta: [...perCitta.values()].sort((a, b) => b.ascolti - a.ascolti).slice(0, 10),
+        paesi: [...perPaese.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+          .map(([paese, ascolti]) => ({ paese, ascolti })),
+        // has_more sul limit: numeri parziali, la card lo dice.
+        approssimato: tutte.length >= 5000,
+      };
+    } catch (e: any) {
+      return { stato: 'errore', errore: e?.message };
+    }
+  }
+
+  // --- RECENSIONI STORE ----------------------------------------------------
+  // App Store: feed RSS pubblico, zero chiavi. L'app id NUMERICO Apple non è
+  // da nessuna parte nel repo (la scheda è ancora in revisione, verificato
+  // 02/09/2026): si legge dalla env APP_STORE_ID quando esisterà. Play: le
+  // recensioni passano solo dalla Google Play Developer API (service
+  // account) — segnaposto documentato, come per gli install Android.
+  async function launchRecensioni() {
+    const risultato: any = { stato: 'ok' };
+    const appleId = String(process.env.APP_STORE_ID || '').replace(/\D/g, '');
+    if (!appleId) {
+      risultato.appStore = {
+        stato: 'chiave_mancante',
+        nota: 'Manca APP_STORE_ID su Vercel: quando la scheda App Store sarà pubblica, l\'id numerico sta nell\'URL apps.apple.com/it/app/…/idXXXXXXXXXX (o in App Store Connect → App Information → Apple ID). Il feed recensioni è pubblico: serve solo l\'id, nessuna chiave.',
+      };
+    } else {
+      try {
+        const r = await axios.get(`https://itunes.apple.com/it/rss/customerreviews/id=${appleId}/sortBy=mostRecent/json`, { timeout: 10000 });
+        // La prima entry del feed a volte è la scheda dell'app stessa,
+        // senza im:rating: si filtra su quello.
+        const entries = ([] as any[]).concat(r.data?.feed?.entry || [])
+          .filter((e: any) => e?.['im:rating']?.label);
+        const recensioni = entries.map((e: any) => ({
+          autore: e?.author?.name?.label || 'Anonimo',
+          titolo: String(e?.title?.label || ''),
+          testo: String(e?.content?.label || '').slice(0, 600),
+          stelle: Number(e?.['im:rating']?.label) || 0,
+          versione: e?.['im:version']?.label || null,
+          quando: e?.updated?.label || null,
+        }));
+        const media = recensioni.length
+          ? Math.round((recensioni.reduce((s: number, x: any) => s + x.stelle, 0) / recensioni.length) * 10) / 10
+          : null;
+        risultato.appStore = {
+          stato: 'ok',
+          media,
+          totaleNelFeed: recensioni.length,
+          ultime: recensioni.slice(0, 5),
+          nota: recensioni.length === 0
+            ? 'Nessuna recensione ancora nel feed pubblico: normale a scheda appena uscita.'
+            : 'Media calcolata sulle recensioni del feed pubblico (le più recenti), non su tutto lo storico.',
+        };
+      } catch (e: any) {
+        risultato.appStore = { stato: 'errore', errore: e?.message };
+      }
+    }
+    risultato.play = {
+      stato: 'manuale',
+      package: 'com.itaintasca.app',
+      nota: 'Le recensioni Play si leggono solo con la Google Play Developer API (service account con accesso alle recensioni): integrazione rimandata. Intanto: Play Console → Valutazioni e recensioni.',
+    };
+    return risultato;
+  }
+
+  app.get("/api/admin/social-stats", rateLimiter, requireAdmin, async (req, res) => {
+    try {
+      const fresh = String(req.query.fresh || '') === '1';
+      if (!fresh) {
+        const cached = await getFromCache('social_stats');
+        const snap = cached?.text_content;
+        // TTL 1 ora sul timestamp scritto dentro lo snapshot stesso.
+        if (snap?.generatoIl && Date.now() - new Date(snap.generatoIl).getTime() < 3600000) {
+          return res.json({ ...snap, dallaCache: true });
+        }
+      }
+      const [youtube, meta, tiktok, sito, ricavi, usoApp, funnel, installAndroid, installIos, ascolti, recensioni] = await Promise.allSettled([
+        socialYouTube(), socialMeta(), socialTikTok(), socialSito(),
+        launchRicavi(), launchUsoApp(), launchFunnel(), launchInstallAndroid(), launchInstallIos(),
+        launchAscolti(), launchRecensioni()
+      ]);
+      const esitoSocial = (r: PromiseSettledResult<any>) =>
+        r.status === 'fulfilled' ? r.value : { stato: 'errore', errore: (r as any).reason?.message };
+      const snapshot = {
+        generatoIl: new Date().toISOString(),
+        youtube: esitoSocial(youtube),
+        meta: esitoSocial(meta),
+        tiktok: esitoSocial(tiktok),
+        sito: esitoSocial(sito),
+        ricavi: esitoSocial(ricavi),
+        usoApp: esitoSocial(usoApp),
+        funnel: esitoSocial(funnel),
+        installAndroid: esitoSocial(installAndroid),
+        installIos: esitoSocial(installIos),
+        ascolti: esitoSocial(ascolti),
+        recensioni: esitoSocial(recensioni),
+      };
+      await saveToCache('social_stats', 'social', snapshot);
+      res.json({ ...snapshot, dallaCache: false });
+    } catch (e: any) {
+      console.error('[Social stats] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'social stats fallite' });
+    }
+  });
+
+  // Numeri inseriti a mano (per ora solo TikTok). Persistiti in api_cache
+  // ('social_manual'): sopravvivono ai cold start, niente migration.
+  app.post("/api/admin/social-stats/manual", rateLimiter, requireAdmin, async (req, res) => {
+    try {
+      const pulisci = (v: any) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+      };
+      const tk = req.body?.tiktok || {};
+      const row = await getFromCache('social_manual');
+      const man = (row?.text_content && typeof row.text_content === 'object') ? row.text_content : {};
+      man.tiktok = {
+        follower: pulisci(tk.follower),
+        miPiace: pulisci(tk.miPiace),
+        video: pulisci(tk.video),
+        aggiornatoIl: new Date().toISOString(),
+      };
+      await saveToCache('social_manual', 'social', man);
+      // Invalida lo snapshot aggregato: al prossimo giro riparte fresco.
+      const snapRow = await getFromCache('social_stats');
+      if (snapRow?.text_content) {
+        await saveToCache('social_stats', 'social', { ...snapRow.text_content, generatoIl: null });
+      }
+      res.json({ ok: true, tiktok: man.tiktok });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'salvataggio manuale fallito' });
+    }
   });
 
   // --- CANARINO API: smoke test schedulato (cron Vercel, vedi vercel.json) ---
@@ -17651,15 +18467,12 @@ ${extract || "Nessuna fonte trovata"}
 </materiale>`;
           }
 
-          // `ultimaSpiaggiaPagante` SOLO quando c'e' davvero qualcuno che
-          // aspetta (31/08/2026). Questa rotta ha due usi: l'utente che apre
-          // la scheda di un POI nuovo — e allora sta fermo a guardare uno
-          // schermo vuoto — e gli script di arricchimento di sfondo, che
-          // passano `engine` esplicitamente e per i quali la latenza non la
-          // vede nessuno. Il flag si accende solo nel primo caso, cosi' i
-          // lavori di massa non finiscono mai su un motore a pagamento.
-          const utenteInAttesa = !requestedEngine;
-          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
+          // Solo motori gratuiti (02/09/2026): `poiEnrichEngine` e' groq,
+          // agnes o cerebras, e la coda di ripiego non contiene DeepSeek.
+          // Dal 31/08 al 02/09 il flag `ultimaSpiaggiaPagante` lo faceva
+          // entrare "quando c'e' un utente che aspetta": 14.423 chiamate su
+          // questa sola rotta, tutte con userId nullo. Revocato.
+          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" } }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
           const parsed = parseSafeJSON(aiResponse.data || "{}");
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale
@@ -22150,8 +22963,16 @@ Usa SEMPRE E SOLO questo schema JSON:
       let finalPlanStr = null;
       for (let i = 0; i < 5; i++) {
         let responseMessage: any;
+        // Chat sull'itinerario: c'e' un utente che aspetta la risposta, quindi
+        // rientra nella parte in diretta e DeepSeek resta (02/09/2026).
+        // ATTENZIONE, pero': questo ciclo chiama DeepSeek DIRETTAMENTE, fuori
+        // da callUniversalAi. Non ha ripiego sui gratuiti se DeepSeek cade
+        // (fa throw), non scrive NIENTE in api_usage_logs — quindi il suo
+        // costo non compare in nessun cruscotto — e puo' fare fino a 5 giri di
+        // tool-calling per singolo messaggio. Andrebbe portato dentro
+        // callUniversalAi come tutti gli altri.
         const deepseekKey = process.env.DEEPSEEK_API_KEY;
-        
+
         if (deepseekKey) {
           try {
             const dsResponse = await axios.post("https://api.deepseek.com/chat/completions", {
