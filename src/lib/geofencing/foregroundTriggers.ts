@@ -164,7 +164,10 @@ function triggerRadiusFor(poi: any, modo: TransportMode, livello?: LivelloFiduci
   const rawTrigger = Number(poi?.geofence_radius) || 0;
   const rawAlert = Number(poi?.alert_radius) || 0;
   const hasEntrance = !!(Number(poi?.entrance_lat) && Number(poi?.entrance_lon));
-  const calibrato = hasEntrance && rawTrigger > 0;
+  // 01/09/2026: non piu' gated su hasEntrance - un raggio grezzo dal DB e'
+  // una misura (o un default di categoria Overture) anche senza entrance
+  // geocodificato, vedi guideSettings.ts::radiiForTransport.
+  const calibrato = rawTrigger > 0;
 
   const r = radiiForTransport(modo, poi?.category, {
     geofenceRadius: rawTrigger || null,
@@ -183,14 +186,12 @@ function triggerRadiusFor(poi: any, modo: TransportMode, livello?: LivelloFiduci
   if (CATEGORY_RADIUS_M[cat]) out = Math.max(out, CATEGORY_RADIUS_M[cat]);
   if (poi?.is_gem) out = Math.max(out, CATEGORY_RADIUS_M.gemme);
 
-  // 23/08/2026 — E ADESSO LA FIDUCIA NEL PUNTO. Un cerchio non e' fatto solo
-  // di raggio: e' fatto di raggio E di centro. Con un centro incerto (il
-  // baricentro di un poligono) il raggio di categoria non basta: il POI viene
-  // marcato «superato» e non parla MAI. Vedi fiduciaPunto/fattoreFiducia in
-  // guideSettings.ts per i numeri (×2 sul centroide puro — cioe' quando NON
-  // abbiamo un punto — e nessun allargamento quando un punto c'e', che sia il
-  // muro, il portone o l'indirizzo; tetti 80 m a piedi e 120 m in auto). Il
-  // bonus gemme resta dov'e': sta sotto i tetti e non viene mai stretto.
+  // 23/08/2026, rivisto 01/09/2026 — LA FIDUCIA NEL PUNTO. Un cerchio non e'
+  // fatto solo di raggio: e' fatto di raggio E di centro. `fiduciaPunto`
+  // resta per sapere se il centro e' un muro/porta/indirizzo o un centroide
+  // incerto, ma `fattoreFiducia` non allarga piu' nessun livello (decisione
+  // utente 01/09/2026: mai raddoppiare per incertezza). Il bonus gemme resta
+  // dov'e': sta sotto i tetti e non viene mai stretto.
   const liv = livello ?? fiduciaPunto(poi, {
     haPerimetro: perimetroNoto(String(poi?.id ?? '')),
     puntoIndirizzoPronto: !!puntoStradaInCache(poi),

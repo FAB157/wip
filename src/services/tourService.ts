@@ -1551,6 +1551,39 @@ class TourService {
     };
   }
 
+  /**
+   * LE TAPPE DA CONSEGNARE AL NAVIGATORE IN AUTO (01/09/2026, committente:
+   * «in auto deve comprendere tutte le tappe/POI del giro, come quando si
+   * attiva dall'itinerario»). Il tasto del radar consegnava una meta sola: in
+   * macchina non serve a niente, si ricomincia da capo a ogni tappa.
+   *
+   * Giro in corso: quelle che RESTANO, dalla corrente in poi e nell'ordine di
+   * cammino — le fatte, le saltate e le escluse non si ripassano. Nessun giro
+   * ancora creato: la bozza scelta nel radar, nel suo ordine. Meno di due
+   * tappe torna null: e` navigazione singola e la fa NavChoiceSheet com'era.
+   *
+   * Il punto di arrivo e` la PORTA (`ingresso`) quando la si conosce, come nel
+   * resto dell'app; altrimenti il centroide.
+   */
+  sequenzaPerNavigatore(): { id: string | number; name: string; lat: number; lon: number }[] | null {
+    const punto = (t: TappaGiro) => ({
+      id: t.id,
+      name: t.nome,
+      lat: t.ingresso?.lat ?? t.lat,
+      lon: t.ingresso?.lon ?? t.lon,
+    });
+    const giro = this.giro;
+    if (giro && !this.sospeso) {
+      const restanti = giro.ordine
+        .slice(this.stato.tappaCorrente)
+        .map(i => giro.tappe[i])
+        .filter(t => t && !t.esclusa && !t.fatta && !t.saltata);
+      return restanti.length > 1 ? restanti.map(punto) : null;
+    }
+    const bozza = this.bozzaSequenza();
+    return bozza.length > 1 ? bozza.map(punto) : null;
+  }
+
   /** Un giro sospeso non e` "in corso": il driver non deve toccarlo. */
   inCorso() { return !!this.giro && !this.sospeso; }
   /** C'e` un giro in memoria, anche se sospeso (per la ripresa e i salvataggi). */

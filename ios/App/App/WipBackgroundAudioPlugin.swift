@@ -284,6 +284,13 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // (LoudnessEnhancer/EQ) e sul web (grafo WebAudio). Con AVPlayer non
         // c'è un EQ applicabile senza riscrivere il playback su AVAudioEngine:
         // qui è un no-op deliberato, il JS non deve fallire.
+        //
+        // Ma il tasto non deve mentire (01/09/2026): se qualcuno lo accende,
+        // si dichiara subito indisponibile e il JS lo rispegne — meglio un
+        // tasto che si rifiuta di uno acceso su un effetto che non c'è.
+        if call.getBool("enabled") == true {
+            notifyListeners("megaphoneUnavailable", data: [:])
+        }
         call.resolve()
     }
 

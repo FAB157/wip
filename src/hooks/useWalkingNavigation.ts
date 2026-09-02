@@ -209,6 +209,56 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // restava aperta per sempre, con wake lock e GPS accesi (verificato 22/08).
   const nearbySinceRef = useRef<number | null>(null);
 
+  // IL CRUSCOTTO A DISPLAY SPENTO ANCHE QUI (31/08/2026, collaudo: «il banner
+  // blu della navigazione non rimane live quando si spenge il display»). Il
+  // giro lo faceva gia' (App.tsx → locationService.updateNavBanner: notifica
+  // del foreground service su Android, Live Activity su iOS, notifica locale
+  // di ripiego); il WIP Nav verso il singolo POI postava solo la notifica
+  // della svolta pronunciata — tra una svolta e l'altra, a schermo spento,
+  // niente. Stessa firma-throttle del giro: si riscrive solo quando cambia
+  // qualcosa che si legge, non a ogni fix GPS.
+  const bannerFirmaRef = useRef('');
+  const aggiornaBannerNav = (
+    t: NavTarget,
+    istruzione: string | null,
+    metriAllaSvolta: number | null,
+    metriResidui: number | null,
+    etaSec: number | null,
+  ) => {
+    const dist = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
+    const nome = t.poiName || '';
+    const titolo = `${nome}${metriResidui != null ? `${nome ? ' · ' : ''}${dist(metriResidui)}` : ''}`;
+    const eta = etaSec != null && etaSec > 0
+      ? new Date(Date.now() + etaSec * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+      : '';
+    const righe: string[] = [];
+    if (istruzione) righe.push(`${istruzione}${metriAllaSvolta != null && metriAllaSvolta > 0 ? ` · ${dist(metriAllaSvolta)}` : ''}`);
+    if (eta) righe.push(`~${eta}`);
+    const firma = `${nome}|${istruzione || ''}|${Math.round((metriAllaSvolta ?? -1) / 50)}|${Math.round((metriResidui ?? 0) / 100)}`;
+    if (firma === bannerFirmaRef.current) return;
+    bannerFirmaRef.current = firma;
+    // Gli stessi campi separati del giro: li impagina la Live Activity iOS.
+    locationService.updateNavBanner(titolo, righe.join('\n'), true, {
+      nomeTappa: nome,
+      indiceTappa: 1,
+      tappeTotali: 1,
+      metriAllaTappa: metriResidui ?? -1,
+      istruzione: istruzione || '',
+      metriAllaSvolta: metriAllaSvolta ?? -1,
+      metriRimanenti: metriResidui ?? 0,
+      eta,
+      nomeProssima: '',
+      foto: '',
+    }).catch(() => {});
+  };
+  const spegniBannerNav = () => {
+    bannerFirmaRef.current = '';
+    // attivo=false: su Android la notifica del servizio torna al testo del
+    // radar, su iOS si chiude la Live Activity, e la notifica locale di
+    // ripiego viene cancellata (lo fa updateNavBanner stesso).
+    locationService.updateNavBanner('', '', false).catch(() => {});
+  };
+
   const releaseWakeLock = () => {
     try { wakeLockRef.current?.release?.(); } catch { /* già rilasciato */ }
     wakeLockRef.current = null;
@@ -425,8 +475,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     recalcBackoffRef.current = 0;
     speedSamplesRef.current = [];
     lastFixRef.current = null;
-    // La notifica dell'ultima svolta non deve restare nel centro notifiche.
-    locationService.cancelNavNotification().catch(() => {});
+    // La notifica dell'ultima svolta non deve restare nel centro notifiche,
+    // e il banner nativo (FGS Android / Live Activity iOS) va spento, non
+    // lasciato fermo sull'ultimo stato per sempre.
+    spegniBannerNav();
     releaseWakeLock();
     setState('idle');
     setCurrentInstruction(null);
@@ -501,9 +553,14 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // ETA dalla durata del router (salite, scale, ZTL) quando c'e'; la
       // velocita' fissa resta solo come riserva. Prima `duration` arrivava e
       // veniva buttata: l'orario d'arrivo era sempre "distanza / 4,7 km/h".
-      setEtaSeconds(Math.round(route.duration > 0 ? route.duration : route.distance / WALK_SPEED_MS));
+      const etaIniziale = Math.round(route.duration > 0 ? route.duration : route.distance / WALK_SPEED_MS);
+      setEtaSeconds(etaIniziale);
       setProgress(0);
       nearbySinceRef.current = null;
+      // Il cruscotto sulla lock screen parte SUBITO, non alla prima svolta:
+      // chi mette il telefono in tasca appena premuto Avvia deve gia' vederlo.
+      bannerFirmaRef.current = '';
+      aggiornaBannerNav(target, first?.instruction ?? null, null, Math.round(route.distance), etaIniziale);
       acquireWakeLock();
 
       // Sottoscrizione al flusso GPS condiviso
@@ -537,14 +594,16 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const remaining = Math.max(nearest.remaining, 0);
         const dDestAir = haversineMeters(here.lat, here.lon, t.lat, t.lon);
         const dDest = remaining;
-        setDistanceToDestination(Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist)));
+        const metriResidui = Math.round(Math.min(Math.max(dDest, dDestAir), dDest + nearest.dist));
+        setDistanceToDestination(metriResidui);
         // ETA = residuo / velocita' REALE dell'utente (media mobile degli
         // ultimi fix, ITI-11): chi cammina piano o si ferma alle vetrine
         // vedeva un orario d'arrivo che non arrivava mai. Riserva: velocita'
         // media del percorso secondo il router (sente salite e scalinate),
         // poi 1,3 m/s.
         const velocitaRotta = r.duration > 0 && r.distance > 0 ? Math.min(2, Math.max(0.6, r.distance / r.duration)) : WALK_SPEED_MS;
-        setEtaSeconds(Math.round((dDest + nearest.dist) / (velocitaStimata ?? velocitaRotta)));
+        const etaSec = Math.round((dDest + nearest.dist) / (velocitaStimata ?? velocitaRotta));
+        setEtaSeconds(etaSec);
         setProgress(Math.min(1, Math.max(0, 1 - dDest / routeTotalRef.current)));
 
         // Aggancio al tracciato (origine personalizzata): da qui in poi
@@ -572,6 +631,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           setState('arrived');
           setProgress(1);
           setCurrentManeuver({ type: 'arrive' });
+          // A destinazione il cruscotto si chiude: Live Activity/notifica via.
+          spegniBannerNav();
           releaseWakeLock();
           const arriveStep = r.steps[r.steps.length - 1];
           const arrivePhrase = arriveStep?.instruction ||
@@ -603,15 +664,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               setCurrentInstruction(step.instruction);
               setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
               speakInstruction(step.instruction, language);
-              // Notifica locale per il display spento. L'ISTRUZIONE e` il
-              // titolo (28/08/2026): con «Indicazione stradale» come titolo e
-              // «gira a sinistra» sotto, sulla lock screen si leggeva prima
-              // l'etichetta e poi la cosa che conta. La via, se c'e`, va nel
-              // corpo: «gira a sinistra» da solo non dice dove.
-              locationService.sendLocalNotification(
-                step.instruction,
-                [step.name, getTranslation('nav_indicazione', (language || 'it').toUpperCase() as Language)].filter(Boolean).join(' · '),
-              );
+              // (31/08/2026) Al posto della sola notifica locale della svolta
+              // c'e' il cruscotto persistente: FGS Android / Live Activity
+              // iOS, con la notifica locale come ripiego DENTRO updateNavBanner.
+              aggiornaBannerNav(t, step.instruction, 0, metriResidui, etaSec);
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;
@@ -635,6 +691,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             setDistanceToNext(Math.round(dLungoStrada));
             setCurrentInstruction(step.instruction);
             setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
+            aggiornaBannerNav(t, step.instruction, Math.round(dLungoStrada), metriResidui, etaSec);
             break;
           }
         }
@@ -646,6 +703,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // Cleanup su unmount
   useEffect(() => () => {
     unsubRef.current?.();
+    // Smontaggio a navigazione attiva: il banner non deve restare appeso.
+    // Solo se QUESTA navigazione era in corso — non si tocca quello del giro.
+    if (targetRef.current) {
+      bannerFirmaRef.current = '';
+      locationService.updateNavBanner('', '', false).catch(() => {});
+    }
     unsubRef.current = null;
     releaseWakeLock();
     emitRoute([], false);

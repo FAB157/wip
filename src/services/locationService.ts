@@ -52,6 +52,12 @@ export interface AudioState {
   progress: number;
   playbackSpeed: number;
   isMegaphone: boolean;
+  /**
+   * false quando il dispositivo ha gia' rifiutato l'effetto (audiofx assenti,
+   * iOS, niente WebAudio): la scheda disabilita il tasto invece di accenderlo
+   * su un effetto che non c'e' (01/09/2026).
+   */
+  megaphoneSupported: boolean;
   /** 🎭 Duetto: indice della battuta in riproduzione (-1 = non è un duetto). */
   duetIndex: number;
 }
@@ -153,6 +159,9 @@ class LocationService {
     progress: 0,
     playbackSpeed: 1,
     isMegaphone: false,
+    // Si parte ottimisti: se l'effetto sia applicabile si scopre solo
+    // provandolo, e si spegne al primo NO del dispositivo.
+    megaphoneSupported: true,
     duetIndex: -1
   };
 
@@ -465,6 +474,14 @@ class LocationService {
         if (!this.isNativePlayback) return;
         this.handlePlaybackFinished();
       });
+
+      // IL TASTO NON MENTE (01/09/2026). Se il dispositivo non espone gli
+      // audiofx (o siamo su iOS, dove l'effetto non c'e'), il nativo lo dice e
+      // il megafono si rispegne da solo: meglio un tasto che si rifiuta di uno
+      // acceso su un effetto che non arrivera' mai.
+      WipBackgroundAudio.addListener('megaphoneUnavailable', () => {
+        this.megafonoNonDisponibile();
+      });
     } catch (e) {
       console.warn('[LocationService] Native audio listeners setup failed', e);
     }
@@ -552,7 +569,28 @@ class LocationService {
     this.notifyAudioState();
   }
 
+  /**
+   * IL TASTO NON MENTE (01/09/2026). Il dispositivo ha rifiutato l'effetto:
+   * si spegne il megafono e lo si segna come non disponibile, cosi' la scheda
+   * disabilita il tasto. L'avviso si mostra solo se l'utente l'aveva davvero
+   * appena chiesto: se il NO arriva da un riallineamento in sottofondo non
+   * serve interrompere nessuno.
+   */
+  private megafonoNonDisponibile(avvisa = true) {
+    this.audioState.megaphoneSupported = false;
+    this.audioState.isMegaphone = false;
+    this.notifyAudioState();
+    if (!avvisa) return;
+    try {
+      window.dispatchEvent(new CustomEvent('audioguide-status', {
+        detail: getTranslation('sk_megafono_non_disponibile', this.language),
+      }));
+    } catch { /* fuori dal browser */ }
+  }
+
   public setMegaphone(enabled: boolean) {
+    // Gia' rifiutato una volta: non si riaccende a vuoto.
+    if (enabled && !this.audioState.megaphoneSupported) { this.megafonoNonDisponibile(); return; }
     this.audioState.isMegaphone = enabled;
     if (enabled) {
       this.initAudioContext(); // aggancia il grafo solo ora che serve davvero
@@ -625,15 +663,30 @@ class LocationService {
       }
     } catch (e) {
       console.error("[LocationService] AudioContext init failed", e);
+      // Senza grafo WebAudio il megafono non e' applicabile: il tasto si
+      // spegne invece di restare acceso su niente (01/09/2026). Il pan
+      // direzionale ha gia' il suo ripiego (pan neutro).
+      if (this.audioState.isMegaphone) this.megafonoNonDisponibile();
     }
   }
 
-  /** Scollega il grafo WebAudio (torna a playbackRate nativo sull'<audio>).
+  /** Stacca i filtri (megafono / pan) e rimette l'audio in presa diretta.
    * La MediaElementSource resta nella WeakMap `mediaSources`: è riusabile,
-   * createMediaElementSource è chiamabile una sola volta per elemento. */
+   * createMediaElementSource è chiamabile una sola volta per elemento.
+   *
+   * NON basta scollegare (01/09/2026, «il megafono non funziona»): per la
+   * specifica WebAudio, dal momento in cui si crea la MediaElementSource
+   * l'uscita dell'<audio> passa PER SEMPRE dal grafo e non torna da sola agli
+   * altoparlanti. Lasciando la sorgente scollegata la guida ammutoliva appena
+   * si spegneva il megafono, e restava muta per tutte le tracce successive —
+   * l'elemento è lo stesso, riusato. Quindi qui si BYPASSA: sorgente →
+   * destinazione, senza filtri. */
   private disconnectAudioGraph() {
     if (!this.audioNodes) return;
-    try { this.audioNodes.source.disconnect(); } catch { /* già scollegata */ }
+    try {
+      this.audioNodes.source.disconnect();
+      if (this.audioCtx) this.audioNodes.source.connect(this.audioCtx.destination);
+    } catch { /* già scollegata */ }
     this.audioNodes = null;
     this.audioNodesElement = null;
   }
@@ -904,7 +957,21 @@ class LocationService {
     this.language = language;
     const wasActive = this.isTourActive;
     this.isTourActive = isTourActive;
-    if (isMuted !== undefined) this.isGuideMuted = isMuted;
+    if (isMuted !== undefined && isMuted !== this.isGuideMuted) {
+      this.isGuideMuted = isMuted;
+      // IL MUTE ZITTISCE ADESSO, NON SOLO LA PROSSIMA TRACCIA (31/08/2026,
+      // collaudo: «il tasto mute sopra al tasto della guida non funziona»).
+      // Prima il flag filtrava solo i playAudio futuri: la voce gia' in corso
+      // continuava e il tasto sembrava rotto. Ora ferma traccia e coda (web,
+      // TTS di sistema e player nativo) e azzera la musica d'ambiente.
+      // stopGuideAudio rimette l'ambiente a 0.15: lo si azzera DOPO.
+      if (isMuted) {
+        this.stopGuideAudio();
+        if (this.ambientPlayer) this.ambientPlayer.volume = 0;
+      } else if (this.ambientPlayer) {
+        this.ambientPlayer.volume = 0.15;
+      }
+    }
 
     if (isTourActive) {
       // Banner e musica d'ambiente SOLO alla transizione spento→acceso:
@@ -1225,7 +1292,8 @@ class LocationService {
       if (!this.isOnline || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
       const player = new Audio("https://assets.mixkit.co/music/preview/mixkit-ambient-tone-340.mp3");
       player.loop = true;
-      player.volume = 0.15;
+      // Col mute attivo l'ambiente parte a zero: si rialza al de-mute.
+      player.volume = this.isGuideMuted ? 0 : 0.15;
       player.play().catch(() => {});
       this.ambientPlayer = player;
     } catch (e) {}

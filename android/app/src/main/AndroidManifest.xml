@@ -139,6 +139,13 @@
          per policy Play (ago 2026): il watchdog usa già il fallback inesatto e
          l'arrivo al POI è una notifica heads-up, come su iOS. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- MEGAFONO (01/09/2026, collaudo: «la funzione megafono non funziona»).
+         Equalizer e LoudnessEnhancer sono AudioEffect di sistema e SENZA questo
+         permesso il costruttore lancia: applyMegaphone() finiva nel catch, che
+         logga e rilascia tutto — il tasto si accendeva e la voce restava
+         identica. E' un permesso install-time (nessuna richiesta a runtime,
+         nessuna schermata in piu' per l'utente). -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Gating trigger con sensori (Activity Recognition transition API):
          runtime su API 29+, install-time GMS sulle versioni precedenti.
          Senza il permesso il gating si disattiva e tutto resta come oggi. -->

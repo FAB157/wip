@@ -13,7 +13,7 @@ import com.google.android.gms.location.LocationServices
 import com.itaintasca.app.db.PoiEntity
 
 /**
- * RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026).
+ * RAGGIO IN BASE ALLA FIDUCIA DEL PUNTO (23/08/2026, rivisto 01/09/2026).
  *
  * Un POI non e' un punto: e' un punto di cui sappiamo, caso per caso, quanto
  * fidarci. Il perimetro e' misurato sul muro; l'ingresso e' la porta vera; il
@@ -21,22 +21,19 @@ import com.itaintasca.app.db.PoiEntity
  * vicinanza MISURATA a pochi metri; il centroide e' solo il baricentro di
  * quello che sappiamo, e li' non conosciamo ne' la via ne' la porta.
  *
- * Scala a quattro livelli (la STESSA di src/lib/guideSettings.ts):
- *   perimetro  → nessun allargamento: la misura c'e' gia' (Footprints)
- *   ingresso   → raggio base
- *   indirizzo  → raggio base, STRETTO: quando c'e' un PUNTO quello E' l'arrivo
- *   centroide  → base x2: non si sa dove sia la porta, meglio largo che muto
- *
- * COSA FA GRADINO E COSA NO (regola dell'utente, 23/08/2026). Il criterio non
- * e' la presenza del numero civico nella stringa — quella distinzione
- * civico/via, provata poche ore prima, e' stata TOLTA — ma la presenza del
- * PUNTO (address_point_lat/lon). Un POI con la sola stringa dell'indirizzo e
- * nessun punto e' `centroide`: la stringa non si puo' trasformare in un
- * cerchio.
- *
- * Tetti: trigger 80 m a piedi / 120 m in auto, avviso 250 m / 400 m. Un raggio
- * CALIBRATO dal DB (geofence_radius/alert_radius) vince su tutto: e' misurato,
- * non stimato.
+ * Regola (decisione utente, 01/09/2026): IL RAGGIO NON AUMENTA MAI PER
+ * INCERTEZZA. Fino a ieri un POI a centroide puro raddoppiava il raggio
+ * (fino a un tetto di 250/400 m) per "non perderlo" — ma la maggioranza dei
+ * POI importati da Overture/OSM e' a centroide (nessun entrance_lat/lon
+ * geocodificato) anche quando e' un luogo notissimo con indirizzo (Chiesa
+ * Evangelica ADI, Chiesa San Pietro Avenza, Biblioteca della Camera di
+ * Commercio...), e il raddoppio produceva notifiche "Esplorazione" a
+ * 200-400+ m su POI mai avvicinati. Ora:
+ *   - raggio CALIBRATO in DB (geofence_radius/alert_radius, misurato o
+ *     default di categoria Overture) → vince sempre se presente, puo' solo
+ *     allargare la preferenza utente, mai stringerla;
+ *   - nessun raggio calibrato → resta la preferenza utente cosi' com'e'
+ *     (default 150 m a piedi / 300 m in auto), niente moltiplicatore.
  *
  * UNICO punto di verita': lo usano GeofenceManager (recinti di sistema) e
  * ItaintaBackgroundPoiService (valutazione predittiva). Tre copie della stessa
@@ -44,17 +41,10 @@ import com.itaintasca.app.db.PoiEntity
  */
 object RaggiFiducia {
 
-    enum class Livello { PERIMETRO, INGRESSO, INDIRIZZO, CENTROIDE }
-
     data class Raggi(val alert: Float, val arrivo: Float)
 
     /** Un punto d'arrivo: le coordinate a cui puntare (trigger e navigatore). */
     data class Punto(val lat: Double, val lon: Double)
-
-    const val TETTO_TRIGGER_PIEDI = 80f
-    const val TETTO_TRIGGER_AUTO = 120f
-    const val TETTO_ALERT_PIEDI = 250f
-    const val TETTO_ALERT_AUTO = 400f
 
     /**
      * GUARDIA sul punto dell'indirizzo: oltre questa distanza dal centroide il
@@ -64,23 +54,6 @@ object RaggiFiducia {
      * nel posto sbagliato.
      */
     const val MAX_DISTANZA_PUNTO_INDIRIZZO = 250f
-
-    /**
-     * Moltiplicatore del raggio base per livello di fiducia.
-     *
-     * L'INDIRIZZO CON UN PUNTO E' L'ARRIVO, NON UN'INCERTEZZA (decisione
-     * utente, 23/08/2026): quel punto e' la casa piu' vicina misurata sul dump
-     * Nominatim, sta a pochi metri dalla facciata, e il raggio ci resta stretto
-     * — 30 m da LI'. Il centroide puro e' l'unico caso da allargare, perche'
-     * li' non sappiamo ne' la via ne' la porta e stringere farebbe perdere
-     * il POI.
-     */
-    private fun moltiplicatore(livello: Livello): Float = when (livello) {
-        Livello.PERIMETRO -> 1f
-        Livello.INGRESSO -> 1f
-        Livello.INDIRIZZO -> 1f
-        Livello.CENTROIDE -> 2f
-    }
 
     /**
      * Il PUNTO dell'indirizzo, se utilizzabile, altrimenti null.
@@ -118,52 +91,39 @@ object RaggiFiducia {
         return puntoIndirizzo(poi) ?: Punto(poi.lat, poi.lon)
     }
 
-    /** Da dove viene il punto di questo POI. */
-    fun livello(poi: PoiEntity): Livello {
-        if (!poi.footprint.isNullOrBlank()) return Livello.PERIMETRO
-        if (poi.entranceLat != null && poi.entranceLon != null) return Livello.INGRESSO
-        if (puntoIndirizzo(poi) != null) return Livello.INDIRIZZO
-        return Livello.CENTROIDE
-    }
-
     /**
      * Raggi effettivi per questo POI, a partire dai raggi base della modalita'
      * (gli slider dell'utente). `alertBase`/`arrivoBase` sono gia' quelli della
      * modalita' corrente (piedi o auto).
      */
     fun calcola(poi: PoiEntity, isDriving: Boolean, alertBase: Float, arrivoBase: Float): Raggi {
-        var alert = alertBase
-        var arrivo = arrivoBase
-
-        // RAGGIO CALIBRATO DAL DB: vince. E' misurato sul perimetro reale — una
-        // piazza lo ha grande, una statua stretto — e non va ne' scalato ne'
-        // tagliato dai tetti, che servono alle STIME. Comportamento invariato
-        // rispetto a prima: gated su hasEntrance, e puo' solo allargare.
-        val hasEntrance = poi.entranceLat != null && poi.entranceLon != null
-        if (hasEntrance) {
-            val calAlert = poi.alertRadius?.takeIf { it > 0 }?.toFloat()
-            val calArrivo = poi.geofenceRadius?.takeIf { it > 0 }?.toFloat()
-            if (calAlert != null || calArrivo != null) {
-                if (calAlert != null) alert = maxOf(alert, calAlert)
-                if (calArrivo != null) arrivo = maxOf(arrivo, calArrivo)
-                return Raggi(alert, arrivo)
-            }
+        // RAGGIO CALIBRATO DAL DB: vince sempre che sia presente, con o senza
+        // punto d'ingresso geocodificato. Fino al 01/09/2026 serviva anche
+        // `hasEntrance` (entrance_lat/entrance_lon non nulli): la maggioranza
+        // dei POI importati da Overture/OSM porta gia' geofence_radius/
+        // alert_radius (spesso un default di categoria, es. 80/200 per le
+        // chiese) ma NON un punto d'ingresso geocodificato — il gate scartava
+        // una misura buona e faceva cadere il POI nel ramo CENTROIDE qui
+        // sotto, raddoppiando il raggio fino a 250-600 m su luoghi noti con
+        // indirizzo (Chiesa Evangelica ADI, Chiesa San Pietro Avenza,
+        // Biblioteca della Camera di Commercio...). Puo' solo allargare,
+        // mai stringere sotto la preferenza utente.
+        val calAlert = poi.alertRadius?.takeIf { it > 0 }?.toFloat()
+        val calArrivo = poi.geofenceRadius?.takeIf { it > 0 }?.toFloat()
+        if (calAlert != null || calArrivo != null) {
+            return Raggi(
+                alert = if (calAlert != null) maxOf(alertBase, calAlert) else alertBase,
+                arrivo = if (calArrivo != null) maxOf(arrivoBase, calArrivo) else arrivoBase
+            )
         }
 
-        val m = moltiplicatore(livello(poi))
-        alert *= m
-        arrivo *= m
-
-        // I tetti limitano l'ALLARGAMENTO, non la scelta dell'utente: chi porta
-        // lo slider a 400 m a piedi continua ad averli. Senza il maxOf col
-        // valore base, il tetto diventerebbe un tappo sugli slider e
-        // spegnerebbe una preferenza esplicita.
-        val tettoTrigger = maxOf(arrivoBase, if (isDriving) TETTO_TRIGGER_AUTO else TETTO_TRIGGER_PIEDI)
-        val tettoAlert = maxOf(alertBase, if (isDriving) TETTO_ALERT_AUTO else TETTO_ALERT_PIEDI)
-        return Raggi(
-            alert = alert.coerceAtMost(tettoAlert),
-            arrivo = arrivo.coerceAtMost(tettoTrigger)
-        )
+        // Nessun raggio calibrato: il POI e' un centroide puro, non sappiamo
+        // dove sia la porta. Decisione utente 01/09/2026: il raggio non
+        // aumenta MAI per incertezza — restare sulla preferenza utente
+        // (default 150 m a piedi / 300 m in auto) e' meglio di un cerchio
+        // allargato che genera notifiche a centinaia di metri su POI mai
+        // avvicinati davvero.
+        return Raggi(alert = alertBase, arrivo = arrivoBase)
     }
 }
 

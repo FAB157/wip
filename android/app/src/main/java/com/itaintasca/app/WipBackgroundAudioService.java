@@ -49,6 +49,12 @@ public class WipBackgroundAudioService extends Service {
         void onPlaybackError(String message);
         void onPlaybackStateChanged(boolean isPlaying);
         void onPlaybackProgress(long positionMs, long durationMs);
+        /**
+         * Gli audiofx di sistema non ci sono su questo dispositivo/ROM: il
+         * megafono non si puo' applicare. Il JS spegne il tasto invece di
+         * lasciarlo acceso a vuoto (01/09/2026).
+         */
+        void onMegaphoneUnavailable();
     }
 
     private static final String TAG = "WipAudio";
@@ -548,6 +554,14 @@ public class WipBackgroundAudioService extends Service {
         }
     }
 
+    /**
+     * Aggancia gli effetti alla sessione audio corrente. Non e' un errore non
+     * riuscirci subito: finche' l'ExoPlayer non ha aperto una sessione audio
+     * non c'e' niente a cui agganciarsi, e ci ripensa `onAudioSessionIdChanged`.
+     * E' un errore invece se gli audiofx non esistono proprio: in quel caso il
+     * megafono si spegne da solo e il JS lo sa (onMegaphoneUnavailable), cosi'
+     * il tasto non resta acceso su un effetto che non c'e'.
+     */
     private void applyMegaphone() {
         releaseMegaphone();
         if (!megaphoneEnabled || exoPlayer == null) return;
@@ -569,9 +583,16 @@ public class WipBackgroundAudioService extends Service {
             megaphoneBoost.setEnabled(true);
         } catch (Exception e) {
             // Alcuni device/ROM non espongono gli audiofx: il megafono resta
-            // senza effetto ma la riproduzione non deve risentirne.
+            // senza effetto ma la riproduzione non deve risentirne. Il tasto
+            // pero' non deve mentire — si spegne, di qua e nella scheda.
             Log.w(TAG, "Effetto megafono non disponibile: " + e.getMessage());
             releaseMegaphone();
+            megaphoneEnabled = false;
+            if (callback != null) {
+                mainHandler.post(() -> {
+                    if (callback != null) callback.onMegaphoneUnavailable();
+                });
+            }
         }
     }
 

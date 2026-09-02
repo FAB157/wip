@@ -116,12 +116,25 @@ interface Props {
   tappe?: NavChoicePoi[];
   onAPiedi?: () => void;
   titolo?: string;
+  /**
+   * IL GIRO IN AUTO (01/09/2026, committente: «il navigatore in auto nel radar
+   * da` indicazioni di una tappa sola, deve comprendere tutte le tappe del
+   * giro»). Diverso da `tappe`: qui a piedi resta la navigazione verso QUESTA
+   * tappa — gratis, la regola dei due tasti non si tocca — e cambia solo
+   * l'auto, che consegna a Google Maps l'intera sequenza come fa
+   * l'itinerario. Passarlo solo quando c'e` davvero un giro di piu` tappe.
+   */
+  tappeAuto?: NavChoicePoi[] | null;
 }
 
-export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi, titolo }: Props) {
+export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi, titolo, tappeAuto }: Props) {
   if (!poi) return null;
   const lang = language as Language;
   const modoItinerario = Array.isArray(tappe) && tappe.length > 0;
+  const giroInAuto = !modoItinerario && Array.isArray(tappeAuto) && tappeAuto.length > 1 ? tappeAuto : null;
+  // Google Maps si ferma a 10 punti: se il giro e` piu` lungo, urlGoogleItinerario
+  // campiona — meglio dirlo nel sottotitolo che far contare le fermate a chi guida.
+  const quanteInAuto = giroInAuto ? Math.min(giroInAuto.length, MAX_TAPPE_GOOGLE) : 0;
   const stop = (e: React.SyntheticEvent) => { e.preventDefault(); e.stopPropagation(); };
   const sheet = (
     <div
@@ -152,17 +165,23 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
         <button
           onClick={(e) => {
             stop(e); onClose();
-            if (modoItinerario) navigaInAutoItinerario(tappe!); else void navigaInAutoVerso(poi);
+            if (modoItinerario) navigaInAutoItinerario(tappe!);
+            else if (giroInAuto) navigaInAutoItinerario(giroInAuto);
+            else void navigaInAutoVerso(poi);
           }}
           className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
         >
           <span className="text-xl">🚗</span>
           <span className="flex-1">
             <span className="block text-sm font-bold text-gray-900">
-              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : "nav_in_auto", lang)}
+              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : giroInAuto ? "nav_giro_in_auto" : "nav_in_auto", lang)}
             </span>
             <span className="block text-[11px] text-gray-500">
-              {getTranslation(modoItinerario ? "nav_giorno_in_auto_sub" : "nav_in_auto_sub", lang)}
+              {modoItinerario
+                ? getTranslation("nav_giorno_in_auto_sub", lang)
+                : giroInAuto
+                  ? getTranslation("nav_giro_in_auto_sub", lang).replace("{n}", String(quanteInAuto))
+                  : getTranslation("nav_in_auto_sub", lang)}
             </span>
           </span>
         </button>

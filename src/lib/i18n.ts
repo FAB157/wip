@@ -875,6 +875,23 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "In auto", EN: "By car", FR: "En voiture", ES: "En coche",
     DE: "Mit dem Auto", RU: "На машине", ZH: "驾车"
   },
+  // IL GIRO IN AUTO DAL RADAR (01/09/2026): con un giro di piu` tappe l'auto
+  // non porta a una sola meta, consegna tutta la sequenza — come dall'
+  // itinerario. {n} = le tappe che entrano davvero nell'URL di Google.
+  nav_giro_in_auto: {
+    IT: "In auto, tutto il giro", EN: "By car, the whole tour",
+    FR: "En voiture, tout le circuit", ES: "En coche, toda la ruta",
+    DE: "Mit dem Auto, die ganze Tour", RU: "На машине, весь маршрут", ZH: "驾车，整条行程"
+  },
+  nav_giro_in_auto_sub: {
+    IT: "Apre Google Maps con tutte le {n} tappe del giro",
+    EN: "Opens Google Maps with all {n} stops of the tour",
+    FR: "Ouvre Google Maps avec les {n} étapes du circuit",
+    ES: "Abre Google Maps con las {n} paradas de la ruta",
+    DE: "Öffnet Google Maps mit allen {n} Stationen der Tour",
+    RU: "Открывает Google Карты со всеми точками маршрута ({n})",
+    ZH: "在 Google 地图中打开行程的全部 {n} 个地点"
+  },
   nav_in_auto_sub: {
     IT: "Apre Google Maps o Mappe",
     EN: "Opens Google Maps or Maps",

@@ -18,13 +18,22 @@ interface LoginScreenProps {
    * (caricamento sessione / reset password), che non si chiude.
    */
   onClose?: () => void;
+  /**
+   * True quando la schermata sta SOPRA l'app (sessione scaduta, azione da
+   * account): allora la X in alto a destra ha un senso, perche' dietro c'e'
+   * qualcosa a cui tornare. All'ingresso invece dietro non c'e' niente: resta
+   * solo il tasto esplicito "Continua senza account" in fondo, che dice cosa
+   * fa. Una X che chiude il nulla e' solo un modo per farsi cliccare per
+   * sbaglio e ritrovarsi ospiti senza averlo scelto.
+   */
+  comeModale?: boolean;
 }
 
 /** Lo sblocco biometrico è un'opzione di sicurezza disattivabile dal profilo. */
 export const BIOMETRIC_PREF_KEY = 'wip_biometric_enabled';
 export const isBiometricPrefEnabled = () => localStorage.getItem(BIOMETRIC_PREF_KEY) !== 'false';
 
-export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod, onClose }: LoginScreenProps) {
+export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false, forceMethod, onClose, comeModale = false }: LoginScreenProps) {
   // Niente prop `language` qui: la schermata vive prima/fuori dall'albero
   // principale, quindi la lingua si legge dalla stessa chiave che App.tsx
   // scrive a ogni cambio (fallback IT).
@@ -323,7 +332,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
           un modale sopra l'app: da li' si torna alla mappa. Al gate d'avvio
           (caricamento sessione, reset password) `onClose` non c'e' e la via
           d'uscita non deve esistere: non c'e' un "dietro" a cui tornare. */}
-      {onClose && (
+      {onClose && comeModale && (
         <button
           type="button"
           onClick={onClose}
@@ -643,14 +652,17 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
           ) : null}
         </AnimatePresence>
 
-        {/* Modalita' ospite: la via d'uscita esplicita, non solo la X in alto.
-            Sta sotto il modulo perche' e' la seconda scelta, non la prima: chi
-            arriva qui in genere vuole entrare. */}
+        {/* Modalita' ospite. Sta SOTTO il modulo, non sopra, e non e' un
+            bottone pieno come "Accedi": e' la seconda scelta, non la prima —
+            chi arriva qui in genere ha un account e vogliamo che lo usi. Ma
+            deve vedersi al primo colpo d'occhio, perche' e' la porta che Apple
+            e Wikicaves ci chiedono di lasciare aperta: quindi bordo pieno e
+            larghezza intera, non un link in grigetto. */}
         {onClose && (
           <button
             type="button"
             onClick={onClose}
-            className="w-full text-center text-sm font-bold text-[#1e3a8a]/70 underline mt-6 py-2 active:scale-95 transition-transform"
+            className="w-full border-2 border-[#1e3a8a]/25 text-[#1e3a8a] font-bold py-3 px-4 rounded-xl mt-5 active:scale-95 transition-transform"
           >
             {t('guest_continua_senza')}
           </button>

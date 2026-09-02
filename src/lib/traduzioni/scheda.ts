@@ -124,6 +124,16 @@ export const TRAD_SCHEDA: Record<string, Partial<Record<Language, string>>> = {
   sk_chiedi_title: { IT: "Metti in pausa e fai una domanda sul luogo: risponde la guida", EN: "Pause and ask a question about the place: the guide answers", FR: "Mets en pause et pose une question sur le lieu : le guide répond", ES: "Pon en pausa y haz una pregunta sobre el lugar: responde la guía", DE: "Pausiere und stell eine Frage zum Ort: Der Guide antwortet", RU: "Поставьте на паузу и задайте вопрос о месте: гид ответит", ZH: "暂停并就该地点提问：导览员会回答" },
   sk_chiedi: { IT: "CHIEDI", EN: "ASK", FR: "DEMANDER", ES: "PREGUNTA", DE: "FRAGEN", RU: "СПРОСИТЬ", ZH: "提问" },
   sk_megafono: { IT: "MEGAFONO", EN: "MEGAPHONE", FR: "MÉGAPHONE", ES: "MEGÁFONO", DE: "MEGAFON", RU: "МЕГАФОН", ZH: "扩音" },
+  // Il dispositivo non espone gli effetti audio: il tasto si spegne e lo dice.
+  sk_megafono_non_disponibile: {
+    IT: "Il megafono non è disponibile su questo dispositivo",
+    EN: "The megaphone isn't available on this device",
+    FR: "Le mégaphone n'est pas disponible sur cet appareil",
+    ES: "El megáfono no está disponible en este dispositivo",
+    DE: "Das Megafon ist auf diesem Gerät nicht verfügbar",
+    RU: "Мегафон недоступен на этом устройстве",
+    ZH: "此设备不支持扩音功能"
+  },
   sk_feedback_momento: { IT: "Com'era il momento dell'audioguida?", EN: "How was the audio guide's timing?", FR: "Le moment de l'audioguide était-il bien choisi ?", ES: "¿Qué tal el momento de la audioguía?", DE: "Wie war der Zeitpunkt des Audioguides?", RU: "Насколько удачным был момент аудиогида?", ZH: "语音导览的时机如何？" },
   sk_momento_giusto: { IT: "⏱ Momento giusto", EN: "⏱ Right time", FR: "⏱ Bon moment", ES: "⏱ Momento justo", DE: "⏱ Richtiger Moment", RU: "⏱ Вовремя", ZH: "⏱ 时机正好" },
   sk_troppo_presto: { IT: "⏰ Troppo presto", EN: "⏰ Too early", FR: "⏰ Trop tôt", ES: "⏰ Demasiado pronto", DE: "⏰ Zu früh", RU: "⏰ Слишком рано", ZH: "⏰ 太早了" },

@@ -871,6 +871,21 @@ function MapArea({
   // descrizione = sfarfallio) ogni volta che un fetch aggiornava la lista.
   const [activePoi, setActivePoi] = useState<Poi | null>(null);
 
+  // Un pin già a schermo che viene ritoccato non ha bisogno di un rifetch
+  // dei POI al recentro: lo consuma solo il click su un marker già
+  // renderizzato (vedi poiMarkers più sotto), non gli altri chiamanti di
+  // centerMapOnPoi che saltano su un punto potenzialmente non ancora
+  // caricato (ricerca, "vicino a me"). Senza questo flag, il pan di
+  // centerMapOnPoi supera quasi sempre la soglia anti-sfarfallio di
+  // fetchPois (120 m) e innesca un fetch reale poco dopo l'apertura della
+  // scheda — `pois` cambia riferimento, la catena visiblePois→markerData→
+  // poiMarkers→gruppiPerCategoria si ricalcola tutta, e MarkerClusterGroup
+  // (react-leaflet-cluster, un wrapper imperativo su leaflet.markercluster)
+  // ricostruisce da zero il layer: per un fotogramma tutti i pin tornano
+  // individuali e sparsi sopra la scheda appena aperta, prima di
+  // riraggrupparsi. Segnalato in video il 31/08/2026.
+  const skipNextFetchRef = useRef(false);
+
   // Centra la mappa sul POI mettendo il pin poco sotto il centro: la scheda,
   // che si apre verso l'alto, risulta così centrata nella vista.
   const centerMapOnPoi = useCallback((poi: Poi, targetZoom?: number) => {
@@ -4906,6 +4921,13 @@ function MapArea({
         // MapController, panTo del follow-me a ogni fix GPS, centratura su un
         // POI). Senza una soglia il follow-me lanciava un fetch al secondo:
         // ogni risposta riscriveva la lista POI e i pin sfarfallavano.
+        if (skipNextFetchRef.current) {
+          // Recentro su un pin appena toccato: il POI è già in lista, un
+          // rifetch qui serve solo a far sfarfallare il cluster (vedi
+          // commento su centerMapOnPoi).
+          skipNextFetchRef.current = false;
+          return;
+        }
         try {
           const center = bounds.getCenter();
           const zoom = mapRef.current?.getZoom() ?? 13;
@@ -5605,6 +5627,9 @@ function MapArea({
               }
               setActivePopupId(poi.id);
               setActivePoi(poi);
+              // Il pin toccato è già renderizzato: il recentro qui sotto non
+              // deve innescare un rifetch che fa sfarfallare il cluster.
+              skipNextFetchRef.current = true;
               centerMapOnPoi(poi);
             }
           }}

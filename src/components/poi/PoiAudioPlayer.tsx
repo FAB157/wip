@@ -378,9 +378,14 @@ export default function PoiAudioPlayer({
               <Mic className="w-4 h-4" />
               {getTranslation('sk_chiedi', language)}
             </button>
+            {/* Il tasto si disabilita se il dispositivo ha rifiutato l'effetto
+                (audiofx assenti, iPhone, niente WebAudio): meglio spento che
+                acceso su un megafono che non si sentira' mai (01/09/2026). */}
             <button
               onClick={() => locationService.setMegaphone(!audioState.isMegaphone)}
-              className={`px-3 py-2 rounded-xl text-xs font-black transition-colors flex items-center gap-1.5 ${audioState.isMegaphone ? "bg-secondary text-white shadow-sm" : "bg-surface-warm/60 hover:bg-surface-warm"}`}
+              disabled={!audioState.megaphoneSupported}
+              title={audioState.megaphoneSupported ? undefined : getTranslation('sk_megafono_non_disponibile', language)}
+              className={`px-3 py-2 rounded-xl text-xs font-black transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed ${audioState.isMegaphone ? "bg-secondary text-white shadow-sm" : "bg-surface-warm/60 hover:bg-surface-warm"}`}
             >
               <Megaphone className="w-4 h-4" />
               {getTranslation('sk_megafono', language)}

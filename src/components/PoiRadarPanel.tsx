@@ -153,7 +153,19 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
   // negli itinerari. NavChoiceSheet punta alla porta (puntoArrivo) e gestisce
   // il plugin nativo col ripiego sul link web.
   const [navPoi, setNavPoi] = useState<any | null>(null);
-  const handleNavigate = (poi: any) => setNavPoi(poi);
+  // IN AUTO SI FA TUTTO IL GIRO (01/09/2026, committente). Dal radar l'auto
+  // dava indicazioni verso una tappa sola: guidando vuol dire ripartire da capo
+  // a ogni fermata. Con un giro di piu` tappe — in corso o ancora in bozza —
+  // l'auto consegna a Google Maps l'intera sequenza, esattamente come quando
+  // si sceglie «in auto» dall'itinerario. A piedi non cambia niente: resta la
+  // navigazione gratis verso QUESTA tappa (la regola dei due tasti).
+  // La sequenza si legge all'apertura della scheda: se nel frattempo si toglie
+  // una tappa dalla mappa, la prossima apertura la ricalcola.
+  const [navTappeAuto, setNavTappeAuto] = useState<any[] | null>(null);
+  const handleNavigate = (poi: any) => {
+    setNavTappeAuto(tourService.sequenzaPerNavigatore());
+    setNavPoi(poi);
+  };
 
   const handleItemClick = (poi: any) => {
     setFocusedId(poi.id);
@@ -530,7 +542,12 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
         </AnimatePresence>
       </div>
       </div>
-      <NavChoiceSheet poi={navPoi} language={language} onClose={() => setNavPoi(null)} />
+      <NavChoiceSheet
+        poi={navPoi}
+        tappeAuto={navTappeAuto}
+        language={language}
+        onClose={() => { setNavPoi(null); setNavTappeAuto(null); }}
+      />
     </motion.div>
   );
 }

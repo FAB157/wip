@@ -141,13 +141,20 @@ export function radiiForTransport(
     ? { alert: d.carAlert, trigger: d.carTrigger }
     : { alert: d.walkAlert, trigger: d.walkTrigger };
 
-  // RAGGI CALIBRATI SUL PERIMETRO REALE. Se il POI è stato processato col
-  // footprint OSM (entrance valorizzato → hasEntrance) E porta un raggio
-  // GREZZO dal DB, quel raggio VINCE: è misurato sul perimetro dell'edificio,
-  // una piazza lo ha grande e una statua lo ha stretto. I POI non calibrati
-  // (raggio null) restano alla preferenza dell'utente.
+  // RAGGI CALIBRATI DAL DB (geofence_radius/alert_radius: misura sul
+  // perimetro OSM quando c'è, altrimenti un default di categoria dai POI
+  // Overture/OSM — comunque una misura, non una stima). VINCE sempre che sia
+  // presente, CON O SENZA `hasEntrance` (01/09/2026, decisione utente).
   //
-  // Perché non è più un `Math.max` (23/08/2026). Il massimo faceva da
+  // Fino a ieri era gated su `hasEntrance`: la maggioranza dei POI importati
+  // da Overture porta già geofence_radius/alert_radius ma NON un
+  // entrance_lat/lon geocodificato — il gate scartava una misura buona anche
+  // su luoghi notissimi con indirizzo (Chiesa Evangelica ADI, Chiesa San
+  // Pietro Avenza, Biblioteca della Camera di Commercio...) e li faceva
+  // cadere nel bump "edifici grandi" qui sotto, con notifiche "Esplorazione"
+  // a 200-400+ m su POI mai avvicinati.
+  //
+  // Perché non è più un `Math.max` a piedi (23/08/2026). Il massimo faceva da
   // PAVIMENTO: il trigger a piedi non poteva mai scendere sotto il default di
   // modalità, e chi portava lo slider a 15 m non otteneva nulla — la guida
   // partiva comunque a 30 m o più. Con un raggio calibrato il default di
@@ -165,26 +172,16 @@ export function radiiForTransport(
   // il tempo di reagire.
   const fpTrigger = Number(footprint?.geofenceRadius) || 0;
   const fpAlert = Number(footprint?.alertRadius) || 0;
-  if (footprint?.hasEntrance && (fpTrigger > 0 || fpAlert > 0)) {
+  if (fpTrigger > 0 || fpAlert > 0) {
     if (fpTrigger > 0) trigger = mode === 'car' ? Math.max(trigger, fpTrigger) : fpTrigger;
     if (fpAlert > 0) alert = Math.max(alert, fpAlert);
     return { alert, trigger };
   }
 
-  // Fallback (comportamento attuale): bump forfettario per edifici grandi,
-  // perché il centroide di un edificio massiccio è lontano dalla strada.
-  const cat = (category || '').toLowerCase();
-  const largeScaleCategories = [
-    'castle', 'castelli', 'museum', 'musei', 'church', 'chiese',
-    'place_of_worship', 'fortress', 'palazzo', 'palace', 'monastery', 'abbey',
-    'archaeological_site', 'ruins', 'rovine', 'monument', 'monumento', 'attraction'
-  ];
-
-  if (largeScaleCategories.includes(cat)) {
-    trigger += 40; // Aggiungiamo 40 metri di tolleranza per edifici massicci
-    alert += 50;   // Espandiamo anche l'alert per dare tempo al GPS di stabilizzarsi
-  }
-
+  // Nessun raggio calibrato: centroide puro, non sappiamo dove sia la porta.
+  // Decisione utente 01/09/2026: il raggio non aumenta MAI per incertezza —
+  // niente più bump forfettario per categoria (chiese, musei, castelli...),
+  // resta la preferenza utente così com'è.
   return { alert, trigger };
 }
 
@@ -303,43 +300,33 @@ export interface FattoreFiducia {
   fattore: number;
   /** Moltiplicatore del raggio di AVVISO. */
   fattoreAvviso: number;
-  tettoTrigger: number;
-  tettoAvviso: number;
-}
-
-/** Tetti: oltre questi non si va, qualunque sia la sfiducia nel punto. */
-export const TETTO_TRIGGER_M: Record<TransportMode, number> = { walk: 80, car: 120 };
-export const TETTO_AVVISO_M: Record<TransportMode, number> = { walk: 250, car: 400 };
-
-export function fattoreFiducia(livello: LivelloFiducia, modo: TransportMode): FattoreFiducia {
-  const tettoTrigger = TETTO_TRIGGER_M[modo] ?? TETTO_TRIGGER_M.walk;
-  const tettoAvviso = TETTO_AVVISO_M[modo] ?? TETTO_AVVISO_M.walk;
-  switch (livello) {
-    case 'perimetro':
-    case 'ingresso':
-    case 'indirizzo':
-      // Muro, porta o punto dell'indirizzo: in tutti e tre i casi si misura da
-      // qualcosa di reale, e allargare peggiorerebbe e basta. «Via Roma 15» e'
-      // un punto quanto lo e' un portone.
-      return { fattore: 1, fattoreAvviso: 1, tettoTrigger, tettoAvviso };
-    default:
-      // Centroide puro: nessun punto, ne' porta ne' facciata. Meglio presto che mai.
-      return { fattore: 2, fattoreAvviso: 2, tettoTrigger, tettoAvviso };
-  }
 }
 
 /**
- * Applica la fiducia a un raggio base.
- * REGOLA D'ORO: la fiducia puo' solo ALLARGARE. Il tetto non deve mai
- * stringere cio' che l'utente ha scelto con gli slider (in auto il trigger
- * arriva a 150 m di preferenza: il tetto di 120 e' un limite all'allargamento,
- * non un massimo assoluto).
+ * Decisione utente 01/09/2026: IL RAGGIO NON AUMENTA MAI PER INCERTEZZA.
+ * Fino a ieri un `centroide` puro raddoppiava il raggio (fattore 2, tetti 80m
+ * piedi/120m auto per il trigger, 250m/400m per l'avviso) — ma la
+ * maggioranza dei POI importati da Overture/OSM e' a centroide (nessun
+ * entrance_lat/lon geocodificato) anche su luoghi notissimi con indirizzo
+ * (Chiesa Evangelica ADI, Chiesa San Pietro Avenza, Biblioteca della Camera
+ * di Commercio...), e il raddoppio produceva notifiche "Esplorazione" a
+ * 200-400+ m su POI mai avvicinati davvero. Nessun livello allarga piu': il
+ * fattore e' sempre 1, qualunque sia la fiducia nel punto.
+ */
+export function fattoreFiducia(_livello: LivelloFiducia, _modo: TransportMode): FattoreFiducia {
+  return { fattore: 1, fattoreAvviso: 1 };
+}
+
+/**
+ * Applica la fiducia a un raggio base. Con `fattoreFiducia` sempre a 1
+ * questa funzione e' oggi un no-op protettivo: resta per non toccare i
+ * chiamanti in foregroundTriggers.ts e per il giorno in cui un livello
+ * dovesse tornare ad allargare (mai stringere sotto la preferenza utente).
  */
 export function applicaFiducia(raggioBase: number, f: FattoreFiducia, tipo: 'trigger' | 'avviso'): number {
   const base = Number(raggioBase) || 0;
   const molt = tipo === 'trigger' ? f.fattore : f.fattoreAvviso;
-  const tetto = tipo === 'trigger' ? f.tettoTrigger : f.tettoAvviso;
-  return Math.max(base, Math.min(base * molt, tetto));
+  return Math.max(base, base * molt);
 }
 
 // --- Categorie ammesse per il trigger audioguida -------------------------

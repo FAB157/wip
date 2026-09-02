@@ -1,5 +1,5 @@
 import { Map as MapIcon, Calendar, Camera, User, Headphones, PartyPopper } from "lucide-react";
-import { ReactNode, useState, useEffect } from "react";
+import { ReactNode, useState, useEffect, useRef } from "react";
 import { Language, getTranslation } from "../lib/i18n";
 
 interface BottomNavProps {
@@ -29,10 +29,31 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
     }
   };
 
+  // IL TASTO MUTE FUORI DALLA BARRA (31/08/2026, collaudo: «il tasto mute
+  // sopra al tasto della guida non funziona»). Stava DENTRO la <nav> (z-100)
+  // come absolute: durante il giro il cruscotto TourBanner (fixed z-[9000])
+  // occupa esattamente quella fascia sopra la barra e si prendeva tutti i
+  // tocchi — il tasto si vedeva ma non rispondeva. Ora e' un fratello fixed
+  // della barra con z-[9100], ancorato con una misura alla colonna del tasto
+  // guida (si rimisura al resize/rotazione).
+  const muteAnchorRef = useRef<HTMLDivElement | null>(null);
+  const [muteX, setMuteX] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isAudioGuideActive) { setMuteX(null); return; }
+    const misura = () => {
+      const r = muteAnchorRef.current?.getBoundingClientRect();
+      if (r) setMuteX(r.left + r.width / 2);
+    };
+    misura();
+    window.addEventListener('resize', misura);
+    return () => window.removeEventListener('resize', misura);
+  }, [isAudioGuideActive]);
+
   // `bg-[#fcfaf8]-container-lowest/90` era una classe inesistente (UX-05):
   // la barra non aveva sfondo. Altezza in `min-h` così Dynamic Type (iOS)
   // può allargarla senza tagliare le etichette (UX-04).
   return (
+    <>
     <nav
       aria-label={getTranslation("a11y_nav_principale", language)}
       className="w-full sm:max-w-none bg-surface-container-lowest/90 flex-shrink-0 backdrop-blur-xl border-t border-amber-100/60 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] flex justify-around items-center min-h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] px-1 z-[100] relative print:hidden"
@@ -83,7 +104,7 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
           </div>
         )}
       </div>
-      <div className="relative flex flex-col items-center justify-center -mb-2">
+      <div ref={muteAnchorRef} className="relative flex flex-col items-center justify-center -mb-2">
         <button
           type="button"
           onClick={() => setIsAudioGuideActive(!isAudioGuideActive)}
@@ -104,21 +125,8 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
             {getTranslation("guide", language)}
           </span>
         </button>
-        {/* Mute: prima era un bottoncino `p-1` (≈24 px) appoggiato SOPRA il
-            bordo del tasto cuffie — si finiva per spegnere la guida volendo
-            solo silenziarla (UX-06). Ora ha un'area propria di 44 px, sospesa
-            sopra la barra con 4 px di aria dal tasto cuffie. */}
-        {isAudioGuideActive && setIsAudioGuideMuted && (
-          <button
-            type="button"
-            onClick={() => setIsAudioGuideMuted(!isAudioGuideMuted)}
-            aria-label={getTranslation(isAudioGuideMuted ? "a11y_riattiva_audio" : "a11y_silenzia_audio", language)}
-            aria-pressed={!!isAudioGuideMuted}
-            className={`absolute -top-12 left-1/2 -translate-x-1/2 min-w-11 min-h-11 flex items-center justify-center bg-[#fcfaf8] text-base rounded-full shadow-lg border cursor-pointer ${isAudioGuideMuted ? "text-rose-500 border-rose-200" : "text-emerald-500 border-emerald-200"}`}
-          >
-            <span aria-hidden="true">{isAudioGuideMuted ? "🔇" : "🔊"}</span>
-          </button>
-        )}
+        {/* Il tasto mute e' renderizzato FUORI dalla <nav> (vedi sopra):
+            qui resta solo l'ancora per la sua posizione orizzontale. */}
       </div>
       <NavItem
         icon={<User className="w-5 h-5" />}
@@ -127,6 +135,22 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
         onClick={() => setActiveTab("profile")}
       />
     </nav>
+    {/* Mute: area propria di 44 px sospesa sopra la barra (UX-06), ma come
+        fratello `fixed z-[9100]` della nav — sopra il TourBanner (z-9000)
+        che prima gli rubava i tocchi durante il giro. */}
+    {isAudioGuideActive && setIsAudioGuideMuted && muteX != null && (
+      <button
+        type="button"
+        onClick={() => setIsAudioGuideMuted(!isAudioGuideMuted)}
+        aria-label={getTranslation(isAudioGuideMuted ? "a11y_riattiva_audio" : "a11y_silenzia_audio", language)}
+        aria-pressed={!!isAudioGuideMuted}
+        className={`fixed z-[9100] min-w-11 min-h-11 flex items-center justify-center bg-[#fcfaf8] text-base rounded-full shadow-lg border cursor-pointer print:hidden ${isAudioGuideMuted ? "text-rose-500 border-rose-200" : "text-emerald-500 border-emerald-200"}`}
+        style={{ left: muteX, transform: "translateX(-50%)", bottom: "calc(4.75rem + env(safe-area-inset-bottom, 0px))" }}
+      >
+        <span aria-hidden="true">{isAudioGuideMuted ? "🔇" : "🔊"}</span>
+      </button>
+    )}
+    </>
   );
 }
 

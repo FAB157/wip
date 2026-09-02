@@ -130,38 +130,24 @@ struct Poi: Codable {
 ///  • `ingresso`  — c'è entrance_lat/lon: è la porta, raggio BASE.
 ///  • `indirizzo` — c'è il PUNTO dell'indirizzo (address_point_lat/lon)
 ///    utilizzabile: raggio BASE, stretto, perché quel punto È l'arrivo.
-///  • `centroide` — nient'altro: raggio ×2, è l'unico caso davvero incerto.
+///  • `centroide` — nient'altro: raggio invariato, MAI raddoppiato (vedi sotto).
 ///
-/// COSA FA GRADINO (23/08/2026): il PUNTO, non la stringa. La distinzione
-/// civico/via provata poche ore prima è stata tolta: il criterio non è il
-/// numero dentro il testo dell'indirizzo, è l'esistenza delle coordinate. Un
-/// POI con la sola stringa e nessun punto è `centroide`.
+/// Regola (decisione utente, 01/09/2026): IL RAGGIO NON AUMENTA MAI PER
+/// INCERTEZZA. Fino a ieri un POI a centroide puro raddoppiava il raggio
+/// (fino a un tetto di 250/400 m) — ma la maggioranza dei POI importati da
+/// Overture/OSM è a centroide (nessun entrance_lat/lon geocodificato) anche
+/// quando è un luogo notissimo con indirizzo (Chiesa Evangelica ADI, Chiesa
+/// San Pietro Avenza, Biblioteca della Camera di Commercio...), e il
+/// raddoppio produceva notifiche "Esplorazione" a 200-400+ m su POI mai
+/// avvicinati davvero.
 ///
-/// I TETTI valgono solo per l'allargamento: non possono mai portare un raggio
-/// SOTTO la preferenza dell'utente (chi mette lo slider a 400 m di avviso
-/// continua ad avere 400 m).
-///
-/// Il `geofence_radius`/`alert_radius` calibrati dal DB, quando ci sono,
-/// VINCONO su tutto: sono misure sul perimetro reale, non stime.
+/// Il `geofence_radius`/`alert_radius` calibrati dal DB, quando ci sono
+/// (misurati o default di categoria Overture), VINCONO sempre — con o senza
+/// entrance geocodificato, perché sono comunque una misura, non una stima —
+/// e possono solo allargare la preferenza utente, mai stringerla. Senza
+/// raggio calibrato resta la preferenza utente così com'è (default 150 m a
+/// piedi / 300 m in auto), nessun moltiplicatore.
 enum PoiRadii {
-    /// Fonte del punto del POI, in ordine di fiducia decrescente.
-    enum FontePunto { case perimetro, ingresso, indirizzo, centroide }
-
-    /// Tetti all'allargamento, per modalità.
-    static let tettoTriggerPiedi: Double = 80
-    static let tettoTriggerAuto: Double = 120
-    static let tettoAvvisoPiedi: Double = 250
-    static let tettoAvvisoAuto: Double = 400
-
-    static func fontePunto(_ poi: Poi) -> FontePunto {
-        if poi.footprint?.isEmpty == false { return .perimetro }
-        if poi.entranceLat != nil && poi.entranceLon != nil { return .ingresso }
-        // Il gradino lo fa il PUNTO (con le sue guardie: fonte e distanza dal
-        // centroide), non la stringa `address`.
-        if poi.puntoIndirizzo != nil { return .indirizzo }
-        return .centroide
-    }
-
     /// UNICA funzione dei raggi operativi: la usano sia la registrazione delle
     /// region CLLocationManager sia la valutazione predittiva dei trigger. Se
     /// due chiamanti calcolassero raggi diversi, la region di rilancio e il
@@ -172,43 +158,23 @@ enum PoiRadii {
         baseAlert: Double,
         baseArrival: Double
     ) -> (alert: Double, arrival: Double) {
-        var alert = baseAlert
-        var arrival = baseArrival
-
-        // RAGGI CALIBRATI DAL DB (footprint OSM). Gated sull'ingresso reale
-        // come radiiForTransport lato web: senza entrance i default 50/150 di
-        // un POI mai processato sarebbero indistinguibili da una misura.
-        // In auto il calibrato può solo ALLARGARE (a 50 km/h un raggio di 15 m
-        // si attraversa fra due fix); a piedi la misura batte la stima.
-        let hasEntrance = poi.entranceLat != nil && poi.entranceLon != nil
+        // RAGGIO CALIBRATO DAL DB: vince sempre che sia presente, con o senza
+        // entrance geocodificato. In auto può solo ALLARGARE (a 50 km/h un
+        // raggio stretto si attraversa fra due fix); a piedi la misura batte
+        // sempre la preferenza utente.
         let calAlert = Double(poi.alertRadius ?? 0)
         let calArrival = Double(poi.arrivalRadius ?? 0)
-        if hasEntrance && (calAlert > 0 || calArrival > 0) {
-            if calArrival > 0 { arrival = isDriving ? max(baseArrival, calArrival) : calArrival }
-            if calAlert > 0 { alert = max(baseAlert, calAlert) }
-            // Nessun tetto: è una misura, non una stima. Un parco ha davvero
-            // quel raggio.
+        if calAlert > 0 || calArrival > 0 {
+            let alert = calAlert > 0 ? max(baseAlert, calAlert) : baseAlert
+            let arrival = calArrival > 0
+                ? (isDriving ? max(baseArrival, calArrival) : calArrival)
+                : baseArrival
             return (alert, arrival)
         }
 
-        switch fontePunto(poi) {
-        case .perimetro:
-            break // il muro è la misura: nessun allargamento
-        case .ingresso:
-            break // la porta è il punto giusto: raggio base
-        case .indirizzo:
-            break // il punto dell'indirizzo È l'arrivo: raggio base, stretto
-        case .centroide:
-            alert *= 2
-            arrival *= 2
-        }
-
-        let tettoTrigger = isDriving ? tettoTriggerAuto : tettoTriggerPiedi
-        let tettoAvviso = isDriving ? tettoAvvisoAuto : tettoAvvisoPiedi
-        // Il tetto limita la CRESCITA, mai la preferenza dell'utente.
-        arrival = min(arrival, max(baseArrival, tettoTrigger))
-        alert = min(alert, max(baseAlert, tettoAvviso))
-        return (alert, arrival)
+        // Nessun raggio calibrato: centroide puro, non sappiamo dove sia la
+        // porta. Il raggio resta quello dell'utente, punto — mai allargato.
+        return (baseAlert, baseArrival)
     }
 }
 

@@ -70,6 +70,17 @@ export interface WipBackgroundAudioPlugin {
     listener: (data: { position: number; duration: number }) => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
 
+  /**
+   * Il megafono non e' applicabile su questo dispositivo: Android non espone
+   * gli audiofx (Equalizer/LoudnessEnhancer), oppure siamo su iOS dove
+   * l'effetto non esiste. Il JS spegne il tasto invece di lasciarlo acceso su
+   * un effetto che non arrivera' mai (01/09/2026).
+   */
+  addListener(
+    eventName: 'megaphoneUnavailable',
+    listener: () => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+
   removeAllListeners(): Promise<void>;
 }
 

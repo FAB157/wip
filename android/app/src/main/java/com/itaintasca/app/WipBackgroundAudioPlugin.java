@@ -57,6 +57,14 @@ public class WipBackgroundAudioPlugin extends Plugin {
             data.put("duration", durationMs / 1000.0);
             notifyListeners("playbackProgress", data);
         }
+
+        @Override
+        public void onMegaphoneUnavailable() {
+            // Il dispositivo non espone Equalizer/LoudnessEnhancer: il JS
+            // spegne il tasto nella scheda invece di lasciarlo acceso su un
+            // effetto che non arrivera' mai (01/09/2026).
+            notifyListeners("megaphoneUnavailable", new JSObject());
+        }
     };
 
     private final ServiceConnection connection = new ServiceConnection() {
