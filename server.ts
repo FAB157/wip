@@ -558,21 +558,40 @@ async function callUniversalAi(
   if (DEEPSEEK_SPENTO) vietati.add('deepseek'); // rete di sicurezza: nessun percorso lo riporta in coda
   let consentiti = baseQueue.filter((e) => !vietati.has(e));
 
-  // NIENTE "ultima spiaggia a pagamento" (revocata il 02/09/2026 dal
-  // committente). Dal 31/08 al 02/09 esisteva un flag `ultimaSpiaggiaPagante`
-  // che accodava DeepSeek dopo i gratuiti "solo per chi aspetta in diretta".
-  // In tre giorni ha prodotto 39.245 chiamate SENZA alcun user_id — 24.806
-  // dalla pre-generazione di poi_audioguides e 14.423 dall'arricchimento POI
-  // — per 13,31 $: i lavori di sfondo passano dalle stesse funzioni degli
-  // utenti in diretta, quindi qualunque flag "in diretta" e' una promessa che
-  // il chiamante non puo' mantenere. E' la seconda volta (la prima il
-  // 17-18/08 con la semina della libreria).
+  // ULTIMA SPIAGGIA A PAGAMENTO (rimessa il 03/09/2026 su richiesta del
+  // committente: «deepseek come ultima spiaggia per l'audioguida on the fly,
+  // ma non per i processi in background»).
   //
-  // La regola torna quella del 18/08, senza eccezioni: DeepSeek entra SOLO
-  // come `primaryEngine` esplicito, cioe' itinerari on the fly, podcast e
-  // guide premium. Se i gratuiti cadono tutti si fallisce: un'audioguida
-  // mancante e' un disservizio circoscritto, una coda a pagamento aperta a
-  // ogni lavoro di massa e' una fattura senza tetto.
+  // A cosa serve: chi e' fermo davanti al monumento e aspetta. Se groq ha
+  // esaurito il tetto giornaliero e gemini/agnes sono giu', senza questo
+  // l'audioguida non esce e il cliente resta con un pulsante che non fa
+  // niente. DeepSeek costa mezzo centesimo e risponde in mezzo secondo.
+  //
+  // PERCHE' LA PRIMA VERSIONE (31/08-02/09) E' FALLITA, e come si evita ora.
+  // Il flag c'era gia', ma `regenerateAudioguideText` lo passava SEMPRE a
+  // `true`. Peccato che da quella stessa funzione passi anche la
+  // pre-generazione di cache degli script di sfondo: in tre giorni 24.806
+  // chiamate senza alcun `user_id`, piu' 14.423 dall'arricchimento POI, per
+  // 13,31 $. Era la seconda volta (la prima il 17-18/08 con la semina della
+  // libreria).
+  //
+  // La differenza ora e' che il flag NON e' piu' un'affermazione del
+  // chiamante ("credo che qualcuno stia aspettando") ma il riflesso di un
+  // FATTO verificabile a monte: chi si autentica col segreto di
+  // infrastruttura viene marcato `background-script` da `requireAuth`, e i
+  // chiamanti lo derivano da li'. Un lavoro di sfondo non puo' fingersi
+  // utente nemmeno per distrazione di chi scrive lo script.
+  //
+  // E il default e' invertito: `utenteInAttesa` sta a `false` se non lo si
+  // dichiara. Chi dimentica ottiene la catena gratuita, non la fattura.
+  if (
+    options.ultimaSpiaggiaPagante &&
+    !vietati.has('deepseek') &&
+    !consentiti.includes('deepseek') &&
+    !!deepseekKey
+  ) {
+    consentiti = [...consentiti, 'deepseek'];
+  }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
   // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
@@ -1304,8 +1323,14 @@ async function streamUniversalAi(
     // ripiega su agnes. Oggi `false`: la parte in diretta resta su DeepSeek.
     const DEEPSEEK_SPENTO = false;
     const wantsGroqFirst = primaryEngine === "groq" || (DEEPSEEK_SPENTO && primaryEngine === "deepseek");
+    // `ultimaSpiaggiaPagante` (03/09/2026): gemello di quello in
+    // callUniversalAi, per la scheda POI generata in streaming. Chi la aspetta
+    // sta guardando uno schermo vuoto; se groq e agnes cadono entrambi,
+    // DeepSeek e' l'ultimo anello. Vale SOLO per l'utente in diretta: il
+    // chiamante lo deriva da `userId !== 'background-script'`, e il default e'
+    // spento, quindi un lavoro di sfondo si ferma ai gratuiti.
     const engineQueue = wantsGroqFirst
-      ? ["groq", "agnes"]
+      ? (options.ultimaSpiaggiaPagante && !DEEPSEEK_SPENTO ? ["groq", "agnes", "deepseek"] : ["groq", "agnes"])
       : ["deepseek", "agnes", "groq"];
     let lastErr: any = null;
 
@@ -7320,13 +7345,20 @@ Regole:
     const base = v.split('_')[0];
     return base === 'dante' ? 'dante' : 'nicky';
   }
-  // Questa funzione gira SEMPRE sui motori gratuiti (02/09/2026). Serve sia
-  // l'utente in diretta sia la pre-generazione di cache degli script di
-  // sfondo, e dall'interno non si distinguono: per tre giorni un flag
-  // "ultimaSpiaggiaPagante" ha provato a distinguerli e ha mandato 24.806
-  // chiamate di sfondo su DeepSeek. Niente motori a pagamento qui.
-  async function regenerateAudioguideText(opts: { text: string; poiName: string; mode?: string; location?: string; previousText?: string; lang?: string; focusInstruction?: string; }): Promise<string> {
-    const { text, poiName, mode, location, previousText, lang = "it", focusInstruction } = opts;
+  // Da questa funzione passano DUE mondi che dall'interno si assomigliano:
+  // l'utente fermo davanti al monumento che aspetta l'audioguida, e la
+  // pre-generazione di cache degli script di sfondo. Per il primo DeepSeek e'
+  // l'ultima spiaggia quando i gratuiti cadono tutti; per il secondo e' solo
+  // una fattura (24.806 chiamate in tre giorni, 31/08-02/09).
+  //
+  // Chi chiama DEVE quindi dire di quale mondo fa parte, e lo deve derivare
+  // dall'identita' del chiamante (`userId !== 'background-script'`), non da
+  // una convinzione. **Il default e' `false`**: chi dimentica di dichiararlo
+  // ottiene i motori gratuiti, non l'addebito. E' la stessa inversione di
+  // default adottata il 18/08 per le code di `callUniversalAi`, e per lo
+  // stesso motivo: un dimenticanza deve costare latenza, mai denaro.
+  async function regenerateAudioguideText(opts: { text: string; poiName: string; mode?: string; location?: string; previousText?: string; lang?: string; focusInstruction?: string; utenteInAttesa?: boolean; }): Promise<string> {
+    const { text, poiName, mode, location, previousText, lang = "it", focusInstruction, utenteInAttesa = false } = opts;
     const targetLangName = LANG_NAMES[String(lang).toLowerCase()] || "italiano";
     const locContext = location ? ` situato a ${location}` : "";
     // Registro (ondata 4): il mode arriva come "personaggio" o
@@ -7397,7 +7429,11 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     const sUrl = process.env.VITE_SUPABASE_URL || '';
     const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
     let response = await callUniversalAi(
-      "groq", [{ role: "user", content: prompt }], { temperature: 0.7 },
+      // DeepSeek entra SOLO in coda ai gratuiti e SOLO se c'e' davvero
+      // qualcuno che aspetta: groq -> gemini -> agnes -> together -> mistral
+      // e, per l'utente in diretta, deepseek come ultimo anello prima del
+      // nulla. I lavori di sfondo si fermano ai gratuiti.
+      "groq", [{ role: "user", content: prompt }], { temperature: 0.7, ultimaSpiaggiaPagante: utenteInAttesa },
       "rigenerazione_audio", sUrl, sKey, getGroqClient()
     );
     if (response?.truncated) {
@@ -7408,7 +7444,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       console.warn("[regenerateAudioguideText] Output troncato, retry con max_tokens esplicito raddoppiato.");
       try {
         response = await callUniversalAi(
-          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096 },
+          "groq", [{ role: "user", content: prompt }], { temperature: 0.7, max_tokens: 4096, ultimaSpiaggiaPagante: utenteInAttesa },
           "rigenerazione_audio_retry_troncato", sUrl, sKey, getGroqClient()
         );
       } catch (retryErr: any) {
@@ -7469,7 +7505,12 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       }
       if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'missing_text' });
 
-      let cleanResult = await regenerateAudioguideText({ text: text.slice(0, 12000), poiName, mode: guideMode, location, previousText, lang: langSafe, focusInstruction });
+      // `regenUser` viene da requireAuth: e' 'background-script' per chi entra
+      // col segreto di infrastruttura, un uuid vero per una persona. Chi apre
+      // la scheda di un POI o chiede "di piu'" mentre ascolta sta aspettando
+      // davvero: per lui DeepSeek resta l'ultimo anello. Il prefetch di cache
+      // no.
+      let cleanResult = await regenerateAudioguideText({ text: text.slice(0, 12000), poiName, mode: guideMode, location, previousText, lang: langSafe, focusInstruction, utenteInAttesa: regenUser !== 'background-script' });
 
       // NARRAZIONE BASE con poi_id: si salva in poi_audioguides (stessa
       // chiave (poi, LINGUA, personaggio+registro) di /api/poi/audioguide),
@@ -7697,7 +7738,11 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
       }
 
       // 3. Genera/traduce nella lingua target (stessa logica di /api/regenerate).
-      const text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower });
+      // Questa rotta serve DUE cose con lo stesso codice: l'utente che ha
+      // pagato l'audioguida e la sta aspettando, e il warm-up della cache
+      // (`fonteDiritto === 'script_prefetch'`, sopra). Solo il primo giustifica
+      // un motore a pagamento.
+      const text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower, utenteInAttesa: callerUserId !== 'background-script' });
       if (!text || !text.trim()) {
         // Nessuna narrazione generata: se si è addebitato ORA si restituisce
         // (best-effort) e si tolgono ENTRAMBE le prove d'acquisto — la chiave
@@ -18467,12 +18512,27 @@ ${extract || "Nessuna fonte trovata"}
 </materiale>`;
           }
 
-          // Solo motori gratuiti (02/09/2026): `poiEnrichEngine` e' groq,
-          // agnes o cerebras, e la coda di ripiego non contiene DeepSeek.
-          // Dal 31/08 al 02/09 il flag `ultimaSpiaggiaPagante` lo faceva
-          // entrare "quando c'e' un utente che aspetta": 14.423 chiamate su
-          // questa sola rotta, tutte con userId nullo. Revocato.
-          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" } }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
+          // Stessa regola dell'audioguida (03/09/2026, committente): «l'utente
+          // on the fly puo' usare DeepSeek, qualsiasi processo di
+          // arricchimento in background no».
+          //
+          // Questa rotta ha due usi che si somigliano solo da fuori: l'utente
+          // che apre la scheda di un POI nuovo — e allora sta guardando uno
+          // schermo vuoto, aspettando — e gli arricchitori di massa, per i
+          // quali la latenza non la vede nessuno e un motore a pagamento e'
+          // solo una fattura (14.423 chiamate dal 31/08 al 02/09, tutte senza
+          // user_id).
+          //
+          // La condizione portante e' l'IDENTITA' del chiamante: chi entra col
+          // segreto di infrastruttura e' marcato `background-script` da
+          // requireAuth, in un punto solo del server, e non puo' fingersi
+          // utente. `!requestedEngine` resta come seconda conferma — gli
+          // script passano `engine` esplicitamente — ma da sola non bastava:
+          // dipendeva dal fatto che ogni script se lo ricordasse, ed e'
+          // esattamente il "punto per punto" che ha fatto scappare la spesa
+          // due volte.
+          const utenteInAttesa = !requestedEngine && userId !== 'background-script';
+          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
           const parsed = parseSafeJSON(aiResponse.data || "{}");
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale
@@ -18891,8 +18951,11 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       // streamUniversalAi), quindi il 401/429 JSON arriva intero al client.
       // Lo userId per il log usage è quello del TOKEN, non quello del body.
       if (!(await cancelloGenerazione(req, res))) return;
-      // Groq come motore primario (velocità), DeepSeek come fallback
-      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" } }, res, groq, `poi_enrichment | Target: ${name}`, req.userId, saveToSharedPois);
+      // Groq come motore primario (velocità), poi agnes; DeepSeek come ultimo
+      // anello SOLO se dietro c'e' una persona che aspetta la scheda — mai per
+      // i lavori di sfondo, che qui possono arrivare col segreto di
+      // infrastruttura come su ogni altra rotta protetta.
+      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: req.userId !== 'background-script' }, res, groq, `poi_enrichment | Target: ${name}`, req.userId, saveToSharedPois);
 
     } catch (e: any) {
       console.error("[/api/poi/enrich-stream] Error:", e.message);
@@ -25307,7 +25370,7 @@ out body;`;
         ).catch(() => null);
         const sp = spRes?.data?.[0] || {};
         const base = sp.audio_script || sp.description_long || sp.description_ai || sp.description_short || sp.description || poiName;
-        text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower });
+        text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower, utenteInAttesa: req.userId !== 'background-script' });
         if (text && text.trim()) {
           await axios.post(
             `${supabaseUrl}/rest/v1/poi_audioguides`,
