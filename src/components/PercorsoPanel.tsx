@@ -112,11 +112,14 @@ export default function PercorsoPanel({ language, onClose }: Props) {
         className="px-6 py-4 border-b border-black/5 flex items-center justify-between sticky top-0 z-10 bg-white/80 cursor-pointer"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <div className="flex items-center gap-3 min-w-0">
+        {/* flex-1 min-w-0 insieme, non min-w-0 da solo (03/09/2026): stesso
+            difetto trovato in DayPassCard, testo a capo un carattere per
+            riga su Safari/PWA senza un flex-basis esplicito. */}
+        <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
             {isCollapsed ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
           </div>
-          <div className="min-w-0">
+          <div className="flex-1 min-w-0">
             <h2 className="text-lg font-black text-emerald-800 tracking-tight leading-none flex items-center gap-1.5">
               <Route className="w-4 h-4" /> {inCorsoPercorso ? tr('pc_in_corso') : tr('pc_titolo')}
             </h2>
@@ -147,9 +150,13 @@ export default function PercorsoPanel({ language, onClose }: Props) {
           </div>
         )}
 
-        {/* PERCORSO IN CORSO: le tappe che restano, le modifiche, l'auto, la fine. */}
+        {/* PERCORSO IN CORSO: le tappe che restano e le modifiche. La lista
+            sola qui dentro (scorre); il piede con «in auto»/«termina» e`
+            FUORI da questo contenitore che scorre (03/09/2026, collaudo:
+            «le opzioni rimangono sotto e non visibili» — erano l'ultimo
+            elemento della lista, da scovare scorrendo). */}
         {!isCollapsed && inCorsoPercorso && giro && vista && (
-          <div className="p-4 space-y-3 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
+          <div className="p-4 space-y-3">
             <p className="text-[11px] text-emerald-900/70 leading-snug">{tr('pc_aggiungi_togli_hint')}</p>
             {errore && (
               <div className="px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-100 flex items-center gap-3">
@@ -191,23 +198,6 @@ export default function PercorsoPanel({ language, onClose }: Props) {
                   </div>
                 );
               })}
-            </div>
-            <p className="text-[11px] text-emerald-900/60 tabular-nums">
-              {distanza(vista.metriRimanenti)} {tr('tour_mancanti')} <span className="text-black/20">·</span> {distanza(vista.metriTotali)} {tr('tour_totali')}
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => { const s = tourService.sequenzaPerNavigatore(); if (s) navigaInAutoItinerario(s); }}
-                className="flex-1 px-3 py-2.5 rounded-xl bg-white border border-black/10 text-[11px] font-bold text-emerald-900 flex items-center justify-center gap-1.5 active:scale-95"
-              >
-                <Car className="w-4 h-4" /> {tr('pc_in_auto')}
-              </button>
-              <button
-                onClick={termina}
-                className="px-3 py-2.5 rounded-xl bg-red-50 text-red-600 text-[11px] font-black flex items-center gap-1.5 active:scale-95 shrink-0"
-              >
-                <Flag className="w-4 h-4" /> {vista.stato === 'FINITO' ? tr('pc_nuovo') : tr('pc_termina')}
-              </button>
             </div>
           </div>
         )}
@@ -339,6 +329,32 @@ export default function PercorsoPanel({ language, onClose }: Props) {
           </>
         )}
       </div>
+
+      {/* IL PIEDE, FISSO — MAI DA SCORRERE (03/09/2026). Le due azioni che
+          contano quando il percorso e` avviato — l'uscita in auto e la fine
+          — stanno fuori dall'area che scorre, come «Crea e avvia» sta fisso
+          in cima nella composizione. */}
+      {!isCollapsed && inCorsoPercorso && giro && vista && (
+        <div className="p-4 pt-3 border-t border-black/5 bg-white/90 backdrop-blur space-y-2 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
+          <p className="text-[11px] text-emerald-900/60 tabular-nums">
+            {distanza(vista.metriRimanenti)} {tr('tour_mancanti')} <span className="text-black/20">·</span> {distanza(vista.metriTotali)} {tr('tour_totali')}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { const s = tourService.sequenzaPerNavigatore(); if (s) navigaInAutoItinerario(s); }}
+              className="flex-1 px-3 py-2.5 rounded-xl bg-white border border-black/10 text-[11px] font-bold text-emerald-900 flex items-center justify-center gap-1.5 active:scale-95"
+            >
+              <Car className="w-4 h-4" /> {tr('pc_in_auto')}
+            </button>
+            <button
+              onClick={termina}
+              className="px-3 py-2.5 rounded-xl bg-red-50 text-red-600 text-[11px] font-black flex items-center gap-1.5 active:scale-95 shrink-0"
+            >
+              <Flag className="w-4 h-4" /> {vista.stato === 'FINITO' ? tr('pc_nuovo') : tr('pc_termina')}
+            </button>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

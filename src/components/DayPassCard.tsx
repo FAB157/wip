@@ -99,9 +99,15 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
   return (
     <div className={`bg-gradient-to-r from-blue-900 to-blue-700 text-white rounded-2xl ${compact ? 'p-3' : 'p-4'}`}>
       <div className="flex items-center justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
+        {/* flex-1 min-w-0 INSIEME, non min-w-0 da solo (03/09/2026, collaudo
+            PWA su iPhone: il testo andava a capo un carattere per riga).
+            Senza un flex-basis esplicito, Safari puo' calcolare male lo
+            spazio in un flex annidato e comprimere il contenitore a una
+            larghezza quasi zero. Stesso pattern usato altrove nel progetto
+            (TourBanner, PercorsoPanel): mai l'uno senza l'altro. */}
+        <div className="flex items-start gap-3 flex-1 min-w-0">
           <Ticket className={`${compact ? 'w-5 h-5' : 'w-6 h-6'} mt-0.5 shrink-0`} />
-          <div className="min-w-0">
+          <div className="flex-1 min-w-0">
             <h3 className="font-bold">WIP Day Pass</h3>
             {dayPass?.active ? (
               <p className="text-sm text-blue-100 mt-0.5">
@@ -130,7 +136,7 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
           per ricaricare. Prima qui c'era solo il toast dell'errore. */}
       {!dayPass?.active && creditiPochi && (
         <div className="mt-3 pt-3 border-t border-white/20 flex items-center gap-3">
-          <p className="flex-1 text-[12px] text-blue-100 leading-snug">
+          <p className="flex-1 min-w-0 text-[12px] text-blue-100 leading-snug">
             {saldo != null
               ? tr('gr_dp_saldo_non_basta').replace('{saldo}', String(saldo)).replace('{costo}', String(DAY_PASS_COST))
               : tr('gr_dp_crediti_insufficienti').replace('{n}', String(DAY_PASS_COST))}

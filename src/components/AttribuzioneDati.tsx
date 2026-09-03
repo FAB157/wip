@@ -22,12 +22,83 @@
  */
 import { memo } from 'react';
 
-/** Fonti riconosciute. La chiave e' il valore di `shared_pois.source`. */
-const FONTI: Record<string, { nome: string; url: string; nota?: string }> = {
+/**
+ * Fonti riconosciute. La chiave e' il valore di `shared_pois.source`.
+ * `etichetta`: cosa viene dalla fonte ("Dati della cavita'", "Scheda e foto"...).
+ * `licenza`: SOLO se verificata sulla fonte, vedi regola qui sopra.
+ */
+const FONTI: Record<string, {
+  nome: string; url: string; nota?: string; etichetta?: string; licenza?: string;
+}> = {
   grottocenter: {
     nome: 'Grottocenter',
     url: 'https://www.grottocenter.org',
     nota: 'Associazione Wikicaves',
+    etichetta: 'Dati della cavita\' da',
+  },
+  // Rijksdienst voor het Cultureel Erfgoed: registro nazionale olandese dei
+  // monumenti. Licenza VERIFICATA il 03/09/2026 su beeldbank.cultureelerfgoed.nl
+  // — CC-BY-SA 4.0, che l'attribuzione la richiede esplicitamente.
+  rce_nl: {
+    nome: 'Rijksdienst voor het Cultureel Erfgoed',
+    url: 'https://www.cultureelerfgoed.nl',
+    etichetta: 'Scheda e foto da',
+    licenza: 'CC BY-SA 4.0',
+  },
+  // National Register of Historic Places, National Park Service. Licenza
+  // VERIFICATA il 03/09/2026: i metadati del servizio danno access constraints
+  // "None" e non rivendicano copyright (opera del governo federale USA, 17
+  // U.S.C. 105). ATTENZIONE: nps.gov/aboutus/disclaimer.htm chiede che «when
+  // such information is published or republished COMMERCIALLY [...] the
+  // copyright notice must include a reference to the original U.S. Government
+  // work» — per un'app a pagamento come la nostra il credito qui sotto non e'
+  // cortesia, e' la condizione d'uso.
+  nps_nrhp: {
+    nome: 'National Register of Historic Places',
+    url: 'https://www.nps.gov/subjects/nationalregister/',
+    nota: 'National Park Service, opera del governo federale USA',
+    etichetta: 'Dati del vincolo da',
+    licenza: 'pubblico dominio',
+  },
+  // National Heritage List for England, Historic England. Licenza VERIFICATA
+  // il 03/09/2026 nel campo `copyrightText` del FeatureServer ufficiale
+  // (owner gis_historicengland): «© Crown Copyright 2026. Contains Ordnance
+  // Survey data © Crown copyright and database right 2026. Released under
+  // OGL.» La OGL v3 impone la citazione della fonte e la conservazione
+  // dell'avviso di copyright: il credito qui sotto e' una CONDIZIONE d'uso.
+  // Il riferimento a Ordnance Survey va tenuto perche' riguarda le coordinate,
+  // che sono esattamente cio' che importiamo.
+  he_nhle: {
+    nome: 'Historic England — National Heritage List for England',
+    url: 'https://historicengland.org.uk/listing/the-list/',
+    nota: '© Crown Copyright. Contains Ordnance Survey data © Crown copyright and database right',
+    etichetta: 'Dati del vincolo da',
+    licenza: 'OGL v3',
+  },
+  // SPAGNA. Non esiste un registro BIC nazionale scaricabile (il ministero
+  // pubblica solo un motore di ricerca), quindi il dato viene dalle comunita'
+  // autonome: due fonti, due crediti distinti. Entrambe CC BY, che
+  // l'attribuzione la impone.
+  //
+  // Instituto Andaluz del Patrimonio Historico — "Localizador Cartografico
+  // del Patrimonio Cultural Andaluz". Licenza VERIFICATA il 03/09/2026 sulla
+  // scheda del dataset nel portale open data della Junta de Andalucia.
+  iaph_es: {
+    nome: 'Instituto Andaluz del Patrimonio Histórico',
+    url: 'https://www.iaph.es',
+    nota: 'Junta de Andalucía',
+    etichetta: 'Dati del vincolo da',
+    licenza: 'CC BY',
+  },
+  // Gobierno de Aragon — "Bienes de Interes Cultural: informacion geografica".
+  // Licenza VERIFICATA il 03/09/2026 su datos.gob.es (CC BY 4.0). Le coordinate
+  // native sono UTM ETRS89 fuso 30N, convertite in WGS84 in fase di import.
+  aragon_es: {
+    nome: 'Gobierno de Aragón',
+    url: 'https://opendata.aragon.es',
+    nota: 'IDEAragón',
+    etichetta: 'Dati del vincolo da',
+    licenza: 'CC BY 4.0',
   },
 };
 
@@ -46,7 +117,7 @@ function AttribuzioneDati({ source, className = '' }: Props) {
 
   return (
     <p className={`text-[10px] leading-snug text-[#1e3a8a]/50 mb-6 px-1 ${className}`}>
-      Dati della cavita' da{' '}
+      {f.etichetta || 'Dati da'}{' '}
       <a
         href={f.url}
         target="_blank"
@@ -56,6 +127,7 @@ function AttribuzioneDati({ source, className = '' }: Props) {
         {f.nome}
       </a>
       {f.nota ? ` (${f.nota})` : ''}
+      {f.licenza ? ` — ${f.licenza}` : ''}
     </p>
   );
 }

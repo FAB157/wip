@@ -1660,8 +1660,15 @@ export default function App() {
               (svolta, metri, tappa, ETA): ora le mostra nella stessa card.
               La X la NASCONDE per la tappa in corso (il giro continua) e
               ricompare alla tappa dopo; fermare il giro si fa dal cruscotto. */}
+          {/* Per il PERCORSO SU MISURA (03/09/2026, committente: «riclicca il
+              tasto verde: deve nascondere l'itinerario; se si attiva deve
+              tornare l'itinerario e il banner blu») il tasto verde della
+              mappa e' anche l'interruttore di questo banner: nascosto col
+              pannello, ricompare riattivandolo. Il giro classico Dieci Tappe
+              non dipende da isPercorsoMode: resta sempre visibile com'era. */}
           {vistaGiro && vistaGiro.avviato && !vistaGiro.inPausa && vistaGiro.stato !== 'FINITO'
-            && activeTab === "map" && cardSvolteNascostaPer !== String(tourService.tappaAttuale()?.id ?? '') && (
+            && activeTab === "map" && cardSvolteNascostaPer !== String(tourService.tappaAttuale()?.id ?? '')
+            && (vistaGiro.modo !== 'percorso' || isPercorsoMode) && (
             <NavigationOverlay
               state="navigating"
               language={language}

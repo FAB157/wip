@@ -1062,6 +1062,15 @@ class TourService {
     this.avviato = true;
     this.pausaManuale = false;
     this.stato = { ...this.stato, stato: 'IN_CAMMINO', da: Date.now(), fermoDa: null };
+    // LA PRIMA ISTRUZIONE, SUBITO (03/09/2026, collaudo: «appena creato il
+    // percorso, cliccato l'altoparlante, non e' uscita l'istruzione»).
+    // aggiornaPasso(pos) calcola la svolta SOLO quando arriva un fix GPS: fra
+    // «Avvia» e il primo campione la card e il tasto «Ripeti» restavano
+    // muti, e in un percorso su misura (senza audioguide) e' l'unica voce
+    // che si sente. Qui si legge lo step iniziale senza aspettare una
+    // posizione — stesso principio di useWalkingNavigation, che mostra la
+    // prima istruzione appena calcolato il percorso, non al primo passo.
+    this.aggiornaPassoIniziale();
     this.salva();
     this.avvisa();
     // Sul telefono l'arrivo lo dichiara il servizio nativo: le tappe entrano
@@ -1342,6 +1351,27 @@ class TourService {
    * manovra (15 m) o quando la successiva e` gia` piu` vicina: cosi` un fix
    * saltato non lascia il navigatore a ripetere una svolta gia` fatta.
    */
+  /**
+   * La prima istruzione, senza aspettare un fix GPS (03/09/2026). Si legge
+   * il primo step della tratta corrente: la distanza resta sconosciuta
+   * (nessuna posizione da cui misurarla) ma il TESTO della svolta c'e' gia',
+   * ed e' quello che manca fra «Avvia» e il primo campione GPS.
+   */
+  private aggiornaPassoIniziale() {
+    const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
+    const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
+    this.tappaDelPasso = this.stato.tappaCorrente;
+    this.passoCorrente = 0;
+    if (steps.length < 2) { this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null }; return; }
+    const s = steps[0];
+    this.navAttuale = {
+      istruzione: istruzionePerStep(s, this.lingua, this.tappaCorrente()?.nome || undefined),
+      metri: null,
+      attraversamento: false,
+      manovra: s?.maneuver ? { type: String(s.maneuver.type || ''), modifier: String(s.maneuver.modifier || '') } : null,
+    };
+  }
+
   private aggiornaPasso(pos: { lat: number; lon: number }) {
     const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
     const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];
@@ -1680,7 +1710,9 @@ class TourService {
         giro.problemi = g.problemi || [];
         this.stato = { stato: 'IN_CAMMINO', tappaCorrente: 0, da: Date.now() };
         this.passoCorrente = 0; this.tappaDelPasso = -1;
-        this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
+        // La prima svolta della strada nuova, subito (03/09/2026): stesso
+        // buco di avvia(), qui dopo un ricalcolo riuscito.
+        this.aggiornaPassoIniziale();
         this.salva(); this.avvisa();
         void this.cercaLungoLaStradaGiro();
         return true;
@@ -1719,7 +1751,7 @@ class TourService {
     giro.metri = Math.round(giro.tratte.reduce((s: number, l: any) => s + (l?.distance || 0), 0)) || giro.metri;
     this.stato = { ...this.stato, tappaCorrente: 0, stato: 'IN_CAMMINO', da: Date.now() };
     this.passoCorrente = 0; this.tappaDelPasso = -1;
-    this.navAttuale = { istruzione: null, metri: null, attraversamento: false, manovra: null };
+    this.aggiornaPassoIniziale();
     this.salva(); this.avvisa();
     // Ordine aggiornato ma SENZA rotta nuova: non e' un ricalcolo riuscito.
     return false;
