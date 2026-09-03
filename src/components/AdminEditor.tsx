@@ -234,7 +234,10 @@ export default function AdminEditor() {
       const mappedPois = (poisResponse.data || []).map((p: any) => ({
         ...p,
         status: p.status || (p.verified ? 'verified' : 'draft'),
-        is_gem: p.is_gem || (p.category === 'gemme') || false
+        // Solo il flag (03/09/2026): prima aprire un POI con category='gemme'
+        // e salvarlo lo PROMOVEVA a gemma senza che l'admin toccasse nulla —
+        // e la categoria vale per 9.062 righe giudicate non-gemme.
+        is_gem: p.is_gem === true
       }));
 
       setPois(mappedPois);

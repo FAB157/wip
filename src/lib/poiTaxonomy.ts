@@ -408,7 +408,27 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
 
   // Le gemme sono una macro a sé: restano gemme anche se sono chiese o musei,
   // ma conservano la sotto-categoria culturale per i sub-chip.
-  const isGem = p.is_gem === true || raw === "gemme";
+  //
+  // CHI DECIDE SE UN POI E' UNA GEMMA: **solo `is_gem`** (03/09/2026).
+  //
+  // Fino a oggi questa riga era `p.is_gem === true || raw === "gemme"`, e
+  // quell'`||` mandava all'aria il declassamento. `gemme` non e' soltanto il
+  // nome della macro: e' anche la `category` con cui e' stato importato il
+  // CSV da Wikipedia, dove faceva da contenitore e non da giudizio di valore.
+  // Risultato misurato oggi: **9.093 righe con `category='gemme'`, di cui
+  // 9.062 con `is_gem=false`** (8.609 visibili). Il modello le aveva giudicate
+  // non-gemme, la chip continuava a mostrarle. E' cosi' che Avenza e Marina di
+  // Carrara restavano gemme benche' il processo di declassamento avesse fatto
+  // il suo lavoro: aveva spento il flag, ma nessuno guardava il flag.
+  //
+  // Quelle righe NON hanno una categoria vera da recuperare: tutte e 9.062
+  // hanno `poi_type='isolated'` e `source='csv'`, solo 174 un wikidata. La
+  // loro categoria d'origine non e' mai stata registrata. Ricadono quindi
+  // sotto "monumenti", che e' il contenitore culturale generico dell'app e
+  // che il campione conferma (chiese, piazze, gallerie, cappelle): meglio
+  // approssimate che spacciate per gemme. Chi volesse la categoria esatta
+  // deve farci passare una ricategorizzazione, non un `||`.
+  const isGem = p.is_gem === true;
 
   const culturalSub = (value: string): string | null => {
     if (CHIESE_TYPES.includes(value)) return "chiese";
@@ -436,6 +456,12 @@ export function resolvePoiTaxonomy(p: any): { macro: string | null; subId: strin
   // restano "panorami" dentro Monumenti: non hanno una famiglia precisa.
   if (cultural && (NATURA_FAMIGLIE as readonly string[]).includes(cultural)) return { macro: "natura", subId: cultural };
   if (cultural) return { macro: "monumenti", subId: cultural };
+
+  // Import CSV di Wikipedia con `category='gemme'` ma `is_gem=false`: senza
+  // questa riga uscirebbero con `macro: null` e sparirebbero dalla mappa,
+  // perche' le chip filtrano per macro. Sono 8.609 luoghi visibili e veri —
+  // vanno mostrati, solo non fra le gemme. Vedi il commento su `isGem`.
+  if (raw === "gemme") return { macro: "monumenti", subId: "monumenti_sub" };
 
   if (LOCALI_TYPES.includes(raw)) return { macro: "locali", subId: subCanonical };
   if (FAMIGLIE_TYPES.includes(raw)) return { macro: "famiglie", subId: subCanonical || subCategoryToFilterId(raw) };

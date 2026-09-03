@@ -353,7 +353,14 @@ export function isCategoryAllowed(
   // Prima questo controllo stava dopo le due esclusioni qui sotto, e una
   // gemma tematica restava zitta. Il nativo fa già così (CategoryMap.isActive
   // guarda is_gem per primo).
-  if (poi.premium || poi.is_gem || cat === 'gemme') return activeSubcats.gemme ?? true;
+  // Solo il FLAG, non la categoria (03/09/2026): `category='gemme'` e' il
+  // contenitore dell'import CSV di Wikipedia e vale per 9.062 righe che il
+  // modello ha giudicato NON gemme. Quelle rispondono all'interruttore dei
+  // monumenti, come la macro in cui ora ricadono (vedi poiTaxonomy). Senza la
+  // riga sotto resterebbero mute: `cat` vale 'gemme' e non combacia con
+  // nessuno degli elenchi piu' avanti.
+  if (poi.premium || poi.is_gem === true) return activeSubcats.gemme ?? true;
+  if (cat === 'gemme') return activeSubcats.monumenti ?? true;
 
   // BENI CULTURALI: scheda e foto, MAI audioguida.
   // Sono i beni dei registri nazionali del patrimonio promossi a POI (circa

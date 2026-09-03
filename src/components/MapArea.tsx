@@ -154,7 +154,10 @@ const EVERYTHING_ORDER = [
   'shopping', 'lusso', 'beni_culturali', 'community', 'neve', 'fontanelle', 'percorsi', 'utilita', 'altro',
 ];
 function everythingGroupOf(row: { category: string; sub_category: string | null; fonte: string; group_key: string; is_gem?: boolean }): string {
-  if (row.is_gem === true || row.group_key === 'gemme') return 'gemme';
+  // Solo `is_gem` decide (03/09/2026): `group_key === 'gemme'` arriva dalla
+  // `category` del CSV Wikipedia, che per 9.062 righe su 9.093 vale 'gemme'
+  // pur avendo `is_gem=false`. Stesso motivo spiegato in poiTaxonomy.ts.
+  if (row.is_gem === true) return 'gemme';
   const raw = String(row.category || '').toLowerCase().trim();
   const sub = String(row.sub_category || '').toLowerCase().trim();
   if (row.fonte === 'route_geometries' || row.group_key.startsWith('percorsi_')) return 'percorsi';
@@ -3894,7 +3897,13 @@ function MapArea({
             playground: "famiglie", marketplace: "utilita"
           };
 
-          const derivedCategory = item.category === 'gemme' ? 'gemme' : (osmToUiCategory[item.category] || item.category || "monumenti");
+          // `category='gemme'` NON basta a fare una gemma (03/09/2026): e' la
+          // categoria dell'import CSV di Wikipedia, e 9.062 righe su 9.093 la
+          // portano con `is_gem=false`. Solo il flag decide; le altre finiscono
+          // fra i monumenti, come stabilito in poiTaxonomy.resolvePoiTaxonomy.
+          const eGemma = item.is_gem === true;
+          const derivedCategory = eGemma ? 'gemme'
+            : (item.category === 'gemme' ? 'monumenti' : (osmToUiCategory[item.category] || item.category || "monumenti"));
 
           return {
             id: item.id,
@@ -3917,7 +3926,7 @@ function MapArea({
             // dettaglio.
             ...(item.teaser ? { [`teaser_text_${String(language || 'it').toLowerCase()}`]: item.teaser } : {}),
             image_url: item.image_url,
-            is_gem: item.is_gem || item.category === 'gemme',
+            is_gem: eGemma,
             isFromDb: true,
             status: item.status || 'verified'
           };
@@ -5298,7 +5307,8 @@ function MapArea({
    * destra) e un tocco mette il POI nella bozza o nel giro in corso.
    */
   const createPoiIcon = (poi: Poi, conPiu = false) => {
-    const isGem = !!(poi.is_gem || poi.category === "gemme");
+    // Solo il flag: vedi poiTaxonomy.resolvePoiTaxonomy (03/09/2026).
+    const isGem = poi.is_gem === true;
     const pinSize = isGem ? 46 : 34;
     const effectiveCat = poi.baseCategory || poi.category;
     const osmSubCat = poi.subCategory || "";
@@ -5411,7 +5421,7 @@ function MapArea({
     // `conPiu` fa parte della chiave: senza, il primo pin disegnato deciderebbe
     // per tutti e il "+" verde non comparirebbe (o non sparirebbe entrando nel
     // giro). E` un solo bit: la cache resta efficace.
-    const cacheKey = `${!!(poi.is_gem || poi.category === "gemme")}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}`;
+    const cacheKey = `${poi.is_gem === true}|${poi.baseCategory || poi.category}|${poi.category || ""}|${poi.subCategory || ""}|${isAccessible(poi)}|${(poi as any).posizioneApprossimata ? 'approx' : ''}|${conPiu ? 'piu' : ''}`;
     let icon = iconCacheRef.current.get(cacheKey);
     if (!icon) {
       icon = createPoiIcon(poi, conPiu);

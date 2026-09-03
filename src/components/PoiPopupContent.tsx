@@ -706,7 +706,9 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   const catHex = CATEGORY_HEX[effectiveCat] || CATEGORY_HEX[poi.category] || "#1e3a8a";
   const catGrad = CATEGORY_GRADIENT[effectiveCat] || CATEGORY_GRADIENT[poi.category] || "from-emerald-900 via-emerald-800 to-green-700";
   const catEmoji = CATEGORY_EMOJIS[effectiveCat] || CATEGORY_EMOJIS[poi.category] || "📍";
-  const isGem = !!(poi.is_gem || poi.category === "gemme");
+  // Solo il flag decide (03/09/2026): `category='gemme'` e' la categoria
+  // dell'import CSV di Wikipedia, non un giudizio. Vedi poiTaxonomy.
+  const isGem = poi.is_gem === true;
   const accessible = checkPoiAccessibility(poi);
 
   // Technical data parsed

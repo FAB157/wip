@@ -380,7 +380,9 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
     >
       <AnimatePresence>
         {entries.slice(0, 2).map((entry, index) => {
-          const isGem = entry.poi?.premium || entry.poi?.is_gem || entry.poi?.category === 'gemme';
+          // Solo il flag (03/09/2026), come in poiTaxonomy: la categoria
+          // 'gemme' e' il contenitore dell'import CSV, non un giudizio.
+          const isGem = entry.poi?.premium || entry.poi?.is_gem === true;
           const isLead = index === 0;
 
           return (
