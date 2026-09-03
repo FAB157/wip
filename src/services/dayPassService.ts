@@ -21,6 +21,7 @@ import {
 } from '../lib/pricing';
 import { isNativeOfflineSupported } from './offlinePackageService';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
+import { getApiUrl, apiFetch } from '../lib/api';
 
 // Wrapper tipizzato condiviso (src/plugins/ItaintaBackgroundPoi.ts).
 const plugin = ItaintaBackgroundPoi;
@@ -102,20 +103,31 @@ export async function activateDayPass(): Promise<DayPassState> {
   const userId = userData?.user?.id;
   if (!userId) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
 
-  // ATTIVAZIONE ATOMICA VIA RPC: l'INSERT diretto su user_passes è stato
-  // rimosso (permetteva un pass gratis con cap arbitrario). activate_day_pass
-  // verifica "nessun pass attivo", addebita 200 crediti e inserisce con
-  // cap=40/24h lato server, tutto in una transazione.
-  const { data: passRow, error: rpcError } = await supabase.rpc('activate_day_pass');
-  if (rpcError) {
-    const m = rpcError.message || '';
-    if (m.includes('insufficient_credits')) {
+  // ATTIVAZIONE LATO SERVER (03/09/2026). Prima si chiamava direttamente la
+  // RPC `activate_day_pass` col token dell'utente, e NON POTEVA FUNZIONARE:
+  // quella funzione chiama `consume_credits`, che scrive su `user_profiles`,
+  // dove il trigger `protect_profile_sensitive_cols` ammette solo
+  // `service_role` o admin. `security definer` cambia il ruolo di esecuzione,
+  // non la rivendicazione del JWT, quindi `auth.role()` restava
+  // 'authenticated' e ogni acquisto moriva con
+  //   P0001 «Campo riservato: modifica non consentita».
+  // Non era un caso limite: il Day Pass non funzionava per NESSUNO.
+  //
+  // Ora l'addebito lo fa il server con la chiave di servizio, come per tutto
+  // il resto dell'economia. Il trigger resta com'e': ha ragione lui, nessun
+  // client deve poter muovere i crediti.
+  const r = await apiFetch(getApiUrl('/api/day-pass/activate'), { method: 'POST' });
+  if (!r.ok) {
+    const corpo = await r.json().catch(() => ({} as any));
+    const e = String(corpo?.error || '');
+    if (r.status === 402 || e === 'insufficient_credits') {
       throw new Error(getTranslation('gr_dp_crediti_insufficienti', linguaCorrente()).replace('{n}', String(DAY_PASS_COST)));
     }
-    if (m.includes('pass_already_active')) throw new Error(getTranslation('gr_dp_gia_attivo', linguaCorrente()));
-    if (m.includes('login_required')) throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
+    if (r.status === 409 || e === 'pass_already_active') throw new Error(getTranslation('gr_dp_gia_attivo', linguaCorrente()));
+    if (r.status === 401 || e === 'login_required') throw new Error(getTranslation('gr_dp_accedi', linguaCorrente()));
     throw new Error(getTranslation('gr_dp_fallita_riprova', linguaCorrente()));
   }
+  const passRow = await r.json().catch(() => ({} as any));
   const expiresAtMs = passRow?.expires_at ? new Date(passRow.expires_at).getTime() : Date.now() + 24 * 60 * 60 * 1000;
   notifyCreditsChanged({ userId });
 

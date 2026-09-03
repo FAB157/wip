@@ -2709,6 +2709,11 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     // (PRICING_LIST): il gate crediti server-side deve usare gli STESSI valori.
     replace_stop: 8,
     photo_search: 5, poi_detail: 5, podcast_daily: 15,
+    // WIP Day Pass: 24 ore hands-free, 40 audioguide. Mancava (03/09/2026):
+    // finche' l'attivazione stava nel client il server non doveva conoscerne
+    // il prezzo, ma ora l'addebito lo fa lui e senza questa voce `prezzoDi`
+    // avrebbe restituito `undefined`. Stesso valore di PRICING_LIST.day_pass.
+    day_pass: 200,
     // Pass Museo: Vision illimitata per MUSEUM_PASS_HOURS ore (visita indoor).
     // 100 crediti (~1€): break-even col costo AI (~1,2 cent/scansione gpt-4o)
     // anche nel caso peggiore del tetto scansioni (MUSEUM_PASS_MAX_SCANS=100).
@@ -7453,6 +7458,83 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     }
     return (response.data || response.text || "").trim().replace(/[#*_~`]/g, '');
   }
+
+  /**
+   * ATTIVAZIONE DEL DAY PASS — 200 crediti, 24 ore, 40 audioguide.
+   *
+   * PERCHE' STA QUI E NON PIU' NEL CLIENT (03/09/2026, difetto riprodotto).
+   * Il client chiamava `supabase.rpc('activate_day_pass')` col PROPRIO token.
+   * Quella funzione e' `security definer` e chiama `consume_credits`, che
+   * scrive su `user_profiles`; ma il trigger `protect_profile_sensitive_cols`
+   * lascia passare i cambi di `purchased_credits`/`earned_credits` solo se
+   * `auth.role() = 'service_role'` o admin. `security definer` cambia il ruolo
+   * DI ESECUZIONE, non la rivendicazione del JWT: `auth.role()` restava
+   * 'authenticated' e il trigger sollevava
+   *   P0001 «Campo riservato: modifica non consentita»
+   * su OGNI acquisto, per OGNI utente. Non era un caso limite: il Day Pass
+   * non poteva funzionare dal browser da quando esiste quel trigger.
+   *
+   * La cura e' la stessa gia' adottata per il resto dell'economia (vedi
+   * `consumeCreditsServer`): l'addebito lo fa il server con la chiave di
+   * servizio. Il trigger resta intatto — e' lui ad avere ragione: nessun
+   * client deve poter muovere i crediti.
+   *
+   * Ordine delle operazioni: prima si verifica che non ci sia gia' un pass
+   * attivo, poi si addebita, poi si scrive il pass. Se la scrittura fallisce
+   * si RIMBORSA subito, perche' 200 crediti tolti senza pass sono un danno
+   * reale e silenzioso.
+   */
+  app.post("/api/day-pass/activate", rateLimiter, requireAuth, async (req: any, res) => {
+    const userId: string = req.userId;
+    if (!userId || userId === 'background-script') {
+      return res.status(401).json({ error: 'login_required' });
+    }
+    const H = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+    try {
+      // 1. Un solo pass attivo per volta (stessa regola della vecchia RPC).
+      const attivi = await axios.get(
+        `${supabaseUrl}/rest/v1/user_passes?user_id=eq.${encodeURIComponent(userId)}&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&select=id,expires_at,guides_used,guides_cap&order=expires_at.desc&limit=1`,
+        { headers: H, timeout: 6000 });
+      if (attivi.data?.length) {
+        const p = attivi.data[0];
+        return res.status(409).json({
+          error: 'pass_already_active',
+          expires_at: p.expires_at,
+          guides_used: p.guides_used,
+          guides_cap: p.guides_cap,
+        });
+      }
+
+      // 2. Addebito col service role: qui il trigger lascia passare.
+      const costo = await prezzoDi('day_pass');
+      const esito = await consumeCreditsServer(userId, costo, 'day_pass');
+      if (esito === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: costo });
+      if (esito === 'error') return res.status(500).json({ error: 'charge_failed' });
+
+      // 3. Il pass. Cap e durata li decide il SERVER, mai il client.
+      const scadenza = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      try {
+        const ins = await axios.post(`${supabaseUrl}/rest/v1/user_passes`,
+          { user_id: userId, pass_type: 'day', expires_at: scadenza, guides_used: 0, guides_cap: 40 },
+          { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'return=representation' }, timeout: 8000 });
+        const riga = ins.data?.[0] || {};
+        return res.json({
+          ok: true,
+          expires_at: riga.expires_at || scadenza,
+          guides_cap: riga.guides_cap ?? 40,
+          guides_used: riga.guides_used ?? 0,
+        });
+      } catch (insErr: any) {
+        // Rimborso immediato: l'utente ha pagato e non ha avuto niente.
+        try { await refundCreditsServer(userId, costo); } catch { /* registrato sotto */ }
+        console.error('[day-pass] insert fallito, crediti rimborsati:', insErr?.response?.data || insErr?.message);
+        return res.status(500).json({ error: 'pass_write_failed' });
+      }
+    } catch (e: any) {
+      console.error('[day-pass] errore:', e?.response?.data || e?.message);
+      return res.status(500).json({ error: 'server_error' });
+    }
+  });
 
   // guardiaCostosa (audit SEC-01, 28/08/2026): requireAuth + tetto
   // persistente per utente. Il Bearer era già obbligatorio dal 22/08.
