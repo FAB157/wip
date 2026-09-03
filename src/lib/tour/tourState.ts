@@ -29,10 +29,19 @@ export const SOGLIE = {
   arrivo_m: 80,
   /** Sotto questa si e` arrivati: parte l'audioguida. */
   ingresso_m: 25,
-  /** Oltre questa, fuori percorso. */
-  deviazione_m: 120,
+  /**
+   * Oltre questa distanza dal TRATTO davanti (proiezione sul segmento, vedi
+   * tourService.scostamentoDalPercorso) si e` fuori percorso. Era 120 m
+   * misurati dai vertici campionati dell'intera geometria: troppo larga per
+   * accorgersi di una strada sbagliata in centro, e falsata sui rettilinei
+   * (03/09/2026, collaudo: «ero uscito dal percorso e la mappa mi mostra
+   * sempre il percorso originale»).
+   */
+  deviazione_m: 70,
+  /** Sotto questa si e` di nuovo sul percorso: isteresi contro il GPS che balla sul bordo. */
+  deviazione_rientro_m: 45,
   /** Per quanto bisogna restare fuori percorso prima di ricalcolare. */
-  deviazione_s: 30,
+  deviazione_s: 15,
   /** Fermo piu` di cosi` = pausa vera, non un semaforo. */
   pausa_s: 180,
   /** Sotto questa velocita` si e` considerati fermi (m/s). */
@@ -119,6 +128,8 @@ export interface Osservazione {
   distanzaTappa: number;
   /** Distanza dal percorso tracciato, in metri. */
   scostamento: number;
+  /** Accuratezza del fix in metri, se nota: allarga la soglia di deviazione. */
+  accuratezza?: number;
   /** Velocita` corrente in m/s (dal GPS o calcolata). */
   velocita: number;
   /** La guida della tappa corrente sta parlando? */
@@ -158,8 +169,14 @@ export function prossimoStato(
   }
 
   // Fuori percorso, ma solo se ci si resta: un rimbalzo del GPS non deve far
-  // ricalcolare il giro.
-  const fuoriDa = o.scostamento > SOGLIE.deviazione_m ? (corrente.fuoriPercorsoDa ?? o.adesso) : null;
+  // ricalcolare il giro. La soglia cresce con l'incertezza del fix (a 50 m
+  // di accuratezza servono 75 m di scostamento) e, una volta fuori, si
+  // rientra solo sotto la soglia bassa: cosi` un fix sul bordo non azzera il
+  // timer a ogni passo (03/09/2026).
+  const sogliaFuori = Math.max(SOGLIE.deviazione_m, (o.accuratezza ?? 0) * 1.5);
+  const eraFuori = corrente.fuoriPercorsoDa != null;
+  const fuori = o.scostamento > sogliaFuori || (eraFuori && o.scostamento > SOGLIE.deviazione_rientro_m);
+  const fuoriDa = fuori ? (corrente.fuoriPercorsoDa ?? o.adesso) : null;
   if (fuoriDa && o.adesso - fuoriDa > SOGLIE.deviazione_s * 1000) {
     return cambia('DEVIATO', { fuoriPercorsoDa: fuoriDa, fermoDa });
   }

@@ -26,7 +26,7 @@ import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
 import { traduciVoci, tradotto } from '../lib/atlanteI18n';
 import { apriScheda } from '../lib/apriScheda';
 import { fotoDaWikidata } from '../lib/wikidataFoto';
-import { tourService, MAX_TAPPE } from '../services/tourService';
+import { tourService } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
 
 interface PoiPopupContentProps {
@@ -52,7 +52,9 @@ export function BottoneGiro({ poi, language }: { poi: any; language: Language })
   const id = poi?.id ?? poi?.poiId;
   const dentro = id != null && tourService.bozzaHa(id);
   const numero = dentro ? tourService.bozzaNumero(id) : null;
-  const pieno = !dentro && bozza.tappe.length >= MAX_TAPPE;
+  // Il tetto e` della bozza (dieci al giro, trenta al percorso su misura).
+  const tetto = tourService.bozzaTetto();
+  const pieno = !dentro && bozza.tappe.length >= tetto;
 
   const tocca = (e: React.SyntheticEvent) => {
     e.preventDefault();
@@ -119,8 +121,8 @@ export function BottoneGiro({ poi, language }: { poi: any; language: Language })
       ) : (
         <>
           <Footprints className="w-4 h-4" />
-          {getTranslation("tour_aggiungi", language)}
-          <span className="text-[10px] font-bold opacity-70 tabular-nums">{bozza.tappe.length}/{MAX_TAPPE}</span>
+          {getTranslation(bozza.modo === 'percorso' ? "pc_tasto_mappa" : "tour_aggiungi", language)}
+          <span className="text-[10px] font-bold opacity-70 tabular-nums">{bozza.tappe.length}/{tetto}</span>
         </>
       )}
     </button>

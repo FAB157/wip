@@ -19,7 +19,7 @@
 import { Polyline, Marker, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { useEffect, useState } from 'react';
-import { tourService, MAX_TAPPE, metri as metriFra, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
+import { tourService, metri as metriFra, type VistaGiro, type BozzaGiro, type TappaGiro } from '../services/tourService';
 import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 
 /**
@@ -278,6 +278,9 @@ export default function TourRouteLayer() {
     // restano sulla mappa, grigie, perche' "dove sono gia` stato" e` parte
     // del quadro. Le escluse no: non dovevano esserci.
     const fatteFuoriOrdine = giro.tappe.filter((t, i) => !giro.ordine.includes(i) && (t.fatta || t.saltata) && !t.esclusa);
+    // Numeri ASSOLUTI, come il cruscotto (03/09/2026): dopo un ricalcolo la
+    // posizione in `ordine` riparte da zero e il pin diceva «1» alla tappa 3/4.
+    const numeri = tourService.numeriTappe();
 
     const escludi = (t: TappaGiro) => conPosizione((p) => { tourService.escludi(t.id, p); });
 
@@ -288,7 +291,8 @@ export default function TourRouteLayer() {
     // Stesso puntino, stesso gesto della bozza; il ricalcolo riparte da dove
     // si e` (aggiungiTappaAlVolo), non da capo.
     const vive = giro.tappe.filter((t) => !t.esclusa).length;
-    const aggiungibili = vive >= MAX_TAPPE ? [] : tourService.candidatiLungoIlPercorso(80)
+    // Il tetto e` del giro (dieci) o del percorso su misura (trenta).
+    const aggiungibili = vive >= tourService.tettoTappe() ? [] : tourService.candidatiLungoIlPercorso(80)
       .filter(({ poi }) => Number.isFinite(Number(poi?.lat)) && Number.isFinite(Number(poi?.lon)));
 
     return (
@@ -338,7 +342,7 @@ export default function TourRouteLayer() {
             <Marker
               key={`giro-${t.id}-${posizione}`}
               position={[p.lat, p.lon]}
-              icon={iconaTappa(posizione + 1, stato, { conX: stato !== 'fatta', sopraIlPin: false, titoloX: tr('tour_togli_tappa') })}
+              icon={iconaTappa(numeri.get(String(t.id)) ?? posizione + 1, stato, { conX: stato !== 'fatta', sopraIlPin: false, titoloX: tr('tour_togli_tappa') })}
               zIndexOffset={stato === 'corrente' ? 1000 : 500}
               eventHandlers={{
                 click: (e: any) => {

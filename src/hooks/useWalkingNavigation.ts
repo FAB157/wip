@@ -163,6 +163,10 @@ export interface UseWalkingNavigationResult {
   stopNavigation: () => void;
   /** Ripete a voce l'istruzione corrente (bottone 🔊 nell'overlay). */
   repeatInstruction: () => void;
+  /** «Ricalcola da qui»: la strada si rifa` dalla posizione attuale (03/09/2026). */
+  recalculateRoute: () => Promise<boolean>;
+  /** Ricalcolo manuale in corso (per lo spinner dell'overlay). */
+  recalculating: boolean;
 }
 
 export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResult {
@@ -174,6 +178,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [routeGeometry, setRouteGeometry] = useState<[number, number][]>([]);
+  /** «Ricalcola da qui» in corso: l'overlay fa girare l'icona (03/09/2026). */
+  const [recalculating, setRecalculating] = useState(false);
 
   const routeRef = useRef<WalkingRoute | null>(null);
   const targetRef = useRef<NavTarget | null>(null);
@@ -224,6 +230,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     metriAllaSvolta: number | null,
     metriResidui: number | null,
     etaSec: number | null,
+    manovra?: ManeuverInfo | null,
   ) => {
     const dist = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
     const nome = t.poiName || '';
@@ -234,21 +241,35 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     const righe: string[] = [];
     if (istruzione) righe.push(`${istruzione}${metriAllaSvolta != null && metriAllaSvolta > 0 ? ` · ${dist(metriAllaSvolta)}` : ''}`);
     if (eta) righe.push(`~${eta}`);
-    const firma = `${nome}|${istruzione || ''}|${Math.round((metriAllaSvolta ?? -1) / 50)}|${Math.round((metriResidui ?? 0) / 100)}`;
+    // (03/09/2026) Sotto i 100 m dalla svolta la card dice «21 m»: la firma
+    // scatta ogni 10 m, non ogni 50, altrimenti il numero sulla lock screen
+    // resta fermo mentre in app scende. Oltre, 50 m bastano.
+    const ms = metriAllaSvolta ?? -1;
+    const scattoSvolta = ms < 0 ? -1 : ms < 100 ? Math.round(ms / 10) : 100 + Math.round(ms / 50);
+    const firma = `${nome}|${istruzione || ''}|${scattoSvolta}|${Math.round((metriResidui ?? 0) / 100)}|${manovra?.type || ''}/${manovra?.modifier || ''}`;
     if (firma === bannerFirmaRef.current) return;
     bannerFirmaRef.current = firma;
+    const totale = routeTotalRef.current;
     // Gli stessi campi separati del giro: li impagina la Live Activity iOS.
     locationService.updateNavBanner(titolo, righe.join('\n'), true, {
       nomeTappa: nome,
       indiceTappa: 1,
       tappeTotali: 1,
       metriAllaTappa: metriResidui ?? -1,
-      istruzione: istruzione || '',
+      istruzione: istruzione || getTranslation('nav_proceed', String(language || 'IT').toUpperCase() as Language),
       metriAllaSvolta: metriAllaSvolta ?? -1,
       metriRimanenti: metriResidui ?? 0,
       eta,
       nomeProssima: '',
       foto: '',
+      // La card blu sulla lock screen (03/09/2026): freccia, barra, tasti.
+      manovraTipo: manovra?.type || '',
+      manovraVerso: manovra?.modifier || '',
+      progresso: totale > 1 && metriResidui != null ? Math.min(1, Math.max(0, 1 - metriResidui / totale)) : -1,
+      metriTotali: totale,
+      inPausa: false,
+      modo: 'singola',
+      minutiRimanenti: etaSec != null && etaSec >= 0 ? etaSec / 60 : -1,
     }).catch(() => {});
   };
   const spegniBannerNav = () => {
@@ -256,7 +277,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // attivo=false: su Android la notifica del servizio torna al testo del
     // radar, su iOS si chiude la Live Activity, e la notifica locale di
     // ripiego viene cancellata (lo fa updateNavBanner stesso).
-    locationService.updateNavBanner('', '', false).catch(() => {});
+    // Prima si spegne il banner, POI (se era stato acceso solo per questa
+    // navigazione) il servizio nativo: nell'ordine inverso la notifica del
+    // servizio sparirebbe con il cruscotto ancora scritto sopra.
+    locationService.updateNavBanner('', '', false)
+      .catch(() => {})
+      .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
   };
 
   const releaseWakeLock = () => {
@@ -495,6 +521,82 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (currentInstruction) speakInstruction(currentInstruction, language);
   }, [currentInstruction, language]);
 
+  /**
+   * «RICALCOLA DA QUI» (03/09/2026, collaudo). Il ricalcolo automatico ha
+   * soglie (45 m fuori rotta per 2 fix), cooldown e backoff: chi vede la
+   * linea sbagliata non deve aspettare. Stessa rotta di maybeRecalc, ma
+   * subito, dalla posizione nota, verso la stessa meta. Ritorna false se non
+   * c'e` una navigazione, una posizione o una rete.
+   */
+  const recalculateRoute = useCallback(async (): Promise<boolean> => {
+    const t = targetRef.current;
+    if (!t || recalcInFlightRef.current) return false;
+    // L'ultimo fix del watch se fresco e credibile, altrimenti il GPS ad alta
+    // precisione: ricalcolare da un punto vecchio o a 200 m e` peggio di
+    // non ricalcolare.
+    let last = locationService.getLastLocation();
+    if (!last || Date.now() - Number(last.timestamp) > 15_000 || !(Number(last.accuracy) <= MAX_GPS_ACCURACY_M)) {
+      last = await new Promise<typeof last>((res) => {
+        if (typeof navigator === 'undefined' || !navigator.geolocation) return res(last);
+        navigator.geolocation.getCurrentPosition(
+          (p) => res({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy, speed: null, heading: null, timestamp: p.timestamp } as any),
+          () => res(last),
+          { enableHighAccuracy: true, timeout: 5000, maximumAge: 3000 },
+        );
+      });
+    }
+    if (!last || targetRef.current !== t) return false;
+    recalcInFlightRef.current = true;
+    setRecalculating(true);
+    try {
+      const here: LatLon = { lat: last.latitude, lon: last.longitude };
+      const route = await fetchWalkingRoute(here, t, language, t.poiName);
+      if (!route || route.steps.length === 0 || targetRef.current !== t) return false;
+      setRoute(route, true);
+      stepIdxRef.current = 0;
+      spokenRef.current.clear();
+      route.steps.forEach((s, i) => { if (String(s.maneuverType || '').toLowerCase() === 'depart') spokenRef.current.add(i); });
+      offRouteCountRef.current = 0;
+      lastRecalcRef.current = Date.now();
+      recalcBackoffRef.current = 0;
+      joinedRouteRef.current = true;
+      nearbySinceRef.current = null;
+      const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
+      setCurrentInstruction(phrase);
+      setCurrentManeuver({ type: 'reroute' });
+      setDistanceToNext(null);
+      setDistanceToDestination(Math.round(route.distance));
+      const etaSec = Math.round(route.duration > 0 ? route.duration : route.distance / WALK_SPEED_MS);
+      setEtaSeconds(etaSec);
+      setProgress(0);
+      speakInstruction(phrase, language);
+      bannerFirmaRef.current = '';
+      aggiornaBannerNav(t, phrase, null, Math.round(route.distance), etaSec, { type: 'reroute' });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      recalcInFlightRef.current = false;
+      setRecalculating(false);
+    }
+  }, [language]);
+
+  // I TASTI DEL CRUSCOTTO A DISPLAY SPENTO (03/09/2026): Live Activity iOS
+  // / notifica Android → plugin → App.tsx, che con un giro in corso li
+  // gestisce da se' e altrimenti li gira qui come evento. Solo se QUESTA
+  // navigazione e` in corso.
+  useEffect(() => {
+    const h = (e: Event) => {
+      if (!targetRef.current) return;
+      const a = String((e as CustomEvent).detail?.action || '');
+      if (a === 'termina') stopNavigation();
+      else if (a === 'riascolta') repeatInstruction();
+      else if (a === 'ricalcola') void recalculateRoute();
+    };
+    window.addEventListener('wip-nav-banner-action', h);
+    return () => window.removeEventListener('wip-nav-banner-action', h);
+  }, [stopNavigation, repeatInstruction, recalculateRoute]);
+
   const startNavigation = useCallback(
     async (target: NavTarget, originOverride?: LatLon | null, routePois?: RoutePoi[]) => {
       // Chiude un'eventuale navigazione già attiva: senza, la vecchia
@@ -559,8 +661,16 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       nearbySinceRef.current = null;
       // Il cruscotto sulla lock screen parte SUBITO, non alla prima svolta:
       // chi mette il telefono in tasca appena premuto Avvia deve gia' vederlo.
+      // PRIMA il servizio nativo (03/09/2026): senza, a cuffie spente il
+      // plugin Android rifiuta il banner (servizio inattivo) e a schermo
+      // spento la WebView si congela con il navigatore dentro. Vedi
+      // locationService.assicuraServizioNativoPerNav. Si aspetta: il primo
+      // banner deve trovare il servizio gia` acceso.
+      try { await locationService.assicuraServizioNativoPerNav(); } catch { /* si va avanti col ripiego */ }
+      if (targetRef.current !== target) return;
       bannerFirmaRef.current = '';
-      aggiornaBannerNav(target, first?.instruction ?? null, null, Math.round(route.distance), etaIniziale);
+      aggiornaBannerNav(target, first?.instruction ?? null, null, Math.round(route.distance), etaIniziale,
+        first ? { type: first.maneuverType, modifier: first.maneuverModifier, street: first.name } : null);
       acquireWakeLock();
 
       // Sottoscrizione al flusso GPS condiviso
@@ -667,7 +777,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               // (31/08/2026) Al posto della sola notifica locale della svolta
               // c'e' il cruscotto persistente: FGS Android / Live Activity
               // iOS, con la notifica locale come ripiego DENTRO updateNavBanner.
-              aggiornaBannerNav(t, step.instruction, 0, metriResidui, etaSec);
+              aggiornaBannerNav(t, step.instruction, 0, metriResidui, etaSec, { type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;
@@ -691,7 +801,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             setDistanceToNext(Math.round(dLungoStrada));
             setCurrentInstruction(step.instruction);
             setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
-            aggiornaBannerNav(t, step.instruction, Math.round(dLungoStrada), metriResidui, etaSec);
+            aggiornaBannerNav(t, step.instruction, Math.round(dLungoStrada), metriResidui, etaSec, { type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
             break;
           }
         }
@@ -707,7 +817,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // Solo se QUESTA navigazione era in corso — non si tocca quello del giro.
     if (targetRef.current) {
       bannerFirmaRef.current = '';
-      locationService.updateNavBanner('', '', false).catch(() => {});
+      locationService.updateNavBanner('', '', false)
+        .catch(() => {})
+        .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
     }
     unsubRef.current = null;
     releaseWakeLock();
@@ -726,5 +838,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     startNavigation,
     stopNavigation,
     repeatInstruction,
+    recalculateRoute,
+    recalculating,
   };
 }

@@ -2107,6 +2107,8 @@ export default function PlanScreen({
     startNavigation,
     stopNavigation,
     repeatInstruction,
+    recalculateRoute,
+    recalculating: navRecalculating,
   } = useWalkingNavigation(language);
 
   // Avvio WIP Nav dal modal "Rotta Intelligente" (bottone per tappa in
@@ -2138,6 +2140,17 @@ export default function PlanScreen({
     window.addEventListener('wip-internal-nav-start', handleInternalNavStart);
     return () => window.removeEventListener('wip-internal-nav-start', handleInternalNavStart);
   }, [startNavigation]);
+
+  // UNA NAVIGAZIONE PER VOLTA (03/09/2026, revisione della mappa): quando
+  // parte un giro Dieci Tappe / percorso su misura, la navigazione a tappa
+  // singola che fosse rimasta accesa va spenta — altrimenti due card blu
+  // sovrapposte, due voci, la linea gialla accanto ai puntini blu, e i tasti
+  // della lock screen che non sanno a chi rispondere.
+  useEffect(() => {
+    const h = () => { stopNavigation(); setNavDayIndex(null); setNavStopIndex(null); };
+    window.addEventListener('wip-giro-avviato', h);
+    return () => window.removeEventListener('wip-giro-avviato', h);
+  }, [stopNavigation]);
 
   // Non usiamo più l'auto-avanzamento, ma un avanzo manuale tramite bottone "onNextStop"
   const handleNextStop = () => {
@@ -7713,6 +7726,8 @@ export default function PlanScreen({
               setNavDayIndex(null);
               setNavStopIndex(null);
             }}
+            onRecalc={() => { void recalculateRoute().then((ok) => { if (!ok) notify(getTranslation('tour_ricalcolo_fallito', language)); }); }}
+            recalcInCorso={navRecalculating}
             onNextStop={navDayIndex !== null && navStopIndex !== null && (generatedPlan?.giorni[navDayIndex]?.tappe.length || 0) > (navStopIndex || 0) + 1 ? handleNextStop : undefined}
             onRepeat={repeatInstruction}
           />

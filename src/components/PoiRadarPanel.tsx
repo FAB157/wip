@@ -7,6 +7,7 @@ import { tourService, MAX_TAPPE, metri as metriFra } from "../services/tourServi
 import { getGuideCharacter } from "../lib/guideSettings";
 import { useBozzaGiro } from "../lib/tour/useGiro";
 import { getDayPassState } from "../services/dayPassService";
+import { gestisciErroreGiro } from "../lib/tour/passRichiesto";
 
 /** "Ho un'ora": i tagli di tempo fra cui scegliere. `null` = tutto il giro. */
 const TEMPI: { min: number | null; label: string }[] = [
@@ -64,12 +65,11 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
       window.dispatchEvent(new CustomEvent('wip-giro-avviato'));
       onClose();
     } catch (e: any) {
-      const m = String(e?.message || '');
-      // Il "motivo" del server (dopo i due punti) prima si scartava (29/08/2026).
-      const dettaglio = m.startsWith('PASS_RICHIESTO:') ? m.slice('PASS_RICHIESTO:'.length).trim() : '';
-      setErrore(m.startsWith('PASS_RICHIESTO')
-        ? `${tr('gr_pass_richiesto')}${dettaglio ? ` (${dettaglio})` : ''}`
-        : m || tr('gr_giro_non_riuscito'));
+      // Il "motivo" del server (dopo i due punti) prima si scartava
+      // (29/08/2026). Dal 03/09/2026 il 402 apre anche la cassa del Day Pass
+      // con «Acquista ora»: la riga qui sotto resta per chi la chiude.
+      const prima = scelte[0] as any;
+      setErrore(gestisciErroreGiro(e, language, { toast: false, city: prima?.city || prima?.citta }));
     } finally { setCreando(false); }
   };
 

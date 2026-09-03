@@ -57,6 +57,7 @@ import AttractionImage from './AttractionImage';
 import PrivacyPolicy from './PrivacyPolicy';
 import AppGuide from './AppGuide';
 import PriceList from './PriceList';
+import DayPassCard from './DayPassCard';
 import FreeFeaturesModal from './FreeFeaturesModal';
 import OfflineMapsTab from './OfflineMapsTab';
 import RainGuaranteeCard from './RainGuaranteeCard';
@@ -904,7 +905,14 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
     // emesso da src/lib/pricing.ts) ricarichiamo profilo e contatori.
     const onCreditsUpdated = () => loadProfileData();
     window.addEventListener('wip-credits-updated', onCreditsUpdated);
-    return () => window.removeEventListener('wip-credits-updated', onCreditsUpdated);
+    // «Ricarica crediti» da qualsiasi punto dell'app (03/09/2026): App.tsx
+    // porta al profilo, qui si apre la scheda dei pacchetti.
+    const onOpenShop = () => setActiveTab('pricing');
+    window.addEventListener('wip-open-shop', onOpenShop);
+    return () => {
+      window.removeEventListener('wip-credits-updated', onCreditsUpdated);
+      window.removeEventListener('wip-open-shop', onOpenShop);
+    };
   }, []);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1358,6 +1366,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
+              {/* IL DAY PASS IN PRIMO PIANO (03/09/2026, committente: «nel
+                  profilo in primo piano ci deve essere il banner acquista il
+                  Day Pass»). Prima stava solo in Mappe offline e Itinerari,
+                  cioe' dove nessuno lo cercava. Con il pass attivo la stessa
+                  card dice quante guide restano e a che ora scade. */}
+              {userSession && <DayPassCard />}
+
               {/* Dashboard del viaggiatore + Passaporto WIP (ondata 5):
                   numeri e timbri dai dati già raccolti */}
               <TravelerDashboard language={language} />

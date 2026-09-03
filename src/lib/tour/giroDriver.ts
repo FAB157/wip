@@ -142,6 +142,22 @@ export function avviaGiroDriver(): void {
   window.addEventListener('wip-location-update', onFix);
   window.addEventListener('wip-speech-ended', onSpeechEnded);
   window.addEventListener('wip-audio-stopped', () => drenaCoda());
+  // «RICALCOLA DA QUI» (03/09/2026): l'esito lo dice il driver, a voce,
+  // passando dal direttore audio — cosi` cruscotto, card blu e tasto sulla
+  // lock screen hanno lo stesso feedback senza parlare sopra la guida.
+  window.addEventListener('wip-giro-ricalcolato', (e: Event) => {
+    try {
+      const esito = (e as CustomEvent).detail?.esito;
+      const chiave = esito === 'ok' ? 'tour_ricalcolato' : esito === 'rete' ? 'tour_ricalcolo_fallito' : null;
+      if (!chiave) return;
+      if (esito === 'ok') { svoltaDettaLontano = null; svoltaDettaVicino = null; avvisatoSenzaRete = false; }
+      const lingua = linguaUi();
+      const testo = getTranslation(chiave, lingua.toUpperCase() as Language);
+      const d = tourService.chiPuoParlare('navigatore', { guidaInCorso: guidaSuona(), metriAllaSvolta: null, suAttraversamento: false });
+      if (d.azione === 'parla' || d.azione === 'abbassa_e_parla') parla(testo, lingua, d.azione === 'abbassa_e_parla');
+      else tourService.accodaVoce('navigatore', testo);
+    } catch { /* niente */ }
+  });
 }
 
 function linguaUi(): string {
@@ -184,7 +200,12 @@ function onFix(e: Event): void {
       } else if (!Number.isFinite(velocitaFix)) velocitaFix = NaN;
     }
     ultimoFix = { lat, lon, ts };
-    tourService.aggiorna({ lat, lon, velocita: Number.isFinite(velocitaFix) ? velocitaFix : undefined }, { guidaInCorso: parlando });
+    tourService.aggiorna({
+      lat, lon,
+      velocita: Number.isFinite(velocitaFix) ? velocitaFix : undefined,
+      // L'accuratezza allarga la soglia di deviazione (tourState.prossimoStato).
+      accuratezza: Number.isFinite(accuracy) ? accuracy : undefined,
+    }, { guidaInCorso: parlando });
     const v = tourService.vista();
     if (!v) return;
     const tappa = tourService.tappaAttuale();
@@ -297,7 +318,9 @@ function onFix(e: Event): void {
 
     // 2. Incontri lungo la strada. Solo se l'istruzione non ha gia' parlato:
     //    se ha parlato, l'incontro si accoda e si dira' al primo silenzio.
-    if (v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA') {
+    //    MAI in un percorso su misura (03/09/2026): «solo percorso, senza
+    //    audioguide» vale anche per i teaser di chi si incontra per strada.
+    if (v.modo !== 'percorso' && v.stato !== 'ALL_INGRESSO' && v.stato !== 'GUIDA_IN_CORSO' && v.stato !== 'IN_PAUSA') {
       for (const { poi, id } of tourService.candidatiLungoIlPercorso(INCONTRO_M)) {
         if (tourService.incontroGiaFatto(id)) continue;
         const pLat = Number(poi.lat), pLon = Number(poi.lon);

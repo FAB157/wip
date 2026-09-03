@@ -31,9 +31,11 @@
 		A11A2B3C4D5E6F7080910101 /* WipApi.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910102 /* WipApi.swift */; };
 		A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */; };
 		A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
+		A11A2B3C4D5E6F7080910115 /* WipNavIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */; };
 		B22A0000000000000000A0A1 /* WipNavActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */; };
 		B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */; };
 		B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
+		B22A0000000000000000A0A5 /* WipNavIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */; };
 		B22A0000000000000000A0A4 /* WipNavActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B4 /* WipNavActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
@@ -70,6 +72,7 @@
 		A11A2B3C4D5E6F7080910102 /* WipApi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipApi.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityNav.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavAttributes.swift; path = ../WipNavActivity/WipNavAttributes.swift; sourceTree = "<group>"; };
+		A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavIntents.swift; path = ../WipNavActivity/WipNavIntents.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavActivityBundle.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavLiveActivity.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -196,6 +199,7 @@
 				A11A2B3C4D5E6F7080910102 /* WipApi.swift */,
 				A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */,
 				A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */,
+				A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */,
 				B22A0000000000000000B0B5 /* App.entitlements */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
@@ -388,6 +392,7 @@
 				A11A2B3C4D5E6F7080910101 /* WipApi.swift in Sources */,
 				A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */,
 				A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */,
+				A11A2B3C4D5E6F7080910115 /* WipNavIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -398,6 +403,7 @@
 				B22A0000000000000000A0A1 /* WipNavActivityBundle.swift in Sources */,
 				B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */,
 				B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */,
+				B22A0000000000000000A0A5 /* WipNavIntents.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

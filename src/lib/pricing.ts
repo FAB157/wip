@@ -21,7 +21,15 @@ export const PRICING_LIST = {
   chat_session: 3,         // Chat sessione (10 messaggi)
   day_pass: 200,           // WIP Day Pass: 24h hands-free, max 40 audioguide (mappe offline gratuite)
   museum_pass: 100,        // Pass Museo: riconoscimenti Vision illimitati per 4 ore (indoor)
+  // PERCORSO SU MISURA (03/09/2026): luoghi di qualsiasi categoria scelti
+  // dalla mappa, ordine ottimizzato e navigatore WIP, SENZA audioguida e
+  // senza Day Pass. Un addebito a percorso, tre modifiche incluse. Allineare
+  // a PERCORSO_COSTO / PERCORSO_MODIFICHE_MAX in server.ts.
+  custom_route: 30,
 };
+
+/** Modifiche (aggiungi/togli luogo) incluse nel prezzo del percorso su misura. */
+export const CUSTOM_ROUTE_MAX_CHANGES = 3;
 
 /** Durata del Pass Museo in ore. Allineare a MUSEUM_PASS_HOURS in server.ts. */
 export const MUSEUM_PASS_HOURS = 4;

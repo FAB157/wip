@@ -12,6 +12,7 @@ import { TRAD_SCHEDA } from './traduzioni/scheda';
 import { TRAD_MAPPA } from './traduzioni/mappa';
 import { TRAD_VARI } from './traduzioni/vari';
 import { TRAD_MANUALE } from './traduzioni/manuale';
+import { TRAD_PERCORSO } from './traduzioni/percorso';
 
 export const DIZIONARI_EXTRA: Record<string, Partial<Record<Language, string>>>[] = [
   TRAD_PROFILO,
@@ -20,4 +21,5 @@ export const DIZIONARI_EXTRA: Record<string, Partial<Record<Language, string>>>[
   TRAD_MAPPA,
   TRAD_VARI,
   TRAD_MANUALE,
+  TRAD_PERCORSO,
 ];

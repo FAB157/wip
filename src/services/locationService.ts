@@ -1002,6 +1002,9 @@ class LocationService {
               return;
             }
           } catch { /* plugin assente/errore: si tenta comunque l'avvio */ }
+          // Da qui il servizio e` della guida: la navigazione singola non lo
+          // spegnera` piu` quando finisce (vedi rilasciaServizioNativoPerNav).
+          this.servizioPerNav = false;
           await this.startNativeBackgroundService();
           this.syncItineraryToNative(itinerary);
         })().catch(() => {});
@@ -1013,7 +1016,17 @@ class LocationService {
       this.stopAmbientMusic();
       if (wasActive) this.azzeraAlloSpegnimento();
       if (typeof window !== 'undefined' && Capacitor.isNativePlatform()) {
-        this.stopNativeBackgroundService();
+        // Cuffie spente a meta` navigazione singola (03/09/2026): il
+        // cruscotto a display spento non deve morire con la guida. Il
+        // servizio riparte in modalita` navigatore e da qui in poi e` della
+        // navigazione, che lo spegnera` a destinazione.
+        if (this.navSingolaAttiva) {
+          this.servizioPerNav = true;
+          this.startNativeBackgroundService({ soloNavigatore: true }).catch(() => {});
+        } else {
+          this.servizioPerNav = false;
+          this.stopNativeBackgroundService();
+        }
       }
     }
   }
@@ -1140,7 +1153,55 @@ class LocationService {
     })();
   }
 
-  private async startNativeBackgroundService() {
+  /**
+   * IL SERVIZIO NATIVO ANCHE PER LA NAVIGAZIONE SINGOLA (03/09/2026).
+   *
+   * Collaudo del committente: «ho cliccato il navigatore per una sola tappa:
+   * il banner blu con le indicazioni c'e` con l'app aperta, ma se chiudo non
+   * c'e` nessun banner ne' Live Activity». Il motivo: il cruscotto a display
+   * spento vive nella notifica del foreground service (Android) e nella Live
+   * Activity aggiornata dal JS (iOS), ma il servizio parte SOLO con le
+   * cuffie. Senza servizio, su Android il plugin risponde ok=false e si
+   * ripiega su una notifica locale che nessuno aggiorna piu` — perche' appena
+   * l'app va in background la WebView viene congelata, e con lei il
+   * navigatore; su iOS la Live Activity parte ma il JS che la aggiorna si
+   * ferma per lo stesso motivo.
+   *
+   * La soluzione: quando parte WIP Nav verso una tappa sola e la guida e`
+   * spenta, il servizio nativo si accende in MODALITA` NAVIGATORE — nessuna
+   * categoria monitorata, gemme spente, modalita` manuale — cioe` un
+   * processo che resta vivo e una notifica persistente da riscrivere, senza
+   * teaser ne' audioguide. A navigazione finita, se la guida e` ancora
+   * spenta, si spegne. Se nel frattempo l'utente accende le cuffie, il
+   * servizio passa a loro e non lo spegne piu` nessuno da qui.
+   */
+  private servizioPerNav = false;
+  private navSingolaAttiva = false;
+
+  public async assicuraServizioNativoPerNav(): Promise<void> {
+    if (!Capacitor.isNativePlatform() || !ItaintaBackgroundPoiPlugin) return;
+    this.navSingolaAttiva = true;
+    // Guida accesa: il servizio c'e` gia`, e appartiene a lei.
+    if (this.isTourActive) { this.servizioPerNav = false; return; }
+    if (this.servizioPerNav) return;
+    try {
+      const perm = await Geolocation.checkPermissions();
+      if (perm.location === 'denied' && (perm.coarseLocation ?? 'denied') === 'denied') return;
+    } catch { /* si tenta comunque */ }
+    this.servizioPerNav = true;
+    await this.startNativeBackgroundService({ soloNavigatore: true });
+  }
+
+  public async rilasciaServizioNativoPerNav(): Promise<void> {
+    this.navSingolaAttiva = false;
+    if (!this.servizioPerNav) return;
+    this.servizioPerNav = false;
+    // Con la guida accesa il servizio e` suo: non si tocca.
+    if (this.isTourActive) return;
+    await this.stopNativeBackgroundService();
+  }
+
+  private async startNativeBackgroundService(opzioni: { soloNavigatore?: boolean } = {}) {
     if (!ItaintaBackgroundPoiPlugin) return;
     try {
       let lat = this.lastLocation?.latitude;
@@ -1192,6 +1253,17 @@ class LocationService {
         const mode = localStorage.getItem('wip_activation_mode');
         if (mode === 'semi-automatic') isAutomaticMode = false;
       } catch (e) {}
+
+      // MODALITA` NAVIGATORE (vedi assicuraServizioNativoPerNav): niente
+      // categorie e gemme spente = il servizio non monitora nessun POI, non
+      // parla e non notifica; resta solo il processo vivo e la notifica
+      // persistente che fa da cruscotto. Manuale, per non far partire
+      // nessuna guida da sola. Il chiamante e` gia` in foreground (tocco su
+      // «Naviga»): l'avvio del foreground service e` consentito.
+      if (opzioni.soloNavigatore) {
+        categories = ['gemme:off'];
+        isAutomaticMode = false;
+      }
 
       // ⚠️ `guideMode` per il servizio nativo significa MODALITÀ DI SPOSTAMENTO
       // ("walking"/"driving"), non il personaggio. Prima gli veniva passato

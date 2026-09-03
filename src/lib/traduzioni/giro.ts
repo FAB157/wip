@@ -685,4 +685,94 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     RU: 'Недостаточно кредитов: Day Pass стоит {n} кредитов.',
     ZH: '积分不足：Day Pass 需要 {n} 积分。',
   },
+  // ── IL CANCELLO CON LA CASSA (03/09/2026, collaudo: «viene il banner ma
+  //    non c'e` nessun link per l'acquisto»). Quando il server risponde 402
+  //    la card del Day Pass si apre DA SOLA, col tasto «Acquista ora»; e se i
+  //    crediti non bastano si passa al negozio, non a un vicolo cieco. ──
+  gr_dp_acquista_ora: {
+    IT: 'Acquista ora · {n} crediti',
+    EN: 'Buy now · {n} credits',
+    FR: 'Acheter maintenant · {n} crédits',
+    ES: 'Comprar ahora · {n} créditos',
+    DE: 'Jetzt kaufen · {n} Credits',
+    RU: 'Купить сейчас · {n} кредитов',
+    ZH: '立即购买 · {n} 积分',
+  },
+  gr_dp_ricarica_crediti: {
+    IT: 'Ricarica crediti',
+    EN: 'Top up credits',
+    FR: 'Recharger des crédits',
+    ES: 'Recargar créditos',
+    DE: 'Credits aufladen',
+    RU: 'Пополнить кредиты',
+    ZH: '充值积分',
+  },
+  gr_dp_saldo_non_basta: {
+    IT: 'Hai {saldo} crediti: te ne servono {costo}.',
+    EN: 'You have {saldo} credits: you need {costo}.',
+    FR: 'Vous avez {saldo} crédits : il vous en faut {costo}.',
+    ES: 'Tienes {saldo} créditos: necesitas {costo}.',
+    DE: 'Du hast {saldo} Credits: du brauchst {costo}.',
+    RU: 'У вас {saldo} кредитов: нужно {costo}.',
+    ZH: '你有 {saldo} 积分：需要 {costo} 积分。',
+  },
+  gr_dp_gate_navigazione: {
+    IT: 'Per avviare la navigazione del giro serve il Day Pass',
+    EN: 'Starting tour navigation requires the Day Pass',
+    FR: 'Le Day Pass est nécessaire pour lancer la navigation du parcours',
+    ES: 'Para iniciar la navegación del recorrido hace falta el Day Pass',
+    DE: 'Zum Starten der Rundgang-Navigation brauchst du den Day Pass',
+    RU: 'Для запуска навигации по маршруту нужен Day Pass',
+    ZH: '开始路线导航需要 Day Pass',
+  },
+  gr_dp_profilo_pitch: {
+    IT: 'Giro a più tappe con navigatore e audioguide automatiche per 24 ore.',
+    EN: 'Multi-stop tour with navigator and automatic audio guides for 24 hours.',
+    FR: 'Parcours à plusieurs étapes avec navigateur et audioguides automatiques pendant 24 heures.',
+    ES: 'Recorrido de varias paradas con navegador y audioguías automáticas durante 24 horas.',
+    DE: 'Rundgang mit mehreren Stationen, Navigator und automatischen Audioguides für 24 Stunden.',
+    RU: 'Маршрут с несколькими точками, навигатор и автоматические аудиогиды на 24 часа.',
+    ZH: '24 小时内的多站点路线、导航和自动语音导览。',
+  },
+  // ── «Ricalcola da qui» (03/09/2026, collaudo: «ero uscito dal percorso e la
+  //    mappa mi mostra sempre il percorso originale»): il quinto tasto del
+  //    cruscotto, in fila con pausa / riascolta / salta / termina. ──
+  tour_ricalcola: {
+    IT: 'Ricalcola il percorso da qui', EN: 'Recalculate the route from here', FR: "Recalculer l'itinéraire d'ici",
+    ES: 'Recalcular la ruta desde aquí', DE: 'Route von hier neu berechnen', RU: 'Пересчитать маршрут отсюда', ZH: '从此处重新计算路线',
+  },
+  tour_ricalcolato: {
+    IT: 'Percorso ricalcolato da dove sei', EN: 'Route recalculated from where you are', FR: "Itinéraire recalculé depuis votre position",
+    ES: 'Ruta recalculada desde donde estás', DE: 'Route von deinem Standort neu berechnet', RU: 'Маршрут пересчитан от вашего положения', ZH: '已从你所在位置重新计算路线',
+  },
+  // ── «L'ingresso e` qui» (solo admin, 03/09/2026) ──
+  sk_ingresso_qui: {
+    IT: "L'ingresso è qui", EN: 'The entrance is here', FR: "L'entrée est ici",
+    ES: 'La entrada está aquí', DE: 'Der Eingang ist hier', RU: 'Вход здесь', ZH: '入口在这里',
+  },
+  sk_ingresso_qui_hint: {
+    IT: 'Salva la tua posizione GPS come ingresso di questo luogo (navigatore, giro e geofence arriveranno qui).',
+    EN: 'Save your GPS position as the entrance of this place (navigator, tour and geofence will arrive here).',
+    FR: "Enregistre ta position GPS comme entrée de ce lieu (navigateur, parcours et géofence y arriveront).",
+    ES: 'Guarda tu posición GPS como entrada de este lugar (navegador, recorrido y geocerca llegarán aquí).',
+    DE: 'Speichert deine GPS-Position als Eingang dieses Ortes (Navigator, Tour und Geofence kommen hier an).',
+    RU: 'Сохранить вашу GPS-позицию как вход этого места (навигатор, маршрут и геозона будут вести сюда).',
+    ZH: '将你的 GPS 位置保存为此地点的入口（导航、路线和地理围栏将到达此处）。',
+  },
+  sk_ingresso_salvato: {
+    IT: 'Ingresso salvato ({m} m dal centro del luogo).', EN: 'Entrance saved ({m} m from the place centre).', FR: "Entrée enregistrée ({m} m du centre du lieu).",
+    ES: 'Entrada guardada ({m} m del centro del lugar).', DE: 'Eingang gespeichert ({m} m vom Ortsmittelpunkt).', RU: 'Вход сохранён ({m} м от центра места).', ZH: '入口已保存（距地点中心 {m} 米）。',
+  },
+  sk_ingresso_salvato_breve: {
+    IT: 'Ingresso salvato', EN: 'Entrance saved', FR: 'Entrée enregistrée',
+    ES: 'Entrada guardada', DE: 'Eingang gespeichert', RU: 'Вход сохранён', ZH: '入口已保存',
+  },
+  sk_ingresso_errore: {
+    IT: 'Ingresso non salvato.', EN: 'Entrance not saved.', FR: "Entrée non enregistrée.",
+    ES: 'Entrada no guardada.', DE: 'Eingang nicht gespeichert.', RU: 'Вход не сохранён.', ZH: '入口未保存。',
+  },
+  tour_ricalcolo_fallito: {
+    IT: 'Ricalcolo non riuscito: controlla la rete e riprova', EN: 'Recalculation failed: check your connection and try again', FR: 'Recalcul impossible : vérifiez la connexion et réessayez',
+    ES: 'No se pudo recalcular: comprueba la conexión e inténtalo de nuevo', DE: 'Neuberechnung fehlgeschlagen: Verbindung prüfen und erneut versuchen', RU: 'Не удалось пересчитать: проверьте сеть и повторите', ZH: '重新计算失败：请检查网络后重试',
+  },
 };

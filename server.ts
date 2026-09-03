@@ -11371,6 +11371,64 @@ ${description}
     }
   });
 
+  /**
+   * «L'INGRESSO E` QUI» (03/09/2026, collaudo a Massa: WIP Nav ha portato
+   * il committente sul retro del Teatro Guglielmi, perche' l'«ingresso» in
+   * banca dati era il civico piu' vicino — la pizzeria dietro — promosso
+   * dalla passata mondiale del 21/08 come unico candidato entro 25 m).
+   * Fino a oggi NESSUNA rotta permetteva di correggere entrance_lat/lon:
+   * l'editor admin muove solo il centroide. Questa scrive l'ingresso
+   * DICHIARATO dalla posizione in cui l'admin si trova (o da un punto scelto
+   * sulla mappa) su shared_pois e su poi_entrances (livello 'dichiarato',
+   * che scavalca il civico), e lo registra nell'audit. Solo admin: un
+   * ingresso sbagliato manda la gente dalla parte sbagliata di un isolato.
+   */
+  app.post("/api/admin/poi/entrance", rateLimiter, requireAdmin, async (req, res) => {
+    try {
+      const { poiId, lat, lon, note } = req.body || {};
+      const nLat = Number(lat), nLon = Number(lon);
+      if (!poiId || !Number.isFinite(nLat) || !Number.isFinite(nLon) || (nLat === 0 && nLon === 0)) {
+        return res.status(400).json({ error: 'poiId, lat e lon richiesti' });
+      }
+      const headers = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const beforeRes = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=id,name,city,lat,lon,entrance_lat,entrance_lon`, { headers });
+      const before = beforeRes.data?.[0];
+      if (!before) return res.status(404).json({ error: 'POI non trovato' });
+      // Un ingresso a piu' di 250 m dal centroide non e' di questo posto:
+      // e' un tocco sbagliato, e si rifiuta prima di fare danni.
+      const cosLat = Math.cos((Number(before.lat) * Math.PI) / 180);
+      const distanza = Math.hypot((nLat - Number(before.lat)) * 111320, (nLon - Number(before.lon)) * 111320 * cosLat);
+      if (!Number.isFinite(distanza) || distanza > 250) {
+        return res.status(400).json({ error: `punto a ${Math.round(distanza)} m dal luogo: troppo lontano per essere il suo ingresso` });
+      }
+      await axios.patch(
+        `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}`,
+        { entrance_lat: nLat, entrance_lon: nLon },
+        { headers: { ...headers, Prefer: 'return=minimal' } }
+      );
+      // poi_entrances: upsert sulla PK poi_id. Se la tabella manca (ambiente
+      // senza quella migration) non e' un errore: shared_pois e' la fonte
+      // che leggono i client.
+      try {
+        await axios.post(`${supabaseUrl}/rest/v1/poi_entrances`, {
+          poi_id: poiId, lat: nLat, lon: nLon, livello: 'dichiarato',
+          distanza_m: Math.round(distanza), candidati: 1, rango: 0,
+          city: before.city || null, fonte: 'admin', promosso: true, promosso_il: new Date().toISOString(),
+        }, { headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' } });
+      } catch (e: any) {
+        console.warn('[poi/entrance] poi_entrances non aggiornata:', e?.response?.status, e?.response?.data?.message || e?.message);
+      }
+      await logSystemError('info', `Ingresso di "${before.name}" dichiarato dall'admin (${Math.round(distanza)} m dal centroide)`, {
+        source: 'poi_entrance', poiId, da: { lat: before.entrance_lat, lon: before.entrance_lon }, a: { lat: nLat, lon: nLon },
+        note: note || null, adminId: (req as any).adminId,
+      });
+      res.json({ ok: true, poiId, entrance_lat: nLat, entrance_lon: nLon, distanza_m: Math.round(distanza) });
+    } catch (e: any) {
+      const detail = e?.response?.data?.message || e?.message || 'update fallito';
+      res.status(500).json({ error: detail });
+    }
+  });
+
   // --- SENTIERI E CAMMINI (OpenStreetMap) --------------------------------
   //
   // Nel mondo ci sono 280.999 oggetti `route=hiking` su OSM, 172.030 con un
@@ -21387,6 +21445,21 @@ ${testo}`;
   // non far esplodere la matrice OSRM — 30 punti sono 900 celle, ancora una
   // chiamata sola.
   const TOUR_MAX_TAPPE = 30;
+  /**
+   * PERCORSO SU MISURA (03/09/2026). Funzione diversa dal giro con
+   * audioguida: luoghi di qualsiasi categoria scelti dalla mappa, ordine
+   * ottimizzato, navigatore, NESSUNA audioguida e NESSUN Day Pass. Si paga a
+   * crediti una volta per percorso (`?modo=percorso&percorso=<id>`), e il
+   * server ricorda l'addebito in api_cache (chiave `percorso:<utente>:<id>`)
+   * insieme alle tappe gia` pagate: una richiesta che AGGIUNGE una tappa
+   * nuova, o che arriva con `modifica=1` (l'utente ne ha tolta una), conta
+   * come modifica; oltre PERCORSO_MODIFICHE_MAX si risponde 402
+   * ModificheEsaurite. Un ricalcolo da deviazione o da tappa fatta (stesse
+   * tappe o un sottoinsieme, senza flag) e` gratis. Allineare a
+   * PRICING_LIST.custom_route e CUSTOM_ROUTE_MAX_CHANGES in src/lib/pricing.ts.
+   */
+  const PERCORSO_COSTO = 30;
+  const PERCORSO_MODIFICHE_MAX = 3;
 
   const distanzaMetri = (a: number[], b: number[]) => {
     const R = 6371000, rad = Math.PI / 180;
@@ -21652,6 +21725,9 @@ ${testo}`;
        * fino a undici chiamate di instradamento verso terzi.
        */
       const anteprima = String(req.query.anteprima || '') === 'true' || String(req.query.modo || '') === 'anteprima';
+      // Percorso su misura: il cancello e` a crediti, non a Day Pass, e sta
+      // piu` sotto (servono le tappe lette). Vedi PERCORSO_COSTO.
+      const modoPercorso = String(req.query.modo || '') === 'percorso';
 
       if (numeroTappe > 1) {
         if (anteprima) {
@@ -21664,6 +21740,8 @@ ${testo}`;
             res.setHeader('Retry-After', String(attesa));
             return res.status(429).json({ error: 'rate_limited', retry_after_seconds: attesa });
           }
+        } else if (modoPercorso) {
+          /* il cancello a crediti sta sotto, a tappe lette */
         } else {
           const pass = await passValido(req);
           if (!pass.ok) {
@@ -21689,6 +21767,53 @@ ${testo}`;
       const partenza = punti[0];
       const tappe = punti.slice(1);
 
+      // ── IL CANCELLO DEL PERCORSO SU MISURA (crediti, non Day Pass) ─────
+      // Una tappa sola e` navigazione normale, gratis come /api/route/foot:
+      // il percorso si paga da due tappe in su.
+      let percorsoStato: { modifiche: number; max: number } | null = null;
+      if (modoPercorso && !anteprima && tappe.length > 1) {
+        let uid: string | null = null;
+        try { uid = await verifyUserToken(req); } catch { uid = null; }
+        if (!uid) return res.status(401).json({ error: 'auth_required' });
+        (req as any).userId = uid;
+        const percorsoId = String(req.query.percorso || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 48);
+        if (!percorsoId) return res.status(400).json({ code: 'InvalidInput', message: "manca l'id del percorso" });
+        const chiaveP = `percorso:${uid}:${percorsoId}`;
+        // La firma di una tappa: coordinate a 4 decimali (~10 m). Basta a
+        // riconoscere «la stessa tappa» fra un ricalcolo e l'altro.
+        const firmaTappa = (p: number[]) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`;
+        const attuali = tappe.map(firmaTappa);
+        let st: any = null;
+        try {
+          const rec = await getFromCache(chiaveP);
+          st = rec?.text_content ? JSON.parse(rec.text_content) : null;
+        } catch { st = null; }
+        if (!st || !st.pagato) {
+          const esito = await consumeCreditsServer(uid, PERCORSO_COSTO, `Percorso su misura (${tappe.length} tappe)`);
+          if (esito === 'insufficient') {
+            return res.status(402).json({ code: 'CreditiInsufficienti', costo: PERCORSO_COSTO, message: `il percorso su misura costa ${PERCORSO_COSTO} crediti` });
+          }
+          if (esito !== 'ok') return res.status(500).json({ code: 'Error', message: 'addebito non riuscito' });
+          st = { pagato: true, pagatoIl: Date.now(), crediti: PERCORSO_COSTO, modifiche: 0, tappe: attuali };
+          await saveToCache(chiaveP, 'percorso', JSON.stringify(st)).catch(() => {});
+          // Se la rotta poi non si calcola, i crediti tornano (vedi il catch).
+          (req as any).percorsoAppenaPagato = { uid, chiaveP };
+        } else {
+          const conosciute = new Set<string>(Array.isArray(st.tappe) ? st.tappe : []);
+          const nuove = attuali.filter((k: string) => !conosciute.has(k));
+          const modifica = nuove.length > 0 || String(req.query.modifica || '') === '1';
+          if (modifica) {
+            if ((Number(st.modifiche) || 0) >= PERCORSO_MODIFICHE_MAX) {
+              return res.status(402).json({ code: 'ModificheEsaurite', max: PERCORSO_MODIFICHE_MAX, message: `hai usato tutte le ${PERCORSO_MODIFICHE_MAX} modifiche di questo percorso` });
+            }
+            st.modifiche = (Number(st.modifiche) || 0) + 1;
+            st.tappe = [...conosciute, ...nuove];
+            await saveToCache(chiaveP, 'percorso', JSON.stringify(st)).catch(() => {});
+          }
+        }
+        percorsoStato = { modifiche: Number(st.modifiche) || 0, max: PERCORSO_MODIFICHE_MAX };
+      }
+
       /**
        * DOVE SI CHIUDE L'ANELLO (28/08/2026). Di norma sul punto da cui si e`
        * chiesta la rotta. Ma un giro ricalcolato a meta` strada riparte da
@@ -21712,7 +21837,11 @@ ${testo}`;
       // (o, peggio, quella completa a chi non ce l'ha).
       const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine};${anteprima ? 'ant' : 'full'}${puntoRientro ? `;r${puntoRientro[0].toFixed(4)},${puntoRientro[1].toFixed(4)}` : ''}`;
       const c = req.query.senza ? null : tourCache.get(chiave);
-      if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
+      // Lo stato del percorso su misura e` di QUESTA richiesta (l'ha appena
+      // contato il cancello), non della risposta in cache.
+      if (c && Date.now() - c.ts < ROUTE_TTL) {
+        return res.json({ ...c.data, wip_giro: { ...(c.data?.wip_giro || {}), ...(percorsoStato ? { percorso: percorsoStato } : {}) }, wip_fonte: 'cache' });
+      }
 
       // ── 1. l'ordine ────────────────────────────────────────────────────
       // `senza=` deve valere ANCHE per l'ordinamento, non solo per le tratte:
@@ -21825,9 +21954,18 @@ ${testo}`;
 
       tourCache.set(chiave, { ts: Date.now(), data: dati });
       if (tourCache.size > 800) tourCache.delete(tourCache.keys().next().value);
-      res.json(dati);
+      // Il contatore delle modifiche NON va in cache: e` per-richiesta.
+      res.json(percorsoStato ? { ...dati, wip_giro: { ...dati.wip_giro, percorso: percorsoStato } } : dati);
     } catch (e: any) {
       console.error('[tour/foot] errore:', e?.message);
+      // Percorso su misura appena pagato e rotta non calcolata: i crediti
+      // tornano e l'addebito si dimentica, cosi` il prossimo tentativo paga
+      // una volta sola.
+      const pp = (req as any).percorsoAppenaPagato;
+      if (pp?.uid) {
+        try { await refundCreditsServer(pp.uid, PERCORSO_COSTO); } catch { /* si logga sotto */ }
+        try { await saveToCache(pp.chiaveP, 'percorso', JSON.stringify({ pagato: false, rimborsatoIl: Date.now() })); } catch { /* niente */ }
+      }
       res.status(500).json({ code: 'Error', message: e?.message });
     }
   });

@@ -52,6 +52,16 @@ import java.util.ArrayList
 )
 class ItaintaBackgroundPoiPlugin : Plugin() {
 
+    companion object {
+        /**
+         * (03/09/2026) Il plugin e' vivo (WebView in piedi)? Lo legge il
+         * servizio quando un tasto del cruscotto viene toccato sulla
+         * notifica: se si', il broadcast arriva al JS; se no, annota
+         * l'azione e apre l'app (ItaintaBackgroundPoiService.inoltraAzioneNav).
+         */
+        @Volatile @JvmStatic var vivo: Boolean = false
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val event = intent?.getStringExtra("event") ?: return
@@ -66,6 +76,9 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                         val json = JSONObject(data1)
                         if (json.has("poiId")) data.put("poiId", json.getString("poiId"))
                         if (json.has("poiName")) data.put("poiName", json.getString("poiName"))
+                        // (03/09/2026) I tasti del cruscotto: azione e orario del tocco.
+                        if (json.has("action")) data.put("action", json.getString("action"))
+                        if (json.has("ts")) data.put("ts", json.getLong("ts"))
                     }
                 } catch (e: Exception) {
                     // Ignora errori di parsing, usiamo il campo 'data' raw
@@ -90,6 +103,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         } else {
             context.registerReceiver(receiver, filter)
         }
+        vivo = true
+        // (03/09/2026) Un tasto del cruscotto toccato mentre la WebView era
+        // morta: il servizio l'ha annotato e ha aperto l'app. Si consegna
+        // adesso (retainUntilConsumed: il listener JS puo' non esserci ancora).
+        try {
+            val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
+            val pendente = prefs.getString(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION, null)
+            if (!pendente.isNullOrBlank()) {
+                val ts = prefs.getLong(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION_TS, 0L)
+                prefs.edit()
+                    .remove(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION)
+                    .remove(ItaintaBackgroundPoiService.PREF_PENDING_NAV_ACTION_TS)
+                    .apply()
+                val data = JSObject()
+                data.put("action", pendente)
+                data.put("ts", ts)
+                notifyListeners("navBannerAction", data, true)
+            }
+        } catch (_: Exception) { /* best-effort */ }
     }
 
     @PluginMethod
@@ -723,6 +755,10 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
                 // (29/08/2026) URL della foto della tappa: icona grande della
                 // notifica sulla lock screen. Vuoto = nessuna foto.
                 putExtra("foto", call.getString("foto") ?: "")
+                // (03/09/2026) Pausa e modo per i tasti della notifica. Solo
+                // se il JS li manda: assenti = il servizio tiene i suoi.
+                call.getBoolean("inPausa")?.let { putExtra("inPausa", it) }
+                call.getString("modo")?.let { putExtra("modo", it) }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -1583,6 +1619,7 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
     }
 
     override fun handleOnDestroy() {
+        vivo = false
         try {
             context.unregisterReceiver(receiver)
         } catch (e: Exception) { }

@@ -126,6 +126,22 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
                 "packageId": packageId, "done": done, "total": total, "phase": phase
             ], retainUntilConsumed: true)
         }
+        // (03/09/2026) I TASTI DELLA LIVE ACTIVITY (WipNavIntents.swift): il
+        // perform() dell'intent gira in questo processo e posta una notifica;
+        // qui diventa l'evento JS `navBannerAction {action}`, lo stesso che
+        // manda Android dalle azioni della notifica del servizio. La chiave
+        // nell'App Group copre il tocco arrivato PRIMA che il plugin fosse
+        // in ascolto (app appena rilanciata dal sistema).
+        NotificationCenter.default.addObserver(forName: WipNavAzione.notifica, object: nil, queue: .main) { [weak self] n in
+            let azione = (n.userInfo?["azione"] as? String) ?? ""
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipNavAzione.chiavePendente)
+            guard !azione.isEmpty else { return }
+            self?.notifyListeners("navBannerAction", data: ["action": azione], retainUntilConsumed: true)
+        }
+        if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipNavAzione.chiavePendente), !pendente.isEmpty {
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipNavAzione.chiavePendente)
+            notifyListeners("navBannerAction", data: ["action": pendente], retainUntilConsumed: true)
+        }
     }
 
     private func jsonString(_ obj: [String: Any]) -> String {
@@ -591,7 +607,16 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             "nomeProssima": call.getString("nomeProssima") ?? "",
             // (29/08/2026) URL della foto della tappa: la scarica
             // LiveActivityNav nell'App Group, il widget la legge da li'.
-            "foto": call.getString("foto") ?? ""
+            "foto": call.getString("foto") ?? "",
+            // (03/09/2026) La card blu sulla lock screen: manovra per la
+            // freccia, avanzamento per la barra, pausa e modo per i tasti.
+            "manovraTipo": call.getString("manovraTipo") ?? "",
+            "manovraVerso": call.getString("manovraVerso") ?? "",
+            "progresso": call.getDouble("progresso") ?? -1,
+            "metriTotali": call.getDouble("metriTotali") ?? 0,
+            "inPausa": call.getBool("inPausa") ?? false,
+            "modo": call.getString("modo") ?? "giro",
+            "minutiRimanenti": call.getDouble("minutiRimanenti") ?? -1
         ]
         // Le API di ActivityKit vogliono il main thread.
         DispatchQueue.main.async {

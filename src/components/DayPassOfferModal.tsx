@@ -8,16 +8,28 @@ interface DayPassOfferModalProps {
   city: string;
   poisCount: number;
   onClose: () => void;
+  /**
+   * Aperta da un cancello (402 del giro, 03/09/2026): il titolo dice il
+   * perche' — «per avviare la navigazione serve il Day Pass» — e non
+   * l'offerta contestuale, che qui suonerebbe fuori luogo.
+   */
+  motivo?: string;
 }
 
 /**
  * Offerta contestuale del Day Pass — sostituisce il vecchio
  * PredictiveBundleModal (sconto bundle regionale 50%). Appare quando l'utente
  * attiva le cuffie in una zona ricca di luoghi (vedi usePredictiveDownload),
- * al massimo una volta ogni 24 ore.
+ * al massimo una volta ogni 24 ore; e SUBITO, fuori dal throttle, quando il
+ * server risponde che serve il pass (evento `wip-open-daypass`).
  */
-export default function DayPassOfferModal({ isOpen, city, poisCount, onClose }: DayPassOfferModalProps) {
+export default function DayPassOfferModal({ isOpen, city, poisCount, onClose, motivo }: DayPassOfferModalProps) {
   const tr = (k: string) => getTranslation(k, linguaCorrente());
+  const titolo = motivo
+    ? motivo
+    : poisCount > 0
+      ? tr('gr_dp_offer_luoghi').replace('{n}', String(poisCount)).replace('{city}', city)
+      : tr('gr_dp_offer_scopri').replace('{city}', city);
   return (
     <AnimatePresence>
       {isOpen && (
@@ -37,19 +49,15 @@ export default function DayPassOfferModal({ isOpen, city, poisCount, onClose }: 
           >
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-blue-700" />
-                <h2 className="text-lg font-black text-gray-900 font-display">
-                  {poisCount > 0
-                    ? tr('gr_dp_offer_luoghi').replace('{n}', String(poisCount)).replace('{city}', city)
-                    : tr('gr_dp_offer_scopri').replace('{city}', city)}
-                </h2>
+                <Sparkles className="w-5 h-5 text-blue-700 shrink-0" />
+                <h2 className="text-lg font-black text-gray-900 font-display leading-tight">{titolo}</h2>
               </div>
               <button onClick={onClose} className="p-1.5 rounded-full hover:bg-gray-100 shrink-0" aria-label={tr('gr_chiudi')}>
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
             <p className="text-sm text-gray-600 mb-4">
-              {tr('gr_dp_offer_testo')}
+              {motivo ? tr('gr_daypass_incluso') : tr('gr_dp_offer_testo')}
             </p>
             <DayPassCard />
             <button

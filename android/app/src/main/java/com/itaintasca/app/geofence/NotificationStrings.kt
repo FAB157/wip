@@ -25,6 +25,9 @@ object NotificationStrings {
     private val TABLE: Map<String, Map<String, String>> = mapOf(
         "it" to mapOf(
             "checkin_title" to "Tappa completata! ✅",
+            // (03/09/2026) I tasti del cruscotto sulla notifica del navigatore.
+            "nav_pausa" to "Pausa", "nav_riprendi" to "Riprendi", "nav_riascolta" to "Riascolta",
+            "nav_salta" to "Salta tappa", "nav_ricalcola" to "Ricalcola", "nav_termina" to "Termina",
             "checkin_text" to "Vuoi passare alla prossima destinazione?",
             "approach_title_stop" to "📍 Tappa Itinerario",
             "approach_title_explore" to "Esplorazione",
@@ -54,6 +57,8 @@ object NotificationStrings {
         ),
         "en" to mapOf(
             "checkin_title" to "Stop completed! ✅",
+            "nav_pausa" to "Pause", "nav_riprendi" to "Resume", "nav_riascolta" to "Replay",
+            "nav_salta" to "Skip stop", "nav_ricalcola" to "Recalculate", "nav_termina" to "End",
             "checkin_text" to "Move on to the next destination?",
             "approach_title_stop" to "📍 Itinerary stop",
             "approach_title_explore" to "Exploring",
@@ -77,6 +82,8 @@ object NotificationStrings {
         ),
         "fr" to mapOf(
             "checkin_title" to "Étape terminée ! ✅",
+            "nav_pausa" to "Pause", "nav_riprendi" to "Reprendre", "nav_riascolta" to "Réécouter",
+            "nav_salta" to "Passer l'étape", "nav_ricalcola" to "Recalculer", "nav_termina" to "Terminer",
             "checkin_text" to "Passer à la prochaine destination ?",
             "approach_title_stop" to "📍 Étape de l'itinéraire",
             "approach_title_explore" to "Exploration",
@@ -100,6 +107,8 @@ object NotificationStrings {
         ),
         "es" to mapOf(
             "checkin_title" to "¡Parada completada! ✅",
+            "nav_pausa" to "Pausa", "nav_riprendi" to "Reanudar", "nav_riascolta" to "Repetir",
+            "nav_salta" to "Saltar parada", "nav_ricalcola" to "Recalcular", "nav_termina" to "Terminar",
             "checkin_text" to "¿Pasar a la siguiente destinación?",
             "approach_title_stop" to "📍 Parada del itinerario",
             "approach_title_explore" to "Exploración",
@@ -123,6 +132,8 @@ object NotificationStrings {
         ),
         "de" to mapOf(
             "checkin_title" to "Etappe abgeschlossen! ✅",
+            "nav_pausa" to "Pause", "nav_riprendi" to "Fortsetzen", "nav_riascolta" to "Nochmal",
+            "nav_salta" to "Station überspringen", "nav_ricalcola" to "Neu berechnen", "nav_termina" to "Beenden",
             "checkin_text" to "Weiter zum nächsten Ziel?",
             "approach_title_stop" to "📍 Etappe der Route",
             "approach_title_explore" to "Erkundung",
@@ -152,6 +163,8 @@ object NotificationStrings {
         // sistema, non del testo.
         "ru" to mapOf(
             "checkin_title" to "Этап пройден! ✅",
+            "nav_pausa" to "Пауза", "nav_riprendi" to "Продолжить", "nav_riascolta" to "Повторить",
+            "nav_salta" to "Пропустить", "nav_ricalcola" to "Пересчитать", "nav_termina" to "Завершить",
             "checkin_text" to "Перейти к следующему пункту?",
             "approach_title_stop" to "📍 Этап маршрута",
             "approach_title_explore" to "Исследование",
@@ -175,6 +188,8 @@ object NotificationStrings {
         ),
         "zh" to mapOf(
             "checkin_title" to "行程点已完成！✅",
+            "nav_pausa" to "暂停", "nav_riprendi" to "继续", "nav_riascolta" to "重听",
+            "nav_salta" to "跳过", "nav_ricalcola" to "重新计算", "nav_termina" to "结束",
             "checkin_text" to "前往下一个目的地？",
             "approach_title_stop" to "📍 行程站点",
             "approach_title_explore" to "探索中",

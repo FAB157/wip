@@ -99,6 +99,19 @@ export interface ItaintaBackgroundPoiPlugin {
     nomeProssima?: string;
     /** URL della foto della tappa (vuoto = nessuna): icona grande / miniatura. */
     foto?: string;
+    /**
+     * (03/09/2026) La card blu sulla lock screen (Live Activity iOS): la
+     * manovra OSRM grezza (tipo/verso → freccia), l'avanzamento 0..1 (barra),
+     * i metri totali, lo stato di pausa (icona play/pause) e il modo
+     * ('giro' | 'percorso' | 'singola': decide quali tasti mostrare).
+     */
+    manovraTipo?: string;
+    manovraVerso?: string;
+    progresso?: number;
+    metriTotali?: number;
+    inPausa?: boolean;
+    modo?: 'giro' | 'percorso' | 'singola';
+    minutiRimanenti?: number;
   }): Promise<{ ok?: boolean; reason?: string }>;
 
   setDayPass(options: { expiresAt: number; cap: number; used: number }): Promise<void>;
@@ -130,6 +143,17 @@ export interface ItaintaBackgroundPoiPlugin {
   addListener(
     eventName: 'directSpeechFinished',
     listener: (data: { id?: string }) => void,
+  ): Promise<PluginListenerHandle> & PluginListenerHandle;
+  /**
+   * (03/09/2026) Un tasto del cruscotto a display spento: i Button della
+   * Live Activity iOS (App Intents) o le azioni della notifica del servizio
+   * Android. `action`: 'pausa' (alterna) | 'riascolta' | 'salta' |
+   * 'ricalcola' | 'termina'. Lo gestisce App.tsx (giro/percorso) o
+   * useWalkingNavigation (tappa singola, via evento 'wip-nav-banner-action').
+   */
+  addListener(
+    eventName: 'navBannerAction',
+    listener: (data: { action?: string }) => void,
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
   addListener(
     eventName: string,

@@ -668,6 +668,12 @@ interface MapAreaProps {
   activeTab?: string;
   isRadarMode?: boolean;
   radarPois?: any[];
+  /**
+   * PERCORSO SU MISURA (03/09/2026): il «+» compare su TUTTI i pin delle
+   * categorie accese (ristoranti, farmacie, parcheggi compresi) e la mappa
+   * resta quella normale, non la finestra del radar. Vedi tourService.ModoGiro.
+   */
+  modalitaPercorso?: boolean;
 }
 
 // Haversine formula
@@ -770,7 +776,7 @@ function escapeHtml(s: string): string {
 }
 
 import PoiPopupContent from "./PoiPopupContent";
-import { tourService, MAX_TAPPE } from "../services/tourService";
+import { tourService } from "../services/tourService";
 import { useBozzaGiro, useVistaGiro } from "../lib/tour/useGiro";
 import TourRouteLayer from "./TourRouteLayer";
 import NavRouteLayer from "./NavRouteLayer";
@@ -795,6 +801,7 @@ function MapArea({
   activeTab,
   isRadarMode,
   radarPois = [],
+  modalitaPercorso = false,
 }: MapAreaProps) {
   const [center, setCenter] = useState<[number, number]>(INITIAL_CENTER);
   const [mapZoom, setMapZoom] = useState(13);
@@ -4958,8 +4965,9 @@ function MapArea({
   );
 
   const visiblePois = useMemo(() => {
-    // Se la modalità Radar è attiva, mostriamo SOLO i POI monitorati dall'audioguida
-    if (isRadarMode) {
+    // Se la modalità Radar è attiva, mostriamo SOLO i POI monitorati dall'audioguida.
+    // Col percorso su misura no: si sceglie fra TUTTI i pin delle chip accese.
+    if (isRadarMode && !modalitaPercorso) {
       return radarPois || [];
     }
 
@@ -5009,7 +5017,7 @@ function MapArea({
       // passesCategoryRule (src/lib/poiTaxonomy.ts), euristiche comprese.
       return passesCategoryRule(p, selectedCategories, subFilter);
     });
-  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois]);
+  }, [pois, selectedCategories, subFilter, isRadarMode, radarPois, modalitaPercorso]);
 
 
   // Initial fetch when map is ready — e a ogni cambio di categorie/sotto-filtro.
@@ -5518,11 +5526,12 @@ function MapArea({
   /** Dieci tappe vive e non se ne aggiungono altre: il "+" sparisce da tutti. */
   const giroPieno = useMemo(() => {
     const g = tourService.datiGiro();
-    if (g && tourService.inCorso()) return g.tappe.filter((t) => !t.esclusa).length >= MAX_TAPPE;
-    return bozzaGiro.tappe.length >= MAX_TAPPE;
+    // Il tetto e` del giro (dieci) o del percorso su misura (trenta).
+    if (g && tourService.inCorso()) return g.tappe.filter((t) => !t.esclusa).length >= tourService.tettoTappe();
+    return bozzaGiro.tappe.length >= tourService.bozzaTetto();
   }, [bozzaGiro, vistaGiroMappa]);
-  /** Il "+" ha senso solo con il radar/giro acceso: altrove e` rumore sul pin. */
-  const mostraPiuSuiPin = !!isRadarMode && !giroPieno && !tourService.eSospeso();
+  /** Il "+" ha senso solo con il radar/giro o il percorso su misura acceso: altrove e` rumore sul pin. */
+  const mostraPiuSuiPin = (!!isRadarMode || modalitaPercorso) && !giroPieno && !tourService.eSospeso();
 
   /** Un tocco sul "+" del pin: alla bozza, o al giro se e` gia` partito. */
   const aggiungiAlGiroDaPin = useCallback((poi: any) => {
@@ -5961,7 +5970,8 @@ function MapArea({
                 language={language}
                 // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
                 // giro", cosi` le tappe si scelgono anche toccando i pin.
-                modalitaGiro={!!isRadarMode}
+                // Lo stesso tasto serve al percorso su misura.
+                modalitaGiro={!!isRadarMode || modalitaPercorso}
                 // La X della card chiude davvero: si chiude il popup di
                 // Leaflet e si azzera lo stato, altrimenti il popup resta
                 // "aperto" per React e non si riapre sullo stesso POI.
@@ -7106,7 +7116,8 @@ function areMapAreaPropsEqual(prev: MapAreaProps, next: MapAreaProps) {
     prev.language === next.language &&
     prev.activeTab === next.activeTab &&
     prev.isRadarMode === next.isRadarMode &&
-    prev.radarPois === next.radarPois
+    prev.radarPois === next.radarPois &&
+    prev.modalitaPercorso === next.modalitaPercorso
   );
 }
 

@@ -82,6 +82,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
                 .queryItems?.first(where: { $0.name == "guide" })?.value ?? "nicky"
             savePendingDeepLink(poiId: poiId, guide: guide)
         }
+        // (03/09/2026) I tasti della Live Activity su iOS 16 sono Link
+        // itainta://nav/<azione> (WipNavIntents.swift): stessa consegna
+        // dell'intent iOS 17, il plugin la gira al JS come navBannerAction.
+        if let azione = WipNavLink.azione(da: url) {
+            WipNavConsegna.consegna(azione)
+            return true
+        }
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
     }
 

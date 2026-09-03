@@ -57,6 +57,7 @@ import wipLogo from '../assets/images/wip-icon.png';
 import { SUBCATEGORY_DETAILS } from "../data/subcategoryDetails";
 import ActionButton from "./ui/ActionButton";
 import NavChoiceSheet from "./NavChoiceSheet";
+import IngressoQuiButton from "./IngressoQuiButton";
 import { BottoneGiro } from "./PoiPopupContent";
 
 import {
@@ -169,6 +170,8 @@ interface PoiDetailSheetProps {
   onSelectNearby?: (poi: any) => void;
   /** Radar acceso: la scheda serve a DECIDERE se il posto entra nel giro. */
   modalitaGiro?: boolean;
+  /** Admin: mostra «L'ingresso e` qui» (correzione dell'ingresso sul posto, 03/09/2026). */
+  isAdmin?: boolean;
   language: Language;
 }
 
@@ -206,6 +209,7 @@ export default function PoiDetailSheet({
   nearbyPois: propNearbyPois = [],
   onSelectNearby,
   modalitaGiro,
+  isAdmin,
   language,
 }: PoiDetailSheetProps) {
   const [nearbyPois, setNearbyPois] = useState<any[]>(propNearbyPois);
@@ -3222,6 +3226,10 @@ export default function PoiDetailSheet({
                 committente aggiungeva tappe col cuore senza sapere perche'
                 funzionasse. Stesso bottone del popup, stessa bozza. */}
             {modalitaGiro && <BottoneGiro poi={poi} language={language} />}
+
+            {/* SOLO ADMIN (03/09/2026): «L'ingresso e` qui» scrive la
+                posizione GPS come porta del luogo. Vedi IngressoQuiButton. */}
+            {isAdmin && <IngressoQuiButton poi={poi} language={language} />}
 
             <div className="grid grid-cols-2 gap-3 mb-6">
               <ActionButton

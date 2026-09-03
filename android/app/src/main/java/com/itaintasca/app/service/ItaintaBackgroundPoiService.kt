@@ -74,6 +74,21 @@ class ItaintaBackgroundPoiService : Service() {
         // puo' scartare — li mostra al posto del testo del radar. Non nasce
         // MAI una seconda notifica: il banner "fisso" e' questa.
         const val ACTION_NAV_BANNER = "com.itaintasca.app.NAV_BANNER"
+        // (03/09/2026) I TASTI DEL CRUSCOTTO sulla notifica, gli stessi del
+        // controller in app (committente: «il banner live dovrebbe essere
+        // questo blu con gli stessi tasti del controller sotto»). Il tocco
+        // arriva al JS come evento `navBannerAction {action}` e tourService
+        // fa quello che farebbe il tasto (pausa/riprendi, salta, ricalcola,
+        // riascolta, termina). Android mostra al massimo TRE azioni: la
+        // terna cambia con lo stato (vedi buildNotification).
+        const val ACTION_NAV_PAUSE = "com.itaintasca.app.NAV_PAUSE"
+        const val ACTION_NAV_SKIP = "com.itaintasca.app.NAV_SKIP"
+        const val ACTION_NAV_REPLAY = "com.itaintasca.app.NAV_REPLAY"
+        const val ACTION_NAV_RECALC = "com.itaintasca.app.NAV_RECALC"
+        const val ACTION_NAV_END = "com.itaintasca.app.NAV_END"
+        /** Tocco arrivato a WebView morta: si annota qui e lo consegna il plugin al suo load(). */
+        const val PREF_PENDING_NAV_ACTION = "pending_nav_action"
+        const val PREF_PENDING_NAV_ACTION_TS = "pending_nav_action_ts"
         // Notifica normale (non FGS) «permesso posizione negato».
         const val NOTIF_ID_PERMISSION = 4005
 
@@ -451,8 +466,26 @@ class ItaintaBackgroundPoiService : Service() {
                 intent.getStringExtra("titolo"),
                 intent.getStringExtra("corpo"),
                 intent.getBooleanExtra("attivo", false),
-                intent.getStringExtra("foto")
+                intent.getStringExtra("foto"),
+                // (03/09/2026) Pausa e modo per i tasti: assenti = si tiene
+                // quello che c'era (una build web vecchia non li manda).
+                inPausa = if (intent.hasExtra("inPausa")) intent.getBooleanExtra("inPausa", false) else null,
+                modo = intent.getStringExtra("modo")
             )
+            return START_STICKY
+        }
+
+        // (03/09/2026) Un tasto del cruscotto toccato sulla notifica.
+        val azioneNav = when (intent?.action) {
+            ACTION_NAV_PAUSE -> "pausa"
+            ACTION_NAV_SKIP -> "salta"
+            ACTION_NAV_REPLAY -> "riascolta"
+            ACTION_NAV_RECALC -> "ricalcola"
+            ACTION_NAV_END -> "termina"
+            else -> null
+        }
+        if (azioneNav != null) {
+            inoltraAzioneNav(azioneNav)
             return START_STICKY
         }
 
@@ -1914,6 +1947,45 @@ class ItaintaBackgroundPoiService : Service() {
         }
     }
 
+    /** (03/09/2026) PendingIntent per un tasto del cruscotto: stessa forma delle azioni della voce. */
+    private fun navActionIntent(action: String, requestCode: Int): PendingIntent = speechActionIntent(action, requestCode)
+
+    /**
+     * (03/09/2026) UN TASTO DEL CRUSCOTTO TOCCATO SULLA NOTIFICA. Effetto
+     * visibile subito (pausa ↔ riprendi, o cruscotto via su «termina»), poi
+     * il tocco va al JS come `navBannerAction {action, ts}` — lo stesso
+     * evento dei tasti della Live Activity iOS — e tourService fa il resto.
+     * Se la WebView e' morta (processo ucciso, servizio riavviato da
+     * START_STICKY/boot senza Activity) il broadcast non troverebbe nessuno:
+     * si annota l'azione nelle prefs e si apre l'app; il plugin la consegna
+     * al suo load() (retainUntilConsumed) e tourService la applica dopo
+     * aver ripreso il giro da localStorage.
+     */
+    private fun inoltraAzioneNav(azione: String) {
+        when (azione) {
+            "pausa" -> applicaNavBanner(navBannerTitolo, navBannerCorpo, true, navBannerFotoUrl, inPausa = !navBannerInPausa)
+            "termina" -> applicaNavBanner(null, null, false)
+        }
+        val ts = System.currentTimeMillis()
+        val json = "{\"action\":\"$azione\",\"ts\":$ts}"
+        if (com.itaintasca.app.plugin.ItaintaBackgroundPoiPlugin.vivo) {
+            sendEventToPlugin("navBannerAction", json)
+            return
+        }
+        getSharedPreferences("ItaintaPrefs", MODE_PRIVATE).edit {
+            putString(PREF_PENDING_NAV_ACTION, azione)
+            putLong(PREF_PENDING_NAV_ACTION_TS, ts)
+        }
+        try {
+            // Consentito: l'app ha appena ricevuto un tocco su un suo
+            // PendingIntent (eccezione «pochi secondi» del background
+            // activity launch per service/receiver).
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        } catch (e: Exception) {
+            Log.w(TAG, "Apertura dell'app per il tasto «$azione» fallita: ${e.message}")
+        }
+    }
+
     /** Stato della voce nativa, parte della chiave anti-duplicato della notifica. */
     private fun voiceStateKey(): String = when {
         !GeofenceBroadcastReceiver.isVoiceActive() -> "muta"
@@ -1929,6 +2001,10 @@ class ItaintaBackgroundPoiService : Service() {
     // corso...") non cancella il cruscotto dal display spento.
     @Volatile private var navBannerTitolo: String? = null
     @Volatile private var navBannerCorpo: String? = null
+    // (03/09/2026) Per i tasti: in pausa la notifica mostra «Riprendi»; il
+    // modo ("giro" | "percorso" | "singola") decide quali tasti hanno senso.
+    @Volatile private var navBannerInPausa: Boolean = false
+    @Volatile private var navBannerModo: String = "giro"
 
     /** Parte della chiave anti-duplicato: senza, cambiando solo il banner la
      *  notifica non verrebbe ripubblicata. */
@@ -1950,7 +2026,7 @@ class ItaintaBackgroundPoiService : Service() {
     }
 
     private fun navBannerKey(): String =
-        "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}|${if (navBannerFoto != null) navBannerFotoUrl.orEmpty() else ""}"
+        "${navBannerTitolo.orEmpty()}|${navBannerCorpo.orEmpty()}|${if (navBannerFoto != null) navBannerFotoUrl.orEmpty() else ""}|${if (navBannerInPausa) "P" else ""}|$navBannerModo"
 
     /** Scarica e riduce la foto della tappa, poi ripubblica la notifica. */
     private fun caricaFotoBanner(url: String) {
@@ -1987,10 +2063,17 @@ class ItaintaBackgroundPoiService : Service() {
      * Accende/spegne il cruscotto e ripubblica subito la notifica persistente.
      * Con `attivo=false` si torna all'ultimo titolo/testo del radar.
      */
-    private fun applicaNavBanner(titolo: String?, corpo: String?, attivo: Boolean, foto: String? = null) {
+    private fun applicaNavBanner(
+        titolo: String?, corpo: String?, attivo: Boolean, foto: String? = null,
+        // (03/09/2026) Nullable apposta: caricaFotoBanner richiama questa
+        // funzione a foto scaricata e non deve azzerare pausa e modo.
+        inPausa: Boolean? = null, modo: String? = null
+    ) {
         if (attivo) {
             navBannerTitolo = titolo?.trim()?.takeIf { it.isNotEmpty() }
             navBannerCorpo = corpo?.trim()
+            inPausa?.let { navBannerInPausa = it }
+            modo?.trim()?.takeIf { it.isNotEmpty() }?.let { navBannerModo = it }
             val url = foto?.trim()?.takeIf { it.startsWith("http") }
             if (url != navBannerFotoUrl) {
                 navBannerFotoUrl = url
@@ -2002,6 +2085,8 @@ class ItaintaBackgroundPoiService : Service() {
             navBannerCorpo = null
             navBannerFotoUrl = null
             navBannerFoto = null
+            navBannerInPausa = false
+            navBannerModo = "giro"
         }
         try {
             val suffix = dayPassSuffix()
@@ -2054,6 +2139,31 @@ class ItaintaBackgroundPoiService : Service() {
             // Sulla lock screen si legge tutto (tappa e svolta): e' il suo scopo.
             builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+        }
+        // (03/09/2026) COL CRUSCOTTO ACCESO I TASTI SONO QUELLI DEL GIRO, al
+        // posto di quelli della voce e dello Stop del servizio: Android ne
+        // mostra al massimo tre, quindi la terna dipende dallo stato —
+        // in cammino [Pausa][Salta][Termina], in pausa [Riprendi][Ricalcola]
+        // [Termina], a tappa singola [Ricalcola][Termina]. «Termina» chiede
+        // lo sblocco del telefono (API 31+): e' l'unico distruttivo, e in app
+        // chiede conferma.
+        if (bannerAttivo) {
+            val lang = NotificationStrings.lang(this)
+            val termina = NotificationCompat.Action.Builder(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                NotificationStrings.get(lang, "nav_termina"),
+                navActionIntent(ACTION_NAV_END, 25)
+            ).setAuthenticationRequired(true).build()
+            if (navBannerModo == "singola") {
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActionIntent(ACTION_NAV_RECALC, 24))
+            } else if (navBannerInPausa) {
+                builder.addAction(android.R.drawable.ic_media_play, NotificationStrings.get(lang, "nav_riprendi"), navActionIntent(ACTION_NAV_PAUSE, 21))
+                builder.addAction(android.R.drawable.ic_menu_rotate, NotificationStrings.get(lang, "nav_ricalcola"), navActionIntent(ACTION_NAV_RECALC, 24))
+            } else {
+                builder.addAction(android.R.drawable.ic_media_pause, NotificationStrings.get(lang, "nav_pausa"), navActionIntent(ACTION_NAV_PAUSE, 21))
+                builder.addAction(android.R.drawable.ic_media_next, NotificationStrings.get(lang, "nav_salta"), navActionIntent(ACTION_NAV_SKIP, 22))
+            }
+            return builder.addAction(termina).build()
         }
         // (AUD-14) Con la voce nativa in corso (teaser o guida del Day Pass
         // nel MediaPlayer del receiver, senza MediaSession) l'unico comando

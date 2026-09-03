@@ -234,6 +234,15 @@ final class LiveActivityNav {
             if let v = d[k] as? NSNumber { return v.doubleValue }
             return def
         }
+        func booleano(_ k: String) -> Bool {
+            if let v = d[k] as? Bool { return v }
+            if let v = d[k] as? NSNumber { return v.boolValue }
+            if let v = d[k] as? String { return v == "true" || v == "1" }
+            return false
+        }
+        // (03/09/2026) La manovra arriva grezza (tipo/verso OSRM) e qui
+        // diventa il simbolo: l'estensione non deve conoscere OSRM.
+        let progresso = numero("progresso", -1)
         return WipNavAttributes.ContentState(
             nomeTappa: stringa("nomeTappa"),
             indiceTappa: Int(numero("indiceTappa", 1)),
@@ -244,7 +253,13 @@ final class LiveActivityNav {
             metriRimanenti: max(numero("metriRimanenti", 0), 0),
             eta: stringa("eta"),
             nomeProssima: stringa("nomeProssima"),
-            fotoPath: ""
+            fotoPath: "",
+            manovra: WipNavManovra.simbolo(tipo: stringa("manovraTipo"), verso: stringa("manovraVerso")),
+            progresso: progresso < 0 ? -1 : min(1, max(0, progresso)),
+            metriTotali: max(numero("metriTotali", 0), 0),
+            inPausa: booleano("inPausa"),
+            modo: stringa("modo").isEmpty ? "giro" : stringa("modo"),
+            minutiRimanenti: numero("minutiRimanenti", -1)
         )
     }
     #endif

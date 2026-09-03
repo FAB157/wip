@@ -29,6 +29,15 @@ interface NavigationOverlayProps {
   onNextStop?: () => void;
   /** Ripete a voce l'istruzione corrente. */
   onRepeat?: () => void;
+  /**
+   * (03/09/2026) «Ricalcola da qui»: la strada si rifa` dalla posizione
+   * attuale verso la stessa meta. Per la tappa singola e` l'unico posto dove
+   * metterlo (non c'e` un cruscotto sotto); per il giro c'e` anche nel
+   * cruscotto, ma la card e` quella che si guarda camminando.
+   */
+  onRecalc?: () => void;
+  /** Ricalcolo in corso: l'icona gira e il tasto non si ripreme. */
+  recalcInCorso?: boolean;
   /** Lingua UI: l'overlay era l'unica schermata del cammino hardcoded in IT. */
   language?: Language;
   /**
@@ -99,6 +108,8 @@ export default function NavigationOverlay({
   onStop,
   onNextStop,
   onRepeat,
+  onRecalc,
+  recalcInCorso = false,
   language = 'IT',
   senzaChiudi = false,
 }: NavigationOverlayProps) {
@@ -223,6 +234,17 @@ export default function NavigationOverlay({
                     className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all"
                   >
                     <Volume2 size={17} />
+                  </button>
+                )}
+                {onRecalc && (
+                  <button
+                    onClick={onRecalc}
+                    disabled={recalcInCorso}
+                    aria-label={t('tour_ricalcola')}
+                    title={t('tour_ricalcola')}
+                    className="grid place-items-center w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all disabled:opacity-60"
+                  >
+                    <RefreshCw size={17} className={recalcInCorso ? 'animate-spin' : ''} />
                   </button>
                 )}
               </div>
