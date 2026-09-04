@@ -44,3 +44,24 @@ deploy_*.js
 append_env*.ts
 append_env*.js
 __splice.ps1
+
+# Materiali per gli store (screenshot, video promo, immagini in lingua):
+# 2,2 GB che non fanno parte del sito. Il 04/09/2026 il deploy falliva
+# proprio qui: l'upload arrivava a ~1 GB e Vercel rispondeva con un
+# errore interno. Nessuna pagina web fa riferimento a questa cartella.
+store
+
+# Documentazione di lavoro e prove locali
+DOCUMENTI INTRASTRUTTURA AUDIOGUIDA
+omniroute-local
+dist-server
+
+# Log di build/deploy lasciati nella root dalle varie sessioni
+build*.txt
+deploy*.txt
+tsc*.txt
+gradle*.txt
+dep[A-Z].txt
+diff_*.txt
+sync_*.txt
+lint-check-out.txt
