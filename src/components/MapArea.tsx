@@ -790,6 +790,7 @@ const BENI_CULTURALI_MIN_ZOOM = 13;
 // lib/cartoTiles.ts: se la build non aveva VITE_CARTO_API_KEY (IPA di CI del
 // 28/08/2026) la chiave viene chiesta a runtime al server.
 import { cartoTileUrl, ensureCartoKey, onCartoKeyChange } from '../lib/cartoTiles';
+import { fotoSicura } from '../lib/fotoHttps';
 
 function MapArea({
   selectedCategories,
@@ -3474,7 +3475,9 @@ function MapArea({
           posizioneApprossimata: /comune/i.test(String(i.geocode_source || '')),
           // La foto libera gia' in casa (Wikimedia Commons) e il suo credito:
           // CC BY-SA obbliga a nominare l'autore, quindi viaggiano insieme.
-          image_url: i.image_url || undefined,
+          // fotoSicura: le foto del catalogo MiC arrivano con schema http e
+          // il browser le blocca dentro una pagina https (04/09/2026).
+          image_url: fotoSicura(i.image_url),
           imageAttribution: i.image_attribution || undefined,
           // La scheda del catalogo nazionale: si apre in una scheda dentro
           // l'app (vedi src/lib/apriScheda.ts). E' la porta che resta ai beni

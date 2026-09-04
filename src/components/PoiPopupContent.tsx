@@ -26,6 +26,7 @@ import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
 import { traduciVoci, tradotto } from '../lib/atlanteI18n';
 import { apriScheda } from '../lib/apriScheda';
 import { fotoDaWikidata } from '../lib/wikidataFoto';
+import { fotoSicura } from '../lib/fotoHttps';
 import { tourService } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
 
@@ -201,7 +202,10 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // apertura e a ignorare `image_url`: le foto scritte non si vedevano.
   // Ordine: quella salvata sul bene → altrimenti Wikidata, che resta la
   // riserva per i beni senza immagine propria.
-  const fotoSalvata = isHeritageAtlasPoi(poi) ? ((poi as any).image_url || null) : null;
+  // fotoSicura: le foto del catalogo MiC sono salvate con schema http e il
+  // browser le blocca dentro una pagina https. Qui oltre alla mappa passano
+  // anche i POI ripescati dalla cache offline, scritti prima della correzione.
+  const fotoSalvata = isHeritageAtlasPoi(poi) ? (fotoSicura((poi as any).image_url) || null) : null;
   const [beneFoto, setBeneFoto] = useState<string | null>(fotoSalvata);
   const beneWikidataRef = isHeritageAtlasPoi(poi) ? ((poi as any).wikidata || null) : null;
   useEffect(() => {
