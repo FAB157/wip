@@ -98,7 +98,15 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
 
   return (
     <div className={`bg-gradient-to-r from-blue-900 to-blue-700 text-white rounded-2xl ${compact ? 'p-3' : 'p-4'}`}>
-      <div className="flex items-center justify-between gap-3">
+      {/* SU TELEFONO SI IMPILA (04/09/2026, collaudo PWA su iPhone).
+          Il 03/09 era stato aggiunto flex-1 min-w-0 al testo, e serve ancora;
+          ma da solo non bastava: il tasto e' `whitespace-nowrap` e l'etichetta
+          «Acquista ora · 200 crediti» occupa da sola ~255 px dei ~300
+          disponibili su un iPhone. Al testo ne restavano una quarantina e
+          tornava a incolonnarsi un carattere per riga, con mezza card vuota.
+          Due colonne su uno schermo stretto non ci stanno: sotto i 640 px
+          testo sopra e tasto sotto a tutta larghezza, affiancati da `sm:` in su. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         {/* flex-1 min-w-0 INSIEME, non min-w-0 da solo (03/09/2026, collaudo
             PWA su iPhone: il testo andava a capo un carattere per riga).
             Senza un flex-basis esplicito, Safari puo' calcolare male lo
@@ -126,16 +134,18 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
           <button
             onClick={handleActivate}
             disabled={activating}
-            className="bg-white text-blue-900 font-bold px-4 py-2 rounded-xl shrink-0 hover:bg-blue-50 disabled:opacity-50 text-sm whitespace-nowrap"
+            className="w-full sm:w-auto flex items-center justify-center bg-white text-blue-900 font-bold px-4 py-2 rounded-xl shrink-0 hover:bg-blue-50 disabled:opacity-50 text-sm whitespace-nowrap"
           >
             {activating ? <Loader2 className="w-5 h-5 animate-spin" /> : tr('gr_dp_acquista_ora').replace('{n}', String(DAY_PASS_COST))}
           </button>
         )}
       </div>
       {/* Crediti che non bastano: si dice quanti mancano e si apre la strada
-          per ricaricare. Prima qui c'era solo il toast dell'errore. */}
+          per ricaricare. Prima qui c'era solo il toast dell'errore.
+          Stessa impilatura della riga sopra: anche qui il tasto ha icona piu'
+          testo e su telefono comprimerebbe l'avviso allo stesso modo. */}
       {!dayPass?.active && creditiPochi && (
-        <div className="mt-3 pt-3 border-t border-white/20 flex items-center gap-3">
+        <div className="mt-3 pt-3 border-t border-white/20 flex flex-col gap-3 sm:flex-row sm:items-center">
           <p className="flex-1 min-w-0 text-[12px] text-blue-100 leading-snug">
             {saldo != null
               ? tr('gr_dp_saldo_non_basta').replace('{saldo}', String(saldo)).replace('{costo}', String(DAY_PASS_COST))
@@ -143,7 +153,7 @@ export default function DayPassCard({ compact = false }: { compact?: boolean }) 
           </p>
           <button
             onClick={apriNegozio}
-            className="bg-amber-400 text-slate-900 font-black px-3 py-2 rounded-xl shrink-0 text-[12px] flex items-center gap-1.5 active:scale-95"
+            className="w-full sm:w-auto justify-center bg-amber-400 text-slate-900 font-black px-3 py-2 rounded-xl shrink-0 text-[12px] flex items-center gap-1.5 active:scale-95"
           >
             <Coins className="w-4 h-4" /> {tr('gr_dp_ricarica_crediti')}
           </button>
