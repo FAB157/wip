@@ -10748,17 +10748,33 @@ ${description}
       stato: 'chiave_mancante',
       nota: 'Su us.posthog.com crea una Personal API Key (Settings → Personal API Keys) e mettila su Vercel come POSTHOG_PERSONAL_API_KEY insieme a POSTHOG_PROJECT_ID.',
     };
+    // UNA sola query per entrambe le finestre, con countIf: prima ne partivano
+    // due in parallelo (7 e 30 giorni) e capitava che PostHog rispondesse
+    // «Query has hit the max execution time» — il suo tetto e' max_execution_time=10
+    // e due scansioni contemporanee sugli stessi eventi se lo mangiano. Stesso
+    // schema gia' usato da launchFunnel, che infatti non ha mai dato il problema.
     try {
-      const conta = async (giorni: number) => {
-        const r = await axios.post(`${POSTHOG_HOST}/api/projects/${projectId}/query/`, {
-          query: { kind: 'HogQLQuery', query: `SELECT count() FROM events WHERE event = '$pageview' AND timestamp > now() - INTERVAL ${giorni} DAY` }
-        }, { headers: { Authorization: `Bearer ${key}` }, timeout: 12000 });
-        return Number(r.data?.results?.[0]?.[0] ?? 0);
-      };
-      const [g7, g30] = await Promise.all([conta(7), conta(30)]);
-      return { stato: 'ok', pageview7gg: g7, pageview30gg: g30 };
+      const r = await axios.post(`${POSTHOG_HOST}/api/projects/${projectId}/query/`, {
+        query: {
+          kind: 'HogQLQuery',
+          query: `SELECT countIf(timestamp > now() - INTERVAL 7 DAY) AS gg7,
+                         countIf(timestamp > now() - INTERVAL 30 DAY) AS gg30
+                  FROM events
+                  WHERE event = '$pageview' AND timestamp > now() - INTERVAL 30 DAY`
+        }
+      }, { headers: { Authorization: `Bearer ${key}` }, timeout: 25000 });
+      const riga = r.data?.results?.[0] || [];
+      return { stato: 'ok', pageview7gg: Number(riga[0] ?? 0), pageview30gg: Number(riga[1] ?? 0) };
     } catch (e: any) {
-      return { stato: 'errore', errore: e?.response?.data?.detail || e?.message };
+      const dettaglio = e?.response?.data?.detail || e?.message;
+      // Il timeout di PostHog e' transitorio: al giro dopo la query e' in cache
+      // e risponde. Meglio dirlo che lasciare un riquadro rosso indecifrabile.
+      const transitorio = /max execution time|timeout/i.test(String(dettaglio));
+      return {
+        stato: 'errore',
+        errore: dettaglio,
+        ...(transitorio ? { nota: 'PostHog ha superato il suo limite di 10 s: e\' un rallentamento temporaneo, riprova fra un minuto con «Aggiorna».' } : {}),
+      };
     }
   }
 
@@ -10913,7 +10929,7 @@ ${description}
                     AND timestamp > now() - INTERVAL 30 DAY
                   GROUP BY event`
         }
-      }, { headers: { Authorization: `Bearer ${key}` }, timeout: 12000 });
+      }, { headers: { Authorization: `Bearer ${key}` }, timeout: 25000 });
       const righe = Array.isArray(r.data?.results) ? r.data.results : [];
       const perEvento: Record<string, { gg7: number; gg30: number }> = {};
       for (const ev of eventi) perEvento[ev] = { gg7: 0, gg30: 0 };
