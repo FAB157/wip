@@ -85,9 +85,16 @@ if (sentryServerAttivo) {
 // Stripe E RevenueCat), 'audioguide_generated' (/api/tts/smart, solo sui
 // cache-miss: un cache-hit non è un segnale di prodotto, è un replay),
 // 'quota_exceeded' (l'attrito vero: chi arriva al tetto e non converte).
+// Il progetto sta sul cloud USA (us.posthog.com), non su quello europeo: fino
+// al 04/09/2026 sia la scrittura degli eventi sia la lettura delle statistiche
+// puntavano a eu.posthog.com, quindi la chiave veniva rifiutata (401
+// "Personal API key ... is invalid") e NESSUN evento e' mai stato registrato.
+// L'host sta in una costante sola, sovrascrivibile da POSTHOG_HOST se un
+// giorno il progetto migrasse.
+const POSTHOG_HOST = process.env.POSTHOG_HOST || 'https://us.posthog.com';
 const posthogAttivo = !!process.env.POSTHOG_API_KEY;
 const posthogClient = posthogAttivo
-  ? new PostHog(process.env.POSTHOG_API_KEY!, { host: 'https://eu.posthog.com' })
+  ? new PostHog(process.env.POSTHOG_API_KEY!, { host: POSTHOG_HOST })
   : null;
 function capturaEvento(distinctId: string, event: string, properties?: Record<string, any>) {
   if (!posthogClient) return;
@@ -10582,7 +10589,7 @@ ${description}
       const eventi = ['credits_purchased', 'audioguide_generated', 'quota_exceeded'];
       const conteggi = await Promise.all(eventi.map(async (ev) => {
         try {
-          const r = await axios.get(`https://eu.posthog.com/api/projects/${projectId}/events/`, {
+          const r = await axios.get(`${POSTHOG_HOST}/api/projects/${projectId}/events/`, {
             headers: { Authorization: `Bearer ${key}` },
             params: { event: ev, after: dopo, limit: 100 }, timeout: 8000
           });
@@ -10670,7 +10677,7 @@ ${description}
   }
 
   async function socialMeta() {
-    const pageId = process.env.FB_PAGE_ID || '61594265810569';
+    const pageId = process.env.FB_PAGE_ID || '1288031631067257';
     const token = process.env.FB_PAGE_TOKEN;
     if (!token) return {
       stato: 'chiave_mancante',
@@ -10739,11 +10746,11 @@ ${description}
     const projectId = process.env.POSTHOG_PROJECT_ID;
     if (!key || !projectId) return {
       stato: 'chiave_mancante',
-      nota: 'Su eu.posthog.com crea una Personal API Key (Settings → Personal API Keys) e mettila su Vercel come POSTHOG_PERSONAL_API_KEY insieme a POSTHOG_PROJECT_ID.',
+      nota: 'Su us.posthog.com crea una Personal API Key (Settings → Personal API Keys) e mettila su Vercel come POSTHOG_PERSONAL_API_KEY insieme a POSTHOG_PROJECT_ID.',
     };
     try {
       const conta = async (giorni: number) => {
-        const r = await axios.post(`https://eu.posthog.com/api/projects/${projectId}/query/`, {
+        const r = await axios.post(`${POSTHOG_HOST}/api/projects/${projectId}/query/`, {
           query: { kind: 'HogQLQuery', query: `SELECT count() FROM events WHERE event = '$pageview' AND timestamp > now() - INTERVAL ${giorni} DAY` }
         }, { headers: { Authorization: `Bearer ${key}` }, timeout: 12000 });
         return Number(r.data?.results?.[0]?.[0] ?? 0);
@@ -10891,11 +10898,11 @@ ${description}
     const projectId = process.env.POSTHOG_PROJECT_ID;
     if (!key || !projectId) return {
       stato: 'chiave_mancante',
-      nota: 'Servono POSTHOG_PERSONAL_API_KEY e POSTHOG_PROJECT_ID (eu.posthog.com → Settings → Personal API Keys).',
+      nota: 'Servono POSTHOG_PERSONAL_API_KEY e POSTHOG_PROJECT_ID (us.posthog.com → Settings → Personal API Keys).',
     };
     try {
       const eventi = ['audioguide_generated', 'credits_purchased', 'quota_exceeded'];
-      const r = await axios.post(`https://eu.posthog.com/api/projects/${projectId}/query/`, {
+      const r = await axios.post(`${POSTHOG_HOST}/api/projects/${projectId}/query/`, {
         query: {
           kind: 'HogQLQuery',
           query: `SELECT event,
