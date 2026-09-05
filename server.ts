@@ -10692,43 +10692,66 @@ ${description}
     try {
       const base = 'https://www.googleapis.com/youtube/v3';
       const ch = await axios.get(`${base}/channels`, {
-        params: { part: 'statistics,snippet', id: SOCIAL_YT_CHANNEL_ID, key }, timeout: 10000
+        params: { part: 'statistics,snippet,contentDetails', id: SOCIAL_YT_CHANNEL_ID, key }, timeout: 10000
       });
       const canale = ch.data?.items?.[0];
       if (!canale) return { stato: 'errore', errore: `canale ${SOCIAL_YT_CHANNEL_ID} non trovato`, profilo: 'https://www.youtube.com/@wipguide' };
       const st = canale.statistics || {};
 
-      // Ultimi video (search) + statistiche dei singoli (videos). Un canale
-      // appena nato non ha video: le due chiamate degradano a lista vuota.
+      // I video dalla PLAYLIST DEI CARICAMENTI, non da `search` (05/09/2026).
+      // Due ragioni: `search` costa 100 unita' di quota contro 1, e restituisce
+      // un sottoinsieme. Dalla playlist `uploads` si vedono tutti i video del
+      // canale, sempre, e con una spesa trascurabile.
       let video: any[] = [];
+      let sommaViews = 0;
       try {
-        const sr = await axios.get(`${base}/search`, {
-          params: { part: 'snippet', channelId: SOCIAL_YT_CHANNEL_ID, order: 'date', maxResults: 10, type: 'video', key }, timeout: 10000
-        });
-        const ids = (sr.data?.items || []).map((v: any) => v?.id?.videoId).filter(Boolean);
-        if (ids.length > 0) {
-          const vr = await axios.get(`${base}/videos`, {
-            params: { part: 'statistics,snippet', id: ids.join(','), key }, timeout: 10000
+        const uploads = canale.contentDetails?.relatedPlaylists?.uploads;
+        if (uploads) {
+          const pl = await axios.get(`${base}/playlistItems`, {
+            params: { part: 'contentDetails', playlistId: uploads, maxResults: 50, key }, timeout: 10000
           });
-          video = (vr.data?.items || []).map((v: any) => ({
-            id: v.id,
-            titolo: v.snippet?.title,
-            pubblicatoIl: v.snippet?.publishedAt,
-            views: Number(v.statistics?.viewCount ?? 0),
-            likes: Number(v.statistics?.likeCount ?? 0),
-            url: `https://www.youtube.com/watch?v=${v.id}`,
-          }));
+          const ids = (pl.data?.items || []).map((i: any) => i?.contentDetails?.videoId).filter(Boolean);
+          if (ids.length > 0) {
+            const vr = await axios.get(`${base}/videos`, {
+              params: { part: 'statistics,snippet', id: ids.slice(0, 50).join(','), key }, timeout: 10000
+            });
+            const tutti = (vr.data?.items || []).map((v: any) => ({
+              id: v.id,
+              titolo: v.snippet?.title,
+              pubblicatoIl: v.snippet?.publishedAt,
+              views: Number(v.statistics?.viewCount ?? 0),
+              likes: Number(v.statistics?.likeCount ?? 0),
+              url: `https://www.youtube.com/watch?v=${v.id}`,
+            }));
+            sommaViews = tutti.reduce((s: number, v: any) => s + (v.views || 0), 0);
+            // In vetrina restano gli ultimi 10 per data, come prima.
+            video = tutti
+              .sort((a: any, b: any) => String(b.pubblicatoIl || '').localeCompare(String(a.pubblicatoIl || '')))
+              .slice(0, 10);
+          }
         }
       } catch (e: any) {
         console.error('[Social] YouTube video list:', e?.message);
       }
+
+      // «VIEWS TOTALI» A ZERO CON I VIDEO PIENI DI VISUALIZZAZIONI (05/09/2026).
+      // `statistics.viewCount` del canale NON somma le visualizzazioni degli
+      // Short, e i video del brand sono verticali: il canale dichiarava 0
+      // mentre i singoli video avevano 96, 36, 17... Quando i due numeri
+      // divergono si mostra la somma dei video, che e' quella vera, e si dice
+      // da dove viene. Il numero del canale resta a fianco per confronto.
+      const viewsCanale = Number(st.viewCount ?? 0);
+      const usaSomma = sommaViews > viewsCanale;
 
       return {
         stato: 'ok',
         profilo: 'https://www.youtube.com/@wipguide',
         nome: canale.snippet?.title || 'WIP.guide',
         iscritti: Number(st.subscriberCount ?? 0),
-        viewsTotali: Number(st.viewCount ?? 0),
+        viewsTotali: usaSomma ? sommaViews : viewsCanale,
+        viewsCanale,
+        viewsSommaVideo: sommaViews,
+        fonteViews: usaSomma ? 'somma dei video' : 'contatore del canale',
         numeroVideo: Number(st.videoCount ?? 0),
         video,
       };

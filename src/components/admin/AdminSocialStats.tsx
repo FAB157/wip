@@ -295,7 +295,17 @@ export default function AdminSocialStats() {
                   <>
                     <div className="grid grid-cols-3 gap-2">
                       <Metrica etichetta="Iscritti" valore={numeroIt(yt?.iscritti)} />
-                      <Metrica etichetta="Views totali" valore={numeroIt(yt?.viewsTotali)} />
+                      {/* La provenienza del numero e' scritta sotto: il
+                          contatore del canale NON somma gli Short, e i video
+                          del brand sono verticali. Quando i due divergono si
+                          mostra la somma dei video, che e' quella vera. */}
+                      <Metrica
+                        etichetta="Views totali"
+                        valore={numeroIt(yt?.viewsTotali)}
+                        sub={yt?.fonteViews === 'somma dei video'
+                          ? `somma dei video (il canale dichiara ${numeroIt(yt?.viewsCanale)}: non conta gli Short)`
+                          : undefined}
+                      />
                       <Metrica etichetta="Video" valore={numeroIt(yt?.numeroVideo)} />
                     </div>
                     {(yt?.video || []).length > 0 ? (
