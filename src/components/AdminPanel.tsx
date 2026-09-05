@@ -4,7 +4,7 @@ import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
   RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket,
-  ClipboardList, SlidersHorizontal, Share2
+  ClipboardList, SlidersHorizontal, Share2, Eye
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
@@ -33,13 +33,15 @@ const AdminContentQueue = lazy(() => import('./admin/AdminContentQueue'));
 const AdminOpsConsole = lazy(() => import('./admin/AdminOpsConsole'));
 // Cruscotto del lancio (social, ricavi, install): caricato a richiesta.
 const AdminSocialStats = lazy(() => import('./admin/AdminSocialStats'));
+// Visite del sito (pagine, referrer, dispositivi): caricato a richiesta.
+const AdminVisits = lazy(() => import('./admin/AdminVisits'));
 
 const CaricamentoScheda = () => (
   <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -518,6 +520,16 @@ export default function AdminPanel() {
             <Share2 className="w-4 h-4" />
             Social
           </button>
+          {/* Visite del sito: pagine, referrer, dispositivi (04/09/2026) */}
+          <button
+            onClick={() => setActiveTab('visits')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'visits' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Eye className="w-4 h-4" />
+            Visite
+          </button>
           <button
             onClick={() => setActiveTab('editor')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -623,6 +635,9 @@ export default function AdminPanel() {
       )}
       {activeTab === 'social' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminSocialStats /></Suspense>
+      )}
+      {activeTab === 'visits' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminVisits /></Suspense>
       )}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 

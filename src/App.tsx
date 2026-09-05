@@ -23,6 +23,7 @@ import { ItaintaBackgroundPoi, clearNativeUserContext, pushUserContextToNative }
 import DayPassBadge from "./components/DayPassBadge";
 import { wipeLocalUserData } from "./lib/userSession";
 import { getApiUrl, invalidaTokenCache } from "./lib/api";
+import { tracciaVisita } from "./lib/pageviewTracker";
 import NavChoiceSheet from "./components/NavChoiceSheet";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
@@ -189,6 +190,14 @@ export default function App() {
 
   // --- 2. Navigation & UI ---
   const [activeTab, setActiveTab] = useState<"map" | "plan" | "camera" | "profile" | "events">("map");
+  // Visite del SITO per il pannello admin (non i POI, vedi CLAUDE.md): una
+  // riga per apertura app + una per ogni cambio tab, mai per l'app nativa
+  // (il pannello "Visite" parla del sito, non degli utenti mobile).
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+    tracciaVisita(`/${activeTab}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
   // Kill switch dal pannello admin (feature flag): una tab spenta mostra un
   // avviso di manutenzione invece della schermata.
   const eventsEnabled = useFeatureFlag('events_tab');

@@ -11251,6 +11251,63 @@ ${description}
     }
   });
 
+  // ── PANNELLO ADMIN: VISITE DEL SITO (page_views, dati nostri) ────────────
+  // Legge le righe grezze degli ultimi 30 giorni e aggrega in JS (volume
+  // atteso: poche migliaia di righe/mese, altrimenti servirebbe una RPC
+  // con GROUP BY lato Postgres). Include anche i numeri PostHog di
+  // socialSito() come conferma incrociata indipendente.
+  app.get("/api/admin/visits", rateLimiter, requireAdmin, async (req, res) => {
+    try {
+      const dal = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const r = await axios.get(
+        `${supabaseUrl}/rest/v1/page_views?created_at=gte.${encodeURIComponent(dal)}&select=path,referrer,device_type,browser,country,session_id,created_at&order=created_at.desc&limit=20000`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+      );
+      const righe: any[] = r.data || [];
+      const ora = Date.now();
+      const entro = (ms: number) => righe.filter(x => ora - new Date(x.created_at).getTime() < ms);
+      const conta = (arr: any[], campo: string, top = 10) => {
+        const mappa = new Map<string, number>();
+        for (const x of arr) {
+          const v = (x[campo] || '(diretto)').toString().trim() || '(diretto)';
+          mappa.set(v, (mappa.get(v) || 0) + 1);
+        }
+        return [...mappa.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).map(([nome, conteggio]) => ({ nome, conteggio }));
+      };
+      const sessioniUniche = (arr: any[]) => new Set(arr.filter(x => x.session_id).map(x => x.session_id)).size;
+      const righe30 = righe; // già filtrate a monte dalla query
+      const righe7 = entro(7 * 24 * 3600 * 1000);
+      const righe24h = entro(24 * 3600 * 1000);
+
+      // Serie giornaliera ultimi 30 giorni (anche i giorni a zero)
+      const serie: { giorno: string; visite: number }[] = [];
+      for (let i = 29; i >= 0; i--) {
+        const d = new Date(ora - i * 24 * 3600 * 1000);
+        const giorno = d.toISOString().slice(0, 10);
+        const visite = righe30.filter(x => x.created_at.slice(0, 10) === giorno).length;
+        serie.push({ giorno, visite });
+      }
+
+      const postHog = await socialSito(); // conferma incrociata indipendente
+
+      res.json({
+        generatoIl: new Date().toISOString(),
+        totali: { oggi24h: righe24h.length, ultimi7gg: righe7.length, ultimi30gg: righe30.length },
+        sessioniUniche30gg: sessioniUniche(righe30),
+        paginePiuViste: conta(righe30, 'path'),
+        provenienza: conta(righe30, 'referrer'),
+        dispositivi: conta(righe30, 'device_type'),
+        browser: conta(righe30, 'browser'),
+        paesi: conta(righe30, 'country'),
+        serieGiornaliera: serie,
+        postHog,
+      });
+    } catch (e: any) {
+      console.error('[Admin visits] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'statistiche visite fallite' });
+    }
+  });
+
   // --- CANARINO API: smoke test schedulato (cron Vercel, vedi vercel.json) ---
   // Salva lo snapshot in api_cache (niente migration) e scrive un errore
   // critical in system_errors SOLO per i check passati da verde a rosso:
@@ -17862,6 +17919,54 @@ REGOLE:
     }
   });
   function oggiYYYYMM() { return new Date().toISOString().slice(0, 7).replace('-', ''); }
+
+  // ── TRACCIAMENTO VISITE SITO (page_views, vedi migration 20260904200000) ──
+  // Pubblica, mai bloccante: se Supabase è giù o il body è malformato la
+  // richiesta risponde comunque 204, il client non deve mai accorgersene.
+  // Solo pagine del sito (App.tsx), MAI le view dei singoli POI (volume
+  // troppo alto, vedi commento nella migration).
+  function tipoDispositivo(ua: string): string {
+    const u = ua.toLowerCase();
+    if (/ipad|tablet/.test(u)) return 'tablet';
+    if (/mobi|iphone|android/.test(u)) return 'mobile';
+    return 'desktop';
+  }
+  function nomeBrowser(ua: string): string {
+    const u = ua.toLowerCase();
+    if (u.includes('edg/')) return 'Edge';
+    if (u.includes('opr/') || u.includes('opera')) return 'Opera';
+    if (u.includes('chrome/')) return 'Chrome';
+    if (u.includes('crios/')) return 'Chrome iOS';
+    if (u.includes('fxios/')) return 'Firefox iOS';
+    if (u.includes('firefox/')) return 'Firefox';
+    if (u.includes('safari/') && !u.includes('chrome')) return 'Safari';
+    return 'Altro';
+  }
+  app.post("/api/track/pageview", rateLimiter, async (req, res) => {
+    res.status(204).end(); // risponde subito, il tracciamento è best-effort
+    try {
+      const path = String(req.body?.path || '').slice(0, 200) || '/';
+      const referrer = req.body?.referrer ? String(req.body.referrer).slice(0, 300) : null;
+      const sessionId = req.body?.sessionId ? String(req.body.sessionId).slice(0, 64) : null;
+      const ua = String(req.headers['user-agent'] || '');
+      const country = (req.headers['x-vercel-ip-country'] as string) || null;
+      await axios.post(`${supabaseUrl}/rest/v1/page_views`, {
+        path,
+        referrer,
+        device_type: tipoDispositivo(ua),
+        browser: nomeBrowser(ua),
+        country,
+        session_id: sessionId,
+      }, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
+      });
+      // Cross-check su PostHog (best-effort, mai bloccante): stesso evento
+      // $pageview che legge già socialSito() nel pannello social.
+      capturaEvento(sessionId || 'anonimo', '$pageview', { $current_url: path, $referrer: referrer });
+    } catch (e: any) {
+      console.error('[track pageview] errore:', e?.message);
+    }
+  });
 
   // ── STATISTICHE CLICK AFFILIATI (pannello admin) ────────────────────────
   // Ultimi 6 mesi di contatori affil_clicks_<YYYYMM> da api_cache.
