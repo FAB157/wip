@@ -88,6 +88,48 @@ function Confronto({ etichetta, v7, v30 }: { etichetta: string; v7: React.ReactN
   );
 }
 
+/**
+ * Classifica dei video piu' visti di UN social (05/09/2026).
+ * Una per piattaforma e mai mescolate: 222 visualizzazioni su un reel
+ * Facebook e 96 su un video YouTube non sono la stessa grandezza, e in una
+ * lista unica il primo posto lo prenderebbe sempre il social che conta piu'
+ * generosamente.
+ */
+function ClassificaSocial({ titolo, video, nota }: { titolo: string; video?: any[]; nota?: string }) {
+  const righe = Array.isArray(video) ? video : [];
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-2 mb-1.5">
+        <h4 className="text-[11px] font-black uppercase tracking-wider text-primary/60">{titolo}</h4>
+        {nota && <span className="text-[10px] text-on-surface-variant truncate">{nota}</span>}
+      </div>
+      {righe.length === 0 ? (
+        <p className="text-[12px] text-on-surface-variant italic">Nessun video con visualizzazioni.</p>
+      ) : (
+        <ol className="space-y-1">
+          {righe.map((v, i) => (
+            <li key={v.url || i} className="flex items-baseline gap-2 min-w-0">
+              <span className="text-[11px] font-black text-primary/40 w-5 shrink-0 text-right">{i + 1}</span>
+              <a
+                href={v.url || '#'}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[12px] text-on-surface hover:text-primary underline decoration-transparent hover:decoration-inherit truncate flex-1 min-w-0"
+                title={v.titolo}
+              >
+                {v.titolo}
+              </a>
+              <span className="text-[12px] font-black text-primary shrink-0">
+                {Number(v.views ?? 0).toLocaleString('it-IT')}
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 function LinkProfilo({ url }: { url?: string }) {
   if (!url) return null;
   return (
@@ -193,6 +235,7 @@ export default function AdminSocialStats() {
   const instIos = dati?.installIos;
   const ascolti = dati?.ascolti;
   const recensioni = dati?.recensioni;
+  const classifica = dati?.classifica;
 
   const tuttoAZero = yt?.stato === 'ok' && Number(yt.iscritti) === 0 && Number(yt.numeroVideo) === 0
     && (meta?.stato !== 'ok' || Number(meta.follower) === 0)
@@ -367,6 +410,34 @@ export default function AdminSocialStats() {
                 Visite, provenienze, pagine piu' viste, dispositivi e paesi arriveranno nella
                 scheda <strong>Visite</strong>, in lavorazione.
               </p>
+            </CardBox>
+          </Sezione>
+
+          {/* ── VIDEO PIU' VISTI ─────────────────────────────────────────
+              Una classifica PER SOCIAL, i primi 20 di ciascuno. Le fonti
+              sono state provate sugli account veri: YouTube dalla playlist
+              dei caricamenti (non da `search`, che costa 100 volte tanto in
+              quota e restituisce meno video), Facebook da /video_reels che
+              espone gia' `views`, Instagram dagli insight per singolo media
+              con metrica `views` — `plays` e `video_views` sono rifiutate
+              da Meta v21. */}
+          <Sezione titolo="Video più visti">
+            <CardBox icona={<TrendingUp className="w-5 h-5" />} titolo="Classifica per social — primi 20" colore="text-rose-600">
+              {classifica?.stato === 'errore' ? (
+                <Errore errore={classifica.errore} />
+              ) : (
+                <>
+                  <div className="grid gap-5 md:grid-cols-3">
+                    <ClassificaSocial titolo="YouTube" video={classifica?.youtube} nota={classifica?.fonti?.youtube} />
+                    <ClassificaSocial titolo="Facebook — reel" video={classifica?.facebook} nota={classifica?.fonti?.facebook} />
+                    <ClassificaSocial titolo="Instagram — reel" video={classifica?.instagram} nota={classifica?.fonti?.instagram} />
+                  </div>
+                  <p className="text-[11px] text-on-surface-variant italic mt-3">
+                    Le tre classifiche restano separate: le visualizzazioni non si contano allo stesso
+                    modo sui tre social, quindi un elenco unico premierebbe sempre il più generoso.
+                  </p>
+                </>
+              )}
             </CardBox>
           </Sezione>
 

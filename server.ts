@@ -10839,6 +10839,161 @@ ${description}
     }
   }
 
+  /**
+   * CLASSIFICA DEI VIDEO PIU' VISTI, le tre piattaforme insieme (05/09/2026).
+   * Richiesta del committente: «una sezione in cui vengono citati i video con
+   * piu' visualizzazioni, tipo classifica, i primi 20».
+   *
+   * Ogni piattaforma dice le visualizzazioni a modo suo, e le tre strade sono
+   * state PROVATE sugli account veri prima di scrivere questo codice:
+   *  - YouTube: la playlist dei caricamenti (`uploads`) e poi `videos` per le
+   *    statistiche. NON `search`: costa 100 unita' di quota contro 1, e
+   *    restituisce un sottoinsieme. Cosi' si vedono tutti i video, sempre.
+   *  - Facebook: `/video_reels` espone gia' `views` (e `post_views`, che e'
+   *    un'altra cosa: le visualizzazioni del POST, non del video).
+   *  - Instagram: la lista media NON contiene le visualizzazioni, servono gli
+   *    insight per singolo media. La metrica e' `views`: `plays` e
+   *    `video_views` vengono RIFIUTATE da Meta v21 (errore #100).
+   *
+   * Best-effort per costruzione: se una piattaforma non risponde, le altre
+   * due si vedono lo stesso e l'errore finisce in `fonti` invece di far
+   * fallire tutto il riquadro.
+   */
+  async function classificaVideo(limite = 20) {
+    const video: any[] = [];
+    const fonti: Record<string, string> = {};
+
+    // --- YOUTUBE ---
+    const ytKey = process.env.YOUTUBE_API_KEY || process.env.VITE_YOUTUBE_API_KEY;
+    if (!ytKey) fonti.youtube = 'chiave mancante';
+    else {
+      try {
+        const base = 'https://www.googleapis.com/youtube/v3';
+        const ch = await axios.get(`${base}/channels`, {
+          params: { part: 'contentDetails', id: SOCIAL_YT_CHANNEL_ID, key: ytKey }, timeout: 12000
+        });
+        const uploads = ch.data?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+        if (!uploads) fonti.youtube = 'playlist caricamenti non trovata';
+        else {
+          const pl = await axios.get(`${base}/playlistItems`, {
+            params: { part: 'contentDetails', playlistId: uploads, maxResults: 50, key: ytKey }, timeout: 12000
+          });
+          const ids = (pl.data?.items || []).map((i: any) => i?.contentDetails?.videoId).filter(Boolean);
+          if (ids.length === 0) fonti.youtube = 'nessun video';
+          else {
+            const st = await axios.get(`${base}/videos`, {
+              params: { part: 'snippet,statistics', id: ids.slice(0, 50).join(','), key: ytKey }, timeout: 12000
+            });
+            for (const v of (st.data?.items || [])) {
+              video.push({
+                piattaforma: 'youtube',
+                titolo: v.snippet?.title || '(senza titolo)',
+                views: Number(v.statistics?.viewCount ?? 0),
+                like: Number(v.statistics?.likeCount ?? 0),
+                data: v.snippet?.publishedAt || null,
+                url: `https://www.youtube.com/watch?v=${v.id}`,
+              });
+            }
+            fonti.youtube = `${ids.length} video letti`;
+          }
+        }
+      } catch (e: any) { fonti.youtube = e?.response?.data?.error?.message || e?.message; }
+    }
+
+    const fbToken = process.env.FB_PAGE_TOKEN;
+    const fbPage = process.env.FB_PAGE_ID || '1288031631067257';
+    const g = 'https://graph.facebook.com/v21.0';
+
+    // --- FACEBOOK (reel della Pagina) ---
+    if (!fbToken) fonti.facebook = 'token mancante';
+    else {
+      try {
+        const r = await axios.get(`${g}/${fbPage}/video_reels`, {
+          params: { fields: 'id,description,created_time,permalink_url,views', limit: 50, access_token: fbToken },
+          timeout: 12000
+        });
+        for (const v of (r.data?.data || [])) {
+          video.push({
+            piattaforma: 'facebook',
+            titolo: primaRiga(v.description) || '(reel senza descrizione)',
+            views: Number(v.views ?? 0),
+            data: v.created_time || null,
+            url: v.permalink_url ? `https://www.facebook.com${v.permalink_url}` : `https://www.facebook.com/${fbPage}`,
+          });
+        }
+        fonti.facebook = `${(r.data?.data || []).length} reel letti`;
+      } catch (e: any) { fonti.facebook = e?.response?.data?.error?.message || e?.message; }
+    }
+
+    // --- INSTAGRAM (reel e video, visualizzazioni dagli insight) ---
+    if (!fbToken) fonti.instagram = 'token mancante';
+    else {
+      try {
+        const pag = await axios.get(`${g}/${fbPage}`, {
+          params: { fields: 'instagram_business_account', access_token: fbToken }, timeout: 12000
+        });
+        const igId = pag.data?.instagram_business_account?.id;
+        if (!igId) fonti.instagram = 'nessun account Instagram collegato alla Pagina';
+        else {
+          const med = await axios.get(`${g}/${igId}/media`, {
+            params: { fields: 'id,caption,media_type,media_product_type,permalink,timestamp', limit: 50, access_token: fbToken },
+            timeout: 12000
+          });
+          // Solo i contenuti video: per le foto la metrica `views` non esiste.
+          // Tetto a 25 insight: e' una chiamata per media, e un profilo con
+          // centinaia di reel farebbe scadere il tempo della funzione.
+          const filmati = (med.data?.data || [])
+            .filter((m: any) => m.media_type === 'VIDEO' || m.media_product_type === 'REELS')
+            .slice(0, 25);
+          const letti = await Promise.all(filmati.map(async (m: any) => {
+            let views = 0;
+            try {
+              const ins = await axios.get(`${g}/${m.id}/insights`, {
+                params: { metric: 'views', access_token: fbToken }, timeout: 10000
+              });
+              views = Number(ins.data?.data?.[0]?.values?.[0]?.value ?? 0);
+            } catch { /* insight non disponibile su quel media: resta 0 */ }
+            return {
+              piattaforma: 'instagram',
+              titolo: primaRiga(m.caption) || '(reel senza didascalia)',
+              views,
+              data: m.timestamp || null,
+              url: m.permalink || null,
+            };
+          }));
+          video.push(...letti);
+          fonti.instagram = `${letti.length} contenuti video letti`;
+        }
+      } catch (e: any) { fonti.instagram = e?.response?.data?.error?.message || e?.message; }
+    }
+
+    // UNA CLASSIFICA PER SOCIAL, non un elenco unico (richiesta del
+    // committente). Mescolarli sarebbe anche fuorviante: 222 visualizzazioni
+    // su un reel Facebook e 96 su un video YouTube non sono la stessa
+    // grandezza, e il primo posto lo prenderebbe sempre la piattaforma con
+    // il conteggio piu' generoso.
+    const perPiattaforma = (nome: string) => video
+      .filter(v => v.piattaforma === nome)
+      .sort((a, b) => (b.views || 0) - (a.views || 0))
+      .slice(0, limite);
+
+    return {
+      stato: video.length > 0 ? 'ok' : 'vuota',
+      totaleConsiderati: video.length,
+      youtube: perPiattaforma('youtube'),
+      facebook: perPiattaforma('facebook'),
+      instagram: perPiattaforma('instagram'),
+      fonti,
+    };
+  }
+
+  /** Prima riga utile di una didascalia lunga, per farne un titolo leggibile. */
+  function primaRiga(testo?: string | null): string {
+    if (!testo) return '';
+    const riga = String(testo).split('\n').map(r => r.trim()).find(r => r.length > 0) || '';
+    return riga.length > 90 ? riga.slice(0, 90).trimEnd() + '…' : riga;
+  }
+
   // --- RICAVI: Stripe (incassi) + Supabase (crediti) -----------------------
   async function launchRicavi() {
     const risultato: any = { stato: 'ok' };
@@ -11254,10 +11409,10 @@ ${description}
           return res.json({ ...snap, dallaCache: true });
         }
       }
-      const [youtube, meta, tiktok, sito, ricavi, usoApp, funnel, installAndroid, installIos, ascolti, recensioni] = await Promise.allSettled([
+      const [youtube, meta, tiktok, sito, ricavi, usoApp, funnel, installAndroid, installIos, ascolti, recensioni, classifica] = await Promise.allSettled([
         socialYouTube(), socialMeta(), socialTikTok(), socialSito(),
         launchRicavi(), launchUsoApp(), launchFunnel(), launchInstallAndroid(), launchInstallIos(),
-        launchAscolti(), launchRecensioni()
+        launchAscolti(), launchRecensioni(), classificaVideo(20)
       ]);
       const esitoSocial = (r: PromiseSettledResult<any>) =>
         r.status === 'fulfilled' ? r.value : { stato: 'errore', errore: (r as any).reason?.message };
@@ -11274,6 +11429,7 @@ ${description}
         installIos: esitoSocial(installIos),
         ascolti: esitoSocial(ascolti),
         recensioni: esitoSocial(recensioni),
+        classifica: esitoSocial(classifica),
       };
       await saveToCache('social_stats', 'social', snapshot);
       res.json({ ...snapshot, dallaCache: false });
