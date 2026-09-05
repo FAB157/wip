@@ -9796,10 +9796,55 @@ ${description}
         { headers: svcHeaders }
       );
       const coupon = coupons?.[0];
-      if (!coupon) return res.status(404).json({ error: 'Codice voucher non valido.' });
-      if (!coupon.is_active) return res.status(410).json({ error: 'Questo voucher è stato disattivato.' });
+      if (!coupon) return res.status(404).json({ error: 'Codice coupon non valido.' });
+      if (!coupon.is_active) return res.status(410).json({ error: 'Questo coupon è stato disattivato.' });
+
+      // SCADENZA (05/09/2026). Un codice pubblicato sui social sopravvive alla
+      // campagna: chi lo ritrova mesi dopo non e' piu' il pubblico voluto.
+      // `expires_at` nullo = nessuna scadenza, comportamento di prima.
+      if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+        const quando = new Date(coupon.expires_at).toLocaleDateString('it-IT');
+        return res.status(410).json({ error: `Questo coupon è scaduto il ${quando}.` });
+      }
+
+      // L'IMPORTO SI PRENDE DAL COUPON, E SE MANCA SI RIFIUTA (05/09/2026).
+      // Prima c'era `coupon.reward_credits || duration_days*10 || 500`: un
+      // coupon creato senza importo regalava 500 crediti A TESTA in silenzio.
+      // I crediti ora si indicano su ogni coupon, quindi un coupon senza
+      // importo e' un errore di creazione: meglio bloccarlo che regalarlo.
+      // `duration_days*10` resta solo per i voucher dell'epoca «giorni premium».
+      const credits = Number(coupon.reward_credits) > 0
+        ? Number(coupon.reward_credits)
+        : (Number(coupon.duration_days) > 0 ? Number(coupon.duration_days) * 10 : 0);
+      if (!(credits > 0)) {
+        await logSystemError('critical',
+          `Coupon ${coupon.code} senza importo: riscatto rifiutato`, { couponId: coupon.id }).catch(() => {});
+        return res.status(409).json({ error: 'Questo coupon non è configurato correttamente. Riprova più tardi.' });
+      }
+
       if ((coupon.uses_count || 0) >= (coupon.max_uses || 1)) {
-        return res.status(410).json({ error: 'Questo voucher è esaurito.' });
+        return res.status(410).json({ error: 'Questo coupon è esaurito.' });
+      }
+
+      // UN RISCATTO PER PERSONA — E SI REGISTRA PRIMA DI ACCREDITARE.
+      // (05/09/2026, difetto visto in collaudo: lo stesso account riscattava
+      // lo stesso codice due volte e prendeva i crediti due volte.)
+      // L'ordine conta: se controllassimo leggendo e scrivessimo dopo, due
+      // richieste simultanee della stessa persona passerebbero entrambe.
+      // Inserendo PRIMA, e' il vincolo unico (coupon_id, user_id) del database
+      // a fermare la seconda — una corsa non lo puo' battere.
+      let redemptionId: string | null = null;
+      try {
+        const ins = await axios.post(`${supabaseUrl}/rest/v1/coupon_redemptions`,
+          { coupon_id: coupon.id, user_id: userId, credits },
+          { headers: { ...svcHeaders, Prefer: 'return=representation' } });
+        redemptionId = ins.data?.[0]?.id || null;
+      } catch (e: any) {
+        const codice = e?.response?.data?.code;
+        if (codice === '23505' || e?.response?.status === 409) {
+          return res.status(409).json({ error: 'Hai già riscattato questo coupon.' });
+        }
+        throw e;
       }
 
       // Consumo con guardia ottimistica sul contatore: se un riscatto
@@ -9810,11 +9855,16 @@ ${description}
         { headers: { ...svcHeaders, Prefer: 'return=representation' } }
       );
       if (!Array.isArray(patchRes.data) || patchRes.data.length === 0) {
-        return res.status(409).json({ error: 'Voucher appena esaurito, riprova.' });
+        // Il coupon si e' esaurito fra il nostro controllo e ora: si toglie la
+        // riga appena scritta, altrimenti questa persona resterebbe segnata
+        // come «ha gia' riscattato» un coupon che non ha mai ricevuto.
+        if (redemptionId) {
+          await axios.delete(`${supabaseUrl}/rest/v1/coupon_redemptions?id=eq.${redemptionId}`,
+            { headers: svcHeaders }).catch(() => {});
+        }
+        return res.status(409).json({ error: 'Coupon appena esaurito, riprova.' });
       }
 
-      // Voucher = CREDITI (i pacchetti B2B sono solo pacchetti di crediti)
-      const credits = coupon.reward_credits || (coupon.duration_days * 10) || 500;
       const { data: prof } = await axios.get(
         `${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=earned_credits`,
         { headers: svcHeaders }
@@ -9822,6 +9872,17 @@ ${description}
       await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`, {
         earned_credits: (prof?.[0]?.earned_credits || 0) + credits
       }, { headers: svcHeaders });
+
+      // IL MOVIMENTO VA NEL REGISTRO (05/09/2026). Il riscatto scriveva su
+      // earned_credits e basta: nel movimento crediti del pannello non
+      // compariva nulla, e i crediti sembravano apparsi dal nulla. `type`
+      // ripiega su 'admin_credit' se il database ha un vincolo che non
+      // conosce ancora 'coupon'. Mai bloccante: il riscatto e' gia' avvenuto.
+      const movimento = (tipo: string) => axios.post(`${supabaseUrl}/rest/v1/credit_transactions`,
+        { user_id: userId, amount: credits, type: tipo, source: 'server',
+          description: `Riscatto coupon ${coupon.code}` },
+        { headers: CREDIT_SVC_HEADERS });
+      await movimento('coupon').catch(() => movimento('admin_credit').catch(() => {}));
 
       res.json({ success: true, credits, structureName: coupon.structure_name || null });
     } catch (e: any) {
