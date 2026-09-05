@@ -186,7 +186,6 @@ export default function AdminSocialStats() {
   const meta = dati?.meta;
   const ig = meta?.instagram;
   const tk = dati?.tiktok;
-  const sito = dati?.sito;
   const ricavi = dati?.ricavi;
   const usoApp = dati?.usoApp;
   const funnel = dati?.funnel;
@@ -345,25 +344,29 @@ export default function AdminSocialStats() {
             </div>
           </Sezione>
 
-          {/* ── SITO ──────────────────────────────────────────────────── */}
+          {/* ── SITO ──────────────────────────────────────────────────────
+              NIENTE PIU' UN «0» CHE SEMBRA UN DATO (05/09/2026).
+              Qui c'era il conteggio pageview letto da PostHog. Mostrava zero,
+              e continuerebbe a mostrarlo per sempre: NESSUNO invia eventi
+              `$pageview`. Il server registra su PostHog solo tre eventi scelti
+              a mano (credits_purchased, audioguide_generated, quota_exceeded)
+              e lato client non esiste posthog-js. Il riquadro non era rotto:
+              era vuoto per costruzione. Un contatore fermo a zero accanto a
+              numeri veri e' peggio di nessun contatore, perche' si legge come
+              «nessuno visita il sito» invece che «non stiamo misurando».
+              Il conteggio vero arriva nella scheda Visite dedicata. */}
           <Sezione titolo="Sito">
-            <CardBox icona={<Globe2 className="w-5 h-5" />} titolo="wip.guide — visite (PostHog)" colore="text-emerald-600">
-              {sito?.stato === 'chiave_mancante' ? (
-                <ChiaveMancante nota={sito.nota} />
-              ) : sito?.stato === 'errore' ? (
-                <Errore errore={sito.errore} />
-              ) : (
-                <>
-                  <div className="max-w-md">
-                    <Confronto etichetta="Pageview" v7={numeroIt(sito?.pageview7gg)} v30={numeroIt(sito?.pageview30gg)} />
-                  </div>
-                  {Number(sito?.pageview30gg ?? 0) === 0 && (
-                    <p className="text-[11px] text-on-surface-variant italic">
-                      Zero pageview può anche significare che il tracciamento $pageview lato client non è attivo (per scelta PostHog registra solo eventi server selezionati).
-                    </p>
-                  )}
-                </>
-              )}
+            <CardBox icona={<Globe2 className="w-5 h-5" />} titolo="wip.guide — visite" colore="text-emerald-600">
+              <p className="text-[13px] text-on-surface-variant leading-snug">
+                Le visite del sito <strong>non sono ancora misurate</strong>: l'app non invia
+                eventi di navigazione a PostHog, che registra solo tre eventi di prodotto
+                (crediti acquistati, audioguida generata, quota superata). Il contatore che
+                stava qui mostrava zero per questo motivo, non perche' il sito sia deserto.
+              </p>
+              <p className="text-[11px] text-on-surface-variant italic mt-2">
+                Visite, provenienze, pagine piu' viste, dispositivi e paesi arriveranno nella
+                scheda <strong>Visite</strong>, in lavorazione.
+              </p>
             </CardBox>
           </Sezione>
 

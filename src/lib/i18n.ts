@@ -1391,22 +1391,30 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Карта всегда будет открываться на этой точке.",
     ZH: "验证通过后，每次进入应用时地图默认显示此区域。"
   , DE: "Die Karte öffnet sich nach der Bestätigung immer an diesem Ort."},
+  // COUPON, NON «CODICE PARTNER» (05/09/2026). Questi testi nascevano per i
+  // voucher degli hotel: parlavano di «codice partner» e promettevano
+  // «vantaggi Premium offerti dal tuo Hotel». Due cose sbagliate insieme —
+  // il Premium non esiste piu' (si va a crediti, e infatti il messaggio di
+  // successo dice «hai ricevuto {n} crediti»), e la funzione ora serve alle
+  // campagne di marketing, non alle strutture ricettive. Decisione del
+  // committente: nella parte utente si parla solo di coupon, senza nominare
+  // alberghi o partner.
   have_coupon: {
-    IT: "Hai un codice partner?",
-    EN: "Do you have a partner code?",
-    FR: "Avez-vous un code partenaire?",
-    ES: "¿Tienes un código de socio?",
-    RU: "Есть партнерский код?",
-    ZH: "您拥有酒店合作兑换码吗？"
-  , DE: "Hast du einen Partnercode?"},
+    IT: "Hai un coupon promozionale?",
+    EN: "Have a promo coupon?",
+    FR: "Vous avez un coupon promotionnel ?",
+    ES: "¿Tienes un cupón promocional?",
+    RU: "Есть промокод?",
+    ZH: "有促销优惠券吗？"
+  , DE: "Hast du einen Aktionscoupon?"},
   redeem_coupon_desc: {
-    IT: "Attiva i vantaggi Premium offerti dal tuo Hotel",
-    EN: "Activate the Premium benefits offered by your Hotel",
-    FR: "Activez les avantages Premium offerts par votre Hôtel",
-    ES: "Activa las ventajas Premium que ofrece tu Hotel",
-    RU: "Активируйте Премиум-доступ от вашего отеля",
-    ZH: "激活您的合作酒店免费赠送的 Premium 会员权益"
-  , DE: "Aktiviere die Premium-Vorteile deines Hotels"},
+    IT: "Inserisci il codice e ricevi crediti omaggio",
+    EN: "Enter the code and get free credits",
+    FR: "Saisissez le code et recevez des crédits offerts",
+    ES: "Introduce el código y recibe créditos de regalo",
+    RU: "Введите код и получите бесплатные кредиты",
+    ZH: "输入优惠码，领取赠送积分"
+  , DE: "Code eingeben und Gratis-Credits erhalten"},
   redeem_btn: {
     IT: "Attiva",
     EN: "Activate",
@@ -1423,14 +1431,18 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Проверка...",
     ZH: "验证中..."
   , DE: "Wird geprüft..."},
+  // Chiave non piu' usata da nessun componente (il riscatto mostra
+  // `pf_coupon_ok`, che dice quanti crediti sono arrivati). Corretta lo stesso:
+  // lasciata com'era prometteva «Premium», che non esiste piu', ed era pronta
+  // a trarre in inganno chiunque la riusasse credendola buona.
   redeem_success: {
-    IT: "Coupon attivato! Extra Premium abilitato.",
-    EN: "Coupon activated! Extra Premium enabled.",
-    FR: "Code activé! Extra Premium activé.",
-    ES: "¡Cupón activado! Beneficios Premium disponibles.",
-    RU: "Код активирован! Премиум включен.",
-    ZH: "兑换成功！您的Premium会员特权已激活。"
-  , DE: "Gutschein aktiviert! Zusätzliches Premium freigeschaltet."},
+    IT: "Coupon attivato! Crediti omaggio accreditati.",
+    EN: "Coupon activated! Free credits added.",
+    FR: "Coupon activé ! Crédits offerts ajoutés.",
+    ES: "¡Cupón activado! Créditos de regalo añadidos.",
+    RU: "Купон активирован! Бесплатные кредиты начислены.",
+    ZH: "兑换成功！赠送积分已到账。"
+  , DE: "Coupon aktiviert! Gratis-Credits gutgeschrieben."},
   guide_mode: {
     IT: "Modalità Guida",
     EN: "Guide Mode",
