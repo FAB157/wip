@@ -6475,7 +6475,7 @@ function MapArea({
                 // Cosi' anche con tutti i layer accesi si legge tutto, e se
                 // proprio non ci sta scorre dentro i suoi bordi invece di
                 // finire tagliato.
-                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[calc(100dvh_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom)_-_10.5rem)] overflow-y-auto overscroll-contain"
+                className="bg-white/85 dark:bg-[#1C1C1E]/85 backdrop-blur-2xl rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] border border-white/60 dark:border-white/10 p-2 flex flex-col gap-0.5 min-w-[232px] max-h-[calc(100dvh_-_env(safe-area-inset-top)_-_env(safe-area-inset-bottom)_-_10.5rem)] overflow-y-auto overscroll-contain touch-pan-y"
               >
                 {(['reti', 'condizioni'] as const).map((gruppo) => (
                   <Fragment key={gruppo}>
