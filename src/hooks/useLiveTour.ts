@@ -68,9 +68,15 @@ function subscribeModuleChannel(pin: string, leader: boolean) {
         // locationService.ts, dispatch di 'wip-leader-audio-start') — un
         // audioUrl non viene mai incluso nel payload, quindi non c'è un
         // ramo "riproduci da URL" da gestire qui.
-        const { textToSpeak, poiName } = payload.payload || {};
+        // Il PERSONAGGIO arriva dal leader (05/09/2026). Prima il follower
+        // riproduceva col proprio: il gruppo sentiva voci diverse sullo stesso
+        // testo, e — chiave di cache diversa — ognuno faceva rigenerare
+        // l'audio a proprio carico invece di riusare quello gia' pagato dal
+        // leader. Con il personaggio in comune la cache combacia: una sola
+        // generazione per tutto il gruppo, quante che siano le persone.
+        const { textToSpeak, poiName, character } = payload.payload || {};
         if (textToSpeak) {
-          locationService.playAudio(textToSpeak, poiName || 'Punto di interesse', 'monumenti');
+          locationService.playAudio(textToSpeak, poiName || 'Punto di interesse', 'monumenti', undefined, character);
           window.dispatchEvent(new CustomEvent('wip-live-audio', {
             detail: { poiName, message: `📻 Il leader ha sbloccato: ${poiName || 'un luogo'}` }
           }));
@@ -108,12 +114,12 @@ function subscribeModuleChannel(pin: string, leader: boolean) {
   // nessuno — il tour di gruppo non trasmetteva NULLA.
   if (leader) {
     leaderAudioListener = (e: any) => {
-      const { audioUrl, textToSpeak, poiName } = e?.detail || {};
+      const { audioUrl, textToSpeak, poiName, character } = e?.detail || {};
       if (!moduleChannel || !moduleIsLeader) return;
       moduleChannel.send({
         type: 'broadcast',
         event: 'audio-start',
-        payload: { audioUrl, poiName, textToSpeak }
+        payload: { audioUrl, poiName, textToSpeak, character }
       }).catch((err: any) => console.warn('[LiveTour] Broadcast fallito:', err));
     };
     window.addEventListener('wip-leader-audio-start', leaderAudioListener);

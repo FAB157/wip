@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WIP — l'audioguida che parte da sola / The audio guide that starts by itself</title>
+<meta name="description" content="WIP è l'audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi. A piedi, in auto, offline. In 7 lingue.">
+<link rel="icon" type="image/png" href="./logo.png">
+<link rel="apple-touch-icon" href="./logo.png">
+<!-- Open Graph (in italiano: anteprima link su WhatsApp/social) -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://wip.guide/scopri">
+<meta property="og:title" content="WIP — l'audioguida che parte da sola">
+<meta property="og:description" content="Il posto ti racconta la sua storia. Da solo, mentre passi. Oltre 9 milioni di luoghi in 196 paesi, a piedi, in auto, offline. In 7 lingue.">
+<meta property="og:image" content="https://wip.guide/scopri/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root{
+    --blu:#1e3a8a;
+    --blu-scuro:#14265c;
+    --blu-notte:#0d1a40;
+    --oro:#eab308;
+    --oro-chiaro:#facc15;
+    --carta:#f7f5ef;
+    --testo:#1f2937;
+    --testo-soft:#c7d2fe;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    background:#f6f7fb;
+    color:var(--testo);
+    line-height:1.55;
+    -webkit-font-smoothing:antialiased;
+  }
+  img,video{max-width:100%;display:block}
+  a{color:inherit}
+
+  /* ---- selettore lingua ---- */
+  .lingue{
+    position:sticky;top:0;z-index:10;
+    display:flex;gap:2px;justify-content:center;flex-wrap:wrap;
+    padding:10px 8px;
+    background:rgba(255,255,255,.92);
+    border-bottom:1px solid #e3e7f0;
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+  }
+  .lingue button{
+    font:inherit;font-size:12px;font-weight:700;letter-spacing:.06em;
+    color:#5b6b85;background:transparent;border:1px solid transparent;
+    border-radius:999px;padding:5px 10px;cursor:pointer;
+  }
+  .lingue button[aria-pressed="true"]{
+    color:#fff;background:var(--blu);border-color:var(--blu);
+  }
+
+  /* ---- hero ---- */
+  .hero{
+    background:linear-gradient(175deg,var(--blu) 0%,var(--blu-scuro) 55%,var(--blu-notte) 100%);
+    color:#fff;text-align:center;
+    padding:40px 22px 56px;
+  }
+  .hero .logo{
+    width:88px;height:88px;margin:0 auto 22px;border-radius:22px;
+    box-shadow:0 10px 30px rgba(0,0,0,.45);
+  }
+  .hero h1{
+    font-size:clamp(28px,7.5vw,44px);
+    line-height:1.18;font-weight:800;letter-spacing:-.01em;
+    max-width:620px;margin:0 auto;
+  }
+  .hero h1 em{font-style:normal;color:var(--oro-chiaro)}
+  .hero p{
+    max-width:520px;margin:18px auto 0;
+    font-size:clamp(15px,4.2vw,18px);color:var(--testo-soft);
+  }
+
+  /* ---- video ---- */
+  .video-sez{padding:40px 18px 48px;text-align:center;
+    background:#f6f7fb;color:var(--blu-scuro)}
+  .video-sez h2{font-size:clamp(20px,5.5vw,26px);margin-bottom:18px;font-weight:800}
+  .video-sez video{
+    width:100%;max-width:300px;margin:0 auto;border-radius:20px;
+    box-shadow:0 14px 40px rgba(30,58,138,.25);background:#000;
+  }
+
+  /* ---- prove ---- */
+  .prove{background:#fff;padding:48px 22px 30px}
+  .prova{max-width:520px;margin:0 auto 46px;text-align:center}
+  .prova .num{
+    display:inline-block;font-size:12px;font-weight:800;letter-spacing:.14em;
+    color:var(--blu);border:2px solid var(--blu);border-radius:999px;
+    padding:3px 12px;margin-bottom:10px;
+  }
+  .prova h2{font-size:clamp(22px,6vw,28px);color:var(--blu-scuro);font-weight:800;line-height:1.2}
+  .prova p{margin-top:10px;color:#4b5563;font-size:16px}
+  .prova img{
+    margin:20px auto 0;border-radius:18px;
+    width:100%;max-width:260px;height:auto;
+    box-shadow:0 12px 34px rgba(30,58,138,.22);
+  }
+
+  /* ---- store + CTA ---- */
+  .store{
+    background:#f6f7fb;border-top:1px solid #e3e7f0;
+    color:var(--blu-scuro);text-align:center;padding:54px 22px 60px;
+  }
+  .store h2{font-size:clamp(20px,5.5vw,26px);font-weight:800;margin-bottom:24px}
+  .badges{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .badge-store{
+    display:flex;align-items:center;gap:10px;text-align:left;
+    background:#fff;border:1px solid #d6dcea;border-radius:12px;
+    padding:10px 18px;min-width:190px;cursor:default;
+    color:var(--blu-scuro);text-decoration:none;
+    box-shadow:0 4px 14px rgba(30,58,138,.08);
+  }
+  .badge-store .icona{font-size:26px;line-height:1}
+  .badge-store .r1{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#7a879e}
+  .badge-store .r2{font-size:16px;font-weight:700;line-height:1.15}
+  .cta{
+    display:inline-block;margin-top:34px;
+    background:var(--blu);color:#fff;
+    font-size:18px;font-weight:800;text-decoration:none;
+    padding:16px 30px;border-radius:999px;
+    box-shadow:0 10px 28px rgba(30,58,138,.35);
+  }
+  .cta:active{transform:scale(.98)}
+  .cta-nota{margin-top:14px;font-size:14px;color:#5b6b85}
+
+  /* ---- footer ---- */
+  footer{
+    background:var(--blu-scuro);color:#c7d2fe;
+    text-align:center;padding:34px 22px 46px;font-size:14px;
+  }
+  footer .segui{font-weight:700;color:#fff;margin-bottom:12px}
+  .social{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-bottom:18px}
+  .social a{color:var(--oro-chiaro);text-decoration:none;font-weight:600}
+  .social a:hover{text-decoration:underline}
+  footer .sito a{color:#fff;font-weight:800;text-decoration:none;font-size:16px}
+
+  @media (min-width:720px){
+    .prova{display:grid;grid-template-columns:1fr 300px;gap:30px;align-items:center;max-width:760px}
+    .prova img{margin-top:0}
+    .prova:nth-child(even) img{order:-1}
+  }
+</style>
+</head>
+<body>
+
+<nav class="lingue" id="lingue" aria-label="Lingua / Language"></nav>
+
+<header class="hero">
+  <img class="logo" src="./logo.png" alt="WIP" width="88" height="88">
+  <h1 data-i18n="h1">Il posto ti racconta la sua storia. <em>Da solo, mentre passi.</em></h1>
+  <p data-i18n="sub">WIP è l'audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi. A piedi, in auto, offline. In 7 lingue.</p>
+</header>
+
+<section class="video-sez">
+  <h2 data-i18n="video_h">Guardala in azione</h2>
+  <video src="./tiktok-appdemo.mp4" poster="./video-poster.jpg" muted playsinline controls preload="none"></video>
+</section>
+
+<section class="prove">
+  <article class="prova">
+    <div>
+      <span class="num">1</span>
+      <h2 data-i18n="p1_h">Parte da sola</h2>
+      <p data-i18n="p1_t">Cammini, entri nel raggio di un luogo e la guida inizia a parlare. Niente da cercare, niente da premere: funziona anche a schermo spento.</p>
+    </div>
+    <img src="./proof-parte-da-sola.webp" alt="" data-i18n-alt="p1_h" loading="lazy" width="640" height="1385">
+  </article>
+  <article class="prova">
+    <div>
+      <span class="num">2</span>
+      <h2 data-i18n="p2_h">9 milioni di luoghi</h2>
+      <p data-i18n="p2_t">Monumenti, gemme nascoste, sentieri, location di film. In 196 paesi, sulla mappa, con foto e testi presi dalle fonti di quel posto.</p>
+    </div>
+    <img src="./proof-mappa.webp" alt="" data-i18n-alt="p2_h" loading="lazy" width="640" height="1138">
+  </article>
+  <article class="prova">
+    <div>
+      <span class="num">3</span>
+      <h2 data-i18n="p3_h">Funziona offline e in auto</h2>
+      <p data-i18n="p3_t">Scarichi l'itinerario e la guida parla anche senza rete. In auto la voce arriva sugli altoparlanti, come un navigatore.</p>
+    </div>
+    <img src="./proof-offline.webp" alt="" data-i18n-alt="p3_h" loading="lazy" width="640" height="1138">
+  </article>
+</section>
+
+<section class="store">
+  <h2 data-i18n="store_h">In arrivo negli store</h2>
+  <!-- ============================================================ -->
+  <!-- SOSTITUIRE con i link store all'approvazione:                 -->
+  <!-- App Store:  trasformare lo <span> in <a href="https://apps.apple.com/app/idXXXXXXXXX" class="badge-store"> e aggiornare data-i18n r1 in badge_su -->
+  <!-- Google Play: trasformare lo <span> in <a href="https://play.google.com/store/apps/details?id=com.itaintasca.app" class="badge-store"> -->
+  <!-- (i badge ufficiali Apple/Google si possono usare SOLO con i link veri) -->
+  <!-- ============================================================ -->
+  <div class="badges">
+    <span class="badge-store" id="badge-apple" role="button" tabindex="0">
+      <span class="icona" aria-hidden="true">&#63743;</span>
+      <span><span class="r1" data-i18n="badge_presto">Presto su</span><br><span class="r2">App Store</span></span>
+    </span>
+    <span class="badge-store" id="badge-google" role="button" tabindex="0">
+      <span class="icona" aria-hidden="true">&#9654;</span>
+      <span><span class="r1" data-i18n="badge_presto">Presto su</span><br><span class="r2">Google Play</span></span>
+    </span>
+  </div>
+  <a class="cta" id="cta-web" href="https://wip.guide/"><span data-i18n="cta">Provala subito dal browser</span> &rarr; wip.guide</a>
+  <p class="cta-nota" data-i18n="cta_nota">È una web app: si apre e funziona già, senza installare nulla.</p>
+</section>
+
+<footer>
+  <p class="segui" data-i18n="segui">Seguici</p>
+  <nav class="social">
+    <a href="https://www.tiktok.com/@wipguide" target="_blank" rel="noopener">TikTok</a>
+    <a href="https://www.instagram.com/wipguide" target="_blank" rel="noopener">Instagram</a>
+    <a href="https://www.youtube.com/@wipguide" target="_blank" rel="noopener">YouTube</a>
+    <a href="https://www.facebook.com/profile.php?id=61594265810569" target="_blank" rel="noopener">Facebook</a>
+  </nav>
+  <p>@wipguide</p>
+  <p class="sito" style="margin-top:8px"><a href="https://wip.guide/">wip.guide</a></p>
+</footer>
+
+<script>
+/* ================= dizionario 7 lingue ================= */
+var I18N = {
+  it: {
+    h1: "Il posto ti racconta la sua storia. <em>Da solo, mentre passi.</em>",
+    sub: "WIP è l'audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi. A piedi, in auto, offline. In 7 lingue.",
+    video_h: "Guardala in azione",
+    p1_h: "Parte da sola",
+    p1_t: "Cammini, entri nel raggio di un luogo e la guida inizia a parlare. Niente da cercare, niente da premere: funziona anche a schermo spento.",
+    p2_h: "9 milioni di luoghi",
+    p2_t: "Monumenti, gemme nascoste, sentieri, location di film. In 196 paesi, sulla mappa, con foto e testi presi dalle fonti di quel posto.",
+    p3_h: "Funziona offline e in auto",
+    p3_t: "Scarichi l'itinerario e la guida parla anche senza rete. In auto la voce arriva sugli altoparlanti, come un navigatore.",
+    store_h: "In arrivo negli store",
+    badge_presto: "Presto su",
+    cta: "Provala subito dal browser",
+    cta_nota: "È una web app: si apre e funziona già, senza installare nulla.",
+    segui: "Seguici"
+  },
+  en: {
+    h1: "Every place tells you its story. <em>By itself, as you walk by.</em>",
+    sub: "WIP is the location-aware audio guide to over 9 million places in 196 countries. On foot, in the car, offline. In 7 languages.",
+    video_h: "See it in action",
+    p1_h: "It starts on its own",
+    p1_t: "Walk into a place's radius and the guide starts talking. Nothing to search, nothing to tap: it works even with the screen off.",
+    p2_h: "9 million places",
+    p2_t: "Monuments, hidden gems, trails, film locations. Across 196 countries, on the map, with photos and text drawn from that place's own sources.",
+    p3_h: "Works offline and in the car",
+    p3_t: "Download your itinerary and the guide keeps talking with no connection. In the car the voice comes through your speakers, like a sat nav.",
+    store_h: "Coming to the stores",
+    badge_presto: "Soon on",
+    cta: "Try it now in your browser",
+    cta_nota: "It's a web app: it opens and just works, nothing to install.",
+    segui: "Follow us"
+  },
+  fr: {
+    h1: "Le lieu te raconte son histoire. <em>Tout seul, quand tu passes.</em>",
+    sub: "WIP est l'audioguide géolocalisé de plus de 9 millions de lieux dans 196 pays. À pied, en voiture, hors ligne. En 7 langues.",
+    video_h: "Regarde-la en action",
+    p1_h: "Il démarre tout seul",
+    p1_t: "Tu marches, tu entres dans le rayon d'un lieu et le guide se met à parler. Rien à chercher, rien à toucher : ça marche même écran éteint.",
+    p2_h: "9 millions de lieux",
+    p2_t: "Monuments, trésors cachés, sentiers, lieux de tournage. Dans 196 pays, sur la carte, avec des photos et des textes issus des sources du lieu lui-même.",
+    p3_h: "Fonctionne hors ligne et en voiture",
+    p3_t: "Télécharge ton itinéraire : le guide parle même sans réseau. En voiture, la voix passe par les haut-parleurs, comme un GPS.",
+    store_h: "Bientôt sur les stores",
+    badge_presto: "Bientôt sur",
+    cta: "Essaie-la tout de suite dans ton navigateur",
+    cta_nota: "C'est une web app : elle s'ouvre et fonctionne déjà, rien à installer.",
+    segui: "Suis-nous"
+  },
+  es: {
+    h1: "El lugar te cuenta su historia. <em>Solo, mientras pasas.</em>",
+    sub: "WIP es la audioguía geolocalizada de más de 9 millones de lugares en 196 países. A pie, en coche, sin conexión. En 7 idiomas.",
+    video_h: "Mírala en acción",
+    p1_h: "Arranca sola",
+    p1_t: "Caminas, entras en el radio de un lugar y la guía empieza a hablar. Nada que buscar, nada que pulsar: funciona incluso con la pantalla apagada.",
+    p2_h: "9 millones de lugares",
+    p2_t: "Monumentos, joyas ocultas, senderos, localizaciones de cine. En 196 países, en el mapa, con fotos y textos de las fuentes de ese lugar.",
+    p3_h: "Funciona sin conexión y en el coche",
+    p3_t: "Descargas el itinerario y la guía habla también sin red. En el coche la voz sale por los altavoces, como un navegador.",
+    store_h: "Muy pronto en las tiendas",
+    badge_presto: "Pronto en",
+    cta: "Pruébala ya desde el navegador",
+    cta_nota: "Es una web app: se abre y funciona, sin instalar nada.",
+    segui: "Síguenos"
+  },
+  de: {
+    h1: "Der Ort erzählt dir seine Geschichte. <em>Von selbst, während du vorbeigehst.</em>",
+    sub: "WIP ist der ortsbezogene Audioguide zu über 9 Millionen Orten in 196 Ländern. Zu Fuß, im Auto, offline. In 7 Sprachen.",
+    video_h: "Sieh sie in Aktion",
+    p1_h: "Startet von selbst",
+    p1_t: "Du gehst los, kommst in den Umkreis eines Ortes, und der Guide beginnt zu erzählen. Nichts suchen, nichts antippen – funktioniert auch bei ausgeschaltetem Bildschirm.",
+    p2_h: "9 Millionen Orte",
+    p2_t: "Denkmäler, versteckte Schätze, Wanderwege, Drehorte. In 196 Ländern, auf der Karte, mit Fotos und Texten aus den Quellen des Ortes selbst.",
+    p3_h: "Funktioniert offline und im Auto",
+    p3_t: "Lade deine Route herunter – der Guide spricht auch ohne Netz. Im Auto kommt die Stimme über die Lautsprecher, wie beim Navi.",
+    store_h: "Bald in den Stores",
+    badge_presto: "Bald im",
+    cta: "Probier sie jetzt im Browser",
+    cta_nota: "Eine Web-App: öffnen und loslegen, ohne Installation.",
+    segui: "Folge uns"
+  },
+  ru: {
+    h1: "Место само рассказывает свою историю. <em>Пока ты просто идёшь мимо.</em>",
+    sub: "WIP — геолокационный аудиогид по более чем 9 миллионам мест в 196 странах. Пешком, на машине, офлайн. На 7 языках.",
+    video_h: "Посмотри, как это работает",
+    p1_h: "Включается сам",
+    p1_t: "Ты идёшь, попадаешь в радиус места — и гид начинает рассказывать. Ничего не искать, ничего не нажимать: работает даже с выключенным экраном.",
+    p2_h: "9 миллионов мест",
+    p2_t: "Памятники, скрытые жемчужины, тропы, места съёмок фильмов. В 196 странах, на карте, с фотографиями и текстами из источников самого места.",
+    p3_h: "Работает офлайн и в машине",
+    p3_t: "Скачай маршрут — гид говорит и без сети. В машине голос звучит из динамиков, как навигатор.",
+    store_h: "Скоро в магазинах приложений",
+    badge_presto: "Скоро в",
+    cta: "Попробуй прямо в браузере",
+    cta_nota: "Это веб-приложение: открывается и сразу работает, ничего устанавливать не нужно.",
+    segui: "Подписывайся"
+  },
+  zh: {
+    h1: "走到哪里，<em>那里就为你讲述自己的故事。</em>",
+    sub: "WIP 是覆盖 196 个国家、超过 900 万个地点的定位语音导览。步行、开车、离线都能用，支持 7 种语言。",
+    video_h: "看看实际效果",
+    p1_h: "自动开始讲解",
+    p1_t: "走进一个地点的范围，导览就自动开口。不用搜索、不用点击，熄屏也照常工作。",
+    p2_h: "900 万个地点",
+    p2_t: "名胜古迹、小众宝藏、步道、电影取景地。遍布 196 个国家，都在地图上，图文均来自该地点的真实资料。",
+    p3_h: "离线可用，车内可用",
+    p3_t: "下载行程后，没有网络导览也能继续讲。开车时声音通过车载音响播放，就像导航一样。",
+    store_h: "即将上架应用商店",
+    badge_presto: "即将上线",
+    cta: "现在就在浏览器里试试",
+    cta_nota: "这是一个网页应用：打开即用，无需安装。",
+    segui: "关注我们"
+  }
+};
+var LINGUE = [["it","IT"],["en","EN"],["fr","FR"],["es","ES"],["de","DE"],["ru","RU"],["zh","中文"]];
+var LS_KEY = "wip_scopri_lang";
+
+function lingaDefault() {
+  try { var s = localStorage.getItem(LS_KEY); if (s && I18N[s]) return s; } catch (e) {}
+  var nav = (navigator.language || "en").toLowerCase();
+  var base = nav.split("-")[0];
+  return I18N[base] ? base : "en";
+}
+
+var linguaCorrente = lingaDefault();
+
+function applicaLingua(lang) {
+  if (!I18N[lang]) lang = "en";
+  linguaCorrente = lang;
+  var d = I18N[lang];
+  document.querySelectorAll("[data-i18n]").forEach(function (el) {
+    var k = el.getAttribute("data-i18n");
+    if (!d[k]) return;
+    if (k === "h1") el.innerHTML = d[k]; else el.textContent = d[k];
+  });
+  document.querySelectorAll("[data-i18n-alt]").forEach(function (el) {
+    var k = el.getAttribute("data-i18n-alt");
+    if (d[k]) el.setAttribute("alt", d[k]);
+  });
+  document.documentElement.setAttribute("lang", lang);
+  try { localStorage.setItem(LS_KEY, lang); } catch (e) {}
+  document.querySelectorAll("#lingue button").forEach(function (b) {
+    b.setAttribute("aria-pressed", b.dataset.lang === lang ? "true" : "false");
+  });
+}
+
+(function () {
+  var nav = document.getElementById("lingue");
+  LINGUE.forEach(function (l) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.dataset.lang = l[0];
+    b.textContent = l[1];
+    b.addEventListener("click", function () { applicaLingua(l[0]); });
+    nav.appendChild(b);
+  });
+  applicaLingua(linguaCorrente);
+})();
+
+/* ================= PostHog (snippet CDN ufficiale, EU) ================= */
+/* Chiave phc_ = project API key pubblica, write-only: può stare nella pagina. */
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+posthog.init("phc_Bj6Hv4wYPYQc2a8oDLYWfcJUFbFq9dVUiJfYZJRBfMkr", {
+  api_host: "https://eu.posthog.com",
+  autocapture: false,
+  capture_pageview: false,
+  capture_pageleave: false,
+  disable_session_recording: true
+});
+/* Solo 3 eventi, niente autocapture, niente registrazione sessioni */
+posthog.capture("$pageview", { lingua: linguaCorrente });
+
+document.getElementById("badge-apple").addEventListener("click", function () {
+  posthog.capture("landing_store_click", { store: "apple", lingua: linguaCorrente });
+});
+document.getElementById("badge-google").addEventListener("click", function () {
+  posthog.capture("landing_store_click", { store: "google", lingua: linguaCorrente });
+});
+document.getElementById("cta-web").addEventListener("click", function () {
+  posthog.capture("landing_try_web", { lingua: linguaCorrente });
+});
+</script>
+</body>
+</html>

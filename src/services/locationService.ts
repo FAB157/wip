@@ -1702,7 +1702,7 @@ class LocationService {
         const okDuet = await this.playDuet(duetLines);
         if (okDuet) {
           window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-            detail: { textToSpeak: text, poiName }
+            detail: { textToSpeak: text, poiName, character: character || this.guideMode }
           }));
           return 'started';
         }
@@ -1730,8 +1730,12 @@ class LocationService {
         // Live Tour: se l'utente è leader di una sessione, useLiveTour
         // ritrasmette questo audio ai follower via canale realtime.
         // (Per i non-leader l'evento è un no-op senza listener attivo.)
+        // Viaggia anche il PERSONAGGIO (05/09/2026): senza, ogni follower
+        // riproduceva col proprio (Nicky o Dante), quindi il gruppo sentiva
+        // voci diverse davanti allo stesso monumento — e, chiave di cache
+        // diversa, ognuno faceva rigenerare l'audio a proprio carico.
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-          detail: { textToSpeak: text, poiName }
+          detail: { textToSpeak: text, poiName, character: character || this.guideMode }
         }));
       }
       return started ? 'started' : false;
