@@ -1100,8 +1100,24 @@ export default function App() {
   // dispositivo per le push (FCM, solo nativo) e si controllano le notifiche
   // non lette — «la tua guida e' pronta» arrivata ad app chiusa diventa una
   // notifica locale all'apertura. Il tocco su una notifica apre l'Archivio.
+  // Link dell'email «Apri in WIP» (?archivio=guide|itinerari): chi arriva
+  // senza sessione passa dal login e perdeva la destinazione. Si mette da
+  // parte all'avvio e si applica appena la sessione c'e'.
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('archivio');
+      if (p) { sessionStorage.setItem('wip_apri_archivio', p); window.history.replaceState({}, '', window.location.pathname); }
+    } catch { /* niente */ }
+  }, []);
   useEffect(() => {
     if (!session?.user?.id) return;
+    try {
+      if (sessionStorage.getItem('wip_apri_archivio')) {
+        setActiveTab('plan');
+        // PlanScreen, montato con la tab, legge la stessa chiave e apre l'Archivio.
+        setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 1200);
+      }
+    } catch { /* niente */ }
     const t = setTimeout(() => {
       import('./services/generazioniService').then(async (m) => {
         await m.registraPush(language).catch(() => {});

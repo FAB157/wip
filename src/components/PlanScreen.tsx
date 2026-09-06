@@ -2748,10 +2748,12 @@ export default function PlanScreen({
     window.addEventListener('wip-generazioni-aggiornate', h);
     // Apertura dell'Archivio dal tocco su una notifica (App.tsx) o dal link
     // dell'email (?archivio=guide|itinerari).
-    const apri = () => { setPlannerMode('my_itineraries'); void fetchMyItineraries(); void fetchSavedPremiumGuides(); };
+    const apri = () => { setPlannerMode('my_itineraries'); void fetchMyItineraries(); void fetchSavedPremiumGuides(); try { sessionStorage.removeItem('wip_apri_archivio'); } catch { /* niente */ } };
     window.addEventListener('wip-apri-archivio', apri);
     try {
-      const p = new URLSearchParams(window.location.search).get('archivio');
+      // Dal link dell'email: App.tsx mette la destinazione in sessionStorage
+      // (sopravvive al login), qui si consuma.
+      const p = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio');
       if (p) { apri(); window.history.replaceState({}, '', window.location.pathname); }
     } catch { /* niente */ }
     return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); };

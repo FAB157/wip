@@ -12,9 +12,12 @@ import Groq from "groq-sdk";
 import * as agentTools from "./agentTools.js";
 // Libreria Itinerari: costanti condivise col client (SOLO tipi/costanti).
 import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
-// PDF «come un libro» generati dal server per gli allegati email (06/09/2026):
-// import dinamico dentro le funzioni, cosi' @react-pdf/renderer si carica
-// solo quando serve e un suo guasto non abbatte l'intera API.
+// PDF «come un libro» generati dal server per gli allegati email (06/09/2026).
+// Import STATICO del modulo (leggero: React + axios), perche' il bundler di
+// Vercel non risolveva l'import dinamico «./src/lib/pdf/serverPdf.js» e
+// l'email partiva senza allegato. @react-pdf/renderer resta un import
+// dinamico DENTRO serverPdf.ts: si carica solo quando si genera un PDF.
+import { pdfGuidaServer, pdfItinerarioServer } from './src/lib/pdf/serverPdf.js';
 // ATTENZIONE — QUI NON VANNO IMPORT DI FILE .json.
 // Il 21/08/2026 questo blocco conteneva otto `import … from
 // "./src/data/tematici/*.json"` per portare i cataloghi tematici nel bundle.
@@ -3409,7 +3412,6 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   /** PDF della guida per l'allegato email (null se non realizzabile). */
   async function pdfGuidaPerEmail(content: any, mediaManifest: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
     try {
-      const { pdfGuidaServer } = await import('./src/lib/pdf/serverPdf.js');
       const buf = await pdfGuidaServer(content, mediaManifest || {}, language);
       if (!buf) return null;
       const nome = String(content?.guida_titolo || 'Guida').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Guida';
@@ -3419,7 +3421,6 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   /** PDF dell'itinerario per l'allegato email (null se non realizzabile). */
   async function pdfItinerarioPerEmail(plan: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
     try {
-      const { pdfItinerarioServer } = await import('./src/lib/pdf/serverPdf.js');
       const buf = await pdfItinerarioServer(plan, language);
       if (!buf) return null;
       const nome = String(plan?.titolo || 'Itinerario').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Itinerario';
