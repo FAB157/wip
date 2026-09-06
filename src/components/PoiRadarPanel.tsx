@@ -350,6 +350,20 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
                 </button>
               );
             })}
+            {/* SOLO IL GIRO (05/09/2026): l'anteprima dalla prima tappa, senza
+                la tratta da dove si e`. Si vede l'itinerario in se' anche da
+                casa o dall'albergo; il giro avviato parte comunque da dove si e`. */}
+            <button
+              onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaSoloItinerario(!bozza.soloItinerario); }}
+              className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
+                bozza.soloItinerario
+                  ? 'bg-[#1e3a8a] text-white border-[#1e3a8a]'
+                  : 'bg-white text-[#1e3a8a]/70 border-black/10 hover:border-[#1e3a8a]/40'
+              }`}
+              aria-pressed={bozza.soloItinerario}
+            >
+              {tr('gr_solo_itinerario')}
+            </button>
           </div>
           {bozza.tappeNelTempo != null && bozza.tappeNelTempo < scelte.length && (
             <p className="text-[10px] text-amber-700 leading-snug">

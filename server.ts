@@ -354,7 +354,11 @@ async function callUniversalAi(
       // NOSTRI (strictEngine, excludeEngines) sono sconosciuti a Groq e
       // farebbero un 400 — vanno tolti qui, una volta per tutte, invece di
       // ricordarsi caso per caso di non impostarli.
-      const { strictEngine: _se, excludeEngines: _ee, ...groqOptions } = options as any;
+      // `ultimaSpiaggiaPagante` (03/09) era rimasto fuori dall'elenco: Groq
+      // rispondeva 400 «property 'ultimaSpiaggiaPagante' is unsupported» a
+      // OGNI chiamata dell'arricchimento POI e tutto ricadeva su Agnes
+      // (visto nel log del 05/09/2026).
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, ...groqOptions } = options as any;
       // Tutte le chiavi prima di arrendersi (vedi tentaConRotazione).
       const r = await tentaConRotazione(groqClients, (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
@@ -811,6 +815,145 @@ function extractItineraryStops(obj: any): any[] {
   return stops;
 }
 
+// ── Nomi di luogo: parole significative e somiglianza (0..1) ────────────────
+// Usato per agganciare una tappa scritta dall'AI («Castello di Uzzano») alla
+// riga vera del database («Castello di Uzzano - Azienda Agricola»).
+const PAROLE_VUOTE_NOMI = new Set(['del', 'della', 'delle', 'dei', 'degli', 'di', 'da', 'the', 'and', 'con', 'per', 'san', 'santa', 'chiesa', 'castello', 'villa', 'museo', 'ristorante', 'pizzeria', 'trattoria', 'osteria', 'piazza', 'via', 'secondo', 'giro', 'pranzo', 'cena', 'colazione', 'aperitivo', 'visita', 'tour']);
+function paroleNome(s: any): string[] {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(w => w.length > 2 && !PAROLE_VUOTE_NOMI.has(w));
+}
+function somiglianzaNomi(a: any, b: any): number {
+  const A = new Set(paroleNome(a)), B = new Set(paroleNome(b));
+  if (!A.size || !B.size) return 0;
+  let comuni = 0; for (const w of A) if (B.has(w)) comuni++;
+  return comuni / Math.min(A.size, B.size);
+}
+
+// ── AGGANCIO DELLE TAPPE AL DATABASE (05/09/2026) ───────────────────────────
+//
+// Verifica sull'itinerario di Greve in Chianti: le coordinate delle tappe
+// erano quelle scritte dall'AI. I quattro locali dei pasti avevano TUTTI la
+// stessa coordinata (il centro del paese), Solociccia — che sta a Panzano e
+// serve solo a pranzo — era «a cena lungo la SR222». Con coordinate cosi' la
+// mappa mette il pin nel posto sbagliato e WIP Nav porta l'utente in piazza
+// invece che al ristorante.
+//
+// Qui ogni tappa viene cercata nel NOSTRO database (shared_pois per i luoghi,
+// locali_pois per i pasti) entro pochi km, per somiglianza del nome. Se c'e':
+//   - coordinate ← punto d'arrivo / ingresso / posizione del POI (quello che
+//     usa il navigatore), non quelle dell'AI;
+//   - poi_id, indirizzo, telefono e sito ← dal DB;
+//   - pasti: se il locale ha orari OSM e non copre la fascia del pasto
+//     (cena in un posto aperto solo a pranzo), la tappa viene marcata
+//     «da_verificare» con la nota, cosi' l'utente lo vede.
+// Senza riscontro la tappa resta com'e': il cross-check AI di
+// verifyItineraryAntiHallucination fa il resto.
+const TIPI_PASTO = /^(pranzo|cena|colazione|aperitivo|brunch|merenda|ristorante|lunch|dinner|breakfast)$/i;
+function orariCopronoPasto(orariOsm: string, tipo: string): boolean | null {
+  const s = String(orariOsm || '');
+  if (!s || /24\/7/.test(s)) return null;
+  const fasce = [...s.matchAll(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/g)]
+    .map(m => ({ da: Number(m[1]) * 60 + Number(m[2]), a: Number(m[3]) * 60 + Number(m[4]) }))
+    .map(f => (f.a <= f.da ? { da: f.da, a: f.a + 24 * 60 } : f));
+  if (!fasce.length) return null;
+  const t = tipo.toLowerCase();
+  const finestra = /cena|dinner/.test(t) ? [19 * 60 + 30, 21 * 60]
+    : /pranzo|lunch|brunch/.test(t) ? [12 * 60 + 30, 13 * 60 + 30]
+    : /colazione|breakfast/.test(t) ? [8 * 60, 9 * 60]
+    : /aperitivo/.test(t) ? [18 * 60, 19 * 60] : null;
+  if (!finestra) return null;
+  return fasce.some(f => f.da <= finestra[0] && f.a >= finestra[1]);
+}
+async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number; lon: number } | null): Promise<{ agganciate: number; pasti_fuori_orario: number }> {
+  const esito = { agganciate: 0, pasti_fuori_orario: 0 };
+  if (!supabaseUrl || !supabaseServiceKey) return esito;
+  const stops = extractItineraryStops(itineraryObj).slice(0, 80);
+  const intestazioni = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+  // Quattro query alla volta: 17 tappe = 17 ilike in parallelo sulla tabella
+  // grande, e sotto carico qualcuna passava i 6 s e cadeva in silenzio.
+  const coda = [...stops];
+  const lavoratore = async () => { while (coda.length) { const s = coda.shift(); if (s) await unaTappa(s.ref); } };
+  async function unaTappa(t: any) {
+    try {
+      if (t?.poi_id) return; // gia' agganciata (chiamata ripetuta): niente doppio lavoro
+      const nome = String(t?.titolo_tappa || t?.titolo || '').replace(/\s*\(.*?\)\s*$/, '');
+      if (paroleNome(nome).length === 0) return;
+      let la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+      if (!Number.isFinite(la) || !Number.isFinite(lo) || (la === 0 && lo === 0)) {
+        if (!centro) return;
+        la = centro.lat; lo = centro.lon;
+      }
+      const pasto = TIPI_PASTO.test(String(t?.tipo || ''));
+      // I pasti li cerca l'AI da una lista presa entro ~5 km dal centro, ma
+      // poi li «posa» in piazza: raggio largo (8 km). I luoghi hanno gia'
+      // una coordinata propria dell'AI, in genere vicina: 3 km.
+      const raggioKm = pasto ? 8 : 3;
+      const dLat = raggioKm / 111, dLon = raggioKm / (111 * Math.max(0.15, Math.cos(la * Math.PI / 180)));
+      const bbox = `&lat=gte.${la - dLat}&lat=lte.${la + dLat}&lon=gte.${lo - dLon}&lon=lte.${lo + dLon}`;
+      const parola = paroleNome(nome)[0];
+      const url = pasto
+        ? `${supabaseUrl}/rest/v1/locali_pois?select=id,name,lat,lon,address,city,phone,website,osm_opening_hours,operating_status&name=ilike.*${encodeURIComponent(parola)}*${bbox}&limit=40`
+        : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem&name=ilike.*${encodeURIComponent(parola)}*&is_hidden=not.is.true${bbox}&limit=40`;
+      const r = await axios.get(url, { headers: intestazioni, timeout: 10000 }).catch((e: any) => { console.warn('[Itinerario] query aggancio fallita per', nome, e?.response?.status || e?.message); return null; });
+      const righe: any[] = Array.isArray(r?.data) ? r.data : [];
+      let migliore: any = null, punteggio = 0, migliorQualita = -1, distMigliore = Infinity;
+      for (const riga of righe) {
+        if (pasto && riga.operating_status && riga.operating_status !== 'open') continue;
+        // Le righe nate da un itinerario AI (iti-…, ai_…, t1_0) sono copie
+        // della prosa AI con indirizzi spesso inventati: non sono una PROVA che
+        // il luogo esista. «Piazza Matteotti a Panzano» (che non esiste) si
+        // agganciava alla sua stessa copia di un giro precedente.
+        if (/^(iti-|ai_|t\d+_\d+$)/.test(String(riga.id || ''))) continue;
+        const s = somiglianzaNomi(nome, riga.name);
+        const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
+        // A parita' di nome vince la riga con piu' dati (indirizzo, gemma,
+        // punto d'arrivo), poi la piu' vicina.
+        const qualita = (riga.address ? 1 : 0) + (riga.is_gem ? 1 : 0) + ((riga.arrival_lat || riga.entrance_lat) ? 1 : 0);
+        const meglio = s > punteggio
+          || (s === punteggio && qualita > migliorQualita)
+          || (s === punteggio && qualita === migliorQualita && d < distMigliore);
+        if (meglio) { punteggio = s; migliore = riga; migliorQualita = qualita; distMigliore = d; }
+      }
+      if (!migliore || punteggio < 0.6) return;
+      esito.agganciate++;
+      // Coordinate: quelle che usa il navigatore (arrivo > ingresso > POI).
+      const cLat = Number(migliore.arrival_lat || migliore.entrance_lat || migliore.lat);
+      const cLon = Number(migliore.arrival_lon || migliore.entrance_lon || migliore.lon);
+      if (Number.isFinite(cLat) && Number.isFinite(cLon) && (cLat !== 0 || cLon !== 0)) t.coordinate = { lat: cLat, lng: cLon };
+      t.poi_id = String(migliore.id);
+      if (migliore.address) {
+        const citta = migliore.city && !String(migliore.address).toLowerCase().includes(String(migliore.city).toLowerCase()) ? `, ${migliore.city}` : '';
+        t.indirizzo = `${migliore.address}${citta}`;
+      }
+      const tel = migliore.contact_phone || migliore.phone;
+      if (tel) t.telefono = String(tel);
+      const sito = migliore.contact_website || migliore.website;
+      if (sito && !t.link_info) t.link_info = String(sito);
+      if (pasto) {
+        // Il nome del locale e' quello del DB quando l'AI l'ha «abbellito»:
+        // «Ristorante La Cantina del Glicine» era in realta' «Ristorante
+        // Pizzeria La Cantina» (Piazza Trento 3). Somiglianza minima (una
+        // parola in comune) basta per l'aggancio, non per tenere il nome.
+        const A = new Set(paroleNome(nome)), B = new Set(paroleNome(migliore.name));
+        let comuni = 0; for (const x of A) if (B.has(x)) comuni++;
+        const jaccard = comuni / Math.max(1, new Set([...A, ...B]).size);
+        if (jaccard < 0.7 && migliore.name) {
+          t.titolo_tappa = String(migliore.name);
+        }
+        const copre = orariCopronoPasto(migliore.osm_opening_hours, String(t.tipo));
+        if (copre === false) {
+          esito.pasti_fuori_orario++;
+          t.verifica = 'da_verificare';
+          t.nota_verifica = [t.nota_verifica, `⚠ Orari del locale (${migliore.osm_opening_hours}) non coprono la fascia di ${String(t.tipo).toLowerCase()}: verifica o scegli un altro locale.`].filter(Boolean).join(' ');
+        }
+      }
+    } catch (e: any) { console.warn('[Itinerario] aggancio fallito per', t?.titolo_tappa, e?.message); }
+  }
+  await Promise.all([lavoratore(), lavoratore(), lavoratore(), lavoratore()]);
+  return esito;
+}
+
 // Solo http(s) verso host pubblici: niente loopback, link-local, reti
 // private, metadata cloud o nomi senza punto. Usato dal link-check degli
 // itinerari e da ogni fetch di URL che arriva dall'esterno.
@@ -877,9 +1020,20 @@ function giornoLocaleDaLon(lon: number): string {
 // ('verificata' | 'da_verificare' | 'non_conforme') e "nota_verifica".
 // Fail-open: qualsiasi errore lascia l'itinerario com'è.
 async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
-  const { destination, lat, lon, radiusKm, specialRequests, interests, language } = opts || {};
+  const { destination, lat, lon, radiusKm, specialRequests, interests, language, inDiretta } = opts || {};
   const stops = extractItineraryStops(itineraryObj).slice(0, 60);
   if (stops.length === 0) return { checked: 0, flagged: 0 };
+
+  // 0) Prima di tutto: coordinate, indirizzi e contatti dal NOSTRO database,
+  //    non dall'AI (vedi agganciaTappeAlDatabase). Va fatto prima del
+  //    controllo geografico, che altrimenti giudica coordinate inventate.
+  try {
+    const centro = typeof lat === 'number' && typeof lon === 'number' ? { lat, lon } : null;
+    const ag = await agganciaTappeAlDatabase(itineraryObj, centro);
+    console.log(`[Itinerario] tappe agganciate al DB: ${ag.agganciate}/${stops.length}, pasti fuori orario: ${ag.pasti_fuori_orario}`);
+  } catch (e: any) {
+    console.warn('[Itinerario] aggancio al DB fallito:', e?.message);
+  }
 
   // Nota "chicca" nella lingua dell'utente: tono da consiglio, NON da allarme.
   // Il verdetto "dubbio" = luogo vero ma poco famoso; il vecchio "⚠ Luogo poco
@@ -976,9 +1130,21 @@ ${JSON.stringify(compact)}`;
 
   const vSupabaseUrl = process.env.VITE_SUPABASE_URL || '';
   const vServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-  const aiRes = await callUniversalAi('agnes', [
+  // Revisore: parte da groq (veloce), poi i gratuiti; con un utente in
+  // attesa (`inDiretta`, mai dalla libreria di sfondo) DeepSeek come ultima
+  // spiaggia — «deve essere deepseek» (committente, 05/09/2026), non Agnes
+  // che ci mette minuti e fa scadere il tetto di 20 s.
+  const aiRes = await callUniversalAi('groq', [
     { role: 'user', content: verifierPrompt }
-  ], { temperature: 0.1, response_format: { type: 'json_object' } }, 'itinerary_verify', vSupabaseUrl, vServiceKey, null);
+  ], {
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+    ultimaSpiaggiaPagante: inDiretta === true,
+    // In diretta Agnes (60 s di timeout, 2-4 min reali) non entra in coda:
+    // brucerebbe da solo il tetto di 20 s e DeepSeek non verrebbe mai
+    // raggiunto. Nella libreria di sfondo resta.
+    excludeEngines: inDiretta === true ? ['agnes'] : [],
+  }, 'itinerary_verify', vSupabaseUrl, vServiceKey, null);
 
   let verdicts: any[] = [];
   try {
@@ -993,6 +1159,26 @@ ${JSON.stringify(compact)}`;
   verdicts.forEach((v: any) => {
     const s = stops[Number(v.n)];
     if (!s) return;
+    // IL DATABASE VINCE SUL REVISORE (05/09/2026): una tappa agganciata a una
+    // riga nostra (stesso nome, entro pochi km) esiste per definizione. Il
+    // revisore AI bocciava luoghi veri con motivazioni inventate («Uzzano e'
+    // in provincia di Pistoia» per il Castello di Uzzano di Greve; «Piazza
+    // Matteotti e' a Greve, non a Panzano») e proponeva alternative a caso.
+    // Restano validi solo il vincolo utente (conforme) e le note gia' messe
+    // dall'aggancio (pasto fuori orario).
+    if (s.ref.poi_id) {
+      // «conforme = no» solo se l'utente ha un vincolo alimentare/di cucina
+      // riconoscibile: altrimenti il revisore lo usa per bocciare l'esistenza
+      // («Lamole e' una frazione, non una cantina» — e' una cantina vera).
+      if (v.conforme === 'no' && detectDietConstraints(constraints).length > 0) {
+        s.ref.verifica = 'non_conforme';
+        s.ref.nota_verifica = `⚠ Potrebbe non rispettare le tue richieste${v.motivo ? `: ${v.motivo}` : ''}`;
+        flagged++;
+      } else if (!s.ref.verifica) {
+        s.ref.verifica = 'verificata';
+      }
+      return;
+    }
     if (v.esiste === 'no') {
       s.ref.verifica = 'da_verificare';
       s.ref.nota_verifica = `⚠ Tappa non confermata${v.motivo ? `: ${v.motivo}` : ''}${v.alternativa ? `. Alternativa sicura: ${v.alternativa}` : ''}`;
@@ -1060,7 +1246,10 @@ async function fetchDatabaseDiningFallback(lat: number, lon: number, constraints
   const dLat = 0.045; // ~5 km
   const dLon = 0.045 / Math.max(0.15, Math.cos(lat * Math.PI / 180));
   const cats = ['ristorante', 'pizzeria', 'pesce', 'carne', 'sushi', 'vegetariano', 'fast_food', 'caffe', 'pasticceria', 'bar'];
-  let url = `${supabaseUrl}/rest/v1/locali_pois?select=name,address,cucina,osm_cuisine,osm_diet&lat=gte.${lat - dLat}&lat=lte.${lat + dLat}&lon=gte.${lon - dLon}&lon=lte.${lon + dLon}`;
+  // Coordinate e orari nella riga (05/09/2026): senza, l'AI «posava» ogni
+  // ristorante nel centro del paese e metteva a cena locali aperti solo a
+  // pranzo (Solociccia a Panzano).
+  let url = `${supabaseUrl}/rest/v1/locali_pois?select=name,address,cucina,osm_cuisine,osm_diet,lat,lon,osm_opening_hours&operating_status=not.eq.closed&lat=gte.${lat - dLat}&lat=lte.${lat + dLat}&lon=gte.${lon - dLon}&lon=lte.${lon + dLon}`;
   let tagLabel = '';
   if (constraints.length) {
     // OR tra tutte le condizioni riconosciute (es. "pesce o carne" → entrambe)
@@ -1085,7 +1274,9 @@ async function fetchDatabaseDiningFallback(lat: number, lon: number, constraints
       const cucina = p.cucina || p.osm_cuisine || '';
       const diete = formatOsmDiet(p.osm_diet);
       const fonte = tagLabel ? `Database - verificato ${tagLabel}` : 'Database';
-      return `- ${p.name}${cucina ? ` (${cucina})` : ''}${p.address ? ` — ${p.address}` : ''}${diete} [${fonte}]`;
+      const coord = Number.isFinite(Number(p.lat)) ? ` (coordinate ${Number(p.lat).toFixed(5)}, ${Number(p.lon).toFixed(5)})` : '';
+      const orari = p.osm_opening_hours ? ` [orari: ${String(p.osm_opening_hours).slice(0, 80)}]` : '';
+      return `- ${p.name}${cucina ? ` (${cucina})` : ''}${p.address ? ` — ${p.address}` : ''}${coord}${orari}${diete} [${fonte}]`;
     });
   } catch { return []; }
 }
@@ -1117,7 +1308,9 @@ async function fetchRealDiningContext(lat: number, lon: number, constraintText: 
   ).then(r => (r.data.results || []).map((p: any) => {
     const cat = (p.categories || []).map((c: any) => c.name).filter(Boolean).slice(0, 2).join("/");
     const addr = p.location?.formatted_address || p.location?.address || "";
-    return `- ${p.name}${cat ? ` (${cat})` : ""}${addr ? ` — ${addr}` : ""} [Foursquare]`;
+    const la = Number(p.latitude ?? p.geocodes?.main?.latitude), lo = Number(p.longitude ?? p.geocodes?.main?.longitude);
+    const coord = Number.isFinite(la) && Number.isFinite(lo) ? ` (coordinate ${la.toFixed(5)}, ${lo.toFixed(5)})` : '';
+    return `- ${p.name}${cat ? ` (${cat})` : ""}${addr ? ` — ${addr}` : ""}${coord} [Foursquare]`;
   })).catch(() => []) : Promise.resolve([]);
 
   const taAllowed = taKey ? await tripAdvisorBudgetOk() : false;
@@ -1126,27 +1319,25 @@ async function fetchRealDiningContext(lat: number, lon: number, constraintText: 
     { timeout: 5000, headers: { Accept: "application/json" } }
   ).then(r => (r.data.data || []).slice(0, 15).map((p: any) => {
     const addr = p.address_obj?.address_string || "";
-    return `- ${p.name}${addr ? ` — ${addr}` : ""} [TripAdvisor]`;
+    const la = Number(p.latitude), lo = Number(p.longitude);
+    const coord = Number.isFinite(la) && Number.isFinite(lo) ? ` (coordinate ${la.toFixed(5)}, ${lo.toFixed(5)})` : '';
+    return `- ${p.name}${addr ? ` — ${addr}` : ""}${coord} [TripAdvisor]`;
   })).catch(() => []) : Promise.resolve([]);
 
-  const [fsq, ta, dietRows] = await Promise.all([fsqPromise, taPromise, dietPromise]);
+  // locali_pois SEMPRE, in parallelo (05/09/2026): e' l'unica fonte con gli
+  // ORARI, e prima entrava solo se le altre due davano meno di 3 righe.
+  const dbPromise = dietConstraints.length ? Promise.resolve<string[]>([]) : fetchDatabaseDiningFallback(lat, lon);
+  const [fsq, ta, dietRows, dbRows] = await Promise.all([fsqPromise, taPromise, dietPromise, dbPromise]);
 
   // Dedup per nome (stesso locale presente su piu' fonti). I verificati per
-  // dieta/cucina vanno PRIMA: sono l'unica garanzia reale sul vincolo.
+  // dieta/cucina vanno PRIMA: sono l'unica garanzia reale sul vincolo; poi
+  // il nostro DB (ha orari e coordinate), poi TripAdvisor e Foursquare.
   const seen = new Set<string>();
   const results: string[] = [];
-  [...dietRows, ...ta, ...fsq].forEach((line: string) => {
+  [...dietRows, ...dbRows, ...ta, ...fsq].forEach((line: string) => {
     const nameKey = line.slice(2).split(" — ")[0].split(" (")[0].trim().toLowerCase();
     if (nameKey && !seen.has(nameKey)) { seen.add(nameKey); results.push(line); }
   });
-
-  if (results.length < 3) {
-    const dbResults = await fetchDatabaseDiningFallback(lat, lon);
-    dbResults.forEach((line) => {
-      const nameKey = line.slice(2).split(" — ")[0].split(" (")[0].trim().toLowerCase();
-      if (nameKey && !seen.has(nameKey)) { seen.add(nameKey); results.push(line); }
-    });
-  }
   if (results.length < 3) return '';
   const dietNote = dietConstraints.length
     ? ` I locali con "[Database - verificato ...]" hanno il vincolo (${dietConstraints.map((c) => c.label).join('/')}) confermato dai dati: usali PRIMA degli altri per le tappe pasto interessate.`
@@ -1155,7 +1346,8 @@ async function fetchRealDiningContext(lat: number, lon: number, constraintText: 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RISTORANTI E LOCALI REALI VERIFICATI (vicino alla destinazione)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Per le tappe COLAZIONE, PRANZO e CENA scegli PREFERIBILMENTE da questo elenco di locali reali, rispettando SEMPRE i vincoli dell'utente (es. gluten free): se nessun locale dell'elenco è adatto ai vincoli, puoi proporre un locale fuori elenco di cui sei CERTO che esista. Nel campo "fonte" della tappa riporta la piattaforma tra parentesi quadre del locale scelto (es. "TripAdvisor").${dietNote}
+Per le tappe COLAZIONE, PRANZO e CENA scegli PREFERIBILMENTE da questo elenco di locali reali, rispettando SEMPRE i vincoli dell'utente (es. gluten free): se nessun locale dell'elenco è adatto ai vincoli, puoi proporre un locale fuori elenco di cui sei CERTO che esista. Nel campo "fonte" della tappa riporta la piattaforma tra parentesi quadre del locale scelto (es. "TripAdvisor").
+COORDINATE: quando una riga porta "(coordinate lat, lon)", copiale ESATTAMENTE nel campo "coordinate" della tappa — mai il centro della città. ORARI: se una riga porta "[orari: ...]", usa quel locale SOLO nella fascia coperta (un locale con orari 12:00-15:00 non va a cena). Il locale del pranzo deve stare a meno di 1,5 km dalla tappa che lo precede; quello della cena vicino all'ultima tappa del giorno o all'alloggio.${dietNote}
 ${results.slice(0, 30).join("\n")}`;
 }
 
@@ -1817,41 +2009,64 @@ async function addXpAtomic(userId: string, amount: number): Promise<void> {
 // PredictHQ rimosso (ago 2026): chiave revocata (401) e nessun rinnovo
 // previsto. Gli eventi reali arrivano da Ticketmaster/Viator/GYG.
 
-async function fetchGeographicContext(destination: string): Promise<{context: string, hasDbPois: boolean} | null> {
+// CONTESTO «LUOGHI VERI» PER IL GENERATORE (riscritto il 05/09/2026).
+//
+// Com'era e perché non funzionava (verificato sull'itinerario di Greve in
+// Chianti, uscito con fonte «classico tradizionale» su tutte le tappe, cioe'
+// senza nessun dato nostro):
+//  - geocodificava la destinazione con Nominatim limitato a it,sm,va: per
+//    Parigi o Lisbona tornava null e l'AI andava a memoria;
+//  - prendeva SOLO i POI status='verified' in un riquadro di 0,1° (~11 km)
+//    senza limite: o niente (quasi tutto il DB e' 'auto') o un timeout;
+//  - «DEVI ASSOLUTAMENTE INCLUDERLI TUTTI»: con 80 righe l'AI ne infilava
+//    quante poteva, a zig-zag.
+// Ora: si parte dalle coordinate che il client ha gia' (autocomplete Mapbox),
+// Nominatim solo come ripiego e senza filtro paese; si leggono i POI nostri
+// entro ~6 km, gemme e categorie culturali, non nascosti, ordinati per
+// importanza (is_gem, poi chi ha una descrizione), massimo 60; ogni riga
+// porta coordinate a 5 decimali, indirizzo e punto d'arrivo se c'e'. All'AI
+// si chiede di PREFERIRLI e di copiarne nome e coordinate esatti, non di
+// includerli tutti.
+async function fetchGeographicContext(destination: string, centro?: { lat?: number; lon?: number } | null): Promise<{context: string, hasDbPois: boolean} | null> {
   try {
-    const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(destination)}&countrycodes=it,sm,va&format=json&limit=1`;
-    const nomRes = await axios.get(nomUrl, { headers: { "User-Agent": "WorldInPocket/1.0" } });
-    
-    if (!nomRes.data || nomRes.data.length === 0) return null;
-    
-    const { lat, lon } = nomRes.data[0];
-    const nLat = parseFloat(lat);
-    const nLon = parseFloat(lon);
+    let nLat = Number(centro?.lat), nLon = Number(centro?.lon);
+    if (!Number.isFinite(nLat) || !Number.isFinite(nLon) || (nLat === 0 && nLon === 0)) {
+      const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(destination)}&format=json&limit=1`;
+      const nomRes = await axios.get(nomUrl, { headers: { "User-Agent": "WorldInPocket/1.0" }, timeout: 6000 }).catch(() => null);
+      if (!nomRes?.data?.length) return null;
+      nLat = parseFloat(nomRes.data[0].lat);
+      nLon = parseFloat(nomRes.data[0].lon);
+    }
 
     let dbPoisString = "";
     let hasDbPois = false;
     try {
-      const diff = 0.1;
-      const { data } = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?lat=gte.${nLat - diff}&lat=lte.${nLat + diff}&lon=gte.${nLon - diff}&lon=lte.${nLon + diff}&status=eq.verified&select=id,name,category,lat,lon,description_short,is_gem`, {
-        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }
-      });
-      if (data && data.length > 0) {
-        const culturalCats = ['monument', 'museum', 'church', 'viewpoint', 'castle', 'archaeological_site', 'artwork', 'monumenti', 'musei', 'chiese', 'panorami', 'gemme'];
-        const dbCultural = data.filter((p: any) => culturalCats.includes(p.category) || p.is_gem === true);
-        
-        if (dbCultural.length > 0) {
-           dbPoisString = dbCultural.map((p: any) => `- ${p.name} (Cat: ${p.category}, Coordinate: ${p.lat}, ${p.lon}) - ${p.description_short || ''}`).join("\n");
-           hasDbPois = true;
-        }
+      const raggioKm = 6;
+      const dLat = raggioKm / 111, dLon = raggioKm / (111 * Math.max(0.15, Math.cos(nLat * Math.PI / 180)));
+      const cats = ['monumenti', 'musei', 'chiese', 'panorami', 'gemme', 'archeologia', 'castelli', 'natura', 'borghi', 'arte', 'parchi', 'cinema', 'enogastronomia', 'monument', 'museum', 'church', 'viewpoint', 'castle', 'archaeological_site', 'artwork'];
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/shared_pois?select=id,name,category,lat,lon,address,city,description_short,is_gem,arrival_lat,arrival_lon,entrance_lat,entrance_lon` +
+        `&lat=gte.${nLat - dLat}&lat=lte.${nLat + dLat}&lon=gte.${nLon - dLon}&lon=lte.${nLon + dLon}` +
+        `&is_hidden=not.is.true&or=(is_gem.eq.true,category.in.(${cats.join(',')}))` +
+        `&order=is_gem.desc.nullslast&limit=60`,
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 }
+      );
+      if (Array.isArray(data) && data.length > 0) {
+        dbPoisString = data.map((p: any) => {
+          const la = Number(p.arrival_lat || p.entrance_lat || p.lat), lo = Number(p.arrival_lon || p.entrance_lon || p.lon);
+          const desc = String(p.description_short || '').replace(/\s+/g, ' ').slice(0, 140);
+          return `- ${p.name}${p.is_gem ? ' ★' : ''} (${p.category}; coordinate ${la.toFixed(5)}, ${lo.toFixed(5)}${p.address ? `; ${p.address}` : ''})${desc ? ` — ${desc}` : ''}`;
+        }).join("\n");
+        hasDbPois = true;
       }
     } catch(e) {
       console.error("DB Fetch Error in Geocontext:", e);
     }
 
     if (hasDbPois) {
-      return { 
-        context: `I SEGUENTI LUOGHI SONO CERTIFICATI E HANNO UN'AUDIOGUIDA NEL NOSTRO SISTEMA. DEVI ASSOLUTAMENTE INCLUDERLI COME TAPPE PRINCIPALI DELL'ITINERARIO:\n${dbPoisString}`,
-        hasDbPois: true 
+      return {
+        context: `LUOGHI VERI DEL NOSTRO DATABASE VICINO A ${destination} (con coordinate esatte del punto d'arrivo; ★ = gemma). PREFERISCILI per le tappe di visita: per ogni tappa presa da qui copia ESATTAMENTE nome e coordinate. Non devi includerli tutti — scegli i piu' significativi e quelli che stanno lungo lo stesso percorso. Puoi aggiungere luoghi non in elenco solo se sei CERTO che esistano.\n${dbPoisString}`,
+        hasDbPois: true
       };
     }
 
@@ -3427,7 +3642,9 @@ app.post("/api/groq/itinerary", rateLimiter, async (req, res) => {
       if (!itinerary || !destination) return res.status(400).json({ error: "Missing itinerary/destination" });
       const timeout = new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 25000));
       const report = await Promise.race([
-        verifyItineraryAntiHallucination(itinerary, { destination, lat, lon, radiusKm: radius, specialRequests, interests, language }),
+        // inDiretta: utente loggato che aspetta il verdetto → DeepSeek come
+        // ultima spiaggia se i gratuiti sono in 429 (committente, 05/09).
+        verifyItineraryAntiHallucination(itinerary, { destination, lat, lon, radiusKm: radius, specialRequests, interests, language, inDiretta: true }),
         timeout,
       ]);
       // verifyItineraryAntiHallucination muta itinerary in place (campi
@@ -3591,10 +3808,12 @@ ${dayLines.join("\n")}
         return res.end();
       }
 
-      const ragContextObj = await fetchGeographicContext(destination);
+      const ragContextObj = await fetchGeographicContext(destination, (typeof lat === "number" && typeof lon === "number") ? { lat, lon } : null);
       let ragInstruction = "";
       if (ragContextObj && ragContextObj.context) {
-        ragInstruction = `\nSei una guida turistica. Genera un itinerario basandoti ESCLUSIVAMENTE su questi dati reali verificati:\n\n${ragContextObj.context}\n\nNon inventare attrazioni non presenti in questa lista.\n`;
+        ragInstruction = ragContextObj.hasDbPois
+          ? `\n${ragContextObj.context}\n`
+          : `\nSei una guida turistica. Genera un itinerario basandoti ESCLUSIVAMENTE su questi dati reali verificati:\n\n${ragContextObj.context}\n\nNon inventare attrazioni non presenti in questa lista.\n`;
       }
 
       // Pasti ancorati a locali reali (TripAdvisor + Foursquare, in parallelo,
@@ -3810,6 +4029,15 @@ REGOLE STRUTTURA GIORNATA (OBBLIGATORIE PER OGNI GIORNO):
 5. Totale minimo: 8 tappe per giorno (incluse pranzo e cena). Adatta le durate delle visite per rientrare nella fascia oraria richiesta, ma NON scendere sotto questi minimi.
 6. PERCORSO PIÙ BREVE OBBLIGATORIO: ogni giorno copre UNA sola zona/quartiere compatto e le tappe si susseguono in ordine di prossimità geografica (dalla più vicina alla successiva, mai a zig-zag attraverso la città). Anche pranzo e cena vanno scelti LUNGO il percorso del giorno, non dall'altra parte della città.
 
+COME SI COSTRUISCE IL PERCORSO (fallo PRIMA di scrivere le tappe):
+a) Dividi il territorio in settori (es. centro storico / colline a nord / valle a sud) e assegna a ogni giorno UN settore: due giorni non devono incrociarsi. Un giorno che va a nord e poi torna a sud per cena è sbagliato.
+b) Dentro il giorno la sequenza è una linea o un anello: ogni tappa è la più vicina alla precedente, e la cena sta vicino all'ultima tappa o all'alloggio. In campagna/borghi sparsi, massimo 12 km tra due tappe consecutive; in città, tappe raggiungibili a piedi.
+c) L'ora di ogni tappa = ora della precedente + sua durata + tempo reale di spostamento (a piedi ~4 km/h, in auto in campagna ~40 km/h). Niente orari che ignorano la distanza.
+d) MAI ripetere un luogo nell'itinerario, nemmeno come «secondo giro» o con un nome diverso: se un giorno non arriva al minimo di tappe con luoghi VERI e diversi, mettine uno in meno. Se un elenco di luoghi veri ti è stato fornito, esaurisci prima quello.
+e) "coordinate" sono quelle ESATTE del luogo della tappa (ingresso, o il locale del pasto), mai il centro della città o della piazza principale: se conosci un luogo ma non la sua posizione precisa, preferisci un luogo di cui hai le coordinate. Due tappe diverse non possono avere le stesse coordinate.
+f) "tipo" corretto per ogni tappa (museo, chiesa, castello, piazza, borgo, villa, parco, panorama, mercato, pranzo, cena, colazione, aperitivo…): il tipo decide come l'app tratta la tappa.
+g) La colazione non è obbligatoria come tappa: se la metti, nel primo giorno vicino all'alloggio.
+
 REGOLE LUNGHEZZA TESTI:
 1. "attivita": Ogni descrizione deve essere approfondita e ricca di dettagli, lunga circa 5-6 righe (circa 60-80 parole).
 2. "consiglio_guida": Il consiglio deve essere di circa 4 righe (circa 40-50 parole).
@@ -3847,12 +4075,57 @@ Struttura JSON:
 }
 Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdown.${langInstruction}`;
 
+      // ── PIU' DI 3 GIORNI: A BLOCCHI (05/09/2026) ─────────────────────────
+      // deepseek-chat ha un tetto FISICO di 8192 token di output: «Lisbona 5
+      // giorni» usciva troncato a ~6.600 token, il client non riparava il
+      // JSON e dopo 10 minuti mostrava INVALID_RESPONSE (rimborso, ma
+      // nessun itinerario). Come nella libreria (libraryGenerateChunked):
+      // lo stream porta i giorni 1-3, poi in onComplete si chiedono gli
+      // altri blocchi da 3 giorni, si ricuce e il tutto arriva al client
+      // nell'evento `verified` (che dal 05/09 il client legge davvero).
+      const GIORNI_PER_BLOCCO = 3;
+      const aBlocchi = requestedDays > GIORNI_PER_BLOCCO;
+      const promptBlocco1 = aBlocchi
+        ? `${prompt}\n\nATTENZIONE — GENERAZIONE A BLOCCHI: l'itinerario completo e' di ${requestedDays} giorni, ma ORA devi restituire SOLO i giorni da 1 a ${GIORNI_PER_BLOCCO} (l'array "giorni" contiene esattamente ${GIORNI_PER_BLOCCO} elementi). Titolo, info_viaggio e totale_viaggio si riferiscono comunque all'intero viaggio di ${requestedDays} giorni. I giorni successivi ti verranno chiesti dopo: distribuisci i luoghi in modo da lasciarne per loro.`
+        : prompt;
+      const generaBlocchiRestanti = async (parsed: any): Promise<void> => {
+        if (!aBlocchi || !Array.isArray(parsed?.giorni)) return;
+        const fatti = parsed.giorni.flatMap((g: any) => (g?.tappe || []).map((t: any) => t?.titolo_tappa)).filter(Boolean);
+        const blocchi: Array<{ da: number; a: number }> = [];
+        for (let da = parsed.giorni.length + 1; da <= requestedDays; da += GIORNI_PER_BLOCCO) {
+          blocchi.push({ da, a: Math.min(requestedDays, da + GIORNI_PER_BLOCCO - 1) });
+        }
+        // In PARALLELO: su Vercel la function muore a 300 s e lo stream del
+        // primo blocco ne usa gia' ~150. Ogni blocco sa quali giorni coprire
+        // e quali luoghi del primo blocco evitare.
+        const esiti = await Promise.all(blocchi.map(async ({ da, a }) => {
+          const contPrompt = `${prompt}\n\nGENERAZIONE A BLOCCHI — ORA restituisci SOLO i giorni da ${da} a ${a} dello STESSO itinerario di ${requestedDays} giorni. JSON: {"giorni":[...]} con esattamente ${a - da + 1} elementi ("giorno" numerati da ${da} a ${a}), stessa struttura delle tappe e tabella_budget per ogni giorno. Non ripetere questi luoghi gia' usati nei giorni 1-${parsed.giorni.length}: ${fatti.slice(0, 60).join('; ')}. I giorni ${da}-${a} coprono zone/quartieri diversi da quelli dei giorni precedenti${blocchi.length > 1 ? ` e dagli altri blocchi (giorni ${blocchi.filter(b => b.da !== da).map(b => `${b.da}-${b.a}`).join(', ')}): scegli per questo blocco la zona n. ${blocchi.findIndex(b => b.da === da) + 2} in ordine di distanza dal centro` : ''}.`;
+          try {
+            const r = await callUniversalAi("deepseek", [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: contPrompt }
+            ], { temperature: 0.7, response_format: { type: "json_object" }, ultimaSpiaggiaPagante: true }, "generazione_itinerario_blocco", supabaseUrl, supabaseServiceKey, groq, itinUserId);
+            const blk = JSON.parse(String(r?.data || "{}").replace(/^```json\s*/i, "").replace(/```\s*$/, ""));
+            const gg = Array.isArray(blk?.giorni) ? blk.giorni.slice(0, a - da + 1) : [];
+            if (!gg.length) console.warn(`[itinerary-stream] blocco giorni ${da}-${a} vuoto`);
+            return gg;
+          } catch (e: any) {
+            console.warn(`[itinerary-stream] blocco giorni ${da}-${a} fallito:`, e?.message);
+            return [] as any[];
+          }
+        }));
+        // Ricucitura in ordine; al primo blocco vuoto ci si ferma (i giorni
+        // consegnati restano contigui e il conguaglio rimborsa il resto).
+        for (const gg of esiti) { if (!gg.length) break; gg.forEach((g: any) => parsed.giorni.push(g)); }
+        parsed.giorni.forEach((g: any, i: number) => { if (g && typeof g === 'object') g.giorno = i + 1; });
+      };
+
       // Utilizza DeepSeek in streaming per gli itinerari.
       // onComplete (awaited PRIMA di [DONE]): conguaglio dell'addebito sui
       // giorni realmente consegnati — il client non paga più nulla da sé.
       await streamUniversalAi("deepseek", [
         { role: "system", content: systemPrompt },
-        { role: "user", content: prompt }
+        { role: "user", content: promptBlocco1 }
       ], { temperature: 0.7, response_format: { type: "json_object" } }, res, null,
         "generazione_itinerario_stream", itinUserId,
         async (fullText: string) => {
@@ -3860,21 +4133,30 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
           try {
             const cleaned = String(fullText || "").replace(/^```json\s*/i, "").replace(/```\s*$/, "");
             const parsed = JSON.parse(cleaned);
-            const delivered = Array.isArray(parsed?.giorni) ? parsed.giorni.length : 0;
-            if (delivered <= 0) { itinRefunded = true; await refundServer(itinUserId, itinCost); return; }
+            if (!(Array.isArray(parsed?.giorni) && parsed.giorni.length > 0)) { itinRefunded = true; await refundServer(itinUserId, itinCost); return; }
+            // Blocchi successivi (solo oltre i 3 giorni): ricuciti qui prima
+            // dell'aggancio, del revisore e del conguaglio.
+            await generaBlocchiRestanti(parsed);
+            const delivered = parsed.giorni.length;
 
             // Verifica anti-allucinazione lato server (motore diverso,
             // tetto 20 s, fail-open): le tappe marcate arrivano al client
             // come evento `verified` prima di [DONE], così il salvataggio
             // parte già con i campi verifica/nota_verifica.
             try {
+              // Aggancio al DB PRIMA del tetto (05/09/2026): e' deterministico e
+              // veloce (query per tappa in parallelo), e non deve dipendere dai
+              // tempi del revisore AI. Il revisore lo ripete a vuoto (le tappe
+              // gia' agganciate vengono saltate).
+              const centro = (typeof lat === "number" && typeof lon === "number") ? { lat, lon } : null;
+              try { await Promise.race([agganciaTappeAlDatabase(parsed, centro), new Promise((r) => setTimeout(r, 12000))]); } catch { /* fail-open */ }
               const report: any = await Promise.race([
-                verifyItineraryAntiHallucination(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language }),
+                verifyItineraryAntiHallucination(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language, inDiretta: true }),
                 new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 20000)),
               ]);
-              if (!report?.timedOut) {
-                res.write(`data: ${JSON.stringify({ verified: parsed, report })}\n\n`);
-              }
+              // Si manda SEMPRE: anche col revisore in ritardo, l'aggancio al
+              // DB c'e' gia' e il client deve riceverlo.
+              res.write(`data: ${JSON.stringify({ verified: parsed, report })}\n\n`);
             } catch (vErr: any) {
               console.warn('[itinerary-stream] verifica anti-allucinazione fallita (fail-open):', vErr?.message);
             }
@@ -5438,7 +5720,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       result.confidenza = confidence;
       // Candidati: solo nomi REALI (DB/Wikipedia vicini), solo se incerto,
       // mai il nome già scelto.
-      const normName = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9一-鿿Ѐ-ӿ ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const normName = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9一-鿿Ѐ-ӿ ]/g, ' ').replace(/\s+/g, ' ').trim();
       const realNorm = new Set(realNamesNearby.map(normName));
       const chosenNorm = normName(result?.nome);
       const candidati: string[] = recognizedFlag && confidence < 70
@@ -6406,7 +6688,7 @@ Rispondi SOLO con JSON: {"nome": "${chosen}", "autore": "...o 'Ignoto'", "anno_p
             // piazza sotto il primo nome arrivato. Ora entro 150 m serve anche
             // un nome simile (normalizzato, uno contiene l'altro); la sola
             // distanza basta solo se ≤ 25 m (stesso punto).
-            const normM = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+            const normM = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
             const myNorm = normM(name);
             let bestD = COMMUNITY_MERGE_RADIUS_M;
             for (const p of nearCommunity || []) {
@@ -8065,7 +8347,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     const stop = new Set(['di','del','della','dei','delle','degli','the','of','la','le','il','lo','san','santa','santo','chiesa','church','museo','museum','palazzo','villa','via','piazza','torre','castello','castle','cattedrale','cathedral','basilica','teatro','theatre','theater','parco','park','monte','lago','lake','de','du','des','el','los','las','and','e','y','et']);
     return String(s || '')
       .toLowerCase()
-      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9\s]/g, ' ')
       .split(/\s+/)
       .filter((t) => t.length >= 4 && !stop.has(t));
@@ -8076,7 +8358,7 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     if (!a.length || !b.length) {
       // Nomi fatti solo di parole comuni («Duomo», «Chiesa di San Pietro»):
       // pretendiamo l'uguaglianza normalizzata.
-      const norm = (x: string) => String(x || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+      const norm = (x: string) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
       return norm(candidato) === norm(nome);
     }
     return b.some((t) => a.includes(t));
@@ -9037,7 +9319,7 @@ ${description}
     { parole: ['famiglie', 'bambini', 'parco giochi', 'zoo', 'acquario', 'family', 'kids'], macro: 'famiglie', label: 'Famiglie', emoji: '🛝' },
     { parole: ['cammini', 'cammino', 'sentieri', 'sentiero', 'trekking', 'hiking', 'pellegrinaggio', 'via francigena', 'trails'], macro: 'natura', label: 'Cammini e sentieri', emoji: '🥾' },
   ];
-  const normRicerca = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const normRicerca = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
   app.get("/api/search/poi", rateLimiter, async (req, res) => {
     const t0 = Date.now();
@@ -12577,7 +12859,7 @@ out center tags 120;`;
   // richiesta.
   const DENOM_TTL_MS = 6 * 60 * 60 * 1000;
   let denominazioniMem: { quando: number; righe: any[] } | null = null;
-  const denomNorm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const denomNorm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
   // Parole che compaiono nei nomi delle denominazioni ma non dicono DOVE
   const DENOM_STOP = new Set(['di', 'del', 'della', 'delle', 'dei', 'degli', 'da', 'de', 'la', 'le', 'il', 'lo', 'gli', 'e', 'ed', 'al', 'alla', 'con', 'in', 'su', 'per',
     'dop', 'igp', 'stg', 'doc', 'docg', 'igt', 'vino', 'vini', 'olio', 'extra', 'vergine', 'oliva', 'formaggio', 'prosciutto', 'salame', 'pane', 'miele', 'aceto', 'balsamico',
@@ -13863,7 +14145,7 @@ out center 360;`;
       }
 
       // Duplicati: POI ufficiali nel raggio di ~150m con nome simile
-      const norm = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const norm = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
       const nearbyOf: Record<string, any[]> = {};
       await Promise.all(toScore.map(async (c) => {
         if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) { nearbyOf[c.id] = []; return; }
@@ -14537,7 +14819,7 @@ Rispondi SOLO con un oggetto JSON valido, testi in lingua "${lang}":
       if (!TRANSIT_KINDS.includes(kind)) return res.status(400).json({ error: 'kind non valido' });
       if (query.length < 2) return res.status(400).json({ error: 'query troppo corta' });
 
-      const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
       const cacheKey = `transit_${kind}_${slugify(query)}_${lang}`;
 
@@ -15465,7 +15747,7 @@ Schema: {"emoji":"🥾","name":"nome del cammino","start":"località di partenza
   // 20/08/2026: solo il 28% delle tappe della biblioteca aveva un sito,
   // contro il 79% degli itinerari generati in diretta.
   function libNormNome(s: any): string {
-    return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, ' ').replace(/\b(il|lo|la|le|gli|i|del|della|di|da|the|of)\b/g, ' ')
       .replace(/\s+/g, ' ').trim();
   }
@@ -16082,7 +16364,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     //    nome (inclusione normalizzata) o per coordinate entro ~300 m —
     //    simmetrico alla regola delle esperienze prenotabili. ────────────
     if (Array.isArray(d.filmLocations) && d.filmLocations.length >= LIB_FILM_MIN_LOCS) {
-      const normName = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const normName = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
       const matched = new Set<number>();
       for (const g of giorni) for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
         const tn = normName(t?.titolo_tappa);
@@ -17322,7 +17604,7 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       // 0. Se un item dello stesso tema già in libreria ha questo titolo
       //    (seed curato incluso: slug per titolo), si ritorna quello senza
       //    toccare Wikidata.
-      const normT = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const normT = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
       const wanted = normT(title);
       try {
         const metas = await libraryLoadMetas();
@@ -17413,7 +17695,7 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         res.status(503).json({ error: 'Catalogo descrittori non disponibile in questo build.' });
         return;
       }
-      const normT = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const normT = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
       const wanted = normT(title);
       let all: any[] = [];
       try { all = mod.getAllDescriptors() || []; } catch { all = []; }
@@ -17810,9 +18092,9 @@ LIMIT ${limit} OFFSET ${offset}`;
       const exclude = String(req.query.exclude || '')
         .split(',').map((s: string) => s.trim().toLowerCase()).filter(Boolean).slice(0, 30);
 
-      const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const slugify = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
-      const norm = (s: any) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const norm = (s: any) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const escludi = (arr: any[]) => arr.filter((t: any) =>
         !exclude.some((ex: string) => norm(t.destination).includes(ex) || norm(t.title).includes(ex)));
 
@@ -20308,7 +20590,7 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
   const EXT_LANG_NAMES: Record<string, string> = { IT: 'italiano', EN: 'inglese (English)', FR: 'francese (français)', ES: 'spagnolo (español)', DE: 'tedesco (Deutsch)', RU: 'russo (русский)', ZH: 'cinese semplificato (简体中文)' };
 
   function extNormCity(s: any): string {
-    return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   }
 
   /** Slug di un item Libreria "zona, 1 giorno, quel tema" per questa città,
@@ -20545,7 +20827,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               // dell'utente: piccola rigenerazione mirata SOLO di quelle
               // (best-effort — se fallisce restano le tappe originali, non
               // blocca la consegna del giorno).
-              const normTitle = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+              const normTitle = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
               const avoidNorm = new Set(avoidTitles.map(normTitle));
               const dupIdx = (day.tappe as any[]).reduce((acc: number[], t, i) => {
                 if (avoidNorm.has(normTitle(t?.titolo_tappa))) acc.push(i);
@@ -21093,9 +21375,9 @@ ${testo}`;
       });
     } catch { return []; }
   };
-  const normTestoMostre = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const normTestoMostre = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-  const slugSemplice = (s: string) => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 40);
+  const slugSemplice = (s: string) => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 40);
 
   /**
    * I musei con un sito, dal piu' vicino, allargando ad anelli finche' non ne
@@ -23812,7 +24094,7 @@ Usa SEMPRE E SOLO questo schema JSON:
       const lang = BIG_FIVE_LANGS[langRaw] ? langRaw : 'it';
       const langName = BIG_FIVE_LANGS[lang];
 
-      const cityNorm = city.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      const cityNorm = city.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
         .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
       const cacheKey = `city_big_five_${cityNorm}_${lang}`;
 
@@ -24087,7 +24369,15 @@ Non aggiungere testo prima o dopo il JSON.`;
       if (!pmCharge) return; // 401/402/500 già inviato
 
       // ── FASE 1: EXTRACT DESTINATION FROM ITINERARY ──────────────────────────
-      const destination: string = itinerary?.titolo || itinerary?.destinazione || "Italia";
+      // La CITTA', non il titolo (05/09/2026): con «Greve in Chianti: Vendemmia
+      // tra Borghi e Strade Bianche» Wikipedia e Commons non trovavano nulla
+      // e la guida usciva con una foto. Il titolo dell'itinerario ha quasi
+      // sempre la forma «Citta': sottotitolo» o «N giorni a Citta' …».
+      const titoloItin: string = String(itinerary?.titolo || '');
+      const cittaDalTitolo = (titoloItin.match(/^([^:–—-]{2,60}?)\s*[:–—-]/)?.[1]
+        || titoloItin.match(/\b(?:a|ad|in|di)\s+([A-ZÀ-Ý][^,:–—(]{1,40}?)(?:\s+(?:tra|fra|con|per|e|in)\b|\s*$)/)?.[1]
+        || '').trim();
+      const destination: string = String(itinerary?.destinazione || itinerary?.destination || cittaDalTitolo || titoloItin || "Italia").trim();
       console.log(`[Premium Guide] Generating for destination: "${destination}", style: "${style}"`);
 
       // ── FASE 2: ENRICHMENT DA FONTI REALI ───────────────────────────────────
@@ -24385,6 +24675,136 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
         throw new Error("Il motore AI ha fallito la generazione a blocchi. Riprova.");
       }
 
+      // ── FASE 4b: DATI CERTI DAL DATABASE, NON DALL'AI (05/09/2026) ─────────
+      //
+      // Verifica sulla guida di Greve in Chianti: le «Info utili» scritte
+      // dall'AI erano in buona parte inventate — lo stesso telefono
+      // «055 853 123» per tre ristoranti diversi, Castello di Uzzano a «Via
+      // Uzzano 16» (e' in Localita' Uzzano 23), Vignamaggio a «Via di
+      // Vignamaggio 1» (e' in Via Petriolo 5), Dario DOC in «Piazza XX
+      // Settembre» (e' in Via XX Luglio 11), Solociccia «a cena, 19:30-23»
+      // (serve solo a pranzo, alle 12, menu fisso). Per un lettore che paga
+      // una guida e' peggio di nessun dato. Regola del committente: «le
+      // informazioni devono essere corrette» e «foto certe: se ci sono, quelle
+      // dei POI».
+      //
+      // Le tappe non portano un id di shared_pois (sono generate con
+      // coordinate): ogni scheda si aggancia al POI del NOSTRO database per
+      // vicinanza (~400 m) e somiglianza del nome. Quando c'e':
+      //   indirizzo    ← shared_pois.address (+ city), quello del matcher
+      //   telefono     ← contact_phone, altrimenti VUOTO (mai un numero AI)
+      //   sito_web     ← contact_website; senza, quello AI solo se risponde
+      //   orari        ← opening_hours_json; senza, quelli AI marcati
+      //                  «indicativi» (l'AI li sbaglia spesso)
+      //   foto         ← image_url/photo_url del POI (la piu' certa), prima
+      //                  di Commons (FASE 5)
+      // Senza aggancio: telefono vuoto, sito verificato, orari marcati.
+      const tappeSorgente = new Map<string, any>();
+      for (const g of enrichedItinerary.giorni || []) for (const t of g.tappe || []) {
+        if (t?.id_tappa) tappeSorgente.set(String(t.id_tappa), t);
+      }
+      const coordDi = (poi: any): { lat: number; lon: number } | null => {
+        const t = tappeSorgente.get(String(poi?.poi_id || ''));
+        const lat = Number(poi?.coordinate?.lat ?? poi?.lat ?? t?.coordinate?.lat ?? t?.lat);
+        const lon = Number(poi?.coordinate?.lng ?? poi?.coordinate?.lon ?? poi?.lon ?? t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
+      };
+      const normNome = paroleNome;
+      const somiglianza = somiglianzaNomi;
+      const poiDalDb = async (poi: any): Promise<any | null> => {
+        // 1) La tappa d'origine porta gia' il poi_id dell'aggancio fatto alla
+        //    generazione dell'itinerario (agganciaTappeAlDatabase): si legge
+        //    QUELLA riga, senza indovinare. `ov-…` = locali_pois (ristoranti:
+        //    telefono, sito e orari OSM); il resto = shared_pois.
+        const tappaSrc = tappeSorgente.get(String(poi?.poi_id || ''));
+        const idNoto = String(tappaSrc?.poi_id || (/^(ov-|wd-|wv-|osm-|loc-|bc-)/.test(String(poi?.poi_id || '')) ? poi.poi_id : '') || '');
+        if (idNoto) {
+          try {
+            const u = idNoto.startsWith('ov-')
+              ? `${supabaseUrl}/rest/v1/locali_pois?select=id,name,address,city,phone,website,osm_opening_hours,lat,lon&id=eq.${encodeURIComponent(idNoto)}&limit=1`
+              : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,address,city,contact_phone,contact_website,opening_hours_json,image_url,photo_url,lat,lon&id=eq.${encodeURIComponent(idNoto)}&limit=1`;
+            const r = await axios.get(u, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 });
+            const riga = Array.isArray(r.data) ? r.data[0] : null;
+            if (riga) {
+              // Stessi nomi di campo di shared_pois per il codice a valle.
+              if (idNoto.startsWith('ov-')) { riga.contact_phone = riga.phone; riga.contact_website = riga.website; riga.opening_hours_json = riga.osm_opening_hours || null; }
+              return riga;
+            }
+          } catch { /* si prova per vicinanza */ }
+        }
+        // 2) Altrimenti per vicinanza + somiglianza del nome.
+        const c = coordDi(poi);
+        if (!c) return null;
+        try {
+          const r = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?select=id,name,address,city,contact_phone,contact_website,opening_hours_json,image_url,photo_url,lat,lon` +
+            `&lat=gte.${c.lat - 0.004}&lat=lte.${c.lat + 0.004}&lon=gte.${c.lon - 0.005}&lon=lte.${c.lon + 0.005}&is_hidden=not.is.true&limit=60`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
+          );
+          const righe: any[] = Array.isArray(r.data) ? r.data : [];
+          let migliore: any = null, punteggio = 0;
+          for (const riga of righe) {
+            const s = somiglianza(poi.titolo, riga.name);
+            if (s > punteggio) { punteggio = s; migliore = riga; }
+          }
+          return punteggio >= 0.5 ? migliore : null;
+        } catch { return null; }
+      };
+      const sitoRisponde = async (u: string): Promise<boolean> => {
+        const url = String(u || '').trim();
+        if (!/^https?:\/\/[^\s]+\.[a-z]{2,}/i.test(url)) return false;
+        try {
+          const r = await axios.get(url, { timeout: 4000, maxRedirects: 4, validateStatus: () => true, headers: { 'User-Agent': 'Mozilla/5.0 (WIP guide check)' } });
+          return r.status < 400;
+        } catch { return false; }
+      };
+      const orariDaJson = (oj: any): string => {
+        try {
+          if (!oj) return '';
+          if (typeof oj === 'string') return oj.trim();
+          if (Array.isArray(oj)) return oj.map((x: any) => typeof x === 'string' ? x : [x?.giorno || x?.day, x?.orario || x?.hours || x?.open].filter(Boolean).join(' ')).filter(Boolean).join('; ');
+          if (typeof oj === 'object') {
+            if (typeof oj.testo === 'string') return oj.testo;
+            if (typeof oj.text === 'string') return oj.text;
+            return Object.entries(oj).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`).join('; ');
+          }
+          return '';
+        } catch { return ''; }
+      };
+      const fotoCertePoi: Record<string, string> = {};
+      let agganciati = 0;
+      for (const giorno of generatedContent.giorni || []) {
+        await Promise.all((giorno.pois || []).map(async (poi: any) => {
+          poi.info_utili = poi.info_utili || {};
+          const riga = await poiDalDb(poi);
+          if (riga) {
+            agganciati++;
+            if (riga.address) {
+              const citta = riga.city && !String(riga.address).toLowerCase().includes(String(riga.city).toLowerCase()) ? `, ${riga.city}` : '';
+              poi.indirizzo = `${riga.address}${citta}`;
+            }
+            poi.info_utili.telefono = riga.contact_phone ? String(riga.contact_phone) : '';
+            if (riga.contact_website) poi.info_utili.sito_web = String(riga.contact_website);
+            else poi.info_utili.sito_web = (await sitoRisponde(poi.info_utili.sito_web)) ? poi.info_utili.sito_web : '';
+            const orari = orariDaJson(riga.opening_hours_json);
+            if (orari) poi.info_utili.orari = orari;
+            else if (poi.info_utili.orari && !/indicativ/i.test(poi.info_utili.orari)) poi.info_utili.orari = `${poi.info_utili.orari} (orari indicativi, da verificare)`;
+            const foto = riga.image_url || riga.photo_url;
+            if (foto && /^https?:\/\//.test(String(foto)) && poi.poi_id) fotoCertePoi[poi.poi_id] = String(foto);
+            poi.coordinate = { lat: Number(riga.lat), lng: Number(riga.lon) };
+          } else {
+            // Nessun POI nostro nei paraggi con quel nome: niente numeri
+            // inventati, sito solo se risponde, orari dichiarati indicativi.
+            poi.info_utili.telefono = '';
+            poi.info_utili.sito_web = (await sitoRisponde(poi.info_utili.sito_web)) ? poi.info_utili.sito_web : '';
+            if (poi.info_utili.orari && !/indicativ/i.test(poi.info_utili.orari)) poi.info_utili.orari = `${poi.info_utili.orari} (orari indicativi, da verificare)`;
+            const c = coordDi(poi);
+            if (c) poi.coordinate = { lat: c.lat, lng: c.lon };
+          }
+        }));
+      }
+      console.log(`[Premium Guide] Dati certi dal DB: ${agganciati} schede agganciate, ${Object.keys(fotoCertePoi).length} foto del POI`);
+
       // ── FASE 5: MEDIA MANIFEST — SOLO FOTO DEL LUOGO VERO ────────────────────
       //
       // REGOLA NON NEGOZIABILE (committente, 22/08/2026): le foto di una guida
@@ -24438,12 +24858,12 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
       }
 
       /** Commons cercato PER COORDINATE: le foto sono scattate lì davvero. */
-      async function fotoDaCommonsVicine(lat: number, lon: number, quante: number): Promise<string[]> {
+      async function fotoDaCommonsVicine(lat: number, lon: number, quante: number, raggioM = 4000): Promise<string[]> {
         if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
         try {
           const r = await axios.get(
             `https://commons.wikimedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${lat}|${lon}` +
-            `&ggsradius=4000&ggslimit=30&ggsnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1600&format=json&origin=*`,
+            `&ggsradius=${raggioM}&ggslimit=30&ggsnamespace=6&prop=imageinfo&iiprop=url&iiurlwidth=1600&format=json&origin=*`,
             { timeout: 6000 }
           ).catch(() => null);
           const pagine = r?.data?.query?.pages;
@@ -24480,6 +24900,14 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
             try {
               let imgUrl: string | null = null;
 
+              // 0. La foto del POI nel NOSTRO database (FASE 4b): e' quella
+              //    scelta e verificata per la scheda dell'app, la piu' certa
+              //    di tutte. Il committente: «se ci sono, usare quelle dei POI».
+              if (poi.poi_id && fotoCertePoi[poi.poi_id]) {
+                mediaManifest[poi.poi_id] = fotoCertePoi[poi.poi_id];
+                continue;
+              }
+
               // 1. Commons cercato per NOME della tappa: se il monumento ha
               //    una sua categoria su Commons, la foto è sua.
               const wmRes = await axios.get(
@@ -24487,9 +24915,16 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
                 { timeout: 4000 }
               ).catch(() => null);
               if (wmRes?.data?.query?.pages) {
+                // La ricerca full-text di Commons e' generosa: per «Dario DOC
+                // Greve» torna qualunque foto di Greve. Si accetta solo un file
+                // il cui nome contiene una parola significativa del POI.
+                const paroleNome = normNome(poi.titolo);
                 for (const page of Object.values(wmRes.data.query.pages) as any[]) {
                   const url = page?.imageinfo?.[0]?.thumburl || page?.imageinfo?.[0]?.url;
-                  if (url && !/\.svg$|\.ogg$|\.wav$|\.pdf$/i.test(url)) { imgUrl = url; break; }
+                  const titoloFile = String(page?.title || '').toLowerCase();
+                  if (!url || /\.svg$|\.ogg$|\.wav$|\.pdf$/i.test(url)) continue;
+                  if (paroleNome.length && !paroleNome.some(w => titoloFile.includes(w))) continue;
+                  imgUrl = url; break;
                 }
               }
 
@@ -24497,9 +24932,11 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
               //    una foto scattata a venti metri da lì ritrae quel posto,
               //    anche quando il nome sul catalogo non combacia.
               if (!imgUrl) {
+                //    Raggio stretto (250 m): a 4 km una foto e' «della zona»,
+                //    non di quella tappa.
                 const la = Number(poi?.coordinate?.lat ?? poi?.lat);
                 const lo = Number(poi?.coordinate?.lng ?? poi?.coordinate?.lon ?? poi?.lon);
-                const vicine = await fotoDaCommonsVicine(la, lo, 1);
+                const vicine = await fotoDaCommonsVicine(la, lo, 1, 250);
                 if (vicine[0]) imgUrl = vicine[0];
               }
 
@@ -25243,7 +25680,7 @@ REGOLE:
    * biglietteria non coincide mai col centroide del monumento).
    */
   function rankTiqetsForPoi(products: any[], poiName: string, lat: number, lon: number): any[] {
-    const norm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ');
+    const norm = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ');
     const STOP = new Set(['di', 'del', 'della', 'dei', 'delle', 'the', 'of', 'la', 'il', 'le', 'lo', 'los', 'las', 'el', 'e', 'and', 'de', 'des', 'der', 'die', 'das']);
     const tokens = norm(poiName).split(/\s+/).filter((t: string) => t.length > 2 && !STOP.has(t));
     return (products || [])

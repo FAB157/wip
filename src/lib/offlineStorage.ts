@@ -112,6 +112,16 @@ export const mirrorPoisToDexie = async (pois: any[]) => {
         image_url: p.image_url || p.photo_url,
         photo_url: p.photo_url || p.image_url,
         status: p.status,
+        // Porta, punto d'arrivo e indirizzo: senza questi il geofencing offline
+        // (poiRepository.getGeofencePoisFromDexie) lavorava al centroide anche
+        // con l'area scaricata — il bundle li porta dal 22/08 e dal 05/09/2026.
+        entrance_lat: p.entrance_lat ?? null,
+        entrance_lon: p.entrance_lon ?? null,
+        arrival_lat: p.arrival_lat ?? null,
+        arrival_lon: p.arrival_lon ?? null,
+        arrival_method: p.arrival_method ?? null,
+        address: p.address ?? null,
+        address_source: p.address_source ?? null,
         lastUpdated: Date.now(),
       })));
   } catch (e) {

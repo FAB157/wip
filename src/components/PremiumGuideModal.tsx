@@ -224,7 +224,7 @@ export default function PremiumGuideModal({
     setIsDownloading(true);
     try {
       const filename = `WIP_${guideContent.guida_titolo.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40)}.pdf`;
-      const pdfBlob = await downloadGuideAsPdf(PDF_CONTAINER_ID, filename);
+      const pdfBlob = await downloadGuideAsPdf(PDF_CONTAINER_ID, filename, { content: guideContent, mediaManifest, language: String(language) });
       if (pdfBlob && guideHash) {
         // Upload in background (non-blocking)
         uploadPdfToStorage(guideHash, pdfBlob).catch(console.error);

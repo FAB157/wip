@@ -291,11 +291,29 @@ async function verifyGuideAntiAllucinazioni(content: any, itinerary: any, langua
   }
 }
 
-// ── PDF generation (client-side via html2pdf.js) ─────────────────────────────
+// ── PDF generation ───────────────────────────────────────────────────────────
+// DAL 05/09/2026 IL PDF E' UN LIBRO, NON UNA FOTO. Con `dati` la guida si
+// impagina con @react-pdf/renderer (src/lib/pdf): testo reale, flusso
+// continuo, sommario, segnalibri, «wip.guide» su ogni pagina. html2pdf.js —
+// che fotografava la pagina e lasciava mezza pagina bianca a ogni scheda —
+// resta solo come ripiego (lingue non latine, o errore del motore).
 export async function downloadGuideAsPdf(
   elementId: string,
-  filename: string
+  filename: string,
+  dati?: { content: PremiumGuideContent; mediaManifest?: Record<string, string>; language?: string }
 ): Promise<Blob | null> {
+  if (dati?.content) {
+    try {
+      const { generaPdfGuida } = await import('../lib/pdf/generaPdf');
+      const blob = await generaPdfGuida(dati.content, dati.mediaManifest || {}, dati.language || 'IT');
+      if (blob) {
+        const saved = await saveBlobAsFile(blob, filename);
+        return saved ? blob : null;
+      }
+    } catch (e) {
+      console.error('[PremiumGuide] PDF (react-pdf) non riuscito, ripiego su html2pdf:', e);
+    }
+  }
   // Dynamically import html2pdf to avoid SSR issues
   let html2pdf: any;
   try {

@@ -25,6 +25,7 @@ import { supabase } from '../lib/supabase';
 import { saveOfflineAudio, getOfflineAudioUrl } from '../lib/offlineStorage';
 import { postForAudioBlob } from '../lib/audioFetch';
 import { getGuideCharacter, isCategoryAllowed, CHIAVI_NATIVO_AUDIOGUIDA } from '../lib/guideSettings';
+import { puntoArrivo, haPuntoArrivo } from '../lib/puntoArrivo';
 import { getTranslation, linguaCorrente, type Language } from '../lib/i18n';
 import {
   prossimoStato, durataAscolto, durataGiro, raggruppaTappeVicine, SOGLIE,
@@ -296,10 +297,22 @@ export interface BozzaGiro {
    * che vale anche a giro gia` partito.
    */
   rientro: RientroAnello;
+  /**
+   * SOLO IL GIRO (05/09/2026, committente: «mi fa partire dal punto in cui
+   * sono: sarebbe meglio che mostrasse anche solo l'itinerario»). Vero =
+   * l'anteprima parte dalla PRIMA TAPPA, senza la tratta dalla posizione
+   * attuale: si vede l'itinerario in se', com'e' fra le sue tappe, da
+   * qualunque posto lo si guardi (a casa, in albergo, in un'altra citta').
+   * Riguarda solo l'anteprima: il giro che si avvia parte sempre da dove si
+   * e' davvero, altrimenti il navigatore non saprebbe da dove portare.
+   * Preferenza, sopravvive allo svuotamento come `anello`.
+   */
+  soloItinerario: boolean;
 }
 
 const CHIAVE_RIPRESA = 'wip_giro_in_corso';
 const CHIAVE_ANELLO = 'wip_giro_anello';
+const CHIAVE_SOLO_ITINERARIO = 'wip_giro_solo_itinerario';
 /** 'originale' (predefinita) o 'corrente': dove si chiude l'anello. Vedi metaAnello. */
 const CHIAVE_RIENTRO = 'wip_giro_rientro';
 /**
@@ -316,10 +329,13 @@ const BOZZA_VUOTA: BozzaGiro = {
   problemi: [], partenza: null, calcolando: false, errore: null, erroreDettaglio: null,
   ordineManuale: false, minutiDisponibili: null, tappeNelTempo: null,
   lungoLaStrada: [], cercandoLungoStrada: false,
-  anello: true, rientro: 'originale',
+  anello: true, rientro: 'originale', soloItinerario: false,
 };
 function leggiPreferenzaAnello(): boolean {
   try { return localStorage.getItem(CHIAVE_ANELLO) !== 'false'; } catch { return true; }
+}
+function leggiPreferenzaSoloItinerario(): boolean {
+  try { return localStorage.getItem(CHIAVE_SOLO_ITINERARIO) === 'true'; } catch { return false; }
 }
 /** Predefinita: il punto di partenza ORIGINALE — e` li` che c'e` l'auto. */
 function leggiPreferenzaRientro(): RientroAnello {
@@ -390,10 +406,16 @@ export function tappaDaPoi(p: any): TappaGiro {
     categoria: p.category || p.poiType || p.baseCategory || null,
     citta: p.city || p.citta || null,
     // Se il POI porta gia` un ingresso, e` li` che si arriva: la differenza
-    // fra "sei arrivato" davanti a un muro e davanti a una porta.
-    ingresso: (p.entrance_lat && p.entrance_lon)
-      ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: livelloIngresso(p) }
-      : null,
+    // fra "sei arrivato" davanti a un muro e davanti a una porta. Dal v3.1
+    // (05/09/2026) prima ancora il PUNTO D'ARRIVO: la porta proiettata sul
+    // marciapiede davanti, gia` sulla rete percorribile — e` da li` che
+    // partono avviso, teaser e "sei arrivato". Il punto e` gia` sulla way
+    // giusta: OSRM non deve piu` indovinare la via.
+    ingresso: haPuntoArrivo(p)
+      ? { ...puntoArrivo(p), livello: 'dichiarato' as LivelloIngresso }
+      : (p.entrance_lat && p.entrance_lon)
+        ? { lat: Number(p.entrance_lat), lon: Number(p.entrance_lon), livello: livelloIngresso(p) }
+        : null,
     // Pranzo, pausa, trasferimento: tappe del percorso ma senza racconto.
     senzaGuida: p.senzaGuida === true || undefined,
     // La foto del luogo per il cruscotto a display spento. Solo se e' del POI
@@ -422,7 +444,7 @@ class TourService {
   private proposta: PropostaSostituta | null = null;
 
   private preferenzaRientro: RientroAnello = leggiPreferenzaRientro();
-  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA, anello: leggiPreferenzaAnello(), rientro: leggiPreferenzaRientro(), ...(leggiBozzaSalvata() || {}) };
+  private bozzaStato: BozzaGiro = { ...BOZZA_VUOTA, anello: leggiPreferenzaAnello(), rientro: leggiPreferenzaRientro(), soloItinerario: leggiPreferenzaSoloItinerario(), ...(leggiBozzaSalvata() || {}) };
   /**
    * GUIDA SPENTA = GIRO SOSPESO, NON CHIUSO (28/08/2026).
    *
@@ -612,6 +634,14 @@ class TourService {
     if (this.bozzaStato.anello === anello) return;
     this.bozzaStato = { ...this.bozzaStato, anello, errore: null };
     try { localStorage.setItem(CHIAVE_ANELLO, anello ? 'true' : 'false'); } catch {}
+    this.programmaAnteprima();
+  }
+
+  /** Solo il giro (dalla prima tappa) o dalla posizione attuale: vedi BozzaGiro.soloItinerario. */
+  bozzaImpostaSoloItinerario(solo: boolean) {
+    if (this.bozzaStato.soloItinerario === solo) return;
+    this.bozzaStato = { ...this.bozzaStato, soloItinerario: solo, errore: null };
+    try { localStorage.setItem(CHIAVE_SOLO_ITINERARIO, solo ? 'true' : 'false'); } catch {}
     this.programmaAnteprima();
   }
 
@@ -843,7 +873,14 @@ class TourService {
 
   private async calcolaAnteprima(mia: number) {
     const tappe = this.bozzaStato.tappe;
-    const partenza = await this.posizioneAttuale();
+    // SOLO IL GIRO: si parte dalla prima tappa (dal suo punto d'arrivo), non
+    // da dove si e'. La prima tratta e' lunga zero e il server la lascia
+    // prima nell'ordine; ad anello si torna alla prima tappa. Cosi' si vede
+    // l'itinerario in se', e non serve nemmeno la posizione.
+    const primaTappa = this.bozzaStato.soloItinerario && tappe.length > 0
+      ? (tappe[0].ingresso ? { lat: tappe[0].ingresso.lat, lon: tappe[0].ingresso.lon } : { lat: tappe[0].lat, lon: tappe[0].lon })
+      : null;
+    const partenza = primaTappa ?? await this.posizioneAttuale();
     if (mia !== this.bozzaVersione) return;
     if (!partenza) {
       this.bozzaStato = { ...this.bozzaStato, partenza: null, ordine: null, geometria: [], tratteSecondi: [], calcolando: false, errore: 'POSIZIONE' };

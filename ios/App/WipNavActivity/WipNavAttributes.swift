@@ -142,6 +142,10 @@ enum WipNavManovra {
         if t == "reroute" { return "arrow.triangle.2.circlepath" }
         if t == "roundabout" || t == "rotary" { return m.contains("left") ? "arrow.counterclockwise" : "arrow.clockwise" }
         if m == "uturn" { return "arrow.uturn.left" }
+        // 'continue' = la strada piega, non e' una svolta: la frase dice
+        // «continua dritto su Via X» e la freccia deve dire lo stesso
+        // (stessa correzione di maneuverIcon, 05/09/2026).
+        if t == "continue" { return "arrow.up" }
         if m == "sharp left" { return "arrow.left" }
         if m == "sharp right" { return "arrow.right" }
         if m == "slight left" { return "arrow.up.left" }

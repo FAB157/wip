@@ -20,6 +20,15 @@ export interface LocalPoi {
   image_url?: string;
   photo_url?: string;
   status?: string;
+  // Porta, punto d'arrivo (marciapiede davanti alla porta, 05/09/2026) e
+  // indirizzo: li legge il geofencing offline. Non indicizzati.
+  entrance_lat?: number | null;
+  entrance_lon?: number | null;
+  arrival_lat?: number | null;
+  arrival_lon?: number | null;
+  arrival_method?: string | null;
+  address?: string | null;
+  address_source?: string | null;
   lastUpdated: number;
 }
 

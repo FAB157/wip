@@ -543,13 +543,26 @@ class SupabaseClient(private val appContext: android.content.Context? = null) {
                 ?: map["teaser_text_en"]?.toString()
                 ?: map["teaser_text"]?.toString()
 
+            // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
+            // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /
+            // 300 m in auto e l'avviso del teaser»). `arrival_lat/lon` (matcher
+            // v3.1, migration 20260905130000) e' la porta proiettata sul
+            // marciapiede davanti, gia' sulla rete percorribile. Si posa nel
+            // campo entranceLat/Lon cosi' tutti i consumatori (recinti,
+            // predittivo, bussola, radar Auto, widget) lo usano senza una
+            // colonna Room in piu'; con una RPC vecchia resta la porta. La
+            // coppia si prende intera: mai una lat d'arrivo con la lon della porta.
+            val arrivalLat = (map["arrival_lat"] as? Number)?.toDouble()
+            val arrivalLon = (map["arrival_lon"] as? Number)?.toDouble()
+            val haArrivo = arrivalLat != null && arrivalLon != null && (arrivalLat != 0.0 || arrivalLon != 0.0)
+
             PoiEntity(
                 id = map["id"]?.toString() ?: "",
                 nome = map["nome"]?.toString() ?: map["name"]?.toString() ?: "Punto di interesse",
                 lat = (map["lat"] as? Number)?.toDouble() ?: 0.0,
                 lon = (map["lon"] as? Number)?.toDouble() ?: 0.0,
-                entranceLat = (map["entrance_lat"] as? Number)?.toDouble(),
-                entranceLon = (map["entrance_lon"] as? Number)?.toDouble(),
+                entranceLat = if (haArrivo) arrivalLat else (map["entrance_lat"] as? Number)?.toDouble(),
+                entranceLon = if (haArrivo) arrivalLon else (map["entrance_lon"] as? Number)?.toDouble(),
                 poiType = catFromDb,
                 guideDefault = map["guide_default"]?.toString() ?: "nicky",
                 isGem = isGem,

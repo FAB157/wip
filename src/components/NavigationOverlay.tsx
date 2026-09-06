@@ -86,6 +86,11 @@ function maneuverIcon(m?: ManeuverInfo | null) {
   if (type === 'reroute') return RefreshCw;
   if (type === 'roundabout' || type === 'rotary') return mod.includes('left') ? RotateCcw : RotateCw;
   if (mod === 'uturn') return RotateCcw;
+  // 'continue' = la strada PIEGA, non c'e' un incrocio: il testo dice
+  // «continua dritto su Via X» (translateManeuver) e la freccia deve dire lo
+  // stesso. Prima qui vinceva il modifier (right/left) e si vedeva una freccia
+  // di svolta sotto una frase che diceva di proseguire (05/09/2026).
+  if (type === 'continue') return ArrowUp;
   if (mod === 'sharp left') return ArrowLeft;
   if (mod === 'sharp right') return ArrowRight;
   if (mod === 'slight left') return ArrowUpLeft;

@@ -306,6 +306,15 @@ export const TRAD_GIRO: Record<string, Partial<Record<Language, string>>> = {
     RU: '🔁 Вернусь к началу',
     ZH: '🔁 回到出发点',
   },
+  gr_solo_itinerario: {
+    IT: '🗺️ Solo il giro, dalla 1ª tappa',
+    EN: '🗺️ Route only, from stop 1',
+    FR: '🗺️ Seulement le parcours, dès l’étape 1',
+    ES: '🗺️ Solo el recorrido, desde la parada 1',
+    DE: '🗺️ Nur die Route, ab Station 1',
+    RU: '🗺️ Только маршрут, с точки 1',
+    ZH: '🗺️ 仅路线，从第1站开始',
+  },
   gr_finisco_ultima: {
     IT: '🏁 Finisco all’ultima tappa',
     EN: '🏁 Finish at the last stop',

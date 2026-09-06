@@ -901,7 +901,13 @@ final class BackgroundPoiManager: NSObject, CLLocationManagerDelegate {
                     if !missingTeaser.isEmpty {
                         self.generateTeasersInBackground(poiIds: Array(missingTeaser))
                     }
-                    self.showRadarTeaserNotifications(pois: pois, location: location)
+                    // DISATTIVATO (03/09/2026, committente: notifiche a
+                    // 248/396/499 m — "troppo distante", "max e' 300 in auto e
+                    // 150 a piedi"). Stesso motivo di Android
+                    // (ItaintaBackgroundPoiService.kt): l'orizzonte di
+                    // 1200/5000 m era indipendente dal raggio impostato
+                    // dall'utente. Funzione lasciata sotto, solo non chiamata.
+                    // self.showRadarTeaserNotifications(pois: pois, location: location)
 
                     if isFirstRegistration {
                         self.evaluateTriggers(at: location)

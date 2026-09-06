@@ -447,6 +447,11 @@ async function getGeofencePoisFromDexie(
         // questi puntoArrivo() ricadrebbe sul centroide anche a bundle scaricato.
         entrance_lat: p.entrance_lat ?? null,
         entrance_lon: p.entrance_lon ?? null,
+        // Il punto d'arrivo (marciapiede davanti alla porta, v3.1): dal
+        // pacchetto offline dal 05/09/2026; null nei pacchetti piu' vecchi.
+        arrival_lat: p.arrival_lat ?? null,
+        arrival_lon: p.arrival_lon ?? null,
+        arrival_method: p.arrival_method ?? null,
         address: p.address ?? null,
         address_source: p.address_source ?? null,
         alert_enabled: true,
@@ -515,6 +520,11 @@ export async function getGeofencePois(
       ...p,
       entrance_lat: coord(p?.entrance_lat),
       entrance_lon: coord(p?.entrance_lon),
+      // Migration 20260905130000: il punto d'arrivo. Prima di quella la RPC
+      // non lo restituisce e qui e' null, come per l'ingresso.
+      arrival_lat: coord(p?.arrival_lat),
+      arrival_lon: coord(p?.arrival_lon),
+      arrival_method: str(p?.arrival_method),
       address: str(p?.address),
       address_source: str(p?.address_source),
       city: str(p?.city),

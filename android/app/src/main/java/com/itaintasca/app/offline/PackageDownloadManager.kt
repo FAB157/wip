@@ -459,8 +459,13 @@ class PackageDownloadManager(private val context: Context) {
                             // Porta, perimetro e indirizzo (area_bundle_pois dal
                             // 22/08/2026). Pagine di server vecchi non li hanno:
                             // restano null e il POI lavora al centroide come prima.
-                            entranceLat = p.optDouble("entrance_lat").takeIf { !it.isNaN() },
-                            entranceLon = p.optDouble("entrance_lon").takeIf { !it.isNaN() },
+                            // IL PUNTO D'ARRIVO prima della porta (05/09/2026,
+                            // migration 20260905130000): la porta proiettata sul
+                            // marciapiede davanti. Stesso posto della porta, cosi'
+                            // i trigger offline partono da li' come online (vedi
+                            // SupabaseClient). Coppia intera o niente.
+                            entranceLat = puntoArrivoLat(p) ?: p.optDouble("entrance_lat").takeIf { !it.isNaN() },
+                            entranceLon = puntoArrivoLon(p) ?: p.optDouble("entrance_lon").takeIf { !it.isNaN() },
                             footprint = Footprints.geojsonCompatto(
                                 // Il bundle porta il GeoJSON come oggetto o come testo.
                                 p.optJSONObject("footprint")?.toString() ?: p.strOrNull("footprint")
@@ -628,3 +633,16 @@ class PackageDownloadManager(private val context: Context) {
 /** optString di org.json ritorna "" per i null: qui vogliamo un vero null. */
 private fun JSONObject.strOrNull(key: String): String? =
     if (isNull(key)) null else optString(key, "").ifEmpty { null }
+
+/**
+ * Il punto d'arrivo del bundle (arrival_lat/lon), solo se la coppia e' intera
+ * e non e' lo zero-zero di un campo vuoto. Altrimenti null: si ricade sulla porta.
+ */
+private fun puntoArrivoLat(p: JSONObject): Double? {
+    val lat = p.optDouble("arrival_lat"); val lon = p.optDouble("arrival_lon")
+    return if (!lat.isNaN() && !lon.isNaN() && (lat != 0.0 || lon != 0.0)) lat else null
+}
+private fun puntoArrivoLon(p: JSONObject): Double? {
+    val lat = p.optDouble("arrival_lat"); val lon = p.optDouble("arrival_lon")
+    return if (!lat.isNaN() && !lon.isNaN() && (lat != 0.0 || lon != 0.0)) lon else null
+}

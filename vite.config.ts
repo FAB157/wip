@@ -164,7 +164,18 @@ export default defineConfig(({mode}) => {
       },
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: {
-        ignored: ['**/tts_usage.json', '**/tts_cache/**']
+        // (05/09/2026) Vite ricaricava la pagina intera per QUALSIASI file
+        // toccato nel repo — build_log.txt, store/promo/*.md, server.ts,
+        // gli script in scratch/ — e ogni reload uccideva l'itinerario o la
+        // guida in generazione (stream abortito, crediti gia' addebitati).
+        // Nel watch restano solo i sorgenti del client.
+        ignored: [
+          '**/tts_usage.json', '**/tts_cache/**',
+          '**/scratch/**', '**/store/**', '**/android/**', '**/ios/**',
+          '**/itainta-native/**', '**/supabase/**', '**/scripts/**',
+          '**/*.log', '**/*.txt', '**/*.md', '**/*.cjs', '**/*.mjs',
+          '**/server.ts', '**/api/**', '**/dist/**',
+        ]
       }
     },
     build: {

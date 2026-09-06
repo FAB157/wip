@@ -277,12 +277,22 @@ async function processItineraryStream(
   let hasError = false;
   let errorMessage = "";
   let billing: { credits_paid?: number; credits_paid_earned?: number; days?: number; ts?: number } | null = null;
+  // Versione VERIFICATA dal server (evento `verified`, 05/09/2026): stesso
+  // itinerario, con le tappe agganciate ai POI del database (coordinate del
+  // punto d'arrivo, poi_id, indirizzo, telefono) e le note del revisore
+  // anti-allucinazioni (verifica/nota_verifica). Il server la manda dal
+  // 14/08, ma qui non veniva letta: tutto quel lavoro andava perso.
+  let verificato: any = null;
 
   // Timeout di sicurezza sul loop di lettura: se lo stream si blocca (es. DeepSeek idle)
   // non lasciamo la lambda e il browser appesi per sempre.
   // 120s: con 40s gli itinerari lunghi (4-5 giorni, 8+ tappe/giorno) venivano
   // troncati a metà streaming — il JSON riparato perdeva giorni interi.
-  const streamTimeout = 120000;
+  // Oltre i 3 giorni il server genera i blocchi successivi DOPO lo stream
+  // (05/09/2026, tetto 8192 token di DeepSeek): ~90 s per blocco da 3
+  // giorni, piu' aggancio e revisore. Il tetto cresce con i giorni.
+  const giorniRichiesti = Math.max(1, Math.floor(Number(body?.days)) || 1);
+  const streamTimeout = 120000 + Math.max(0, Math.ceil((giorniRichiesti - 3) / 3)) * 120000 + 60000;
   const streamStart = Date.now();
 
   // BUFFER DI RIGA: il server emette un evento SSE per token, ma i confini dei
@@ -324,6 +334,8 @@ async function processItineraryStream(
             // (dati_itinerario.credits_paid) e la Garanzia pioggia rimborsa
             // solo quelli, mai un itinerario gratuito.
             billing = parsed.billing;
+          } else if (parsed.verified && Array.isArray(parsed.verified.giorni)) {
+            verificato = parsed.verified;
           } else if (parsed.text) {
             fullJson += parsed.text;
             const partialObj = parsePartialJSON(fullJson);
@@ -380,6 +392,17 @@ async function processItineraryStream(
     throw new PlanError('INVALID_RESPONSE');
   }
 
+  // La versione verificata dal server vince: e' lo stesso JSON con le tappe
+  // agganciate al database e le note del revisore. Si accetta solo se ha
+  // lo stesso numero di giorni (mai perdere giorni per un evento parziale).
+  // Oltre i 3 giorni lo stream porta solo il primo blocco e i giorni
+  // successivi arrivano ricuciti dal server dentro `verified`: per questo
+  // la versione verificata puo' avere PIU' giorni, mai meno.
+  if (verificato && Array.isArray(result?.giorni) && verificato.giorni.length >= result.giorni.length) {
+    result = verificato;
+  }
+
+  // (id del POI di una tappa: vedi idPoiDaTappa a livello di modulo)
   // NORMALIZZAZIONE DELLE TAPPE (ITI-01, 28/08/2026): lo schema AI del server
   // non produce `id_tappa`, ma tutto il resto della schermata lo da' per
   // scontato (lock, check-in, navigazione). Un id sintetico stabile
@@ -675,6 +698,29 @@ const ExperienceCard = ({ exp, onAdd, color }: { key?: React.Key, exp: any, onAd
   </div>
 );
 
+/**
+ * L'ID DEL POI DI UNA TAPPA — un posto solo (05/09/2026).
+ *
+ * Fino a oggi una tappa diventava POI in TRE punti con TRE id diversi:
+ * l'effetto post-generazione (`iti-nome-coordinate`), il salvataggio del piano
+ * (`id_tappa`, cioe' «t1_0» dal 28/08: UNA riga per tutto il mondo riscritta
+ * da ogni itinerario di chiunque) e il giro nel radar (`iti-…` di nuovo).
+ * Geofencing, audioguida e scheda cercavano righe diverse per lo stesso luogo.
+ *
+ * Regola unica:
+ *  - tappa agganciata dal server a un POI VERO di shared_pois (`poi_id`,
+ *    agganciaTappeAlDatabase): l'id e' quello, e la riga NON si riscrive;
+ *  - locale di locali_pois (`ov-…`) o tappa senza riscontro: `iti-<slug del
+ *    nome>-<lat>_<lon>` a 3 decimali (~100 m), stabile per lo stesso luogo,
+ *    diverso per gli omonimi di altre citta'.
+ */
+function idPoiDaTappa(t: any, lat: number, lon: number): string {
+  const p = String(t?.poi_id || '');
+  if (p && !p.startsWith('ov-')) return p;
+  const slug = String(t?.titolo_tappa || t?.titolo || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  return `iti-${slug}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
+}
+
 export default function PlanScreen({
   resetCounter,
   guideMode,
@@ -744,7 +790,10 @@ export default function PlanScreen({
    * da preparare.
    */
   const assicuraContenutiTappe = useCallback(async (poi: any[]) => {
-    const daFare = (poi || []).filter((p) => p && !p.senzaGuida && p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+    // Le tappe agganciate a un POI vero (`agganciato`) hanno gia' riga, scheda
+    // e foto: un upsert qui sovrascriverebbe nome, coordinate e status del
+    // POI verificato con i dati della tappa AI.
+    const daFare = (poi || []).filter((p) => p && !p.senzaGuida && !p.agganciato && p.id && Number.isFinite(p.lat) && Number.isFinite(p.lon));
     if (daFare.length === 0) return;
     try {
       await supabase.from('shared_pois').upsert(
@@ -1843,13 +1892,18 @@ export default function PlanScreen({
           // La regola sta in tappaDiventaPoi, un posto solo; che una cena non
           // «parli» lo garantisce AUDIOGUIDABLE_CATEGORIES, non un'esclusione
           // qui: 'locali' e 'utilita' non ne fanno parte.
-          if (lat !== 0 && lon !== 0 && tappaDiventaPoi(tappa.tipo || '')) {
+          // Tappa agganciata dal server a un POI VERO (poi_id di shared_pois,
+          // 05/09/2026): la riga esiste gia', con scheda e foto verificate.
+          // Non si riscrive con la prosa AI. I locali (`ov-…`) stanno in
+          // locali_pois e diventano POI come prima.
+          const agganciata = !!tappa.poi_id && !String(tappa.poi_id).startsWith('ov-');
+          if (lat !== 0 && lon !== 0 && !agganciata && tappaDiventaPoi(tappa.tipo || '')) {
             // L'id porta anche le coordinate (22/08/2026): con il solo slug
             // del titolo, «iti-duomo» era UNA riga condivisa da tutte le
             // città con un Duomo, e teneva la foto e il testo della prima.
             // A 3 decimali (~100 m) due tappe omonime in città diverse non
             // collidono più; la stessa tappa dello stesso itinerario sì.
-            const stableId = `iti-${tappa.titolo_tappa.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${lat.toFixed(3)}_${lon.toFixed(3)}`.replace(/\./g, 'p');
+            const stableId = idPoiDaTappa(tappa, lat, lon);
             allPoisToUpsert.push({
               id: stableId,
               name: tappa.titolo_tappa,
@@ -4131,12 +4185,28 @@ export default function PlanScreen({
           // devono diventare POI in shared_pois.
           .filter(t => String((t as any).tipo || '').toLowerCase() !== 'trasferimento')
           .filter(t => t.coordinate && t.coordinate.lat !== 0)
+          // Tappa già agganciata dal server a un POI VERO di shared_pois
+          // (05/09/2026, agganciaTappeAlDatabase): il POI esiste, con la sua
+          // scheda verificata. Ricrearlo qui vorrebbe dire un doppione con la
+          // prosa AI sopra al luogo vero. I locali (`ov-…`, tabella
+          // locali_pois) non stanno in shared_pois e seguono il percorso di prima.
+          .filter(t => { const p = String((t as any).poi_id || ''); return !p || p.startsWith('ov-'); })
           .map(tappa => {
             const lat = parseFloat(String(tappa.coordinate.lat));
             const lon = parseFloat(String(tappa.coordinate.lng || (tappa.coordinate as any).lon));
-            const poiId = tappa.id_tappa && !tappa.id_tappa.startsWith('custom-')
-              ? tappa.id_tappa
-              : `ai_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/\./g, '_');
+            // L'id del POI deve identificare IL LUOGO, non la posizione della
+            // tappa nel piano. Dal 28/08 (ITI-01) id_tappa e' sintetico
+            // («t1_0» = prima tappa del primo giorno) e finiva qui come id di
+            // shared_pois: una sola riga «t1_0» per tutto il mondo, riscritta
+            // da ogni itinerario salvato da chiunque (verificato il 05/09: le
+            // 16 righe t1_0..t2_7 erano tutte l'ultimo piano salvato, Greve).
+            // Gli id sintetici e quelli delle esperienze prenotabili
+            // (viator_/gyg_/tm_/tq_, non luoghi stabili) prendono l'id
+            // «iti-nome-coordinate»: LO STESSO con cui la tappa entra nel
+            // radar (idPoiDaTappa), cosi' salvataggio, giro, geofencing e
+            // audioguida parlano della stessa riga.
+            const idSintetico = !tappa.id_tappa || /^(t\d+_\d+|custom-|viator_|gyg_|tm_|tq_)/.test(tappa.id_tappa);
+            const poiId = idSintetico ? idPoiDaTappa(tappa, lat, lon) : tappa.id_tappa;
 
             const descriptionFull = tappa.attivita || "";
             const descLong = descriptionFull;
@@ -6894,6 +6964,30 @@ export default function PlanScreen({
                       const t = generatedPlan?.titolo || getTranslation('itinerary', language);
                       const nomeFile = `WIP - ${t.substring(0, 30)} - ${gg}${mm}${aa}.pdf`;
 
+                      // IL PDF E' UN LIBRO, NON UNA STAMPA (05/09/2026). Prima
+                      // si fotografava la vista di stampa (html2pdf) o si
+                      // passava dalla stampa del browser: titolo a un quarto
+                      // di pagina, riquadri con mezza pagina bianca sotto,
+                      // testo minuscolo e rasterizzato. Ora l'itinerario si
+                      // impagina con @react-pdf/renderer (src/lib/pdf), su
+                      // web e su telefono allo stesso modo; le vecchie vie
+                      // restano come ripiego se il motore non ce la fa.
+                      if (printPlan) {
+                        try {
+                          notify(getTranslation('pf_pdf_in_corso', language));
+                          const { generaPdfItinerario } = await import('../lib/pdf/generaPdf');
+                          const blob = await generaPdfItinerario(printPlan, language);
+                          if (blob) {
+                            const { saveBlobAsFile } = await import('../services/premiumGuideService');
+                            const ok = await saveBlobAsFile(blob, nomeFile);
+                            notify(getTranslation(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito', language));
+                            return;
+                          }
+                        } catch (e) {
+                          console.error('[PlanScreen] PDF itinerario (react-pdf) non riuscito, ripiego', e);
+                        }
+                      }
+
                       // SUL TELEFONO NON ESISTE window.print() (29/08/2026,
                       // collaudo sul Realme: il tasto non faceva NULLA, senza
                       // nemmeno un errore in console). Il WebView Android non
@@ -7060,10 +7154,18 @@ export default function PlanScreen({
                               });
                               const poi = tappe.map((t: any) => {
                                 const la = Number(t.coordinate.lat), lo = Number(t.coordinate.lng ?? t.coordinate.lon);
-                                const stableId = `iti-${String(t.titolo_tappa || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}-${la.toFixed(3)}_${lo.toFixed(3)}`.replace(/\./g, 'p');
+                                // Tappa agganciata dal server a un POI vero: entra nel
+                                // giro CON L'ID DEL POI (scheda, foto, audioguida gia'
+                                // sue) e con le coordinate del suo punto d'arrivo, che
+                                // il server ha gia' messo in `coordinate`. Le altre
+                                // prendono l'id «iti-…», lo stesso del salvataggio.
+                                const stableId = idPoiDaTappa(t, la, lo);
+                                const agganciato = stableId === String(t.poi_id || '');
                                 const tipo = String(t?.tipo || '').toLowerCase();
                                 return {
                                   id: stableId, name: t.titolo_tappa, lat: la, lon: lo,
+                                  agganciato,
+                                  address: t.indirizzo || null,
                                   category: mapItineraryCategoryToMapCategory(t.tipo || 'monumenti'),
                                   city: (generatedPlan as any)?.destinazione || (generatedPlan as any)?.destination || null,
                                   senzaGuida: SENZA_RACCONTO.some((s) => tipo.includes(s)) || undefined,
@@ -7815,7 +7917,7 @@ export default function PlanScreen({
                       // Nome file univoco legato alla guida (mai un nome fisso)
                       const titolo = guideToRender?.content?.guida_titolo || generatedPlan?.titolo || 'Guida';
                       const filename = `WIP_${String(titolo).replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.pdf`;
-                      await downloadGuideAsPdf('premium-guide-pdf-inner-plan', filename);
+                      await downloadGuideAsPdf('premium-guide-pdf-inner-plan', filename, { content: guideToRender.content, mediaManifest: guideToRender.media, language: String(language) });
                     } catch (e) {
                       console.error("PDF Download failed", e);
                     } finally {

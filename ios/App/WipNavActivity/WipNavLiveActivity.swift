@@ -73,11 +73,15 @@ private struct WipNavIstruzione: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
+            // (05/09/2026, committente: «a display spento la card blu con
+            // scritte GIALLE e indicazioni ben visibili»). L'istruzione era
+            // bianca e piccola: sull'Always-On, che abbassa la luminosita',
+            // spariva. Giallo come i metri, piu' grande e piu' pesante.
             Text(stato.istruzione)
-                .font(.subheadline.weight(.bold))
-                .foregroundColor(WipNavColori.testo)
+                .font(.system(size: 19, weight: .heavy, design: .rounded))
+                .foregroundColor(WipNavColori.giallo)
                 .lineLimit(righe)
-                .minimumScaleFactor(0.85)
+                .minimumScaleFactor(0.8)
         }
     }
 }

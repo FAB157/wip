@@ -543,13 +543,26 @@ final class WipSupabaseClient {
                 ?? (map["teaser_text_en"] as? String)
                 ?? (map["teaser_text"] as? String)
 
+            // IL PUNTO D'ARRIVO PRIMA DELLA PORTA (05/09/2026, committente: «il
+            // punto d'arrivo sara' quello da cui partono i trigger dei 150 m /
+            // 300 m in auto e l'avviso del teaser»). `arrival_lat/lon` (matcher
+            // v3.1, migration 20260905130000) e' la porta proiettata sul
+            // marciapiede davanti, gia' sulla rete percorribile. Si posa in
+            // entranceLat/Lon cosi' triggerLocation e tutti i consumatori lo
+            // usano senza un campo in piu'; con una RPC vecchia resta la porta.
+            // Coppia intera o niente, e mai lo zero-zero di un campo vuoto.
+            // Stessa regola di SupabaseClient.kt.
+            let arrivalLat = (map["arrival_lat"] as? NSNumber)?.doubleValue
+            let arrivalLon = (map["arrival_lon"] as? NSNumber)?.doubleValue
+            let haArrivo = arrivalLat != nil && arrivalLon != nil && (arrivalLat != 0 || arrivalLon != 0)
+
             return Poi(
                 id: (map["id"] as? String) ?? String(describing: map["id"] ?? ""),
                 nome: (map["nome"] as? String) ?? (map["name"] as? String) ?? "Punto di interesse",
                 lat: (map["lat"] as? NSNumber)?.doubleValue ?? 0,
                 lon: (map["lon"] as? NSNumber)?.doubleValue ?? 0,
-                entranceLat: (map["entrance_lat"] as? NSNumber)?.doubleValue,
-                entranceLon: (map["entrance_lon"] as? NSNumber)?.doubleValue,
+                entranceLat: haArrivo ? arrivalLat : (map["entrance_lat"] as? NSNumber)?.doubleValue,
+                entranceLon: haArrivo ? arrivalLon : (map["entrance_lon"] as? NSNumber)?.doubleValue,
                 poiType: cat,
                 guideDefault: (map["guide_default"] as? String) ?? "nicky",
                 isGem: isGem,

@@ -3087,7 +3087,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                       // Nome file univoco legato alla guida (mai un nome fisso)
                       const titolo = guideToRender?.content?.guida_titolo || 'Guida';
                       const filename = `WIP_${String(titolo).replace(/[^a-zA-Z0-9àèéìòù ]/g, '').trim().replace(/\s+/g, '_').slice(0, 40)}.pdf`;
-                      await downloadGuideAsPdf('premium-guide-pdf-inner', filename);
+                      await downloadGuideAsPdf('premium-guide-pdf-inner', filename, { content: guideToRender.content, mediaManifest: guideToRender.media, language: String(language) });
                     } catch (e) {
                       console.error("PDF Download failed", e);
                       // Prima falliva in silenzio (specie su Android WebView)

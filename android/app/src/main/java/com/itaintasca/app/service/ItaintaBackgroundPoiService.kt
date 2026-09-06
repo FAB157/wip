@@ -1691,9 +1691,18 @@ class ItaintaBackgroundPoiService : Service() {
                             .map { it.first }
                         if (teaserTargets.isNotEmpty()) generateTeasersInBackground(teaserTargets)
 
-                        // ✅ [TEASER RADAR] - Avvisi teaser per i POI nel radar
-                        // che l'utente non ha ancora avvicinato
-                        showRadarTeaserNotifications(pois, location)
+                        // ✅ [TEASER RADAR] - DISATTIVATO (03/09/2026, committente
+                        // dal collaudo: notifiche a 248/396/499 m — «troppo
+                        // distante», «max e' 300 in auto e 150 a piedi»).
+                        // showRadarTeaserNotifications notificava apposta i 2 POI
+                        // piu' vicini OLTRE il raggio di alert, fino a un orizzonte
+                        // di 1200 m a piedi / 5000 m in auto — hardcoded,
+                        // indipendente dal raggio che l'utente ha impostato in
+                        // GeoControl. Il raggio di alert (walkAlert/carAlert,
+                        // 50-400 m / 100-600 m, default 150/300) resta l'UNICO
+                        // limite per qualunque notifica di prossimita': funzione
+                        // lasciata nel file (sotto), solo non piu' chiamata.
+                        // showRadarTeaserNotifications(pois, location)
                     }
                 } catch (e: Exception) {
                     // Rete "zombie" (validata ma inservibile) o server giù:
