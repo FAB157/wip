@@ -244,6 +244,12 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   
   // Category Chips
   beni_culturali: { IT: "Beni Culturali", EN: "Cultural Heritage", FR: "Patrimoine culturel", ES: "Patrimonio cultural", DE: "Kulturgüter", RU: "Культурное наследие", ZH: "文化遗产" },
+  // Turismo dello Shopping e Turismo di Lusso (28/08/2026): categorie vere in
+  // shared_pois (vedi poiTaxonomy.ts SHOPPING_SUB_BY_TYPE / LUSSO_SUB_BY_TYPE
+  // e i sotto-filtri in CategoryChips.tsx) rimaste senza chip e senza questa
+  // etichetta — ripristinate il 06/09/2026.
+  shopping: { IT: "Shopping", EN: "Shopping", FR: "Shopping", ES: "Compras", DE: "Shopping", RU: "Шопинг", ZH: "购物" },
+  lusso: { IT: "Lusso", EN: "Luxury", FR: "Luxe", ES: "Lujo", DE: "Luxus", RU: "Люкс", ZH: "奢华" },
   beni_culturali_tutelato: { IT: "Bene culturale tutelato", EN: "Protected heritage site", FR: "Bien culturel protégé", ES: "Bien cultural protegido", DE: "Geschütztes Kulturgut", RU: "Охраняемый объект наследия", ZH: "受保护文化遗产" },
   beni_culturali_no_guida: { IT: "Scheda informativa: questo bene non ha audioguida", EN: "Information only: this site has no audio guide", FR: "Fiche d'information : ce bien n'a pas d'audioguide", ES: "Ficha informativa: este bien no tiene audioguía", DE: "Nur Information: zu diesem Kulturgut gibt es keinen Audioguide", RU: "Только справка: у этого объекта нет аудиогида", ZH: "仅供参考：此地点没有语音导览" },
   beni_culturali_scheda_ufficiale: { IT: "Scheda ufficiale del catalogo", EN: "Official catalogue record", FR: "Fiche officielle du catalogue", ES: "Ficha oficial del catálogo", DE: "Offizieller Katalogeintrag", RU: "Официальная карточка каталога", ZH: "官方目录条目" },

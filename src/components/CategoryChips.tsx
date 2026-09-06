@@ -82,6 +82,14 @@ export const CATEGORIES: Category[] = [
   // stanno. La macro apre la riga dei sotto-chip: lì ogni verticale si accende
   // da solo. Spenta di default.
   { id: "tematiche", label: "Tematici", icon: <span className="text-sm">🧭</span> },
+  // SHOPPING e LUSSO (06/09/2026): STESSA scelta di Vino e Gusto qui sopra, e
+  // per lo stesso motivo — NON sono chip. `resolvePoiTaxonomy` (poiTaxonomy.ts)
+  // le risolve apposta a `macro: null`: un pin shopping/lusso non ha una macro,
+  // quindi il filtro `!!macro && activeCategories.includes(macro)` di MapArea
+  // lo scarterebbe SEMPRE, qualunque chip fosse accesa — una chip qui sarebbe
+  // stata un interruttore che non accende niente. Vivono come layer del
+  // pannello ⓘ (MapArea.tsx, LIVELLI 'shopping'/'lusso'), con la propria fetch
+  // diretta su shared_pois, esattamente come le strade del vino.
   { id: "eventi", label: "Eventi", icon: <span className="text-sm">🎪</span> }
 ];
 

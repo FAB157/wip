@@ -425,6 +425,34 @@ export const TRAD_MAPPA: Record<string, Partial<Record<Language, string>>> = {
     RU: '~27 000 участков ЕС с границами (Европейское агентство по окружающей среде)',
     ZH: '约 27,000 个欧盟保护区及其边界（欧洲环境署）',
   },
+  // Turismo dello Shopping e Turismo di Lusso (06/09/2026): layer del
+  // pannello ⓘ, stesso schema di Vino e Gusto — vedi CategoryChips.tsx.
+  mp_layer_shopping_nome: {
+    IT: 'Shopping', EN: 'Shopping', FR: 'Shopping', ES: 'Compras',
+    DE: 'Shopping', RU: 'Шопинг', ZH: '购物',
+  },
+  mp_layer_shopping_det: {
+    IT: 'vie e centri commerciali, grandi magazzini, outlet, souk',
+    EN: 'shopping streets and malls, department stores, outlets, souks',
+    FR: 'rues et centres commerciaux, grands magasins, outlets, souks',
+    ES: 'calles y centros comerciales, grandes almacenes, outlets, zocos',
+    DE: 'Einkaufsstraßen und -zentren, Kaufhäuser, Outlets, Basare',
+    RU: 'торговые улицы и центры, универмаги, аутлеты, базары',
+    ZH: '购物街与商场、百货商店、奥特莱斯、集市',
+  },
+  mp_layer_lusso_nome: {
+    IT: 'Lusso', EN: 'Luxury', FR: 'Luxe', ES: 'Lujo',
+    DE: 'Luxus', RU: 'Люкс', ZH: '奢华',
+  },
+  mp_layer_lusso_det: {
+    IT: 'hotel 5 stelle, ristoranti stellati, marine, club esclusivi',
+    EN: '5-star hotels, starred restaurants, marinas, exclusive clubs',
+    FR: 'hôtels 5 étoiles, restaurants étoilés, marinas, clubs exclusifs',
+    ES: 'hoteles 5 estrellas, restaurantes con estrellas, marinas, clubes exclusivos',
+    DE: '5-Sterne-Hotels, Sternerestaurants, Yachthäfen, exklusive Clubs',
+    RU: 'пятизвёздочные отели, рестораны со звёздами, марины, эксклюзивные клубы',
+    ZH: '五星级酒店、米其林星级餐厅、游艇码头、尊享会所',
+  },
   mp_n2k_habitat: {
     IT: 'Sito di importanza comunitaria (habitat)', EN: 'Habitats Directive site (SCI/SAC)',
     FR: 'Site d\'importance communautaire (habitats)', ES: 'Lugar de importancia comunitaria (hábitats)',

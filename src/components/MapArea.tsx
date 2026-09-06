@@ -9,6 +9,7 @@ import {
   Fragment,
   memo,
 } from "react";
+import { createPortal } from "react-dom";
 import { getApiUrl } from "../lib/api";
 import {
   CATEGORY_COLORS,
@@ -1475,6 +1476,153 @@ function MapArea({
     return () => { map.off("moveend", onMoveEnd); };
   }, [servicesActive, loadServices]);
 
+  // ── Turismo dello Shopping e Turismo di Lusso (06/09/2026) ─────────────
+  // STESSA scelta di Vino e Gusto qui sopra: `resolvePoiTaxonomy` (che filtra
+  // le chip) risolve apposta `category='shopping'`/`'lusso'` a `macro: null`
+  // — non sono patrimonio culturale, sono due verticali a sé che si accendono
+  // quando servono, e non devono mescolarsi ai monumenti nella barra delle
+  // chip. Vivono come layer del pannello ⓘ, con una fetch diretta su
+  // shared_pois: stesso schema di `loadServices` qui sopra, senza le reti/i
+  // tracciati di Vino e Gusto, che qui non hanno senso (un centro commerciale
+  // non è una tappa di un percorso).
+  const SHOPPING_LUSSO_MIN_ZOOM = 10;
+  const SHOPPING_EMOJI: Record<string, string> = {
+    vie_shopping: '🛍️', grandi_magazzini: '🏬', mall: '🏢', outlet: '🏷️', souk: '🕌', duty_free: '✈️',
+  };
+  const LUSSO_EMOJI: Record<string, string> = {
+    hotel_lusso: '🏨', ristoranti_stellati: '⭐', marine_yacht: '⛵', club_esclusivi: '🥂',
+    treni_storici: '🚂', sci_lusso: '🎿', noleggio_lusso: '🛥️',
+  };
+
+  const [shoppingActive, setShoppingActive] = useState(() => {
+    try { return localStorage.getItem('wip_shopping_layer_enabled') === '1'; } catch { return false; }
+  });
+  const [shoppingLoading, setShoppingLoading] = useState(false);
+  const shoppingLayerRef = useRef<L.LayerGroup | null>(null);
+
+  const [lussoActive, setLussoActive] = useState(() => {
+    try { return localStorage.getItem('wip_lusso_layer_enabled') === '1'; } catch { return false; }
+  });
+  const [lussoLoading, setLussoLoading] = useState(false);
+  const lussoLayerRef = useRef<L.LayerGroup | null>(null);
+
+  /** Fabbrica comune: interroga shared_pois per `category` nei bounds e disegna i pin nel gruppo dato. */
+  const caricaLayerVerticale = useCallback(async (
+    category: 'shopping' | 'lusso',
+    emojiPerTipo: Record<string, string>,
+    emojiDefault: string,
+    group: L.LayerGroup,
+    bounds: L.LatLngBounds,
+  ) => {
+    const { data } = await supabase
+      .from('shared_pois')
+      .select('id,name,lat,lon,poi_type,description_short,contact_website,contact_phone,is_hidden,status')
+      .eq('category', category)
+      .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
+      .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+      .limit(200);
+    for (const p of data || []) {
+      if (p.is_hidden === true || p.status === 'needs_revision') continue;
+      const emoji = emojiPerTipo[String(p.poi_type)] || emojiDefault;
+      const icon = L.divIcon({
+        html: cerchioMarker(emoji, MARKER_CERCHIO_PX, 14),
+        className: `wip-${category}-marker`,
+        ...cerchioMarkerOpts(),
+      });
+      L.marker([Number(p.lat), Number(p.lon)], { icon })
+        .bindPopup(`<div style="font-family:system-ui,sans-serif;min-width:150px;max-width:240px;">
+          <div style="font-size:12px;font-weight:700;color:#111827;">${emoji} ${escapeHtml(p.name || '')}</div>
+          <div style="font-size:11px;color:#374151;margin-top:3px;">${escapeHtml(p.description_short || '')}</div>
+          ${p.contact_website ? `<a href="${escapeHtml(p.contact_website)}" target="_blank" rel="noopener" style="font-size:10px;color:#1e3a8a;font-weight:700;display:block;margin-top:4px;">${getTranslation('mp_sito', language)} ↗</a>` : ''}
+          ${p.contact_phone ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${escapeHtml(p.contact_phone)}</div>` : ''}
+        </div>`)
+        .addTo(group);
+    }
+  }, [language]);
+
+  const loadShopping = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setShoppingLoading(true);
+    try {
+      if (!shoppingLayerRef.current) shoppingLayerRef.current = L.layerGroup();
+      const group = shoppingLayerRef.current;
+      group.clearLayers();
+      await caricaLayerVerticale('shopping', SHOPPING_EMOJI, '🏬', group, bounds);
+      if (!map.hasLayer(group)) group.addTo(map);
+    } catch (e) {
+      console.warn('[Shopping] fetch fallito:', e);
+    } finally {
+      setShoppingLoading(false);
+    }
+  }, [caricaLayerVerticale]);
+
+  const loadLusso = useCallback(async (bounds: L.LatLngBounds) => {
+    const map = mapRef.current;
+    if (!map) return;
+    setLussoLoading(true);
+    try {
+      if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
+      const group = lussoLayerRef.current;
+      group.clearLayers();
+      await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds);
+      if (!map.hasLayer(group)) group.addTo(map);
+    } catch (e) {
+      console.warn('[Lusso] fetch fallito:', e);
+    } finally {
+      setLussoLoading(false);
+    }
+  }, [caricaLayerVerticale]);
+
+  const toggleShopping = useCallback(() => setShoppingActive((v) => {
+    const next = !v;
+    try { localStorage.setItem('wip_shopping_layer_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+    return next;
+  }), []);
+  const toggleLusso = useCallback(() => setLussoActive((v) => {
+    const next = !v;
+    try { localStorage.setItem('wip_lusso_layer_enabled', next ? '1' : '0'); } catch { /* storage pieno */ }
+    return next;
+  }), []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!shoppingActive) {
+      if (map && shoppingLayerRef.current && map.hasLayer(shoppingLayerRef.current)) map.removeLayer(shoppingLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < SHOPPING_LUSSO_MIN_ZOOM) {
+        if (shoppingLayerRef.current && map.hasLayer(shoppingLayerRef.current)) map.removeLayer(shoppingLayerRef.current);
+        return;
+      }
+      void loadShopping(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [shoppingActive, loadShopping]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!lussoActive) {
+      if (map && lussoLayerRef.current && map.hasLayer(lussoLayerRef.current)) map.removeLayer(lussoLayerRef.current);
+      return;
+    }
+    if (!map) return;
+    const aggiorna = () => {
+      if (map.getZoom() < SHOPPING_LUSSO_MIN_ZOOM) {
+        if (lussoLayerRef.current && map.hasLayer(lussoLayerRef.current)) map.removeLayer(lussoLayerRef.current);
+        return;
+      }
+      void loadLusso(map.getBounds());
+    };
+    aggiorna();
+    map.on('moveend', aggiorna);
+    return () => { map.off('moveend', aggiorna); };
+  }, [lussoActive, loadLusso]);
+
   // ── Fog of war dei luoghi visitati (src/lib/visitedFog.ts) ────────────
   // Toggle 👣 nei controlli mappa: layer canvas di rettangoli Leaflet
   // sulle celle ~150×150 m già calpestate — un "diario che si costruisce
@@ -1596,6 +1744,24 @@ function MapArea({
   // Non persiste: è un menù, non una preferenza — gli stati dei singoli
   // layer invece restano salvati come prima.
   const [serviziAperti, setServiziAperti] = useState(false);
+
+  // ANCORA FUORI DALLA MAPPA (06/09/2026, bug del committente: «il pannello
+  // dei livelli deve stare SOPRA le chip»). La colonna in basso a sinistra
+  // (meteo, pillola pioggia, tasto livelli e il suo pannello) vive dentro
+  // il contenitore della mappa (`bg-[#e4e9d5] ... z-0` qui sotto), che
+  // stabilisce il proprio contesto di stacking a livello 0: qualunque
+  // z-index dato agli elementi al suo interno — anche z-[2100] — non può
+  // MAI superare le chip di CategoryChips.tsx (z-[2000]), perché sono sue
+  // SORELLE fuori da quel contenitore, non figlie dello stesso z-0. Alzare
+  // lo z-0 della mappa alzerebbe con sé anche gli altri pannelli interni
+  // (POI, z-[1001]/[1002]) che devono restare SOTTO le chip. Il portale
+  // sposta solo questa colonna, via DOM, dentro lo stesso contenitore di
+  // App.tsx che ospita già le chip (id="wip-map-shell", stessa origine per
+  // il posizionamento assoluto): lì il suo z-index compete davvero.
+  const [mapShellEl, setMapShellEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setMapShellEl(document.getElementById('wip-map-shell'));
+  }, []);
   // Lo zoom di adesso, per dire nel pannello «avvicinati»: un layer acceso
   // che non mostra niente perché si sta guardando mezza Europa sembra
   // rotto, e la spiegazione deve stare dove si è appena toccato.
@@ -5741,12 +5907,27 @@ function MapArea({
       dettaglio: getTranslation('mp_layer_natura2000_det', language),
       onClick: toggleAree,
     },
+    {
+      id: 'shopping', gruppo: 'reti', on: shoppingActive, loading: shoppingLoading, emoji: '🏬',
+      tinta: 'bg-fuchsia-700 border-fuchsia-400', zoomMin: SHOPPING_LUSSO_MIN_ZOOM,
+      nome: getTranslation('mp_layer_shopping_nome', language),
+      dettaglio: getTranslation('mp_layer_shopping_det', language),
+      onClick: toggleShopping,
+    },
+    {
+      id: 'lusso', gruppo: 'reti', on: lussoActive, loading: lussoLoading, emoji: '👑',
+      tinta: 'bg-violet-950 border-violet-600', zoomMin: SHOPPING_LUSSO_MIN_ZOOM,
+      nome: getTranslation('mp_layer_lusso_nome', language),
+      dettaglio: getTranslation('mp_layer_lusso_det', language),
+      onClick: toggleLusso,
+    },
   ], [
     language, sentieriActive, sentieriLoading, ciclabiliActive, ciclabiliLoading,
     stradeGustoActive, stradeGustoLoading, servicesActive, servicesLoading,
     neveActive, neveLoading, soleActive, soleLoading, bathingActive, bathingLoading,
-    areeActive, areeLoading, AREE_MIN_ZOOM,
+    areeActive, areeLoading, AREE_MIN_ZOOM, shoppingActive, shoppingLoading, lussoActive, lussoLoading,
     toggleSentieri, toggleCiclabili, toggleStradeGusto, toggleServices, toggleNeve, toggleSole, toggleBathing, toggleAree,
+    toggleShopping, toggleLusso,
   ]);
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
@@ -6121,7 +6302,13 @@ function MapArea({
 
       {/* ── Colonna controlli in alto a sinistra: meteo + servizi pratici ──
           Angolo non invasivo: il banner offline sta al centro, gli errori a
-          destra, la ricerca in basso. */}
+          destra, la ricerca in basso.
+          PORTALE (06/09/2026): finché `mapShellEl` non è pronto (primo
+          render, prima dell'effetto) questa colonna resta invisibile per un
+          istante — meglio che disegnarla intrappolata sotto le chip anche
+          solo per un frame. Vedi il commento su `mapShellEl` più sopra. */}
+      {mapShellEl && createPortal(
+      <>
       {/* IN BASSO A SINISTRA, sopra la barra di ricerca (22/08/2026). Stava
           in alto a 0,75 rem, ma le chip partono a 0,25 rem con z-index 2000
           e le loro righe di sotto-chip crescono verso il basso: la chip
@@ -6440,6 +6627,8 @@ function MapArea({
           </AnimatePresence>
         </div>
       </div>
+      </>,
+      mapShellEl)}
 
       <AnimatePresence>
         {followMode && (

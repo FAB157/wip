@@ -1145,6 +1145,13 @@ export default function App() {
   // l'effect onAuthStateChange qui sopra fa il resto (aggiorna `session`,
   // e per un vero reset noi soli mettiamo isRecovering per mostrare
   // "Nuova Password", esattamente come già fa su web via l'hash della pagina).
+  //
+  // STESSO LINK, DUE FORME (06/09/2026, Google login nativo): il client
+  // Supabase nativo è in PKCE (vedi supabase.ts), quindi il ritorno da
+  // signInWithOAuth non porta un frammento #access_token ma una query
+  // ?code=... da scambiare con exchangeCodeForSession. Il browser di sistema
+  // aperto da LoginScreen (@capacitor/browser) va richiuso a mano: non è la
+  // WebView dell'app, nessuno lo farebbe da solo.
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let handle: any = null;
@@ -1154,6 +1161,16 @@ export default function App() {
         handle = await CapApp.addListener('appUrlOpen', async ({ url }: { url: string }) => {
           try {
             const parsed = new URL(url);
+            const query = new URLSearchParams(parsed.search);
+            const code = query.get('code');
+            if (code) {
+              // Ritorno OAuth (Google): scambia il code PKCE con la sessione
+              // e chiudi il browser di sistema aperto per l'accesso.
+              const { error } = await supabase.auth.exchangeCodeForSession(code);
+              if (error) console.warn('[App.tsx] exchangeCodeForSession fallito', error);
+              try { const { Browser } = await import('@capacitor/browser'); await Browser.close(); } catch { /* già chiuso o non nativo */ }
+              return;
+            }
             // Supabase mette i token nel fragment (#access_token=...&type=recovery);
             // per sicurezza si prova anche la query string se un giorno cambiasse flow.
             const raw = parsed.hash && parsed.hash.length > 1 ? parsed.hash.slice(1) : parsed.search.replace(/^\?/, '');
@@ -1537,7 +1554,13 @@ export default function App() {
         )}
 
         {/* TAB: MAPPA */}
-        <div className={`flex-1 w-full overflow-hidden ${activeTab === "map" ? "h-full relative block" : "absolute inset-0 invisible opacity-0 pointer-events-none -z-10"}`}>
+        {/* id="wip-map-shell" (06/09/2026): ancora del portale che estrae la
+            colonna «meteo + livelli» di MapArea.tsx dal contenitore z-0 della
+            mappa, dove il suo z-index non riusciva mai a superare le chip
+            (vedi il commento su `mapShellEl` in MapArea.tsx). Stesso box di
+            posizionamento di CategoryChips, poche righe sotto: il portale
+            atterra qui apposta. */}
+        <div id="wip-map-shell" className={`flex-1 w-full overflow-hidden ${activeTab === "map" ? "h-full relative block" : "absolute inset-0 invisible opacity-0 pointer-events-none -z-10"}`}>
           <MapArea selectedCategories={selectedCategories} onSelectPoi={handleSelectPoi} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} activeTab={activeTab} isRadarMode={isRadarMode} radarPois={radarPois} modalitaPercorso={isPercorsoMode} />
 
           {/* PULSANTE RADAR CUFFIE — sopra la tab bar E la safe area inferiore
