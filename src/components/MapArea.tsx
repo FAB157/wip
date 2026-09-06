@@ -7018,7 +7018,11 @@ function MapArea({
            sembrava un tasto rotto. E` il motivo per cui la ricerca della
            citta' «non funzionava» nell'app mentre sulla PWA, in una finestra
            larga, andava. Il campo ora si apre in una riga SOPRA la barra. */
-        className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[1000] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation"
+        /* z-[2200] e non z-[1000] (06/09/2026): il meteo sta a z-[1000] e il
+           pannello livelli sale a z-[2100] quando è aperto (vedi sopra) — la
+           riga di ricerca e i suoi risultati restavano sotto entrambi, e
+           cercare una città con un livello acceso mostrava un menu coperto. */
+        className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation"
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
