@@ -12,12 +12,13 @@ import Groq from "groq-sdk";
 import * as agentTools from "./agentTools.js";
 // Libreria Itinerari: costanti condivise col client (SOLO tipi/costanti).
 import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
-// PDF «come un libro» generati dal server per gli allegati email (06/09/2026).
-// Import STATICO del modulo (leggero: React + axios), perche' il bundler di
-// Vercel non risolveva l'import dinamico «./src/lib/pdf/serverPdf.js» e
-// l'email partiva senza allegato. @react-pdf/renderer resta un import
-// dinamico DENTRO serverPdf.ts: si carica solo quando si genera un PDF.
-import { pdfGuidaServer, pdfItinerarioServer } from './src/lib/pdf/serverPdf.js';
+// PDF «come un libro» generati dal server per gli allegati email (06/09/2026):
+// import DINAMICO dentro le funzioni (vedi pdfGuidaPerEmail). L'import
+// statico ha messo giu' l'API il 06/09 sera (ERR_MODULE_NOT_FOUND: su Vercel
+// l'API gira come ESM e gli import relativi senza estensione dentro
+// src/lib/pdf non si risolvevano). Ora quei moduli usano «.js» e l'import
+// dinamico isola comunque un eventuale guasto: l'email parte senza allegato,
+// l'API resta viva.
 // ATTENZIONE — QUI NON VANNO IMPORT DI FILE .json.
 // Il 21/08/2026 questo blocco conteneva otto `import … from
 // "./src/data/tematici/*.json"` per portare i cataloghi tematici nel bundle.
@@ -3412,6 +3413,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   /** PDF della guida per l'allegato email (null se non realizzabile). */
   async function pdfGuidaPerEmail(content: any, mediaManifest: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
     try {
+      const { pdfGuidaServer } = await import('./src/lib/pdf/serverPdf.js');
       const buf = await pdfGuidaServer(content, mediaManifest || {}, language);
       if (!buf) return null;
       const nome = String(content?.guida_titolo || 'Guida').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Guida';
@@ -3421,6 +3423,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   /** PDF dell'itinerario per l'allegato email (null se non realizzabile). */
   async function pdfItinerarioPerEmail(plan: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
     try {
+      const { pdfItinerarioServer } = await import('./src/lib/pdf/serverPdf.js');
       const buf = await pdfItinerarioServer(plan, language);
       if (!buf) return null;
       const nome = String(plan?.titolo || 'Itinerario').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Itinerario';
@@ -19757,7 +19760,14 @@ ${extract || "Nessuna fonte trovata"}
           content.description_long = jsonResponse.description_long;
           content.description_ai = jsonResponse.description_long;
         }
-        if (thumbnail && !existing?.image_url) { content.image_url = thumbnail; content.photo_url = thumbnail; }
+        // BUGFIX 06/09/2026: `!existing?.image_url` da solo non bastava — un
+        // POI con un vecchio link `source.unsplash.com` (servizio dismesso,
+        // vedi findFallbackPhoto sopra) ha GIA' un image_url non vuoto, quindi
+        // questa condizione non lo sostituiva mai con la foto vera appena
+        // trovata. Stesso identico difetto gia' corretto in /api/poi/enrich-
+        // stream (variabile `existingImage`): qui mancava.
+        const fotoEsistenteMorta = !existing?.image_url || String(existing.image_url).includes('source.unsplash.com');
+        if (thumbnail && fotoEsistenteMorta) { content.image_url = thumbnail; content.photo_url = thumbnail; }
         // Nome tradotto/traslitterato: merge nel JSONB per-lingua, mai
         // sovrascrive le altre lingue già presenti (colonna condivisa).
         if ((jsonResponse as any).name_translit) {

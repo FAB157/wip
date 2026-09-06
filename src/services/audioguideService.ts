@@ -10,7 +10,7 @@ import {
   incrementAudioguidePlay,
   ensureSharedPoi,
 } from './poiRepository';
-import { ensurePoiDetails, type EnrichInput } from './enrichmentService';
+import { ensurePoiDetails, fotoStantia, type EnrichInput } from './enrichmentService';
 import { getApiUrl, apiFetch } from '../lib/api';
 import { bearerHeaders } from '../lib/audioFetch';
 import type { GuideCharacter } from '../types/poi';
@@ -176,6 +176,15 @@ async function getOrCreateAudioguideTextInterno(
   // gratis come prima — e' cio' che il server chiama "colpo di cache".
   if (cached?.audio_text && !cacheSospetta && !charge) {
     if (incrementPlay) await incrementAudioguidePlay(cached.id);
+    // BUGFIX 06/09/2026: con testo gia' in cache si usciva qui SENZA MAI
+    // passare da ensurePoiDetails — quindi un POI visitato una volta con
+    // una foto rotta (es. i vecchi link source.unsplash.com, dismessi)
+    // restava con la foto rotta per sempre: ogni visita successiva
+    // "on the fly" leggeva solo l'audioguida in cache e non ritentava mai
+    // la foto. Qui si rilancia l'arricchimento in BACKGROUND (mai atteso,
+    // mai in blocco della risposta) solo quando la foto risulta assente o
+    // e' uno di quei link morti — non ad ogni ascolto.
+    if (fotoStantia(poi)) void ensurePoiDetails(poi, language, true).catch(() => {});
     return { status: 'ok', text: cached.audio_text, charged: false, cached: true };
   }
 

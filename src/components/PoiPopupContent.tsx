@@ -26,7 +26,7 @@ import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
 import { traduciVoci, tradotto } from '../lib/atlanteI18n';
 import { apriScheda } from '../lib/apriScheda';
 import { fotoDaWikidata } from '../lib/wikidataFoto';
-import { fotoSicura } from '../lib/fotoHttps';
+import { fotoSicura, migliorFoto } from '../lib/fotoHttps';
 import { tourService } from '../services/tourService';
 import { useBozzaGiro } from '../lib/tour/useGiro';
 
@@ -243,7 +243,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   // La foto chiesta della dimensione che serve, non da 800 px per un riquadro
   // alto 160 (24/08/2026): su Wikimedia costa da tre a sette volte meno byte,
   // ed e' il grosso del tempo che passava fra il tocco sul pin e la foto.
-  const heroSrc = fotoPrincipale(data?.imageUrl || poi.image_url || poi.photo_url || null);
+  const heroSrc = fotoPrincipale(data?.imageUrl || migliorFoto(poi) || null);
   useEffect(() => { setImgError(false); }, [heroSrc]);
 
   const { toggleFavorite, isFavorite: checkFavorite } = useFavorites();
@@ -296,7 +296,7 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
       // ── STEP 0: Mostra SUBITO foto+desc già presenti nel POI object ──
       // (dai campi che shared_pois ritorna via RPC o discovery)
-      const immediateImage = poi.image_url || poi.photo_url || null;
+      const immediateImage = migliorFoto(poi) || null;
       // Fuori dall'italiano il teaser per-lingua (gia' sul filo della RPC)
       // batte i campi description_* di shared_pois, che sono in italiano.
       const immediateDesc = (linguaUi !== 'it' && teaserUi(poi))
@@ -369,11 +369,11 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
           if (dbRes?.ok) {
             const dbData = await dbRes.json();
             const hasDesc = dbData?.description_ai || dbData?.description_long || dbData?.description_short;
-            const hasImg = dbData?.image_url || dbData?.photo_url;
+            const hasImg = migliorFoto(dbData);
 
             if (hasDesc || hasImg) {
               const enriched: any = {
-                imageUrl: dbData.image_url || dbData.photo_url || immediateImage || null,
+                imageUrl: hasImg || immediateImage || null,
                 image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
                 description: dbData.description_short || dbData.description_ai || immediateDesc || "",
                 descriptionLong: dbData.description_long || dbData.full_description || "",

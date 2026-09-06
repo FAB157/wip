@@ -1266,6 +1266,21 @@ function MapArea({
   const [userHeading, setUserHeading] = useState<number | null>(null);
   const [mapRotation, setMapRotation] = useState(0);
   const compassListenerRef = useRef<((e: DeviceOrientationEvent) => void) | null>(null);
+  // SOGLIA BUSSOLA (06/09/2026) — LA CAUSA DELLO SFARFALLIO su "tutti i POI"
+  // e sulla foto della scheda aperta, segnalato dall'utente ("continua
+  // mentre il pin e' aperto"). `deviceorientation`/`deviceorientationabsolute`
+  // spara eventi al ritmo grezzo del sensore (15-60 Hz), e il magnetometro
+  // e' rumoroso: anche col telefono fermo il valore oscilla di continuo di
+  // qualche decimo di grado. Prima ogni evento chiamava setUserHeading +
+  // setMapRotation, quindi MapArea (l'intero componente, migliaia di righe)
+  // rirenderizzava fino a 60 volte al secondo — e siccome OGNI pin ha
+  // `transform: rotate(var(--map-rotation))`, tutti vibravano insieme, in
+  // sincrono col rumore del sensore. Qui si applica una doppia soglia (gradi
+  // + tempo): un aggiornamento passa solo se la bussola si e' mossa
+  // davvero (>=2°) o se e' passato abbastanza tempo dall'ultimo (150 ms,
+  // ~6-7 aggiornamenti/sec — fluido all'occhio, innocuo per i render).
+  const ultimoHeadingApplicatoRef = useRef<number | null>(null);
+  const ultimoHeadingTsRef = useRef(0);
 
   // Stop follow mode & compass when user manually pans the map
   const stopFollowMode = useCallback((perGesto = false) => {
@@ -1520,6 +1535,13 @@ function MapArea({
       .eq('category', category)
       .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
       .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
+      // .order('id') (06/09/2026): senza un ordine esplicito il limit(200)
+      // non e' stabile fra una richiesta e l'altra — con le decine di
+      // migliaia di righe aggiunte oggi (harvest planet+Wikidata+directory)
+      // ogni pan/zoom poteva tornare un sottoinsieme leggermente diverso
+      // degli stessi 200, e i pin sembravano sfarfallare (apparire/sparire)
+      // anche senza muoversi. Un ordine fisso rende il sottoinsieme stabile.
+      .order('id')
       .limit(200);
     // Pulire QUI, dopo la risposta, non prima di interrogare: pulire prima
     // dell'await lasciava la mappa senza pin per tutta la durata della rete
@@ -3603,7 +3625,26 @@ function MapArea({
         // di 400 si riempie sempre nelle citta' storiche: senza ordine, a
         // Londra tornavano 357 case a schiera vincolate e nessun monumento.
         // Cosi' i beni turistici vincono il taglio e il resto riempie.
+        //
+        // SECONDO ORDINE PER `id` (06/09/2026) — LA CAUSA DELLO SFARFALLIO
+        // sui pin dell'atlante e sulla loro foto, segnalato dall'utente:
+        // "solo foto e tutto il pin, continua mentre il pin e' aperto".
+        // Postgres NON garantisce un ordine stabile fra righe con lo STESSO
+        // tier quando si taglia con .limit() senza un secondo criterio: a
+        // ogni refetch (la mappa ne fa uno ad ogni pan, anche minimo, come
+        // il micro-spostamento dell'inseguimento GPS) il DB poteva restituire
+        // un sottoinsieme leggermente diverso dei 400 beni a parita' di
+        // riquadro — alcuni entravano, altri uscivano, in modo che sembrava
+        // casuale. Il pin apparso/sparito rifaceva il giro marker-cluster
+        // (animazione = "sfarfallio del pin"), e se era proprio quello con
+        // il popup aperto, la sua card rimontava da zero: la foto lampeggiava
+        // ricaricandosi. Il fix generale del 22/08/2026 (positionCacheRef)
+        // risolveva SOLO le posizioni duplicate a parita' di dati, non
+        // questo: qui il dato stesso cambiava selezione ad ogni richiesta.
+        // Con `id` come secondo criterio lo stesso riquadro restituisce
+        // sempre lo stesso taglio dei 400, quindi gli stessi beni.
         .order('tier', { ascending: true })
+        .order('id', { ascending: true })
         .limit(limite);
       return (data || [])
         .filter((i: any) => i.name && i.lat != null && i.lon != null)
@@ -5444,6 +5485,19 @@ function MapArea({
         }
 
         if (heading !== null && Number.isFinite(heading)) {
+          // Doppia soglia (gradi + tempo): vedi il commento su
+          // `ultimoHeadingApplicatoRef` piu' sopra. La differenza angolare
+          // va calcolata sul cerchio (0°/360° sono lo stesso punto), non
+          // come sottrazione semplice.
+          const now = Date.now();
+          const prev = ultimoHeadingApplicatoRef.current;
+          const grezza = prev === null ? Infinity : Math.abs(heading - prev);
+          const delta = Math.min(grezza, 360 - grezza);
+          if (prev !== null && delta < 2 && now - ultimoHeadingTsRef.current < 150) {
+            return;
+          }
+          ultimoHeadingApplicatoRef.current = heading;
+          ultimoHeadingTsRef.current = now;
           setUserHeading(heading);
           setMapRotation(heading);
           if (mapRef.current) {

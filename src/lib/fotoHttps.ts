@@ -34,3 +34,29 @@ export function fotoSicura(url: string | null | undefined): string | undefined {
   if (pulito.startsWith('http://')) return 'https://' + pulito.slice('http://'.length);
   return pulito;
 }
+
+/**
+ * 06/09/2026: `source.unsplash.com` e' un servizio DISMESSO da Unsplash —
+ * un link morto rimasto scritto su migliaia di righe prima della correzione
+ * del 22/08/2026 (vedi server.ts, findFallbackPhoto). Un link morto conta
+ * come assente, non come "foto presente".
+ */
+function fotoMorta(url: string | null | undefined): boolean {
+  return !url || String(url).includes('source.unsplash.com');
+}
+
+/**
+ * La MIGLIORE foto disponibile per un POI: `image_url` e `photo_url`
+ * dovrebbero essere sinonimi, ma decine di punti del codice leggevano
+ * sempre `image_url` per primo — se quello e' un link Unsplash morto e
+ * `photo_url` ha invece la foto vera (Wikipedia/Commons), il POI sembrava
+ * "senza foto" anche quando la foto vera esisteva gia' nel database.
+ */
+export function migliorFoto(poi: { image_url?: string | null; photo_url?: string | null } | null | undefined): string | undefined {
+  if (!poi) return undefined;
+  const candidati = [poi.image_url, poi.photo_url];
+  for (const c of candidati) {
+    if (!fotoMorta(c)) return fotoSicura(c);
+  }
+  return undefined;
+}

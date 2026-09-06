@@ -5,6 +5,7 @@ import { checkUserQuota, incrementUserQuota } from '../lib/quotaManager';
 import QuotaLimitToast, { useQuotaToast } from './QuotaLimitToast';
 import CreditConfirmationModal from './CreditConfirmationModal';
 import { notify } from '../lib/toast';
+import { migliorFoto } from '../lib/fotoHttps';
 import ShopScreen from './ShopScreen';
 import { PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged, consumeCredits } from '../lib/pricing';
 import { useNetworkStatus } from "../hooks/useNetworkStatus";
@@ -858,7 +859,7 @@ export default function PoiDetailSheet({
 
         const wikiPayload = {
           extract: desc,
-          thumbnail: poi.image_url || (poi as any).photo_url || undefined,
+          thumbnail: migliorFoto(poi) || undefined,
           description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         };
@@ -887,7 +888,7 @@ export default function PoiDetailSheet({
         const shortDesc = poi.description_short || poi.description_ai || poi.description || "";
         setWikiData({
           extract: shortDesc,
-          thumbnail: poi.image_url || (poi as any).photo_url || undefined,
+          thumbnail: migliorFoto(poi) || undefined,
           description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
           pageUrl: "#"
         });
@@ -901,7 +902,7 @@ export default function PoiDetailSheet({
         if (!cached.wikiData && (cached.descriptionLong || cached.description || cached.audioScript || cached.imageUrl)) {
            setWikiData({
               extract: cached.descriptionLong || cached.description || cached.audioScript || "",
-              thumbnail: cached.imageUrl || cached.image_url || poi.image_url || (poi as any).photo_url || undefined,
+              thumbnail: cached.imageUrl || migliorFoto(cached) || migliorFoto(poi) || undefined,
               description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
               pageUrl: "#"
            });
@@ -1000,7 +1001,7 @@ export default function PoiDetailSheet({
                    const basicWiki = {
                      extract: currentDesc || "Analisi storica in corso...",
                      description: poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : "Cultura",
-                     thumbnail: dbData.image_url || dbData.photo_url || poi.image_url || undefined,
+                     thumbnail: migliorFoto(dbData) || migliorFoto(poi) || undefined,
                      pageUrl: "#"
                    };
                    const basicTrip = { address: '', phone: '', website: '', tags: [poi.category], rating: null, numReviews: 0, reviews: [] };
@@ -1061,7 +1062,7 @@ export default function PoiDetailSheet({
 
                   const wikiPayload = {
                     extract: finalDesc,
-                    thumbnail: dbData.image_url || dbData.photo_url || poi.image_url || undefined,
+                    thumbnail: migliorFoto(dbData) || migliorFoto(poi) || undefined,
                     description: (poi.category ? ((poi.category ? (poi.category.charAt(0).toUpperCase() + poi.category.slice(1)) : getTranslation('sk_luogo', language))) : getTranslation('sk_luogo', language)),
                     pageUrl: techData.wikipedia_url || techData.wikivoyage_url || '#',
                   };
@@ -1122,7 +1123,7 @@ export default function PoiDetailSheet({
             let enriched: any = {};
             let finalEnriched: any = {};
             let currentExtract = poi.description_short || poi.description || "";
-            let currentThumbnail = poi.image_url || (poi as any).photo_url || undefined;
+            let currentThumbnail = migliorFoto(poi) || undefined;
             let currentPageUrl = "#";
 
             // Serve anche quando il testo c'è ma MANCA LA FOTO: questa è
@@ -2768,7 +2769,7 @@ export default function PoiDetailSheet({
           <div className="relative h-[240px] px-4">
             <div className="w-full h-full rounded-2xl overflow-hidden relative group">
               <AttractionImage
-                src={poi?.image_url || poi?.photo_url || wikiData?.thumbnail}
+                src={migliorFoto(poi) || wikiData?.thumbnail}
                 alt={poi.name || getTranslation('sk_attrazione', language)}
                 category={poi.category}
                 className="w-full h-full"

@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { X, Volume2, Car, Footprints } from 'lucide-react';
 import { CATEGORY_EMOJI } from '../lib/poiCategories';
+import { migliorFoto } from '../lib/fotoHttps';
 import type { PoiCategory } from '../types/poi';
 import { getTranslation, Language } from '../lib/i18n';
 import { puntoArrivo } from '../lib/puntoArrivo';
@@ -223,7 +224,7 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
           isCar: d.isCar ?? false,
           queueNames: [],
           enteredAt: Date.now(),
-          image: poi.image_url || poi.photo_url || undefined,
+          image: migliorFoto(poi) || undefined,
           lat,
           lon,
           poi,
