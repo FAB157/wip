@@ -373,7 +373,13 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
 
             if (hasDesc || hasImg) {
               const enriched: any = {
-                imageUrl: hasImg || immediateImage || null,
+                // immediateImage PRIMA, non dopo (06/09/2026): la foto e' gia'
+                // a schermo dallo STEP 0. Se qui si scriveva un'altra stringa
+                // per la STESSA foto (stessa immagine, URL leggermente
+                // diverso — dimensione, redirect...) l'<img> la ricaricava da
+                // capo: un lampo bianco a ogni apertura, anche con la foto
+                // giusta gia' visibile. Si aggiorna solo se prima non c'era.
+                imageUrl: immediateImage || hasImg || null,
                 image_attribution: dbData.image_attribution || (poi as any).image_attribution || null,
                 description: dbData.description_short || dbData.description_ai || immediateDesc || "",
                 descriptionLong: dbData.description_long || dbData.full_description || "",
@@ -536,7 +542,11 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
                  const foundImage = (await wikiImagePromise) || parsedFinal.image_url || null;
                  if (foundImage) {
                     parsedFinal.image_url = foundImage;
-                    groqData.imageUrl = foundImage;
+                    // Non sovrascrive una foto GIA' a schermo (stesso motivo
+                    // di immediateImage sopra): altrimenti l'<img> ricarica
+                    // e lampeggia proprio mentre lo streaming Groq finisce,
+                    // il momento in cui l'utente sta gia' guardando la scheda.
+                    if (!groqData.imageUrl) groqData.imageUrl = foundImage;
                  }
                  
                  if (parsedFinal.description_long || parsedFinal.description_short) {

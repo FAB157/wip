@@ -6382,7 +6382,13 @@ function MapArea({
           barra — quindi il pannello sale sopra di loro e usa tutta l'altezza.
           Appena si chiude torna sotto, e le chip riappaiono: nessuno stato da
           ricordare, nessun pulsante in piu'. */}
-      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none`}>
+      {/* 06/09/2026: nascosta del tutto quando la ricerca città è aperta —
+          il solo z-index (2200 sulla barra di ricerca, sopra questo z-2100)
+          bastava a mettere la ricerca sopra, ma meteo e tasto livelli
+          restavano visibili sotto e si affollavano visivamente contro il
+          riquadro dei risultati. "Sovrapposta a tutto" qui vuol dire anche
+          non condividere lo schermo con loro, non solo vincere lo z-fight. */}
+      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${ricercaAperta ? 'opacity-0 pointer-events-none invisible' : ''}`}>
         {/* Chip meteo (Open-Meteo, cache 30 min) */}
         {meteo && (
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
