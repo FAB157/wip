@@ -3170,13 +3170,33 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
    * Ritorna { ok, errore? }. Destinatari validati e al massimo 6 (account + 5).
    */
   async function inviaEmail(a: { a: string[]; oggetto: string; html: string; testo?: string; allegati?: Array<{ filename: string; content: Buffer | string }> }): Promise<{ ok: boolean; errore?: string }> {
-    const key = process.env.RESEND_API_KEY;
-    if (!key) return { ok: false, errore: 'non_configurato' };
     const validi = Array.from(new Set(a.a.map(x => String(x || '').trim().toLowerCase()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)))).slice(0, 6);
     if (!validi.length) return { ok: false, errore: 'nessun_destinatario' };
+    // BREVO prima di tutto (06/09/2026): e' il provider gia' in uso per le
+    // email di Supabase Auth (smtp-relay.brevo.com, noreply@wip.guide), col
+    // dominio gia' verificato. API transazionale, allegati in base64.
+    const brevo = process.env.BREVO_API_KEY;
+    if (brevo) {
+      try {
+        const mitt = (process.env.EMAIL_FROM || 'WIP - World in Pocket <noreply@wip.guide>').match(/^(.*?)\s*<([^>]+)>$/);
+        const r = await axios.post('https://api.brevo.com/v3/smtp/email', {
+          sender: { name: mitt ? mitt[1].trim() : 'WIP', email: mitt ? mitt[2] : 'noreply@wip.guide' },
+          to: validi.map(email => ({ email })),
+          subject: a.oggetto,
+          htmlContent: a.html,
+          textContent: a.testo,
+          attachment: (a.allegati || []).length ? (a.allegati || []).map(x => ({ name: x.filename, content: Buffer.isBuffer(x.content) ? x.content.toString('base64') : x.content })) : undefined,
+        }, { headers: { 'api-key': brevo, 'Content-Type': 'application/json', Accept: 'application/json' }, timeout: 20000 });
+        return r.status < 300 ? { ok: true } : { ok: false, errore: `HTTP ${r.status}` };
+      } catch (e: any) {
+        return { ok: false, errore: e?.response?.data?.message || e?.message || 'errore' };
+      }
+    }
+    const key = process.env.RESEND_API_KEY;
+    if (!key) return { ok: false, errore: 'non_configurato' };
     try {
       const r = await axios.post('https://api.resend.com/emails', {
-        from: process.env.RESEND_FROM || 'WIP · World in Pocket <guide@wip.guide>',
+        from: process.env.RESEND_FROM || process.env.EMAIL_FROM || 'WIP - World in Pocket <noreply@wip.guide>',
         to: validi,
         subject: a.oggetto,
         html: a.html,
@@ -24854,7 +24874,7 @@ Non aggiungere testo prima o dopo il JSON.`;
       ]);
       const perPiatt: Record<string, number> = {};
       for (const x of d.data || []) perPiatt[x.piattaforma] = (perPiatt[x.piattaforma] || 0) + 1;
-      res.json({ notifiche: n.data || [], dispositivi: perPiatt, configurato: { email: !!process.env.RESEND_API_KEY, push: !!fcmAccount()?.project_id } });
+      res.json({ notifiche: n.data || [], dispositivi: perPiatt, configurato: { email: !!(process.env.BREVO_API_KEY || process.env.RESEND_API_KEY), push: !!fcmAccount()?.project_id } });
     } catch (e: any) { res.status(500).json({ error: e?.message }); }
   });
 
