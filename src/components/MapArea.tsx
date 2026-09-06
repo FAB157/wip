@@ -1521,6 +1521,10 @@ function MapArea({
       .gte('lat', bounds.getSouth()).lte('lat', bounds.getNorth())
       .gte('lon', bounds.getWest()).lte('lon', bounds.getEast())
       .limit(200);
+    // Pulire QUI, dopo la risposta, non prima di interrogare: pulire prima
+    // dell'await lasciava la mappa senza pin per tutta la durata della rete
+    // (i pin "vanno e vengono" a ogni pan/zoom, segnalato 06/09/2026).
+    group.clearLayers();
     for (const p of data || []) {
       if (p.is_hidden === true || p.status === 'needs_revision') continue;
       const emoji = emojiPerTipo[String(p.poi_type)] || emojiDefault;
@@ -1547,7 +1551,6 @@ function MapArea({
     try {
       if (!shoppingLayerRef.current) shoppingLayerRef.current = L.layerGroup();
       const group = shoppingLayerRef.current;
-      group.clearLayers();
       await caricaLayerVerticale('shopping', SHOPPING_EMOJI, '🏬', group, bounds);
       if (!map.hasLayer(group)) group.addTo(map);
     } catch (e) {
@@ -1564,7 +1567,6 @@ function MapArea({
     try {
       if (!lussoLayerRef.current) lussoLayerRef.current = L.layerGroup();
       const group = lussoLayerRef.current;
-      group.clearLayers();
       await caricaLayerVerticale('lusso', LUSSO_EMOJI, '👑', group, bounds);
       if (!map.hasLayer(group)) group.addTo(map);
     } catch (e) {
