@@ -4090,7 +4090,10 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // lo stream porta i giorni 1-3, poi in onComplete si chiedono gli
       // altri blocchi da 3 giorni, si ricuce e il tutto arriva al client
       // nell'evento `verified` (che dal 05/09 il client legge davvero).
-      const GIORNI_PER_BLOCCO = 3;
+      // 2 giorni per blocco (06/09, prova su wip.guide): con 3 giorni da 10
+      // tappe e i testi lunghi il primo blocco arrivava a 26 KB ≈ 8.192
+      // token e DeepSeek lo troncava comunque. Con 2 giorni ~16 KB.
+      const GIORNI_PER_BLOCCO = 2;
       const aBlocchi = requestedDays > GIORNI_PER_BLOCCO;
       const promptBlocco1 = aBlocchi
         ? `${prompt}\n\nATTENZIONE — GENERAZIONE A BLOCCHI: l'itinerario completo e' di ${requestedDays} giorni, ma ORA devi restituire SOLO i giorni da 1 a ${GIORNI_PER_BLOCCO} (l'array "giorni" contiene esattamente ${GIORNI_PER_BLOCCO} elementi). Titolo, info_viaggio e totale_viaggio si riferiscono comunque all'intero viaggio di ${requestedDays} giorni. I giorni successivi ti verranno chiesti dopo: distribuisci i luoghi in modo da lasciarne per loro.`

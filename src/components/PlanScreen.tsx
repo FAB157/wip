@@ -292,7 +292,7 @@ async function processItineraryStream(
   // (05/09/2026, tetto 8192 token di DeepSeek): ~90 s per blocco da 3
   // giorni, piu' aggancio e revisore. Il tetto cresce con i giorni.
   const giorniRichiesti = Math.max(1, Math.floor(Number(body?.days)) || 1);
-  const streamTimeout = 120000 + Math.max(0, Math.ceil((giorniRichiesti - 3) / 3)) * 120000 + 60000;
+  const streamTimeout = 120000 + Math.max(0, Math.ceil((giorniRichiesti - 2) / 2)) * 90000 + 60000;
   const streamStart = Date.now();
 
   // BUFFER DI RIGA: il server emette un evento SSE per token, ma i confini dei
