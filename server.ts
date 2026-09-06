@@ -905,6 +905,11 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         // il luogo esista. «Piazza Matteotti a Panzano» (che non esiste) si
         // agganciava alla sua stessa copia di un giro precedente.
         if (/^(iti-|ai_|t\d+_\d+$)/.test(String(riga.id || ''))) continue;
+        // Prodotti e locali non sono luoghi (Lisbona, 06/09): «Alfama» si
+        // agganciava a un tour Viator, la Cattedrale a un biglietto Tiqets,
+        // il Castello di São Jorge a un ristorante Overture omonimo.
+        if (/^(viator-|tq-|gyg-|tm-|tiqets-)/i.test(String(riga.id || ''))) continue;
+        if (!pasto && /^ov-/.test(String(riga.id || ''))) continue;
         const s = somiglianzaNomi(nome, riga.name);
         const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
         // A parita' di nome vince la riga con piu' dati (indirizzo, gemma,
@@ -2048,11 +2053,13 @@ async function fetchGeographicContext(destination: string, centro?: { lat?: numb
         `${supabaseUrl}/rest/v1/shared_pois?select=id,name,category,lat,lon,address,city,description_short,is_gem,arrival_lat,arrival_lon,entrance_lat,entrance_lon` +
         `&lat=gte.${nLat - dLat}&lat=lte.${nLat + dLat}&lon=gte.${nLon - dLon}&lon=lte.${nLon + dLon}` +
         `&is_hidden=not.is.true&or=(is_gem.eq.true,category.in.(${cats.join(',')}))` +
-        `&order=is_gem.desc.nullslast&limit=60`,
+        `&order=is_gem.desc.nullslast&limit=90`,
         { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 }
       );
-      if (Array.isArray(data) && data.length > 0) {
-        dbPoisString = data.map((p: any) => {
+      // Fuori prodotti (tour, biglietti), locali e copie AI: non sono luoghi.
+      const luoghi = (Array.isArray(data) ? data : []).filter((p: any) => !/^(viator-|tq-|gyg-|tm-|tiqets-|ov-|iti-|ai_|t\d+_\d+$)/i.test(String(p.id || ''))).slice(0, 60);
+      if (luoghi.length > 0) {
+        dbPoisString = luoghi.map((p: any) => {
           const la = Number(p.arrival_lat || p.entrance_lat || p.lat), lo = Number(p.arrival_lon || p.entrance_lon || p.lon);
           const desc = String(p.description_short || '').replace(/\s+/g, ' ').slice(0, 140);
           return `- ${p.name}${p.is_gem ? ' ★' : ''} (${p.category}; coordinate ${la.toFixed(5)}, ${lo.toFixed(5)}${p.address ? `; ${p.address}` : ''})${desc ? ` — ${desc}` : ''}`;
@@ -4118,6 +4125,21 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         // consegnati restano contigui e il conguaglio rimborsa il resto).
         for (const gg of esiti) { if (!gg.length) break; gg.forEach((g: any) => parsed.giorni.push(g)); }
         parsed.giorni.forEach((g: any, i: number) => { if (g && typeof g === 'object') g.giorno = i + 1; });
+        // DOPPIONI: i blocchi generati in parallelo non si vedono tra loro
+        // (Lisbona 06/09: Praça do Comércio nei giorni 1 e 4, lo stesso
+        // ristorante a pranzo nei giorni 3 e 4). Resta la prima occorrenza;
+        // un giorno con una tappa in meno e' meglio di una tappa ripetuta.
+        const visti = new Set<string>();
+        for (const g of parsed.giorni) {
+          if (!Array.isArray(g?.tappe)) continue;
+          g.tappe = g.tappe.filter((t: any) => {
+            const chiave = paroleNome(t?.titolo_tappa).join(' ');
+            if (!chiave) return true;
+            if (visti.has(chiave)) return false;
+            visti.add(chiave);
+            return true;
+          });
+        }
       };
 
       // Utilizza DeepSeek in streaming per gli itinerari.
