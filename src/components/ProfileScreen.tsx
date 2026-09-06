@@ -15,6 +15,7 @@ import { resetAllPlayed, getDistances, setDistance } from '../lib/guideSettings'
 const AdminPanel = lazy(() => import('./AdminPanel'));
 import ShopScreen from './ShopScreen';
 import MapStartSetting from './MapStartSetting';
+import NotifichePreferenze from './NotifichePreferenze';
 import UserProfileSummary from './UserProfileSummary';
 import MyVisionTab from './MyVisionTab';
 import GalleryViewToggle, { useGalleryView } from './GalleryViewToggle';
@@ -2090,6 +2091,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
 
               {/* Dove si apre la mappa (22/08/2026): non più Carrara per tutti */}
               <MapStartSetting language={language} />
+
+              {/* Notifiche push (06/09/2026): servizio / novità e offerte */}
+              <NotifichePreferenze language={language} />
 
               {/* PERMESSI DAL SETUP (29/08/2026, committente: «tutte queste
                   autorizzazioni si possono fare anche dal setup dell'utente?»).

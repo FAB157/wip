@@ -35,13 +35,14 @@ const AdminOpsConsole = lazy(() => import('./admin/AdminOpsConsole'));
 const AdminSocialStats = lazy(() => import('./admin/AdminSocialStats'));
 // Visite del sito (pagine, referrer, dispositivi): caricato a richiesta.
 const AdminVisits = lazy(() => import('./admin/AdminVisits'));
+const AdminNotifiche = lazy(() => import('./admin/AdminNotifiche'));
 
 const CaricamentoScheda = () => (
   <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -520,6 +521,16 @@ export default function AdminPanel() {
             <Share2 className="w-4 h-4" />
             Social
           </button>
+          {/* Notifiche push/email ai clienti (06/09/2026) */}
+          <button
+            onClick={() => setActiveTab('notifiche')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'notifiche' ? 'bg-white text-amber-600 shadow-sm' : 'text-primary/60 hover:text-amber-600'
+            }`}
+          >
+            <Bell className="w-4 h-4" />
+            Notifiche
+          </button>
           {/* Visite del sito: pagine, referrer, dispositivi (04/09/2026) */}
           <button
             onClick={() => setActiveTab('visits')}
@@ -635,6 +646,9 @@ export default function AdminPanel() {
       )}
       {activeTab === 'social' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminSocialStats /></Suspense>
+      )}
+      {activeTab === 'notifiche' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminNotifiche /></Suspense>
       )}
       {activeTab === 'visits' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminVisits /></Suspense>

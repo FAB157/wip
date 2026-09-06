@@ -1096,6 +1096,32 @@ export default function App() {
   // sovrascriveva lo stato locale dell'itinerario.
   }, [session?.user?.id]);
 
+  // NOTIFICHE (06/09/2026): con la sessione attiva si registra il
+  // dispositivo per le push (FCM, solo nativo) e si controllano le notifiche
+  // non lette — «la tua guida e' pronta» arrivata ad app chiusa diventa una
+  // notifica locale all'apertura. Il tocco su una notifica apre l'Archivio.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const t = setTimeout(() => {
+      import('./services/generazioniService').then(async (m) => {
+        await m.registraPush(language).catch(() => {});
+        const nonLette = await m.notificheAllApertura().catch(() => []);
+        if (nonLette.length) await m.segnaLette(nonLette.map(n => n.id)).catch(() => {});
+      }).catch(() => {});
+    }, 4000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
+  useEffect(() => {
+    const apri = () => {
+      setActiveTab('plan');
+      // PlanScreen legge l'evento e apre «I miei itinerari» (guide comprese).
+      setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
+    };
+    window.addEventListener('wip-notifica-apri', apri);
+    return () => window.removeEventListener('wip-notifica-apri', apri);
+  }, []);
+
   // Il mirror locale dei preferiti è l'unica fonte per `itinerary`: cuore
   // (popup mappa), stella (scheda POI) e cestino del Diario passano tutti da
   // lib/favorites, che dopo ogni modifica emette FAVORITES_EVENT. Prima ogni

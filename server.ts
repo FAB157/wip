@@ -12,6 +12,9 @@ import Groq from "groq-sdk";
 import * as agentTools from "./agentTools.js";
 // Libreria Itinerari: costanti condivise col client (SOLO tipi/costanti).
 import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
+// PDF «come un libro» generati dal server per gli allegati email (06/09/2026):
+// import dinamico dentro le funzioni, cosi' @react-pdf/renderer si carica
+// solo quando serve e un suo guasto non abbatte l'intera API.
 // ATTENZIONE — QUI NON VANNO IMPORT DI FILE .json.
 // Il 21/08/2026 questo blocco conteneva otto `import … from
 // "./src/data/tematici/*.json"` per portare i cataloghi tematici nel bundle.
@@ -3128,6 +3131,296 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     if (!ok) await logSystemError('critical', `Rimborso server-side fallito`, { source: 'chargeOrReject', userId, amount });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NOTIFICHE (email + push) E GENERAZIONI IN DIFFERITA — 06/09/2026
+  //
+  // Decisione del committente: chi chiede una guida premium (o un itinerario
+  // lungo) non deve restare con lo schermo acceso. La richiesta entra in coda
+  // (`generazioni`), il server la porta a termine da solo, la salva
+  // nell'Archivio e avvisa con EMAIL (sempre, sia itinerario che guida, con il
+  // PDF) e PUSH («🎉 La tua guida è pronta!»). Le push servono anche alle
+  // comunicazioni col cliente (pannello admin «Notifiche»).
+  //
+  // Email: Resend via REST (RESEND_API_KEY, RESEND_FROM). Nessun SMTP: prima
+  // di oggi l'app non mandava email proprie.
+  // Push: Firebase Cloud Messaging HTTP v1, autenticazione con il service
+  // account (FIREBASE_SERVICE_ACCOUNT = JSON) firmando il JWT con crypto di
+  // Node: niente firebase-admin (pesa 30 MB nella function).
+  // Senza chiavi configurate ogni canale si limita a registrare «non
+  // configurato» in `notifiche.esito`: mai un errore per l'utente.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const SB_HDR = () => ({ apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' });
+
+  /** Email dell'account (auth.users), letta con la service role. */
+  async function emailUtente(userId: string): Promise<string | null> {
+    try {
+      const r = await axios.get(`${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { headers: SB_HDR(), timeout: 8000 });
+      return r.data?.email || null;
+    } catch { return null; }
+  }
+
+  /** Lingua dell'utente: dal profilo se c'e', altrimenti quella passata. */
+  function linguaNotifica(l: any): string {
+    const s = String(l || 'IT').toUpperCase();
+    return ['IT', 'EN', 'FR', 'ES', 'DE', 'RU', 'ZH'].includes(s) ? s : 'IT';
+  }
+
+  /**
+   * Invio email con Resend. `allegati` = [{ filename, content: Buffer|base64 }].
+   * Ritorna { ok, errore? }. Destinatari validati e al massimo 6 (account + 5).
+   */
+  async function inviaEmail(a: { a: string[]; oggetto: string; html: string; testo?: string; allegati?: Array<{ filename: string; content: Buffer | string }> }): Promise<{ ok: boolean; errore?: string }> {
+    const key = process.env.RESEND_API_KEY;
+    if (!key) return { ok: false, errore: 'non_configurato' };
+    const validi = Array.from(new Set(a.a.map(x => String(x || '').trim().toLowerCase()).filter(x => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(x)))).slice(0, 6);
+    if (!validi.length) return { ok: false, errore: 'nessun_destinatario' };
+    try {
+      const r = await axios.post('https://api.resend.com/emails', {
+        from: process.env.RESEND_FROM || 'WIP · World in Pocket <guide@wip.guide>',
+        to: validi,
+        subject: a.oggetto,
+        html: a.html,
+        text: a.testo,
+        attachments: (a.allegati || []).map(x => ({ filename: x.filename, content: Buffer.isBuffer(x.content) ? x.content.toString('base64') : x.content })),
+      }, { headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, timeout: 20000 });
+      return r.status < 300 ? { ok: true } : { ok: false, errore: `HTTP ${r.status}` };
+    } catch (e: any) {
+      return { ok: false, errore: e?.response?.data?.message || e?.message || 'errore' };
+    }
+  }
+
+  // ── FCM v1: token OAuth dal service account, in cache fino a scadenza ────
+  let fcmToken: { valore: string; scade: number } | null = null;
+  function fcmAccount(): any | null {
+    try { const j = process.env.FIREBASE_SERVICE_ACCOUNT; return j ? JSON.parse(j) : null; } catch { return null; }
+  }
+  async function fcmAccessToken(): Promise<string | null> {
+    const sa = fcmAccount();
+    if (!sa?.client_email || !sa?.private_key) return null;
+    if (fcmToken && fcmToken.scade > Date.now() + 60000) return fcmToken.valore;
+    const now = Math.floor(Date.now() / 1000);
+    const b64 = (o: any) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const head = b64({ alg: 'RS256', typ: 'JWT' });
+    const claim = b64({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/firebase.messaging', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 });
+    const firma = crypto.sign('RSA-SHA256', Buffer.from(`${head}.${claim}`), sa.private_key).toString('base64url');
+    try {
+      const r = await axios.post('https://oauth2.googleapis.com/token',
+        new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${head}.${claim}.${firma}` }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 10000 });
+      fcmToken = { valore: r.data.access_token, scade: Date.now() + (Number(r.data.expires_in) || 3600) * 1000 };
+      return fcmToken.valore;
+    } catch (e: any) { console.warn('[push] token FCM fallito:', e?.response?.data?.error_description || e?.message); return null; }
+  }
+
+  /**
+   * Push a tutti i dispositivi dell'utente. Rispetta le preferenze del
+   * profilo (push_servizio / push_promo); i token non piu' validi vengono
+   * cancellati. Ritorna quanti invii sono andati a buon fine.
+   */
+  async function inviaPush(userId: string, n: { titolo: string; corpo: string; dati?: Record<string, string>; tipo?: 'servizio' | 'promo' }): Promise<{ inviate: number; errore?: string }> {
+    const sa = fcmAccount();
+    if (!sa?.project_id) return { inviate: 0, errore: 'non_configurato' };
+    try {
+      const prof = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}&select=push_servizio,push_promo`, { headers: SB_HDR(), timeout: 6000 }).catch(() => null);
+      const p = prof?.data?.[0] || {};
+      if ((n.tipo || 'servizio') === 'promo' ? p.push_promo !== true : p.push_servizio === false) return { inviate: 0, errore: 'preferenza_utente' };
+      const disp = await axios.get(`${supabaseUrl}/rest/v1/dispositivi_push?user_id=eq.${userId}&select=id,token`, { headers: SB_HDR(), timeout: 6000 });
+      const tokens: Array<{ id: string; token: string }> = disp.data || [];
+      if (!tokens.length) return { inviate: 0, errore: 'nessun_dispositivo' };
+      const access = await fcmAccessToken();
+      if (!access) return { inviate: 0, errore: 'token_fcm' };
+      let inviate = 0;
+      for (const d of tokens) {
+        try {
+          await axios.post(`https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`, {
+            message: {
+              token: d.token,
+              notification: { title: n.titolo, body: n.corpo },
+              data: Object.fromEntries(Object.entries(n.dati || {}).map(([k, v]) => [k, String(v)])),
+              android: { priority: 'high', notification: { channel_id: 'wip_servizio', sound: 'default' } },
+              apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+            }
+          }, { headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' }, timeout: 10000 });
+          inviate++;
+        } catch (e: any) {
+          const codice = e?.response?.data?.error?.details?.[0]?.errorCode || e?.response?.data?.error?.status;
+          if (codice === 'UNREGISTERED' || codice === 'NOT_FOUND' || e?.response?.status === 404) {
+            await axios.delete(`${supabaseUrl}/rest/v1/dispositivi_push?id=eq.${d.id}`, { headers: SB_HDR(), timeout: 6000 }).catch(() => {});
+          } else console.warn('[push] invio fallito:', codice || e?.message);
+        }
+      }
+      return { inviate };
+    } catch (e: any) { return { inviate: 0, errore: e?.message }; }
+  }
+
+  /** Riga nel registro `notifiche` (inbox dell'app + registro admin). */
+  async function registraNotifica(userId: string, n: { titolo: string; corpo: string; dati?: any; tipo?: 'servizio' | 'promo'; canali: string[]; esito: any; inviata_da?: string | null }): Promise<void> {
+    try {
+      await axios.post(`${supabaseUrl}/rest/v1/notifiche`, {
+        user_id: userId, tipo: n.tipo || 'servizio', titolo: n.titolo, corpo: n.corpo,
+        dati: n.dati || {}, canali: n.canali, esito: n.esito, inviata_da: n.inviata_da || null,
+      }, { headers: { ...SB_HDR(), Prefer: 'return=minimal' }, timeout: 8000 });
+    } catch (e: any) { console.warn('[notifiche] registro fallito:', e?.message); }
+  }
+
+  /**
+   * Notifica completa (push + email opzionale + registro) a un utente.
+   * `email` = { oggetto, html, testo?, allegati?, extra?: string[] } oppure
+   * assente per la sola push.
+   */
+  async function notificaUtente(userId: string, n: { titolo: string; corpo: string; dati?: Record<string, string>; tipo?: 'servizio' | 'promo'; inviata_da?: string | null; email?: { oggetto: string; html: string; testo?: string; allegati?: any[]; extra?: string[] } }): Promise<{ push: any; email: any }> {
+    const esito: any = {};
+    const canali: string[] = ['inapp'];
+    esito.push = await inviaPush(userId, { titolo: n.titolo, corpo: n.corpo, dati: n.dati, tipo: n.tipo });
+    if (esito.push.inviate > 0) canali.push('push');
+    if (n.email) {
+      const principale = await emailUtente(userId);
+      const dest = [principale, ...(n.email.extra || [])].filter(Boolean) as string[];
+      esito.email = await inviaEmail({ a: dest, oggetto: n.email.oggetto, html: n.email.html, testo: n.email.testo, allegati: n.email.allegati });
+      if (esito.email.ok) canali.push('email');
+    }
+    await registraNotifica(userId, { titolo: n.titolo, corpo: n.corpo, dati: n.dati, tipo: n.tipo, canali, esito, inviata_da: n.inviata_da });
+    return esito;
+  }
+
+  // ── Coda `generazioni` ────────────────────────────────────────────────────
+  async function generazioneAggiorna(id: string, campi: any): Promise<void> {
+    await axios.patch(`${supabaseUrl}/rest/v1/generazioni?id=eq.${encodeURIComponent(id)}`, { ...campi, updated_at: new Date().toISOString() },
+      { headers: { ...SB_HDR(), Prefer: 'return=minimal' }, timeout: 8000 }).catch((e: any) => console.warn('[generazioni] aggiornamento fallito:', e?.message));
+  }
+  async function generazioneLeggi(id: string): Promise<any | null> {
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/generazioni?id=eq.${encodeURIComponent(id)}&select=*&limit=1`, { headers: SB_HDR(), timeout: 8000 });
+      return r.data?.[0] || null;
+    } catch { return null; }
+  }
+
+  /** Testi della notifica «pronta» nella lingua dell'utente. */
+  function testiPronta(tipo: string, lingua: string, titolo: string): { titolo: string; corpo: string; oggetto: string; intro: string; apri: string } {
+    const L = linguaNotifica(lingua);
+    const guida = tipo === 'guida';
+    const T: Record<string, any> = {
+      IT: { titolo: guida ? '🎉 La tua guida è pronta!' : '🎉 Il tuo itinerario è pronto!', corpo: `${titolo} — aprilo nel tuo Archivio.`, oggetto: guida ? `La tua Guida d'Autore è pronta: ${titolo}` : `Il tuo itinerario è pronto: ${titolo}`, intro: guida ? 'La tua Guida d\'Autore è pronta: la trovi nell\'Archivio dell\'app e in allegato come PDF.' : 'Il tuo itinerario è pronto: lo trovi nell\'Archivio dell\'app e in allegato come PDF.', apri: 'Apri in WIP' },
+      EN: { titolo: guida ? '🎉 Your guide is ready!' : '🎉 Your itinerary is ready!', corpo: `${titolo} — open it in your Archive.`, oggetto: guida ? `Your Author's Guide is ready: ${titolo}` : `Your itinerary is ready: ${titolo}`, intro: guida ? 'Your Author\'s Guide is ready: find it in the app Archive and attached as a PDF.' : 'Your itinerary is ready: find it in the app Archive and attached as a PDF.', apri: 'Open in WIP' },
+      FR: { titolo: guida ? '🎉 Votre guide est prêt !' : '🎉 Votre itinéraire est prêt !', corpo: `${titolo} — ouvrez-le dans vos Archives.`, oggetto: guida ? `Votre guide est prêt : ${titolo}` : `Votre itinéraire est prêt : ${titolo}`, intro: 'C\'est prêt : retrouvez-le dans les Archives de l\'app et en pièce jointe (PDF).', apri: 'Ouvrir dans WIP' },
+      ES: { titolo: guida ? '🎉 ¡Tu guía está lista!' : '🎉 ¡Tu itinerario está listo!', corpo: `${titolo} — ábrelo en tu Archivo.`, oggetto: guida ? `Tu guía está lista: ${titolo}` : `Tu itinerario está listo: ${titolo}`, intro: 'Está listo: lo encuentras en el Archivo de la app y adjunto en PDF.', apri: 'Abrir en WIP' },
+      DE: { titolo: guida ? '🎉 Dein Guide ist fertig!' : '🎉 Deine Reiseroute ist fertig!', corpo: `${titolo} — im Archiv öffnen.`, oggetto: guida ? `Dein Guide ist fertig: ${titolo}` : `Deine Reiseroute ist fertig: ${titolo}`, intro: 'Fertig: du findest es im Archiv der App und als PDF im Anhang.', apri: 'In WIP öffnen' },
+      RU: { titolo: guida ? '🎉 Ваш гид готов!' : '🎉 Ваш маршрут готов!', corpo: `${titolo} — откройте в Архиве.`, oggetto: guida ? `Ваш гид готов: ${titolo}` : `Ваш маршрут готов: ${titolo}`, intro: 'Готово: смотрите в Архиве приложения и во вложении (PDF).', apri: 'Открыть в WIP' },
+      ZH: { titolo: guida ? '🎉 您的指南已准备好！' : '🎉 您的行程已准备好！', corpo: `${titolo} — 在“档案”中打开。`, oggetto: guida ? `您的指南已准备好：${titolo}` : `您的行程已准备好：${titolo}`, intro: '已准备好：请在应用的“档案”中查看，PDF 见附件。', apri: '在 WIP 中打开' },
+    };
+    return T[L] || T.IT;
+  }
+
+  function htmlEmailPronta(t: { intro: string; apri: string }, titolo: string, link: string): string {
+    const esc = (s: string) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+    return `<div style="font-family:Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#1f2937">
+  <div style="background:#1e3a8a;color:#fff;padding:20px 24px;border-radius:12px 12px 0 0"><div style="font-size:12px;letter-spacing:.2em;opacity:.8">WIP · WORLD IN POCKET</div><div style="font-size:20px;font-weight:700;margin-top:6px">${esc(titolo)}</div></div>
+  <div style="padding:22px 24px;border:1px solid #e5e7eb;border-top:0;border-radius:0 0 12px 12px">
+    <p style="font-size:15px;line-height:1.5">${esc(t.intro)}</p>
+    <p style="margin:22px 0"><a href="${esc(link)}" style="background:#e8611a;color:#fff;text-decoration:none;padding:12px 20px;border-radius:999px;font-weight:700">${esc(t.apri)}</a></p>
+    <p style="font-size:12px;color:#6b7280">wip.guide</p>
+  </div></div>`;
+  }
+
+  /**
+   * Chiusura di una generazione riuscita: stato `pronta`, push + email (con
+   * PDF se disponibile) + registro. Idempotente: se gia' notificata, esce.
+   */
+  async function generazionePronta(jobId: string, risultatoId: string, titolo: string, pdf?: { filename: string; content: Buffer } | null): Promise<void> {
+    const job = await generazioneLeggi(jobId);
+    if (!job || job.notificata_at) return;
+    await generazioneAggiorna(jobId, { stato: 'pronta', risultato_id: risultatoId, titolo: titolo || job.titolo, pronta_at: new Date().toISOString(), errore: null });
+    const t = testiPronta(job.tipo, job.lingua, titolo || job.titolo || '');
+    const link = `https://www.wip.guide/?archivio=${job.tipo === 'guida' ? 'guide' : 'itinerari'}`;
+    await notificaUtente(job.user_id, {
+      titolo: t.titolo, corpo: t.corpo, tipo: 'servizio',
+      dati: { azione: 'archivio', tipo: job.tipo, id: risultatoId, generazione: jobId },
+      email: { oggetto: t.oggetto, html: htmlEmailPronta(t, titolo || job.titolo || '', link), testo: `${t.intro}\n${link}`, allegati: pdf ? [pdf] : [], extra: Array.isArray(job.email_extra) ? job.email_extra : [] },
+    });
+    await generazioneAggiorna(jobId, { notificata_at: new Date().toISOString() });
+  }
+
+  /** Fallimento definitivo: stato `fallita`, rimborso, avviso. */
+  async function generazioneFallita(jobId: string, errore: string): Promise<void> {
+    const job = await generazioneLeggi(jobId);
+    if (!job || job.stato === 'pronta' || job.stato === 'fallita') return;
+    await generazioneAggiorna(jobId, { stato: 'fallita', errore: String(errore || 'errore').slice(0, 500) });
+    if (job.crediti > 0) await refundServer(job.user_id, job.crediti);
+    const L = linguaNotifica(job.lingua);
+    const testi: Record<string, [string, string]> = {
+      IT: ['Generazione non riuscita', `Non siamo riusciti a preparare «${job.titolo || ''}». I crediti ti sono stati restituiti: riprova quando vuoi.`],
+      EN: ['Generation failed', `We could not prepare "${job.titolo || ''}". Your credits have been refunded: try again anytime.`],
+    };
+    const [ti, co] = testi[L] || testi.EN;
+    await notificaUtente(job.user_id, { titolo: ti, corpo: co, tipo: 'servizio', dati: { azione: 'archivio', generazione: jobId } });
+  }
+
+  /**
+   * Avvio del lavoro: chiamata INTERNA alla rotta che sa gia' generare (la
+   * guida: /api/premium-guide/generate; l'itinerario:
+   * /api/groq/itinerary-stream) con il segreto di infrastruttura e il
+   * jobId. Ogni rotta gira nella SUA invocazione (300 s su Vercel), salva il
+   * risultato e chiude il lavoro. Qui non si aspetta la risposta: la
+   * richiesta parte e si torna subito all'utente; il cron riprova i lavori
+   * rimasti a meta'.
+   */
+  function baseInterna(): string {
+    if (process.env.INTERNAL_BASE_URL) return process.env.INTERNAL_BASE_URL;
+    if (process.env.VERCEL) return 'https://www.wip.guide';
+    return `http://localhost:${process.env.PORT || 3000}`;
+  }
+  async function generazioneAvvia(job: any): Promise<void> {
+    if (!SCRIPT_SHARED_SECRET) { await generazioneFallita(job.id, 'SCRIPT_SHARED_SECRET mancante: il lavoratore non puo\' autenticarsi'); return; }
+    await generazioneAggiorna(job.id, { stato: 'in_corso', avviata_at: new Date().toISOString(), tentativi: (Number(job.tentativi) || 0) + 1 });
+    const percorso = job.tipo === 'guida' ? '/api/premium-guide/generate' : '/api/groq/itinerary-stream';
+    const body = { ...(job.parametri || {}), userId: job.user_id, jobId: job.id, language: job.lingua };
+    const p = axios.post(`${baseInterna()}${percorso}`, body, {
+      headers: { 'Content-Type': 'application/json', 'x-script-secret': SCRIPT_SHARED_SECRET, 'x-job-id': job.id },
+      timeout: 290000, maxContentLength: Infinity, maxBodyLength: Infinity, responseType: 'text',
+    }).then(() => undefined).catch((e: any) => console.warn(`[generazioni] lavoro ${job.id} (${job.tipo}):`, e?.code || e?.message));
+    // Su Vercel la function viene congelata alla risposta: waitUntil la
+    // tiene viva finche' il lavoro non ha ricevuto risposta (o scade).
+    try {
+      const vf = await import('@vercel/functions').catch(() => null as any);
+      if (vf?.waitUntil) vf.waitUntil(p); else void p;
+    } catch { void p; }
+  }
+
+  /** PDF della guida per l'allegato email (null se non realizzabile). */
+  async function pdfGuidaPerEmail(content: any, mediaManifest: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
+    try {
+      const { pdfGuidaServer } = await import('./src/lib/pdf/serverPdf.js');
+      const buf = await pdfGuidaServer(content, mediaManifest || {}, language);
+      if (!buf) return null;
+      const nome = String(content?.guida_titolo || 'Guida').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Guida';
+      return { filename: `WIP ${nome}.pdf`, content: buf };
+    } catch (e: any) { console.warn('[pdf email] guida:', e?.message); return null; }
+  }
+  /** PDF dell'itinerario per l'allegato email (null se non realizzabile). */
+  async function pdfItinerarioPerEmail(plan: any, language: any): Promise<{ filename: string; content: Buffer } | null> {
+    try {
+      const { pdfItinerarioServer } = await import('./src/lib/pdf/serverPdf.js');
+      const buf = await pdfItinerarioServer(plan, language);
+      if (!buf) return null;
+      const nome = String(plan?.titolo || 'Itinerario').replace(/[^\p{L}\p{N} _-]+/gu, '').trim().slice(0, 60) || 'Itinerario';
+      return { filename: `WIP ${nome}.pdf`, content: buf };
+    } catch (e: any) { console.warn('[pdf email] itinerario:', e?.message); return null; }
+  }
+
+  /**
+   * Chi chiama una rotta di generazione PER CONTO di un lavoro in coda: il
+   * segreto di infrastruttura + jobId nel body. Ritorna il lavoro (con
+   * user_id e crediti gia' addebitati) oppure null se non e' una chiamata
+   * interna valida.
+   */
+  async function lavoroInterno(req: any): Promise<any | null> {
+    const jobId = String(req.body?.jobId || req.headers['x-job-id'] || '');
+    if (!jobId || !SCRIPT_SHARED_SECRET || req.headers['x-script-secret'] !== SCRIPT_SHARED_SECRET) return null;
+    const job = await generazioneLeggi(jobId);
+    if (!job || job.stato === 'pronta' || job.stato === 'fallita') return null;
+    return job;
+  }
+
   // Come verifyUserToken ma richiede is_admin = true sul profilo.
   async function verifyAdminBearer(req: any): Promise<string | null> {
     const uid = await verifyUserToken(req);
@@ -3669,6 +3962,7 @@ app.post("/api/groq/itinerary", rateLimiter, async (req, res) => {
     let itinCost = 0;
     let itinSettled = false;
     let itinRefunded = false; // rimborso totale avvenuto: la quota non va incrementata
+    let lavoro: any = null;   // lavoro in coda (generazioni) che ha chiesto questo itinerario
     try {
       // Header SSE in cima, PRIMA di qualsiasi write: prima si scrivevano
       // FEATURE_DISABLED/QUOTA_EXCEEDED senza Content-Type event-stream.
@@ -3785,12 +4079,16 @@ ${dayLines.join("\n")}
       // settleItineraryCost lato client è diventata un no-op di refresh UI:
       // niente doppio addebito.
       const requestedDays = Math.min(30, Math.max(1, Math.floor(Number(days)) || 1));
-      itinUserId = await verifyUserToken(req);
+      // LAVORO IN DIFFERITA (06/09/2026): chiamata dalla coda `generazioni`
+      // con il segreto di infrastruttura → utente e crediti sono quelli del
+      // lavoro (gia' addebitati), nessun token e nessuna quota.
+      lavoro = await lavoroInterno(req);
+      itinUserId = lavoro ? String(lavoro.user_id) : await verifyUserToken(req);
       if (!itinUserId) { res.status(401).type('application/json').json({ error: 'UNAUTHORIZED' }); return; }
 
       // Quota DOPO l'auth: il contatore è per utente verificato, mai per
       // lo userId del body.
-      const quota = await checkAndIncrementQuota(req, 'itinerari');
+      const quota = lavoro ? { allowed: true } : await checkAndIncrementQuota(req, 'itinerari');
       if (!quota.allowed) {
         res.write(`data: ${JSON.stringify({ error: "QUOTA_EXCEEDED", detail: quota.error || '' })}\n\n`);
         return res.end();
@@ -3799,13 +4097,13 @@ ${dayLines.join("\n")}
       // Ripartizione del prelievo fra i due portafogli (consume_credits
       // svuota prima earned): serve alla garanzia pioggia per rimborsare
       // sullo STESSO portafoglio da cui è uscito il credito.
-      itinCost = (await prezzoDi('itinerary_daily')) * requestedDays;
+      itinCost = lavoro ? (Number(lavoro.crediti) || 0) : (await prezzoDi('itinerary_daily')) * requestedDays;
       let earnedBefore = 0;
       try {
         const prof = await axios.get(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${itinUserId}&select=earned_credits`, { headers: CREDIT_SVC_HEADERS, timeout: 4000 });
         earnedBefore = Number(prof.data?.[0]?.earned_credits) || 0;
       } catch { /* best-effort: senza lettura si assume tutto da purchased */ }
-      const chargeOutcome = await consumeCreditsServer(itinUserId, itinCost, `itinerary_daily ×${requestedDays}`);
+      const chargeOutcome = lavoro ? 'ok' : await consumeCreditsServer(itinUserId, itinCost, `itinerary_daily ×${requestedDays}`);
       if (chargeOutcome === 'insufficient') {
         res.write(`data: ${JSON.stringify({ error: "INSUFFICIENT_CREDITS", cost: itinCost })}\n\n`);
         return res.end();
@@ -4192,6 +4490,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
             // qui rimborserebbe più di quanto incassato (conio di crediti).
             const owed = (itinCost / requestedDays) * Math.min(requestedDays, delivered);
             if (owed < itinCost) await refundServer(itinUserId, itinCost - owed);
+            if (lavoro) await generazioneAggiorna(lavoro.id, { crediti: Math.round(owed) });
 
             // ── Registro di quanto è stato PAGATO (garanzia pioggia) ──────
             // L'itinerario viene salvato dal client con un id suo: il server
@@ -4215,13 +4514,42 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
                 { cache_key: `itin_paid_${itinUserId}_${billing.ts}`, content_type: 'itinerary_billing', text_content: JSON.stringify({ ...billing, userId: itinUserId }) },
                 { headers: CREDIT_SVC_HEADERS, timeout: 5000 });
             } catch { /* best-effort: il claim ripiega su credit_transactions */ }
+
+            // ── ARCHIVIO DAL SERVER + EMAIL/PUSH (06/09/2026) ──────────────
+            // L'itinerario si salva QUI, con un id deciso dal server e mandato
+            // al client nell'evento `verified` (parsed.id): se l'utente ha
+            // chiuso la pagina non si perde niente, e il client, quando
+            // salva a sua volta, fa l'upsert sullo stesso id. L'email con il
+            // PDF parte sempre (committente), la push «pronto» pure.
+            try {
+              const idItin = String(parsed.id || (lavoro?.risultato_id) || crypto.randomUUID());
+              parsed.id = idItin;
+              parsed.credits_paid = billing.credits_paid; parsed.credits_paid_earned = billing.credits_paid_earned; parsed.credits_paid_ts = billing.ts;
+              await axios.post(`${supabaseUrl}/rest/v1/user_itineraries?on_conflict=id`, {
+                id: idItin, user_id: itinUserId, titolo: String(parsed.titolo || destination || 'Itinerario').slice(0, 200),
+                dati_itinerario: parsed, updated_at: new Date().toISOString(),
+              }, { headers: { ...SB_HDR(), Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 10000 });
+              try { res.write(`data: ${JSON.stringify({ verified: parsed, report: { salvato: true } })}\n\n`); } catch { /* stream chiuso */ }
+              const titoloItin = String(parsed.titolo || destination || 'Itinerario');
+              const pdf = await pdfItinerarioPerEmail(parsed, language);
+              if (lavoro) {
+                await generazionePronta(lavoro.id, idItin, titoloItin, pdf);
+              } else {
+                const t = testiPronta('itinerario', language, titoloItin);
+                await notificaUtente(itinUserId, { titolo: t.titolo, corpo: t.corpo, tipo: 'servizio', dati: { azione: 'archivio', tipo: 'itinerario', id: idItin },
+                  email: { oggetto: t.oggetto, html: htmlEmailPronta(t, titoloItin, 'https://www.wip.guide/?archivio=itinerari'), testo: t.intro, allegati: pdf ? [pdf] : [] } });
+              }
+            } catch (eSalva: any) {
+              console.warn('[itinerary-stream] archivio/email dal server falliti:', eSalva?.message);
+            }
           } catch {
             // JSON finale non parsabile: il client tenterà comunque la
             // riparazione, ma senza certezza della consegna non tratteniamo
             // nulla — meglio un raro itinerario riparato gratis che un
             // addebito per un fallimento.
             itinRefunded = true;
-            await refundServer(itinUserId, itinCost);
+            if (lavoro) await generazioneFallita(lavoro.id, 'JSON finale non valido');
+            else await refundServer(itinUserId, itinCost);
           }
         }
       );
@@ -4231,7 +4559,8 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         // volte se il catch sotto scattasse dopo.
         itinSettled = true;
         itinRefunded = true;
-        await refundServer(itinUserId, itinCost);
+        if (lavoro) await generazioneFallita(lavoro.id, 'nessun contenuto dai motori AI');
+        else await refundServer(itinUserId, itinCost);
       }
 
       // La quota conta le CONSEGNE: una generazione rimborsata per intero
@@ -4245,7 +4574,8 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // della rotta va restituito (best-effort, la guardia anti-conio di
       // refund_credits limita comunque ai consumi reali).
       try {
-        if (itinUserId && itinCost > 0 && !itinSettled) {
+        if (lavoro && !itinSettled) await generazioneFallita(lavoro.id, e?.message || 'errore');
+        else if (itinUserId && itinCost > 0 && !itinSettled) {
           await refundServer(itinUserId, itinCost);
         }
       } catch { /* best-effort */ }
@@ -24345,8 +24675,192 @@ Non aggiungere testo prima o dopo il JSON.`;
     }
   });
 
+  // ═══ GENERAZIONI IN DIFFERITA — rotte (06/09/2026) ═══════════════════════
+  // POST /api/generazioni  { tipo:'guida'|'itinerario', parametri, email_extra }
+  // Addebita SUBITO (stesso listino e stessa quota della rotta in diretta),
+  // mette in coda e avvia il lavoro; risponde in un secondo con l'id.
+  // L'utente puo' chiudere l'app: la guida arriva nell'Archivio, via email e
+  // con la push.
+  app.post("/api/generazioni", rateLimiter, requireAuth, async (req: any, res) => {
+    let addebito: { userId: string; cost: number } | null = null;
+    try {
+      const { tipo, parametri, email_extra, language } = req.body || {};
+      if (tipo !== 'guida' && tipo !== 'itinerario') return res.status(400).json({ error: 'tipo_non_valido' });
+      if (!parametri || typeof parametri !== 'object') return res.status(400).json({ error: 'parametri_mancanti' });
+      const giorni = tipo === 'guida'
+        ? Math.max(1, Number(parametri?.itinerary?.giorni?.length) || 1)
+        : Math.min(30, Math.max(1, Math.floor(Number(parametri?.days)) || 1));
+      if (tipo === 'guida' && !parametri.itinerary?.giorni) return res.status(400).json({ error: 'itinerario_mancante' });
+      if (tipo === 'itinerario' && !parametri.destination) return res.status(400).json({ error: 'destinazione_mancante' });
+      const quota = await checkAndIncrementQuota(req, tipo === 'guida' ? 'premium_guide' : 'itinerari');
+      if (!quota.allowed) return res.status(403).json({ error: 'QUOTA_EXCEEDED' });
+      // Guida gia' in archivio (stesso hash): niente addebito, si chiude subito.
+      if (tipo === 'guida' && parametri.hash && /^[A-Za-z0-9_-]{4,80}$/.test(String(parametri.hash))) {
+        const c = await axios.get(`${supabaseUrl}/rest/v1/itinerary_guides?itinerary_hash=eq.${encodeURIComponent(String(parametri.hash))}&status=eq.completed&select=itinerary_hash&limit=1`, { headers: SB_HDR(), timeout: 8000 }).catch(() => null);
+        if (c?.data?.length) return res.json({ id: null, gia_pronta: true, risultato_id: c.data[0].itinerary_hash });
+      }
+      addebito = await chargeOrReject(req, res, tipo === 'guida' ? 'premium_guide_daily' : 'itinerary_daily', giorni);
+      if (!addebito) return;
+      const extra = (Array.isArray(email_extra) ? email_extra : []).map((e: any) => String(e || '').trim().toLowerCase()).filter((e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)).slice(0, 5);
+      const titolo = tipo === 'guida'
+        ? String(parametri.itinerary?.titolo || parametri.itinerary?.destinazione || 'Guida Premium').slice(0, 160)
+        : `${String(parametri.destination).slice(0, 80)} · ${giorni} ${giorni === 1 ? 'giorno' : 'giorni'}`;
+      const ins = await axios.post(`${supabaseUrl}/rest/v1/generazioni`, {
+        user_id: addebito.userId, tipo, titolo, parametri, lingua: linguaNotifica(language || parametri.language),
+        crediti: addebito.cost, email_extra: extra, stato: 'in_coda',
+      }, { headers: { ...SB_HDR(), Prefer: 'return=representation' }, timeout: 8000 });
+      const job = ins.data?.[0];
+      if (!job?.id) throw new Error('coda non disponibile');
+      await generazioneAvvia(job);
+      res.json({ id: job.id, stato: 'in_coda', crediti: addebito.cost, titolo });
+    } catch (e: any) {
+      console.error('[generazioni] creazione fallita:', e?.message);
+      if (addebito) await refundServer(addebito.userId, addebito.cost);
+      res.status(500).json({ error: e?.message || 'errore' });
+    }
+  });
+
+  // Le mie generazioni (per l'Archivio): ultime 30, senza i parametri.
+  app.get("/api/generazioni/mie", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/generazioni?user_id=eq.${req.userId}&select=id,tipo,stato,titolo,risultato_id,errore,created_at,pronta_at&order=created_at.desc&limit=30`, { headers: SB_HDR(), timeout: 8000 });
+      res.json({ generazioni: r.data || [] });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+
+  // Cron di sicurezza: riprova i lavori rimasti a meta' (la function e'
+  // morta, DeepSeek non ha risposto…) e dopo 3 tentativi li chiude con
+  // rimborso. Ogni 5 minuti (vercel.json). Auth: Bearer CRON_SECRET.
+  app.get("/api/cron/generazioni", async (req, res) => {
+    if (!process.env.CRON_SECRET || req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) return res.status(401).json({ error: 'unauthorized' });
+    try {
+      const limite = new Date(Date.now() - 7 * 60 * 1000).toISOString();
+      const r = await axios.get(`${supabaseUrl}/rest/v1/generazioni?stato=in.(in_coda,in_corso)&updated_at=lt.${encodeURIComponent(limite)}&select=*&order=created_at.asc&limit=10`, { headers: SB_HDR(), timeout: 8000 });
+      const esiti: any[] = [];
+      for (const job of r.data || []) {
+        if ((Number(job.tentativi) || 0) >= 3) { await generazioneFallita(job.id, 'troppi tentativi'); esiti.push({ id: job.id, esito: 'fallita' }); continue; }
+        // La guida potrebbe essere gia' in archivio (la function e' morta dopo
+        // il salvataggio): in quel caso si chiude senza rigenerare.
+        if (job.tipo === 'guida' && job.parametri?.hash) {
+          const c = await axios.get(`${supabaseUrl}/rest/v1/itinerary_guides?itinerary_hash=eq.${encodeURIComponent(String(job.parametri.hash))}&status=eq.completed&select=itinerary_hash,content_data,media_manifest&limit=1`, { headers: SB_HDR(), timeout: 8000 }).catch(() => null);
+          if (c?.data?.length) { await generazionePronta(job.id, c.data[0].itinerary_hash, String(c.data[0].content_data?.guida_titolo || job.titolo || ''), await pdfGuidaPerEmail(c.data[0].content_data, c.data[0].media_manifest, job.lingua)); esiti.push({ id: job.id, esito: 'chiusa' }); continue; }
+        }
+        await generazioneAvvia(job); esiti.push({ id: job.id, esito: 'riavviata', tentativo: (Number(job.tentativi) || 0) + 1 });
+      }
+      res.json({ ok: true, controllate: (r.data || []).length, esiti });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+
+  // ═══ DISPOSITIVI PUSH E NOTIFICHE ═══════════════════════════════════════
+  app.post("/api/push/registra", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const { token, piattaforma, lingua } = req.body || {};
+      if (!token || typeof token !== 'string' || token.length < 20 || token.length > 4096) return res.status(400).json({ error: 'token_non_valido' });
+      const piatt = ['android', 'ios', 'web'].includes(String(piattaforma)) ? String(piattaforma) : 'android';
+      // Il token identifica il dispositivo: se cambia utente sullo stesso
+      // telefono, la riga passa al nuovo (upsert sul token).
+      await axios.post(`${supabaseUrl}/rest/v1/dispositivi_push?on_conflict=token`, { user_id: req.userId, token, piattaforma: piatt, lingua: linguaNotifica(lingua), visto_at: new Date().toISOString() },
+        { headers: { ...SB_HDR(), Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 8000 });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+  app.post("/api/push/rimuovi", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const { token } = req.body || {};
+      if (token) await axios.delete(`${supabaseUrl}/rest/v1/dispositivi_push?token=eq.${encodeURIComponent(String(token))}&user_id=eq.${req.userId}`, { headers: SB_HDR(), timeout: 8000 });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+  // Inbox: ultime 50 notifiche + quante non lette (per la notifica locale
+  // all'apertura e il badge).
+  app.get("/api/notifiche/mie", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/notifiche?user_id=eq.${req.userId}&select=id,tipo,titolo,corpo,dati,letta_at,created_at&order=created_at.desc&limit=50`, { headers: SB_HDR(), timeout: 8000 });
+      const lista = r.data || [];
+      res.json({ notifiche: lista, non_lette: lista.filter((n: any) => !n.letta_at).length });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+  app.post("/api/notifiche/lette", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(String).slice(0, 100);
+      const filtro = ids.length ? `&id=in.(${ids.map(encodeURIComponent).join(',')})` : '';
+      await axios.patch(`${supabaseUrl}/rest/v1/notifiche?user_id=eq.${req.userId}&letta_at=is.null${filtro}`, { letta_at: new Date().toISOString() }, { headers: { ...SB_HDR(), Prefer: 'return=minimal' }, timeout: 8000 });
+      res.json({ ok: true });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+  app.post("/api/notifiche/preferenze", rateLimiter, requireAuth, async (req: any, res) => {
+    try {
+      const campi: any = {};
+      if (typeof req.body?.push_servizio === 'boolean') campi.push_servizio = req.body.push_servizio;
+      if (typeof req.body?.push_promo === 'boolean') campi.push_promo = req.body.push_promo;
+      if (!Object.keys(campi).length) return res.status(400).json({ error: 'niente_da_salvare' });
+      await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${req.userId}`, campi, { headers: { ...SB_HDR(), Prefer: 'return=minimal' }, timeout: 8000 });
+      res.json({ ok: true, ...campi });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+
+  // ═══ ADMIN: NOTIFICHE MANUALI ═══════════════════════════════════════════
+  // { destinatario: { tipo:'utente'|'segmento'|'tutti', email?, segmento? },
+  //   titolo, corpo, tipo:'servizio'|'promo', azione?, email?: boolean }
+  // Segmenti: 'inattivi_30' (nessun accesso da 30 gg), 'lingua:XX'.
+  // Le promozionali vanno SOLO a chi ha push_promo = true (GDPR) e con un
+  // tetto: massimo una promo ogni 7 giorni per utente.
+  app.post("/api/admin/notifiche/invia", rateLimiter, requireAdmin, async (req: any, res) => {
+    try {
+      const { destinatario, titolo, corpo, tipo = 'servizio', azione, email: conEmail } = req.body || {};
+      if (!titolo || !corpo) return res.status(400).json({ error: 'titolo e corpo obbligatori' });
+      const promo = tipo === 'promo';
+      let utenti: string[] = [];
+      if (destinatario?.tipo === 'utente') {
+        const em = String(destinatario.email || '').trim().toLowerCase();
+        const u = await axios.get(`${supabaseUrl}/auth/v1/admin/users?page=1&per_page=1&filter=${encodeURIComponent(em)}`, { headers: SB_HDR(), timeout: 8000 }).catch(() => null);
+        const trovato = (u?.data?.users || []).find((x: any) => String(x.email || '').toLowerCase() === em);
+        if (!trovato) return res.status(404).json({ error: 'utente_non_trovato' });
+        utenti = [trovato.id];
+      } else {
+        // Base: chi ha almeno un dispositivo (altrimenti non riceverebbe nulla).
+        const d = await axios.get(`${supabaseUrl}/rest/v1/dispositivi_push?select=user_id,lingua,visto_at&limit=5000`, { headers: SB_HDR(), timeout: 15000 });
+        let righe: any[] = d.data || [];
+        const seg = String(destinatario?.segmento || '');
+        if (destinatario?.tipo === 'segmento' && /^lingua:/.test(seg)) righe = righe.filter(x => String(x.lingua).toUpperCase() === seg.slice(7).toUpperCase());
+        if (destinatario?.tipo === 'segmento' && seg === 'inattivi_30') { const lim = Date.now() - 30 * 86400000; righe = righe.filter(x => new Date(x.visto_at).getTime() < lim); }
+        utenti = Array.from(new Set(righe.map(x => String(x.user_id))));
+      }
+      if (utenti.length > 2000) return res.status(400).json({ error: 'troppi_destinatari', n: utenti.length });
+      // Tetto promozionale: chi ha gia' ricevuto una promo negli ultimi 7 giorni salta.
+      let saltati = 0;
+      if (promo && utenti.length) {
+        const lim = new Date(Date.now() - 7 * 86400000).toISOString();
+        const rec = await axios.get(`${supabaseUrl}/rest/v1/notifiche?tipo=eq.promo&created_at=gte.${encodeURIComponent(lim)}&select=user_id&limit=10000`, { headers: SB_HDR(), timeout: 15000 }).catch(() => null);
+        const recenti = new Set((rec?.data || []).map((x: any) => String(x.user_id)));
+        const prima = utenti.length; utenti = utenti.filter(u => !recenti.has(u)); saltati = prima - utenti.length;
+      }
+      let inviate = 0, senzaCanale = 0;
+      for (const uid of utenti) {
+        const esito = await notificaUtente(uid, { titolo: String(titolo).slice(0, 120), corpo: String(corpo).slice(0, 500), tipo: promo ? 'promo' : 'servizio', inviata_da: req.adminId,
+          dati: azione ? { azione: String(azione) } : {},
+          email: conEmail ? { oggetto: String(titolo).slice(0, 120), html: htmlEmailPronta({ intro: String(corpo), apri: 'Apri WIP' }, String(titolo), 'https://www.wip.guide/'), testo: String(corpo) } : undefined });
+        if (esito.push?.inviate > 0 || esito.email?.ok) inviate++; else senzaCanale++;
+      }
+      res.json({ ok: true, destinatari: utenti.length, inviate, senza_canale: senzaCanale, saltati_tetto_promo: saltati });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+  // Registro invii (ultime 200) + contatori dispositivi.
+  app.get("/api/admin/notifiche", rateLimiter, requireAdmin, async (_req, res) => {
+    try {
+      const [n, d] = await Promise.all([
+        axios.get(`${supabaseUrl}/rest/v1/notifiche?select=id,user_id,tipo,titolo,corpo,canali,esito,inviata_da,letta_at,created_at&order=created_at.desc&limit=200`, { headers: SB_HDR(), timeout: 10000 }),
+        axios.get(`${supabaseUrl}/rest/v1/dispositivi_push?select=piattaforma`, { headers: { ...SB_HDR(), Prefer: 'count=exact' }, timeout: 10000 }),
+      ]);
+      const perPiatt: Record<string, number> = {};
+      for (const x of d.data || []) perPiatt[x.piattaforma] = (perPiatt[x.piattaforma] || 0) + 1;
+      res.json({ notifiche: n.data || [], dispositivi: perPiatt, configurato: { email: !!process.env.RESEND_API_KEY, push: !!fcmAccount()?.project_id } });
+    } catch (e: any) { res.status(500).json({ error: e?.message }); }
+  });
+
   app.post("/api/premium-guide/generate", rateLimiter, async (req, res) => {
     let pmCharge: { userId: string; cost: number } | null = null;
+    let lavoro: any = null; // lavoro in coda (generazioni) che ha chiesto questa guida
     try {
       // dedica: guida-regalo con dedica in copertina (costo invariato)
       const { itinerary, style, userId, hash, language = "IT", dedica } = req.body;
@@ -24357,16 +24871,22 @@ Non aggiungere testo prima o dopo il JSON.`;
       const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
       const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
+      // LAVORO IN DIFFERITA (06/09/2026): se la chiamata arriva dalla coda
+      // `generazioni` (segreto di infrastruttura + jobId), l'utente e i
+      // crediti sono quelli del lavoro: niente token, niente nuovo addebito,
+      // e alla fine si chiude il lavoro (archivio + email + push).
+      lavoro = await lavoroInterno(req);
+
       // TOKEN PRIMA DELLA CACHE: prima bastava conoscere un hash per farsi
       // servire la guida (pagata da un altro) senza alcuna autenticazione.
-      const pmUserId = await verifyUserToken(req);
+      const pmUserId = lavoro ? String(lavoro.user_id) : await verifyUserToken(req);
       if (!pmUserId) return res.status(401).json({ error: 'login_required' });
 
       // Limite unico anti-frode con reset giornaliero: stessa logica di tutte
       // le altre feature (checkAndIncrementQuota), nessun tier free/premium.
       // I vecchi limiti per-riga (0 free / 10 premium) sono ignorati: chi paga
       // in crediti non va mai bloccato per tier.
-      const guideQuota = await checkAndIncrementQuota(req, 'premium_guide');
+      const guideQuota = lavoro ? { allowed: true, userId: pmUserId } : await checkAndIncrementQuota(req, 'premium_guide');
       if (!guideQuota.allowed) {
         return res.status(403).json({ error: "QUOTA_EXCEEDED" });
       }
@@ -24381,6 +24901,13 @@ Non aggiungere testo prima o dopo il JSON.`;
           const cached = cacheCheck.data[0];
           console.log("[Premium Guide] Cache hit! Returning cached guide.");
           // Cache hit PRIMA dell'addebito: la guida già in libreria non ripaga.
+          if (lavoro) {
+            // Lavoro in coda per una guida gia' esistente: si chiude subito
+            // (i crediti del lavoro tornano indietro, la guida non si ripaga).
+            if (lavoro.crediti > 0) await refundServer(lavoro.user_id, lavoro.crediti);
+            await generazioneAggiorna(lavoro.id, { crediti: 0 });
+            await generazionePronta(lavoro.id, String(cached.itinerary_hash), String(cached.content_data?.guida_titolo || lavoro.titolo || ''), await pdfGuidaPerEmail(cached.content_data, cached.media_manifest || {}, language));
+          }
           return res.json({ content: cached.content_data, media_manifest: cached.media_manifest || {}, cached: true });
         }
       }
@@ -24390,7 +24917,9 @@ Non aggiungere testo prima o dopo il JSON.`;
       // era gratuita e anonima (userId dal body). Ora il token è obbligatorio
       // e l'addebito è atomico; il rimborso su fallimento è nel catch finale.
       const numDaysGuide = Math.max(1, (itinerary?.giorni?.length) || 1);
-      pmCharge = await chargeOrReject(req, res, 'premium_guide_daily', numDaysGuide);
+      pmCharge = lavoro
+        ? { userId: pmUserId, cost: 0 } // gia' addebitati alla creazione del lavoro: il rimborso lo fa generazioneFallita
+        : await chargeOrReject(req, res, 'premium_guide_daily', numDaysGuide);
       if (!pmCharge) return; // 401/402/500 già inviato
 
       // ── FASE 1: EXTRACT DESTINATION FROM ITINERARY ──────────────────────────
@@ -25000,15 +25529,30 @@ Restituisci ESATTAMENTE questo schema JSON, con un elemento in "pois" per OGNI t
 
       // Contatore quota: incremento atomico (RPC), non più GET-then-PATCH
       // sullo userId del body.
-      if (guideQuota.userId) incrementQuotaCount(guideQuota.userId, 'premium_guide').catch(() => {});
+      if (guideQuota.userId && !lavoro) incrementQuotaCount(guideQuota.userId, 'premium_guide').catch(() => {});
 
       console.log("[Premium Guide] ✅ Generation complete!");
+      // Lavoro in differita: archivio gia' scritto (FASE 6), ora email con il
+      // PDF + push «la tua guida e' pronta».
+      if (lavoro) {
+        await generazionePronta(lavoro.id, safeHash, String(generatedContent.guida_titolo || lavoro.titolo || destination), await pdfGuidaPerEmail(generatedContent, mediaManifest, language));
+      } else if (pmCharge?.userId) {
+        // Anche in diretta l'email parte sempre (committente, 06/09): «invio
+        // email lo stesso sia itinerario che guida». Senza bloccare la risposta.
+        const t = testiPronta('guida', language, String(generatedContent.guida_titolo || destination));
+        void (async () => {
+          const pdf = await pdfGuidaPerEmail(generatedContent, mediaManifest, language);
+          await notificaUtente(pmCharge!.userId, { titolo: t.titolo, corpo: t.corpo, tipo: 'servizio', dati: { azione: 'archivio', tipo: 'guida', id: safeHash },
+            email: { oggetto: t.oggetto, html: htmlEmailPronta(t, String(generatedContent.guida_titolo || destination), 'https://www.wip.guide/?archivio=guide'), testo: t.intro, allegati: pdf ? [pdf] : [] } });
+        })().catch(() => {});
+      }
       res.json({ content: generatedContent, media_manifest: mediaManifest });
 
     } catch (error: any) {
       console.error("Premium Guide Error:", error);
       // Generazione fallita dopo l'addebito: rimborso server-side.
-      if (pmCharge) await refundServer(pmCharge.userId, pmCharge.cost);
+      if (lavoro) await generazioneFallita(lavoro.id, error?.message || 'GENERATION_ERROR');
+      else if (pmCharge) await refundServer(pmCharge.userId, pmCharge.cost);
       res.status(500).json({ error: error.message || "GENERATION_ERROR" });
     }
   });

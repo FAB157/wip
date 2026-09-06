@@ -47,6 +47,7 @@ import ShopScreen from './ShopScreen';
 import LoadingQuiz from './LoadingQuiz';
 import { downloadGuideAsPdf } from '../services/premiumGuideService';
 import { mapItineraryCategoryToMapCategory, tappaDiventaPoi } from '../services/poiRepository';
+import { mieGenerazioni, type Generazione } from '../services/generazioniService';
 import BudgetTable from './itinerary/BudgetTable';
 import CalendarExportButton from './CalendarExportButton';
 import ItineraryStop from './itinerary/ItineraryStop';
@@ -1372,6 +1373,7 @@ export default function PlanScreen({
 
   // Premium Guide Archive
   const [savedPremiumGuides, setSavedPremiumGuides] = useState<any[]>([]);
+  const [generazioniInCorso, setGenerazioniInCorso] = useState<Generazione[]>([]);
 
   // Offline Audio Bundle Modal
   const [showOfflineBundleModal, setShowOfflineBundleModal] = useState(false);
@@ -2704,7 +2706,57 @@ export default function PlanScreen({
     } catch (e) {
       console.error(e);
     }
+    void fetchGenerazioni();
   };
+
+  // Generazioni in differita (06/09/2026): le voci «in preparazione» e
+  // «fallita» dell'Archivio. Finche' ce n'e' una in coda si ricontrolla ogni
+  // 30 s; quando una diventa pronta si ricaricano guide/itinerari.
+  const fetchGenerazioni = async () => {
+    try {
+      const lista = await mieGenerazioni();
+      const recenti = lista.filter(g => g.stato === 'in_coda' || g.stato === 'in_corso'
+        || (g.stato === 'fallita' && Date.now() - new Date(g.created_at).getTime() < 24 * 3600 * 1000));
+      const eranoInCorso = generazioniInCorso.filter(g => g.stato !== 'fallita').length;
+      setGenerazioniInCorso(recenti);
+      const oraInCorso = recenti.filter(g => g.stato !== 'fallita').length;
+      if (eranoInCorso > 0 && oraInCorso < eranoInCorso) {
+        // Qualcosa e' diventato pronto: riallinea l'archivio.
+        void (async () => {
+          try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const uid = sessionData?.session?.user?.id;
+            if (!uid) return;
+            const { data } = await supabase.from('itinerary_guides').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+            if (data) setSavedPremiumGuides(data);
+          } catch { /* niente */ }
+        })();
+        void fetchMyItineraries();
+      }
+    } catch { /* offline: resta com'e' */ }
+  };
+  useEffect(() => {
+    if (plannerMode !== 'my_itineraries') return;
+    const inCorso = generazioniInCorso.some(g => g.stato === 'in_coda' || g.stato === 'in_corso');
+    if (!inCorso) return;
+    const t = setInterval(() => { void fetchGenerazioni(); }, 30000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plannerMode, generazioniInCorso.length]);
+  useEffect(() => {
+    const h = () => { void fetchGenerazioni(); };
+    window.addEventListener('wip-generazioni-aggiornate', h);
+    // Apertura dell'Archivio dal tocco su una notifica (App.tsx) o dal link
+    // dell'email (?archivio=guide|itinerari).
+    const apri = () => { setPlannerMode('my_itineraries'); void fetchMyItineraries(); void fetchSavedPremiumGuides(); };
+    window.addEventListener('wip-apri-archivio', apri);
+    try {
+      const p = new URLSearchParams(window.location.search).get('archivio');
+      if (p) { apri(); window.history.replaceState({}, '', window.location.pathname); }
+    } catch { /* niente */ }
+    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const deleteMyItinerary = async (id: string) => {
     if (!confirm(getTranslation('vr_b_confirm_delete_itinerary', language))) return;
@@ -6771,7 +6823,20 @@ export default function PlanScreen({
                 </div>
               ) : (
                 <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                  {savedPremiumGuides.length === 0 ? (
+                  {/* Generazioni in differita (06/09/2026): in coda/in corso o fallite. */}
+                  {generazioniInCorso.filter(g => g.tipo === 'guida').map(g => (
+                    <div key={g.id} className={`p-5 rounded-3xl border shadow-sm flex items-center gap-4 ${g.stato === 'fallita' ? 'bg-red-50 border-red-100' : 'bg-amber-50 border-amber-100'}`}>
+                      {g.stato === 'fallita' ? <AlertTriangle className="w-6 h-6 text-red-500 shrink-0" /> : <Loader2 className="w-6 h-6 text-amber-600 animate-spin shrink-0" />}
+                      <div className="min-w-0">
+                        <h4 className="font-black text-primary leading-tight truncate">{g.titolo || 'Guida Premium'}</h4>
+                        <p className="text-xs font-bold text-on-surface-variant/70 mt-0.5">
+                          {g.stato === 'fallita' ? getTranslation('gen_fallita', language) : getTranslation('gen_in_preparazione', language)}
+                          {g.stato !== 'fallita' && <> · {getTranslation('gen_in_coda_nota', language)}</>}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                  {savedPremiumGuides.length === 0 && generazioniInCorso.filter(g => g.tipo === 'guida').length === 0 ? (
                     <div className="py-12 flex flex-col items-center justify-center text-center">
                       <div className="w-20 h-20 bg-primary/5 rounded-[2rem] flex items-center justify-center mb-6">
                         <Download className="w-10 h-10 text-primary/20" />

@@ -29,6 +29,12 @@ public class MainActivity extends BridgeActivity {
         // Attiva il Watchdog per il servizio di background
         ServiceWatchdog.Companion.schedule(this);
 
+        // Canale delle push di servizio (06/09/2026): il server (FCM v1) manda
+        // «la tua guida e' pronta», rimborsi, tour di gruppo con
+        // channel_id = "wip_servizio". Senza il canale, su Android 8+ la
+        // notifica non compare. Creato qui una volta sola (idempotente).
+        creaCanaleNotifiche();
+
         // I flag showWhenLocked/turnScreenOn sono stati rimossi (policy Play,
         // ago 2026): l'arrivo al POI è una notifica heads-up sonora, come su
         // iOS — l'audio parte comunque dal servizio, non serve accendere lo schermo.
@@ -100,6 +106,20 @@ public class MainActivity extends BridgeActivity {
                         + quotedPoiId + ", guide: " + quotedGuide + " } }));";
                 getBridge().getWebView().evaluateJavascript(js, null);
             });
+        }
+    }
+
+    private void creaCanaleNotifiche() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        try {
+            android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+            if (nm == null || nm.getNotificationChannel("wip_servizio") != null) return;
+            android.app.NotificationChannel canale = new android.app.NotificationChannel(
+                    "wip_servizio", "Avvisi WIP", android.app.NotificationManager.IMPORTANCE_HIGH);
+            canale.setDescription("Guida pronta, rimborsi, tour di gruppo");
+            nm.createNotificationChannel(canale);
+        } catch (Exception e) {
+            Log.w(TAG, "Canale notifiche non creato", e);
         }
     }
 

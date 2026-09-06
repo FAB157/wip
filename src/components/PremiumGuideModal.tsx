@@ -12,7 +12,10 @@ import {
   uploadPdfToStorage,
   GUIDE_STYLE_META,
   getAccessToken,
+  computeItineraryHash,
 } from '../services/premiumGuideService';
+import { accodaGuida } from '../services/generazioniService';
+import { supabase } from '../lib/supabase';
 import { getUserProfile, isUserPremium } from '../lib/quotaManager';
 import { useCreditConfirmation } from '../hooks/useCreditConfirmation';
 import CreditConfirmationModal from './CreditConfirmationModal';
@@ -29,7 +32,9 @@ interface PremiumGuideModalProps {
   onClose: () => void;
 }
 
-type Phase = 'select_style' | 'generating' | 'preview' | 'error';
+// 'in_coda' (06/09/2026): la guida si prepara in differita — l'utente puo'
+// chiudere l'app; la trova nell'Archivio e la riceve via email e push.
+type Phase = 'select_style' | 'generating' | 'preview' | 'error' | 'in_coda';
 
 const STYLES: GuideStyle[] = ['art', 'family', 'shopping', 'food', 'essential'];
 
@@ -51,6 +56,9 @@ export default function PremiumGuideModal({
   const [isEpubLoading, setIsEpubLoading]   = useState(false);
   // Dedica regalo (opzionale): finisce in copertina, costo invariato
   const [dedica, setDedica]                 = useState('');
+  // Altri destinatari dell'email con la guida (oltre all'account), max 5.
+  const [emailExtra, setEmailExtra]         = useState('');
+  const [codaInfo, setCodaInfo]             = useState<{ titolo: string; emailAccount: string } | null>(null);
   const [isPremiumUser, setIsPremiumUser]   = useState<boolean | null>(null);
   const [creditsLeft, setCreditsLeft]       = useState<number | null>(null);
   const PDF_CONTAINER_ID = 'premium-guide-pdf-container';
@@ -86,10 +94,25 @@ export default function PremiumGuideModal({
 
     try {
       setStreamingText('');
-      // ADDEBITO E RIMBORSO ORA SERVER-SIDE: la rotta /premium-guide/generate
+      // IN DIFFERITA (06/09/2026): la guida si mette in coda sul server, che
+      // la prepara da solo (anche 10 minuti), la salva nell'Archivio e avvisa
+      // con email (PDF allegato) e push. L'utente puo' chiudere subito.
+      // Se la stessa guida e' gia' in archivio (stesso hash), si apre in
+      // diretta come prima, senza addebito.
+      const hash = await computeItineraryHash(itinerary, `${selectedStyle}_${language}`);
+      const destinatari = emailExtra.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean).slice(0, 5);
+      const coda = await accodaGuida({ itinerary, style: selectedStyle, hash, language, dedica, emailExtra: destinatari });
+      if (coda.id) {
+        const { data: sess } = await supabase.auth.getSession();
+        setCodaInfo({ titolo: coda.titolo || itinerary?.titolo || '', emailAccount: sess?.session?.user?.email || '' });
+        setPhase('in_coda');
+        notifyCreditsChanged({ userId });
+        window.dispatchEvent(new CustomEvent('wip-generazioni-aggiornate'));
+        return;
+      }
+      // ADDEBITO E RIMBORSO SERVER-SIDE: la rotta /premium-guide/generate
       // scala i crediti in modo atomico e li restituisce se la generazione
-      // fallisce. Il client non addebita più (niente doppio addebito), passa
-      // solo il token; la modale di conferma sopra resta come UX.
+      // fallisce (qui arriva solo la guida gia' pronta in cache).
       const result = await generatePremiumGuide(itinerary, selectedStyle, userId, language, dedica);
 
       // Validazione d'esito: una guida senza giorni è un fallimento mascherato.
@@ -362,6 +385,26 @@ export default function PremiumGuideModal({
                   </p>
                 </div>
 
+                {/* In differita (06/09/2026): la guida arriva via email; qui
+                    altri destinatari oltre all'account, es. i compagni di viaggio. */}
+                <div className="mt-4">
+                  <label className="block text-xs font-black text-[#1e3a8a] mb-1.5">
+                    ✉️ {getTranslation('gen_email_extra', language)}
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="email"
+                    value={emailExtra}
+                    onChange={(e) => setEmailExtra(e.target.value)}
+                    maxLength={400}
+                    placeholder="anna@esempio.it, marco@esempio.it"
+                    className="w-full px-4 py-3 rounded-2xl border-2 border-outline-variant bg-[#f8f5f0] text-sm text-[#1e3a8a] placeholder:text-[#1e3a8a]/40 focus:border-primary focus:outline-none transition-colors"
+                  />
+                  <p className="text-[10px] text-[#1e3a8a]/50 mt-1">
+                    {getTranslation('gen_email_hint', language)}
+                  </p>
+                </div>
+
                 {/* Generate button */}
                 <button
                   onClick={handleGenerate}
@@ -384,6 +427,27 @@ export default function PremiumGuideModal({
                 userId={userId} 
                 language={language} 
               />
+            )}
+
+            {/* ── PHASE: in coda (06/09/2026) — puoi chiudere l'app ── */}
+            {phase === 'in_coda' && (
+              <div className="flex flex-col items-center justify-center px-8 py-12 text-center gap-5">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-50 flex items-center justify-center text-3xl">📖</div>
+                <div>
+                  <h3 className="text-base font-black text-[#1e3a8a] mb-2">{getTranslation('gen_in_coda_titolo', language)}</h3>
+                  <p className="text-sm text-[#1e3a8a] max-w-sm leading-relaxed">
+                    {getTranslation('gen_in_coda_testo', language)}
+                    {codaInfo?.emailAccount ? <> <b>{codaInfo.emailAccount}</b></> : null}
+                  </p>
+                  <p className="text-xs text-[#1e3a8a]/60 max-w-sm leading-relaxed mt-3">{getTranslation('gen_in_coda_nota', language)}</p>
+                </div>
+                <button
+                  onClick={onClose}
+                  className="px-6 py-3 rounded-2xl bg-primary text-secondary font-black text-sm shadow-lg shadow-primary/25 hover:bg-primary/90 transition-colors"
+                >
+                  {getTranslation('gen_in_coda_ok', language)}
+                </button>
+              </div>
             )}
 
             {/* ── PHASE: error ── */}
