@@ -280,6 +280,24 @@ export default function PercorsoPanel({ language, onClose }: Props) {
                       {label}
                     </button>
                   ))}
+                  {/* SOLO IL GIRO (06/09/2026): stesso difetto e stesso rimedio
+                      di PoiRadarPanel — l'anteprima partiva sempre dalla
+                      posizione GPS, anche quando le tappe scelte sono lontane
+                      (si sceglie dalla mappa, che si può guardare da ovunque).
+                      Risultato: un "percorso" di 1400 km in linea d'aria. Col
+                      toggle acceso l'anteprima parte dalla prima tappa; il
+                      percorso AVVIATO parte comunque da dove si è davvero. */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); tourService.bozzaImpostaSoloItinerario(!bozza.soloItinerario); }}
+                    className={`px-2.5 py-1.5 min-h-8 rounded-full text-[11px] font-bold border transition-colors shrink-0 whitespace-nowrap ${
+                      bozza.soloItinerario
+                        ? 'bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-white text-emerald-900/70 border-black/10 hover:border-emerald-700/40'
+                    }`}
+                    aria-pressed={bozza.soloItinerario}
+                  >
+                    {tr('gr_solo_itinerario')}
+                  </button>
                 </div>
 
                 {scelte.length >= 2 && (
