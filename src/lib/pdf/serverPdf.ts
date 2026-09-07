@@ -18,6 +18,9 @@ import { haCaratteriNonLatini } from './pulisci.js';
 
 const MAX_IMG = 6 * 1024 * 1024;
 
+/** Ultimo errore (per la diagnostica /api/admin/pdf-prova). */
+export let ultimoErrore: string | null = null;
+
 async function immagineDataUrl(url: string): Promise<string | null> {
   try {
     if (!/^https?:\/\//i.test(String(url || ''))) return null;
@@ -72,6 +75,7 @@ export async function pdfGuidaServer(content: any, mediaManifest: Record<string,
     const buf = await renderToBuffer(React.createElement(GuidaPremiumPdf, { content, immagini, etichette: ET_GUIDA[L] }) as any);
     return await numeraPagine(Buffer.from(buf), ET_GUIDA[L].pagina, 2);
   } catch (e: any) {
+    ultimoErrore = `${e?.message || e}\n${String(e?.stack || '').split('\n').slice(1, 5).join('\n')}`;
     console.warn('[pdf server] guida non generata:', e?.message);
     return null;
   }
@@ -88,6 +92,7 @@ export async function pdfItinerarioServer(plan: any, language: unknown): Promise
     const buf = await renderToBuffer(React.createElement(ItinerarioPdf, { plan, etichette: ET_ITINERARIO[L] }) as any);
     return await numeraPagine(Buffer.from(buf), ET_ITINERARIO[L].pagina, 1);
   } catch (e: any) {
+    ultimoErrore = `${e?.message || e}\n${String(e?.stack || '').split('\n').slice(1, 5).join('\n')}`;
     console.warn('[pdf server] itinerario non generato:', e?.message);
     return null;
   }

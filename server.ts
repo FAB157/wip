@@ -24876,6 +24876,37 @@ Non aggiungere testo prima o dopo il JSON.`;
       res.json({ ok: true, destinatari: utenti.length, inviate, senza_canale: senzaCanale, saltati_tetto_promo: saltati });
     } catch (e: any) { res.status(500).json({ error: e?.message }); }
   });
+  // Diagnostica (07/09/2026): genera il PDF di una guida (per hash) o di un
+  // itinerario (per id) come farebbe l'allegato email, e risponde con il PDF
+  // oppure con l'errore esatto — i log runtime di Vercel non conservano gli
+  // avvisi e l'allegato mancava senza spiegazione.
+  app.get("/api/admin/pdf-prova", rateLimiter, requireAdmin, async (req: any, res) => {
+    const t0 = Date.now();
+    try {
+      const hash = String(req.query.hash || ''), idItin = String(req.query.itinerario || '');
+      let mod: any;
+      try { mod = await import('./src/lib/pdf/serverPdf.js'); }
+      catch (e: any) { return res.status(500).json({ fase: 'import', errore: e?.message, stack: String(e?.stack || '').split('\n').slice(0, 6) }); }
+      let buf: Buffer | null = null;
+      if (hash) {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/itinerary_guides?itinerary_hash=eq.${encodeURIComponent(hash)}&select=content_data,media_manifest&limit=1`, { headers: SB_HDR(), timeout: 8000 });
+        if (!r.data?.[0]) return res.status(404).json({ errore: 'guida non trovata' });
+        try { buf = await mod.pdfGuidaServer(r.data[0].content_data, r.data[0].media_manifest || {}, 'IT'); }
+        catch (e: any) { return res.status(500).json({ fase: 'render guida', errore: e?.message, stack: String(e?.stack || '').split('\n').slice(0, 8) }); }
+      } else if (idItin) {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/user_itineraries?id=eq.${encodeURIComponent(idItin)}&select=dati_itinerario&limit=1`, { headers: SB_HDR(), timeout: 8000 });
+        if (!r.data?.[0]) return res.status(404).json({ errore: 'itinerario non trovato' });
+        try { buf = await mod.pdfItinerarioServer(r.data[0].dati_itinerario, 'IT'); }
+        catch (e: any) { return res.status(500).json({ fase: 'render itinerario', errore: e?.message, stack: String(e?.stack || '').split('\n').slice(0, 8) }); }
+      } else return res.status(400).json({ errore: 'passa ?hash= o ?itinerario=' });
+      if (!buf) return res.status(500).json({ fase: 'render', errore: mod.ultimoErrore || 'PDF nullo (lingua non latina?)', ms: Date.now() - t0 });
+      if (String(req.query.json) === '1') return res.json({ ok: true, bytes: buf.length, ms: Date.now() - t0 });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="prova.pdf"');
+      res.send(buf);
+    } catch (e: any) { res.status(500).json({ fase: 'generale', errore: e?.message }); }
+  });
+
   // Registro invii (ultime 200) + contatori dispositivi.
   app.get("/api/admin/notifiche", rateLimiter, requireAdmin, async (_req, res) => {
     try {
