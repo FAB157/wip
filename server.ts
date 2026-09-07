@@ -24886,6 +24886,12 @@ Non aggiungere testo prima o dopo il JSON.`;
       // Admin, oppure il segreto di infrastruttura (diagnostica da script).
       if (req.userId !== 'background-script' && !(await verifyAdminBearer(req))) return res.status(403).json({ error: 'Admin authorization required' });
       const hash = String(req.query.hash || ''), idItin = String(req.query.itinerario || '');
+      if (req.query.ls) {
+        // Cosa c'e' davvero nel pacchetto della function (il tracciatore di Vercel a volte lascia fuori dei moduli).
+        const dir = path.join(process.cwd(), 'src', 'lib', 'pdf');
+        let file: string[] = []; try { file = fs.readdirSync(dir); } catch (e: any) { file = [`ERRORE ${e?.message}`]; }
+        return res.json({ cwd: process.cwd(), dir, file });
+      }
       let mod: any;
       try { mod = await import('./src/lib/pdf/serverPdf.js'); }
       catch (e: any) { return res.status(500).json({ fase: 'import', errore: e?.message, stack: String(e?.stack || '').split('\n').slice(0, 6) }); }
