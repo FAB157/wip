@@ -1617,23 +1617,29 @@ export default function App() {
                l'altro, allineati a destra. In fila crescevano verso sinistra
                fin sopra il centro della mappa, e il tasto del navigatore —
                l'unico che serve camminando — era in fondo alla fila. */
-            <div className="absolute right-4 z-[999] flex flex-col items-end gap-2" style={{ bottom: "calc(9.75rem + env(safe-area-inset-bottom, 0px))" }}>
+            <div className="absolute right-4 z-[999] flex flex-col items-end gap-2" style={{ bottom: "calc(5.25rem + env(safe-area-inset-bottom, 0px))" }}>
               {/* PERCORSO SU MISURA (03/09/2026, committente: «due funzioni
                   diverse, attivate in modo diverso»). Il suo tasto sta qui,
                   sopra le cuffie, e NON dipende da loro: si compone un
                   percorso di ristoranti, farmacie e monumenti anche con
-                  l'audioguida spenta, perche' non c'entra con l'audioguida. */}
+                  l'audioguida spenta, perche' non c'entra con l'audioguida.
+                  STESSA MISURA E STESSA ALTEZZA DEI LIVELLI (07/09/2026,
+                  richiesto dal committente): 44 px come il tasto livelli di
+                  MapArea.tsx (non piu' 48), e lo stesso ancoraggio dal fondo
+                  (5.25rem, non piu' 9.75rem) — quando e' l'unico tasto della
+                  colonna (nessun giro/audioguida in corso, il caso comune)
+                  finisce esattamente alla stessa quota, sul lato opposto. */}
               <motion.button
                 whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleTogglePercorso}
                 title={getTranslation('pc_tasto_mappa', language)}
                 aria-label={getTranslation('pc_tasto_mappa', language)}
-                className={`w-12 h-12 rounded-full shadow-2xl flex items-center justify-center transition-all ${
+                className={`w-11 h-11 rounded-full shadow-2xl flex items-center justify-center transition-all ${
                   isPercorsoMode
                     ? 'bg-emerald-700 text-white ring-4 ring-emerald-700/30'
                     : 'bg-white/90 text-emerald-700 border border-emerald-100'
                 }`}
               >
-                <Route className="w-6 h-6" />
+                <Route className="w-5 h-5" />
               </motion.button>
               {isAudioGuideActive && (<>
               <motion.button

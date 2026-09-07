@@ -24880,9 +24880,11 @@ Non aggiungere testo prima o dopo il JSON.`;
   // itinerario (per id) come farebbe l'allegato email, e risponde con il PDF
   // oppure con l'errore esatto — i log runtime di Vercel non conservano gli
   // avvisi e l'allegato mancava senza spiegazione.
-  app.get("/api/admin/pdf-prova", rateLimiter, requireAdmin, async (req: any, res) => {
+  app.get("/api/admin/pdf-prova", rateLimiter, requireAuth, async (req: any, res) => {
     const t0 = Date.now();
     try {
+      // Admin, oppure il segreto di infrastruttura (diagnostica da script).
+      if (req.userId !== 'background-script' && !(await verifyAdminBearer(req))) return res.status(403).json({ error: 'Admin authorization required' });
       const hash = String(req.query.hash || ''), idItin = String(req.query.itinerario || '');
       let mod: any;
       try { mod = await import('./src/lib/pdf/serverPdf.js'); }
