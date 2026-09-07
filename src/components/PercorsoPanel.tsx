@@ -19,17 +19,39 @@
  */
 import { X, ChevronDown, ChevronUp, GripVertical, MapPin, Route, Car, Coins, Loader2, Flag } from "lucide-react";
 import { motion, Reorder } from "motion/react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CATEGORY_EMOJIS } from "../lib/mapConstants";
 import { Language, getTranslation } from "../lib/i18n";
 import { tourService, metri as metriFra } from "../services/tourService";
 import { useBozzaGiro, useVistaGiro } from "../lib/tour/useGiro";
 import { PRICING_LIST, CUSTOM_ROUTE_MAX_CHANGES } from "../lib/pricing";
+import { getGemmeVicine } from "../services/poiRepository";
 import { navigaInAutoItinerario } from "./NavChoiceSheet";
+
+/**
+ * LE DUE VIE VELOCI (07/09/2026). Il committente: «qualcosa di facile,
+ * intuitivo ma efficace per l'itinerario: il metodo attuale va bene, ci
+ * aggiungi uno veloce». Dal menu sul tasto verde si sceglie «Gemme intorno
+ * a me» o «A tempo»: la lista si riempie da sola con le migliori gemme della
+ * zona e da li' in poi e' il percorso su misura di sempre (si tolgono le
+ * tappe che non si vogliono, si paga, si parte). `ts` cambia a ogni scelta,
+ * cosi' la stessa voce premuta due volte riparte.
+ */
+export interface AvvioRapido { tipo: 'gemme' | 'tempo'; minuti?: number; ts: number }
+
+/** Quante gemme e in che raggio, secondo il tempo che si ha. */
+function misuraVeloce(a: AvvioRapido): { max: number; raggio: number } {
+  if (a.tipo === 'gemme') return { max: 6, raggio: 2500 };
+  const m = a.minuti || 120;
+  if (m <= 60) return { max: 3, raggio: 1200 };
+  if (m <= 120) return { max: 5, raggio: 2000 };
+  return { max: 8, raggio: 3000 };
+}
 
 interface Props {
   language: Language;
   onClose: () => void;
+  avvioRapido?: AvvioRapido | null;
 }
 
 /** La posizione per il ricalcolo: GPS se risponde in fretta, altrimenti l'ultima nota. */
@@ -42,7 +64,7 @@ function conPosizione(fn: (p?: { lat: number; lon: number }) => void) {
   );
 }
 
-export default function PercorsoPanel({ language, onClose }: Props) {
+export default function PercorsoPanel({ language, onClose, avvioRapido }: Props) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const bozza = useBozzaGiro();
   const vista = useVistaGiro();
@@ -52,6 +74,35 @@ export default function PercorsoPanel({ language, onClose }: Props) {
   const [creando, setCreando] = useState(false);
   const [errore, setErrore] = useState<{ tipo: 'crediti' | 'accesso' | 'modifiche' | 'altro'; testo: string } | null>(null);
   const tr = (k: string) => getTranslation(k, language);
+  // La via veloce: 'cerco' mentre si leggono le gemme, 'pronto' con quante
+  // ne sono entrate, 'nessuna' se la zona e' vuota. Si azzera al primo tocco
+  // manuale sulla lista (bozza svuotata o tappa tolta).
+  const [veloce, setVeloce] = useState<{ stato: 'cerco' | 'pronto' | 'nessuna' | 'posizione'; n?: number } | null>(null);
+  const ultimoAvvioRef = useRef<number>(0);
+  useEffect(() => {
+    if (!avvioRapido || avvioRapido.ts === ultimoAvvioRef.current) return;
+    ultimoAvvioRef.current = avvioRapido.ts;
+    let vivo = true;
+    (async () => {
+      setErrore(null); setIsCollapsed(false);
+      setVeloce({ stato: 'cerco' });
+      const pos = await tourService.posizioneAttuale(true);
+      if (!vivo) return;
+      if (!pos) { setVeloce({ stato: 'posizione' }); return; }
+      const { max, raggio } = misuraVeloce(avvioRapido);
+      const gemme = await getGemmeVicine(pos.lat, pos.lon, raggio, max);
+      if (!vivo) return;
+      if (!gemme.length) { setVeloce({ stato: 'nessuna' }); return; }
+      tourService.bozzaImpostaModo('percorso');
+      // Si parte da dove si e' davvero: niente «solo il giro».
+      tourService.bozzaImpostaSoloItinerario(false);
+      const n = tourService.bozzaDaTappe(gemme, { ordinaServer: true });
+      if (avvioRapido.tipo === 'tempo') tourService.bozzaImpostaTempo(avvioRapido.minuti || null);
+      setVeloce(n > 0 ? { stato: 'pronto', n } : { stato: 'nessuna' });
+    })().catch(() => { if (vivo) setVeloce({ stato: 'nessuna' }); });
+    return () => { vivo = false; };
+  }, [avvioRapido]);
+  useEffect(() => { if (scelte.length === 0 && veloce?.stato === 'pronto') setVeloce(null); }, [scelte.length, veloce]);
   const costo = PRICING_LIST.custom_route;
   const tetto = tourService.bozzaTetto();
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -256,13 +307,25 @@ export default function PercorsoPanel({ language, onClose }: Props) {
             {scelte.length === 0 ? (
               <div className="p-6 flex flex-col items-center text-center gap-3">
                 <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
-                  <MapPin className="w-7 h-7" />
+                  {veloce?.stato === 'cerco' ? <Loader2 className="w-7 h-7 animate-spin" /> : <MapPin className="w-7 h-7" />}
                 </div>
+                {veloce?.stato === 'cerco' ? (
+                  <p className="text-[12px] font-bold text-emerald-900/80 leading-snug px-2">{tr('pc_veloce_cerco')}</p>
+                ) : veloce?.stato === 'nessuna' || veloce?.stato === 'posizione' ? (
+                  <p className="text-[12px] font-bold text-amber-800 bg-amber-50 rounded-xl px-3 py-2.5 leading-snug">
+                    {veloce.stato === 'posizione' ? tr('gr_serve_posizione') : tr('pc_veloce_nessuna')}
+                  </p>
+                ) : null}
                 <p className="text-[12px] text-emerald-900/70 leading-snug px-2">{tr('pc_vuoto')}</p>
                 <p className="text-[11px] font-bold text-emerald-900/50">{tr('pc_prezzo_riga').replace('{n}', String(costo)).replace('{m}', String(CUSTOM_ROUTE_MAX_CHANGES))}</p>
               </div>
             ) : (
               <div className="px-4 py-2.5 space-y-2 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))]">
+                {veloce?.stato === 'pronto' && (
+                  <p className="text-[11px] font-bold text-emerald-900/80 bg-emerald-50 rounded-xl px-3 py-2 leading-snug">
+                    {tr('pc_veloce_pronto').replace('{n}', String(veloce.n))}
+                  </p>
+                )}
                 {/* Ad anello o aperto: le due opzioni chieste dal committente. */}
                 <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
                   <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-900/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>

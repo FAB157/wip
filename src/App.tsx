@@ -27,7 +27,7 @@ import { tracciaVisita } from "./lib/pageviewTracker";
 import NavChoiceSheet from "./components/NavChoiceSheet";
 import { notify } from "./lib/toast";
 import { notifyCreditsChanged } from "./lib/pricing";
-import { Headphones, MapPin, Loader2, Navigation2, Route } from "lucide-react";
+import { Headphones, MapPin, Loader2, Navigation2, Route, Gem, Timer, Hand, ChevronLeft } from "lucide-react";
 import { Language, getTranslation, linguaCorrente } from "./lib/i18n";
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
@@ -50,7 +50,7 @@ import { useVistaGiro, useBozzaGiro } from "./lib/tour/useGiro";
 import { tourService } from "./services/tourService";
 import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import { gestisciErroreGiro } from "./lib/tour/passRichiesto";
-import PercorsoPanel from "./components/PercorsoPanel";
+import PercorsoPanel, { type AvvioRapido } from "./components/PercorsoPanel";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
@@ -247,14 +247,33 @@ export default function App() {
     tourService.bozzaImpostaModo(modo);
     return true;
   }, []);
+  /**
+   * IL MENU DELLE TRE VIE (07/09/2026, committente: «cliccando sul tasto
+   * itinerario appaiono sopra le 3 alternative: personale più gli altri 2
+   * modi veloci, tempo e gemme»). Il tasto verde non apre piu' il pannello
+   * di colpo: mostra tre pillole sopra di se'. «Personale» e' il metodo di
+   * sempre (pin per pin); «Gemme intorno a me» e «A tempo» riempiono la
+   * lista da soli (PercorsoPanel, avvioRapido). Col pannello aperto il
+   * tasto lo chiude, come prima.
+   */
+  const [percorsoMenu, setPercorsoMenu] = useState<null | 'vie' | 'tempo'>(null);
+  const [avvioRapido, setAvvioRapido] = useState<AvvioRapido | null>(null);
+  const apriPercorso = useCallback((rapido?: Omit<AvvioRapido, 'ts'>): boolean => {
+    setPercorsoMenu(null);
+    if (!impostaModoBozza('percorso')) return false;
+    setIsRadarMode(false);
+    setIsPercorsoMode(true);
+    setAvvioRapido(rapido ? { ...rapido, ts: Date.now() } : null);
+    return true;
+  }, [impostaModoBozza]);
   const handleTogglePercorso = useCallback(() => {
-    const next = !isPercorsoMode;
-    if (next) {
-      if (!impostaModoBozza('percorso')) return;
-      setIsRadarMode(false);
-    }
-    setIsPercorsoMode(next);
-  }, [isPercorsoMode, impostaModoBozza]);
+    if (isPercorsoMode) { setIsPercorsoMode(false); setPercorsoMenu(null); return; }
+    // Con un giro o un percorso gia' in corso il menu non ha senso: si apre
+    // il pannello, che mostra cosa c'e' (le vie veloci riempirebbero una
+    // bozza che non si puo' usare finche' quello non finisce).
+    if (tourService.inCorso()) { apriPercorso(); return; }
+    setPercorsoMenu((m) => (m ? null : 'vie'));
+  }, [isPercorsoMode, apriPercorso]);
   // "Nuovo giro da qui" dal banner a giro finito (22/08/2026): riapre il radar.
   useEffect(() => {
     const h = () => { setActiveTab('map'); setIsPercorsoMode(false); tourService.bozzaImpostaModo('giro'); setIsRadarMode(true); };
@@ -431,6 +450,25 @@ export default function App() {
     const apri = () => setIsRadarMode(true);
     window.addEventListener('wip-apri-radar', apri);
     return () => window.removeEventListener('wip-apri-radar', apri);
+  }, []);
+  // Ricerca città aperta su MapArea.tsx: il tasto «Componi un percorso»
+  // sta qui, fuori da MapArea, quindi non basta lo stato locale di
+  // quel componente — deve sparire insieme al tasto livelli
+  // (07/09/2026, richiesto dal committente).
+  const [citySearchOpen, setCitySearchOpen] = useState(false);
+  useEffect(() => {
+    const onToggle = (e: Event) => setCitySearchOpen(!!(e as CustomEvent).detail?.aperta);
+    window.addEventListener('wip-city-search-toggle', onToggle);
+    return () => window.removeEventListener('wip-city-search-toggle', onToggle);
+  }, []);
+  // Stessa cosa quando si apre la card di un pin (07/09/2026): la card e'
+  // ancorata in basso alla stessa quota del tasto «Componi un percorso»,
+  // che le spuntava sopra dal bordo arrotondato.
+  const [poiCardOpen, setPoiCardOpen] = useState(false);
+  useEffect(() => {
+    const onToggle = (e: Event) => setPoiCardOpen(!!(e as CustomEvent).detail?.aperta);
+    window.addEventListener('wip-poi-card-toggle', onToggle);
+    return () => window.removeEventListener('wip-poi-card-toggle', onToggle);
   }, []);
   // LA REGOLA DEI DUE TASTI (31/08/2026, committente). Il GIRO multi-tappa
   // e' premium: si avvia SOLO con «Avvia la navigazione», che passa dal
@@ -1629,11 +1667,69 @@ export default function App() {
                   (5.25rem, non piu' 9.75rem) — quando e' l'unico tasto della
                   colonna (nessun giro/audioguida in corso, il caso comune)
                   finisce esattamente alla stessa quota, sul lato opposto. */}
+              {/* LE TRE VIE, sopra il tasto verde. Il velo trasparente dietro
+                  chiude il menu toccando altrove. */}
+              <AnimatePresence>
+                {percorsoMenu && !isPercorsoMode && !(citySearchOpen || poiCardOpen) && (
+                  <>
+                    <div className="fixed inset-0 z-[1090]" onClick={() => setPercorsoMenu(null)} aria-hidden="true" />
+                    <motion.div
+                      key={percorsoMenu}
+                      initial={{ opacity: 0, y: 8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.96 }}
+                      transition={{ duration: 0.16 }}
+                      className="absolute bottom-full right-0 mb-2 z-[1095] flex flex-col items-end gap-1.5"
+                    >
+                      {percorsoMenu === 'vie' ? (
+                        <>
+                          {([
+                            { k: 'pc_menu_gemme', icona: <Gem className="w-4 h-4" />, azione: () => apriPercorso({ tipo: 'gemme' }), forte: true },
+                            { k: 'pc_menu_tempo', icona: <Timer className="w-4 h-4" />, azione: () => setPercorsoMenu('tempo'), forte: true },
+                            { k: 'pc_menu_personale', icona: <Hand className="w-4 h-4" />, azione: () => apriPercorso(), forte: false },
+                          ] as const).map(({ k, icona, azione, forte }) => (
+                            <button
+                              key={k} onClick={azione}
+                              className={`h-10 pl-3 pr-4 rounded-full shadow-xl flex items-center gap-2 text-[12px] font-black whitespace-nowrap active:scale-95 transition-transform ${forte ? 'bg-emerald-700 text-white' : 'bg-white/95 text-emerald-800 border border-emerald-100'}`}
+                            >
+                              {icona} {getTranslation(k, language)}
+                            </button>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          {([
+                            { k: 'pc_tempo_1h', minuti: 60 },
+                            { k: 'pc_tempo_2h', minuti: 120 },
+                            { k: 'pc_tempo_mezza', minuti: 240 },
+                          ] as const).map(({ k, minuti }) => (
+                            <button
+                              key={k} onClick={() => apriPercorso({ tipo: 'tempo', minuti })}
+                              className="h-10 pl-3 pr-4 rounded-full shadow-xl flex items-center gap-2 text-[12px] font-black whitespace-nowrap bg-emerald-700 text-white active:scale-95 transition-transform"
+                            >
+                              <Timer className="w-4 h-4" /> {getTranslation(k, language)}
+                            </button>
+                          ))}
+                          <button
+                            onClick={() => setPercorsoMenu('vie')}
+                            className="h-9 pl-2 pr-3 rounded-full shadow-xl flex items-center gap-1 text-[11px] font-bold bg-white/95 text-emerald-800 border border-emerald-100 active:scale-95"
+                            aria-label={getTranslation('gr_chiudi', language)}
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
               <motion.button
                 whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleTogglePercorso}
                 title={getTranslation('pc_tasto_mappa', language)}
                 aria-label={getTranslation('pc_tasto_mappa', language)}
-                className={`w-11 h-11 rounded-full shadow-2xl flex items-center justify-center transition-all ${
+                // Sparisce insieme al tasto livelli quando si apre la ricerca
+                // città o la card di un pin (07/09/2026, richiesto dal
+                // committente) — vedi gli eventi 'wip-city-search-toggle' e
+                // 'wip-poi-card-toggle' qui sopra.
+                className={`w-11 h-11 rounded-full shadow-2xl flex items-center justify-center transition-all ${(citySearchOpen || poiCardOpen) ? 'opacity-0 pointer-events-none invisible' : ''} ${
                   isPercorsoMode
                     ? 'bg-emerald-700 text-white ring-4 ring-emerald-700/30'
                     : 'bg-white/90 text-emerald-700 border border-emerald-100'
@@ -1727,7 +1823,7 @@ export default function App() {
               <PoiRadarPanel pois={radarPois} onClose={() => setIsRadarMode(false)} onFocus={(poi) => window.dispatchEvent(new CustomEvent('focus-poi', { detail: poi }))} onRemove={handleRemoveRadarPoi} language={language} />
             )}
             {isPercorsoMode && !isRadarMode && activeTab === "map" && (
-              <PercorsoPanel language={language} onClose={() => setIsPercorsoMode(false)} />
+              <PercorsoPanel language={language} onClose={() => setIsPercorsoMode(false)} avvioRapido={avvioRapido} />
             )}
           </AnimatePresence>
 

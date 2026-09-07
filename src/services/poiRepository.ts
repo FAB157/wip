@@ -131,6 +131,56 @@ export async function getPoisByIds(ids: string[]): Promise<Map<string, NearbyPoi
   return result;
 }
 
+/**
+ * LE GEMME INTORNO A UN PUNTO, le migliori prima (07/09/2026, «Giro veloce»:
+ * un tap e il percorso su misura si riempie da solo con le gemme della zona).
+ *
+ * Select diretta su shared_pois per riquadro, NON la RPC nearby_pois: quella
+ * taglia ai 400 luoghi piu' vicini di QUALSIASI categoria, e in un centro
+ * storico denso le gemme a 2 km restano fuori. Gemma = solo `is_gem` (mai
+ * category='gemme', regola del 03/09). Ordine: prima chi ha foto E testo
+ * (una tappa muta e senza immagine e' una tappa povera), poi la distanza.
+ * Porta e punto d'arrivo vengono letti perche' e' li' che il navigatore deve
+ * portare. Raggio in metri (bbox approssimata), tetto `max`.
+ */
+export async function getGemmeVicine(
+  lat: number,
+  lon: number,
+  raggioMetri = 2500,
+  max = 8,
+): Promise<NearbyPoi[]> {
+  if (!hasRpc()) return [];
+  try {
+    const dLat = raggioMetri / 111_320;
+    const dLon = raggioMetri / (111_320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+    const { data, error } = await supabase
+      .from('shared_pois')
+      .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, photo_url, status, is_hidden, country, city, is_gem, entrance_lat, entrance_lon, arrival_lat, arrival_lon')
+      .eq('is_gem', true)
+      .gte('lat', lat - dLat).lte('lat', lat + dLat)
+      .gte('lon', lon - dLon).lte('lon', lon + dLon)
+      .limit(300);
+    if (error) throw error;
+    const punteggio = (p: any) => (p.image_url || p.photo_url ? 2 : 0) + (p.description_ai || p.description_short ? 1 : 0);
+    return (data || [])
+      .filter((p: any) => isVisiblePoiStatus(p) && p.name && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)))
+      .map((p: any) => ({
+        ...p,
+        lat: Number(p.lat), lon: Number(p.lon),
+        premium: true,
+        photo_url: p.photo_url || p.image_url,
+        image_url: p.image_url || p.photo_url,
+        distance_meters: haversineMeters(lat, lon, Number(p.lat), Number(p.lon)),
+      }))
+      .filter((p: any) => p.distance_meters <= raggioMetri)
+      .sort((a: any, b: any) => (punteggio(b) - punteggio(a)) || (a.distance_meters - b.distance_meters))
+      .slice(0, max) as NearbyPoi[];
+  } catch (e) {
+    console.warn('[poiRepository] gemme vicine non lette', e);
+    return [];
+  }
+}
+
 export async function getNearbyPois(
   lat: number,
   lon: number,

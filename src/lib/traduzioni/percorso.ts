@@ -26,6 +26,48 @@ export const TRAD_PERCORSO: Record<string, Partial<Record<Language, string>>> = 
     IT: 'Componi un percorso', EN: 'Build a route', FR: 'Composer un parcours',
     ES: 'Crear una ruta', DE: 'Route zusammenstellen', RU: 'Составить маршрут', ZH: '规划路线',
   },
+  // IL MENU DELLE TRE VIE (07/09/2026, committente: «cliccando sul tasto
+  // itinerario appaiono sopra le 3 alternative: personale più gli altri 2
+  // modi veloci, tempo e gemme»). Personale = il metodo di sempre, pin per
+  // pin. Gemme = le migliori gemme intorno a te, gia' nella lista. A tempo =
+  // quante gemme ci stanno in un'ora, due, mezza giornata.
+  pc_menu_personale: {
+    IT: 'Personale · scelgo io i luoghi', EN: 'Custom · I pick the places', FR: 'Personnel · je choisis les lieux',
+    ES: 'Personal · elijo yo los lugares', DE: 'Persönlich · ich wähle die Orte', RU: 'Свой · выбираю места сам', ZH: '自选 · 我来挑地点',
+  },
+  pc_menu_gemme: {
+    IT: 'Gemme intorno a me', EN: 'Gems around me', FR: 'Pépites autour de moi',
+    ES: 'Joyas a mi alrededor', DE: 'Juwelen um mich herum', RU: 'Жемчужины рядом со мной', ZH: '我身边的瑰宝',
+  },
+  pc_menu_tempo: {
+    IT: 'A tempo · quanto ho?', EN: 'By time · how long have I got?', FR: 'Au temps · combien ai-je ?',
+    ES: 'Por tiempo · ¿cuánto tengo?', DE: 'Nach Zeit · wie viel habe ich?', RU: 'По времени · сколько у меня?', ZH: '按时间 · 我有多久？',
+  },
+  pc_tempo_1h: { IT: '1 ora', EN: '1 hour', FR: '1 heure', ES: '1 hora', DE: '1 Stunde', RU: '1 час', ZH: '1 小时' },
+  pc_tempo_2h: { IT: '2 ore', EN: '2 hours', FR: '2 heures', ES: '2 horas', DE: '2 Stunden', RU: '2 часа', ZH: '2 小时' },
+  pc_tempo_mezza: { IT: 'Mezza giornata', EN: 'Half a day', FR: 'Une demi-journée', ES: 'Media jornada', DE: 'Ein halber Tag', RU: 'Полдня', ZH: '半天' },
+  pc_veloce_cerco: {
+    IT: 'Cerco le gemme intorno a te…', EN: 'Looking for gems around you…', FR: 'Je cherche les pépites autour de vous…',
+    ES: 'Busco las joyas a tu alrededor…', DE: 'Ich suche Juwelen in deiner Nähe…', RU: 'Ищу жемчужины рядом с вами…', ZH: '正在寻找你身边的瑰宝……',
+  },
+  pc_veloce_nessuna: {
+    IT: 'Nessuna gemma nei dintorni: sposta la mappa su una città o scegli i luoghi dai pin.',
+    EN: 'No gems nearby: move the map to a town or pick places from the pins.',
+    FR: 'Aucune pépite aux alentours : déplacez la carte vers une ville ou choisissez les lieux sur les épingles.',
+    ES: 'No hay joyas cerca: mueve el mapa a una ciudad o elige los lugares desde los pines.',
+    DE: 'Keine Juwelen in der Nähe: verschiebe die Karte auf eine Stadt oder wähle Orte über die Pins.',
+    RU: 'Рядом нет жемчужин: переместите карту на город или выберите места по меткам.',
+    ZH: '附近没有瑰宝：把地图移到某个城市，或从图钉中挑选地点。',
+  },
+  pc_veloce_pronto: {
+    IT: '{n} gemme intorno a te, già in ordine di cammino. Togli quelle che non vuoi, poi «Crea e avvia».',
+    EN: '{n} gems around you, already in walking order. Remove any you don’t want, then “Create & start”.',
+    FR: '{n} pépites autour de vous, déjà dans l’ordre de marche. Retirez celles que vous ne voulez pas, puis « Créer et lancer ».',
+    ES: '{n} joyas a tu alrededor, ya en orden de camino. Quita las que no quieras y luego «Crear e iniciar».',
+    DE: '{n} Juwelen um dich herum, schon in Gehreihenfolge. Entferne, was du nicht willst, dann „Erstellen & starten“.',
+    RU: '{n} жемчужин рядом с вами, уже в порядке маршрута. Уберите лишние и нажмите «Создать и начать».',
+    ZH: '你身边的 {n} 处瑰宝已按步行顺序排好。删掉不想去的，然后点「创建并开始」。',
+  },
   pc_vuoto: {
     IT: 'Tocca il «+» sui pin della mappa — monumenti, ristoranti, farmacie, parcheggi, qualsiasi categoria — e WIP calcola il percorso più corto che li tocca tutti.',
     EN: 'Tap the "+" on the map pins — monuments, restaurants, pharmacies, car parks, any category — and WIP works out the shortest route through all of them.',
