@@ -7,6 +7,7 @@
 import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
 import { PDF_C, pdfStili as S, pulisci, Elenco, PiedePagina } from './base.js';
+import { tappeMappa } from './tappeMappa.js';
 
 export interface ItinerarioPdfEtichette {
   pagina: string; giorno: string; giorni: string; giornoSingolo: string; curatoDa: string;
@@ -82,6 +83,37 @@ const Sezione = ({ titolo, voci, colore }: { titolo: string; voci?: string[]; co
   </View>
 ));
 
+/**
+ * Legenda sotto la mappa: numero del pin + nome della tappa, gli stessi
+ * numeri di tappeMappa() usati per i pin. Due colonne, un'intestazione per
+ * giorno quando i giorni sono piu' di uno.
+ */
+const Legenda = ({ plan, et, nGiorni }: { plan: any; et: ItinerarioPdfEtichette; nGiorni: number }) => {
+  const tappe = tappeMappa(plan);
+  if (!tappe.length) return null;
+  const righe: React.ReactNode[] = [];
+  let giornoCorrente = -1;
+  for (const t of tappe) {
+    if (nGiorni > 1 && t.giorno !== giornoCorrente) {
+      giornoCorrente = t.giorno;
+      righe.push(
+        <Text key={`g${t.giorno}`} style={[S.sansBold, { width: '100%', fontSize: 8.5, color: PDF_C.navy, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: righe.length ? 4 : 0, marginBottom: 2 }]}>
+          {et.giorno} {t.giorno}
+        </Text>,
+      );
+    }
+    righe.push(
+      <View key={t.n} style={{ width: '50%', flexDirection: 'row', alignItems: 'flex-start', paddingRight: 8, marginBottom: 2 }}>
+        <View style={{ width: 13, height: 13, borderRadius: 6.5, backgroundColor: PDF_C.navy, alignItems: 'center', justifyContent: 'center', marginRight: 5, marginTop: 0.5 }}>
+          <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 7, color: '#ffffff' }}>{t.n}</Text>
+        </View>
+        <Text style={[S.sans, { fontSize: 8.5, flex: 1, lineHeight: 1.25 }]}>{pulisci(t.titolo) || '—'}</Text>
+      </View>,
+    );
+  }
+  return <View style={{ marginTop: 8, flexDirection: 'row', flexWrap: 'wrap' }}>{righe}</View>;
+};
+
 export default function ItinerarioPdf({ plan, etichette: et, mappa }: ItinerarioPdfProps) {
   const titolo = pulisci(plan?.titolo) || 'WIP';
   const giorni: any[] = Array.isArray(plan?.giorni) ? plan.giorni : [];
@@ -130,7 +162,8 @@ export default function ItinerarioPdf({ plan, etichette: et, mappa }: Itinerario
           <View style={{ borderWidth: 1, borderColor: PDF_C.navy, borderRadius: 6, overflow: 'hidden' }}>
             <Image src={mappa} style={{ width: '100%' }} />
           </View>
-          <Text style={[S.piccolo, { marginTop: 6 }]}>© Mapbox © OpenStreetMap contributors</Text>
+          <Text style={[S.piccolo, { marginTop: 4 }]}>© Mapbox © OpenStreetMap contributors</Text>
+          <Legenda plan={plan} et={et} nGiorni={nGiorni} />
         </Page>
       ) : null}
     </Document>

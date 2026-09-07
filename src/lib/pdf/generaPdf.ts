@@ -12,6 +12,7 @@
  */
 import type { PremiumGuideContent } from '../../services/premiumGuideService';
 import { haCaratteriNonLatini } from './pulisci.js';
+import { tappeMappa } from './tappeMappa.js';
 
 /**
  * «Pagina x / y» su ogni pagina, con pdf-lib, dopo l'impaginazione: il
@@ -89,23 +90,17 @@ async function ricodifica(b: Blob): Promise<string | undefined> {
   } catch { return undefined; }
 }
 
-const coordTappa = (t: any): { lat: number; lon: number } | null => {
-  const lat = Number(t?.coordinate?.lat ?? t?.lat);
-  const lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon ?? t?.lng ?? t?.lon);
-  return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
-};
-
 /**
  * URL della mappa statica Mapbox del percorso, con i numeri delle tappe.
  * Condiviso fra il PDF del client e quello del server (allegato email):
- * la stessa mappa in entrambi. undefined senza token o senza coordinate.
+ * la stessa mappa in entrambi. I numeri sono quelli di tappeMappa(), gli
+ * stessi della legenda sotto la mappa. undefined senza token o coordinate.
  */
 export function urlMappaStatica(plan: any, token: string | undefined): string | undefined {
   if (!token) return undefined;
-  const punti: { lat: number; lon: number }[] = [];
-  for (const g of plan?.giorni || []) for (const t of g?.tappe || []) { const c = coordTappa(t); if (c) punti.push(c); }
+  const punti = tappeMappa(plan);
   if (!punti.length) return undefined;
-  const pin = punti.slice(0, 40).map((p, i) => `pin-s-${Math.min(i + 1, 99)}+1e3a8a(${p.lon.toFixed(5)},${p.lat.toFixed(5)})`).join(',');
+  const pin = punti.map((p) => `pin-s-${Math.min(p.n, 99)}+1e3a8a(${p.lon.toFixed(5)},${p.lat.toFixed(5)})`).join(',');
   return `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${pin}/auto/1000x760@2x?padding=70&access_token=${encodeURIComponent(token)}`;
 }
 
