@@ -78,6 +78,8 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
   // ne sono entrate, 'nessuna' se la zona e' vuota. Si azzera al primo tocco
   // manuale sulla lista (bozza svuotata o tappa tolta).
   const [veloce, setVeloce] = useState<{ stato: 'cerco' | 'pronto' | 'nessuna' | 'posizione'; n?: number } | null>(null);
+  // Il riquadro «Confermi il pagamento?» (vedi crea()); `saldo` arriva dopo.
+  const [conferma, setConferma] = useState<{ saldo: number | null } | null>(null);
   const ultimoAvvioRef = useRef<number>(0);
   useEffect(() => {
     if (!avvioRapido || avvioRapido.ts === ultimoAvvioRef.current) return;
@@ -103,6 +105,7 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
     return () => { vivo = false; };
   }, [avvioRapido]);
   useEffect(() => { if (scelte.length === 0 && veloce?.stato === 'pronto') setVeloce(null); }, [scelte.length, veloce]);
+  useEffect(() => { if (scelte.length <= 1) setConferma(null); }, [scelte.length]);
   const costo = PRICING_LIST.custom_route;
   const tetto = tourService.bozzaTetto();
   const distanza = (m: number) => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`);
@@ -117,8 +120,29 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
     setErrore({ tipo: 'altro', testo: m || tr('gr_giro_non_riuscito') });
   };
 
-  const crea = async () => {
+  /**
+   * LA CONFERMA PRIMA DI PAGARE (07/09/2026, collaudo del committente: «in
+   * nessuna modalità mi ha chiesto di pagare e ha iniziato la navigazione;
+   * deve chiedere prima e dichiarare che l'utente sta pagando»). Con piu' di
+   * una tappa il primo tocco apre il riquadro con costo, tappe e saldo; solo
+   * «Paga e avvia» addebita e fa partire il navigatore. La tappa singola e'
+   * gratis e parte senza conferma.
+   */
+  const crea = async (confermato = false) => {
     if (creando || scelte.length === 0) return;
+    if (scelte.length > 1 && !confermato) {
+      setErrore(null);
+      setConferma({ saldo: null });
+      try {
+        const { supabase } = await import('../lib/supabase');
+        const { getWalletBalance } = await import('../lib/pricing');
+        const { data } = await supabase.auth.getSession();
+        const uid = data.session?.user?.id;
+        if (uid) { const w = await getWalletBalance(uid); setConferma((c) => (c ? { saldo: w.total } : c)); }
+      } catch { /* il saldo e' un'informazione in piu', non un requisito */ }
+      return;
+    }
+    setConferma(null);
     setCreando(true); setErrore(null);
     try {
       await tourService.avviaDaBozza();
@@ -287,6 +311,42 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
                 </button>
               )}
             </div>
+
+            {conferma && scelte.length > 1 && (
+              <div className="px-4 py-3 border-b border-emerald-200 bg-emerald-50 space-y-2">
+                <p className="text-[13px] font-black text-emerald-900 flex items-center gap-1.5"><Coins className="w-4 h-4" /> {tr('pc_conferma_titolo')}</p>
+                <p className="text-[12px] text-emerald-900/80 leading-snug">
+                  {tr('pc_conferma_testo').replace('{n}', String(costo)).replace('{t}', String(scelte.length)).replace('{m}', String(CUSTOM_ROUTE_MAX_CHANGES))}
+                </p>
+                {conferma.saldo != null && (
+                  <p className={`text-[11px] font-bold tabular-nums ${conferma.saldo < costo ? 'text-red-600' : 'text-emerald-900/60'}`}>
+                    {tr('pc_conferma_saldo').replace('{s}', String(conferma.saldo))}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setConferma(null); }}
+                    className="px-3 py-2.5 rounded-xl text-[11px] font-bold text-emerald-900/70 bg-white border border-black/10 active:scale-95"
+                  >
+                    {tr('gr_annulla')}
+                  </button>
+                  {conferma.saldo != null && conferma.saldo < costo ? (
+                    <button onClick={() => window.dispatchEvent(new CustomEvent('wip-open-shop'))} className="flex-1 px-3 py-2.5 rounded-xl bg-amber-400 text-slate-900 text-[12px] font-black flex items-center justify-center gap-1.5 active:scale-95">
+                      <Coins className="w-4 h-4" /> {tr('gr_dp_ricarica_crediti')}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); crea(true); }}
+                      disabled={creando}
+                      className="flex-1 px-3 py-2.5 rounded-xl bg-emerald-700 text-white text-[12px] font-black shadow-md flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-60"
+                    >
+                      {creando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Route className="w-4 h-4" />}
+                      {tr('pc_conferma_paga').replace('{n}', String(costo))}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {errore && (
               <div className="px-4 py-2.5 border-b border-black/5 bg-amber-50 flex items-center gap-3">

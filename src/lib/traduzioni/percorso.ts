@@ -68,6 +68,30 @@ export const TRAD_PERCORSO: Record<string, Partial<Record<Language, string>>> = 
     RU: '{n} жемчужин рядом с вами, уже в порядке маршрута. Уберите лишние и нажмите «Создать и начать».',
     ZH: '你身边的 {n} 处瑰宝已按步行顺序排好。删掉不想去的，然后点「创建并开始」。',
   },
+  // LA CONFERMA DEL PAGAMENTO (07/09/2026, committente: «deve chiedere prima
+  // della navigazione e dichiarare che l'utente sta pagando»). Prima «Crea e
+  // avvia» addebitava e partiva in un colpo solo.
+  pc_conferma_titolo: {
+    IT: 'Confermi il pagamento?', EN: 'Confirm the payment?', FR: 'Confirmer le paiement ?',
+    ES: '¿Confirmas el pago?', DE: 'Zahlung bestätigen?', RU: 'Подтвердить оплату?', ZH: '确认付款？',
+  },
+  pc_conferma_testo: {
+    IT: 'Stai per pagare {n} crediti per questo percorso di {t} tappe. Comprende fino a {m} modifiche. Il navigatore parte subito dopo.',
+    EN: 'You are about to pay {n} credits for this {t}-stop route. Up to {m} changes included. The navigator starts right after.',
+    FR: 'Vous allez payer {n} crédits pour ce parcours de {t} étapes. Jusqu’à {m} modifications incluses. Le navigateur démarre juste après.',
+    ES: 'Vas a pagar {n} créditos por esta ruta de {t} paradas. Incluye hasta {m} cambios. El navegador arranca justo después.',
+    DE: 'Du zahlst gleich {n} Credits für diese Route mit {t} Stationen. Bis zu {m} Änderungen inklusive. Der Navigator startet direkt danach.',
+    RU: 'Вы заплатите {n} кредитов за маршрут из {t} остановок. Включено до {m} изменений. Навигатор запустится сразу после.',
+    ZH: '你将为这条 {t} 站的路线支付 {n} 积分，含最多 {m} 次修改。付款后导航立即开始。',
+  },
+  pc_conferma_saldo: {
+    IT: 'Saldo attuale: {s} crediti', EN: 'Current balance: {s} credits', FR: 'Solde actuel : {s} crédits',
+    ES: 'Saldo actual: {s} créditos', DE: 'Aktuelles Guthaben: {s} Credits', RU: 'Текущий баланс: {s} кредитов', ZH: '当前余额：{s} 积分',
+  },
+  pc_conferma_paga: {
+    IT: 'Paga {n} crediti e avvia', EN: 'Pay {n} credits and start', FR: 'Payer {n} crédits et lancer',
+    ES: 'Pagar {n} créditos e iniciar', DE: '{n} Credits zahlen und starten', RU: 'Оплатить {n} кредитов и начать', ZH: '支付 {n} 积分并开始',
+  },
   pc_vuoto: {
     IT: 'Tocca il «+» sui pin della mappa — monumenti, ristoranti, farmacie, parcheggi, qualsiasi categoria — e WIP calcola il percorso più corto che li tocca tutti.',
     EN: 'Tap the "+" on the map pins — monuments, restaurants, pharmacies, car parks, any category — and WIP works out the shortest route through all of them.',
