@@ -11,7 +11,7 @@
  * incorporati non hanno cirillico/CJK): chi chiama ripiega su html2pdf.
  */
 import type { PremiumGuideContent } from '../../services/premiumGuideService';
-import { haCaratteriNonLatini } from './pulisci';
+import { haCaratteriNonLatini } from './pulisci.js';
 
 /**
  * «Pagina x / y» su ogni pagina, con pdf-lib, dopo l'impaginazione: il

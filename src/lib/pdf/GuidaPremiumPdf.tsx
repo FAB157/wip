@@ -7,7 +7,7 @@
 import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
 import type { PremiumGuideContent, PremiumGuidePoi } from '../../services/premiumGuideService';
-import { PDF_C, pdfStili as S, pulisci, Elenco, stelle, PiedePagina } from './base';
+import { PDF_C, pdfStili as S, pulisci, Elenco, stelle, PiedePagina } from './base.js';
 
 export interface GuidaPdfEtichette {
   guida: string; sommario: string; giorno: string; introduzione: string;

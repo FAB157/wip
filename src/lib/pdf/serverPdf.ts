@@ -13,8 +13,8 @@
  */
 import React from 'react';
 import axios from 'axios';
-import { ET_GUIDA, ET_ITINERARIO, lingua } from './generaPdf';
-import { haCaratteriNonLatini } from './pulisci';
+import { ET_GUIDA, ET_ITINERARIO, lingua } from './generaPdf.js';
+import { haCaratteriNonLatini } from './pulisci.js';
 
 const MAX_IMG = 6 * 1024 * 1024;
 
@@ -68,7 +68,7 @@ export async function pdfGuidaServer(content: any, mediaManifest: Record<string,
     }
     if (!immagini.cover) { const primo = Object.keys(immagini)[0]; if (primo) immagini.cover = immagini[primo]; }
     const { renderToBuffer } = await import('@react-pdf/renderer');
-    const { default: GuidaPremiumPdf } = await import('./GuidaPremiumPdf');
+    const { default: GuidaPremiumPdf } = await import('./GuidaPremiumPdf.js');
     const buf = await renderToBuffer(React.createElement(GuidaPremiumPdf, { content, immagini, etichette: ET_GUIDA[L] }) as any);
     return await numeraPagine(Buffer.from(buf), ET_GUIDA[L].pagina, 2);
   } catch (e: any) {
@@ -84,7 +84,7 @@ export async function pdfItinerarioServer(plan: any, language: unknown): Promise
     if (haCaratteriNonLatini(JSON.stringify(plan).slice(0, 20000))) return null;
     const L = lingua(language);
     const { renderToBuffer } = await import('@react-pdf/renderer');
-    const { default: ItinerarioPdf } = await import('./ItinerarioPdf');
+    const { default: ItinerarioPdf } = await import('./ItinerarioPdf.js');
     const buf = await renderToBuffer(React.createElement(ItinerarioPdf, { plan, etichette: ET_ITINERARIO[L] }) as any);
     return await numeraPagine(Buffer.from(buf), ET_ITINERARIO[L].pagina, 1);
   } catch (e: any) {

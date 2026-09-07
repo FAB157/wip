@@ -6,7 +6,7 @@
  */
 import React from 'react';
 import { Document, Page, Text, View, Image } from '@react-pdf/renderer';
-import { PDF_C, pdfStili as S, pulisci, Elenco, PiedePagina } from './base';
+import { PDF_C, pdfStili as S, pulisci, Elenco, PiedePagina } from './base.js';
 
 export interface ItinerarioPdfEtichette {
   pagina: string; giorno: string; giorni: string; giornoSingolo: string; curatoDa: string;

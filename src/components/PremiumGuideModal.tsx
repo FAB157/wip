@@ -421,11 +421,12 @@ export default function PremiumGuideModal({
 
             {/* ── PHASE: generating ── */}
             {phase === 'generating' && (
-              <LoadingQuiz 
-                destination={itinerary.city || itinerary.destinazione || itinerary.titolo || ''} 
-                quizLength={8} 
-                userId={userId} 
-                language={language} 
+              <LoadingQuiz
+                destination={itinerary.city || itinerary.destinazione || itinerary.titolo || ''}
+                quizLength={8}
+                userId={userId}
+                language={language}
+                avvisoAttesa="guida"
               />
             )}
 

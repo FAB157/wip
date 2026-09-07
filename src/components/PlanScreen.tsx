@@ -7923,6 +7923,7 @@ export default function PlanScreen({
           userId={currentUserId || ''}
           language={language}
           onDismiss={() => setQuizDismissed(true)}
+          avvisoAttesa={loading ? 'itinerario' : undefined}
         />
       )}
 

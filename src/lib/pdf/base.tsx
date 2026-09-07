@@ -15,9 +15,9 @@
  */
 import React from 'react';
 import { Page, Text, View, StyleSheet } from '@react-pdf/renderer';
-import { pulisci } from './pulisci';
+import { pulisci } from './pulisci.js';
 
-export { pulisci, haCaratteriNonLatini } from './pulisci';
+export { pulisci, haCaratteriNonLatini } from './pulisci.js';
 
 export const PDF_C = {
   navy: '#1e3a8a',
