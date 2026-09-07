@@ -23,7 +23,6 @@ import {
   useMap,
   ZoomControl,
   useMapEvents,
-  Popup,
   LayerGroup,
   Polyline,
   CircleMarker,
@@ -5795,10 +5794,11 @@ function MapArea({
   );
 
   // Memoizza gli elementi Marker: vengono ricostruiti SOLO quando cambia la
-  // lista dei POI. Il popup non è più figlio di ogni Marker: prima bastava
+  // lista dei POI. La scheda non è più figlia di ogni Marker: prima bastava
   // aprire/chiudere una scheda per ricostruire tutti i ~500 <Marker> (era la
-  // causa principale della lentezza di apertura). Ora c'è un unico <Popup>
-  // condiviso renderizzato a livello mappa (vedi activePoi più sotto).
+  // causa principale della lentezza di apertura). Ora c'è un'unica scheda
+  // condivisa, guidata solo da `activePoi` (vedi più sotto) e dal 06-07/09/2026
+  // non più un Popup di Leaflet ma un pannello React ancorato in basso.
   // Il colore della categoria, in esadecimale: CATEGORY_COLORS lo tiene
   // dentro una classe Tailwind («bg-[#0f766e]») perché serve così ai pin,
   // ma il cerchio del raggruppamento è HTML disegnato a mano.
@@ -6166,66 +6166,56 @@ function MapArea({
             );
           })()}
 
-          {/* Popup condiviso: uno solo per tutta la mappa. key per poi.id così
-              cambiando POI la scheda rimonta pulita (stati e fetch propri). */}
-          {activePoi && (
-            <Popup
-              key={`popup-${activePoi.id}`}
-              className="custom-popup"
-              minWidth={290}
-              maxWidth={290}
-              // La X nativa di Leaflet si sommava a quella disegnata da
-              // PoiPopupContent: due X visibili nello stesso angolo
-              // (24/08/2026, segnalato sui beni culturali). Ora ne resta
-              // una sola, quella della card, più grande e coerente su ogni
-              // variante — chiude comunque nello stesso modo (onClose sotto).
-              closeButton={false}
-              position={[activePoi.lat, activePoi.lon]}
-              offset={[0, -42]}
-              // L'autoPan di Leaflet combatteva col flyTo di centerMapOnPoi
-              // (due animazioni simultanee sulla stessa mappa = schermo e pin
-              // che sfarfallano all'apertura). Il flyTo posiziona già il pin
-              // sotto il centro apposta per lasciare spazio al popup.
-              autoPan={false}
-              eventHandlers={{
-                // Leaflet emette `remove` anche quando il popup viene solo
-                // ri-agganciato durante un re-render: chiudere la scheda in
-                // quel caso la faceva apparire e sparire in pochi millisecondi.
-                // Chiudiamo solo se, esaurito il ciclo di render, il popup non
-                // è più sulla mappa (chiusura vera dell'utente).
-                remove: (e: any) => {
-                  const closedId = activePoi.id;
-                  setTimeout(() => {
-                    const map = mapRef.current;
-                    if (map && e?.target && map.hasLayer(e.target)) return;
-                    setActivePopupId((cur) => (cur === closedId ? null : cur));
-                    setActivePoi((cur) => (cur && cur.id === closedId ? null : cur));
-                  }, 0);
-                },
-              }}
-            >
-              <PoiPopupContent
-                poi={activePoi}
-                onGuideClick={() => selectPoi(activePoi)}
-                language={language}
-                // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
-                // giro", cosi` le tappe si scelgono anche toccando i pin.
-                // Lo stesso tasto serve al percorso su misura.
-                modalitaGiro={!!isRadarMode || modalitaPercorso}
-                // La X della card chiude davvero: si chiude il popup di
-                // Leaflet e si azzera lo stato, altrimenti il popup resta
-                // "aperto" per React e non si riapre sullo stesso POI.
-                onClose={() => {
-                  try { mapRef.current?.closePopup(); } catch { /* mappa gia' smontata */ }
-                  setActivePopupId(null);
-                  setActivePoi(null);
-                }}
-              />
-            </Popup>
-          )}
-
         </MapContainer>
       </div>
+
+      {/* SCHEDA POI: pannello ancorato in basso, NON PIU` un Popup di Leaflet
+          (06-07/09/2026, richiesto dal committente dopo un video: "la scheda
+          appare e scompare velocissimo"). La causa vera era strutturale, non
+          un bug da rattoppare: un Leaflet Popup vive DENTRO l'albero della
+          mappa (posizione via setLatLng, autoPan, l'evento `remove` che
+          Leaflet spara anche solo per un ri-aggancio durante un re-render —
+          vedi la cronologia di pezze qui sopra, mai bastate). MapArea
+          rirenderizza spesso (bussola, GPS, fetch): ogni volta il Popup
+          rischiava di essere tolto e rimesso, con un lampo. Un pannello React
+          comune, fuori da MapContainer e guidato solo da `activePoi`, non ha
+          nessuno di questi problemi — non è mai stato "dentro" la mappa.
+          Posizione e aspetto seguono la richiesta: ancorato appena sopra la
+          barra "Trova vicino"/"Tutto" (stesso bordo, non più una bolla sul
+          pin), e alla chiusura la mappa torna a centrare il pin per davvero
+          (prima restava spostato del 22% per lasciare posto alla bolla). */}
+      <AnimatePresence>
+        {activePoi && (
+          <motion.div
+            key={`poi-sheet-${activePoi.id}`}
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+            className="absolute bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[1150] max-h-[58dvh] md:max-h-[70dvh]"
+          >
+            <PoiPopupContent
+              poi={activePoi}
+              onGuideClick={() => selectPoi(activePoi)}
+              language={language}
+              // Dieci Tappe: col radar acceso la scheda offre "Aggiungi al
+              // giro", cosi` le tappe si scelgono anche toccando i pin.
+              // Lo stesso tasto serve al percorso su misura.
+              modalitaGiro={!!isRadarMode || modalitaPercorso}
+              onClose={() => {
+                // Il pin torna al centro vero dello schermo, non piu` spostato
+                // per lasciare posto a una bolla che non c'e` piu`.
+                try {
+                  const map = mapRef.current;
+                  if (map) map.flyTo([activePoi.lat, activePoi.lon], map.getZoom(), { duration: 0.5 });
+                } catch { /* mappa gia' smontata */ }
+                setActivePopupId(null);
+                setActivePoi(null);
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Banner offline discreto: stessa famiglia visiva del badge "Follow ON"
           qui sotto (pillola blur, testo maiuscolo). useNetworkStatus() era

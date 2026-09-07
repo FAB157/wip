@@ -927,7 +927,12 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
   }
 
   return (
-    <div className="w-[300px] -m-3 overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
+    // LARGHEZZA PIENA (06-07/09/2026): non e' piu' un Popup di Leaflet (che
+    // imponeva minWidth/maxWidth=290 e un padding interno da compensare con
+    // -m-3), ma un pannello ancorato in basso — vedi MapArea.tsx. La card
+    // riempie il contenitore che la ospita, come le varianti atlante e
+    // utility qui sopra.
+    <div className="w-full overflow-hidden rounded-2xl font-sans shadow-2xl bg-white flex flex-col max-h-[60vh]">
       {/* Tasto tendina in alto (drag handle) per agevolare chiusura */}
       <div className="w-full flex justify-center py-1.5 bg-white/80 absolute top-0 z-50 rounded-t-2xl pointer-events-none">
         <div className="w-10 h-1.5 bg-gray-300 rounded-full" />
