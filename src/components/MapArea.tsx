@@ -936,6 +936,22 @@ function MapArea({
   // restava solo la lente, e sembrava un tasto rotto. La barra ora resta
   // una riga sola e la ricerca ha una riga tutta sua, sopra.
   const [ricercaAperta, setRicercaAperta] = useState(false);
+  // Il tasto «Componi un percorso» sta in App.tsx, fuori da questo
+  // componente: nessuna prop lo collega qui. Stesso motivo per cui
+  // spariva solo il tasto livelli quando si apre la ricerca città
+  // (07/09/2026, richiesto dal committente) — si avvisa App.tsx con un
+  // evento, come gia' fa 'wip-apri-radar' qualche schermata sotto.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('wip-city-search-toggle', { detail: { aperta: ricercaAperta } }));
+  }, [ricercaAperta]);
+  // Stessa cosa quando si apre la card di un pin (07/09/2026): la card e'
+  // ancorata in basso e i due tasti (livelli qui sotto, percorso in
+  // App.tsx) le finivano sopra, spuntando dal bordo arrotondato. Il tasto
+  // livelli usa activePoi direttamente (stesso file); il tasto percorso
+  // ha bisogno dell'evento, come sopra per la ricerca città.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('wip-poi-card-toggle', { detail: { aperta: !!activePoi } }));
+  }, [activePoi]);
   const campoRicercaRef = useRef<HTMLInputElement | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -3170,13 +3186,37 @@ function MapArea({
     south: number, west: number, north: number, east: number
   ): Promise<Poi[]> => {
     try {
-      const { data } = await supabase
+      const colonne = 'id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, images_json, status, is_hidden';
+      const nati = supabase
         .from('shared_pois')
-        .select('id, name, lat, lon, category, poi_type, description_short, description_ai, image_url, status, is_hidden')
+        .select(colonne)
         .eq('category', 'community')
         .gte('lat', south).lte('lat', north)
         .gte('lon', west).lte('lon', east)
         .limit(300);
+      /**
+       * ANCHE I LUOGHI UFFICIALI CON FOTO DELLA COMMUNITY (07/09/2026, il
+       * committente: «la spiaggia della Lecciona non si vede; le foto
+       * approvate devono essere mostrate nella chip»). Una Vision approvata
+       * con «allega a un POI esistente» finisce nella galleria (images_json,
+       * source 'wip_community') di una spiaggia o di un monumento gia' in
+       * archivio, che resta della sua categoria: la sola query su
+       * category='community' non la vedeva mai. Qui si chiedono anche quei
+       * luoghi (contenimento jsonb), solo a vista ravvicinata: senza indice
+       * sulla galleria una bbox continentale sarebbe una scansione.
+       */
+      const vistaRavvicinata = (north - south) <= 2 && (east - west) <= 2;
+      const allegati = vistaRavvicinata
+        ? supabase
+          .from('shared_pois')
+          .select(colonne)
+          .neq('category', 'community')
+          .contains('images_json', [{ source: 'wip_community' }])
+          .gte('lat', south).lte('lat', north)
+          .gte('lon', west).lte('lon', east)
+          .limit(300)
+        : Promise.resolve({ data: [] as any[] });
+      const [{ data }, { data: dataAllegati }] = await Promise.all([nati, allegati]);
       // Denylist status COMPLETA (isVisiblePoiStatus): il solo check su
       // 'draft' lasciava visibili i POI community auto-sospesi dalle
       // segnalazioni utente (status 'needs_revision') e quelli rifiutati.
@@ -3185,8 +3225,18 @@ function MapArea({
       const { isVisiblePoiStatus } = await import('../services/poiRepository');
       const { getBlockedCommunityPoiIds } = await import('../lib/communityModeration');
       const blockedIds = getBlockedCommunityPoiIds();
-      return (data || [])
+      /** La prima foto della community in galleria: copertina se il luogo non ne ha una. */
+      const fotoCommunity = (i: any): string | null => {
+        try {
+          const g = Array.isArray(i.images_json) ? i.images_json : JSON.parse(i.images_json || '[]');
+          const f = g.find((x: any) => x?.source === 'wip_community' && typeof x?.url === 'string' && /^https?:\/\//.test(x.url));
+          return f ? f.url : null;
+        } catch { return null; }
+      };
+      const visti = new Set<string>();
+      return [...(data || []), ...(dataAllegati || [])]
         .filter((i: any) => isVisiblePoiStatus(i) && i.name && !blockedIds.has(String(i.id)))
+        .filter((i: any) => { const k = String(i.id); if (visti.has(k)) return false; visti.add(k); return true; })
         .map((i: any) => ({
           id: i.id,
           lat: Number(i.lat),
@@ -3194,9 +3244,9 @@ function MapArea({
           name: i.name,
           category: 'community',
           baseCategory: 'community',
-          subCategory: i.poi_type || 'community',
+          subCategory: i.poi_type || (i.category !== 'community' ? i.category : null) || 'community',
           description: i.description_ai || i.description_short,
-          image_url: i.image_url,
+          image_url: i.image_url || fotoCommunity(i),
           is_gem: false,
           isFromDb: true,
           status: i.status || 'verified'
@@ -6381,8 +6431,10 @@ function MapArea({
           bastava a mettere la ricerca sopra, ma meteo e tasto livelli
           restavano visibili sotto e si affollavano visivamente contro il
           riquadro dei risultati. "Sovrapposta a tutto" qui vuol dire anche
-          non condividere lo schermo con loro, non solo vincere lo z-fight. */}
-      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${ricercaAperta ? 'opacity-0 pointer-events-none invisible' : ''}`}>
+          non condividere lo schermo con loro, non solo vincere lo z-fight.
+          07/09/2026: stessa cosa con la card di un pin aperta — il chip
+          meteo sta alla sua stessa quota (5.25rem) e le spuntava sopra. */}
+      <div className={`absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 ${serviziAperti ? 'z-[2100]' : 'z-[1000]'} flex flex-col-reverse items-start gap-2 pointer-events-none transition-opacity ${(ricercaAperta || activePoi) ? 'opacity-0 pointer-events-none invisible' : ''}`}>
         {/* Chip meteo (Open-Meteo, cache 30 min) */}
         {meteo && (
           <div className="pointer-events-auto bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-2xl rounded-full shadow-[0_4px_16px_rgba(0,0,0,0.12)] border border-white/60 dark:border-white/10 px-3 py-1.5 flex items-center gap-1.5 text-[12px] font-black text-[#1e3a8a] dark:text-white select-none">
@@ -6443,8 +6495,11 @@ function MapArea({
           Il toggle "zone esplorate" è stato tolto su richiesta: era un
           diario, non un servizio, e non c'entrava con gli altri tre.
         */}
-        {/* col-reverse: il tasto sta in basso e il pannello si apre sopra */}
-        <div className="pointer-events-auto flex flex-col-reverse items-start gap-2">
+        {/* col-reverse: il tasto sta in basso e il pannello si apre sopra.
+            Trasparente e non cliccabile con la card di un pin aperta: la
+            card e' ancorata alla stessa quota e altrimenti il tasto le
+            spunta sopra dal bordo arrotondato (07/09/2026, committente). */}
+        <div className={`pointer-events-auto flex flex-col-reverse items-start gap-2 transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}>
           <button
             onClick={() => setServiziAperti((v) => !v)}
             // Era una ⓘ, che vuol dire «informazioni» e non «livelli»: chi
@@ -7075,8 +7130,12 @@ function MapArea({
         /* z-[2200] e non z-[1000] (06/09/2026): il meteo sta a z-[1000] e il
            pannello livelli sale a z-[2100] quando è aperto (vedi sopra) — la
            riga di ricerca e i suoi risultati restavano sotto entrambi, e
-           cercare una città con un livello acceso mostrava un menu coperto. */
-        className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation"
+           cercare una città con un livello acceso mostrava un menu coperto.
+           Trasparente con la card di un pin aperta (07/09/2026, committente):
+           sta a bottom-1rem, sotto la card che arriva fin verso 5.25rem, e lo
+           z-index altissimo la faceva comunque vincere sul fondo della card
+           (tasti Guida/Naviga/Audio). Stessa regola degli altri due tasti. */
+        className={`absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] left-4 right-4 md:bottom-8 md:left-8 md:max-w-md md:mx-auto z-[2200] flex flex-row items-center bg-white/70 dark:bg-[#1C1C1E]/70 backdrop-blur-3xl rounded-[2rem] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-white/60 dark:border-white/10 p-1.5 gap-2 select-none touch-manipulation transition-opacity ${activePoi ? 'opacity-0 pointer-events-none invisible' : ''}`}
         onMouseDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}

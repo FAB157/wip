@@ -10,6 +10,11 @@ import dns from "node:dns";
 import axios from "axios";
 import Groq from "groq-sdk";
 import * as agentTools from "./agentTools.js";
+// Feed eventi/mostre/stagionali aggiunti il 07/09/2026 (Klook, Trip.com,
+// festival Wikidata, stagioni, JSON-LD dei musei, città in tre nomi).
+import * as eventiFeed from "./eventiFeed.js";
+// Registro dei portali eventi per paese (mai usato prima del 07/09/2026).
+import { fontiPerPaese } from "./src/data/fontiEventi.js";
 // Libreria Itinerari: costanti condivise col client (SOLO tipi/costanti).
 import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
 // PDF «come un libro» generati dal server per gli allegati email (06/09/2026):
@@ -2235,6 +2240,12 @@ async function saveAudioToStorageAndCache(cacheKey: string, audioBuffer: Buffer)
      return null;
   }
 }
+
+// La cache api_cache passa ai feed eventi (eventiFeed.ts non conosce Supabase).
+eventiFeed.configuraEventiFeed({
+  get: (k: string) => getFromCache(k),
+  set: (k: string, tipo: string, v: any) => saveToCache(k, tipo, v),
+});
 
 export const app = express();
 // SICUREZZA: dietro il proxy Vercel/Express, req.ip deriva da X-Forwarded-For
@@ -7123,9 +7134,13 @@ Rispondi SOLO con JSON: {"nome": "${chosen}", "autore": "...o 'Ignoto'", "anno_p
           try {
             images = Array.isArray(attachTarget.images_json) ? attachTarget.images_json : JSON.parse(attachTarget.images_json || '[]');
           } catch { images = []; }
-          if (publicPhotoUrl) images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso });
+          if (publicPhotoUrl) images.push({ url: publicPhotoUrl, source: 'wip_community', added_at: nowIso, card_id: card.id });
+          // Come nell'accorpamento: un luogo senza copertina la eredita dalla
+          // foto approvata (07/09/2026: la spiaggia della Lecciona aveva due
+          // foto community in galleria e nessuna copertina, pin senza foto).
           await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(attachPoiId)}`,
-            { images_json: images }, { headers: svcHeaders });
+            { images_json: images, ...(attachTarget.image_url || !publicPhotoUrl ? {} : { image_url: publicPhotoUrl, photo_url: publicPhotoUrl }) },
+            { headers: svcHeaders });
           publishedPoiId = attachPoiId;
         }
 
@@ -13394,6 +13409,13 @@ out center tags 120;`;
           // opere…) viaggiano in technical_data.dettagli: vedi
           // scratch/importa-tematici.mjs.
           extra: p.technical_data?.dettagli || {},
+          // Portati fino in fondo SOLO per traduciTematici() qui sotto: le
+          // traduzioni gia' fatte vivono dentro technical_data.traduzioni e
+          // un PATCH deve poter ricostruire l'oggetto intero senza
+          // cancellare cio' che c'era. spogliaTraduzioni() in
+          // /api/tematici/eventi li toglie prima di rispondere al client.
+          technical_data: p.technical_data || {},
+          traduzioni: p.technical_data?.traduzioni || {},
         }));
     } catch (e: any) {
       console.warn(`[Tematici] Lettura catalogo "${chiave}" fallita:`, e?.message);
@@ -13403,6 +13425,82 @@ out center tags 120;`;
     }
     tematiciCache.set(chiave, { dati, quando: Date.now() });
     return dati;
+  }
+
+  /**
+   * Traduzioni dei campi liberi dei cataloghi tematici (cieli/mercati/
+   * fioriture): il catalogo sopra e' scritto una volta in italiano ("la
+   * lingua non entra nella chiave: i cataloghi sono dati, non testo").
+   * Chi guarda «Stagionali» in un'altra lingua vedeva le ETICHETTE tradotte
+   * ma il contenuto vero — descrizione, "quando", specie, picco di
+   * fioritura — sempre in italiano (07/09/2026, segnalato dal committente).
+   *
+   * Cache-first come poi_details/poi_audioguides: la traduzione si fa UNA
+   * volta per POI+lingua e si scrive dentro technical_data.traduzioni[LINGUA]
+   * sulla riga di shared_pois, cosi' la richiesta successiva — anche di un
+   * altro utente, anche da un'altra citta' vicina — la trova gia' pronta e
+   * non chiama piu' l'AI. UNA sola chiamata Groq per l'intera vista (fino a
+   * ~58 luoghi), non una per POI: altrimenti "Stagionali" in inglese
+   * costerebbe cinquanta round-trip invece di uno.
+   */
+  async function traduciTematici(voci: any[], lingua: string): Promise<void> {
+    if (lingua === 'IT' || !voci.length) return;
+    const daTradurre = voci.filter((v) => {
+      const gia = v?.traduzioni?.[lingua];
+      if (gia) {
+        if (gia.highlights) v.highlights = gia.highlights;
+        if (gia.best_time) v.best_time = gia.best_time;
+        if (gia.schedule) v.extra = { ...v.extra, schedule: gia.schedule };
+        if (gia.species) v.extra = { ...v.extra, species: gia.species };
+        if (gia.peak) v.extra = { ...v.extra, peak: gia.peak };
+        return false;
+      }
+      return !!(v?.highlights || v?.best_time || v?.extra?.schedule || v?.extra?.species || v?.extra?.peak);
+    });
+    if (!daTradurre.length) return;
+
+    const richiesta: Record<string, any> = {};
+    daTradurre.forEach((v) => {
+      const campi: Record<string, string> = {};
+      if (v.highlights) campi.highlights = String(v.highlights);
+      if (v.best_time) campi.best_time = String(v.best_time);
+      if (v.extra?.schedule) campi.schedule = String(v.extra.schedule);
+      if (v.extra?.species) campi.species = String(v.extra.species);
+      if (v.extra?.peak) campi.peak = String(v.extra.peak);
+      if (Object.keys(campi).length) richiesta[String(v.id)] = campi;
+    });
+    if (!Object.keys(richiesta).length) return;
+
+    const nomeLingua = ({ EN: 'inglese', FR: 'francese', ES: 'spagnolo', DE: 'tedesco', RU: 'russo', ZH: 'cinese' } as Record<string, string>)[lingua] || lingua;
+    const prompt = `Traduci in ${nomeLingua} SOLO i valori di questo JSON. Le chiavi esterne sono ID: non toccarle. Le chiavi interne restano "highlights","best_time","schedule","species","peak" (traduci solo quelle presenti). Non aggiungere e non togliere campi, non inventare nulla, stesso tono breve e informativo dell'originale. Rispondi SOLO col JSON tradotto, stessa struttura:
+${JSON.stringify(richiesta)}`;
+
+    try {
+      const out = await callUniversalAi('groq', [{ role: 'user', content: prompt }],
+        { temperature: 0.1, response_format: { type: 'json_object' }, excludeEngines: ['deepseek'] }, 'tematici_traduzione',
+        supabaseUrl, supabaseServiceKey, getGroqClient());
+      const tradotto = JSON.parse(String(out?.data || '{}'));
+      const svcHeaders = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      await Promise.all(daTradurre.map(async (v) => {
+        const t = tradotto[String(v.id)];
+        if (!t || typeof t !== 'object') return;
+        if (t.highlights) v.highlights = t.highlights;
+        if (t.best_time) v.best_time = t.best_time;
+        if (t.schedule) v.extra = { ...v.extra, schedule: t.schedule };
+        if (t.species) v.extra = { ...v.extra, species: t.species };
+        if (t.peak) v.extra = { ...v.extra, peak: t.peak };
+        // Merge additivo su una sotto-chiave che nessun'altra rotta scrive:
+        // un PATCH diretto basta, senza un GET prima per ogni riga.
+        try {
+          await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(v.id))}`,
+            { technical_data: { ...(v.technical_data || {}), traduzioni: { ...(v.traduzioni || {}), [lingua]: t } } },
+            { headers: svcHeaders });
+        } catch { /* la traduzione resta comunque nella risposta di adesso */ }
+      }));
+    } catch (e: any) {
+      console.warn('[tematici] traduzione fallita:', e?.message);
+      // Nessun errore in pagina: per questa volta i campi restano in italiano.
+    }
   }
 
   const tematiciDistanzaKm = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -13510,8 +13608,28 @@ out center tags 120;`;
       // saveToCache fa un upsert: created_at non si aggiorna sulle righe già
       // esistenti, quindi l'età vera è quella scritta nel contenuto.
       const nato = Date.parse(contenuto?.generato_al || riga?.created_at || '');
+      // Tutte le voci di una risposta gia' assemblata, per passarle a
+      // traduciTematici() e per ripulirle prima di uscire (07/09/2026):
+      // technical_data/traduzioni servono solo dentro il server.
+      const tuttiIVociDi = (c: any): any[] => ([
+        ...(c?.stelle?.luoghi || []), ...(c?.mercatini || []),
+        ...(c?.fioriture?.in_corso || []), ...(c?.fioriture?.in_arrivo || []),
+      ]);
+      const spogliaTraduzioni = (c: any) => {
+        const via = (v: any) => { const { technical_data, traduzioni, ...resto } = v || {}; return resto; };
+        return {
+          ...c,
+          stelle: { ...c.stelle, luoghi: (c.stelle?.luoghi || []).map(via) },
+          mercatini: (c.mercatini || []).map(via),
+          fioriture: {
+            in_corso: (c.fioriture?.in_corso || []).map(via),
+            in_arrivo: (c.fioriture?.in_arrivo || []).map(via),
+          },
+        };
+      };
       if (contenuto && Number.isFinite(nato) && Date.now() - nato < TEMATICI_EVENTI_TTL_MS) {
-        return res.json({ ...contenuto, raggio_km: raggioKm, lingua, cached: true });
+        await traduciTematici(tuttiIVociDi(contenuto), lingua);
+        return res.json({ ...spogliaTraduzioni(contenuto), raggio_km: raggioKm, lingua, cached: true });
       }
 
       const oggi = new Date();
@@ -13580,9 +13698,14 @@ out center tags 120;`;
         generato_al: new Date().toISOString(),
         attribuzione: meteoStelle ? 'MET Norway (NLOD / CC BY 4.0)' : undefined,
       };
-      // Si salva anche la zona vuota: rileggerla costa come riempirla.
+      // Si salva anche la zona vuota: rileggerla costa come riempirla. Si
+      // salva PRIMA della traduzione, con technical_data/traduzioni intatti
+      // (il catalogo resta lingua-agnostico, come dice il commento sopra) —
+      // cosi' una richiesta futura in un'altra lingua trova comunque quelle
+      // gia' fatte, invece di doverle rifare ad ogni cambio di lingua.
       try { await saveToCache(chiave, 'tematici_eventi', dati); } catch {}
-      res.json({ ...dati, raggio_km: raggioKm, lingua, cached: false });
+      await traduciTematici(tuttiIVociDi(dati), lingua);
+      res.json({ ...spogliaTraduzioni(dati), raggio_km: raggioKm, lingua, cached: false });
     } catch (e: any) {
       console.error('[tematici/eventi] errore:', e?.message);
       res.status(500).json({ error: e?.message || 'tematici_eventi_failed' });
@@ -14871,7 +14994,10 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON: {"tappe":[{"orario":"...","titolo_t
       // Giorno LOCALE dalla longitudine (fuso ≈ lon/15 ore): con l'UTC una
       // sera a Tokyo o a Los Angeles cadeva nel giorno sbagliato.
       const oggi = giornoLocaleDaLon(lon);
-      const cacheKey = `local_events_${lat.toFixed(1)}_${lon.toFixed(1)}_${Math.round(radiusKm)}_${oggi}`;
+      // La lingua entra nella chiave: i festival Wikidata hanno le etichette
+      // nella lingua dell'utente.
+      const linguaUtente = String(req.query.lang || req.query.language || 'it').slice(0, 2).toLowerCase();
+      const cacheKey = `local_events_${lat.toFixed(1)}_${lon.toFixed(1)}_${Math.round(radiusKm)}_${oggi}_${linguaUtente}`;
       const cached = await getFromCache(cacheKey);
       if (Array.isArray(cached?.text_content?.events)) {
         // Il vuoto è cachato per 1 ora soltanto (fonti giù), il pieno per il giorno.
@@ -14933,7 +15059,10 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON: {"tappe":[{"orario":"...","titolo_t
         });
         return String(sRes.data || '');
       })();
-      const [mercatiRes, sagreRes] = await Promise.allSettled([mercatiPromise, sagrePromise]);
+      // 4. Festival ricorrenti da Wikidata (mondiale, ogni lingua): Oktoberfest,
+      //    Carnevale, festival del cinema... con giorno/mese dell'anno.
+      const festivalPromise = eventiFeed.festivalDaWikidata(lat, lon, Math.min(radiusKm, 80), linguaUtente, eventiFeed.LINGUA_PAESE[countryCode] || '');
+      const [mercatiRes, sagreRes, festivalRes] = await Promise.allSettled([mercatiPromise, sagrePromise, festivalPromise]);
 
       // 2. Mercati da OpenStreetMap (tutto il mondo, coordinate esatte)
       try {
@@ -15022,6 +15151,16 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON: {"tappe":[{"orario":"...","titolo_t
         } catch (e: any) {
           console.warn('[events/local] sagre non disponibili:', e?.message);
         }
+      }
+
+      // 4. Festival (Wikidata): dopo i mercati e le sagre, dal piu' vicino.
+      if (festivalRes.status === 'fulfilled' && Array.isArray(festivalRes.value)) {
+        const festival = festivalRes.value
+          .sort((a: any, b: any) => distKm(lat, lon, a.lat, a.lon) - distKm(lat, lon, b.lat, b.lon))
+          .slice(0, 30);
+        events.push(...festival);
+      } else if (festivalRes.status === 'rejected') {
+        console.warn('[events/local] festival non disponibili:', festivalRes.reason?.message);
       }
 
       const payload = { events, country: countryCode || null, region: regionName || null, generato_al: Date.now() };
@@ -18451,6 +18590,37 @@ LIMIT ${limit} OFFSET ${offset}`;
   // destination non esiste) e la cache si salva SOLO con ≥3 voci valide.
   const SEASONAL_CATALOG_THEMES = ['storia', 'mare', 'montagna', 'cultura', 'unicita'];
   const MESI_ITALIANO = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
+
+  // ── Città-cardine per i festival veri nel catalogo (07/09/2026) ─────────
+  // Accanto alle proposte AI, si aggiungono destinazioni con un festival
+  // RICORRENTE vero (Wikidata, P837/P2922/P580): niente inventato, solo
+  // quello che festivalDaWikidata già filtra per la scheda Eventi. Elenco
+  // corto di cardini per area, coordinate note: interrogarli è economico
+  // perché festivalDaWikidata ha già una cache di 7 giorni.
+  const CARDINI_FESTIVAL: { citta: string; paese: string; lat: number; lon: number; area: 'Italia' | 'Europa' }[] = [
+    { citta: 'Venezia', paese: 'Italia', lat: 45.4408, lon: 12.3155, area: 'Italia' },
+    { citta: 'Siena', paese: 'Italia', lat: 43.3188, lon: 11.3306, area: 'Italia' },
+    { citta: 'Viareggio', paese: 'Italia', lat: 43.8663, lon: 10.2517, area: 'Italia' },
+    { citta: 'Ivrea', paese: 'Italia', lat: 45.4685, lon: 7.8746, area: 'Italia' },
+    { citta: 'Alba', paese: 'Italia', lat: 44.6996, lon: 8.0357, area: 'Italia' },
+    { citta: 'Spoleto', paese: 'Italia', lat: 42.7343, lon: 12.7398, area: 'Italia' },
+    { citta: 'Verona', paese: 'Italia', lat: 45.4384, lon: 10.9916, area: 'Italia' },
+    { citta: 'Ravenna', paese: 'Italia', lat: 44.4184, lon: 12.2035, area: 'Italia' },
+    { citta: 'Gubbio', paese: 'Italia', lat: 43.3506, lon: 12.5766, area: 'Italia' },
+    { citta: 'Sanremo', paese: 'Italia', lat: 43.8159, lon: 7.7761, area: 'Italia' },
+    { citta: 'Monaco di Baviera', paese: 'Germania', lat: 48.1351, lon: 11.5820, area: 'Europa' },
+    { citta: 'Colonia', paese: 'Germania', lat: 50.9375, lon: 6.9603, area: 'Europa' },
+    { citta: 'Vienna', paese: 'Austria', lat: 48.2082, lon: 16.3738, area: 'Europa' },
+    { citta: 'Salisburgo', paese: 'Austria', lat: 47.8095, lon: 13.0550, area: 'Europa' },
+    { citta: 'Edimburgo', paese: 'Regno Unito', lat: 55.9533, lon: -3.1883, area: 'Europa' },
+    { citta: 'Siviglia', paese: 'Spagna', lat: 37.3891, lon: -5.9845, area: 'Europa' },
+    { citta: 'Pamplona', paese: 'Spagna', lat: 42.8125, lon: -1.6458, area: 'Europa' },
+    { citta: 'Nizza', paese: 'Francia', lat: 43.7102, lon: 7.2620, area: 'Europa' },
+    { citta: 'Cannes', paese: 'Francia', lat: 43.5528, lon: 7.0174, area: 'Europa' },
+    { citta: 'Praga', paese: 'Repubblica Ceca', lat: 50.0755, lon: 14.4378, area: 'Europa' },
+    { citta: 'Cracovia', paese: 'Polonia', lat: 50.0647, lon: 19.9450, area: 'Europa' },
+    { citta: 'Reykjavik', paese: 'Islanda', lat: 64.1466, lon: -21.9426, area: 'Europa' },
+  ];
   // Lingue supportate dal catalogo (stesse della UI, src/lib/i18n.ts).
   const SEASONAL_LANGS: Record<string, string> = {
     it: 'italiano', en: 'inglese (English)', fr: 'francese (français)',
@@ -18536,7 +18706,8 @@ Rispondi SOLO con un array JSON, nessun testo prima o dopo:
 
       let proposte = await generaBlocco();
       if (proposte.length === 0) proposte = await generaBlocco(); // retry 1 volta su parse fallito
-      if (proposte.length === 0) return res.status(502).json({ error: 'Catalogo non generabile al momento', templates: [] });
+      // Niente 502 immediato: se l'AI non risponde restano comunque i festival
+      // veri sotto (punto 3bis) — l'errore si valuta dopo averli calcolati.
 
       // 3. Validazione: geocoding della destination (Mapbox, timeout breve).
       // Senza token non si può validare: fail-open dichiarato, meglio proposte
@@ -18581,8 +18752,56 @@ Rispondi SOLO con un array JSON, nessun testo prima o dopo:
         });
       }
 
-      // 4. In cache solo un risultato degno (≥3 voci valide): un blocco magro
-      // non deve avvelenare la chiave per tutto il mese.
+      // 3bis. Festival VERI da Wikidata, sui cardini dell'area richiesta: non
+      // sostituiscono le proposte AI, le affiancano con qualcosa di verificabile.
+      // Nessuna delle città-cardine è "poco nota", quindi si saltano con hidden=1.
+      if (!hidden) {
+        try {
+          const cardini = CARDINI_FESTIVAL.filter((c) => c.area === area);
+          const perCardine = await Promise.all(cardini.map(async (c) => {
+            const linguaLocale = eventiFeed.LINGUA_PAESE[
+              ({ Italia: 'it', Germania: 'de', Austria: 'de', 'Regno Unito': 'gb', Spagna: 'es', Francia: 'fr', 'Repubblica Ceca': 'cz', Polonia: 'pl', Islanda: 'is' } as Record<string, string>)[c.paese] || ''
+            ] || '';
+            const festival = await eventiFeed.festivalDaWikidata(c.lat, c.lon, 15, lang, linguaLocale);
+            return { c, festival };
+          }));
+          for (const { c, festival } of perCardine) {
+            for (const f of festival) {
+              // Solo quelli col mese giusto (ricorrenti) o una data reale nella finestra.
+              const nelMese = f.mese != null && mesi.includes(f.mese);
+              const dataInFinestra = f.date && mesi.includes(new Date(`${f.date}T12:00:00`).getUTCMonth() + 1);
+              if (!nelMese && !dataInFinestra) continue;
+              const dKey = norm(c.citta);
+              if (visti.has(dKey) || [...visti].some((v) => v && (dKey.includes(v) || v.includes(dKey)))) continue;
+              const descrizione = String(f.description || '').trim();
+              if (descrizione.length < 15) continue;   // troppo poco per proporlo
+              visti.add(dKey);
+              validi.push({
+                id: `wd_${slugify(area)}_${slugify(c.citta)}`,
+                emoji: '🎪',
+                title: f.name,
+                destination: c.citta,
+                country: c.paese,
+                months: [f.mese || (f.date ? new Date(`${f.date}T12:00:00`).getUTCMonth() + 1 : mesi[0])],
+                days: 2,
+                interests: ['tradizioni'],
+                theme: theme || 'cultura',
+                specialRequests: `${f.name}${f.quando ? ` (${f.quando})` : ''}: ${descrizione}`.slice(0, 400),
+                fonte: 'wikidata', // il client mostra il badge "🗓 Festival reale"
+              });
+              break; // un festival per cardine basta: si passa alla citta' successiva
+            }
+          }
+        } catch (e: any) {
+          console.warn('[seasonal-catalog] festival Wikidata non disponibili:', e?.message);
+        }
+      }
+
+      // 4. Solo ora si valuta il fallimento: senza AI e senza festival veri,
+      // la rotta non ha nulla di onesto da proporre.
+      if (validi.length === 0) return res.status(502).json({ error: 'Catalogo non generabile al momento', templates: [] });
+      // In cache solo un risultato degno (≥3 voci): un blocco magro non deve
+      // avvelenare la chiave per tutto il mese.
       if (validi.length >= 3) await saveToCache(cacheKey, 'seasonal_catalog', validi);
       res.json({ templates: validi, cached: false });
     } catch (e: any) {
@@ -18774,11 +18993,16 @@ REGOLE:
   // Whitelist a suffisso di dominio; per i brand multi-TLD (ticketmaster.*)
   // il TLD è vincolato a 2-3 lettere (+ eventuale secondo livello paese) per
   // non far passare lookalike tipo "ticketmaster.evilsite".
-  const AFFILIATE_OUT_SOURCES = ['ticketmaster', 'viator', 'getyourguide', 'tiqets', 'local', 'esim'];
+  const AFFILIATE_OUT_SOURCES = ['ticketmaster', 'viator', 'getyourguide', 'tiqets', 'local', 'esim', 'klook', 'tripcom', 'mostre', 'stagionali'];
   const AFFILIATE_HOST_PATTERNS = [
     /(^|\.)ticketmaster\.[a-z]{2,3}(\.[a-z]{2})?$/i,
     /(^|\.)livenation\.[a-z]{2,3}(\.[a-z]{2})?$/i,
     /(^|\.)viator\.com$/i,
+    /(^|\.)vi\.me$/i,
+    // Klook (aid=124310, anche i redirect di affiliate.klook.com) e Trip.com
+    // (Allianceid/SID): affiliazioni aggiunte il 07/09/2026.
+    /(^|\.)klook\.com$/i,
+    /(^|\.)trip\.com$/i,
     /(^|\.)getyourguide\.[a-z]{2,3}(\.[a-z]{2})?$/i,
     /(^|\.)gyg\.[a-z]{2,3}$/i,
     /(^|\.)tiqets\.com$/i,
@@ -21638,7 +21862,10 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     return isNaN(d.getTime()) ? null : `${m[1]}-${m[2]}-${m[3]}`;
   };
 
-  const scaricaHtml = async (url: string): Promise<string | null> => {
+  // Accept-Language: prima la lingua del PAESE del museo, poi inglese. Con
+  // «it,en» un sito cinese o giapponese serviva la versione inglese ridotta
+  // (o nulla), e le mostre locali restavano fuori.
+  const scaricaHtml = async (url: string, linguaLocale = ''): Promise<string | null> => {
     try {
       const r = await axios.get(url, {
         timeout: 9000,
@@ -21647,7 +21874,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; WorldInPocket/1.0; +https://wip.guide)',
           'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'it,en;q=0.8',
+          'Accept-Language': linguaLocale && linguaLocale !== 'en' ? `${linguaLocale},en;q=0.8,it;q=0.6` : 'en,it;q=0.8',
         },
         validateStatus: (s) => s < 400,
         responseType: 'text',
@@ -21674,47 +21901,68 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
   // nello slider della homepage. Una sola pagina in piu' per sito.
   const RE_LINK_MOSTRE = /href=["']([^"'#]*(?:mostr|exhibition|exposition|exposici|ausstellung|tentoonstelling|utstilling|wystaw|vystav|展覧|展览)[^"'#]*)["']/i;
 
-  /** La home del museo e, se esiste, la sua pagina "mostre"; null se illeggibile. */
-  const testoMostreDelSito = async (url: string): Promise<{ testo: string; fonte_url: string } | null> => {
+  /**
+   * La home del museo e, se esiste, la sua pagina "mostre"; null se illeggibile.
+   * Prima del testo si cercano i DATI STRUTTURATI (JSON-LD Event/
+   * ExhibitionEvent): titoli copiati dal sito, date certe, zero AI.
+   */
+  const testoMostreDelSito = async (url: string, linguaLocale = ''): Promise<{ testo: string; fonte_url: string; strutturate: any[] } | null> => {
     if (!isPublicHttpUrl(url)) return null;
-    const home = await scaricaHtml(url);
+    const home = await scaricaHtml(url, linguaLocale);
     if (!home) return null;
     let testo = testoDaHtml(home, 9000);
     let fonteUrl = url;
+    let strutturate: any[] = [];
+    try { strutturate = eventiFeed.mostreDaJsonLd(home, url); } catch { strutturate = []; }
     const m = home.match(RE_LINK_MOSTRE);
     if (m) {
       try {
         const link = new URL(m[1], url);
         if (/^https?:$/.test(link.protocol) && link.toString() !== url && isPublicHttpUrl(link.toString())) {
-          const pagina = await scaricaHtml(link.toString());
-          if (pagina) { testo = `${testoDaHtml(pagina, 9000)}\n\n[HOME] ${testo.slice(0, 4000)}`; fonteUrl = link.toString(); }
+          const pagina = await scaricaHtml(link.toString(), linguaLocale);
+          if (pagina) {
+            testo = `${testoDaHtml(pagina, 9000)}\n\n[HOME] ${testo.slice(0, 4000)}`;
+            fonteUrl = link.toString();
+            try { strutturate = [...strutturate, ...eventiFeed.mostreDaJsonLd(pagina, link.toString())]; } catch { /* pagina senza JSON-LD */ }
+          }
         }
       } catch { /* link malformato: basta la home */ }
     }
-    return testo.length > 200 ? { testo, fonte_url: fonteUrl } : null;
+    return testo.length > 200 || strutturate.length ? { testo, fonte_url: fonteUrl, strutturate } : null;
   };
 
-  // Cache PER SITO (mostre_sito_<host>, 12 h): il testo estratto e le mostre
-  // gia' estratte per lingua. Due celle adiacenti (o due lingue) non rileggono
-  // lo stesso museo. Formato: { testo, fonte_url, letto_al, mostre: { it: [...] } }.
+  // Cache PER SITO (mostre_sito_<host>, 12 h): il testo estratto, le mostre
+  // strutturate (JSON-LD) e le mostre gia' estratte per lingua. Due celle
+  // adiacenti (o due lingue) non rileggono lo stesso museo.
+  // Formato: { testo, fonte_url, letto_al, strutturate: [...], mostre: { it: [...] } }.
+  // v2 (07/09/2026): le righe senza `v: 2` sono della versione che perdeva
+  // i titoli non latini e quelli tradotti: si rileggono.
   const chiaveSitoMostre = (url: string) => {
     try { return `mostre_sito_${new URL(url).hostname.replace(/^www\./, '').toLowerCase().replace(/[^a-z0-9.-]/g, '')}`; } catch { return null; }
   };
-  const mostreDelSitoCached = async (m: any, lingua: string): Promise<{ mostre: any[]; fonte_url: string | null }> => {
+  const mostreDelSitoCached = async (m: any, lingua: string, linguaLocale = ''): Promise<{ mostre: any[]; fonte_url: string | null }> => {
     const chiave = chiaveSitoMostre(String(m.contact_website));
     let riga: any = chiave ? await leggiCacheMostre(chiave) : null;
-    const fresca = riga && riga.letto_al && (Date.now() - Date.parse(riga.letto_al)) < MOSTRE_TTL_MS && typeof riga.testo === 'string';
+    const fresca = riga && riga.v === 2 && riga.letto_al && (Date.now() - Date.parse(riga.letto_al)) < MOSTRE_TTL_MS && typeof riga.testo === 'string';
     if (!fresca) {
-      const letto = await testoMostreDelSito(m.contact_website);
-      riga = { testo: letto?.testo || '', fonte_url: letto?.fonte_url || null, letto_al: new Date().toISOString(), mostre: {} };
+      const letto = await testoMostreDelSito(m.contact_website, linguaLocale);
+      riga = { v: 2, testo: letto?.testo || '', fonte_url: letto?.fonte_url || null, letto_al: new Date().toISOString(), strutturate: letto?.strutturate || [], mostre: {} };
     }
-    if (!riga.testo) {
+    const strutturate: any[] = Array.isArray(riga.strutturate) ? riga.strutturate : [];
+    if (!riga.testo && !strutturate.length) {
       if (chiave && !fresca) saveToCache(chiave, 'mostre_sito', riga).catch(() => {});
       return { mostre: [], fonte_url: riga.fonte_url || null };
     }
     const perLingua = (riga.mostre && typeof riga.mostre === 'object') ? riga.mostre : (riga.mostre = {});
     if (!Array.isArray(perLingua[lingua])) {
-      perLingua[lingua] = await mostreDalTesto(riga.testo, m.name, lingua);
+      // Le strutturate valgono per ogni lingua (titolo originale); l'AI
+      // aggiunge solo cio' che il JSON-LD non dichiara.
+      const daAi = riga.testo ? await mostreDalTesto(riga.testo, m.name, lingua) : [];
+      const gia = new Set(strutturate.map((s: any) => eventiFeed.normUnicode(s.titolo_originale || s.titolo).slice(0, 20)));
+      perLingua[lingua] = [
+        ...strutturate,
+        ...daAi.filter((x: any) => !gia.has(eventiFeed.normUnicode(x.titolo_originale || x.titolo).slice(0, 20))),
+      ];
       if (chiave) saveToCache(chiave, 'mostre_sito', riga).catch(() => {});
     }
     return { mostre: perLingua[lingua], fonte_url: riga.fonte_url || null };
@@ -21726,20 +21974,28 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
    * Le regole del prompt sono strette di proposito: una mostra inventata e'
    * peggio di nessuna mostra, perche' l'utente ci va e trova chiuso. Meglio un
    * elenco vuoto che uno plausibile.
+   *
+   * Due titoli: `titolo_originale` COPIATO dalla pagina (e' quello che si
+   * confronta col testo, in qualunque alfabeto) e `titolo` nella lingua
+   * dell'utente. Prima il confronto era su a-z0-9 e sul titolo tradotto:
+   * scartava tutto cio' che non era italiano.
    */
   const mostreDalTesto = async (testo: string, nomeLuogo: string, lingua: string): Promise<any[]> => {
+    const nomeLingua = ({ it: 'italiano', en: 'inglese', fr: 'francese', es: 'spagnolo', de: 'tedesco', ru: 'russo', zh: 'cinese' } as Record<string, string>)[lingua] || lingua;
     const prompt = `Questo e' il testo della pagina web di "${nomeLuogo}".
 Estrai SOLO le mostre ed esposizioni TEMPORANEE attualmente in corso o annunciate, con le date.
 
 REGOLE FERREE:
 - Se la pagina non parla di mostre con date, rispondi {"mostre":[]}. Un elenco vuoto e' una risposta giusta.
 - NON inventare titoli, date o artisti. Riporta solo cio' che c'e' scritto.
+- "titolo_originale" e' il titolo COPIATO ESATTAMENTE dalla pagina, nella lingua e nell'alfabeto in cui e' scritto (cinese, giapponese, russo, arabo compresi). Mai tradurlo.
+- "titolo" e' lo stesso titolo tradotto in ${nomeLingua} (se e' un nome proprio, lascialo uguale).
 - Ignora la collezione permanente: interessano le mostre temporanee.
 - Ignora eventi che non sono mostre (concerti, conferenze, laboratori).
 - Le date nel formato AAAA-MM-GG. Se manca la fine, lascia null.
 
-Rispondi in ${lingua === 'it' ? 'italiano' : lingua} con questo JSON:
-{"mostre":[{"titolo":"","sottotitolo":"","artista":"","dal":"AAAA-MM-GG","al":"AAAA-MM-GG","descrizione":"una frase","prezzo":""}]}
+Descrizione e sottotitolo in ${nomeLingua}. Rispondi con questo JSON:
+{"mostre":[{"titolo_originale":"","titolo":"","sottotitolo":"","artista":"","dal":"AAAA-MM-GG","al":"AAAA-MM-GG","descrizione":"una frase","prezzo":""}]}
 
 TESTO:
 ${testo}`;
@@ -21752,16 +22008,18 @@ ${testo}`;
         supabaseUrl, supabaseServiceKey, getGroqClient());
       const j = JSON.parse(String(out?.data || '{}'));
       const lista = Array.isArray(j?.mostre) ? j.mostre : [];
-      // ANTI-ALLUCINAZIONE: resta solo una voce il cui titolo (normalizzato,
-      // primi 20 caratteri) compare davvero nel testo della pagina.
+      // ANTI-ALLUCINAZIONE: resta solo una voce il cui titolo ORIGINALE
+      // (normalizzato Unicode, primi 20 caratteri) compare davvero nel testo
+      // della pagina. Ripiego sul titolo tradotto per i nomi propri.
       const testoNorm = normTestoMostre(testo);
       return lista.filter((x: any) => {
-        const t = normTestoMostre(String(x?.titolo || '')).slice(0, 20);
-        return t.length >= 4 && testoNorm.includes(t);
-      });
+        const orig = normTestoMostre(String(x?.titolo_originale || '')).slice(0, 20);
+        const trad = normTestoMostre(String(x?.titolo || '')).slice(0, 20);
+        return (orig.length >= 3 && testoNorm.includes(orig)) || (trad.length >= 4 && testoNorm.includes(trad));
+      }).map((x: any) => ({ ...x, titolo: String(x?.titolo || x?.titolo_originale || '').trim(), titolo_originale: String(x?.titolo_originale || x?.titolo || '').trim() }));
     } catch { return []; }
   };
-  const normTestoMostre = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const normTestoMostre = (s: string) => eventiFeed.normUnicode(s);
 
   const slugSemplice = (s: string) => String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 40);
 
@@ -21770,37 +22028,61 @@ ${testo}`;
    * bastano MOSTRE_MAX_SITI. Due POI con lo stesso dominio contano una volta
    * (il museo civico e la sua pinacoteca hanno spesso la stessa home).
    */
+  /**
+   * I musei nel raggio, dalla RPC spaziale musei_vicini (indice GiST).
+   * La bbox su lat/lon che c'era prima andava in statement timeout sulle
+   * citta' grandi (07/09/2026: Milano e Firenze = 0 musei) e l'errore veniva
+   * inghiottito. Ora un fallimento e' esplicito: `ok: false`, e chi chiama
+   * NON mette in cache il vuoto. Ripiego sulla bbox con un limit piccolo se
+   * la RPC non esiste ancora (migration non applicata).
+   */
+  const leggiMuseiVicini = async (lat: number, lon: number, raggioKm: number, soloConSito: boolean, limite: number): Promise<{ righe: any[]; ok: boolean }> => {
+    try {
+      const resp = await axios.post(`${supabaseUrl}/rest/v1/rpc/musei_vicini`, {
+        p_lat: lat, p_lon: lon, radius_m: Math.round(raggioKm * 1000), limit_num: limite, solo_con_sito: soloConSito,
+      }, {
+        headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' },
+        timeout: 20000,
+      });
+      return { righe: Array.isArray(resp.data) ? resp.data : [], ok: true };
+    } catch (e: any) {
+      const status = e?.response?.status;
+      console.warn('[mostre] RPC musei_vicini fallita:', status || e?.message);
+      if (status !== 404) return { righe: [], ok: false };
+    }
+    // Migration assente: bbox piccola (limit 80 risponde ancora nei tempi).
+    try {
+      const dLat = raggioKm / 111.32;
+      const dLon = raggioKm / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+      const q = `${supabaseUrl}/rest/v1/shared_pois`
+        + `?select=id,name,lat,lon,category,contact_website,contact_phone,image_url,photo_url,address,city,description_short`
+        + `&is_hidden=eq.false&status=not.in.(draft,rejected,needs_revision)${soloConSito ? '&contact_website=not.is.null' : ''}`
+        + `&lat=gte.${(lat - dLat).toFixed(4)}&lat=lte.${(lat + dLat).toFixed(4)}`
+        + `&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}`
+        + `&category=in.(musei,museum,gallery,art_gallery,monumenti)&limit=${Math.min(80, limite)}`;
+      const resp = await axios.get(q, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 15000 });
+      const righe = (resp.data || []).map((m: any) => ({ ...m, distanza_m: kmFra(lat, lon, Number(m.lat), Number(m.lon)) * 1000 }))
+        .filter((m: any) => m.distanza_m <= raggioKm * 1000)
+        .sort((a: any, b: any) => a.distanza_m - b.distanza_m);
+      return { righe, ok: true };
+    } catch (e: any) {
+      console.warn('[mostre] lettura musei (bbox) fallita:', e?.message);
+      return { righe: [], ok: false };
+    }
+  };
+
   const museiConSito = async (lat: number, lon: number, raggioKm: number) => {
     const anelli = MOSTRE_ANELLI_KM.filter(r => r <= raggioKm);
     if (!anelli.length || anelli[anelli.length - 1] < raggioKm) anelli.push(raggioKm);
     const perHost = new Map<string, any>();
     let totaleNelRaggio = 0;
+    let letturaOk = true;
     for (const r of anelli) {
-      const dLat = r / 111.32;
-      const dLon = r / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
-      const q = `${supabaseUrl}/rest/v1/shared_pois`
-        + `?select=id,name,lat,lon,category,contact_website,image_url,photo_url,address,city`
-        // Stesso filtro status dei permanenti: niente bozze/rifiutati.
-        + `&is_hidden=eq.false&status=not.in.(draft,rejected,needs_revision)&contact_website=not.is.null`
-        + `&lat=gte.${(lat - dLat).toFixed(4)}&lat=lte.${(lat + dLat).toFixed(4)}`
-        + `&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}`
-        + `&category=in.(musei,museum,gallery,art_gallery,monumenti)&limit=300`;
-      let righe: any[] = [];
-      try {
-        const resp = await axios.get(q, {
-          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
-          timeout: 15000,
-        });
-        righe = resp.data || [];
-      } catch (e: any) {
-        console.warn('[mostre] lettura musei fallita:', e?.message);
-        break;
-      }
-      totaleNelRaggio = 0;
+      const { righe, ok } = await leggiMuseiVicini(lat, lon, r, true, 400);
+      if (!ok) { letturaOk = false; break; }
+      totaleNelRaggio = righe.length;
       for (const m of righe) {
-        const d = kmFra(lat, lon, Number(m.lat), Number(m.lon));
-        if (!(d <= r)) continue;
-        totaleNelRaggio++;
+        const d = Number(m.distanza_m) / 1000;
         let host = '';
         try { host = new URL(String(m.contact_website)).hostname.replace(/^www\./, ''); } catch { continue; }
         if (!/^https?:/i.test(String(m.contact_website)) || !host) continue;
@@ -21813,7 +22095,7 @@ ${testo}`;
     const pesoCat = (c: string) => /^(musei|museum)$/.test(c) ? 0 : 1;
     const musei = Array.from(perHost.values())
       .sort((a, b) => pesoCat(a.category) - pesoCat(b.category) || a.distanza_km - b.distanza_km);
-    return { musei, totale: totaleNelRaggio };
+    return { musei, totale: totaleNelRaggio, ok: letturaOk };
   };
 
   /**
@@ -21821,8 +22103,9 @@ ${testo}`;
    * del luogo. Copre solo le mostre dei grandi musei, ma e' mondiale e ha
    * un'API vera. Fail-open: se il SPARQL tace, restano quelle dei siti.
    */
-  const mostreDaWikidata = async (lat: number, lon: number, raggioKm: number, lingua: string): Promise<any[]> => {
+  const mostreDaWikidata = async (lat: number, lon: number, raggioKm: number, lingua: string, linguaLocale = ''): Promise<any[]> => {
     const r = Math.min(100, Math.max(5, Math.round(raggioKm)));
+    const lingueEtichette = [lingua, 'en', linguaLocale, 'it'].filter((x, i, a) => x && a.indexOf(x) === i).join(',');
     const daQuando = new Date(Date.now() - 2 * 365 * 86400_000).toISOString().slice(0, 10);
     const sparql = `SELECT ?item ?itemLabel ?itemDescription ?inizio ?fine ?luogo ?luogoLabel ?coord ?sito ?img WHERE {
   VALUES ?tipo { wd:Q464980 wd:Q29023906 wd:Q667276 }
@@ -21837,7 +22120,7 @@ ${testo}`;
   OPTIONAL { ?item wdt:P18 ?img }
   FILTER(?inizio >= "${daQuando}T00:00:00Z"^^xsd:dateTime)
   FILTER(!BOUND(?fine) || (?fine >= NOW() && ?fine < "2080-01-01T00:00:00Z"^^xsd:dateTime))
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "${lingua},en,it". }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${lingueEtichette}". }
 } LIMIT 60`;
     try {
       const resp = await axios.get('https://query.wikidata.org/sparql', {
@@ -21880,33 +22163,42 @@ ${testo}`;
 
   /** Il lavoro vero: musei → siti → AI, piu' Wikidata, in un solo elenco. */
   const calcolaMostre = async (lat: number, lon: number, raggioKm: number, lingua: string) => {
-    const { musei, totale } = await museiConSito(lat, lon, raggioKm);
+    // Lingua del paese (per Accept-Language e per le etichette Wikidata):
+    // un museo di Pechino va letto in cinese, non in italiano.
+    const geo = await eventiFeed.cittaInTreNomi(lat, lon, lingua).catch(() => null);
+    const linguaLocale = geo?.lingua_locale || '';
+    const { musei, totale, ok } = await museiConSito(lat, lon, raggioKm);
     const daLeggere = musei.slice(0, MOSTRE_MAX_SITI);
     const [daMusei, daWikidata] = await Promise.all([
       Promise.all(daLeggere.map(async (m: any) => {
-        const { mostre: trovate, fonte_url } = await mostreDelSitoCached(m, lingua);
+        const { mostre: trovate, fonte_url } = await mostreDelSitoCached(m, lingua, linguaLocale);
         return trovate.map((x: any) => ({
-          fonte_url: fonte_url || m.contact_website,
-          titolo: String(x.titolo || '').trim(),
+          fonte_url: x.url || fonte_url || m.contact_website,
+          titolo: String(x.titolo || x.titolo_originale || '').trim(),
+          titolo_originale: String(x.titolo_originale || '').trim(),
           sottotitolo: String(x.sottotitolo || '').trim(),
           artista: String(x.artista || '').trim(),
           dal: dataIso(x.dal),
           al: dataIso(x.al),
           descrizione: String(x.descrizione || '').trim(),
           prezzo: String(x.prezzo || '').trim(),
-          id: `mostra-${m.id}-${slugSemplice(x.titolo || '')}`,
+          // Slug a-z se c'e', altrimenti (titoli cinesi, russi...) un base64
+          // del titolo Unicode: senza, tutte le mostre di un museo avevano lo
+          // stesso id.
+          id: `mostra-${m.id}-${slugSemplice(x.titolo_originale || x.titolo || '') || Buffer.from(eventiFeed.normUnicode(x.titolo_originale || x.titolo || '')).toString('base64url').slice(0, 16)}`,
           luogo: m.name,
           poi_id: m.id,
           lat: Number(m.lat), lon: Number(m.lon),
           distanza_km: m.distanza_km,
           indirizzo: m.address || null,
           citta: m.city || null,
-          immagine: m.image_url || m.photo_url || null,
-          sito: m.contact_website,
+          // La foto della mostra (JSON-LD) prima di quella del museo.
+          immagine: x.immagine || m.image_url || m.photo_url || null,
+          sito: x.url || m.contact_website,
           fonte: 'museo',
         }));
       })),
-      mostreDaWikidata(lat, lon, raggioKm, lingua),
+      mostreDaWikidata(lat, lon, raggioKm, lingua, linguaLocale),
     ]);
 
     const oggi = giornoLocaleDaLon(lon);
@@ -21922,7 +22214,9 @@ ${testo}`;
       // un "dal" di piu' di un anno fa senza una fine (mostra fantasma).
       .filter((x: any) => !x.dal || (x.dal <= fraDiciottoMesi && (x.al || x.dal >= dodiciMesiFa)))
       .filter((x: any) => {
-        const k = `${slugSemplice(x.titolo)}|${slugSemplice(x.luogo || '')}`;
+        // Chiave Unicode: con slugSemplice (a-z) tutti i titoli cinesi di un
+        // museo collassavano in una voce sola.
+        const k = `${eventiFeed.normUnicode(x.titolo_originale || x.titolo).slice(0, 40)}|${eventiFeed.normUnicode(x.luogo || '').slice(0, 30)}`;
         if (viste.has(k)) return false;
         viste.add(k);
         return true;
@@ -21933,6 +22227,9 @@ ${testo}`;
       mostre,
       musei_interrogati: daLeggere.length,
       musei_trovati: totale,
+      // false = la lettura dei musei e' FALLITA (non «zero musei»): chi
+      // chiama non deve metterla in cache ne' saltarla nel cron.
+      lettura_ok: ok,
       generato_al: new Date().toISOString(),
     };
   };
@@ -22010,7 +22307,12 @@ ${testo}`;
       const dati = await calcolaMostre(lat, lon, raggioKm, lingua);
       // Si salva anche la zona vuota: rileggere dodici siti per dire "niente"
       // costa come leggerli per dire qualcosa, e il cron la terra' fresca.
-      try { await salvaCacheMostre(chiave, dati); } catch {}
+      // MA NON una lettura fallita (lettura_ok false): prima il timeout del
+      // DB finiva in cache per 12 ore e la vista Mostre restava vuota.
+      if (dati.lettura_ok !== false) { try { await salvaCacheMostre(chiave, dati); } catch {} }
+      else if (inCache && Array.isArray(inCache.mostre) && inCache.mostre.length) {
+        return res.json({ ...inCache, raggio_km: raggioKm, cached: true, stale: true });
+      }
       res.json({ ...dati, raggio_km: raggioKm, cached: false });
     } catch (e: any) {
       console.error('[mostre] errore:', e?.message);
@@ -22036,29 +22338,16 @@ ${testo}`;
       const anelli = MOSTRE_ANELLI_KM.filter(r => r <= raggioKm);
       if (!anelli.length || anelli[anelli.length - 1] < raggioKm) anelli.push(raggioKm);
       const perId = new Map<string, any>();
+      let letturaOk = true;
       for (const r of anelli) {
-        const dLat = r / 111.32;
-        const dLon = r / (111.32 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
-        const q = `${supabaseUrl}/rest/v1/shared_pois`
-          + `?select=id,name,lat,lon,category,contact_website,contact_phone,image_url,photo_url,address,city,description_short`
-          + `&is_hidden=eq.false&status=not.in.(draft,rejected,needs_revision)`
-          + `&lat=gte.${(lat - dLat).toFixed(4)}&lat=lte.${(lat + dLat).toFixed(4)}`
-          + `&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}`
-          + `&category=in.(musei,museum,gallery,art_gallery)&limit=400`;
-        let righe: any[] = [];
-        try {
-          const resp = await axios.get(q, {
-            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
-            timeout: 15000,
-          });
-          righe = resp.data || [];
-        } catch (e: any) {
-          console.warn('[mostre/permanenti] lettura musei fallita:', e?.message);
-          break;
-        }
+        // RPC spaziale (vedi leggiMuseiVicini): la bbox andava in timeout.
+        const { righe, ok } = await leggiMuseiVicini(lat, lon, r, false, 400);
+        if (!ok) { letturaOk = false; break; }
         for (const m of righe) {
-          const d = kmFra(lat, lon, Number(m.lat), Number(m.lon));
-          if (!(d <= r) || perId.has(m.id)) continue;
+          // I monumenti servono alle mostre (hanno un sito), non alle permanenti.
+          if (!/^(musei|museum|gallery|art_gallery)$/.test(String(m.category || ''))) continue;
+          const d = Number(m.distanza_m) / 1000;
+          if (perId.has(m.id)) continue;
           // Spazzatura nota del catalogo: schede AI senza nome o col nome di
           // un artista al posto del museo. Meglio una lista corta e vera.
           const nome = String(m.name || '').trim();
@@ -22090,6 +22379,7 @@ ${testo}`;
       const musei = Array.from(perNome.values())
         .sort((a, b) => a.distanza_km - b.distanza_km)
         .slice(0, PERMANENTI_MAX);
+      if (!letturaOk && musei.length === 0) return res.status(503).json({ error: 'musei_non_leggibili', musei: [], raggio_km: raggioKm });
       res.json({ musei, raggio_km: raggioKm });
     } catch (e: any) {
       console.error('[mostre/permanenti] errore:', e?.message);
@@ -22123,7 +22413,10 @@ ${testo}`;
         const dati = await leggiCacheMostre(chiave);
         const eta = dati?.generato_al ? Date.now() - Date.parse(dati.generato_al) : Infinity;
         // Zona senza musei: non cambia da sola, inutile rileggerla ogni volta.
-        if (dati && dati.musei_interrogati === 0 && eta < 7 * 86400_000) { esito.saltate++; continue; }
+        // Solo se la lettura era andata a buon fine (lettura_ok): le zone
+        // salvate vuote dal timeout del DB (prima del 07/09/2026, senza il
+        // campo) vanno rilette subito.
+        if (dati && dati.lettura_ok === true && dati.musei_interrogati === 0 && eta < 7 * 86400_000) { esito.saltate++; continue; }
         if (eta < SOGLIA_MS) { esito.saltate++; continue; }
         candidate.push({ chiave, eta, lat: parseFloat(m[1]), lon: parseFloat(m[2]), km: parseInt(m[3], 10), lingua: m[4] });
       }
@@ -22132,6 +22425,7 @@ ${testo}`;
         if (Date.now() - inizio > 240_000) break;   // margine sotto i 300 s di Vercel
         try {
           const dati = await calcolaMostre(c.lat, c.lon, c.km, c.lingua);
+          if (dati.lettura_ok === false) { esito.errori.push(`${c.chiave}: lettura musei fallita`); continue; }
           await saveToCache(c.chiave, 'mostre', dati);
           esito.rinfrescate.push(`${c.chiave} (${dati.mostre.length})`);
         } catch (e: any) {
@@ -24836,6 +25130,40 @@ Non aggiungere testo prima o dopo il JSON.`;
   // Segmenti: 'inattivi_30' (nessun accesso da 30 gg), 'lingua:XX'.
   // Le promozionali vanno SOLO a chi ha push_promo = true (GDPR) e con un
   // tetto: massimo una promo ogni 7 giorni per utente.
+  /**
+   * LA NOTIFICA LA SCRIVE L'AI (07/09/2026, committente: «un tasto con cui
+   * l'AI ti crea in automatico la notifica in base a specifiche dell'admin,
+   * con DeepSeek»). L'admin dice cosa vuole comunicare, in due righe; torna
+   * titolo (con un'emoji in testa, max 60 caratteri) e testo (max 220) nella
+   * lingua del segmento, gia' pronti nei campi del modulo: si rilegge, si
+   * corregge, si invia. DeepSeek e' ammesso: c'e' un admin loggato che
+   * aspetta la risposta (regola «solo in diretta»), non uno script di sfondo.
+   */
+  app.post("/api/admin/notifiche/genera", rateLimiter, requireAdmin, async (req: any, res) => {
+    try {
+      const istruzioni = String(req.body?.istruzioni || '').trim().slice(0, 1500);
+      if (istruzioni.length < 5) return res.status(400).json({ error: 'istruzioni troppo corte' });
+      const tipo = req.body?.tipo === 'promo' ? 'promo' : 'servizio';
+      const lingua = String(req.body?.lingua || 'IT').toUpperCase().slice(0, 2);
+      const azione = String(req.body?.azione || '').slice(0, 40);
+      const NOMI: Record<string, string> = { IT: 'italiano', EN: 'inglese', FR: 'francese', ES: 'spagnolo', DE: 'tedesco', RU: 'russo', ZH: 'cinese semplificato' };
+      const system = `Sei il copywriter di WIP (World in Pocket), app di audioguide e itinerari di viaggio con oltre 9 milioni di luoghi, community di viaggiatori e itinerari personalizzati. Scrivi notifiche push brevi, calde e concrete, mai battute scriptate, mai promesse false. Vietato citare Android Auto. Rispondi SOLO con un JSON {"titolo": string, "corpo": string}. Titolo: un'emoji pertinente in testa, poi al massimo 60 caratteri. Corpo: al massimo 220 caratteri, una sola idea, chiusura con un invito all'azione coerente con "${azione || 'apri l\'app'}". Lingua: ${NOMI[lingua] || 'italiano'}. Tipo: ${tipo === 'promo' ? 'promozionale (tono invitante, niente pressione)' : 'di servizio (tono chiaro e utile)'}.`;
+      const r = await callUniversalAi("deepseek", [
+        { role: "system", content: system },
+        { role: "user", content: `Specifiche dell'admin:\n${istruzioni}` },
+      ], { temperature: 0.8, max_tokens: 400, response_format: { type: "json_object" }, ultimaSpiaggiaPagante: true }, "notifica_admin_ai", supabaseUrl, supabaseServiceKey, groq, req.userId);
+      let out: any = {};
+      try { out = JSON.parse(String(r?.data || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, '')); } catch { out = {}; }
+      const titolo = String(out?.titolo || '').trim().slice(0, 120);
+      const corpo = String(out?.corpo || '').trim().slice(0, 500);
+      if (!titolo || !corpo) return res.status(502).json({ error: 'l\'AI non ha restituito titolo e testo', motore: r?.model || null });
+      res.json({ titolo, corpo, motore: r?.model || 'deepseek' });
+    } catch (e: any) {
+      console.error('[admin/notifiche/genera]', e?.message);
+      res.status(500).json({ error: e?.message || 'errore' });
+    }
+  });
+
   app.post("/api/admin/notifiche/invia", rateLimiter, requireAdmin, async (req: any, res) => {
     try {
       const { destinatario, titolo, corpo, tipo = 'servizio', azione, email: conEmail } = req.body || {};
@@ -26230,7 +26558,7 @@ REGOLE:
         `&radius=${parsedRadius}` +
         `&unit=km` +
         `&sort=date,asc` +
-        `&size=20` +
+        `&size=50` +
         `&locale=${locale}` +
         (safeStart ? `&startDateTime=${safeStart}` : '') +
         (safeEnd ? `&endDateTime=${safeEnd}` : '');
@@ -26257,17 +26585,19 @@ REGOLE:
   //
   // Helper unico per tutte le superfici: tab Eventi (/api/tiqets), iniezione
   // negli itinerari e biglietti della scheda POI (/api/poi/tickets).
-  async function fetchTiqetsProducts(opts: { lat?: number; lon?: number; cityName?: string; radiusKm?: number; lang?: string; pageSize?: number }): Promise<any[]> {
+  async function fetchTiqetsProducts(opts: { lat?: number; lon?: number; cityName?: string; radiusKm?: number; lang?: string; pageSize?: number; query?: string }): Promise<any[]> {
     const tiqetsKey = process.env.TIQETS_API_KEY || process.env.VITE_TIQETS_API_KEY;
     if (!tiqetsKey) return [];
 
     // lang=it/en/fr/...: titoli e tagline nella lingua dell'utente
     // (verificato: senza lang l'API risponde in inglese).
     const params: any = {
-      page_size: opts.pageSize || 20,
+      page_size: Math.min(100, opts.pageSize || 20),
       currency: "EUR",
       lang: String(opts.lang || 'it').slice(0, 2).toLowerCase()
     };
+    // Ricerca libera (stagionali: «mercatini di Natale», «cherry blossom»).
+    if (opts.query) params.query = String(opts.query).slice(0, 80);
     if (opts.lat !== undefined && opts.lon !== undefined && opts.lat !== null && opts.lon !== null) {
       params.lat = opts.lat;
       params.lng = opts.lon;
@@ -26355,11 +26685,13 @@ REGOLE:
       const hit = await partnerCacheGet(ck, 6 * 60 * 60 * 1000);
       if (hit) return res.json(hit);
 
+      // 60 chiesti, 40 mostrati (prima 20/12): e' la fonte affiliata piu'
+      // ricca sui musei, la lista lunga serve a chi cerca in una metropoli.
       const results = (await fetchTiqetsProducts(
         parsedLat && parsedLon
-          ? { lat: parsedLat, lon: parsedLon, radiusKm, lang, pageSize: 20 }
-          : { cityName: String(cityName), lang, pageSize: 20 }
-      )).slice(0, 12);
+          ? { lat: parsedLat, lon: parsedLon, radiusKm, lang, pageSize: 60 }
+          : { cityName: String(cityName), lang, pageSize: 60 }
+      )).slice(0, 40);
 
       console.log(`[Tiqets Proxy] ${results.length} prodotti per (${parsedLat}, ${parsedLon})`);
       partnerCacheSet(ck, 'tiqets', results);
@@ -26367,6 +26699,323 @@ REGOLE:
     } catch (err: any) {
       console.error("[Tiqets Proxy] Error:", err.response?.status, err.response?.data?.message || err.message);
       res.status(500).json({ error: "Failed to fetch from Tiqets", message: err.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // FEED AGGIUNTI IL 07/09/2026 (vedi eventiFeed.ts)
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── La citta' in tre nomi ───────────────────────────────────────────────
+  // Un reverse con namedetails: nome locale (北京), inglese (Beijing) e nella
+  // lingua dell'utente (Pechino), piu' paese e lingua del paese. I partner
+  // ricevono l'inglese, i portali locali il nome locale, l'utente il suo.
+  app.get("/api/geo/citta", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat));
+      const lon = parseFloat(String(req.query.lon));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const geo = await eventiFeed.cittaInTreNomi(lat, lon, lang);
+      res.json(geo);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+
+  /** Nome inglese e locale della citta' per le rotte partner: dalla query o dal reverse. */
+  const nomiCittaPer = async (req: any): Promise<{ en: string; locale: string; utente: string; cc: string; lingua_locale: string }> => {
+    const q = req.query || {};
+    const lang = partnerLang(q.lang || q.language);
+    const lat = parseFloat(String(q.lat)), lon = parseFloat(String(q.lon));
+    const dato = { en: String(q.city_en || ''), locale: String(q.city_local || ''), utente: String(q.city || ''), cc: String(q.cc || '').toLowerCase(), lingua_locale: '' };
+    if (dato.en && dato.cc) return dato;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return dato;
+    const geo = await eventiFeed.cittaInTreNomi(lat, lon, lang);
+    return {
+      en: dato.en || geo.en, locale: dato.locale || geo.locale, utente: dato.utente || geo.utente,
+      cc: dato.cc || geo.cc, lingua_locale: geo.lingua_locale,
+    };
+  };
+
+  // ── Klook (affiliato) ───────────────────────────────────────────────────
+  // Attivita' dal widget dell'account per le citta' con un widget salvato,
+  // link affiliato alla pagina citta' per le altre. Klook copre soprattutto
+  // l'Asia, dove GetYourGuide e Viator sono deboli.
+  app.get("/api/klook", rateLimiter, async (req, res) => {
+    try {
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const nomi = await nomiCittaPer(req);
+      if (!nomi.en) return res.json([]);
+      const lista = await eventiFeed.klookAttivita(nomi.en, lang);
+      res.json(lista);
+    } catch (e: any) {
+      console.error('[klook] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'klook_failed' });
+    }
+  });
+
+  // ── Trip.com (affiliato) ────────────────────────────────────────────────
+  // «Cose da fare» lette dalla pagina elenco (server-side rendered) con i
+  // parametri di affiliazione. Mondiale, con inventario vero in Cina.
+  app.get("/api/tripcom", rateLimiter, async (req, res) => {
+    try {
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const nomi = await nomiCittaPer(req);
+      // Sul sito localizzato il nome nella lingua dell'utente; su www.trip.com l'inglese.
+      const nome = (lang === 'en' ? nomi.en : (nomi.utente || nomi.en)) || nomi.locale;
+      if (!nome) return res.json([]);
+      let lista = await eventiFeed.tripcomAttivita(nome, lang);
+      // Con il nome tradotto puo' non trovare nulla: riprova con l'inglese.
+      if (lista.length <= 1 && nomi.en && nomi.en !== nome) lista = await eventiFeed.tripcomAttivita(nomi.en, lang);
+      res.json(lista);
+    } catch (e: any) {
+      console.error('[tripcom] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'tripcom_failed' });
+    }
+  });
+
+  // ── Tiqets: mostre ed eventi temporanei (affiliato) ─────────────────────
+  // Endpoint dedicato dell'API Tiqets (/v2/temporary-events): mostre con
+  // date, museo, foto e i prodotti che danno accesso. La citta' Tiqets si
+  // ricava dai prodotti piu' vicini alle coordinate (l'endpoint cities non
+  // ha coordinate). Cache 6 h per citta' e lingua.
+  app.get("/api/tiqets/mostre", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat));
+      const lon = parseFloat(String(req.query.lon));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const tiqetsKey = process.env.TIQETS_API_KEY || process.env.VITE_TIQETS_API_KEY;
+      if (!tiqetsKey) return res.json({ mostre: [], motivo: 'TIQETS_API_KEY assente' });
+      const raggioKm = Math.min(50, Math.max(5, parseFloat(String(req.query.radius_km)) || 30));
+      const ck = partnerCacheKey('tiqets_mostre', lat, lon, raggioKm, lang);
+      const hit = await partnerCacheGet(ck, 6 * 60 * 60 * 1000);
+      if (hit) return res.json({ mostre: hit, cached: true });
+
+      const headers = { Authorization: `Token ${tiqetsKey}`, Accept: 'application/json' };
+      // 1. I prodotti vicini: da loro la citta' Tiqets (la piu' frequente) e i
+      //    link affiliati (product_url arriva gia' col partner).
+      const pr = await axios.get('https://api.tiqets.com/v2/products', {
+        params: { lat, lng: lon, max_distance: raggioKm, page_size: 100, lang, currency: 'EUR' }, headers, timeout: 8000,
+      });
+      const prodotti: any[] = pr.data?.products || [];
+      const perProdotto = new Map<string, any>();
+      const conteggioCitta = new Map<number, number>();
+      for (const p of prodotti) {
+        perProdotto.set(String(p.id || p.product_id), p);
+        const cid = Number(p.city_id ?? p.city?.id);
+        if (Number.isFinite(cid) && cid > 0) conteggioCitta.set(cid, (conteggioCitta.get(cid) || 0) + 1);
+      }
+      const cittaIds = Array.from(conteggioCitta.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([id]) => id);
+      if (!cittaIds.length) { partnerCacheSet(ck, 'tiqets_mostre', []); return res.json({ mostre: [] }); }
+
+      // 2. Le mostre temporanee della citta' (fino a 100), da oggi in poi.
+      const oggi = giornoLocaleDaLon(lon);
+      const ev = await axios.get('https://api.tiqets.com/v2/temporary-events', {
+        params: { city_id: cittaIds, lang, page_size: 100, from_date: oggi }, headers, timeout: 8000,
+        paramsSerializer: { indexes: null },
+      });
+      const eventi: any[] = ev.data?.temporary_events || ev.data?.events || ev.data?.data || [];
+      const mostre = eventi.map((e: any) => {
+        const ids: string[] = (e.access_product_ids || []).map(String);
+        const prodotto = ids.map((id) => perProdotto.get(id)).find(Boolean);
+        const url = prodotto?.product_url || prodotto?.product_checkout_url
+          || (e.tiqets_url ? `${e.tiqets_url}${e.tiqets_url.includes('?') ? '&' : '?'}partner=wip-189103` : '');
+        const img = e.image || {};
+        return {
+          id: `tiqets-ev-${e.id}`,
+          titolo: String(e.title || '').trim(),
+          titolo_originale: '',
+          sottotitolo: '',
+          artista: '',
+          dal: dataIso(e.from_date),
+          al: dataIso(e.to_date),
+          descrizione: String(e.description || '').trim().slice(0, 240),
+          prezzo: prodotto?.price?.formatted || (typeof prodotto?.price === 'number' ? `da €${prodotto.price}` : ''),
+          luogo: String(e.experience_name || prodotto?.venue?.name || ''),
+          poi_id: null,
+          lat: Number(prodotto?.geolocation?.lat ?? prodotto?.venue?.lat) || lat,
+          lon: Number(prodotto?.geolocation?.lng ?? prodotto?.venue?.lon) || lon,
+          distanza_km: typeof prodotto?.distance === 'number' ? Math.round(prodotto.distance * 10) / 10 : null,
+          indirizzo: null,
+          citta: String(prodotto?.city_name || ''),
+          immagine: String(img.large || img.medium || img.extra_large || img.small || ''),
+          sito: url,
+          fonte: 'tiqets',
+          tipo_evento: String(e.event_type || 'exhibition'),
+          affiliato: true,
+        };
+      }).filter((m: any) => m.titolo && m.sito && (!m.al || m.al >= oggi));
+      partnerCacheSet(ck, 'tiqets_mostre', mostre);
+      res.json({ mostre });
+    } catch (e: any) {
+      console.error('[tiqets/mostre] errore:', e?.response?.status, e?.response?.data?.message || e?.message);
+      res.status(500).json({ error: 'tiqets_mostre_failed', message: e?.message });
+    }
+  });
+
+  // ── Stagionali dagli affiliati ──────────────────────────────────────────
+  // Nel periodo giusto (tabella STAGIONI: mercatini di Natale, fioriture,
+  // aurora, vendemmia...) si interrogano Tiqets e Viator con la parola
+  // chiave nella lingua dell'utente + la citta'. Fuori periodo la rotta non
+  // chiede nulla ai partner. Un blocco per stagione, cache 12 h.
+  app.get("/api/stagionali/affiliati", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat));
+      const lon = parseFloat(String(req.query.lon));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const nomi = await nomiCittaPer(req);
+      const mese = new Date().getUTCMonth() + 1;
+      const stagioni = eventiFeed.stagioniAttive(nomi.cc, mese);
+      if (!stagioni.length || !nomi.en) return res.json({ blocchi: [], mese });
+
+      const ck = partnerCacheKey('stagionali', lat, lon, 50, lang, `${nomi.cc}_${mese}`);
+      const hit = await partnerCacheGet(ck, 12 * 60 * 60 * 1000);
+      if (hit) return res.json({ blocchi: hit, mese, cached: true });
+
+      const blocchi = await Promise.all(stagioni.map(async (s) => {
+        const parola = s.parole[lang] || s.parole.en;
+        const [tiqets, viator] = await Promise.all([
+          fetchTiqetsProducts({ lat, lon, radiusKm: 50, lang, pageSize: 20, query: parola }).catch(() => []),
+          agentTools.searchViatorFreetext(`${parola} ${nomi.en}`, lang, 12).catch(() => []),
+        ]);
+        const voci = [
+          ...tiqets.slice(0, 8),
+          ...viator.slice(0, 8).map((v: any, i: number) => ({ ...v, id: `viator-st-${s.id}-${i}`, source: 'viator', lat, lon })),
+        ];
+        return { id: s.id, emoji: s.emoji, titolo: s.titolo[lang] || s.titolo.en, parola, voci };
+      }));
+      const pieni = blocchi.filter((b) => b.voci.length > 0);
+      partnerCacheSet(ck, 'stagionali', pieni);
+      res.json({ blocchi: pieni, mese });
+    } catch (e: any) {
+      console.error('[stagionali/affiliati] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'stagionali_failed' });
+    }
+  });
+
+  // ── Portali locali + ricerca web nella lingua del posto ─────────────────
+  // Due fonti in una rotta, stesso estrattore:
+  //  1. i portali del registro (src/data/fontiEventi.ts) per il paese, con
+  //     l'URL costruito sul nome della città (inglese o locale);
+  //  2. le pagine trovate dalla ricerca web «<città> <eventi|mostre|concerti>
+  //     <mese anno>» nella lingua del posto (fornitore da chiave: Brave o
+  //     Google; senza chiave la ricerca è spenta e restano i portali).
+  // Ogni pagina: prima il JSON-LD (eventi dichiarati dal sito), poi l'AI
+  // (max 4 pagine, mai DeepSeek) col titolo copiato dalla pagina come unica
+  // difesa contro le invenzioni. Cache per città e giorno; tetto giornaliero
+  // di città «fredde» per tenere sotto controllo ricerche e chiamate AI.
+  const PORTALI_MAX_CITTA_FREDDE_GIORNO = 40;
+  const PORTALI_MAX_PAGINE_AI = 4;
+  const eventiDalTestoAi = async (testo: string, urlPagina: string, lingua: string, linguaPagina: string): Promise<any[]> => {
+    const nomeLingua = ({ it: 'italiano', en: 'inglese', fr: 'francese', es: 'spagnolo', de: 'tedesco', ru: 'russo', zh: 'cinese' } as Record<string, string>)[lingua] || lingua;
+    const prompt = `Questo e' il testo di una pagina web (${urlPagina}) che elenca eventi, in lingua "${linguaPagina || 'sconosciuta'}".
+Estrai gli EVENTI FUTURI con una data: concerti, mostre, festival, spettacoli, mercati, sagre, sport.
+
+REGOLE FERREE:
+- Se la pagina non elenca eventi con date, rispondi {"eventi":[]}. Un elenco vuoto e' una risposta giusta.
+- NON inventare titoli, date, luoghi o prezzi. Riporta solo cio' che c'e' scritto.
+- "titolo_originale" e' il titolo COPIATO ESATTAMENTE dalla pagina, nella lingua e nell'alfabeto originali. Mai tradurlo.
+- "titolo" e' lo stesso titolo tradotto in ${nomeLingua} (i nomi propri restano uguali).
+- "data" e "data_fine" nel formato AAAA-MM-GG (data_fine null se e' un solo giorno). Se l'anno manca, usa quello piu' plausibile a partire da oggi.
+- "orario" HH:MM oppure "". "luogo" e' il nome della sede o della via, come scritto. "prezzo" come scritto, oppure "".
+- "kind" e' uno fra: concerto, mostra, festival, mercato, teatro, sport, altro.
+- Massimo 25 eventi.
+
+Descrizione in ${nomeLingua}, una frase. Rispondi con questo JSON:
+{"eventi":[{"titolo_originale":"","titolo":"","kind":"concerto","data":"AAAA-MM-GG","data_fine":null,"orario":"","luogo":"","descrizione":"","prezzo":"","url":""}]}
+
+TESTO:
+${testo}`;
+    try {
+      const out = await callUniversalAi('groq', [{ role: 'user', content: prompt }],
+        { temperature: 0.1, response_format: { type: 'json_object' }, excludeEngines: ['deepseek'] }, 'eventi_portali_estrazione',
+        supabaseUrl, supabaseServiceKey, getGroqClient());
+      const j = JSON.parse(String(out?.data || '{}'));
+      return Array.isArray(j?.eventi) ? j.eventi : [];
+    } catch { return []; }
+  };
+
+  app.get("/api/events/portali", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat));
+      const lon = parseFloat(String(req.query.lon));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ error: 'lat e lon richiesti' });
+      const lang = partnerLang(req.query.lang || req.query.language);
+      const nomi = await nomiCittaPer(req);
+      if (!nomi.en) return res.json({ events: [], fonti: [] });
+      const oggi = giornoLocaleDaLon(lon);
+      const linguaLocale = nomi.lingua_locale || eventiFeed.LINGUA_PAESE[nomi.cc] || '';
+      const ck = `portali_${slugSemplice(nomi.en) || 'x'}_${nomi.cc}_${lang}_${oggi}`;
+      const hit = await partnerCacheGet(ck, 24 * 60 * 60 * 1000);
+      if (hit) return res.json({ ...hit, cached: true });
+
+      // Tetto giornaliero delle città fredde (ricerche + AI): oltre, vuoto.
+      const contatoreKey = `portali_cold_${new Date().toISOString().slice(0, 10)}`;
+      const gia = Number((await getFromCache(contatoreKey))?.text_content) || 0;
+      if (gia >= PORTALI_MAX_CITTA_FREDDE_GIORNO) return res.json({ events: [], fonti: [], limite_giornaliero: true });
+      saveToCache(contatoreKey, 'counter', String(gia + 1)).catch(() => {});
+
+      // 1. Portali del registro (max 4) + 2. pagine dalla ricerca web (max 6)
+      const portali = fontiPerPaese(nomi.cc, nomi.en, nomi.locale).slice(0, 4)
+        .map((f) => ({ url: f.urlPronto, lingua: f.lingua || linguaLocale, fonte: f.id }));
+      const ricerche = eventiFeed.fornitoreRicerca()
+        ? await Promise.all(eventiFeed.queryEventiLocali(nomi.locale, linguaLocale, nomi.en).map((q) => eventiFeed.ricercaWeb(q.q, { lang: q.lang, cc: nomi.cc, count: 8 })))
+        : [];
+      const trovate = eventiFeed.pagineDaLeggere(ricerche.flat(), 6)
+        .map((r) => ({ url: r.url, lingua: linguaLocale, fonte: 'web' }));
+      const pagine = [...portali, ...trovate].filter((p, i, a) => a.findIndex((x) => x.url === p.url) === i).slice(0, 10);
+
+      // Lettura in parallelo: JSON-LD subito, testo da tenere per l'AI.
+      const lette = await Promise.all(pagine.map(async (p) => {
+        if (!isPublicHttpUrl(p.url)) return null;
+        const html = await scaricaHtml(p.url, p.lingua);
+        if (!html) return null;
+        const testo = eventiFeed.testoPagina(html, 12000);
+        let strutturati: any[] = [];
+        try { strutturati = eventiFeed.eventiDaJsonLd(html, p.url); } catch { strutturati = []; }
+        return { ...p, testo, strutturati };
+      }));
+      const events: any[] = [];
+      const daAi: any[] = [];
+      for (const p of lette) {
+        if (!p) continue;
+        if (p.strutturati.length) {
+          events.push(...eventiFeed.validaEventi(p.strutturati, p.testo + ' ' + p.strutturati.map((s: any) => s.titolo).join(' '), p.url, oggi));
+        } else if (p.testo.length > 600) {
+          daAi.push(p);
+        }
+      }
+      // AI solo dove il sito non dichiara nulla: le pagine più lunghe prima.
+      daAi.sort((a, b) => b.testo.length - a.testo.length);
+      const estratti = await Promise.all(daAi.slice(0, PORTALI_MAX_PAGINE_AI).map(async (p) => {
+        const grezzi = await eventiDalTestoAi(p.testo.slice(0, 9000), p.url, lang, p.lingua);
+        return eventiFeed.validaEventi(grezzi, p.testo, p.url, oggi);
+      }));
+      events.push(...estratti.flat());
+
+      // Doppioni fra pagine diverse (stesso evento su due portali): titolo+data.
+      const visti = new Set<string>();
+      const finali = events.filter((e) => {
+        const k = `${eventiFeed.normUnicode(e.originalTitle || e.name).slice(0, 40)}|${e.date}`;
+        if (visti.has(k)) return false;
+        visti.add(k);
+        return true;
+      }).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(0, 60);
+
+      const payload = {
+        events: finali,
+        fonti: lette.filter(Boolean).map((p: any) => ({ fonte: p.fonte, url: p.url, eventi: p.strutturati.length })),
+        ricerca: eventiFeed.fornitoreRicerca(),
+        citta: { en: nomi.en, locale: nomi.locale, cc: nomi.cc, lingua: linguaLocale },
+      };
+      partnerCacheSet(ck, 'portali', payload);
+      res.json(payload);
+    } catch (e: any) {
+      console.error('[events/portali] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'portali_failed' });
     }
   });
 
@@ -26441,7 +27090,8 @@ REGOLE:
       if (!activeCity) activeCity = "Italia";
 
       console.log(`[Viator Proxy] Searching for ${activeCity} (${parsedLat}, ${parsedLon})`);
-      const resultsString = await agentTools.searchViatorExperiences(parsedLat, parsedLon, parsedRadius, startDate, endDate, activeCity);
+      // Lingua dell'utente (prima it-IT cablato) e 20 risultati (prima 8).
+      const resultsString = await agentTools.searchViatorExperiences(parsedLat, parsedLon, parsedRadius, startDate, endDate, activeCity, lang, 20);
 
       let results = [];
       try {
@@ -26482,7 +27132,7 @@ REGOLE:
 
       if (gygApiKey) {
         try {
-          const gygUrl = `https://api.getyourguide.com/1/tours?q=${encodeURIComponent(searchCity)}&lat=${parsedLat}&lng=${parsedLon}&radius=${parsedRadius}&limit=20&language=${lang}&currency=EUR`;
+          const gygUrl = `https://api.getyourguide.com/1/tours?q=${encodeURIComponent(searchCity)}&lat=${parsedLat}&lng=${parsedLon}&radius=${parsedRadius}&limit=30&language=${lang}&currency=EUR`;
           const gygRes = await axios.get(gygUrl, {
             headers: {
               "Accept": "application/json",
@@ -26497,7 +27147,7 @@ REGOLE:
       }
 
       if (activities.length > 0) {
-        const results = activities.slice(0, 12).map((t: any) => {
+        const results = activities.slice(0, 24).map((t: any) => {
           const tourId = t.tour_id || t.id || "";
           let deepUrl = tourId
             ? `${gygHost}/tours/${tourId}?partner_id=${GYG_PARTNER_ID}&utm_medium=online_publisher&utm_source=itaintasca`

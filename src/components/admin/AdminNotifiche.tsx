@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { getApiUrl } from '../../lib/api';
-import { Bell, Send, RefreshCw, CheckCircle2, AlertTriangle, Smartphone, Mail } from 'lucide-react';
+import { Bell, Send, RefreshCw, CheckCircle2, AlertTriangle, Smartphone, Mail, Sparkles, Loader2 } from 'lucide-react';
 
 const adminHeaders = async (): Promise<Record<string, string>> => {
   const { data: s } = await supabase.auth.getSession();
@@ -33,6 +33,27 @@ export default function AdminNotifiche() {
   const [ancheEmail, setAncheEmail] = useState(false);
   const [invio, setInvio] = useState(false);
   const [esito, setEsito] = useState<any>(null);
+  // «Scrivi con l'AI» (07/09/2026): l'admin descrive cosa comunicare,
+  // DeepSeek propone titolo e testo nei campi qui sotto, pronti da correggere.
+  const [istruzioniAi, setIstruzioniAi] = useState('');
+  const [generando, setGenerando] = useState(false);
+  const [erroreAi, setErroreAi] = useState<string | null>(null);
+
+  const generaConAi = async () => {
+    if (istruzioniAi.trim().length < 5 || generando) return;
+    setGenerando(true); setErroreAi(null);
+    try {
+      const lingua = destTipo === 'segmento' && segmento.startsWith('lingua:') ? segmento.slice(7) : 'IT';
+      const r = await fetch(getApiUrl('/api/admin/notifiche/genera'), {
+        method: 'POST', headers: await adminHeaders(),
+        body: JSON.stringify({ istruzioni: istruzioniAi, tipo, lingua, azione: azione || undefined }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setTitolo(String(j.titolo || '')); setCorpo(String(j.corpo || ''));
+    } catch (e: any) { setErroreAi(e?.message || 'errore'); }
+    setGenerando(false);
+  };
 
   const carica = async () => {
     setCaricamento(true);
@@ -96,6 +117,21 @@ export default function AdminNotifiche() {
               </select>
             </label>
           )}
+        </div>
+        <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 space-y-2">
+          <label className="block text-xs font-bold text-violet-900">Scrivi con l'AI · dì cosa vuoi comunicare
+            <textarea value={istruzioniAi} onChange={e => setIstruzioniAi(e.target.value)} maxLength={1500} rows={2}
+              placeholder="Es. Da oggi il percorso su misura si crea in 3 tocchi con le gemme intorno a te; invita a provarlo. Tono amichevole."
+              className="mt-1 w-full rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm" />
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <button onClick={generaConAi} disabled={generando || istruzioniAi.trim().length < 5}
+              className="flex items-center gap-2 rounded-xl bg-violet-600 text-white font-black text-sm px-4 py-2 disabled:opacity-40">
+              {generando ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {generando ? 'Scrivo…' : 'Scrivi con l\'AI'}
+            </button>
+            <span className="text-[11px] text-violet-900/60">Usa tipo, lingua del segmento e azione scelti qui sotto. Titolo e testo si possono correggere prima dell'invio.</span>
+            {erroreAi && <span className="text-xs font-bold text-red-600">Errore: {erroreAi}</span>}
+          </div>
         </div>
         <div className="grid md:grid-cols-3 gap-3">
           <label className="text-xs font-bold text-gray-600 md:col-span-2">Titolo
