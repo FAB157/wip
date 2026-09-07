@@ -13,7 +13,7 @@
  */
 import React from 'react';
 import axios from 'axios';
-import { ET_GUIDA, ET_ITINERARIO, lingua } from './generaPdf.js';
+import { ET_GUIDA, ET_ITINERARIO, lingua, urlMappaStatica } from './generaPdf.js';
 import { haCaratteriNonLatini } from './pulisci.js';
 import GuidaPremiumPdf from './GuidaPremiumPdf.js';
 import ItinerarioPdf from './ItinerarioPdf.js';
@@ -101,8 +101,11 @@ export async function pdfItinerarioServer(plan: any, language: unknown): Promise
     if (!Array.isArray(plan?.giorni) || !plan.giorni.length) return null;
     if (haCaratteriNonLatini(JSON.stringify(plan).slice(0, 20000))) return null;
     const L = lingua(language);
+    // Stessa mappa del PDF fatto dal telefono (07/09: l'allegato usciva senza).
+    const urlMappa = urlMappaStatica(plan, process.env.VITE_MAPBOX_TOKEN || process.env.MAPBOX_TOKEN);
+    const mappa = urlMappa ? (await immagineDataUrl(urlMappa)) || undefined : undefined;
     const { renderToBuffer } = await import('@react-pdf/renderer');
-    const buf = await renderToBuffer(React.createElement(ItinerarioPdf, { plan, etichette: ET_ITINERARIO[L] }) as any);
+    const buf = await renderToBuffer(React.createElement(ItinerarioPdf, { plan, etichette: ET_ITINERARIO[L], mappa }) as any);
     return await numeraPagine(Buffer.from(buf), ET_ITINERARIO[L].pagina, 1);
   } catch (e: any) {
     ultimoErrore = `${e?.message || e}\n${String(e?.stack || '').split('\n').slice(1, 5).join('\n')}`;

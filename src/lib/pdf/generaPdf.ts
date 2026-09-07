@@ -95,16 +95,24 @@ const coordTappa = (t: any): { lat: number; lon: number } | null => {
   return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
 };
 
-/** La mappa del percorso: immagine statica Mapbox con i numeri delle tappe. */
-async function mappaStatica(plan: any): Promise<string | undefined> {
-  const token = (import.meta as any).env?.VITE_MAPBOX_TOKEN;
+/**
+ * URL della mappa statica Mapbox del percorso, con i numeri delle tappe.
+ * Condiviso fra il PDF del client e quello del server (allegato email):
+ * la stessa mappa in entrambi. undefined senza token o senza coordinate.
+ */
+export function urlMappaStatica(plan: any, token: string | undefined): string | undefined {
   if (!token) return undefined;
   const punti: { lat: number; lon: number }[] = [];
   for (const g of plan?.giorni || []) for (const t of g?.tappe || []) { const c = coordTappa(t); if (c) punti.push(c); }
   if (!punti.length) return undefined;
   const pin = punti.slice(0, 40).map((p, i) => `pin-s-${Math.min(i + 1, 99)}+1e3a8a(${p.lon.toFixed(5)},${p.lat.toFixed(5)})`).join(',');
-  const url = `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${pin}/auto/1000x760@2x?padding=70&access_token=${encodeURIComponent(token)}`;
-  return scaricaImmagine(url);
+  return `https://api.mapbox.com/styles/v1/mapbox/streets-v12/static/${pin}/auto/1000x760@2x?padding=70&access_token=${encodeURIComponent(token)}`;
+}
+
+/** La mappa del percorso: immagine statica Mapbox con i numeri delle tappe. */
+async function mappaStatica(plan: any): Promise<string | undefined> {
+  const url = urlMappaStatica(plan, (import.meta as any).env?.VITE_MAPBOX_TOKEN);
+  return url ? scaricaImmagine(url) : undefined;
 }
 
 export async function generaPdfItinerario(plan: any, language: unknown): Promise<Blob | null> {
