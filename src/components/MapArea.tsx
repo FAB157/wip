@@ -6192,7 +6192,11 @@ function MapArea({
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: '100%', opacity: 0 }}
             transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-            className="absolute bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[1150] max-h-[58dvh] md:max-h-[70dvh]"
+            // bottom: 5.25rem, lo STESSO offset gia' collaudato in questo file
+            // per la colonna meteo/livelli qui sopra — cancella esattamente la
+            // barra "Trova vicino"/Tutto (1rem di margine + la sua altezza),
+            // non un valore indovinato a occhio.
+            className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[1150] max-h-[50dvh] md:max-h-[65dvh]"
           >
             <PoiPopupContent
               poi={activePoi}
