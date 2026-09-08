@@ -215,39 +215,6 @@ export function pickVoice(lang: string, character: GuideCharacter = 'nicky'): Sp
 
 import { locationService } from './locationService';
 
-/**
- * Legge una frase con la VOCE DI SISTEMA, senza costi cloud e senza gli
- * effetti collaterali del navigatore (niente banner `wip-nav-instruction`).
- * Serve alla chat dell'agente WIP: le risposte sono tante e brevi, mandarle
- * su Azure sarebbe una spesa per ogni battuta.
- *
- * (08/09/2026) Prima WipAgentPlanner chiamava `window.speechSynthesis` di
- * suo: sul web va, ma nella WebView nativa speechSynthesis spesso NON esiste
- * — stessa trappola del microfono — e WIP restava muto nell'app. Qui la
- * frase passa dal motore TTS nativo quando l'app gira nativa.
- */
-export function speakVoceDiSistema(text: string, lang = 'it', character: GuideCharacter = 'nicky'): void {
-  if (locationService.getIsGuideMuted()) return;
-  const frase = String(text || '').trim();
-  if (!frase) return;
-
-  if (Capacitor.isNativePlatform() || typeof window === 'undefined' || !('speechSynthesis' in window)) {
-    // force: l'utente sta chattando in primo piano, il servizio in background
-    // può essere spento — senza force la coda scarterebbe la frase.
-    void speakViaNativeQueue(frase, { force: true, lang, character, kind: 'chat' });
-    return;
-  }
-
-  try {
-    const u = new SpeechSynthesisUtterance(frase);
-    u.lang = bcp47(lang);
-    const v = pickVoice(lang, character);
-    if (v) u.voice = v;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch { /* la voce è un di più: mai rompere la chat */ }
-}
-
 /** Legge una frase breve con la voce nativa del browser (gratis). */
 export function speakInstruction(text: string, lang = 'it', character: GuideCharacter = 'nicky'): void {
   if (locationService.getIsGuideMuted()) return;

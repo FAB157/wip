@@ -24,7 +24,8 @@ import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { speakVoceDiSistema, stopSpeech } from '../services/ttsService';
+import { speakAudioguide, stopSpeech } from '../services/ttsService';
+import { getGuideCharacter } from '../lib/guideSettings';
 import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
 
 /** I parametri che l'agente consegna: sono ESATTAMENTE gli stati del form. */
@@ -90,12 +91,15 @@ export default function WipAgentPlanner({
   // bloccano comunque l'audio senza un gesto dell'utente).
   // (08/09/2026) Prima si usava `window.speechSynthesis` diretto: sul web va,
   // ma nella WebView nativa speechSynthesis spesso NON esiste e WIP restava
-  // MUTO nell'app — la stessa trappola del microfono. Ora passa da
-  // speakVoceDiSistema, che sul nativo parla col motore TTS del dispositivo
-  // (gratis: una chat su Azure costerebbe a ogni battuta).
+  // MUTO nell'app — la stessa trappola del microfono. Ora si usa la STESSA
+  // voce delle audioguide (Azure neural via /api/tts/smart, riprodotta dal
+  // player nativo): è quella che l'utente sente nei podcast, curata in tutte
+  // le lingue, e la stessa che usa già la chat di AgentControls — WIP ha una
+  // voce sola in tutta l'app. Il ripiego su Web Speech resta dentro
+  // speakAudioguide per quando si è offline.
   const speak = (text: string) => {
     if (!voiceOn) return;
-    speakVoceDiSistema(text, language.toLowerCase(), 'nicky');
+    void speakAudioguide(text, language.toLowerCase(), getGuideCharacter());
   };
   const stopSpeaking = () => stopSpeech();
   // A schermo chiuso non deve restare né la voce né il microfono acceso.
