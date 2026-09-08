@@ -450,13 +450,18 @@ export const OnboardingCarousel: React.FC<OnboardingProps> = (props) => {
         </div>
       </div>
 
-      <main className="relative z-10 flex-1 flex flex-col justify-center px-6 sm:px-10">
+      {/* `min-h-0 overflow-y-auto`: senza, su uno schermo basso il contenuto
+          spinge il footer col pulsante «Avanti» fuori dalla vista — e' lo
+          screenshot con cui Apple ha respinto la 1.3 l'8/09/2026 (iPad in
+          modalita' compatibilita' iPhone). `my-auto` centra quando lo spazio
+          c'e' e lascia scorrere quando non c'e'. */}
+      <main className="relative z-10 flex-1 min-h-0 overflow-y-auto flex flex-col px-6 py-2 sm:px-10">
         <AnimatePresence mode="wait">
           <motion.div
             key={indice}
             {...animazione}
             transition={{ duration: menoMovimento ? 0.2 : 0.45, ease: [0.16, 1, 0.3, 1] }}
-            className="mx-auto flex w-full max-w-md flex-col items-center text-center"
+            className="mx-auto my-auto flex w-full max-w-md flex-col items-center text-center"
           >
             {eRiepilogo ? (
               <>

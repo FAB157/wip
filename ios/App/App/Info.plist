@@ -132,13 +132,19 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- Universale dall'8/09/2026 (rifiuto Apple 1.3, Guideline 4 su iPad Air:
+	     l'app girava in modalita' compatibilita' iPhone, incorniciata e con
+	     l'onboarding tagliato). Su iPad solo verticale, come su iPhone: il
+	     layout e' pensato per una colonna. Chi non supporta tutte le
+	     orientazioni su iPad deve dichiarare UIRequiresFullScreen (niente
+	     Split View / Slide Over), altrimenti la validazione fallisce. -->
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIRequiresFullScreen</key>
+	<true/>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 </dict>
