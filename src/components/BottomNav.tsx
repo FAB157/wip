@@ -1,4 +1,4 @@
-import { Map as MapIcon, Calendar, Camera, User, Headphones, PartyPopper } from "lucide-react";
+import { Map as MapIcon, Calendar, Camera, User, Headphones, PartyPopper, Sparkles } from "lucide-react";
 import { ReactNode, useState, useEffect, useRef } from "react";
 import { Language, getTranslation } from "../lib/i18n";
 
@@ -104,6 +104,22 @@ export default function BottomNav({ activeTab, setActiveTab, isAudioGuideActive,
           </div>
         )}
       </div>
+      {/* ASSISTENTE WIP, tra fotocamera e guida (08/09/2026, richiesto dal
+          committente: «un tasto per attivare l'assistente WIP come quello
+          nella sezione itinerario ma che può rispondere su tutto»). Apre la
+          STESSA chat generica "Chiedi a WIP" già raggiungibile dalla scheda
+          di un POI (evento 'wip-open-chat', nessun contesto): stesso
+          componente, stesso motore, solo un ingresso in più, sempre a
+          disposizione invece che legato a un luogo. */}
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent('wip-open-chat', { detail: {} }))}
+        aria-label={getTranslation('a11y_assistente_ia', language)}
+        className="flex flex-col items-center justify-center gap-0.5 px-2 py-1 min-h-[48px] min-w-[56px] transition-all cursor-pointer text-slate-500 font-medium hover:text-primary"
+      >
+        <Sparkles className="w-5 h-5" />
+        <span className="text-[11px] uppercase tracking-normal">{getTranslation('nav_assistente', language)}</span>
+      </button>
       <div ref={muteAnchorRef} className="relative flex flex-col items-center justify-center -mb-2">
         <button
           type="button"
