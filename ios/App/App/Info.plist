@@ -84,6 +84,13 @@
 	<string>La fotocamera serve per la funzione Vision che riconosce i monumenti inquadrati.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Il microfono è usato per dettare a voce le domande alla guida AI durante l'ascolto delle audioguide.</string>
+	<!-- SFSpeechRecognizer (plugin @capacitor-community/speech-recognition,
+	     08/09/2026): senza questa chiave iOS fa crashare l'app alla prima
+	     richiesta di permesso, e App Review rifiuta l'uso non dichiarato.
+	     Va SEMPRE insieme a NSMicrophoneUsageDescription qui sopra: il
+	     riconoscimento vocale ha bisogno di entrambi. -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Il riconoscimento vocale trasforma in testo quello che detti all'assistente WIP, così puoi creare l'itinerario e fare domande parlando invece di scrivere.</string>
 	<!-- Gating sensori anti-teletrasporto GPS (MotionActivityGate.swift):
 	     se l'utente nega il permesso il comportamento resta identico a prima
 	     (fail-safe, nessuna soppressione dei trigger). -->

@@ -5,6 +5,14 @@
          e openSystemNavigator cadeva SEMPRE sul fallback geo: generico. -->
     <queries>
         <package android:name="com.google.android.apps.maps" />
+        <!-- (08/09/2026) Stessa trappola per la DETTATURA: su Android 11+ il
+             package visibility filtering nasconde il servizio di
+             riconoscimento vocale, e SpeechRecognizer.isRecognitionAvailable()
+             torna false anche dove il servizio c'e'. Senza questo intent il
+             tasto microfono resta muto sui telefoni recenti. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application
@@ -146,6 +154,10 @@
          identica. E' un permesso install-time (nessuna richiesta a runtime,
          nessuna schermata in piu' per l'utente). -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- DETTATURA (08/09/2026): il plugin chiede RECORD_AUDIO a runtime prima
+         di avviare l'ascolto. Senza la dichiarazione qui la richiesta viene
+         negata subito e il microfono dell'assistente WIP non parte. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Gating trigger con sensori (Activity Recognition transition API):
          runtime su API 29+, install-time GMS sulle versioni precedenti.
          Senza il permesso il gating si disattiva e tutto resta come oggi. -->

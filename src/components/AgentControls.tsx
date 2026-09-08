@@ -8,6 +8,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { getTranslation, type Language } from '../lib/i18n';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
+import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
 
 interface AgentControlsProps {
   itineraryId: string;
@@ -73,70 +74,43 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
     if (pulito) void speakAudioguide(pulito, (language || 'IT').toLowerCase(), getGuideCharacter());
   };
 
-  // MICROFONO: UN'ISTANZA SOLA, in un ref. Prima `new SpeechRecognition()`
-  // stava nel corpo del componente: ogni render ne creava una nuova, e lo
-  // "stop" finiva sull'istanza dell'ultimo render — mai avviata — mentre
-  // quella avviata restava viva col microfono occupato (l'icona "in uso"
-  // che non si spegne, 23/08/2026).
-  const recRef = useRef<any>(null);
-  const getRecognition = () => {
-    if (recRef.current) return recRef.current;
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) return null;
-    const r = new SR();
-    r.continuous = false;
-    r.interimResults = false;
-    r.onresult = (event: any) => {
-      const transcript = event.results?.[0]?.[0]?.transcript;
-      if (transcript) {
-        dettatoRef.current = true; // la risposta a una domanda dettata si legge
-        setCustomEvent((prev) => prev ? `${prev} ${transcript}` : transcript);
-      }
-      setIsListening(false);
-    };
-    r.onerror = (event: any) => {
-      console.error('Speech recognition error', event?.error);
-      setIsListening(false);
-    };
-    r.onend = () => setIsListening(false);
-    recRef.current = r;
-    return r;
-  };
+  // MICROFONO: la sessione viva sta in un ref, cosi' lo "stop" arriva sempre
+  // a QUELLA avviata (prima si creava un riconoscitore per render e il
+  // microfono restava occupato, 23/08/2026). Dal 08/09/2026 la dettatura
+  // passa da voceInput.ts: nativa sull'app (la Web Speech API non esiste
+  // nella WebView di iOS/Android, il tasto sembrava morto), Web Speech API
+  // sul web.
+  const sessioneVoceRef = useRef<SessioneVoce | null>(null);
 
-  // Alla chiusura del componente il riconoscimento va ABORTITO e la voce
-  // fermata, o il microfono resta occupato a chat chiusa.
+  // Alla chiusura del componente il riconoscimento va fermato e la voce
+  // zittita, o il microfono resta occupato a chat chiusa.
   useEffect(() => () => {
-    try { recRef.current?.abort?.(); } catch { /* gia' fermo */ }
+    sessioneVoceRef.current?.ferma();
     stopSpeech();
   }, []);
 
   const SPEECH_LANGS: Record<string, string> = { it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES', de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN' };
 
-  const handleMicrophoneClick = () => {
-    const recognition = getRecognition();
-    if (!recognition) {
-      notify(tr('chat_mic_unsupported'));
-      return;
-    }
-
+  const handleMicrophoneClick = async () => {
     if (isListening) {
-      // stop() consegna l'eventuale parlato gia' captato (onresult), poi onend.
-      try { recognition.stop(); } catch { /* gia' fermo */ }
+      // ferma() consegna l'eventuale parlato gia' captato, poi chiude.
+      sessioneVoceRef.current?.ferma();
       setIsListening(false);
       return;
     }
 
-    // La lingua del riconoscimento segue la UI (prima era it-IT fisso).
-    recognition.lang = SPEECH_LANGS[(language || 'IT').toLowerCase().slice(0, 2)] || 'it-IT';
     setIsListening(true);
     if (!isExpanded) setIsExpanded(true);
-    try {
-      recognition.start();
-    } catch {
-      // start() su un'istanza gia' avviata lancia: si riparte pulito.
-      try { recognition.abort(); } catch { /* niente */ }
-      setIsListening(false);
-    }
+    sessioneVoceRef.current = await avviaAscolto({
+      // La lingua del riconoscimento segue la UI (prima era it-IT fisso).
+      lingua: SPEECH_LANGS[(language || 'IT').toLowerCase().slice(0, 2)] || 'it-IT',
+      onRisultato: (testo) => {
+        dettatoRef.current = true; // la risposta a una domanda dettata si legge
+        setCustomEvent((prev) => prev ? `${prev} ${testo}` : testo);
+      },
+      onFine: () => { setIsListening(false); sessioneVoceRef.current = null; },
+      onErrore: (motivo) => notify(tr(motivo === 'permesso_negato' ? 'voce_permesso_negato' : 'voce_non_disponibile')),
+    });
   };
   const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>(
     chatHistory && chatHistory.length > 0 ? chatHistory : [
@@ -405,7 +379,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               <button onClick={() => setShowInfo(true)} className="text-primary hover:text-primary/80">
                 <Info className="w-5 h-5" />
               </button>
-              <button onClick={() => { setIsExpanded(false); stopSpeech(); try { recRef.current?.abort?.(); } catch { /* fermo */ } setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
+              <button onClick={() => { setIsExpanded(false); stopSpeech(); sessioneVoceRef.current?.ferma(); setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
                 <X className="w-6 h-6" />
               </button>
             </div>
@@ -473,7 +447,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
             <div className="absolute right-1 flex items-center gap-1">
               {!customEvent && !isListening && (
                 <button 
-                  onClick={handleMicrophoneClick}
+                  onClick={() => void handleMicrophoneClick()}
                   className="w-8 h-8 rounded-full text-gray-400 hover:text-primary hover:bg-gray-100 flex items-center justify-center transition-colors"
                   title={tr('chat_speak_btn')}
                 >
@@ -483,7 +457,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               
               {isListening && (
                 <button 
-                  onClick={handleMicrophoneClick}
+                  onClick={() => void handleMicrophoneClick()}
                   className="w-8 h-8 rounded-full bg-red-100 text-red-500 flex items-center justify-center animate-pulse"
                   title={tr('chat_stop_listening')}
                 >

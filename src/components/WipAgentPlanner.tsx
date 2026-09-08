@@ -25,6 +25,7 @@ import { getApiUrl } from '../lib/api';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { pickVoice } from '../services/ttsService';
+import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
 
 /** I parametri che l'agente consegna: sono ESATTAMENTE gli stati del form. */
 export interface WipAgentParams {
@@ -71,7 +72,7 @@ export default function WipAgentPlanner({
     try { return localStorage.getItem('wip_agent_voice') !== '0'; } catch { return true; }
   });
   const listRef = useRef<HTMLDivElement | null>(null);
-  const recognitionRef = useRef<any>(null);
+  const sessioneVoceRef = useRef<SessioneVoce | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -103,7 +104,8 @@ export default function WipAgentPlanner({
   const stopSpeaking = () => {
     try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch { /* niente */ }
   };
-  useEffect(() => () => stopSpeaking(), []);
+  // A schermo chiuso non deve restare né la voce né il microfono acceso.
+  useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.ferma(); }, []);
 
   const send = async (text: string) => {
     const clean = text.trim();
@@ -140,31 +142,29 @@ export default function WipAgentPlanner({
     }
   };
 
-  const toggleMic = () => {
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SR) { notify(t('wip_agent_mic_unsupported')); inputRef.current?.focus(); return; }
+  // Dettatura: nativa sull'app, Web Speech API sul web — vedi voceInput.ts.
+  // Prima si usava solo la Web Speech API, che nella WebView nativa non
+  // esiste: il tasto sembrava morto (08/09/2026).
+  const toggleMic = async () => {
     if (listening) {
-      try { recognitionRef.current?.stop(); } catch { /* niente */ }
+      sessioneVoceRef.current?.ferma();
       setListening(false);
       return;
     }
     stopSpeaking(); // WIP tace quando l'utente parla
-    const rec = new SR();
-    rec.lang = SPEECH_LANG[language] || 'it-IT';
-    rec.continuous = false;
-    rec.interimResults = false;
-    rec.onresult = (ev: any) => {
-      const transcript = String(ev.results?.[0]?.[0]?.transcript || '').trim();
-      setListening(false);
+    setListening(true);
+    const sessione = await avviaAscolto({
+      lingua: SPEECH_LANG[language] || 'it-IT',
       // Quello che si dice a voce parte subito: il microfono è già la
       // conferma, chiedere anche "invio" è un passo in più.
-      if (transcript) void send(transcript);
-    };
-    rec.onerror = () => setListening(false);
-    rec.onend = () => setListening(false);
-    recognitionRef.current = rec;
-    setListening(true);
-    try { rec.start(); } catch { setListening(false); }
+      onRisultato: (testo) => { void send(testo); },
+      onFine: () => { setListening(false); sessioneVoceRef.current = null; },
+      onErrore: (motivo) => {
+        notify(t(motivo === 'permesso_negato' ? 'voce_permesso_negato' : 'voce_non_disponibile'));
+        inputRef.current?.focus();
+      },
+    });
+    sessioneVoceRef.current = sessione;
   };
 
   return (
@@ -251,7 +251,7 @@ export default function WipAgentPlanner({
       >
         <button
           type="button"
-          onClick={toggleMic}
+          onClick={() => void toggleMic()}
           aria-pressed={listening}
           aria-label={t('wip_agent_listening')}
           className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border transition ${
