@@ -2,7 +2,15 @@
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- maximum-scale=1 + user-scalable=no (08/09/2026): un pizzico partito
+         FUORI dalla mappa (chip, barra in basso) zoomava l'intera app, che
+         restava tagliata ai bordi e sotto la barra di stato senza nessun
+         modo per tornare indietro a schermo intero (PWA e app nativa).
+         Safari nel browser ignora comunque queste due opzioni per
+         l'accessibilita'; nella WebView e nella PWA le rispetta, e li' i
+         testi grandi arrivano da Dynamic Type (html { font: -apple-system-body }
+         in index.css), non dallo zoom di pagina. La mappa ha il suo pinch. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="theme-color" content="#1e3a8a" />
