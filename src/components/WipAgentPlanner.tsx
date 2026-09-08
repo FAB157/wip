@@ -24,7 +24,7 @@ import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { pickVoice } from '../services/ttsService';
+import { speakVoceDiSistema, stopSpeech } from '../services/ttsService';
 import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
 
 /** I parametri che l'agente consegna: sono ESATTAMENTE gli stati del form. */
@@ -88,22 +88,16 @@ export default function WipAgentPlanner({
   // WIP legge ad alta voce le proprie risposte (non l'intro al montaggio:
   // partire a parlare da soli all'apertura è invadente, e alcuni browser
   // bloccano comunque l'audio senza un gesto dell'utente).
+  // (08/09/2026) Prima si usava `window.speechSynthesis` diretto: sul web va,
+  // ma nella WebView nativa speechSynthesis spesso NON esiste e WIP restava
+  // MUTO nell'app — la stessa trappola del microfono. Ora passa da
+  // speakVoceDiSistema, che sul nativo parla col motore TTS del dispositivo
+  // (gratis: una chat su Azure costerebbe a ogni battuta).
   const speak = (text: string) => {
     if (!voiceOn) return;
-    try {
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = SPEECH_LANG[language] || 'it-IT';
-      const v = pickVoice(language.toLowerCase(), 'nicky');
-      if (v) u.voice = v;
-      u.rate = 1.0;
-      window.speechSynthesis.speak(u);
-    } catch { /* la voce è un di più: mai rompere la chat */ }
+    speakVoceDiSistema(text, language.toLowerCase(), 'nicky');
   };
-  const stopSpeaking = () => {
-    try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch { /* niente */ }
-  };
+  const stopSpeaking = () => stopSpeech();
   // A schermo chiuso non deve restare né la voce né il microfono acceso.
   useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.ferma(); }, []);
 
