@@ -11,9 +11,14 @@ import { X, Loader2, ExternalLink, Sparkles } from 'lucide-react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { templatesForNow, loadTemplateTranslations, SEASONAL_THEMES, type SeasonalTemplate, type SeasonalTheme, type TemplateI18nMap } from '../lib/seasonalTemplates';
 import { getApiUrl, apiFetch } from '../lib/api';
+import { ensureAffiliateUrl } from '../lib/affiliates';
 
-/** Template col marcatore di provenienza (i curati non ce l'hanno). */
-type CatalogTemplate = SeasonalTemplate & { aiGenerated?: boolean };
+/**
+ * Template col marcatore di provenienza (i curati non ce l'hanno).
+ * `fonte: 'wikidata'` (07/09/2026): un festival ricorrente vero (Wikidata),
+ * non scritto a mano ne' generato dall'AI — badge diverso, stessa card.
+ */
+type CatalogTemplate = SeasonalTemplate & { aiGenerated?: boolean; fonte?: 'wikidata' };
 
 type TplFilter = 'tutti' | 'nascosti' | SeasonalTheme;
 
@@ -78,6 +83,36 @@ async function loadEsperienze(destination: string, lang: string): Promise<Esperi
       }
     } catch { /* best-effort: si passa alla sorgente dopo */ }
   }
+  // Klook e Trip.com (07/09/2026): GET, non POST come i tre sopra. Il nome
+  // città va passato così com'è (nomiCittaPer lo accetta come `utente`,
+  // Trip.com cerca direttamente in italiano; Klook risponde solo se
+  // combacia con un nome inglese del suo elenco, altrimenti tace).
+  if (items.length < 3) {
+    for (const path of ['/api/klook', '/api/tripcom']) {
+      if (items.length >= 3) break;
+      try {
+        const res = await fetch(
+          getApiUrl(`${path}?city=${encodeURIComponent(destination)}&lang=${encodeURIComponent(lang)}`),
+          { signal: AbortSignal.timeout(9000) },
+        );
+        if (!res.ok) continue;
+        const data = await res.json();
+        if (!Array.isArray(data)) continue;
+        almenoUnaRispostaOk = true;
+        for (const e of data) {
+          if (items.length >= 3) break;
+          // isSearch: la card "tutto il catalogo del partner", non un prodotto vero.
+          if (!e?.url || e?.isSearch) continue;
+          items.push({
+            name: String(e.name || '').slice(0, 90),
+            price: String(e.price || ''),
+            url: String(e.url),
+            source: String(e.source || (path === '/api/klook' ? 'klook' : 'tripcom')),
+          });
+        }
+      } catch { /* best-effort */ }
+    }
+  }
   // In cache solo se almeno una sorgente ha risposto: un fallimento di rete
   // non deve congelare "zero esperienze" per 6 ore.
   if (almenoUnaRispostaOk) {
@@ -86,9 +121,16 @@ async function loadEsperienze(destination: string, lang: string): Promise<Esperi
   return items;
 }
 
-/** Link tracciato via /api/out (whitelist host lato server). */
+/**
+ * Link tracciato via /api/out (whitelist host lato server).
+ * ensureAffiliateUrl PRIMA di incapsulare (07/09/2026): senza, i link Viator
+ * restavano nel vecchio shortlink vi.me/vNn2S?url=... invece del formato con
+ * pid/mcid — la stessa correzione fatta per EventsScreen tempo fa, qui era
+ * rimasta indietro. Klook/Trip.com/Tiqets non vengono toccati (arrivano già
+ * affiliati dal server): la funzione è un no-op sui loro domini.
+ */
 function outUrl(e: Esperienza): string {
-  return getApiUrl(`/api/out?u=${encodeURIComponent(e.url)}&src=${encodeURIComponent(e.source)}`);
+  return getApiUrl(`/api/out?u=${encodeURIComponent(ensureAffiliateUrl(e.url))}&src=${encodeURIComponent(e.source)}`);
 }
 
 export default function SeasonalCatalogSheet({
@@ -261,9 +303,9 @@ export default function SeasonalCatalogSheet({
                   <div className="flex items-start justify-between gap-2">
                     <div className="text-2xl">{t.emoji}</div>
                     <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full ${
-                      t.aiGenerated ? 'bg-gray-100 text-gray-500' : 'bg-primary/10 text-primary'
+                      t.fonte === 'wikidata' ? 'bg-emerald-50 text-emerald-700' : t.aiGenerated ? 'bg-gray-100 text-gray-500' : 'bg-primary/10 text-primary'
                     }`}>
-                      {t.aiGenerated ? '🤖 AI' : '✦ Redazione'}
+                      {t.fonte === 'wikidata' ? '🗓 Festival reale' : t.aiGenerated ? '🤖 AI' : '✦ Redazione'}
                     </span>
                   </div>
                   <div className="text-xs font-black text-primary leading-tight mt-1">{testi(t).title}</div>

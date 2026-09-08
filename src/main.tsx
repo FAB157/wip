@@ -57,6 +57,11 @@ import AppLockGate from './components/AppLockGate';
 import { Capacitor } from '@capacitor/core';
 import { Purchases, LOG_LEVEL } from '@revenuecat/purchases-capacitor';
 import { registerSW } from 'virtual:pwa-register';
+// VERCEL ANALYTICS (07/09/2026): pageview + visitatori nel pannello Vercel.
+// Il beacon (/_vercel/insights/*) esiste solo sul dominio Vercel: su
+// Capacitor nativo (WebView con bundle locale, vedi lib/api.ts) non avrebbe
+// dove atterrare, quindi il componente si monta solo sul web.
+import { Analytics as VercelAnalytics } from '@vercel/analytics/react';
 
 // SERVICE WORKER (29/08/2026). Prima lo registrava uno script iniettato da
 // vite-plugin-pwa che faceva solo register(): dopo un aggiornamento
@@ -103,6 +108,7 @@ createRoot(document.getElementById('root')!).render(
           <App />
         </AppLockGate>
       </QueryClientProvider>
+      {!Capacitor.isNativePlatform() && <VercelAnalytics />}
     </ErrorBoundary>
   </StrictMode>,
 );

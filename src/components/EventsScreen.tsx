@@ -22,7 +22,19 @@ import { getApiUrl, apiFetch } from "../lib/api";
 import { ensureAffiliateUrl, ensureGygAffiliateUrl, ensureViatorAffiliateUrl, trackAffiliateClick } from "../lib/affiliates";
 import { getLocalFavorites, toggleFavoritePoi } from "../lib/favorites";
 
-type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator" | "tiqets" | "local" | "mostre" | "permanenti";
+// klook e tripcom (affiliati, 07/09/2026) stanno nella vista Eventi;
+// tiqets_mostre (mostre temporanee dell'API Tiqets, affiliate) nella vista
+// Mostre «In corso» accanto a quelle lette dai siti dei musei.
+// portali = i portali locali del registro + le pagine trovate dalla ricerca
+// web nella lingua del posto (/api/events/portali).
+type EventSource = "virgilio" | "ticketmaster" | "getyourguide" | "viator" | "tiqets" | "klook" | "tripcom" | "local" | "portali" | "mostre" | "tiqets_mostre" | "permanenti";
+
+/** Fonti con commissione: vengono prima nell'ordinamento per rilevanza. */
+const FONTI_AFFILIATE: EventSource[] = ["tiqets", "getyourguide", "viator", "klook", "tripcom", "tiqets_mostre"];
+const VUOTE_PER_FONTE = (): Record<EventSource, any> => ({
+  virgilio: null, ticketmaster: null, getyourguide: null, viator: null, tiqets: null, klook: null, tripcom: null,
+  local: null, portali: null, mostre: null, tiqets_mostre: null, permanenti: null,
+});
 
 interface EventData {
   id: string;
@@ -54,6 +66,13 @@ interface EventData {
   isFamily?: boolean;
   isMusic?: boolean;
   macroCategory?: string;
+  /** Prezzo o voto mostrati sulla card (partner). */
+  price?: string;
+  rating?: string;
+  /** Mostre: titolo nella lingua del sito, quando diverso da quello mostrato. */
+  originalTitle?: string;
+  /** Card «tutto il catalogo del partner per questa città» (link di ricerca). */
+  isSearch?: boolean;
 }
 
 import { Language, getTranslation } from "../lib/i18n";
@@ -96,7 +115,7 @@ const emojiCategoria = (e: { macroCategory?: string; source: EventSource; isMusi
     if (prima && /\p{Extended_Pictographic}/u.test(prima)) return prima;
   }
   if (e.isMusic || e.source === 'ticketmaster') return '🎵';
-  if (e.source === 'mostre' || e.source === 'permanenti') return '🖼️';
+  if (e.source === 'mostre' || e.source === 'permanenti' || e.source === 'tiqets_mostre') return '🖼️';
   return '🎪';
 };
 
@@ -129,7 +148,7 @@ const tipoDi = (e: EventData): Exclude<TipoEvento, 'tutti'> | null => {
   const m = (e.macroCategory || '').toLowerCase();
   if (m.includes('mercato')) return 'mercati';
   if (m.includes('sagra') || m.includes('fiera')) return 'sagre';
-  if (m.includes('tour')) return 'tour';
+  if (m.includes('tour') || e.source === 'klook' || e.source === 'tripcom') return 'tour';
   if (e.source === 'tiqets' || m.includes('musei & attrazioni')) return 'biglietti';
   if (e.isMusic || e.source === 'ticketmaster') return 'concerti';
   return null;
@@ -145,36 +164,17 @@ interface EventsScreenProps {
 }
 
 export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language }: EventsScreenProps) {
-  const [sourceResults, setSourceResults] = useState<Record<EventSource, EventData[]>>({
-    virgilio: [],
-    ticketmaster: [],
-    getyourguide: [],
-    viator: [],
-    tiqets: [],
-    local: [],
-    mostre: [],
-    permanenti: [],
+  const [sourceResults, setSourceResults] = useState<Record<EventSource, EventData[]>>(() => {
+    const v = VUOTE_PER_FONTE(); for (const k of Object.keys(v)) v[k as EventSource] = []; return v;
   });
-  const [loadingSources, setLoadingSources] = useState<Record<EventSource, boolean>>({
-    virgilio: false,
-    ticketmaster: false,
-    getyourguide: false,
-    viator: false,
-    tiqets: false,
-    local: false,
-    mostre: false,
-    permanenti: false,
+  const [loadingSources, setLoadingSources] = useState<Record<EventSource, boolean>>(() => {
+    const v = VUOTE_PER_FONTE(); for (const k of Object.keys(v)) v[k as EventSource] = false; return v;
   });
-  const [sourceErrors, setSourceErrors] = useState<Record<EventSource, string | null>>({
-    virgilio: null,
-    ticketmaster: null,
-    getyourguide: null,
-    viator: null,
-    tiqets: null,
-    local: null,
-    mostre: null,
-    permanenti: null,
-  });
+  const [sourceErrors, setSourceErrors] = useState<Record<EventSource, string | null>>(() => VUOTE_PER_FONTE());
+
+  // La città in tre nomi (/api/geo/citta): inglese per i partner, locale per
+  // i portali, quella dell'utente per lo schermo; più paese e lingua locale.
+  const geoRef = useRef<{ cc: string; en: string; locale: string; utente: string; lingua_locale: string }>({ cc: '', en: '', locale: '', utente: '', lingua_locale: '' });
 
   // Tre viste separate, mai mescolate: «Eventi» (le sei fonti storiche),
   // «Mostre» e «Stagionali». Dentro Mostre un sotto-interruttore: «In corso»
@@ -190,6 +190,12 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   const mostreKeyRef = useRef<string>('');
   const permanentiKeyRef = useRef<string>('');
   const stagionaliKeyRef = useRef<string>('');
+  const tiqetsMostreKeyRef = useRef<string>('');
+  const stagionaliAffKeyRef = useRef<string>('');
+  // Stagionali dagli affiliati (/api/stagionali/affiliati): blocchi per
+  // stagione (mercatini di Natale, fioriture...) con Tiqets e Viator.
+  const [stagionaliAff, setStagionaliAff] = useState<{ id: string; emoji: string; titolo: string; voci: any[] }[]>([]);
+  const [stagionaliAffLoading, setStagionaliAffLoading] = useState(false);
   // Stagionali: { stelle, mercatini, fioriture } da /api/tematici/eventi.
   // La rotta può non esistere ancora: in quel caso lo stato resta null e la
   // vista mostra «Nessun dato per questa zona», mai un errore rosso.
@@ -199,7 +205,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [city, setCity] = useState("Italia");
-  const [sortBy, setSortBy] = useState<'date' | 'relevance'>('date');
+  // Rilevanza di default (07/09/2026): gli affiliati in testa. «Per data»
+  // resta a un tocco per chi cerca il concerto di stasera.
+  const [sortBy, setSortBy] = useState<'date' | 'relevance'>('relevance');
   const [deviceCoords, setDeviceCoords] = useState<[number, number] | null>(null);
   // Raggio iniziale = quello del riquadro visibile sulla mappa, così la prima
   // ricerca copre esattamente ciò che l'utente sta guardando. I chip di
@@ -223,6 +231,17 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   const [activeTrip, setActiveTrip] = useState<{ city: string; lat: number; lon: number } | null>(null);
   const [useTripCenter, setUseTripCenter] = useState(false);
 
+  // Ricerca città libera (08/09/2026): terza opzione accanto a «ultimo
+  // itinerario»/«posizione attuale», stessa fonte della mappa (/api/geocode,
+  // proxy Mapbox — il token non è mai nel bundle client). Priorità massima
+  // su searchCenter finché non viene svuotata: chi ha appena cercato una
+  // città non vuole tornarci per sbaglio riaprendo la pagina.
+  const [cittaCercata, setCittaCercata] = useState<{ label: string; lat: number; lon: number } | null>(null);
+  const [queryCitta, setQueryCitta] = useState("");
+  const [suggerimentiCitta, setSuggerimentiCitta] = useState<{ id: string; label: string; lat: number; lon: number }[]>([]);
+  const [cercaCittaAperta, setCercaCittaAperta] = useState(false);
+  const abortCittaRef = useRef<AbortController | null>(null);
+
   // «Serata perfetta»: proposta AI aperitivo+cena+evento+rientro
   const [eveningPlan, setEveningPlan] = useState<any | null>(null);
   const [eveningLoading, setEveningLoading] = useState(false);
@@ -230,8 +249,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // Centro effettivo di TUTTE le ricerche: la destinazione del viaggio attivo
   // (se scelta) oppure il centro della mappa visualizzata (default invariato).
-  const searchCenter: [number, number] | undefined =
-    useTripCenter && activeTrip ? [activeTrip.lat, activeTrip.lon] : mapCenter;
+  const searchCenter: [number, number] | undefined = cittaCercata
+    ? [cittaCercata.lat, cittaCercata.lon]
+    : useTripCenter && activeTrip ? [activeTrip.lat, activeTrip.lon] : mapCenter;
 
   // Date filters: oggi in ora LOCALE (toISOString slitta di un giorno la sera)
   const [startDate, setStartDate] = useState<string>(() => isoOggiLocale());
@@ -240,6 +260,37 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     d.setDate(d.getDate() + 30);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
+
+  // Suggerimenti città: stesso proxy della mappa, ma solo località (niente
+  // POI/indirizzi qui — si cerca una città, non un luogo preciso).
+  useEffect(() => {
+    const q = queryCitta.trim();
+    abortCittaRef.current?.abort();
+    if (q.length < 2) { setSuggerimentiCitta([]); return; }
+    const ctrl = new AbortController();
+    abortCittaRef.current = ctrl;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(getApiUrl(
+          `/api/geocode?q=${encodeURIComponent(q)}&lang=${langParam}&limit=5&types=place,locality,region`
+        ), { signal: ctrl.signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (ctrl.signal.aborted) return;
+        const feats = (data.features || []).map((f: any) => ({ id: f.id, label: f.description, lat: f.lat, lon: f.lon }));
+        setSuggerimentiCitta(feats);
+      } catch { /* silenzioso: nessun suggerimento, l'utente può riprovare */ }
+    }, 350);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [queryCitta, langParam]);
+
+  const sceglieCittaCercata = useCallback((s: { label: string; lat: number; lon: number }) => {
+    setCittaCercata(s);
+    setUseTripCenter(false);
+    setQueryCitta("");
+    setSuggerimentiCitta([]);
+    setCercaCittaAperta(false);
+  }, []);
 
   const prevCenterRef = useRef<[number, number] | undefined>(mapCenter);
   // Date e città correnti, lette dai loader per evitare closure stantie
@@ -265,18 +316,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     );
 
     if (centerMoved) {
-      setSourceResults({
-        virgilio: [],
-        ticketmaster: [],
-        getyourguide: [],
-        viator: [],
-        tiqets: [],
-        local: [],
-        mostre: [],
-        permanenti: [],
-      });
+      setSourceResults(() => { const v = VUOTE_PER_FONTE(); for (const k of Object.keys(v)) v[k as EventSource] = []; return v; });
       mostreKeyRef.current = '';
       permanentiKeyRef.current = '';
+      tiqetsMostreKeyRef.current = '';
+      stagionaliAffKeyRef.current = '';
     }
 
     prevCenterRef.current = searchCenter;
@@ -288,36 +332,50 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     let currentLon = searchCenter?.[1] || 10.1;
 
     try {
-      // Reverse geocoding to get city name for sources that need it (like Virgilio)
+      // La città in tre nomi: prima un solo reverse in italiano dava «Pechino»
+      // a tutti i partner, che non lo riconoscevano. Ora GetYourGuide e
+      // Viator ricevono «Beijing», Trip.com/Klook il nome adatto, l'utente
+      // vede il suo. Ripiego sul vecchio reverse se la rotta non risponde.
       let resolvedCityName = "Italia";
+      let geo = { cc: '', en: '', locale: '', utente: '', lingua_locale: '' };
       try {
-        const geocodeRes = await fetch(
-          getApiUrl(`/api/nominatim/reverse?lat=${currentLat}&lon=${currentLon}`)
-        );
-        if (geocodeRes.ok) {
-          const geocodeData = await geocodeRes.json();
-          // Prefer city, then town, then village, then county
-          resolvedCityName = geocodeData.address?.city ||
-            geocodeData.address?.town ||
-            geocodeData.address?.village ||
-            geocodeData.address?.county ||
-            "Italia";
-          setCity(resolvedCityName);
+        const r = await fetch(getApiUrl(`/api/geo/citta?lat=${currentLat}&lon=${currentLon}&lang=${langParam}`), { signal: AbortSignal.timeout(10000) });
+        if (r.ok) {
+          const g = await r.json();
+          geo = { cc: String(g?.cc || ''), en: String(g?.en || ''), locale: String(g?.locale || ''), utente: String(g?.utente || ''), lingua_locale: String(g?.lingua_locale || '') };
         }
-      } catch (e) {
-        console.warn("Geocoding failed", e);
+      } catch (e) { console.warn("geo/citta failed", e); }
+      if (!geo.en) {
+        try {
+          const geocodeRes = await fetch(getApiUrl(`/api/nominatim/reverse?lat=${currentLat}&lon=${currentLon}`));
+          if (geocodeRes.ok) {
+            const geocodeData = await geocodeRes.json();
+            const a = geocodeData.address || {};
+            geo.en = a.city || a.town || a.village || a.county || '';
+            geo.utente = geo.en;
+            geo.cc = String(a.country_code || '').toLowerCase();
+          }
+        } catch (e) { console.warn("Geocoding failed", e); }
       }
+      resolvedCityName = geo.utente || geo.en || "Italia";
+      geoRef.current = geo;
+      setCity(resolvedCityName);
       cityRef.current = resolvedCityName;
+      const cityForPartners = geo.en || resolvedCityName;
 
       // Load all sources in parallel using the map center and the selected radius
       const { start, end } = datesRef.current;
       await Promise.allSettled([
-        loadVirgilio(currentLat, currentLon, resolvedCityName),
-        loadTicketmaster(currentLat, currentLon, radius, resolvedCityName),
-        loadGetYourGuide(currentLat, currentLon, radius, resolvedCityName),
-        loadViator(currentLat, currentLon, radius, start, end, resolvedCityName),
+        // Virgilio copre solo l'Italia: fuori si risparmia una chiamata inutile.
+        (geo.cc === 'it' || !geo.cc) ? loadVirgilio(currentLat, currentLon, resolvedCityName) : Promise.resolve(),
+        loadTicketmaster(currentLat, currentLon, radius, cityForPartners),
+        loadGetYourGuide(currentLat, currentLon, radius, cityForPartners),
+        loadViator(currentLat, currentLon, radius, start, end, cityForPartners),
         loadTiqets(currentLat, currentLon, radius),
+        loadKlook(currentLat, currentLon),
+        loadTripcom(currentLat, currentLon),
         loadLocal(currentLat, currentLon, radius),
+        loadPortali(currentLat, currentLon),
       ]);
 
     } catch (err) {
@@ -646,9 +704,189 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     if (source === "getyourguide") loadGetYourGuide(lat, lon, radius, city);
     if (source === "viator") loadViator(lat, lon, radius, startDate, endDate, city);
     if (source === "tiqets") loadTiqets(lat, lon, radius);
+    if (source === "klook") loadKlook(lat, lon);
+    if (source === "tripcom") loadTripcom(lat, lon);
     if (source === "local") loadLocal(lat, lon, radius);
+    if (source === "portali") loadPortali(lat, lon);
     if (source === "mostre") { mostreKeyRef.current = ''; loadMostre(lat, lon, radius); }
+    if (source === "tiqets_mostre") { tiqetsMostreKeyRef.current = ''; loadTiqetsMostre(lat, lon, radius); }
     if (source === "permanenti") { permanentiKeyRef.current = ''; loadPermanenti(lat, lon, radius); }
+  };
+
+  /** Parametri città per le rotte partner (nomi già risolti da /api/geo/citta). */
+  const cittaQuery = (): string => {
+    const g = geoRef.current;
+    return `&city_en=${encodeURIComponent(g.en || '')}&city_local=${encodeURIComponent(g.locale || '')}&city=${encodeURIComponent(g.utente || '')}&cc=${encodeURIComponent(g.cc || '')}`;
+  };
+
+  /** Card comune per i partner con catalogo (Klook, Trip.com). */
+  const cardPartner = (a: any, source: 'klook' | 'tripcom', lat: number, lon: number, macro: string): EventData => {
+    const partner = source === 'klook' ? 'Klook' : 'Trip.com';
+    const cityName = String(a.city || geoRef.current.utente || '');
+    return {
+      id: String(a.id),
+      name: a.isSearch
+        ? getTranslation("events_search_on_partner", language).replace('{city}', cityName).replace('{partner}', partner)
+        : String(a.name || ''),
+      description: a.isSearch
+        ? getTranslation("events_search_on_partner_desc", language)
+        : String(a.description || ''),
+      date: '',
+      bookable: true,
+      venueName: [a.price, a.rating].filter(Boolean).join(' · ') || partner,
+      url: String(a.url || ''),
+      imageUrl: String(a.imageUrl || ''),
+      source,
+      macroCategory: macro,
+      lat, lon,
+      price: a.price || undefined,
+      rating: a.rating || undefined,
+      isSearch: !!a.isSearch,
+    };
+  };
+
+  // ── Klook (affiliato, forte in Asia) ────────────────────────────────────
+  const loadKlook = async (lat: number, lon: number) => {
+    logApiCall('klook', 'fetch_activities');
+    setLoadingSources(prev => ({ ...prev, klook: true }));
+    setSourceErrors(prev => ({ ...prev, klook: null }));
+    try {
+      const r = await fetch(getApiUrl(`/api/klook?lat=${lat}&lon=${lon}&lang=${langParam}${cittaQuery()}`), { signal: AbortSignal.timeout(15000) });
+      if (!r.ok) throw new Error(`Klook ${r.status}`);
+      const data = await r.json();
+      const lista: EventData[] = (Array.isArray(data) ? data : []).map((a: any) => cardPartner(a, 'klook', lat, lon, '🎟️ Tour & Attività'));
+      setSourceResults(prev => ({ ...prev, klook: lista }));
+    } catch (err) {
+      console.warn('loadKlook:', err);
+      setSourceErrors(prev => ({ ...prev, klook: getTranslation("events_err_klook", language) }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, klook: false }));
+    }
+  };
+
+  // ── Trip.com (affiliato, mondiale) ──────────────────────────────────────
+  const loadTripcom = async (lat: number, lon: number) => {
+    logApiCall('tripcom', 'fetch_activities');
+    setLoadingSources(prev => ({ ...prev, tripcom: true }));
+    setSourceErrors(prev => ({ ...prev, tripcom: null }));
+    try {
+      const r = await fetch(getApiUrl(`/api/tripcom?lat=${lat}&lon=${lon}&lang=${langParam}${cittaQuery()}`), { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`Trip.com ${r.status}`);
+      const data = await r.json();
+      const lista: EventData[] = (Array.isArray(data) ? data : []).map((a: any) => cardPartner(a, 'tripcom', lat, lon, '🎫 Attrazioni & Tour'));
+      setSourceResults(prev => ({ ...prev, tripcom: lista }));
+    } catch (err) {
+      console.warn('loadTripcom:', err);
+      setSourceErrors(prev => ({ ...prev, tripcom: getTranslation("events_err_tripcom", language) }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, tripcom: false }));
+    }
+  };
+
+  // ── Mostre temporanee di Tiqets (affiliate) ─────────────────────────────
+  // /api/tiqets/mostre: l'endpoint dedicato dell'API Tiqets, con date e
+  // biglietto. Vanno nella vista Mostre «In corso», prima delle altre.
+  const loadTiqetsMostre = async (lat: number, lon: number, searchRadius: number) => {
+    const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${Math.min(searchRadius, 50)}_${language}`;
+    if (tiqetsMostreKeyRef.current === key) return;
+    tiqetsMostreKeyRef.current = key;
+    logApiCall('tiqets', 'temporary_events');
+    setLoadingSources(prev => ({ ...prev, tiqets_mostre: true }));
+    setSourceErrors(prev => ({ ...prev, tiqets_mostre: null }));
+    try {
+      const r = await fetch(getApiUrl(`/api/tiqets/mostre?lat=${lat}&lon=${lon}&radius_km=${Math.min(searchRadius, 50)}&lang=${langParam}`), { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) throw new Error(`Tiqets mostre ${r.status}`);
+      const data = await r.json();
+      const oggi = isoOggiLocale();
+      const mapped: EventData[] = (data?.mostre || []).map((m: any) => ({
+        id: String(m.id),
+        name: String(m.titolo || ''),
+        description: [m.descrizione, m.prezzo ? `💶 ${m.prezzo}` : ''].filter(Boolean).join(' · '),
+        date: m.dal || oggi,
+        endDate: m.al || '',
+        venueName: m.luogo || '',
+        venueAddress: m.citta || undefined,
+        url: m.sito || '',
+        imageUrl: m.immagine || '',
+        source: 'tiqets_mostre' as EventSource,
+        macroCategory: m.tipo_evento === 'exhibition' ? '🖼️ Mostra · biglietto' : '🎫 Evento · biglietto',
+        lat: Number(m.lat) || undefined,
+        lon: Number(m.lon) || undefined,
+        approxCoords: false,
+        bookable: true,
+        price: m.prezzo || undefined,
+      }));
+      setSourceResults(prev => ({ ...prev, tiqets_mostre: mapped }));
+    } catch (err) {
+      console.warn('loadTiqetsMostre:', err);
+      tiqetsMostreKeyRef.current = '';
+      setSourceErrors(prev => ({ ...prev, tiqets_mostre: getTranslation("events_err_tiqets_mostre", language) }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, tiqets_mostre: false }));
+    }
+  };
+
+  // ── Portali locali + ricerca web nella lingua del posto ─────────────────
+  // /api/events/portali: eventi letti dai portali del registro e dalle
+  // pagine trovate cercando «<città> eventi <mese>» nella lingua locale.
+  // Senza coordinate: le card portano il luogo scritto e il link alla pagina.
+  const KIND_MACRO: Record<string, string> = {
+    concerto: '🎵 Concerto', mostra: '🖼️ Mostra', festival: '🎪 Festival', mercato: '🧺 Mercato',
+    teatro: '🎭 Teatro & Spettacolo', sport: '🏟️ Sport', altro: '📍 Evento',
+  };
+  const loadPortali = async (lat: number, lon: number) => {
+    logApiCall('portali', 'eventi_portali_web');
+    setLoadingSources(prev => ({ ...prev, portali: true }));
+    setSourceErrors(prev => ({ ...prev, portali: null }));
+    try {
+      // La prima lettura di una città legge fino a dieci pagine e chiama
+      // l'AI: può durare. Le successive arrivano dalla cache del giorno.
+      const r = await fetch(getApiUrl(`/api/events/portali?lat=${lat}&lon=${lon}&lang=${langParam}${cittaQuery()}`), { signal: AbortSignal.timeout(90000) });
+      if (!r.ok) throw new Error(`portali ${r.status}`);
+      const data = await r.json();
+      const mapped: EventData[] = (data?.events || []).map((e: any) => ({
+        id: String(e.id),
+        name: String(e.name || ''),
+        originalTitle: e.originalTitle || undefined,
+        description: [e.description, e.price ? `💶 ${e.price}` : ''].filter(Boolean).join(' · '),
+        date: String(e.date || ''),
+        endDate: e.endDate || undefined,
+        time: e.time || undefined,
+        venueName: e.venueName || e.fonte || '',
+        url: String(e.url || ''),
+        imageUrl: String(e.imageUrl || ''),
+        source: 'portali' as EventSource,
+        macroCategory: KIND_MACRO[String(e.kind || 'altro')] || KIND_MACRO.altro,
+        isMusic: e.kind === 'concerto',
+        isFree: /gratuit|gratis|\bfree\b|libero|libre|kostenlos|免费|無料|무료|бесплатно/i.test(`${e.price} ${e.description}`) ? true : undefined,
+      }));
+      setSourceResults(prev => ({ ...prev, portali: mapped }));
+    } catch (err) {
+      console.warn('loadPortali:', err);
+      setSourceErrors(prev => ({ ...prev, portali: getTranslation("events_err_portali", language) }));
+    } finally {
+      setLoadingSources(prev => ({ ...prev, portali: false }));
+    }
+  };
+
+  // ── Stagionali dagli affiliati ──────────────────────────────────────────
+  const loadStagionaliAffiliati = async (lat: number, lon: number) => {
+    const key = `${lat.toFixed(2)}_${lon.toFixed(2)}_${language}`;
+    if (stagionaliAffKeyRef.current === key) return;
+    stagionaliAffKeyRef.current = key;
+    setStagionaliAffLoading(true);
+    try {
+      const r = await fetch(getApiUrl(`/api/stagionali/affiliati?lat=${lat}&lon=${lon}&lang=${langParam}${cittaQuery()}`), { signal: AbortSignal.timeout(25000) });
+      if (!r.ok) throw new Error(`stagionali affiliati ${r.status}`);
+      const data = await r.json();
+      setStagionaliAff(Array.isArray(data?.blocchi) ? data.blocchi : []);
+    } catch (err) {
+      console.warn('loadStagionaliAffiliati:', err);
+      stagionaliAffKeyRef.current = '';
+      setStagionaliAff([]);
+    } finally {
+      setStagionaliAffLoading(false);
+    }
   };
 
   // ── Sagre e mercati locali (ondata 6) ──────────────────────────────────
@@ -670,12 +908,15 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         id: `local-${e.id}`,
         name: e.name,
         description: e.description || '',
-        date: e.date,
+        date: e.date || '',
+        endDate: e.endDate || undefined,
         venueName: e.venueName || '',
         url: e.url || '',
         imageUrl: e.imageUrl || '',
         source: 'local' as EventSource,
-        macroCategory: e.kind === 'mercato' ? '🧺 Mercato' : '🍷 Sagra & Festa',
+        // festival = ricorrenti da Wikidata (07/09/2026): Oktoberfest,
+        // Carnevale, festival del cinema, con il mese nella descrizione.
+        macroCategory: e.kind === 'mercato' ? '🧺 Mercato' : e.kind === 'festival' ? `🎪 ${getTranslation("events_festival_label", language)}` : '🍷 Sagra & Festa',
         lat: e.lat,
         lon: e.lon,
         approxCoords: !!e.approx,
@@ -1036,9 +1277,13 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         const titolo = String(m.titolo || '').trim();
         const artista = String(m.artista || '').trim();
         const prezzo = String(m.prezzo || '').trim();
+        const originale = String(m.titolo_originale || '').trim();
         return {
           id: String(m.id),
           name: artista && !titolo.toLowerCase().includes(artista.toLowerCase()) ? `${titolo} — ${artista}` : titolo,
+          // Titolo nella lingua del sito (cinese, giapponese...) quando e'
+          // diverso da quello tradotto: e' quello che l'utente trova sul posto.
+          originalTitle: originale && originale.toLowerCase() !== titolo.toLowerCase() ? originale : undefined,
           description: [m.sottotitolo, m.descrizione, prezzo ? `💶 ${prezzo}` : ''].filter(Boolean).join(' · '),
           // Senza data di apertura e' in corso: si parte da oggi.
           date: m.dal || oggi,
@@ -1147,19 +1392,34 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       const lat = searchCenter?.[0] || 44.0792;
       const lon = searchCenter?.[1] || 10.1;
       loadStagionali(lat, lon, radius);
+      loadStagionaliAffiliati(lat, lon);
       return;
     }
     if (view !== 'mostre') return;
     const lat = searchCenter?.[0] || 44.0792;
     const lon = searchCenter?.[1] || 10.1;
-    if (subView === 'in_corso') loadMostre(lat, lon, radius);
+    if (subView === 'in_corso') { loadTiqetsMostre(lat, lon, radius); loadMostre(lat, lon, radius); }
     else loadPermanenti(lat, lon, radius);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, subView, searchCenter?.[0], searchCenter?.[1], radius, language]);
 
+  /** Nome leggibile della fonte (badge di caricamento ed errore). */
+  const etichettaFonte = (source: string): string =>
+    source === 'ticketmaster' ? 'Ticketmaster'
+      : source === 'getyourguide' ? 'GetYourGuide'
+      : source === 'viator' ? 'Viator'
+      : (source === 'tiqets' || source === 'tiqets_mostre') ? 'Tiqets'
+      : source === 'klook' ? 'Klook'
+      : source === 'tripcom' ? 'Trip.com'
+      : source === 'local' ? getTranslation("events_source_local_label", language)
+      : source === 'portali' ? getTranslation("events_source_portali_label", language)
+      : source === 'mostre' ? getTranslation("events_view_exhibitions", language)
+      : source === 'permanenti' ? getTranslation("events_exh_permanent", language)
+      : source;
+
   /** A quale lista appartiene una fonte: eventi, mostre in corso o permanenti. */
   const vistaDi = (s: EventSource): string =>
-    s === 'mostre' ? 'mostre:in_corso' : s === 'permanenti' ? 'mostre:permanenti' : 'eventi';
+    (s === 'mostre' || s === 'tiqets_mostre') ? 'mostre:in_corso' : s === 'permanenti' ? 'mostre:permanenti' : 'eventi';
   // In «Stagionali» nessuna fonte eventi e' pertinente: badge, errori e
   // lista degli eventi restano fuori (vistaDi non torna mai 'stagionali').
   const vistaAttiva = view === 'mostre' ? `mostre:${subView}` : view;
@@ -1240,9 +1500,56 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     const fior = stagionali?.fioriture;
     const fiorInCorso = comeLista(fior?.in_corso ?? (Array.isArray(fior) ? fior : null), 'lista');
     const fiorInArrivo = comeLista(fior?.in_arrivo, 'lista');
-    const nulla = !luoghiStelle.length && !mercatini.length && !fiorInCorso.length && !fiorInArrivo.length;
+    const nulla = !luoghiStelle.length && !mercatini.length && !fiorInCorso.length && !fiorInArrivo.length && !stagionaliAff.length;
 
-    if (stagionaliLoading && nulla) {
+    // «Di stagione, prenotabili»: i blocchi degli affiliati (Tiqets, Viator)
+    // per le stagioni attive nel paese (mercatini di Natale, fioriture,
+    // aurora, vendemmia...). Stanno in testa: sono la parte con commissione.
+    const bloccoAffiliati = stagionaliAff.length > 0 && (
+      <div className="flex flex-col gap-4">
+        {stagionaliAff.map((b) => (
+          <div key={b.id} className="flex flex-col gap-2">
+            <h2 className="text-on-surface font-black text-sm uppercase tracking-wider">
+              {b.emoji} {b.titolo} · <span className="text-primary">{getTranslation("events_seasonal_partners", language)}</span>
+            </h2>
+            <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
+              {b.voci.map((v: any, i: number) => {
+                const src = String(v.source || 'tiqets');
+                const url = src === 'viator' ? ensureViatorAffiliateUrl(String(v.url || '')) : String(v.url || '');
+                const href = url ? getApiUrl(`/api/out?u=${encodeURIComponent(url)}&src=stagionali`) : undefined;
+                return (
+                  <a
+                    key={`${b.id}-${v.id || i}`}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => url && trackAffiliateClick(url, String(v.name || ''), city, 'events_seasonal')}
+                    className="w-56 shrink-0 bg-surface rounded-2xl border border-outline-variant overflow-hidden hover:border-primary/40 transition-colors flex flex-col"
+                  >
+                    {v.imageUrl ? (
+                      <img src={v.imageUrl} alt="" loading="lazy" className="w-full h-28 object-cover" />
+                    ) : (
+                      <div className="w-full h-28 bg-gradient-to-br from-primary/20 to-secondary/20 flex items-center justify-center text-4xl select-none" aria-hidden="true">{b.emoji}</div>
+                    )}
+                    <div className="p-3 flex flex-col gap-1 flex-1">
+                      <div className="text-xs font-bold text-on-surface leading-snug line-clamp-2">{String(v.name || '')}</div>
+                      <div className="text-[10px] font-bold text-on-surface-variant mt-auto">
+                        {[v.price, v.rating].filter(Boolean).join(' · ') || (src === 'viator' ? 'Viator' : 'Tiqets')}
+                      </div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-primary">
+                        {src === 'viator' ? getTranslation("events_book_viator", language) : getTranslation("events_book_tiqets", language)}
+                      </div>
+                    </div>
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+
+    if ((stagionaliLoading || stagionaliAffLoading) && nulla) {
       return (
         <div className="flex flex-col items-center justify-center py-20 text-primary">
           <Loader2 className="w-8 h-8 animate-spin mb-4" />
@@ -1256,7 +1563,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           <div className="text-4xl mb-4">🌸</div>
           <p className="font-bold text-on-surface">{tt("tem_no_data", "Nessun dato per questa zona")}</p>
           <p className="text-sm text-on-surface-variant mt-1">
-            Cieli bui, mercatini e fioriture cambiano con la stagione: allarga il raggio o riprova più avanti.
+            {tt("tem_no_data_hint", "Cieli bui, mercatini e fioriture cambiano con la stagione: allarga il raggio o riprova più avanti.")}
           </p>
         </div>
       );
@@ -1265,6 +1572,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     const nuvole = Number(meteo?.nuvoleNotte ?? meteo?.nuvole);
     return (
       <div className="flex flex-col gap-5">
+        {bloccoAffiliati}
         {/* 🌌 Stanotte sotto le stelle: cielo, luna e sciami valgono per
             TUTTA la zona, quindi stanno in testa una volta sola. */}
         {(luoghiStelle.length > 0 || luna || sciami.length > 0) && (
@@ -1386,13 +1694,15 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // ── Link affiliati via /api/out (tracking click server-side) ───────────
   // Solo per le fonti partner e solo se l'host è nella whitelist del server:
   // così un URL fuori whitelist resta un link diretto e non finisce in 400.
-  const AFFIL_OUT_HOST_RE = /(^|\.)((ticketmaster|livenation|getyourguide|gyg)\.[a-z]{2,3}(\.[a-z]{2})?|viator\.com|tiqets\.com|eventiesagre\.it|openstreetmap\.org)$/i;
+  const AFFIL_OUT_HOST_RE = /(^|\.)((ticketmaster|livenation|getyourguide|gyg)\.[a-z]{2,3}(\.[a-z]{2})?|viator\.com|vi\.me|tiqets\.com|klook\.com|trip\.com|eventiesagre\.it|openstreetmap\.org)$/i;
   const outUrl = (ev: EventData): string => {
     const finalUrl = ensureAffiliateUrl(ev.url);
     try {
       const host = new URL(finalUrl).hostname;
-      if (["ticketmaster", "viator", "getyourguide", "tiqets", "local"].includes(ev.source) && AFFIL_OUT_HOST_RE.test(host)) {
-        return getApiUrl(`/api/out?u=${encodeURIComponent(finalUrl)}&src=${ev.source}`);
+      // tiqets_mostre passa come «mostre» nel contatore (stesso partner).
+      const src = ev.source === 'tiqets_mostre' ? 'tiqets' : ev.source;
+      if (["ticketmaster", "viator", "getyourguide", "tiqets", "klook", "tripcom", "local", "mostre"].includes(src) && AFFIL_OUT_HOST_RE.test(host)) {
+        return getApiUrl(`/api/out?u=${encodeURIComponent(finalUrl)}&src=${src}`);
       }
     } catch { /* URL malformato: link diretto */ }
     return finalUrl;
@@ -1433,20 +1743,62 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
   // Solo eventi REALI dalle cinque sorgenti: niente più mock di riempimento.
   // Se non c'è nulla si mostra lo stato "nessun evento trovato".
+  // Ordine di base = priorita' commerciale: prima gli affiliati (Tiqets,
+  // GetYourGuide, Viator, Klook, Trip.com), poi Ticketmaster, poi il resto.
   const displayEvents = [
-    ...sourceResults.virgilio,
-    ...sourceResults.ticketmaster,
+    ...sourceResults.tiqets,
     ...sourceResults.getyourguide,
     ...sourceResults.viator,
-    ...sourceResults.tiqets,
+    ...sourceResults.klook,
+    ...sourceResults.tripcom,
+    ...sourceResults.ticketmaster,
+    ...sourceResults.virgilio,
+    ...sourceResults.portali,
     ...sourceResults.local,
+    ...sourceResults.tiqets_mostre,
     ...sourceResults.mostre,
     ...sourceResults.permanenti,
   ];
 
   const oggiLocale = isoOggiLocale();
 
+  // ── Deduplicazione fra fonti (07/09/2026) ───────────────────────────────
+  // Lo stesso concerto o la stessa mostra arrivano spesso da più fonti (un
+  // festival su Ticketmaster E sul portale locale, una mostra sul sito del
+  // museo E su Tiqets). Chiave: titolo normalizzato Unicode (ogni alfabeto)
+  // + data + luogo entro 1 km. displayEvents mette prima gli affiliati e
+  // Ticketmaster, quindi la prima occorrenza — quella tenuta — è già la
+  // migliore per commissione o autorevolezza; fra pari, chi ha la foto.
+  const normalizzaTitoloDedup = (s: string) =>
+    String(s || '').toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+  // Solo eventi con una DATA vera: i prodotti prenotabili (Tiqets, GYG,
+  // Viator, Klook, Trip.com) restano tutti, anche con titoli simili — sono
+  // biglietti/tour diversi di partner diversi, non lo stesso evento
+  // duplicato, e l'obiettivo è avere più scelta fra gli affiliati, non meno.
+  const dedupVisti = new Map<string, EventData>();
+  const dedupEsclusi = new Set<string>();
+  for (const e of displayEvents) {
+    if (e.bookable || !e.date) continue;
+    const titolo = normalizzaTitoloDedup(e.originalTitle || e.name);
+    if (titolo.length < 4) continue;
+    const chiave = `${vistaDi(e.source)}|${titolo}|${e.date}`;
+    const prima = dedupVisti.get(chiave);
+    if (!prima) { dedupVisti.set(chiave, e); continue; }
+    // Doppione confermato solo se anche il luogo combacia (entro 1 km) o
+    // manca la coordinata su uno dei due: due concerti omonimi in città
+    // diverse non vanno persi.
+    const vicini = !e.lat || !e.lon || !prima.lat || !prima.lon
+      || haversineMeters(prima.lat, prima.lon, e.lat, e.lon) <= 1000;
+    if (!vicini) continue;
+    // La copia scartata è quella senza immagine, a parità resta la prima
+    // vista (ordine di displayEvents: affiliati e Ticketmaster prima).
+    const tieneENuova = !prima.imageUrl && !!e.imageUrl;
+    dedupEsclusi.add(tieneENuova ? prima.id : e.id);
+    if (tieneENuova) dedupVisti.set(chiave, e);
+  }
+
   const filteredEvents = displayEvents.filter((e) => {
+    if (dedupEsclusi.has(e.id)) return false;
     // Eventi, mostre in corso o permanenti: una lista alla volta, mai insieme.
     if (vistaDi(e.source) !== vistaAttiva) return false;
     // Senza data (prenotabile, fiera annuale, annuncio Virgilio senza <time>)
@@ -1459,7 +1811,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       const dEnd = new Date(endDate);
       dEnd.setHours(23, 59, 59, 999);
       let inDateRange: boolean;
-      if (e.source === 'mostre') {
+      if (e.source === 'mostre' || e.source === 'tiqets_mostre') {
         // Una mostra e' un periodo: basta che si sovrapponga alle date scelte.
         // Senza data di chiusura si considera aperta.
         const endObj = e.endDate ? new Date(`${e.endDate}T23:59:59`) : null;
@@ -1495,7 +1847,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
 
     return true;
   }).sort((a, b) => {
-    if ((a.source === 'mostre' || a.source === 'permanenti') && a.source === b.source) {
+    const eMostra = (s: EventSource) => s === 'mostre' || s === 'tiqets_mostre';
+    // Nella vista Mostre le temporanee Tiqets (biglietto affiliato) vengono
+    // prima di quelle lette dai siti, a parita' di lista.
+    if (eMostra(a.source) && eMostra(b.source) && a.source !== b.source) return a.source === 'tiqets_mostre' ? -1 : 1;
+    if ((eMostra(a.source) || a.source === 'permanenti') && a.source === b.source) {
       const dist = (e: EventData) => (searchCenter && e.lat && e.lon)
         ? haversineMeters(searchCenter[0], searchCenter[1], e.lat, e.lon) : Infinity;
       // Le permanenti non hanno date: conta solo la vicinanza.
@@ -1513,22 +1869,31 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       return dist(a) - dist(b);
     }
     if (sortBy === 'relevance') {
+      // Prima chi paga la commissione (Tiqets, GYG, Viator, Klook, Trip.com),
+      // poi Ticketmaster, poi il resto; le card «tutto il catalogo» in coda
+      // al loro partner; il gratis conta un po'.
       const getScore = (e: EventData) => {
         let score = 0;
+        if (FONTI_AFFILIATE.includes(e.source)) score += 20;
         if (e.source === 'ticketmaster') score += 8;
+        if (e.imageUrl) score += 1;
+        if (e.isSearch) score -= 5;
         if (e.isFree) score += 2;
         return score;
       };
       return getScore(b) - getScore(a);
     }
-    
+
     const dateA = new Date(a.date).getTime();
     const dateB = new Date(b.date).getTime();
+    // Le card senza data (prenotabili, affiliate) restano nell'ordine di
+    // base (affiliati prima), dopo quelle con una data nel periodo.
+    if (isNaN(dateA) && isNaN(dateB)) return 0;
     if (isNaN(dateA)) return 1;
     if (isNaN(dateB)) return -1;
-    
+
     if (dateA !== dateB) return dateA - dateB;
-    
+
     // Secondary sort: Source priority (Ticketmaster > Virgilio)
     const sourcePriority: Record<string, number> = { ticketmaster: 0, virgilio: 1 };
     return (sourcePriority[a.source] || 0) - (sourcePriority[b.source] || 0);
@@ -1670,9 +2035,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
         {activeTrip && (
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => setUseTripCenter(true)}
+              onClick={() => { setUseTripCenter(true); setCittaCercata(null); }}
               className={`px-3 py-1.5 rounded-full text-[11px] font-black transition-all border ${
-                useTripCenter
+                useTripCenter && !cittaCercata
                   ? 'bg-primary border-primary text-white shadow-md'
                   : 'bg-surface-variant border-outline-variant text-on-surface-variant hover:bg-primary/10'
               }`}
@@ -1680,15 +2045,65 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
               📍 {getTranslation("events_trip_active", language).replace('{city}', activeTrip.city)}
             </button>
             <button
-              onClick={() => setUseTripCenter(false)}
+              onClick={() => { setUseTripCenter(false); setCittaCercata(null); }}
               className={`px-3 py-1.5 rounded-full text-[11px] font-black transition-all border ${
-                !useTripCenter
+                !useTripCenter && !cittaCercata
                   ? 'bg-primary border-primary text-white shadow-md'
                   : 'bg-surface-variant border-outline-variant text-on-surface-variant hover:bg-primary/10'
               }`}
             >
               🧭 {getTranslation("events_current_position", language)}
             </button>
+          </div>
+        )}
+
+        {/* Ricerca città libera (08/09/2026): terza via, indipendente dal
+            viaggio attivo — cerca eventi altrove senza aprire la mappa. */}
+        {cittaCercata ? (
+          <div className="flex items-center gap-2">
+            <span className="px-3 py-1.5 rounded-full text-[11px] font-black bg-primary border border-primary text-white shadow-md flex items-center gap-1.5">
+              🔎 {cittaCercata.label}
+              <button
+                onClick={() => setCittaCercata(null)}
+                aria-label={getTranslation("close", language)}
+                className="ml-0.5 hover:opacity-70"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </span>
+          </div>
+        ) : (
+          <div className="relative">
+            <div className="flex items-center gap-2 bg-surface-variant rounded-2xl border border-outline-variant px-3 py-2">
+              <MapPin className="w-4 h-4 text-on-surface-variant shrink-0" />
+              <input
+                type="text"
+                value={queryCitta}
+                onChange={(e) => { setQueryCitta(e.target.value); setCercaCittaAperta(true); }}
+                onFocus={() => setCercaCittaAperta(true)}
+                onBlur={() => setTimeout(() => setCercaCittaAperta(false), 150)}
+                placeholder={getTranslation("search_city_placeholder", language)}
+                className="flex-1 bg-transparent text-[13px] font-bold text-on-surface placeholder:text-on-surface-variant/60 outline-none min-w-0"
+              />
+              {queryCitta && (
+                <button onClick={() => { setQueryCitta(""); setSuggerimentiCitta([]); }} aria-label={getTranslation("close", language)}>
+                  <X className="w-4 h-4 text-on-surface-variant" />
+                </button>
+              )}
+            </div>
+            {cercaCittaAperta && suggerimentiCitta.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 bg-surface rounded-2xl border border-outline-variant shadow-xl z-20 overflow-hidden max-h-60 overflow-y-auto">
+                {suggerimentiCitta.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => sceglieCittaCercata(s)}
+                    className="w-full text-left px-4 py-2.5 text-[12px] font-bold text-on-surface hover:bg-primary/10 transition-colors border-b border-outline-variant/40 last:border-0"
+                  >
+                    📍 {s.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1748,7 +2163,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
             isLoading && vistaDi(source as EventSource) === vistaAttiva && (
               <div key={source} className="flex items-center gap-1.5 px-3 py-1 bg-primary/5 text-primary rounded-full text-[10px] font-bold border border-primary/10">
                 <Loader2 className="w-3 h-3 animate-spin" />
-                {getTranslation("events_loading_source", language)} {source.toUpperCase()}
+                {getTranslation("events_loading_source", language)} {etichettaFonte(source).toUpperCase()}
               </div>
             )
           ))}
@@ -1758,7 +2173,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
               const hasResults = (sourceResults as any)[source]?.length > 0;
               if (!err || hasResults) return null;
               if (vistaDi(source as EventSource) !== vistaAttiva) return null;
-              const sourceLabel = source === 'ticketmaster' ? 'Ticketmaster' : source === 'getyourguide' ? 'GetYourGuide' : source === 'viator' ? 'Viator' : source === 'tiqets' ? 'Tiqets' : source === 'local' ? getTranslation("events_source_local_label", language) : source === 'mostre' ? getTranslation("events_view_exhibitions", language) : source === 'permanenti' ? getTranslation("events_exh_permanent", language) : source;
+              const sourceLabel = etichettaFonte(source);
               return (
                 <motion.div 
                   initial={{ opacity: 0, scale: 0.9 }}
@@ -1845,7 +2260,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                 )}
                 <div className="absolute top-2 left-2 flex gap-1">
                   <div className="bg-black/60 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
-                    {event.source}
+                    {event.source === 'tiqets_mostre' ? 'tiqets' : event.source === 'tripcom' ? 'trip.com' : event.source}
                   </div>
                   {event.macroCategory && (
                     <div className="bg-primary/90 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
@@ -1857,7 +2272,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                       🆓 {getTranslation("events_free_badge", language)}
                     </div>
                   )}
-                  {event.source === 'mostre' && event.endDate && giorniA(event.endDate) <= 7 && (
+                  {(event.source === 'mostre' || event.source === 'tiqets_mostre') && event.endDate && giorniA(event.endDate) <= 7 && (
                     <div className="bg-amber-600/90 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-lg uppercase tracking-wider">
                       ⏳ {getTranslation("events_last_days", language)}
                     </div>
@@ -1866,9 +2281,16 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
               </div>
               <div className="p-5 flex flex-col flex-1">
                 <div className="flex justify-between items-start gap-4 mb-2">
-                  <h3 className="text-lg font-bold text-on-surface leading-tight">
-                    {event.name}
-                  </h3>
+                  <div className="min-w-0">
+                    <h3 className="text-lg font-bold text-on-surface leading-tight">
+                      {event.name}
+                    </h3>
+                    {event.originalTitle && (
+                      <div className="text-xs text-on-surface-variant mt-0.5 truncate" title={getTranslation("events_original_title", language)}>
+                        {event.originalTitle}
+                      </div>
+                    )}
+                  </div>
                   <button 
                     onClick={() => saveEventAsPoi(event)}
                     className="p-2 hover:bg-error/10 text-on-surface-variant hover:text-error rounded-full transition-colors flex-shrink-0"
@@ -1882,7 +2304,7 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                   <CalendarIcon className="w-4 h-4" />
                   {event.permanent ? (
                     `🏛️ ${getTranslation("events_permanent_label", language)}`
-                  ) : event.source === 'mostre' ? (
+                  ) : (event.source === 'mostre' || event.source === 'tiqets_mostre') ? (
                     // Periodo, non data: «apre il 3 ott · fino al 10 gen» oppure «fino al 30 set»
                     event.date > oggiLocale
                       ? `${getTranslation("events_opens_on", language)} ${fmtGiorno(event.date, language)}${event.endDate ? ` · ${getTranslation("events_until", language)} ${fmtGiorno(event.endDate, language)}` : ''}`
@@ -1952,6 +2374,9 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
                       {/* Brand esplicito del partner: aumenta fiducia e CTR */}
                       {event.source === 'viator' ? getTranslation("events_book_viator", language)
                         : event.source === 'getyourguide' ? getTranslation("events_book_gyg", language)
+                        : event.source === 'klook' ? getTranslation("events_book_klook", language)
+                        : event.source === 'tripcom' ? getTranslation("events_book_tripcom", language)
+                        : (event.source === 'tiqets' || event.source === 'tiqets_mostre') ? getTranslation("events_book_tiqets", language)
                         : (event.source === 'mostre' || event.source === 'permanenti') ? getTranslation("events_exhibition_site", language)
                         : getTranslation("events_info_tickets", language)}
                     </a>
@@ -1979,36 +2404,11 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
       </div>
 
       {/* Sticky Bottom Functions Bar */}
-      <div className="bg-[#1A1D1F]/95 backdrop-blur-xl border-t border-white/10 px-6 py-4 flex flex-col gap-3 flex-shrink-0 shadow-[0_-8px_32px_rgba(0,0,0,0.4)]">
-        {/* Date Filters — in «Stagionali» non esistono: contano solo il
-            punto e il raggio, la stagione la decide il calendario. */}
-        {view !== 'stagionali' && (
-        <div className="flex gap-3">
-          <div className="flex-1 flex flex-col gap-1">
-            <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-wider flex items-center gap-1">
-              <CalendarIcon className="w-3 h-3 text-primary" /> {getTranslation("events_from", language)}
-            </label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-primary transition-colors w-full"
-            />
-          </div>
-          <div className="flex-1 flex flex-col gap-1">
-            <label className="text-[10px] font-black text-on-surface-variant uppercase tracking-wider flex items-center gap-1">
-              <CalendarIcon className="w-3 h-3 text-primary" /> {getTranslation("events_to", language)}
-            </label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-primary transition-colors w-full"
-            />
-          </div>
-        </div>
-        )}
-
+      {/* Due sole righe (07/09): sopra i chip (distanza, gratis, tipi,
+          ordinamento), sotto «dal [data] al [data]» su una riga con le
+          etichette in linea — prima le etichette stavano sopra i campi e la
+          barra occupava tre righe. */}
+      <div className="bg-[#1A1D1F]/95 backdrop-blur-xl border-t border-white/10 px-6 py-3 flex flex-col gap-2.5 flex-shrink-0 shadow-[0_-8px_32px_rgba(0,0,0,0.4)]">
         {/* Radius and Sorting Selection (Combined in one row) */}
         <div className="flex items-center gap-4 overflow-x-auto no-scrollbar pb-0.5">
           {/* Radius */}
@@ -2093,6 +2493,35 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
           </div>
           </>)}
         </div>
+
+        {/* Date Filters — in «Stagionali» non esistono: contano solo il
+            punto e il raggio, la stagione la decide il calendario. */}
+        {view !== 'stagionali' && (
+        <div className="flex items-center gap-3">
+          <label className="flex-1 flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-wider flex items-center gap-1 shrink-0">
+              <CalendarIcon className="w-3 h-3 text-primary" /> {getTranslation("events_from", language)}
+            </span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-primary transition-colors w-full min-w-0"
+            />
+          </label>
+          <label className="flex-1 flex items-center gap-2 min-w-0">
+            <span className="text-[10px] font-black text-on-surface-variant uppercase tracking-wider flex items-center gap-1 shrink-0">
+              <CalendarIcon className="w-3 h-3 text-primary" /> {getTranslation("events_to", language)}
+            </span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="bg-white/5 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-primary transition-colors w-full min-w-0"
+            />
+          </label>
+        </div>
+        )}
       </div>
 
       {/* Modale «Serata perfetta» */}

@@ -370,13 +370,27 @@ async function callUniversalAi(
       // rispondeva 400 «property 'ultimaSpiaggiaPagante' is unsupported» a
       // OGNI chiamata dell'arricchimento POI e tutto ricadeva su Agnes
       // (visto nel log del 05/09/2026).
-      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, ...groqOptions } = options as any;
-      // Tutte le chiavi prima di arrendersi (vedi tentaConRotazione).
-      const r = await tentaConRotazione(groqClients, (groqInstance: any) => groqInstance.chat.completions.create({
+      const { strictEngine: _se, excludeEngines: _ee, ultimaSpiaggiaPagante: _up, groqOnTheFly: _otf, ...groqOptions } = options as any;
+      const chiediGroq = (groqInstance: any) => groqInstance.chat.completions.create({
         messages,
         model: finalModel,
         ...groqOptions
-      }));
+      });
+      let r: any;
+      // Chiave "On the fly" (08/09/2026): tentata PRIMA, da sola, solo se il
+      // chiamante la chiede esplicitamente (utente vero in attesa). Se fallisce
+      // (quota, errore di rete) si ricade sul pool normale qui sotto — mai il
+      // contrario: il pool di sfondo non deve MAI toccare questa chiave.
+      if (options.groqOnTheFly && groqOnTheFlyClient) {
+        try {
+          r = await chiediGroq(groqOnTheFlyClient);
+        } catch (eOnFly: any) {
+          if (!valeLaPenaAltraChiave(eOnFly)) throw eOnFly;
+          console.warn(`[Groq On the fly] chiave dedicata fallita (${eOnFly?.status || eOnFly?.message}), ricado sul pool condiviso`);
+        }
+      }
+      // Tutte le chiavi del pool prima di arrendersi (vedi tentaConRotazione).
+      if (!r) r = await tentaConRotazione(groqClients, chiediGroq);
       textContent = r.choices?.[0]?.message?.content || "";
       responseData = r;
       tokensUsed = r.usage?.total_tokens || 0;
@@ -1561,10 +1575,25 @@ async function streamUniversalAi(
     for (const eng of engineQueue) {
       try {
         if (eng === "groq") {
-          if (!groqInstance) throw new Error("Groq instance missing");
           const model = options.model || "openai/gpt-oss-120b";
           finalUsedModel = "groq-" + model;
-          totalContent = await _streamGroq(groqInstance, messages, { ...options, model }, res, acc);
+          // Chiave "On the fly" (08/09/2026): tentata per prima, da sola,
+          // solo se il chiamante la chiede (utente vero in attesa) — mai
+          // dal pool di sfondo. Se fallisce si ricade sul client del pool
+          // condiviso, non sull'engine successivo (agnes) subito.
+          if (options.groqOnTheFly && groqOnTheFlyClient) {
+            try {
+              totalContent = await _streamGroq(groqOnTheFlyClient, messages, { ...options, model }, res, acc);
+            } catch (eOnFly: any) {
+              if (acc.text) throw eOnFly; // già emesso qualcosa: non ripartire da un altro client
+              console.warn(`[Groq On the fly] chiave dedicata fallita in streaming (${eOnFly?.message}), ricado sul pool condiviso`);
+              if (!groqInstance) throw new Error("Groq instance missing");
+              totalContent = await _streamGroq(groqInstance, messages, { ...options, model }, res, acc);
+            }
+          } else {
+            if (!groqInstance) throw new Error("Groq instance missing");
+            totalContent = await _streamGroq(groqInstance, messages, { ...options, model }, res, acc);
+          }
         } else if (eng === "agnes") {
           finalUsedModel = "agnes-2.5-flash";
           totalContent = await _streamAgnes(messages, options, res, acc);
@@ -3580,6 +3609,25 @@ function parseSafeJSON(text: string) {
   }
 
   const groq = getGroqClient(); // Per retrocompatibilità con rotte esistenti
+
+  // Groq "On the fly" (08/09/2026): chiave DEDICATA, mai messa dentro
+  // groqKeys/groqClients — chi arricchisce in massa da script di sfondo
+  // pesca solo dal pool sopra, e non può mai consumarla. Riservata a
+  // /api/poi/enrich e /api/poi/enrich-stream, SOLO quando c'è un utente
+  // vero in attesa (mai userId === 'background-script').
+  let groqOnTheFlyClient: any = null;
+  const groqOnTheFlyKey = process.env.GROQ_API_KEY_ONTHEFLY;
+  if (groqOnTheFlyKey) {
+    try {
+      const GroqConstructor = (Groq as any).default || Groq;
+      groqOnTheFlyClient = new GroqConstructor({ apiKey: groqOnTheFlyKey });
+      console.log("✅ [STARTUP] Groq On the fly configurato (chiave dedicata).");
+    } catch (e: any) {
+      console.warn("Failed to initialize Groq On the fly client:", e.message);
+    }
+  } else {
+    console.warn("⚠️ [STARTUP] GROQ_API_KEY_ONTHEFLY assente: l'arricchimento in diretta ricade sul pool condiviso.");
+  }
 
   // ── Startup API Key Validation ──
   const deepseekKeyCheck = process.env.DEEPSEEK_API_KEY || process.env.VITE_DEEPSEEK_API_KEY;
@@ -19925,7 +19973,7 @@ ${extract || "Nessuna fonte trovata"}
           // esattamente il "punto per punto" che ha fatto scappare la spesa
           // due volte.
           const utenteInAttesa = !requestedEngine && userId !== 'background-script';
-          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
+          const aiResponse = await callUniversalAi(poiEnrichEngine, [{ role: "user", content: curatorPrompt }], { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: utenteInAttesa, groqOnTheFly: utenteInAttesa }, `poi_enrichment | Target: ${name}`, supabaseUrl, supabaseServiceKey, groq, userId);
           const parsed = parseSafeJSON(aiResponse.data || "{}");
 
           // Backstop di CODICE, non solo di prompt: se non c'era materiale
@@ -20355,7 +20403,7 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
       // anello SOLO se dietro c'e' una persona che aspetta la scheda — mai per
       // i lavori di sfondo, che qui possono arrivare col segreto di
       // infrastruttura come su ogni altra rotta protetta.
-      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: req.userId !== 'background-script' }, res, groq, `poi_enrichment | Target: ${name}`, req.userId, saveToSharedPois);
+      await streamUniversalAi("groq", messages, { response_format: { type: "json_object" }, ultimaSpiaggiaPagante: req.userId !== 'background-script', groqOnTheFly: req.userId !== 'background-script' }, res, groq, `poi_enrichment | Target: ${name}`, req.userId, saveToSharedPois);
 
     } catch (e: any) {
       console.error("[/api/poi/enrich-stream] Error:", e.message);
@@ -26959,14 +27007,22 @@ ${testo}`;
       saveToCache(contatoreKey, 'counter', String(gia + 1)).catch(() => {});
 
       // 1. Portali del registro (max 4) + 2. pagine dalla ricerca web (max 6)
+      // `strict`: un portale MONDIALE (allevents.in/{citta}, Eventbrite: la
+      // stessa pagina serve ogni città con un solo URL per paese) o una pagina
+      // trovata dalla ricerca web NON garantisce che ogni evento sulla pagina
+      // riguardi la città giusta (visto in produzione: allevents.in/milan con
+      // dentro un evento di Patna) — quegli eventi vanno confermati con la
+      // vicinanza del nome città nel testo. I portali di UN paese/città sola
+      // (Virgilio, Time Out Roma...) restano senza quel controllo aggiuntivo.
       const portali = fontiPerPaese(nomi.cc, nomi.en, nomi.locale).slice(0, 4)
-        .map((f) => ({ url: f.urlPronto, lingua: f.lingua || linguaLocale, fonte: f.id }));
+        .map((f) => ({ url: f.urlPronto, lingua: f.lingua || linguaLocale, fonte: f.id, strict: f.paesi.includes('*') }));
       const ricerche = eventiFeed.fornitoreRicerca()
         ? await Promise.all(eventiFeed.queryEventiLocali(nomi.locale, linguaLocale, nomi.en).map((q) => eventiFeed.ricercaWeb(q.q, { lang: q.lang, cc: nomi.cc, count: 8 })))
         : [];
       const trovate = eventiFeed.pagineDaLeggere(ricerche.flat(), 6)
-        .map((r) => ({ url: r.url, lingua: linguaLocale, fonte: 'web' }));
+        .map((r) => ({ url: r.url, lingua: linguaLocale, fonte: 'web', strict: true }));
       const pagine = [...portali, ...trovate].filter((p, i, a) => a.findIndex((x) => x.url === p.url) === i).slice(0, 10);
+      const cittaAccettate = [nomi.en, nomi.locale, nomi.utente].filter(Boolean);
 
       // Lettura in parallelo: JSON-LD subito, testo da tenere per l'AI.
       const lette = await Promise.all(pagine.map(async (p) => {
@@ -26983,7 +27039,7 @@ ${testo}`;
       for (const p of lette) {
         if (!p) continue;
         if (p.strutturati.length) {
-          events.push(...eventiFeed.validaEventi(p.strutturati, p.testo + ' ' + p.strutturati.map((s: any) => s.titolo).join(' '), p.url, oggi));
+          events.push(...eventiFeed.validaEventi(p.strutturati, p.testo + ' ' + p.strutturati.map((s: any) => s.titolo).join(' '), p.url, oggi, p.strict ? cittaAccettate : []));
         } else if (p.testo.length > 600) {
           daAi.push(p);
         }
@@ -26992,7 +27048,7 @@ ${testo}`;
       daAi.sort((a, b) => b.testo.length - a.testo.length);
       const estratti = await Promise.all(daAi.slice(0, PORTALI_MAX_PAGINE_AI).map(async (p) => {
         const grezzi = await eventiDalTestoAi(p.testo.slice(0, 9000), p.url, lang, p.lingua);
-        return eventiFeed.validaEventi(grezzi, p.testo, p.url, oggi);
+        return eventiFeed.validaEventi(grezzi, p.testo, p.url, oggi, p.strict ? cittaAccettate : []);
       }));
       events.push(...estratti.flat());
 

@@ -298,7 +298,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           chi cammina. */}
       {!isCollapsed && scelte.length > 0 && (
         <div className="px-4 py-2.5 border-b border-black/5 bg-white/70 space-y-2">
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
             <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_tempo_che_hai')}</span>
             {TEMPI.map(({ min, label }) => (
               <button
@@ -316,7 +316,7 @@ export default function PoiRadarPanel({ pois, onClose, onFocus, onRemove, langua
           </div>
           {/* Ad anello o aperto. Era sempre ad anello: chi dorme dall'altra
               parte della citta` non vuole tornare al punto di partenza. */}
-          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+          <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
             <span className="text-[10px] font-bold uppercase tracking-wide text-[#1e3a8a]/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
             {/* TRE possibilita`, non due (28/08/2026). L'anello ha DUE mete
                 diverse appena il giro viene ricalcolato per strada: il punto

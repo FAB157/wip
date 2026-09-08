@@ -186,6 +186,7 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   tem_fioriture_now: { IT: "Fioriture in corso", EN: "Blooming now", FR: "Floraisons en cours", ES: "Floraciones en curso", DE: "Blüht gerade", RU: "Цветёт сейчас", ZH: "正在花期" },
   tem_fioriture_soon: { IT: "In arrivo", EN: "Coming soon", FR: "Bientôt", ES: "Próximamente", DE: "Demnächst", RU: "Скоро", ZH: "即将开放" },
   tem_no_data: { IT: "Nessun dato per questa zona", EN: "No data for this area", FR: "Aucune donnée pour cette zone", ES: "No hay datos para esta zona", DE: "Keine Daten für dieses Gebiet", RU: "Нет данных по этой зоне", ZH: "该区域暂无数据" },
+  tem_no_data_hint: { IT: "Cieli bui, mercatini e fioriture cambiano con la stagione: allarga il raggio o riprova più avanti.", EN: "Dark skies, markets and blooms change with the season: widen the radius or try again later.", FR: "Ciels étoilés, marchés et floraisons changent avec la saison : élargissez le rayon ou réessayez plus tard.", ES: "Cielos oscuros, mercadillos y floraciones cambian con la temporada: amplía el radio o vuelve a intentarlo más tarde.", DE: "Dunkle Himmel, Märkte und Blüten ändern sich mit der Jahreszeit: Radius vergrößern oder später erneut versuchen.", RU: "Тёмное небо, рынки и цветение меняются по сезону: увеличьте радиус или попробуйте позже.", ZH: "夜空、市集与花期会随季节变化：扩大范围或稍后再试。" },
   tem_bortle: { IT: "Cielo (scala Bortle)", EN: "Sky (Bortle scale)", FR: "Ciel (échelle de Bortle)", ES: "Cielo (escala Bortle)", DE: "Himmel (Bortle-Skala)", RU: "Небо (шкала Бортля)", ZH: "夜空（波特尔等级）" },
   tem_free_access: { IT: "Accesso libero", EN: "Free access", FR: "Accès libre", ES: "Acceso libre", DE: "Freier Zugang", RU: "Свободный доступ", ZH: "自由进入" },
   // Navigazione a piedi (NavigationOverlay) — prima erano hardcoded in IT
@@ -4721,6 +4722,45 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   events_book_gyg: {
     IT: "Prenota su GetYourGuide", EN: "Book on GetYourGuide", FR: "Réserver sur GetYourGuide", ES: "Reservar en GetYourGuide", RU: "Забронировать на GetYourGuide", ZH: "在 GetYourGuide 预订"
   , DE: "Auf GetYourGuide buchen"},
+  events_book_klook: {
+    IT: "Prenota su Klook", EN: "Book on Klook", FR: "Réserver sur Klook", ES: "Reservar en Klook", RU: "Забронировать на Klook", ZH: "在 Klook 预订"
+  , DE: "Auf Klook buchen"},
+  events_book_tripcom: {
+    IT: "Prenota su Trip.com", EN: "Book on Trip.com", FR: "Réserver sur Trip.com", ES: "Reservar en Trip.com", RU: "Забронировать на Trip.com", ZH: "在 Trip.com 预订"
+  , DE: "Auf Trip.com buchen"},
+  events_book_tiqets: {
+    IT: "Biglietti su Tiqets", EN: "Tickets on Tiqets", FR: "Billets sur Tiqets", ES: "Entradas en Tiqets", RU: "Билеты на Tiqets", ZH: "在 Tiqets 购票"
+  , DE: "Tickets auf Tiqets"},
+  events_search_on_partner: {
+    IT: "Tutte le attività a {city} su {partner}", EN: "All activities in {city} on {partner}", FR: "Toutes les activités à {city} sur {partner}", ES: "Todas las actividades en {city} en {partner}", RU: "Все активности в {city} на {partner}", ZH: "{partner} 上 {city} 的所有活动"
+  , DE: "Alle Aktivitäten in {city} auf {partner}"},
+  events_search_on_partner_desc: {
+    IT: "Il catalogo completo del partner per questa città: tour, biglietti, trasferimenti.", EN: "The partner's full catalogue for this city: tours, tickets, transfers.", FR: "Le catalogue complet du partenaire pour cette ville : visites, billets, transferts.", ES: "El catálogo completo del socio para esta ciudad: tours, entradas, traslados.", RU: "Полный каталог партнёра для этого города: туры, билеты, трансферы.", ZH: "合作伙伴在该城市的完整目录：导览、门票、接送。"
+  , DE: "Der komplette Katalog des Partners für diese Stadt: Touren, Tickets, Transfers."},
+  events_err_klook: {
+    IT: "Klook non disponibile", EN: "Klook unavailable", FR: "Klook indisponible", ES: "Klook no disponible", RU: "Klook недоступен", ZH: "Klook 不可用"
+  , DE: "Klook nicht verfügbar"},
+  events_err_tripcom: {
+    IT: "Trip.com non disponibile", EN: "Trip.com unavailable", FR: "Trip.com indisponible", ES: "Trip.com no disponible", RU: "Trip.com недоступен", ZH: "Trip.com 不可用"
+  , DE: "Trip.com nicht verfügbar"},
+  events_err_tiqets_mostre: {
+    IT: "Mostre Tiqets non disponibili", EN: "Tiqets exhibitions unavailable", FR: "Expositions Tiqets indisponibles", ES: "Exposiciones Tiqets no disponibles", RU: "Выставки Tiqets недоступны", ZH: "Tiqets 展览不可用"
+  , DE: "Tiqets-Ausstellungen nicht verfügbar"},
+  events_seasonal_partners: {
+    IT: "Di stagione, prenotabili", EN: "In season, bookable", FR: "De saison, réservables", ES: "De temporada, reservables", RU: "Сезонное, можно забронировать", ZH: "当季可预订"
+  , DE: "Saisonal, buchbar"},
+  events_source_portali_label: {
+    IT: "Portali locali", EN: "Local listings", FR: "Agendas locaux", ES: "Agendas locales", RU: "Местные афиши", ZH: "本地活动网站"
+  , DE: "Lokale Veranstaltungskalender"},
+  events_err_portali: {
+    IT: "Portali locali non disponibili", EN: "Local listings unavailable", FR: "Agendas locaux indisponibles", ES: "Agendas locales no disponibles", RU: "Местные афиши недоступны", ZH: "本地活动网站不可用"
+  , DE: "Lokale Kalender nicht verfügbar"},
+  events_festival_label: {
+    IT: "Festival", EN: "Festival", FR: "Festival", ES: "Festival", RU: "Фестиваль", ZH: "节日"
+  , DE: "Festival"},
+  events_original_title: {
+    IT: "Titolo originale", EN: "Original title", FR: "Titre original", ES: "Título original", RU: "Оригинальное название", ZH: "原名"
+  , DE: "Originaltitel"},
   events_show_more: {
     IT: "Mostra altri 20", EN: "Show 20 more", FR: "Afficher 20 de plus", ES: "Mostrar 20 más", RU: "Показать ещё 20", ZH: "再显示 20 个"
   , DE: "20 weitere anzeigen"},

@@ -387,7 +387,7 @@ export default function PercorsoPanel({ language, onClose, avvioRapido }: Props)
                   </p>
                 )}
                 {/* Ad anello o aperto: le due opzioni chieste dal committente. */}
-                <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto no-scrollbar -mx-1 px-1 py-0.5">
+                <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto touch-pan-x no-scrollbar -mx-1 px-1 py-0.5">
                   <span className="text-[10px] font-bold uppercase tracking-wide text-emerald-900/50 mr-1 shrink-0 whitespace-nowrap">{tr('gr_arrivo')}</span>
                   {([
                     { k: 'anello', anello: true, label: tr('gr_torno_da_dove_parto') },

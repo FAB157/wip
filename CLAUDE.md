@@ -162,6 +162,10 @@ Feature-gated: `GROQ_API_KEY` (+`_2`/`_3` rotation), `DEEPSEEK_API_KEY`, `TOGETH
 
 Read-only keys for the admin "Diagnostica" → Monitoraggio esterno panel (`/api/admin/monitoring-status`), separate from the write keys above and each optional independently: `CHECKLY_API_KEY`/`CHECKLY_ACCOUNT_ID` (same values used locally for `npx checkly deploy`, also needed server-side here), `SENTRY_AUTH_TOKEN`/`SENTRY_ORG_SLUG`, `UPTIMEROBOT_API_KEY`, `POSTHOG_PERSONAL_API_KEY`/`POSTHOG_PROJECT_ID`.
 
+Ricerca web nella lingua locale per la scheda Eventi (`/api/events/portali`, 07/09/2026): il fornitore si sceglie dalla chiave presente, `BRAVE_SEARCH_API_KEY` (Brave Search API) oppure `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX` (Google Programmable Search su tutto il web). Senza chiave la ricerca è spenta e restano i portali del registro `src/data/fontiEventi.ts`. Cache 7 giorni per query, tetto di 40 città «fredde» al giorno.
+
+Affiliazioni Klook e Trip.com (07/09/2026) sono costanti in `klookCities.ts` (`KLOOK_AID`, `KLOOK_ADS`: un widget per città creato nel pannello affiliati) e `eventiFeed.ts` (`TRIPCOM_ALLIANCE_ID`, `TRIPCOM_SID`); non sono chiavi segrete.
+
 Routes degrade to an error response rather than crashing when a key is absent.
 
 ## Monitoring (added 30/08/2026)

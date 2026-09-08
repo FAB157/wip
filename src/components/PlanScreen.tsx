@@ -1405,6 +1405,22 @@ export default function PlanScreen({
   const [tiqetsLoadingDay, setTiqetsLoadingDay] = useState<number | null>(null);
   const [tiqetsExpandedDay, setTiqetsExpandedDay] = useState<number | null>(null);
 
+  // ── Klook + Trip.com (affiliati, 07/09/2026) per day ──
+  // Un solo blocco per i due partner forti in Asia: /api/klook e
+  // /api/tripcom, con i link gia' affiliati (aid Klook, Allianceid/SID Trip.com).
+  const [asiaByDay, setAsiaByDay] = useState<Record<number, any[]>>({});
+  const [asiaLoadingDay, setAsiaLoadingDay] = useState<number | null>(null);
+  const [asiaExpandedDay, setAsiaExpandedDay] = useState<number | null>(null);
+
+  // ── Mostre reali per giorno (07/09/2026) ────────────────────────────────
+  // /api/mostre sui musei vicini alla tappa: mostre lette dai siti dei
+  // musei, non inventate. Niente data puntuale per il giorno (il piano non
+  // la registra): si mostra la mostra se e' aperta nella FINESTRA DEL
+  // VIAGGIO (getTripDateWindow), stessa logica gia' usata per Ticketmaster.
+  const [mostreByDay, setMostreByDay] = useState<Record<number, any[]>>({});
+  const [mostreLoadingDay, setMostreLoadingDay] = useState<number | null>(null);
+  const [mostreExpandedDay, setMostreExpandedDay] = useState<number | null>(null);
+
   // ── Podcast state ──
   const [playingDay, setPlayingDay] = useState<number | string | null>(null);
   const [isGeneratingPodcast, setIsGeneratingPodcast] = useState<number | string | null>(null);
@@ -1654,6 +1670,113 @@ export default function PlanScreen({
     }
   };
 
+  const loadAsiaForDay = async (dayIdx: number) => {
+    if (asiaByDay[dayIdx]) {
+      setAsiaExpandedDay(prev => prev === dayIdx ? null : dayIdx);
+      return;
+    }
+    setAsiaLoadingDay(dayIdx);
+    setAsiaExpandedDay(dayIdx);
+    try {
+      let lat = 0, lon = 0;
+      if (generatedPlan) {
+        const g = generatedPlan.giorni[dayIdx === 999 ? 0 : dayIdx];
+        const firstStop = g?.tappe?.[0];
+        lat = firstStop?.coordinate?.lat || 0;
+        lon = firstStop?.coordinate?.lng || (firstStop?.coordinate as any)?.lon || 0;
+      } else if (likedCandidates.length > 0) {
+        const first = likedCandidates[0];
+        lat = first.coordinate?.lat || 0;
+        lon = first.coordinate?.lng || 0;
+      }
+      if (!lat || !lon) { setAsiaByDay(prev => ({ ...prev, [dayIdx]: [] })); return; }
+      const lang = (language || 'IT').toLowerCase();
+      const [k, t] = await Promise.allSettled([
+        fetch(getApiUrl(`/api/klook?lat=${lat}&lon=${lon}&lang=${lang}`), { signal: AbortSignal.timeout(15000) }).then(r => r.ok ? r.json() : []),
+        fetch(getApiUrl(`/api/tripcom?lat=${lat}&lon=${lon}&lang=${lang}`), { signal: AbortSignal.timeout(20000) }).then(r => r.ok ? r.json() : []),
+      ]);
+      const lista = [
+        ...(k.status === 'fulfilled' && Array.isArray(k.value) ? k.value : []),
+        ...(t.status === 'fulfilled' && Array.isArray(t.value) ? t.value : []),
+      ].map((a: any) => ({
+        ...a,
+        name: a.isSearch ? `${a.source === 'klook' ? 'Klook' : 'Trip.com'} · ${a.name}` : a.name,
+        description: a.isSearch ? getTranslation('events_search_on_partner_desc', language) : a.description,
+        duration: a.source === 'klook' ? 'Klook' : 'Trip.com',
+        price: a.price || '',
+        lat, lon,
+      }));
+      // I link arrivano gia' affiliati dal server: non si riscrivono.
+      setAsiaByDay(prev => ({ ...prev, [dayIdx]: lista }));
+    } catch (err) {
+      console.error("[Klook/Trip.com] Error loading for day", dayIdx, err);
+      setAsiaByDay(prev => ({ ...prev, [dayIdx]: [] }));
+    } finally {
+      setAsiaLoadingDay(null);
+    }
+  };
+
+  const loadMostreForDay = async (dayIdx: number) => {
+    if (mostreByDay[dayIdx]) {
+      setMostreExpandedDay(prev => prev === dayIdx ? null : dayIdx);
+      return;
+    }
+    setMostreLoadingDay(dayIdx);
+    setMostreExpandedDay(dayIdx);
+    try {
+      let lat = 0, lon = 0;
+      if (generatedPlan) {
+        const g = generatedPlan.giorni[dayIdx === 999 ? 0 : dayIdx];
+        const firstStop = g?.tappe?.[0];
+        lat = firstStop?.coordinate?.lat || 0;
+        lon = firstStop?.coordinate?.lng || (firstStop?.coordinate as any)?.lon || 0;
+      } else if (likedCandidates.length > 0) {
+        const first = likedCandidates[0];
+        lat = first.coordinate?.lat || 0;
+        lon = first.coordinate?.lng || 0;
+      }
+      if (!lat || !lon) { setMostreByDay(prev => ({ ...prev, [dayIdx]: [] })); return; }
+      const lang = (language || 'IT').toLowerCase();
+      const res = await fetch(getApiUrl(`/api/mostre?lat=${lat}&lon=${lon}&radius_km=30&language=${lang}`), { signal: AbortSignal.timeout(90000) });
+      if (!res.ok) throw new Error("Errore api mostre");
+      const data = await res.json();
+      const tutte: any[] = Array.isArray(data?.mostre) ? data.mostre : [];
+      // Aperta nella FINESTRA DEL VIAGGIO (il mese scelto): senza, si
+      // proporrebbero mostre chiuse ormai o non ancora aperte a quel viaggio.
+      // Senza un mese scelto passano tutte (nessuna finestra da rispettare).
+      const win = getTripDateWindow();
+      const aperta = (m: any) => {
+        if (!win) return true;
+        const dal = m.dal ? new Date(`${m.dal}T00:00:00`) : null;
+        const al = m.al ? new Date(`${m.al}T23:59:59`) : null;
+        return (!dal || dal <= win.end) && (!al || al >= win.start);
+      };
+      const lista = tutte.filter(aperta).slice(0, 8).map((m: any) => {
+        const periodo = m.al
+          ? `${getTranslation('events_until', language)} ${m.al.slice(8, 10)}/${m.al.slice(5, 7)}`
+          : (m.dal ? `${getTranslation('events_from', language)} ${m.dal.slice(8, 10)}/${m.dal.slice(5, 7)}` : '');
+        return {
+          id: m.id,
+          name: m.artista && !String(m.titolo || '').toLowerCase().includes(String(m.artista).toLowerCase()) ? `${m.titolo} — ${m.artista}` : m.titolo,
+          description: [m.sottotitolo, m.descrizione].filter(Boolean).join(' · '),
+          duration: [m.luogo, periodo].filter(Boolean).join(' · '),
+          price: m.prezzo || '',
+          rating: '',
+          imageUrl: m.immagine || '',
+          url: m.sito || '',
+          lat: Number(m.lat) || lat, lon: Number(m.lon) || lon,
+          dal: m.dal, al: m.al, luogo: m.luogo,
+        };
+      }).filter((x: any) => x.name && x.url);
+      setMostreByDay(prev => ({ ...prev, [dayIdx]: lista }));
+    } catch (err) {
+      console.error("[Mostre] Error loading for day", dayIdx, err);
+      setMostreByDay(prev => ({ ...prev, [dayIdx]: [] }));
+    } finally {
+      setMostreLoadingDay(null);
+    }
+  };
+
   const loadTicketmasterForDay = async (dayIdx: number) => {
     if (ticketmasterByDay[dayIdx]) {
       setTicketmasterExpandedDay(prev => prev === dayIdx ? null : dayIdx);
@@ -1685,7 +1808,15 @@ export default function PlanScreen({
         return;
       }
 
-      const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=50`));
+      // Finestra del VIAGGIO (il mese scelto nel form), non "da oggi in poi":
+      // senza, un viaggio a dicembre mostrava i concerti di oggi, non quelli
+      // del mese in cui si parte. Nessuna data inventata: se il mese non è
+      // stato scelto (o non dà una finestra), si resta senza filtro come prima.
+      const win = getTripDateWindow();
+      const finestra = win
+        ? `&startDateTime=${win.start.toISOString().split('.')[0]}Z&endDateTime=${new Date(win.end.getTime() + 86400000).toISOString().split('.')[0]}Z`
+        : '';
+      const res = await fetch(getApiUrl(`/api/ticketmaster?lat=${lat}&lon=${lon}&radius=50${finestra}`));
       if (!res.ok) throw new Error("Errore api Ticketmaster");
       const data = await res.json();
 
@@ -2054,6 +2185,55 @@ export default function PlanScreen({
       )
     };
 
+    setGeneratedPlan(updatedPlan);
+    savePlanToSupabase(updatedPlan);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
+  };
+
+  const handleAddAsiaToDay = (dayIdx: number, exp: any) => {
+    if (!generatedPlan) return;
+    const partner = exp.source === 'klook' ? 'Klook' : 'Trip.com';
+    const newTappa = {
+      id_tappa: `${exp.source === 'klook' ? 'klook' : 'tripcom'}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      ora: "TBD",
+      titolo_tappa: exp.name || `Esperienza ${partner}`,
+      attivita: (exp.description || `Attività prenotabile su ${partner}.`),
+      consiglio_guida: `✨ Nicky: prenotabile su ${partner}${exp.price ? `: ${exp.price}` : ''}`,
+      tipo: "esperienza",
+      coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 },
+      // URL gia' affiliata (aid Klook / Allianceid+SID Trip.com): intatta.
+      link_info: exp.url
+    };
+    const updatedPlan = {
+      ...generatedPlan,
+      giorni: generatedPlan.giorni.map((g, idx) =>
+        idx === dayIdx ? { ...g, tappe: [...g.tappe, newTappa] } : g
+      )
+    };
+    setGeneratedPlan(updatedPlan);
+    savePlanToSupabase(updatedPlan);
+    notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
+  };
+
+  const handleAddMostraToDay = (dayIdx: number, exp: any) => {
+    if (!generatedPlan) return;
+    const periodo = exp.al ? `fino al ${exp.al}` : (exp.dal ? `dal ${exp.dal}` : 'periodo in corso');
+    const newTappa = {
+      id_tappa: `mostra_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      ora: "Da definire",
+      titolo_tappa: exp.name,
+      attivita: `Mostra in corso (${periodo})${exp.luogo ? ` presso ${exp.luogo}` : ''}. ${exp.description || ''}`.trim(),
+      consiglio_guida: `✨ Nicky: mostra vera, letta dal sito del museo — verifica gli orari prima di andare.`,
+      tipo: "cultura",
+      coordinate: { lat: exp.lat || 0, lng: exp.lon || 0 },
+      link_info: exp.url,
+    };
+    const updatedPlan = {
+      ...generatedPlan,
+      giorni: generatedPlan.giorni.map((g, idx) =>
+        idx === dayIdx ? { ...g, tappe: [...g.tappe, newTappa] } : g
+      )
+    };
     setGeneratedPlan(updatedPlan);
     savePlanToSupabase(updatedPlan);
     notify(`${getTranslation('experience_added', language)} — ${getTranslation('day', language)} ${dayIdx + 1}`, 'success');
@@ -7484,6 +7664,50 @@ export default function PlanScreen({
                               : <ChevronDown className="w-5 h-5 text-violet-400" />
                             }
                           </button>
+
+                          <button
+                            onClick={() => loadAsiaForDay(gIdx)}
+                            disabled={asiaLoadingDay === gIdx}
+                            className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-orange-50 to-amber-50 rounded-2xl border border-orange-200 hover:border-orange-400 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                {asiaLoadingDay === gIdx
+                                  ? <Loader2 className="w-5 h-5 text-orange-600 animate-spin" />
+                                  : <Globe className="w-5 h-5 text-orange-600" />
+                                }
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-black text-orange-600">🌏 Klook · Trip.com</p>
+                              </div>
+                            </div>
+                            {asiaExpandedDay === gIdx
+                              ? <ChevronUp className="w-5 h-5 text-orange-400" />
+                              : <ChevronDown className="w-5 h-5 text-orange-400" />
+                            }
+                          </button>
+
+                          <button
+                            onClick={() => loadMostreForDay(gIdx)}
+                            disabled={mostreLoadingDay === gIdx}
+                            className="w-full flex items-center justify-between p-4 bg-gradient-to-r from-rose-50 to-pink-50 rounded-2xl border border-rose-200 hover:border-rose-400 transition-all group"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center group-hover:scale-110 transition-transform">
+                                {mostreLoadingDay === gIdx
+                                  ? <Loader2 className="w-5 h-5 text-rose-600 animate-spin" />
+                                  : <Globe className="w-5 h-5 text-rose-600" />
+                                }
+                              </div>
+                              <div className="text-left">
+                                <p className="text-sm font-black text-rose-600">🖼️ Mostre in corso</p>
+                              </div>
+                            </div>
+                            {mostreExpandedDay === gIdx
+                              ? <ChevronUp className="w-5 h-5 text-rose-400" />
+                              : <ChevronDown className="w-5 h-5 text-rose-400" />
+                            }
+                          </button>
                         </div>
                       )}
 
@@ -7533,6 +7757,30 @@ export default function PlanScreen({
                                 ))}
                               </div>
                             ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tickets_tiqets', language)}</div>}
+                          </motion.div>
+                        )}
+
+                        {asiaExpandedDay === gIdx && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            {asiaByDay[gIdx] && asiaByDay[gIdx].length > 0 ? (
+                              <div className="space-y-3 mt-4">
+                                {asiaByDay[gIdx].map((exp: any, eIdx: number) => (
+                                  <ExperienceCard key={`asia-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddAsiaToDay(gIdx, exp)} color={exp.source === 'klook' ? '#ff5b00' : '#2b7cff'} />
+                                ))}
+                              </div>
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('no_tours_gyg', language)}</div>}
+                          </motion.div>
+                        )}
+
+                        {mostreExpandedDay === gIdx && (
+                          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                            {mostreByDay[gIdx] && mostreByDay[gIdx].length > 0 ? (
+                              <div className="space-y-3 mt-4">
+                                {mostreByDay[gIdx].map((exp: any, eIdx: number) => (
+                                  <ExperienceCard key={`mostra-${gIdx}-${eIdx}`} exp={exp} onAdd={() => handleAddMostraToDay(gIdx, exp)} color="#e11d48" />
+                                ))}
+                              </div>
+                            ) : <div className="py-6 text-center text-sm text-gray-500 font-bold">{getTranslation('events_exhibitions_none', language)}</div>}
                           </motion.div>
                         )}
                       </AnimatePresence>

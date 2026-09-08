@@ -346,30 +346,69 @@ function formatViatorProduct(p: any, affiliatePrefix: string) {
     name: p.title || p.name,
     description: p.description || p.shortDescription || "Esperienza imperdibile",
     url: affiliateUrl,
-    imageUrl: p.images?.[0]?.variants?.[0]?.url || "https://images.unsplash.com/photo-1543857778-c4a1a3e0b2eb?auto=format&fit=crop&q=80&w=400",
+    // Niente foto di ripiego da archivio: la card senza immagine mostra
+    // l'emoji della categoria (regola del progetto, 22/08/2026).
+    imageUrl: p.images?.[0]?.variants?.[0]?.url || "",
     duration: p.duration?.fixedDurationInMinutes ? `${p.duration.fixedDurationInMinutes} min` : "Durata variabile",
     price: p.pricing?.summary?.fromPrice ? `Da ${p.pricing.summary.fromPrice} EUR` : "Prezzo su richiesta",
     rating: p.reviews?.combinedAverageRating || "Nuovo"
   };
 }
 
-export async function searchViatorExperiences(lat: number, lng: number, radiusKm: number = 100, startDate?: string, endDate?: string, cityName?: string): Promise<string> {
+/** Accept-Language di Viator per la lingua dell'app (prima era cablato it-IT). */
+const VIATOR_LANG: Record<string, string> = { it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES', de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN' };
+export const viatorAcceptLanguage = (lang?: string) => VIATOR_LANG[String(lang || 'it').slice(0, 2).toLowerCase()] || 'it-IT';
+
+/**
+ * Ricerca libera di prodotti Viator («mercatini di Natale Vienna», «cherry
+ * blossom Kyoto»): serve agli Stagionali e alle mostre. Stesso formato di
+ * searchViatorExperiences.
+ */
+export async function searchViatorFreetext(term: string, lang: string = 'it', count: number = 12): Promise<any[]> {
+  const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
+  if (!apiKey || !term) return [];
+  try {
+    const res = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, {
+      searchTerm: term,
+      searchTypes: [{ searchType: "PRODUCTS", pagination: { start: 1, count: Math.min(50, Math.max(1, count)) } }],
+      currency: "EUR",
+      pagination: { start: 1, count: Math.min(50, Math.max(1, count)) }
+    }, {
+      headers: {
+        "exp-api-key": apiKey,
+        "Accept": "application/json;version=2.0",
+        "Accept-Language": viatorAcceptLanguage(lang),
+        "Content-Type": "application/json"
+      },
+      timeout: 10000
+    });
+    const prods = res.data?.products?.results || res.data?.products || [];
+    return (Array.isArray(prods) ? prods : []).map((p: any) => formatViatorProduct(p, "https://vi.me/vNn2S?url="));
+  } catch (err: any) {
+    console.warn(`[Viator] freetext '${term}' fallita:`, err.response?.status || err.message);
+    return [];
+  }
+}
+
+export async function searchViatorExperiences(lat: number, lng: number, radiusKm: number = 100, startDate?: string, endDate?: string, cityName?: string, lang: string = 'it', count: number = 20): Promise<string> {
   const apiKey = process.env.VIATOR_API_KEY || process.env.VITE_VIATOR_API_KEY;
   if (!apiKey) {
     console.error("[Viator] VIATOR_API_KEY non trovata nel .env!");
     return JSON.stringify([]);
   }
-  
+
   try {
     const affiliatePrefix = "https://vi.me/vNn2S?url=";
-    
+    const acceptLanguage = viatorAcceptLanguage(lang);
+    const quanti = Math.min(50, Math.max(1, count));
+
     // Fallback date a 30 giorni se non specificate
     if (!startDate) startDate = new Date().toISOString().split("T")[0];
     if (!endDate) endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
     // ── Risolvi il destinationId dinamicamente ──
     let destinationId = await resolveDestinationId(cityName || "", apiKey);
-    
+
     // Se non troviamo il destinationId, possiamo provare una ricerca prodotti "Freetext"
     if (!destinationId) {
       console.log(`[Viator] Città '${cityName}' non trovata dinamicamente. Fallback a ricerca Freetext su PRODUCTS.`);
@@ -377,25 +416,25 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
         searchTerm: cityName || "Italia",
         searchTypes: [{ searchType: "PRODUCTS" }],
         currency: "EUR",
-        pagination: { start: 1, count: 8 }
+        pagination: { start: 1, count: quanti }
       };
       const freeRes = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, freePayload, {
         headers: {
           "exp-api-key": apiKey,
           "Accept": "application/json;version=2.0",
-          "Accept-Language": "it-IT",
+          "Accept-Language": acceptLanguage,
           "Content-Type": "application/json"
         },
         timeout: 10000
       });
-      const prods = freeRes.data?.products || [];
-      if (prods.length === 0) return JSON.stringify([]);
+      const prods = freeRes.data?.products?.results || freeRes.data?.products || [];
+      if (!Array.isArray(prods) || prods.length === 0) return JSON.stringify([]);
       console.log(`[Viator] ✅ Trovati ${prods.length} prodotti tramite Freetext per '${cityName}'`);
-      return JSON.stringify(prods.slice(0, 8).map((p: any) => formatViatorProduct(p, affiliatePrefix)));
+      return JSON.stringify(prods.slice(0, quanti).map((p: any) => formatViatorProduct(p, affiliatePrefix)));
     }
 
     console.log(`[Viator] Ricerca prodotti per '${cityName}' → destinationId: ${destinationId}`);
-    
+
     const prodPayload = {
       filtering: {
         destination: destinationId.toString(),
@@ -407,16 +446,18 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
       },
       pagination: {
         start: 1,
-        count: 8
+        // Prima 8: la scheda Eventi ne mostra fino a 20 (piu' scelta per
+        // l'utente, piu' commissioni: e' la fonte affiliata principale).
+        count: quanti
       },
       currency: "EUR"
     };
-    
+
     const prodRes = await axios.post(`https://${viatorApiHost()}/partner/products/search`, prodPayload, {
       headers: {
         "exp-api-key": apiKey,
         "Accept": "application/json;version=2.0",
-        "Accept-Language": "it-IT",
+        "Accept-Language": acceptLanguage,
         "Content-Type": "application/json"
       },
       timeout: 10000
