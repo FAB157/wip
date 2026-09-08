@@ -85,7 +85,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
   // Alla chiusura del componente il riconoscimento va fermato e la voce
   // zittita, o il microfono resta occupato a chat chiusa.
   useEffect(() => () => {
-    sessioneVoceRef.current?.ferma();
+    sessioneVoceRef.current?.annulla(); // abort: rilascia il microfono subito
     stopSpeech();
   }, []);
 
@@ -379,7 +379,7 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               <button onClick={() => setShowInfo(true)} className="text-primary hover:text-primary/80">
                 <Info className="w-5 h-5" />
               </button>
-              <button onClick={() => { setIsExpanded(false); stopSpeech(); sessioneVoceRef.current?.ferma(); setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
+              <button onClick={() => { setIsExpanded(false); stopSpeech(); sessioneVoceRef.current?.annulla(); setIsListening(false); if (onClose) onClose(); }} className="text-gray-400 hover:text-gray-700">
                 <X className="w-6 h-6" />
               </button>
             </div>

@@ -102,8 +102,10 @@ export default function WipAgentPlanner({
     void speakAudioguide(text, language.toLowerCase(), getGuideCharacter());
   };
   const stopSpeaking = () => stopSpeech();
-  // A schermo chiuso non deve restare né la voce né il microfono acceso.
-  useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.ferma(); }, []);
+  // A schermo chiuso non deve restare né la voce né il microfono acceso:
+  // annulla() (abort) rilascia il microfono subito — con ferma() (stop)
+  // Safari iOS lasciava la spia rossa accesa dopo l'uscita dall'agente.
+  useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.annulla(); }, []);
 
   const send = async (text: string) => {
     const clean = text.trim();
@@ -194,7 +196,7 @@ export default function WipAgentPlanner({
         >
           {voiceOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
         </button>
-        <button type="button" onClick={() => { stopSpeaking(); onClose(); }} aria-label={getTranslation('close', language)} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition">
+        <button type="button" onClick={() => { stopSpeaking(); sessioneVoceRef.current?.annulla(); onClose(); }} aria-label={getTranslation('close', language)} className="p-2 rounded-full bg-gray-100 text-gray-400 hover:bg-gray-200 transition">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -226,7 +228,7 @@ export default function WipAgentPlanner({
           <div className="flex flex-wrap gap-2 pt-1">
             <button
               type="button"
-              onClick={() => { stopSpeaking(); onReady(ready); }}
+              onClick={() => { stopSpeaking(); sessioneVoceRef.current?.annulla(); onReady(ready); }}
               className="flex items-center gap-2 px-5 py-3 min-h-[44px] bg-primary text-white rounded-2xl font-black text-sm shadow-md hover:shadow-lg transition"
             >
               <Sparkles className="w-4 h-4" /> {t('wip_agent_ready_cta')}

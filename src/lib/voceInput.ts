@@ -22,8 +22,18 @@ import { Capacitor } from '@capacitor/core';
 export type MotivoVoce = 'non_disponibile' | 'permesso_negato' | 'errore';
 
 export interface SessioneVoce {
-  /** Ferma l'ascolto. Si può chiamare più volte senza danno. */
+  /**
+   * Ferma l'ascolto CONSEGNANDO quello che è già stato captato (il tocco
+   * sul microfono rosso: l'utente ha finito di parlare). Idempotente.
+   */
   ferma: () => void;
+  /**
+   * Butta via tutto e RILASCIA il microfono subito: chiusura della chat,
+   * smontaggio del componente. Su Safari iOS `stop()` non basta — la spia
+   * rossa del microfono restava accesa anche dopo essere usciti dall'agente
+   * (08/09/2026): serve `abort()`.
+   */
+  annulla: () => void;
 }
 
 export interface OpzioniVoce {
@@ -86,6 +96,9 @@ async function avviaNativo(opts: OpzioniVoce): Promise<SessioneVoce | null> {
       chiusa = true;
       SpeechRecognition.stop().catch(() => { /* già ferma */ });
     };
+    // Il plugin nativo non distingue: stop() rilascia il microfono in ogni
+    // caso (SFSpeechRecognizer/SpeechRecognizer chiudono la sessione audio).
+    const annulla = ferma;
 
     // partialResults=false → start() si risolve con il testo finale.
     // popup=false: su Android il dialogo di sistema coprirebbe la chat, e
@@ -107,7 +120,7 @@ async function avviaNativo(opts: OpzioniVoce): Promise<SessioneVoce | null> {
       })
       .finally(() => opts.onFine());
 
-    return { ferma };
+    return { ferma, annulla };
   } catch {
     opts.onErrore?.('errore');
     opts.onFine();
@@ -128,19 +141,29 @@ function avviaWeb(opts: OpzioniVoce): SessioneVoce | null {
     rec.lang = opts.lingua;
     rec.continuous = false;
     rec.interimResults = false;
+    // abort() rilascia il microfono all'istante: Safari iOS tiene la spia
+    // rossa accesa finché il riconoscitore è vivo, anche a frase già
+    // consegnata e anche dopo stop(). Si chiama a risultato ricevuto, a
+    // fine ascolto e alla chiusura della chat: idempotente, mai dannoso.
+    const rilascia = () => { try { rec.abort(); } catch { /* già chiuso */ } };
     rec.onresult = (ev: any) => {
       const testo = String(ev.results?.[0]?.[0]?.transcript || '').trim();
       if (testo) opts.onRisultato(testo);
+      rilascia();
     };
     rec.onerror = (ev: any) => {
       // 'not-allowed' = microfono negato dal browser: è un permesso, non un
       // guasto, e va detto con le parole giuste.
       if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') opts.onErrore?.('permesso_negato');
     };
-    rec.onend = () => opts.onFine();
+    let finita = false;
+    rec.onend = () => { if (finita) return; finita = true; rilascia(); opts.onFine(); };
     rec.start();
     return {
+      // stop() consegna l'eventuale parlato già captato (onresult) e poi
+      // onend chiude e rilascia.
       ferma: () => { try { rec.stop(); } catch { /* già ferma */ } },
+      annulla: rilascia,
     };
   } catch {
     opts.onErrore?.('errore');
