@@ -261,6 +261,8 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
 
+  const langParam = String(language || 'IT').toLowerCase();
+
   // Suggerimenti città: stesso proxy della mappa, ma solo località (niente
   // POI/indirizzi qui — si cerca una città, non un luogo preciso).
   useEffect(() => {
@@ -302,8 +304,6 @@ export default function EventsScreen({ mapCenter, mapRadiusKm, onClose, language
   // componente distrutto (cambio tab).
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
-
-  const langParam = String(language || 'IT').toLowerCase();
 
   // Lettura di TUTTE le fonti: solo quando cambiano centro o raggio. Le date
   // non stanno fra le dipendenze: un cambio di periodo rilancia soltanto le
