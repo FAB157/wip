@@ -52,7 +52,6 @@ import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import { gestisciErroreGiro } from "./lib/tour/passRichiesto";
 import PercorsoPanel, { type AvvioRapido } from "./components/PercorsoPanel";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
-import LiveTourAudioGate from "./components/LiveTourAudioGate";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
 import RoutePoisModal from "./components/RoutePoisModal";
@@ -1624,15 +1623,6 @@ export default function App() {
     locationService.syncSettings(itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted);
   }, [itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted, selectedCategories]);
 
-  // Tour di gruppo: il follower che preme «Ascolta ora» col muto acceso lo
-  // toglie davvero (locationService lo ha gia' fatto subito per non perdere
-  // il gesto; qui si allinea lo switch della barra in basso).
-  useEffect(() => {
-    const togliMuto = () => setIsAudioGuideMuted(false);
-    window.addEventListener('wip-live-unmute', togliMuto);
-    return () => window.removeEventListener('wip-live-unmute', togliMuto);
-  }, []);
-
   // Rimozione persistita via lib/favorites: aggiorna il mirror locale,
   // emette FAVORITES_EVENT (che riallinea `itinerary` e le altre liste) e
   // cancella dal cloud, con coda di retry se offline.
@@ -2057,9 +2047,6 @@ export default function App() {
         <div className="print:hidden">
           <GeofenceAudioGuide isActive={isAudioGuideActive} isMuted={isAudioGuideMuted} itinerary={itinerary} guideMode={guideMode} language={language} />
           <AudioPlayerBanner />
-          {/* Tour di gruppo: se l'audio del leader non parte da solo sul
-              telefono del follower, qui compare «Tocca per ascoltare». */}
-          <LiveTourAudioGate language={language} />
 
           <AnimatePresence>
             {globalChatConfig.isOpen && (
