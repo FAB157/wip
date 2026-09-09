@@ -52,6 +52,7 @@ import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import { gestisciErroreGiro } from "./lib/tour/passRichiesto";
 import PercorsoPanel, { type AvvioRapido } from "./components/PercorsoPanel";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
+import LiveTourAudioGate from "./components/LiveTourAudioGate";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
 import RoutePoisModal from "./components/RoutePoisModal";
@@ -1097,6 +1098,27 @@ export default function App() {
       try { localStorage.setItem('wip_group_plan_join', groupPin); } catch { /* ok */ }
       setActiveTab('plan');
     }
+    // ARRIVO DALLE PAGINE PUBBLICHE (09/09/2026): le schede /luogo/... servite
+    // a Google finiscono su un pulsante che porta qui. Senza questo blocco
+    // chi arriva da una ricerca su un monumento preciso atterrava sulla home
+    // e doveva ricercarselo — il momento in cui si perde la visita.
+    // lat/lon/nome viaggiano nell'URL perche' li ha gia' il server che ha
+    // reso la pagina: cosi' la mappa si centra subito, senza aspettare una
+    // query. 'focus-poi' e' lo stesso evento che usano Vision e la fotocamera.
+    const poiId = params.get('poi');
+    const poiLat = Number(params.get('lat'));
+    const poiLon = Number(params.get('lon'));
+    if (poiId && Number.isFinite(poiLat) && Number.isFinite(poiLon)) {
+      setActiveTab('map');
+      // Ritardo minimo: MapArea deve aver montato il listener.
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: poiLat, lon: poiLon, zoom: 17 } }));
+        window.dispatchEvent(new CustomEvent('focus-poi', {
+          detail: { id: poiId, name: params.get('nome') || '', lat: poiLat, lon: poiLon },
+        }));
+      }, 800);
+    }
+
     // Dieci Tappe condiviso: ?giro=ID apre il giro salvato come piano nel tab
     // Piani. Chi lo apre ne ha una copia sua (id nuovo), vedi apriGiroCondiviso.
     const giroCondiviso = params.get('giro');
@@ -1602,6 +1624,15 @@ export default function App() {
     locationService.syncSettings(itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted);
   }, [itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted, selectedCategories]);
 
+  // Tour di gruppo: il follower che preme «Ascolta ora» col muto acceso lo
+  // toglie davvero (locationService lo ha gia' fatto subito per non perdere
+  // il gesto; qui si allinea lo switch della barra in basso).
+  useEffect(() => {
+    const togliMuto = () => setIsAudioGuideMuted(false);
+    window.addEventListener('wip-live-unmute', togliMuto);
+    return () => window.removeEventListener('wip-live-unmute', togliMuto);
+  }, []);
+
   // Rimozione persistita via lib/favorites: aggiorna il mirror locale,
   // emette FAVORITES_EVENT (che riallinea `itinerary` e le altre liste) e
   // cancella dal cloud, con coda di retry se offline.
@@ -2026,6 +2057,9 @@ export default function App() {
         <div className="print:hidden">
           <GeofenceAudioGuide isActive={isAudioGuideActive} isMuted={isAudioGuideMuted} itinerary={itinerary} guideMode={guideMode} language={language} />
           <AudioPlayerBanner />
+          {/* Tour di gruppo: se l'audio del leader non parte da solo sul
+              telefono del follower, qui compare «Tocca per ascoltare». */}
+          <LiveTourAudioGate language={language} />
 
           <AnimatePresence>
             {globalChatConfig.isOpen && (

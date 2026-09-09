@@ -11387,6 +11387,24 @@ ${description}
   const seoUrlLuogo = (p: any) =>
     `${seoSlug(p?.name) || 'luogo'}~${encodeURIComponent(String(p?.id ?? ''))}`;
 
+  /**
+   * Il collegamento dalla pagina pubblica all'app, che apre DIRETTAMENTE quel
+   * luogo sulla mappa. Portare alla home era il buco piu' costoso di tutta la
+   * catena: uno arriva da Google cercando un monumento preciso, e si ritrova
+   * a doverselo ricercare — e' li' che si perde la visita.
+   * Coordinate e nome viaggiano nell'URL perche' li abbiamo gia' qui: la
+   * mappa si centra subito, senza una seconda query. Il lettore e'
+   * l'`?poi=` gestito in App.tsx.
+   */
+  const seoLinkApp = (p: any) => {
+    const q = new URLSearchParams({ poi: String(p?.id ?? ''), nome: String(p?.name ?? '') });
+    if (Number.isFinite(Number(p?.lat)) && Number.isFinite(Number(p?.lon))) {
+      q.set('lat', String(p.lat));
+      q.set('lon', String(p.lon));
+    }
+    return `https://wip.guide/?${q.toString()}`;
+  };
+
   /** Il filtro di ammissione, uno solo, usato sia dalla sitemap che dalla pagina. */
   const SEO_FILTRO = `is_hidden=is.false&description_short=not.is.null&image_url=not.is.null`;
 
@@ -11557,7 +11575,7 @@ footer a{color:#1e3a8a}
 <img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">
 <p>${seoEscape(descr)}</p>
 ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
-<a class="cta" href="https://wip.guide">Ascolta l'audioguida di ${seoEscape(poi.name)}
+<a class="cta" href="${seoEscape(seoLinkApp(poi))}">Ascolta l'audioguida di ${seoEscape(poi.name)}
 <small>Gratis su WIP — parte da sola quando arrivi sul posto, anche a schermo spento</small></a>
 <footer>
 <p><strong>WIP · World in Pocket</strong> racconta oltre 9 milioni di luoghi in 7 lingue.

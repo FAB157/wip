@@ -44,6 +44,18 @@ const MIN_DESCRIZIONE = 180;
 const LOTTO = 1000;    // righe lette per giro: senza filtri in SQL regge
 const PAUSA_MS = 300;  // respiro: il database serve anche l'app
 
+// SI CAMMINA PER CATEGORIA, NON SU TUTTA LA TABELLA (misurato il 09/09/2026).
+// Sull'intera tabella la resa e' dell'1% — per 50.000 pagine servirebbe
+// leggere 5 milioni di righe. Filtrando per categoria, che e' indicizzata,
+// «musei» risponde in 409 ms con l'8% di ammessi: venti volte meglio.
+// L'ordine non e' casuale: prima le categorie con il contenuto piu' curato,
+// che sono anche quelle che la gente cerca («museo», «cosa vedere»). Se il
+// tetto di pagine si esaurisce, si esaurisce sulle pagine migliori.
+const CATEGORIE = [
+  'musei', 'monumenti', 'chiese', 'cinema', 'beni_culturali',
+  'localita', 'natura', 'enogastronomia', 'street_art', 'sentieri',
+];
+
 const attesa = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const escapeXml = (s) => String(s ?? '')
@@ -62,7 +74,9 @@ const STATI_ESCLUSI = new Set(['draft', 'needs_revision', 'rejected', 'hidden'])
 async function cacheScrivi(chiave, contenuto) {
   await axios.post(
     `${SUPABASE_URL}/rest/v1/api_cache`,
-    { cache_key: chiave, endpoint: 'seo', text_content: contenuto, created_at: new Date().toISOString() },
+    // La colonna e' `content_type`, non `endpoint` (verificato sullo schema:
+    // cache_key, content_type, text_content, audio_url, created_at).
+    { cache_key: chiave, content_type: 'seo', text_content: contenuto, created_at: new Date().toISOString() },
     { headers: { ...H, Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 30000 },
   );
 }
@@ -94,74 +108,83 @@ async function leggiConPazienza(url, etichetta) {
 }
 
 async function main() {
-  // Ripresa: si riparte dall'ultimo confine di sitemap completata.
-  let ultimoId = (await cacheLeggi('seo_sitemap_progresso_id')) || '';
+  // Ripresa: si riparte dalla categoria e dall'id dove ci si era fermati.
+  const progresso = JSON.parse((await cacheLeggi('seo_sitemap_progresso')) || '{}');
   let shard = Number(await cacheLeggi('seo_sitemap_shard_totale')) || 0;
-  if (ultimoId) console.log(`Riprendo dallo shard ${shard}, id > ${ultimoId}`);
+  let iCategoria = Number(progresso.categoria) || 0;
+  let ultimoId = progresso.id || '';
+  if (ultimoId || iCategoria) {
+    console.log(`Riprendo dalla categoria «${CATEGORIE[iCategoria]}», id > ${ultimoId}, shard ${shard}`);
+  }
 
   let buffer = [];
   let letteTotali = 0;
   const t0 = Date.now();
 
-  while (shard < MAX_SHARD) {
-    // ── Fase 1: colonne leggere, cammino sulla chiave primaria ──
-    const filtro = ultimoId ? `&id=gt.${encodeURIComponent(ultimoId)}` : '';
-    const righe = await leggiConPazienza(
-      `${SUPABASE_URL}/rest/v1/shared_pois?select=id,name,image_url,is_hidden,status,updated_at`
-      + `&order=id.asc&limit=${LOTTO}${filtro}`,
-      'fase 1',
-    );
-    if (!righe.length) break;
-    ultimoId = righe[righe.length - 1].id;
-    letteTotali += righe.length;
-
-    const candidati = righe.filter((p) =>
-      p.is_hidden !== true && p.image_url && !STATI_ESCLUSI.has(String(p.status || '')));
-
-    // ── Fase 2: la descrizione solo per i candidati (di solito ~1%) ──
-    if (candidati.length) {
-      const lista = candidati.map((p) => `"${String(p.id).replace(/"/g, '')}"`).join(',');
-      const testi = await leggiConPazienza(
-        `${SUPABASE_URL}/rest/v1/shared_pois?select=id,description_short&id=in.(${encodeURIComponent(lista)})`,
-        'fase 2',
-      );
-      const lunghezza = new Map(testi.map((t) => [String(t.id), String(t.description_short || '').length]));
-
-      for (const p of candidati) {
-        if ((lunghezza.get(String(p.id)) || 0) < MIN_DESCRIZIONE) continue;
-        const loc = `https://wip.guide/luogo/${urlLuogo(p)}`;
-        const lastmod = p.updated_at ? String(p.updated_at).slice(0, 10) : '';
-        buffer.push(`<url><loc>${escapeXml(loc)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}<changefreq>monthly</changefreq></url>`);
-
-        if (buffer.length >= URL_PER_SITEMAP) {
-          const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${buffer.join('\n')}\n</urlset>`;
-          await cacheScrivi(`seo_sitemap_shard_${shard}`, xml);
-          shard++;
-          buffer = [];
-          // Progresso salvato solo al confine di una sitemap completa: cosi'
-          // una ripresa non lascia mai una sitemap a meta'.
-          await cacheScrivi('seo_sitemap_progresso_id', String(ultimoId));
-          await cacheScrivi('seo_sitemap_shard_totale', String(shard));
-          console.log(`  sitemap ${shard - 1} scritta — ${letteTotali} righe lette, ${Math.round((Date.now() - t0) / 60000)} min`);
-          if (shard >= MAX_SHARD) break;
-        }
-      }
-    }
-
-    await attesa(PAUSA_MS);
-  }
-
-  // L'ultimo pezzo, se ne resta uno.
-  if (buffer.length && shard < MAX_SHARD) {
+  const scriviShard = async () => {
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${buffer.join('\n')}\n</urlset>`;
     await cacheScrivi(`seo_sitemap_shard_${shard}`, xml);
     shard++;
-    await cacheScrivi('seo_sitemap_progresso_id', String(ultimoId));
+    buffer = [];
     await cacheScrivi('seo_sitemap_shard_totale', String(shard));
+    console.log(`  sitemap ${shard - 1} scritta — ${letteTotali} righe lette, ${Math.round((Date.now() - t0) / 60000)} min`);
+  };
+
+  for (; iCategoria < CATEGORIE.length && shard < MAX_SHARD; iCategoria++) {
+    const categoria = CATEGORIE[iCategoria];
+    console.log(`\n── ${categoria} ──`);
+    let ammesseQui = 0;
+
+    while (shard < MAX_SHARD) {
+      // UN SOLO GIRO, DESCRIZIONE INCLUSA. Il primo tentativo la chiedeva
+      // separatamente per i soli candidati, per non trascinare testo inutile;
+      // ma dentro una categoria (che e' indicizzata) il costo sparisce —
+      // misurato: 500 righe di «musei» con tutto dentro in 409 ms. La
+      // seconda fase aggiungeva solo un modo di sbagliare, ed e' bastato un
+      // `in.(...)` con le virgole codificate per farla fallire con un 400.
+      const filtro = `category=eq.${encodeURIComponent(categoria)}`
+        + (ultimoId ? `&id=gt.${encodeURIComponent(ultimoId)}` : '');
+      const righe = await leggiConPazienza(
+        `${SUPABASE_URL}/rest/v1/shared_pois?select=id,name,image_url,description_short,is_hidden,status,updated_at`
+        + `&${filtro}&order=id.asc&limit=${LOTTO}`,
+        `lettura (${categoria})`,
+      );
+      if (!righe.length) break;
+      ultimoId = righe[righe.length - 1].id;
+      letteTotali += righe.length;
+
+      const ammesse = righe.filter((p) =>
+        p.is_hidden !== true
+        && p.image_url
+        && String(p.description_short || '').length >= MIN_DESCRIZIONE
+        && !STATI_ESCLUSI.has(String(p.status || '')));
+
+      for (const p of ammesse) {
+        const loc = `https://wip.guide/luogo/${urlLuogo(p)}`;
+        const lastmod = p.updated_at ? String(p.updated_at).slice(0, 10) : '';
+        buffer.push(`<url><loc>${escapeXml(loc)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}<changefreq>monthly</changefreq></url>`);
+        ammesseQui++;
+        if (buffer.length >= URL_PER_SITEMAP) {
+          await scriviShard();
+          if (shard >= MAX_SHARD) break;
+        }
+      }
+
+      // Il progresso si salva a ogni giro, non solo a sitemap completa: qui
+      // un giro puo' costare minuti, e ripeterlo dopo un'interruzione e'
+      // tempo buttato.
+      await cacheScrivi('seo_sitemap_progresso', JSON.stringify({ categoria: iCategoria, id: ultimoId }));
+      await attesa(PAUSA_MS);
+    }
+
+    console.log(`  ${categoria}: ${ammesseQui} pagine ammesse`);
+    ultimoId = '';  // la categoria dopo riparte dal suo inizio
   }
 
+  if (buffer.length && shard < MAX_SHARD) await scriviShard();
+
   console.log(`\nFatto: ${shard} sitemap, ${letteTotali} righe lette, ${Math.round((Date.now() - t0) / 60000)} minuti.`);
-  console.log('Ora /sitemap.xml le dichiara e /sitemap-luoghi-N.xml le serve dalla cache.');
+  console.log('Ora la sitemap le dichiara e le serve dalla cache.');
 }
 
 main().catch((e) => { console.error(String(e?.message || e)); process.exit(1); });
