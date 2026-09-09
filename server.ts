@@ -11395,7 +11395,11 @@ ${description}
   // passa solo chi ha una descrizione vera e una foto vera, ed e' circa
   // l'1% della tabella. Tenere fuori pagine che superano quel controllo non
   // proteggeva la qualita', toglieva soltanto pagine buone.
-  const SEO_MAX_SHARD = 300;
+  // Nessun tetto vero (committente, 09/09/2026: «fino a quante ne prende, no
+  // limiti»). Resta un fermo di sicurezza — deve combaciare con MAX_SHARD in
+  // scripts/costruisci-sitemap.mjs, altrimenti l'indice promette sitemap che
+  // non esistono oppure ne nasconde di buone.
+  const SEO_MAX_SHARD = 5000;
 
   const seoEscape = (s: any) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -11548,7 +11552,13 @@ ${description}
         return;
       }
 
-      const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: storia, foto e audioguida gratis`;
+      // Il titolo non promette la foto quando la foto non c'e'. Da quando la
+      // soglia di ammissione non richiede piu' l'immagine (09/09/2026) una
+      // parte delle pagine e' di solo testo, e un titolo che dice «foto» a chi
+      // arriva dalla ricerca e' una promessa non mantenuta: fa tornare
+      // indietro, ed e' esattamente il segnale che affossa una pagina.
+      const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: `
+        + (poi.image_url ? 'storia, foto e audioguida gratis' : 'storia e audioguida gratis');
       // Il testo migliore disponibile, non per forza quello «corto»: molti
       // luoghi hanno solo description_long, e prima finivano in 404 pur
       // avendo una scheda ricca.
