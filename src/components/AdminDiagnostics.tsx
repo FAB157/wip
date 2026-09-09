@@ -101,6 +101,71 @@ function CanarySection() {
   );
 }
 
+// ── ROUTING: quale fonte serve le rotte (09/09/2026) ─────────────────────
+// Il navigatore dipende da 5 servizi esterni in catena (FOSSGIS OSRM e
+// Valhalla gratuiti senza garanzia, poi ORS, Geoapify, Mapbox a pagamento).
+// Se le gratuite calano e le riserve salgono, e' il momento di passare a un
+// router nostro — PRIMA che gli utenti restino a piedi. Dati da
+// /api/admin/routing-stats (contatore per giorno e fonte).
+function RoutingSection() {
+  const [dati, setDati] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(getApiUrl('/api/admin/routing-stats?giorni=7'), { headers: await adminAuthHeaders() });
+        if (res.ok) setDati(await res.json());
+      } catch { /* resta null */ }
+      setLoading(false);
+    })();
+  }, []);
+
+  const totali: Record<string, number> = dati?.totali || {};
+  const fonti = Object.entries(totali).sort((a, b) => b[1] - a[1]);
+  const totale = fonti.reduce((s, [, n]) => s + n, 0);
+  const quota = dati?.quotaGratuita;
+  const allarme = quota != null && quota < 80 && totale >= 20;
+
+  return (
+    <div className="bg-white rounded-2xl p-4 border border-outline-variant/40 space-y-3">
+      <div className="flex items-center gap-2">
+        <Globe2 className="w-5 h-5 text-primary" />
+        <div>
+          <h3 className="font-black text-primary text-sm">Routing — chi serve le rotte (7 giorni)</h3>
+          <p className="text-[11px] text-on-surface-variant">Le prime due fonti sono gratuite ma senza garanzia: se la quota scende sotto l'80% le riserve stanno lavorando troppo.</p>
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-xs text-on-surface-variant italic">Caricamento...</div>
+      ) : !dati ? (
+        <div className="text-xs text-red-600">Statistiche non disponibili.</div>
+      ) : (
+        <div className="space-y-2">
+          <div className={`text-xs font-bold ${allarme ? 'text-red-600' : 'text-green-700'}`}>
+            {totale} rotte · quota fonti gratuite/cache: {quota == null ? '—' : `${quota}%`}
+            {allarme && ' — ATTENZIONE: le riserve stanno servendo troppe rotte'}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {fonti.map(([f, n]) => (
+              <div key={f} className="bg-surface-variant/40 rounded-lg px-2.5 py-1.5 border border-outline-variant/40">
+                <div className="text-[10px] font-black uppercase tracking-wider text-primary/60 truncate">{f}</div>
+                <div className="text-sm font-black tabular-nums">{n} <span className="text-[10px] font-semibold text-on-surface-variant">({totale ? Math.round((n / totale) * 100) : 0}%)</span></div>
+              </div>
+            ))}
+            {fonti.length === 0 && <div className="text-xs text-on-surface-variant italic col-span-full">Nessuna rotta negli ultimi 7 giorni.</div>}
+          </div>
+          {dati.mapbox && (
+            <div className="text-[11px] text-on-surface-variant">
+              Mapbox {dati.mapbox.mese}: <span className="font-bold tabular-nums">{dati.mapbox.usate}</span> / {dati.mapbox.tetto} richieste (tetto mensile)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MONITORAGGIO ESTERNO: Sentry / Checkly / UptimeRobot / PostHog ──────
 // (30/08/2026) Un colpo d'occhio sui quattro servizi invece di aprire
 // quattro dashboard diverse. Ogni fornitore senza la sua chiave di lettura
@@ -1459,6 +1524,7 @@ export default function AdminDiagnostics() {
           diagnostica, visibile prima ancora di lanciare i test manuali */}
       <CanarySection />
       <MonitoringSection />
+      <RoutingSection />
       <FlagsSection />
       <TriggerTelemetrySection />
       <GpsReplaySection />

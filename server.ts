@@ -22889,6 +22889,82 @@ ${testo}`;
     },
   ];
 
+  // CONTATORE FONTI DI ROUTING (09/09/2026). Il server scriveva gia' wip_fonte
+  // in ogni risposta, ma nessuno lo guardava: non c'era modo di accorgersi
+  // che FOSSGIS sta rifiutando (traffico che scivola sulle riserve, fino a
+  // Mapbox a pagamento) prima che gli utenti restassero senza navigatore.
+  // Un contatore per giorno e per fonte in api_cache (chiave
+  // route_fonti_YYYY-MM-DD, JSON {fonte: n}), letto da
+  // /api/admin/routing-stats. In memoria si accumula e si scrive ogni 30 s
+  // o 25 eventi: non una scrittura per rotta.
+  const routeFontiBuffer: Record<string, number> = {};
+  let routeFontiUltimoFlush = Date.now();
+  let routeFontiInFlush = false;
+  const contaFonteRoute = (fonte: string) => {
+    routeFontiBuffer[fonte] = (routeFontiBuffer[fonte] || 0) + 1;
+    const eventi = Object.values(routeFontiBuffer).reduce((s, n) => s + n, 0);
+    if (Date.now() - routeFontiUltimoFlush > 30000 || eventi >= 25) void flushFontiRoute();
+  };
+  const flushFontiRoute = async () => {
+    if (routeFontiInFlush) return;
+    const daScrivere = { ...routeFontiBuffer };
+    if (!Object.keys(daScrivere).length) return;
+    routeFontiInFlush = true;
+    for (const k of Object.keys(routeFontiBuffer)) delete routeFontiBuffer[k];
+    routeFontiUltimoFlush = Date.now();
+    try {
+      const key = `route_fonti_${new Date().toISOString().slice(0, 10)}`;
+      const row = await getFromCache(key);
+      let attuale: Record<string, number> = {};
+      try { attuale = row?.text_content ? JSON.parse(row.text_content) : {}; } catch { attuale = {}; }
+      for (const [f, n] of Object.entries(daScrivere)) attuale[f] = (attuale[f] || 0) + n;
+      await saveToCache(key, 'counter', JSON.stringify(attuale));
+    } catch (e: any) {
+      // Fail-open: si perdono al massimo 30 s di conteggi, mai una rotta.
+      for (const [f, n] of Object.entries(daScrivere)) routeFontiBuffer[f] = (routeFontiBuffer[f] || 0) + n;
+    } finally {
+      routeFontiInFlush = false;
+    }
+  };
+
+  /**
+   * GET /api/admin/routing-stats?giorni=7
+   * Rotte per giorno e per fonte negli ultimi N giorni + quota Mapbox del
+   * mese. Se le fonti gratuite (fossgis-*) calano e le riserve salgono, e'
+   * il segnale per passare a un router nostro PRIMA che gli utenti restino
+   * a piedi.
+   */
+  app.get("/api/admin/routing-stats", rateLimiter, requireAdmin, async (req, res) => {
+    try {
+      await flushFontiRoute();
+      const giorni = Math.min(31, Math.max(1, parseInt(String(req.query.giorni || '7'), 10) || 7));
+      const perGiorno: Array<{ giorno: string; fonti: Record<string, number>; totale: number }> = [];
+      const totali: Record<string, number> = {};
+      for (let i = 0; i < giorni; i++) {
+        const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+        const row = await getFromCache(`route_fonti_${d}`);
+        let fonti: Record<string, number> = {};
+        try { fonti = row?.text_content ? JSON.parse(row.text_content) : {}; } catch { fonti = {}; }
+        const totale = Object.values(fonti).reduce((s, n) => s + n, 0);
+        for (const [f, n] of Object.entries(fonti)) totali[f] = (totali[f] || 0) + n;
+        perGiorno.push({ giorno: d, fonti, totale });
+      }
+      const mese = new Date().toISOString().slice(0, 7);
+      const mapboxRow = await getFromCache(`mapbox_routing_budget_${mese}`);
+      const totaleTutte = Object.values(totali).reduce((s, n) => s + n, 0);
+      const gratuite = (totali['fossgis-osrm'] || 0) + (totali['fossgis-valhalla'] || 0) + (totali['cache'] || 0);
+      res.json({
+        giorni: perGiorno,
+        totali,
+        quotaGratuita: totaleTutte ? Math.round((gratuite / totaleTutte) * 100) : null,
+        mapbox: { mese, usate: Number(mapboxRow?.text_content) || 0, tetto: MAPBOX_ROUTING_MONTHLY_BUDGET },
+        fontiConfigurate: FONTI_ROUTE.map(f => ({ nome: f.nome, attiva: f.attiva, evitaScale: !!f.scale })),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message });
+    }
+  });
+
   /**
    * Stessa firma di OSRM: /api/route/foot/{lon},{lat};{lon},{lat}
    * Il client cambia solo la costante di base.
@@ -22911,7 +22987,7 @@ ${testo}`;
       // La cache si salta quando si stanno provando le riserve, altrimenti
       // risponderebbe col percorso della fonte che si voleva escludere.
       const c = req.query.senza ? null : routeCache.get(chiave);
-      if (c && Date.now() - c.ts < ROUTE_TTL) return res.json({ ...c.data, wip_fonte: 'cache' });
+      if (c && Date.now() - c.ts < ROUTE_TTL) { contaFonteRoute('cache'); return res.json({ ...c.data, wip_fonte: 'cache' }); }
 
       // Diagnostica: `?senza=fossgis-osrm,fossgis-valhalla` salta quelle fonti.
       // Serve a PROVARE la catena di riserva: una riserva mai provata non e' una
@@ -22929,6 +23005,7 @@ ${testo}`;
             const dati = { ...out, wip_fonte: f.nome };
             routeCache.set(chiave, { ts: Date.now(), data: dati });
             if (routeCache.size > 4000) routeCache.delete(routeCache.keys().next().value);
+            contaFonteRoute(f.nome);
             return res.json(dati);
           }
           errori.push(`${f.nome}: nessun percorso`);
@@ -22938,6 +23015,7 @@ ${testo}`;
       }
       // Tutte cadute: si dice quali e perche', invece di un 500 muto.
       console.error('[route/foot] nessuna fonte disponibile:', errori.join(' · '));
+      contaFonteRoute('nessuna');
       res.status(503).json({ code: 'NoRoute', message: 'nessun servizio di routing disponibile', tentativi: errori });
     } catch (e: any) {
       console.error('[route/foot] errore:', e?.message);
@@ -23417,11 +23495,12 @@ ${testo}`;
             if (saltate.has(f.nome) || !f.attiva) continue;
             try {
               const out = await f.run(a, b, lang);
-              if (out?.routes?.[0]?.legs?.[0]?.steps?.length) return { ...out.routes[0], wip_fonte: f.nome };
+              if (out?.routes?.[0]?.legs?.[0]?.steps?.length) { contaFonteRoute(f.nome); return { ...out.routes[0], wip_fonte: f.nome }; }
             } catch { /* fonte successiva */ }
           }
           // Una tratta irraggiungibile non deve far fallire il giro: si dichiara
           // e si tira dritto. Un errore silenzioso qui sembra un'app rotta.
+          contaFonteRoute('linea-retta');
           problemi.push(`tratta ${i + 1}: nessun percorso pedonale`);
           const d = distanzaMetri(a, b);
           return { distance: d, duration: d / 1.35, geometry: { type: 'LineString', coordinates: [a, b] }, legs: [{ steps: [] }], wip_fonte: 'linea-retta', irraggiungibile: true };
