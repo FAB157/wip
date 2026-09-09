@@ -38,8 +38,13 @@ const H = { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, "Conten
 // Devono combaciare con server.ts, altrimenti l'indice promette sitemap che
 // non esistono o ne nasconde di buone.
 const URL_PER_SITEMAP = 1000;
-const MAX_SHARD = 50;
-const MIN_DESCRIZIONE = 180;
+const MAX_SHARD = 300;
+// Soglia unica a 100 caratteri, foto o no: passa ogni luogo che abbia una
+// descrizione vera. Sotto i 100 restano solo frammenti tipo «Chiesa a
+// Milano», che farebbero pagine vuote (misurato: valgono il 3% del totale).
+// Vale il testo PIU' LUNGO fra description_short e description_long: molti
+// luoghi hanno solo il secondo, e prima venivano scartati per sbaglio.
+const MIN_DESCRIZIONE = 100;
 
 const LOTTO = 1000;    // righe lette per giro: senza filtri in SQL regge
 // Respiro fra un lotto e l'altro. Tenuto alto apposta: questo database serve
@@ -150,7 +155,7 @@ async function main() {
       const filtro = `category=eq.${encodeURIComponent(categoria)}`
         + (ultimoId ? `&id=gt.${encodeURIComponent(ultimoId)}` : '');
       const righe = await leggiConPazienza(
-        `${SUPABASE_URL}/rest/v1/shared_pois?select=id,name,image_url,description_short,is_hidden,status,updated_at`
+        `${SUPABASE_URL}/rest/v1/shared_pois?select=id,name,image_url,description_short,description_long,is_hidden,status,updated_at`
         + `&${filtro}&order=id.asc&limit=${LOTTO}`,
         `lettura (${categoria})`,
       );
@@ -158,11 +163,12 @@ async function main() {
       ultimoId = righe[righe.length - 1].id;
       letteTotali += righe.length;
 
-      const ammesse = righe.filter((p) =>
-        p.is_hidden !== true
-        && p.image_url
-        && String(p.description_short || '').length >= MIN_DESCRIZIONE
-        && !STATI_ESCLUSI.has(String(p.status || '')));
+      const ammesse = righe.filter((p) => {
+        if (p.is_hidden === true || STATI_ESCLUSI.has(String(p.status || ''))) return false;
+        const corto = String(p.description_short || '').trim().length;
+        const lungo = String(p.description_long || '').trim().length;
+        return Math.max(corto, lungo) >= MIN_DESCRIZIONE;
+      });
 
       for (const p of ammesse) {
         const loc = `https://www.wip.guide/luogo/${urlLuogo(p)}`;

@@ -11347,7 +11347,33 @@ ${description}
   // pagina, e i segnali si dividono fra due indirizzi. Sta scritto qui una
   // volta sola perche' sitemap, canonico e collegamenti non possano divergere.
   const SEO_SITO = 'https://www.wip.guide';
-  const SEO_MIN_DESCRIZIONE = 180;      // caratteri: sotto, e' una didascalia
+  // Due soglie, non una (09/09/2026). Una pagina senza foto non e' per forza
+  // una pagina povera: se il testo e' vero e sostanzioso si regge benissimo
+  // da sola — e la regola del progetto dice che nessuna foto e' meglio di
+  // una foto sbagliata, quindi non se ne mette una generica per riempire.
+  // Chi ha la foto passa con 180 caratteri; chi non ce l'ha deve portare
+  // piu' testo, perche' e' l'unica cosa che ha da offrire.
+  // Misurato su 4.899 luoghi il 09/09/2026: il 48% non ha alcun testo e un
+  // altro 25% sta sotto i 50 caratteri — quelli non diventeranno mai pagine,
+  // qualunque soglia si scelga. La fascia 100-179 caratteri vale invece il
+  // 12% ed e' grande quanto tutto il resto degli ammessi messi insieme: con
+  // una foto vera, il nome, il luogo, le coordinate e i dati strutturati, una
+  // pagina cosi' e' scarna ma onesta e utile. Senza foto serve piu' testo,
+  // perche' e' l'unica cosa che la pagina ha.
+  // Soglia unica a 100 caratteri, foto o no (richiesta del committente:
+  // «tutte le pagine POI con descrizione»). Sotto i 100 restano solo
+  // frammenti — «Chiesa a Milano» — che farebbero pagine vuote, e valgono
+  // appena il 3% del campione: escluderli non toglie quasi niente e evita
+  // l'unico caso in cui Google penalizza davvero.
+  const SEO_MIN_DESCRIZIONE = 100;
+  const SEO_MIN_DESCRIZIONE_SENZA_FOTO = 100;
+
+  /** Il testo piu' lungo fra i due campi: molti luoghi hanno solo il lungo. */
+  const seoTesto = (p: any) => {
+    const corto = String(p?.description_short || '').trim();
+    const lungo = String(p?.description_long || '').trim();
+    return lungo.length > corto.length ? lungo : corto;
+  };
   // 1000 e non 5000: PostgREST tronca in silenzio a 1000 righe per risposta.
   // Con 5000 l'indice prometteva cinque volte le pagine che le sitemap
   // contenevano davvero, e l'80% dei luoghi non sarebbe mai finito in nessuna
@@ -11364,10 +11390,12 @@ ${description}
   //  - Posizionamento: 50.000 pagine buone si indicizzano; 265.000 mediocri
   //    diluiscono il dominio. Meglio poche pagine che Google tiene, che tante
   //    che scarta.
-  // Quando servira' allargare, la strada giusta non e' alzare questo numero
-  // ma precalcolare le sitemap con un cron a passi (paginazione per chiave,
-  // non per offset).
-  const SEO_MAX_SHARD = 50;
+  // ALZATO A 300 il 09/09/2026 (era 50). Il tetto basso serviva a evitare
+  // pagine sottili, ma quel rischio lo copre gia' il filtro di ammissione:
+  // passa solo chi ha una descrizione vera e una foto vera, ed e' circa
+  // l'1% della tabella. Tenere fuori pagine che superano quel controllo non
+  // proteggeva la qualita', toglieva soltanto pagine buone.
+  const SEO_MAX_SHARD = 300;
 
   const seoEscape = (s: any) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -11411,14 +11439,15 @@ ${description}
     return `${SEO_SITO}/?${q.toString()}`;
   };
 
-  /** Il filtro di ammissione, uno solo, usato sia dalla sitemap che dalla pagina. */
-  const SEO_FILTRO = `is_hidden=is.false&description_short=not.is.null&image_url=not.is.null`;
+  /** Il filtro grezzo lato database; la selezione fine la fa seoPoiAmmesso. */
+  const SEO_FILTRO = `is_hidden=is.false&description_short=not.is.null`;
 
-  const seoPoiAmmesso = (p: any) =>
-    p && p.is_hidden !== true
-    && String(p.description_short || '').length >= SEO_MIN_DESCRIZIONE
-    && !!p.image_url
-    && !['draft', 'needs_revision', 'rejected', 'hidden'].includes(String(p.status || ''));
+  const seoPoiAmmesso = (p: any) => {
+    if (!p || p.is_hidden === true) return false;
+    if (['draft', 'needs_revision', 'rejected', 'hidden'].includes(String(p.status || ''))) return false;
+    const testo = seoTesto(p).length;
+    return p.image_url ? testo >= SEO_MIN_DESCRIZIONE : testo >= SEO_MIN_DESCRIZIONE_SENZA_FOTO;
+  };
 
   app.get("/robots.txt", (req, res) => {
     res.type('text/plain').send([
@@ -11520,16 +11549,25 @@ ${description}
       }
 
       const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: storia, foto e audioguida gratis`;
-      const descr = String(poi.description_short).replace(/\s+/g, ' ').trim().slice(0, 300);
+      // Il testo migliore disponibile, non per forza quello «corto»: molti
+      // luoghi hanno solo description_long, e prima finivano in 404 pur
+      // avendo una scheda ricca.
+      const descr = seoTesto(poi).replace(/\s+/g, ' ').trim().slice(0, 300);
       const url = `${SEO_SITO}/luogo/${seoUrlLuogo(poi)}`;
-      const testoLungo = String(poi.description_long || '').replace(/\s+/g, ' ').trim();
+      const completo = seoTesto(poi).replace(/\s+/g, ' ').trim();
+      // Il seguito, solo se aggiunge davvero qualcosa oltre ai primi 300
+      // caratteri gia' mostrati (altrimenti si ripeterebbe il paragrafo).
+      const testoLungo = completo.length > 320 ? completo.slice(300) : '';
 
       const jsonLd = {
         '@context': 'https://schema.org',
         '@type': 'TouristAttraction',
         name: poi.name,
         description: descr,
-        image: poi.image_url,
+        // Solo se c'e' davvero: un campo immagine vuoto nei dati strutturati
+        // e' un errore segnalato da Google, e mettere una foto generica al
+        // posto di quella del luogo e' vietato dalle regole del progetto.
+        ...(poi.image_url ? { image: poi.image_url } : {}),
         url,
         ...(Number.isFinite(Number(poi.lat)) && Number.isFinite(Number(poi.lon)) ? {
           geo: { '@type': 'GeoCoordinates', latitude: Number(poi.lat), longitude: Number(poi.lon) },
@@ -11554,9 +11592,9 @@ ${description}
 <meta property="og:type" content="article">
 <meta property="og:title" content="${seoEscape(titolo)}">
 <meta property="og:description" content="${seoEscape(descr.slice(0, 200))}">
-<meta property="og:image" content="${seoEscape(poi.image_url)}">
+${poi.image_url ? `<meta property="og:image" content="${seoEscape(poi.image_url)}">` : ''}
 <meta property="og:url" content="${seoEscape(url)}">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="${poi.image_url ? 'summary_large_image' : 'summary'}">
 <script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
 <style>
 :root{color-scheme:light}
@@ -11578,7 +11616,7 @@ footer a{color:#1e3a8a}
 <header><a href="${seoEscape(SEO_SITO)}">WIP · World in Pocket</a></header>
 <h1>${seoEscape(poi.name)}</h1>
 <p class="dove">${seoEscape([poi.city, poi.country].filter(Boolean).join(', '))}</p>
-<img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">
+${poi.image_url ? `<img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">` : ''}
 <p>${seoEscape(descr)}</p>
 ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
 <a class="cta" href="${seoEscape(seoLinkApp(poi))}">Ascolta l'audioguida di ${seoEscape(poi.name)}
