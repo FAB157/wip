@@ -9,7 +9,7 @@ import {
   Play, Pause, RefreshCw, Plus, CheckCircle,
   History, Bookmark, User, ShoppingCart, Trash2,
   ChevronDown, Ticket, WifiOff, KeyRound, Users,
-  Calendar, PartyPopper
+  Calendar, PartyPopper, Sparkles, Route
 } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP, MUSEUM_PASS_HOURS } from '../lib/pricing';
@@ -239,6 +239,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_intro_li_map')} <FreeBadge label={t('man_gratis')} /></Li>
             <Li>{t('man_intro_li_audio_1')} <CostBadge cost={cr(PRICING_LIST.audio_guide)} /> {t('man_intro_li_audio_2')}</Li>
             <Li><strong>Day Pass 24h</strong> {t('man_intro_li_daypass', { n: DAY_PASS_GUIDE_CAP })} <CostBadge cost={cr(PRICING_LIST.day_pass)} /></Li>
+            <Li>{t('man_intro_li_percorso')} <CostBadge cost={cr(PRICING_LIST.custom_route)} /></Li>
             <Li>{t('man_intro_li_poidetail')} <CostBadge cost={cr(PRICING_LIST.poi_detail)} /></Li>
             <Li>{t('man_intro_li_itin_1')} <CostBadge cost={crGiorno(PRICING_LIST.itinerary_daily)} /> {t('man_intro_li_itin_2')} <strong>{t('man_intro_li_itin_3')}</strong> {t('man_intro_li_itin_4')} WIP</Li>
             <Li>{t('man_intro_li_chat')} <CostBadge cost={cr10Msg(PRICING_LIST.chat_session)} /></Li>
@@ -288,6 +289,7 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li><strong><Calendar className="w-4 h-4 inline" /> {t('man_nav_li_itin_label')}</strong> — {t('man_nav_li_itin_desc')}</Li>
             <Li><strong><PartyPopper className="w-4 h-4 inline" /> {t('man_nav_li_eventi_label')}</strong> — {t('man_nav_li_eventi_desc')}</Li>
             <Li><strong><Camera className="w-4 h-4 inline" /> {t('man_nav_li_wip_label')}</strong> — {t('man_nav_li_wip_desc')}</Li>
+            <Li><strong><Sparkles className="w-4 h-4 inline" /> {t('man_nav_li_ai_label')}</strong> — {t('man_nav_li_ai_desc')}</Li>
             <Li><strong><Headphones className="w-4 h-4 inline" /> {t('man_nav_li_guida_label')}</strong> — {t('man_nav_li_guida_desc')}</Li>
             <Li><strong><User className="w-4 h-4 inline" /> {t('man_nav_li_profilo_label')}</strong> — {t('man_nav_li_profilo_desc')}</Li>
           </ul>
@@ -312,9 +314,19 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_map_li_pin')}</Li>
             <Li><Headphones className="w-4 h-4 inline" /> {t('man_map_li_cuffie')}</Li>
             <Li>{t('man_map_li_radar')}</Li>
+            <Li>{t('man_map_li_livelli')}</Li>
+            <Li>{t('man_map_li_community')}</Li>
           </ul>
           <H>{t('man_map_h_giro')}</H>
           <P>{t('man_map_p_giro_1')} <strong>{t('gr_crea_giro')}</strong> {t('man_map_p_giro_2')} <strong>{t('gr_avvia_navigazione')}</strong>{t('man_map_p_giro_3')}</P>
+          <H><Route className="w-4 h-4 inline text-emerald-700" /> {t('man_map_h_percorso')}</H>
+          <P>{t('man_map_p_percorso_1', { n: PRICING_LIST.custom_route })} <CostBadge cost={cr(PRICING_LIST.custom_route)} /></P>
+          <ul className="mb-2">
+            <Li>{t('man_map_li_pc_gemme')}</Li>
+            <Li>{t('man_map_li_pc_tempo')}</Li>
+            <Li>{t('man_map_li_pc_personale')}</Li>
+          </ul>
+          <P>{t('man_map_p_percorso_2')}</P>
           <H>{t('man_map_h_beni')}</H>
           <P>{t('man_map_p_beni_1')}</P>
           <ul className="mb-2">
@@ -399,7 +411,15 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_plan_li_rigenera')}</Li>
             <Li>{t('man_plan_li_segui')}</Li>
             <Li>{t('man_plan_li_offline', { n: PRICING_LIST.audio_guide + PRICING_LIST.poi_detail })}</Li>
+            <Li>{t('man_plan_li_tappe_reali')}</Li>
             <Li>{t('man_plan_li_pdf', { n: PRICING_LIST.premium_guide_daily })}</Li>
+          </ul>
+          <H>{t('man_plan_h_differita')}</H>
+          <P>{t('man_plan_p_differita')}</P>
+          <ul className="mb-2">
+            <Li><Mail className="w-3.5 h-3.5 inline" /> {t('man_plan_li_email')}</Li>
+            <Li>{t('man_plan_li_archivio')}</Li>
+            <Li><Bell className="w-3.5 h-3.5 inline" /> {t('man_plan_li_push')}</Li>
           </ul>
           <H>{t('man_plan_h_giorno')}</H>
           <P>{t('man_plan_p_giorno')}</P>
@@ -528,9 +548,10 @@ export default function AppGuide({ language }: AppGuideProps) {
         <>
           <P>{t('man_chat_p_intro')}</P>
           <ul className="mb-2">
+            <Li><Sparkles className="w-3.5 h-3.5 inline" /> {t('man_chat_li_barra', { n: PRICING_LIST.chat_session })}</Li>
             <Li>{t('man_chat_li_1', { n: PRICING_LIST.chat_session })}</Li>
             <Li>{t('man_chat_li_2', { n: PRICING_LIST.chat_session })}</Li>
-            <Li>{t('man_chat_li_3')}</Li>
+            <Li>{t('man_chat_li_voce')}</Li>
           </ul>
         </>
       ),
@@ -640,6 +661,7 @@ export default function AppGuide({ language }: AppGuideProps) {
           <Li>{t('man_st_li_6')}</Li>
           <Li>{t('man_st_li_7')}</Li>
           <Li>{t('man_st_li_8')}</Li>
+          <Li><Bell className="w-3.5 h-3.5 inline" /> {t('man_st_li_notifiche')}</Li>
           <Li>{t('man_st_li_9')}</Li>
         </ul>
       ),
