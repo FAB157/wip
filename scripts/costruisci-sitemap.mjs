@@ -50,6 +50,55 @@ const MAX_SHARD = 5000;
 // luoghi hanno solo il secondo, e prima venivano scartati per sbaglio.
 const MIN_DESCRIZIONE = 100;
 
+// ── LA LUNGHEZZA NON BASTA: I TESTI COMPILATI (09/09/2026) ────────────────
+// Misurato su un campione per categoria: il 43% dei testi ammessi in «cinema»
+// e il 33% in «beni_culturali» non erano descrizioni ma un modello riempito
+// con nome e luogo. Superavano i 100 caratteri senza dire niente del posto —
+// esattamente le pagine che un motore di ricerca chiama «doorway» e che, in
+// massa, fanno male a tutto il dominio, non solo a se stesse.
+//
+// Due famiglie, trattate in modo diverso perche' sono cose diverse.
+//
+// 1. SEGNAPOSTO NOSTRI. Si dichiarano da soli: «sara' sostituita da una
+//    descrizione completa non appena una fonte documentata raccontera' questo
+//    luogo». Una pagina che ammette di non avere contenuto non va pubblicata:
+//    si scarta tutta, per firma, senza guardare la lunghezza.
+//    Nella stessa famiglia stanno i RIFIUTI DEL MODELLO: schede in cui l'AI ha
+//    scritto di non sapere niente del posto («Mi dispiace, ma il materiale
+//    fornito non contiene alcuna informazione…»). Sono l'1% del campione, ma
+//    su una pagina pubblica sono la cosa peggiore che si possa pubblicare.
+const SEGNAPOSTO = [
+  /gemme segnalate su WIP/i,
+  /questa scheda essenziale/i,
+  /luogo d['’]interesse a\b/i,
+  /mi\s+dispiace/i,
+  /non\s+essendo\s+disponibili\s+informazioni/i,
+  /non\s+(?:sono|risultano)\s+disponibili\s+informazioni/i,
+  /informazioni\s+(?:specifiche\s+)?non\s+disponibili/i,
+  /non\s+(?:ho|abbiamo|posso)\s+(?:informazioni|scrivere)/i,
+  /no\s+(?:specific\s+)?information\s+(?:is\s+)?available/i,
+  /(?:could|can)\s*not\s+find\s+(?:any\s+)?information/i,
+  /as\s+an\s+ai\s+language\s+model/i,
+  /come\s+modello\s+(?:di\s+)?linguaggio/i,
+];
+
+// 2. FRASI DI REGISTRO. Il registro storico americano (NRHP) da' sempre la
+//    stessa frase: vera, ma identica per decine di migliaia di beni. Qui non
+//    si scarta la riga: si TOGLIE la frase di formula e si guarda cosa resta.
+//    Chi ha anche un paragrafo suo passa, chi era solo formula no.
+const MODELLI = [
+  /[^.]*\bis\s+listed\s+on\s+the\s+United\s+States\s+National\s+Register\s+of\s+Historic\s+Places\b[^.]*\.?/gi,
+  /\bListed\s+on\s+\d{1,2}\/\d{1,2}\/\d{2,4}\.?/gi,
+  /\bNational\s+Register\s+(?:of\s+Historic\s+Places\s+)?(?:reference|number)\b[^.]*\.?/gi,
+];
+
+/** Il testo tolte le formule: e' questo che deve valere i 100 caratteri. */
+const testoProprio = (t) => {
+  const s = String(t || '');
+  if (SEGNAPOSTO.some((re) => re.test(s))) return '';
+  return MODELLI.reduce((x, re) => x.replace(re, ' '), s).replace(/\s+/g, ' ').trim();
+};
+
 const LOTTO = 1000;    // righe lette per giro: senza filtri in SQL regge
 // Respiro fra un lotto e l'altro. Tenuto alto apposta: questo database serve
 // anche l'app e i lavori di massa delle altre sessioni, e il 09/09/2026 il
@@ -272,8 +321,8 @@ async function main() {
 
       const ammesse = righe.filter((p) => {
         if (p.is_hidden === true || STATI_ESCLUSI.has(String(p.status || ''))) return false;
-        const corto = String(p.description_short || '').trim().length;
-        const lungo = String(p.description_long || '').trim().length;
+        const corto = testoProprio(p.description_short).length;
+        const lungo = testoProprio(p.description_long).length;
         return Math.max(corto, lungo) >= MIN_DESCRIZIONE;
       });
 

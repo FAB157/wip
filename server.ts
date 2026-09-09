@@ -11368,10 +11368,100 @@ ${description}
   const SEO_MIN_DESCRIZIONE = 100;
   const SEO_MIN_DESCRIZIONE_SENZA_FOTO = 100;
 
-  /** Il testo piu' lungo fra i due campi: molti luoghi hanno solo il lungo. */
+  // ── LA LUNGHEZZA NON BASTA: I TESTI COMPILATI (09/09/2026) ──────────────
+  // Misurato su un campione per categoria: il 43% dei testi ammessi in
+  // «cinema» e il 33% in «beni_culturali» non erano descrizioni ma un modello
+  // riempito con nome e luogo. Superavano i 100 caratteri senza dire niente
+  // del posto — le pagine che un motore chiama «doorway», e che in massa
+  // fanno male a tutto il dominio, non solo a se stesse.
+  //
+  // 1. SEGNAPOSTO NOSTRI: si dichiarano da soli («sara' sostituita da una
+  //    descrizione completa non appena una fonte documentata raccontera'
+  //    questo luogo»). Una pagina che ammette di non avere contenuto non si
+  //    pubblica: si scarta per firma, senza guardare la lunghezza.
+  //    Nella stessa famiglia stanno i RIFIUTI DEL MODELLO: schede in cui l'AI
+  //    ha scritto di non sapere niente del posto («Mi dispiace, ma il
+  //    materiale fornito non contiene alcuna informazione…»). Sono l'1% del
+  //    campione, ma su una pagina pubblica sono la cosa peggiore che si possa
+  //    pubblicare, e superano i 100 caratteri senza fatica.
+  const SEO_SEGNAPOSTO = [
+    /gemme segnalate su WIP/i,
+    /questa scheda essenziale/i,
+    /luogo d['’]interesse a\b/i,
+    /mi\s+dispiace/i,
+    /non\s+essendo\s+disponibili\s+informazioni/i,
+    /non\s+(?:sono|risultano)\s+disponibili\s+informazioni/i,
+    /informazioni\s+(?:specifiche\s+)?non\s+disponibili/i,
+    /non\s+(?:ho|abbiamo|posso)\s+(?:informazioni|scrivere)/i,
+    /no\s+(?:specific\s+)?information\s+(?:is\s+)?available/i,
+    /(?:could|can)\s*not\s+find\s+(?:any\s+)?information/i,
+    /as\s+an\s+ai\s+language\s+model/i,
+    /come\s+modello\s+(?:di\s+)?linguaggio/i,
+  ];
+  // 2. FRASI DI REGISTRO (NRHP): vere, ma identiche per decine di migliaia di
+  //    beni. Non si scarta la riga, si toglie la formula e si guarda il
+  //    residuo: chi ha anche un paragrafo suo passa, chi era solo formula no.
+  const SEO_MODELLI = [
+    /[^.]*\bis\s+listed\s+on\s+the\s+United\s+States\s+National\s+Register\s+of\s+Historic\s+Places\b[^.]*\.?/gi,
+    /\bListed\s+on\s+\d{1,2}\/\d{1,2}\/\d{2,4}\.?/gi,
+    /\bNational\s+Register\s+(?:of\s+Historic\s+Places\s+)?(?:reference|number)\b[^.]*\.?/gi,
+  ];
+  // TENERE ALLINEATO con scripts/costruisci-sitemap.mjs: se le due regole
+  // divergono, la sitemap elenca pagine che poi rispondono 404 (o il
+  // contrario), che e' peggio di non averle.
+  const seoTestoProprio = (t: any) => {
+    const s = String(t || '');
+    if (SEO_SEGNAPOSTO.some((re) => re.test(s))) return '';
+    return SEO_MODELLI.reduce((x, re) => x.replace(re, ' '), s).replace(/\s+/g, ' ').trim();
+  };
+
+  // ── LA LINGUA DELLA PAGINA (09/09/2026) ────────────────────────────────
+  // Le schede arrivano da Wikipedia nella lingua del posto: un castello
+  // norvegese ha il testo in norvegese, un museo olandese in olandese. La
+  // pagina pero' dichiarava sempre `lang="it"`, cioe' diceva una cosa falsa
+  // su se stessa a chiunque la leggesse — motori di ricerca, lettori di
+  // schermo e traduttori automatici.
+  // Nel database non c'e' una colonna con la lingua, e `wikipedia_url` (che
+  // la conterrebbe nel sottodominio) e' pieno solo nello 0-14% dei casi
+  // (misurato): quindi si riconosce dal testo, contando le parole di servizio
+  // che ogni lingua ripete di continuo. Non serve precisione da laboratorio,
+  // serve non dichiarare italiano un testo inglese.
+  // Parole scelte per DISTINGUERE, non per essere frequenti: «su» stava fra le
+  // spie spagnole e da solo bastava a far passare per spagnolo un testo
+  // italiano (misurato in prova). Le parole comuni a piu' lingue («de», «la»,
+  // «con») sono tenute fuori o messe in tutte, cosi' si annullano.
+  const SEO_SPIE: Record<string, string[]> = {
+    it: ['della', 'delle', 'degli', 'dell', 'che', 'nel', 'nella', 'sono', 'anche', 'più', 'come', 'questo'],
+    en: ['the', 'and', 'of', 'is', 'was', 'with', 'which', 'from', 'its', 'has', 'were', 'that'],
+    fr: ['des', 'les', 'du', 'est', 'dans', 'qui', 'une', 'aux', 'par', 'pour', 'cette', 'ont'],
+    // niente «del»: e' italiano quanto spagnolo («Repubblica del Congo») e da
+    // solo faceva passare per spagnoli dei testi italiani.
+    es: ['los', 'las', 'por', 'para', 'como', 'entre', 'donde', 'fue', 'está', 'sus', 'española'],
+    de: ['der', 'die', 'das', 'und', 'ist', 'wurde', 'von', 'im', 'sich', 'den', 'eine', 'auch'],
+    nl: ['het', 'een', 'van', 'en', 'met', 'door', 'werd', 'voor', 'op', 'zijn', 'naar'],
+    pt: ['os', 'as', 'do', 'dos', 'das', 'em', 'uma', 'foi', 'seu', 'sua'],
+    no: ['og', 'er', 'til', 'som', 'med', 'av', 'den', 'det', 'ble', 'har', 'ikke', 'på'],
+    sv: ['och', 'är', 'till', 'som', 'med', 'av', 'den', 'det', 'för', 'har', 'inte', 'på'],
+  };
+  const seoLingua = (testo: string) => {
+    const parole = String(testo || '').toLowerCase().match(/[\p{L}']+/gu);
+    if (!parole || parole.length < 12) return 'en';   // testo troppo corto per decidere
+    const conta: Record<string, number> = {};
+    for (const p of parole) {
+      for (const [l, spie] of Object.entries(SEO_SPIE)) {
+        if (spie.includes(p)) conta[l] = (conta[l] || 0) + 1;
+      }
+    }
+    const vinta = Object.entries(conta).sort((a, b) => b[1] - a[1])[0];
+    // Serve un minimo di prove: sotto, meglio l'inglese di un'ipotesi.
+    return vinta && vinta[1] >= 3 ? vinta[0] : 'en';
+  };
+
+  /** Il testo piu' lungo fra i due campi, tolte le formule: molti luoghi
+   *  hanno solo il lungo, e molti hanno solo un modello compilato. */
   const seoTesto = (p: any) => {
-    const corto = String(p?.description_short || '').trim();
-    const lungo = String(p?.description_long || '').trim();
+    const corto = seoTestoProprio(p?.description_short);
+    const lungo = seoTestoProprio(p?.description_long);
     return lungo.length > corto.length ? lungo : corto;
   };
   // 1000 e non 5000: PostgREST tronca in silenzio a 1000 righe per risposta.
@@ -11545,10 +11635,24 @@ ${description}
       );
       const poi = Array.isArray(data) ? data[0] : null;
 
-      // Un luogo senza contenuto vero non diventa una pagina: 404, e non entra
-      // in sitemap. Meglio nessuna pagina che una pagina vuota.
-      if (!seoPoiAmmesso(poi)) {
+      // Un luogo senza contenuto vero non diventa una pagina. Ma la risposta
+      // giusta dipende dal perche':
+      //  - il luogo NON ESISTE → 404, e' la verita';
+      //  - il luogo esiste ma il suo testo non e' pubblicabile (un modello
+      //    compilato, un segnaposto, un rifiuto del modello) → 200 con
+      //    `noindex`. Dire 404 di una cosa che esiste e' falso, e soprattutto
+      //    quando la regola di ammissione si stringe — com'e' successo il
+      //    09/09/2026, quando il filtro sui testi compilati ha escluso il 19%
+      //    delle pagine — trasformerebbe di colpo decine di migliaia di URL
+      //    gia' elencati in sitemap in altrettanti errori di scansione.
+      //    `noindex` ottiene la stessa cosa (la pagina esce dall'indice) senza
+      //    dichiarare un guasto che non c'e'.
+      if (!poi) {
         res.status(404).type('text/html').send(seoPaginaVuota());
+        return;
+      }
+      if (!seoPoiAmmesso(poi)) {
+        res.status(200).type('text/html').send(seoPaginaVuota());
         return;
       }
 
@@ -11591,8 +11695,11 @@ ${description}
         } : {}),
       };
 
+      // La lingua e' quella del TESTO, non la nostra: vedi seoLingua().
+      const lingua = seoLingua(seoTesto(poi));
+
       res.type('text/html').set('Cache-Control', 'public, max-age=3600, s-maxage=86400').send(`<!doctype html>
-<html lang="it">
+<html lang="${lingua}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

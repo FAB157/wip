@@ -906,8 +906,15 @@ export default function ItineraryLibrarySheet({
           onDismiss={() => setQuizDismissed(true)}
         />
       )}
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-gray-100 shrink-0">
+      {/* Header.
+          `pt-4` fisso non bastava: su iPhone con notch o Dynamic Island la
+          barra di stato occupa la fascia alta dello schermo, e titolo e X ci
+          finivano SOTTO — la X restava sotto l'indicatore della batteria e non
+          si riusciva a premerla per chiudere (segnalato il 09/09/2026).
+          Stessa forma usata altrove nel progetto (PlanScreen, NavigationOverlay):
+          il massimo fra il margine normale e la safe area, cosi' sui dispositivi
+          senza notch non cambia niente. */}
+      <div className="flex items-center justify-between px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {detail && (
             <button
