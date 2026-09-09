@@ -167,18 +167,25 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     }
   };
 
-  // "Continua con Google" (06/09/2026). Due percorsi diversi:
+  // "Continua con Google" (06/09/2026, corretto 09/09/2026). Due percorsi diversi:
   // - Web: signInWithOAuth reindirizza il browser su Google e poi torna qui;
   //   il client Supabase (detectSessionInUrl di default) legge da solo i
   //   parametri di ritorno e onAuthStateChange in App.tsx fa il resto.
   // - Nativo: una WebView non può aprire l'accesso Google (Google la blocca,
   //   "disallowed_useragent"), quindi si apre il browser di sistema/Custom Tab
   //   con @capacitor/browser (skipBrowserRedirect: true, noi apriamo l'URL a
-  //   mano) e si torna in app via lo STESSO App Link già usato per conferma
-  //   email/reset password (https://wip.guide/auth/callback). Qui il client è
-  //   in PKCE (vedi supabase.ts): il ritorno porta un `?code=...`, non un
-  //   frammento con i token, e a scambiarlo con la sessione ci pensa il
-  //   listener `appUrlOpen` in App.tsx.
+  //   mano). Il ritorno NON usa l'App Link https://wip.guide/auth/callback
+  //   (quello resta per conferma email/reset password, aperti da un tap vero
+  //   in Mail): un Universal Link non si attiva in modo affidabile su un
+  //   redirect automatico dentro Safari/SFSafariViewController — iOS lo
+  //   riserva ai tap reali, quindi dopo l'accesso Safari restava aperto sulla
+  //   pagina invece di ridare il controllo all'app (le barre del browser
+  //   sopra e sotto viste dal committente il 09/09). Si torna invece con lo
+  //   schema personalizzato itainta:// (già registrato in Info.plist e
+  //   nell'intent-filter Android), che Safari/Custom Tab intercetta sempre.
+  //   Il client è in PKCE (vedi supabase.ts): il ritorno porta un `?code=...`,
+  //   non un frammento con i token, e a scambiarlo con la sessione ci pensa
+  //   il listener `appUrlOpen` in App.tsx.
   const [googleLoading, setGoogleLoading] = useState(false);
   const handleGoogleLogin = async () => {
     if (googleLoading || loading) return;
@@ -188,7 +195,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       if (Capacitor.isNativePlatform()) {
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
-          options: { redirectTo: 'https://wip.guide/auth/callback', skipBrowserRedirect: true },
+          options: { redirectTo: 'itainta://auth/callback', skipBrowserRedirect: true },
         });
         if (error) throw error;
         if (!data?.url) throw new Error('URL di accesso Google mancante');
@@ -213,8 +220,8 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
   };
 
   // "Continua con Apple" (07/09/2026): stesso schema di Google riga per riga
-  // (stesso App Link di ritorno, stesso listener in App.tsx) — cambia solo
-  // il provider. Configurato lato Apple con Services ID
+  // (stesso ritorno itainta://auth/callback, stesso listener in App.tsx) —
+  // cambia solo il provider. Configurato lato Apple con Services ID
   // com.itaintasca.app.signin per il web e Bundle ID com.itaintasca.app per
   // il nativo (entrambi nei Client IDs del provider su Supabase).
   const [appleLoading, setAppleLoading] = useState(false);
@@ -226,7 +233,7 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
       if (Capacitor.isNativePlatform()) {
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'apple',
-          options: { redirectTo: 'https://wip.guide/auth/callback', skipBrowserRedirect: true },
+          options: { redirectTo: 'itainta://auth/callback', skipBrowserRedirect: true },
         });
         if (error) throw error;
         if (!data?.url) throw new Error('URL di accesso Apple mancante');

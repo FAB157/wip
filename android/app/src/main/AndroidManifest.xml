@@ -42,6 +42,21 @@
                 <data android:scheme="itainta" android:host="poi" />
             </intent-filter>
 
+            <!-- Ritorno da "Continua con Google/Apple" nativo (09/09/2026): schema
+                 personalizzato itainta://auth/callback (vedi LoginScreen.tsx). Usato
+                 al posto dell'App Link https://wip.guide/auth/callback qui sotto perché
+                 quello richiede assetlinks.json verificato con l'impronta reale (oggi
+                 solo un placeholder, vedi commento sotto) — finché non è pubblicato,
+                 Custom Tabs non ridà mai il controllo all'app dopo l'accesso e resta
+                 aperto sulla pagina web. Uno schema custom non ha questo problema: non
+                 serve alcuna verifica di dominio, Android lo intercetta sempre. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="itainta" android:host="auth" />
+            </intent-filter>
+
             <!-- App Link (Android 6+) per i link di conferma email / reset password
                  inviati da Supabase Auth, che puntano a https://wip.guide/auth/callback
                  (vedi LoginScreen.tsx confirmRedirect / resetPasswordForEmail). Con
