@@ -77,19 +77,39 @@ sull'SPA vuota. Per Google il sito era **una pagina sola**. Nel frattempo in
 Stessa mossa di Wanderlog, ma con un catalogo già scritto invece che
 aspettando gli utenti.
 
-Fatto oggi (`server.ts`, `vercel.json`):
+Fatto (`server.ts`, `vercel.json`):
 - `robots.txt` con sitemap dichiarata
-- `sitemap.xml` a indice + sitemap sharded da 5.000 URL
-- `/luogo/<nome>-<id>` servita in **HTML vero al primo byte**, con titolo,
-  meta description, Open Graph, dati strutturati `TouristAttraction` e la
-  chiamata all'azione verso l'app
+- `sitemap.xml` a indice + sitemap sharded da **1.000** URL (non 5.000:
+  PostgREST tronca in silenzio a 1.000 righe per risposta, e con 5.000
+  l'indice prometteva cinque volte le pagine che le sitemap contenevano)
+- `/luogo/<nome>~<id>` servita in **HTML vero al primo byte**, con titolo,
+  meta description, Open Graph, dati strutturati `TouristAttraction`, la
+  lingua vera del testo in `<html lang>` e la chiamata all'azione
+- Search Console: proprietà `https://www.wip.guide/` verificata, sitemap
+  accettata. **211.000 pagine pubblicate** al 09/09, in crescita.
 
-**Regola di qualità, non di quantità**: non si pubblicano 9,3 milioni di
-pagine. Passano solo i luoghi con una descrizione di sostanza (≥180
-caratteri) **e** una foto reale. Gli altri rispondono 404 e restano fuori
-dalla sitemap. Milioni di pagine sottili sono una penalizzazione, non
-traffico — ed è la stessa regola «foto e testi veri» che vale per il resto
-del prodotto.
+**Regola di qualità, non di quantità** (aggiornata il 09/09 dopo averla
+misurata, non stimata):
+- la soglia è **100 caratteri di testo PROPRIO**, e la foto **non è più
+  richiesta**: misurando si è visto che pretenderla non alzava la qualità,
+  toglieva solo pagine buone. Il titolo però non promette «foto» quando la
+  foto non c'è;
+- non basta la lunghezza. Sono esclusi i **testi compilati**: i modelli
+  riempiti con nome e luogo (43% dei testi ammessi in «cinema», 33% in
+  «beni_culturali»), i segnaposto che si dichiarano da soli («questa scheda
+  essenziale sarà sostituita…») e i rifiuti dell'AI («Mi dispiace, ma il
+  materiale fornito non contiene alcuna informazione»). In prova: **19% delle
+  pagine escluse, tutte con residuo vuoto**, nessun testo vero perso;
+- chi non passa risponde **200 con `noindex`**, non 404: dire «non esiste» di
+  un luogo che esiste è falso, e con un filtro che si stringe trasformerebbe
+  di colpo decine di migliaia di URL già in sitemap in errori di scansione.
+
+Milioni di pagine sottili sono una penalizzazione, non traffico — ed è la
+stessa regola «foto e testi veri» che vale per il resto del prodotto.
+
+**Nota che vincola la campagna**: al 09/09/2026 l'app **non è ancora
+scaricabile** (Play e App Store rispondono entrambi 404). Ogni chiamata
+all'azione porta a `wip.guide` o a una pagina luogo, mai a un badge store.
 
 ### Leva 2 — Social (già attiva, va solo puntata meglio)
 

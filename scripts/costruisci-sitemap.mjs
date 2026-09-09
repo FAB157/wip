@@ -107,13 +107,12 @@ const LOTTO = 1000;    // righe lette per giro: senza filtri in SQL regge
 // non funziona si'.
 const PAUSA_MS = 1500;
 
-// SI CAMMINA PER CATEGORIA, NON SU TUTTA LA TABELLA (misurato il 09/09/2026).
-// Sull'intera tabella la resa e' dell'1% — per 50.000 pagine servirebbe
-// leggere 5 milioni di righe. Filtrando per categoria, che e' indicizzata,
-// «musei» risponde in 409 ms con l'8% di ammessi: venti volte meglio.
-// L'ordine non e' casuale: prima le categorie con il contenuto piu' curato,
-// che sono anche quelle che la gente cerca («museo», «cosa vedere»). Se il
-// tetto di pagine si esaurisce, si esaurisce sulle pagine migliori.
+// Le categorie stanno in un modulo a parte perche' le usa anche
+// costruisci-vicini.mjs: se le due liste divergessero, la sitemap elencherebbe
+// pagine senza vicini, o i vicini punterebbero a pagine che non esistono.
+import { CATEGORIE } from "./categorie-seo.mjs";
+
+/* La lista era qui: spostata in scripts/categorie-seo.mjs il 09/09/2026.
 // LA COLONNA `category` HA DUE GENERAZIONI DI VALORI (misurato il 09/09/2026).
 // Accanto alle macro storiche («musei», «monumenti», «chiese», «panorami»)
 // convivono i valori a grana fine scritti dagli harvest: `beach` da solo vale
@@ -190,6 +189,7 @@ const CATEGORIE = [
   'locali', 'restaurant', 'cafe', 'bar', 'pub', 'fast_food',
   'consigli', 'information', 'tourism_information', 'community', 'utilita',
 ];
+*/
 
 const attesa = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -11536,6 +11536,18 @@ ${description}
   /** Il filtro grezzo lato database; la selezione fine la fa seoPoiAmmesso. */
   const SEO_FILTRO = `is_hidden=is.false&description_short=not.is.null`;
 
+  /**
+   * La cella geografica di un punto, in decimi di grado (~11 km).
+   * E' la chiave con cui i luoghi vicini vengono raggruppati in cache:
+   * deve dare lo STESSO risultato qui e in scripts/costruisci-vicini.mjs,
+   * altrimenti la pagina cerca una voce che nessuno ha scritto.
+   */
+  const seoCella = (lat: any, lon: any) => {
+    const la = Number(lat), lo = Number(lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+    return `${Math.floor(la * 10)}_${Math.floor(lo * 10)}`;
+  };
+
   const seoPoiAmmesso = (p: any) => {
     if (!p || p.is_hidden === true) return false;
     if (['draft', 'needs_revision', 'rejected', 'hidden'].includes(String(p.status || ''))) return false;
@@ -11698,6 +11710,29 @@ ${description}
       // La lingua e' quella del TESTO, non la nostra: vedi seoLingua().
       const lingua = seoLingua(seoTesto(poi));
 
+      // ── LUOGHI VICINI: il rimedio alle pagine orfane ────────────────────
+      // Finche' ogni pagina esiste solo dentro la sitemap, il sito e'
+      // 211.000 indirizzi a distanza zero link dalla home — cioe' esattamente
+      // il profilo che i motori classificano come generazione di massa. Otto
+      // link a luoghi veri e vicini trasformano l'elenco in un percorso.
+      //
+      // NON si interroga il database per trovarli. Sono precalcolati da
+      // scripts/costruisci-vicini.mjs e raccolti per CELLA geografica, non
+      // per luogo: una voce di cache serve tutti i luoghi dello stesso
+      // quadrato, quindi le scritture sono migliaia invece di 211.000 e la
+      // lettura resta una ricerca per chiave, non una scansione.
+      // Se la voce manca, la pagina esce senza vicini: mai un errore, mai
+      // una domanda in piu' al database.
+      let vicini: any[] = [];
+      try {
+        const cella = seoCella(poi.lat, poi.lon);
+        if (cella) {
+          const riga = await getFromCache(`seo_vicini_${cella}`);
+          const mappa = riga?.text_content ? JSON.parse(riga.text_content) : null;
+          vicini = Array.isArray(mappa?.[String(poi.id)]) ? mappa[String(poi.id)].slice(0, 8) : [];
+        }
+      } catch { vicini = []; }
+
       res.type('text/html').set('Cache-Control', 'public, max-age=3600, s-maxage=86400').send(`<!doctype html>
 <html lang="${lingua}">
 <head>
@@ -11726,11 +11761,21 @@ img.hero{width:100%;height:auto;border-radius:14px;display:block;margin:0 0 22px
 .cta small{display:block;font-weight:400;opacity:.85;margin-top:4px}
 footer{margin-top:40px;padding-top:20px;border-top:1px solid #eee;color:#666;font-size:14px}
 footer a{color:#1e3a8a}
+nav.briciole{font-size:14px;color:#666;margin:14px 0 0}
+nav.briciole a{color:#1e3a8a;text-decoration:none}
+nav.briciole span{color:#aaa;margin:0 6px}
+section.vicini{margin:34px 0 0;padding-top:22px;border-top:1px solid #eee}
+section.vicini h2{font-size:19px;margin:0 0 12px}
+ul.vicini{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+ul.vicini a{color:#1e3a8a;text-decoration:none;font-weight:600}
+ul.vicini .d{color:#777;font-size:14px;font-weight:400;display:block}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header><a href="${seoEscape(SEO_SITO)}">WIP · World in Pocket</a></header>
+<nav class="briciole"><a href="${seoEscape(SEO_SITO)}">WIP</a>${[poi.country, poi.city].filter(Boolean)
+  .map((v: any) => `<span>›</span>${seoEscape(String(v))}`).join('')}</nav>
 <h1>${seoEscape(poi.name)}</h1>
 <p class="dove">${seoEscape([poi.city, poi.country].filter(Boolean).join(', '))}</p>
 ${poi.image_url ? `<img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">` : ''}
@@ -11738,6 +11783,11 @@ ${poi.image_url ? `<img class="hero" src="${seoEscape(poi.image_url)}" alt="${se
 ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
 <a class="cta" href="${seoEscape(seoLinkApp(poi))}">Ascolta l'audioguida di ${seoEscape(poi.name)}
 <small>Gratis su WIP — parte da sola quando arrivi sul posto, anche a schermo spento</small></a>
+${vicini.length ? `<section class="vicini">
+<h2>Qui vicino</h2>
+<ul class="vicini">${vicini.map((v: any) => `<li><a href="${seoEscape(SEO_SITO)}/luogo/${seoEscape(v.u)}">${seoEscape(v.n)}</a>
+<span class="d">${seoEscape(v.c || '')}${v.c && v.km ? ' · ' : ''}${v.km ? `a ${seoEscape(v.km)} km` : ''}</span></li>`).join('')}</ul>
+</section>` : ''}
 <footer>
 <p><strong>WIP · World in Pocket</strong> racconta oltre 9 milioni di luoghi in 7 lingue.
 L'audioguida parte da sola mentre cammini: non devi cercare niente.</p>
@@ -24960,6 +25010,39 @@ out center tags;`;
       }
       if (!authUserId) return res.status(401).json({ error: 'login_required' });
 
+      // --- PACCHETTO CHAT: 3 crediti = 10 messaggi (09/09/2026) ---
+      // Prima questa conversazione era gratuita: il committente ha chiesto che
+      // costi come la chat della barra (`/api/optimize-itinerary`), stesso
+      // contatore e stesso addebito, così le due strade dell'agente WIP si
+      // comportano allo stesso modo. Si riusa `user_chat_sessions`, cioè lo
+      // STESSO borsellino di messaggi della chat generale: chi ha appena
+      // pagato il pacchetto non lo ripaga passando dall'altra porta.
+      const CHAT_PACK_SIZE = 10;
+      const CHAT_PACK_COST = 3; // = PRICING_LIST.chat_session
+      const confirmPurchase = req.body?.confirmPurchase === true;
+      let chatMessagesLeft = 0;
+      try {
+        const rowRes = await axios.get(
+          `${supabaseUrl}/rest/v1/user_chat_sessions?user_id=eq.${authUserId}&select=messages_left`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
+        );
+        chatMessagesLeft = Number(rowRes.data?.[0]?.messages_left) || 0;
+      } catch { chatMessagesLeft = 0; }
+      if (chatMessagesLeft <= 0) {
+        if (!confirmPurchase) {
+          return res.status(402).json({ error: 'no_messages_left', needsPurchase: true, cost: CHAT_PACK_COST, packSize: CHAT_PACK_SIZE });
+        }
+        const rpcRes = await axios.post(
+          `${supabaseUrl}/rest/v1/rpc/consume_credits`,
+          { p_user_id: authUserId, p_amount: CHAT_PACK_COST },
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } }
+        );
+        if (rpcRes.data !== true) {
+          return res.status(402).json({ error: 'insufficient_credits', cost: CHAT_PACK_COST });
+        }
+        chatMessagesLeft = CHAT_PACK_SIZE;
+      }
+
       const language = /^[A-Z]{2}$/.test(String(req.body?.language || '')) ? String(req.body.language) : 'IT';
       const rawMsgs = Array.isArray(req.body?.messages) ? req.body.messages : [];
       // Input non fidato: ruoli ammessi, testo tagliato, al massimo 20 turni.
@@ -25035,7 +25118,22 @@ RISPONDI SOLO con questo JSON, nient'altro:
       };
       // "ready" lo decide il server sui dati, non la parola del modello.
       const ready = parsed.ready === true && destination.length >= 2 && days >= 1;
-      res.json({ reply: String(parsed.reply).slice(0, 1200), ready, params });
+
+      // Scala un messaggio dal pacchetto SOLO ora che la risposta esiste: un
+      // errore del modello non deve costare all'utente. Stesso contatore della
+      // chat della barra, così i due agenti attingono allo stesso pacchetto.
+      const messaggiRimasti = Math.max(0, chatMessagesLeft - 1);
+      try {
+        await axios.post(
+          `${supabaseUrl}/rest/v1/user_chat_sessions`,
+          { user_id: authUserId, messages_left: messaggiRimasti, updated_at: new Date().toISOString() },
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' } }
+        );
+      } catch (e: any) {
+        console.warn('[itinerary/converse] contatore messaggi non salvato:', e?.message);
+      }
+
+      res.json({ reply: String(parsed.reply).slice(0, 1200), ready, params, messagesLeft: messaggiRimasti });
     } catch (e: any) {
       console.error('[itinerary/converse] Errore:', e?.message);
       res.status(500).json({ error: 'WIP non è raggiungibile in questo momento: riprova.' });
