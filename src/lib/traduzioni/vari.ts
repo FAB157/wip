@@ -322,6 +322,15 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
     RU: "Продолжить через Google",
     ZH: "使用 Google 继续",
   },
+  vr_a_login_apple: {
+    IT: "Continua con Apple",
+    EN: "Continue with Apple",
+    FR: "Continuer avec Apple",
+    ES: "Continuar con Apple",
+    DE: "Mit Apple fortfahren",
+    RU: "Продолжить через Apple",
+    ZH: "使用 Apple 继续",
+  },
   vr_a_login_or: {
     IT: "oppure",
     EN: "or",

@@ -212,6 +212,40 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     }
   };
 
+  // "Continua con Apple" (07/09/2026): stesso schema di Google riga per riga
+  // (stesso App Link di ritorno, stesso listener in App.tsx) — cambia solo
+  // il provider. Configurato lato Apple con Services ID
+  // com.itaintasca.app.signin per il web e Bundle ID com.itaintasca.app per
+  // il nativo (entrambi nei Client IDs del provider su Supabase).
+  const [appleLoading, setAppleLoading] = useState(false);
+  const handleAppleLogin = async () => {
+    if (appleLoading || loading) return;
+    setAppleLoading(true);
+    setError('');
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'apple',
+          options: { redirectTo: 'https://wip.guide/auth/callback', skipBrowserRedirect: true },
+        });
+        if (error) throw error;
+        if (!data?.url) throw new Error('URL di accesso Apple mancante');
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: data.url });
+      } else {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'apple',
+          options: { redirectTo: window.location.origin },
+        });
+        if (error) throw error;
+      }
+    } catch (e: any) {
+      setError(friendlyError(e));
+    } finally {
+      setAppleLoading(false);
+    }
+  };
+
   const handleResendConfirmation = async () => {
     if (!email) { setError(t('vr_a_login_resend_need_email')); return; }
     setLoading(true);
@@ -596,6 +630,22 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
                   </svg>
                 )}
                 {t('vr_a_login_google')}
+              </button>
+
+              <button
+                type="button"
+                disabled={appleLoading || loading}
+                onClick={handleAppleLogin}
+                className="w-full bg-black text-white font-bold py-3.5 px-4 rounded-xl mt-2 flex items-center justify-center hover:bg-black/85 transition-colors disabled:opacity-50"
+              >
+                {appleLoading ? (
+                  <Loader2 className="w-5 h-5 mr-3 animate-spin" />
+                ) : (
+                  <svg className="w-5 h-5 mr-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M16.365 1.43c0 1.14-.437 2.1-1.311 2.88-.874.78-1.933 1.2-3.176 1.26-.06-1.14.397-2.1 1.271-2.94.874-.84 1.977-1.2 3.216-1.2Zm4.395 15.42c-.437 1.02-1.028 1.98-1.775 2.88-1.018 1.26-2.036 1.89-3.054 1.89-.78 0-1.674-.24-2.682-.72-1.008-.48-1.936-.72-2.784-.72-.916 0-1.87.24-2.862.72-.99.48-1.79.72-2.4.72-.916 0-1.978-.66-3.185-1.98-1.05-1.14-1.916-2.46-2.598-3.96C.463 13.15 0 11.38 0 9.61c0-2.1.607-3.9 1.821-5.4C2.99 2.71 4.55 2 6.5 2c.827 0 1.858.24 3.096.72 1.238.48 2.06.72 2.464.72.42 0 1.288-.27 2.604-.81C15.98.83 17.062.6 17.936.6c1.428 0 2.664.42 3.708 1.26-1.35.9-2.024 2.16-2.024 3.78 0 1.26.464 2.34 1.393 3.24.46.45 1.05.81 1.766 1.08-.155.5-.318.98-.489 1.44Z"/>
+                  </svg>
+                )}
+                {t('vr_a_login_apple')}
               </button>
 
               <p className="text-center text-sm text-on-surface-variant mt-2">
