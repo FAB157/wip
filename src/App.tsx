@@ -655,6 +655,8 @@ export default function App() {
     destinationName: string;
     /** Id vero del POI di destinazione (popup/radar): all'arrivo apre la scheda con autoplay. */
     poiId?: string | null;
+    /** Paese della meta: pronuncia locale dei nomi delle vie nel navigatore (08/09/2026). */
+    country?: string | null;
     onStart: (pois: any[]) => void;
   }>({ isOpen: false, startCoords: null, endCoords: null, destinationName: "", poiId: null, onStart: () => {} });
 
@@ -704,6 +706,8 @@ export default function App() {
         // per aprire la scheda e far partire l'audioguida. Senza, PlanScreen
         // inventava un id sintetico "wipnav_<nome>" che non apriva niente.
         poiId: e.detail.poiId || null,
+        // Paese della meta: pronuncia locale dei nomi delle vie (08/09/2026).
+        country: e.detail.country || null,
         // Default sicuro: il dispatch di ItineraryStop non fornisce onStart e
         // il vecchio `routeModalConfig.onStart(pois)` esplodeva con TypeError
         // alla conferma. Senza callback esplicita si avvia il navigatore
@@ -843,6 +847,46 @@ export default function App() {
     const handleOpenMapArea = () => setActiveTab('map');
     window.addEventListener('wip-open-map-area', handleOpenMapArea);
     return () => window.removeEventListener('wip-open-map-area', handleOpenMapArea);
+  }, []);
+
+  // "I MIEI DOWNLOAD" (08/09/2026): un tocco su una voce scaricata apre
+  // direttamente la funzione. Qui si fa solo il cambio tab e il rilancio
+  // dell'evento alla schermata giusta (con lo stesso "spara finche' non e'
+  // montata" di wip-internal-nav-start: il tab Piano e' montato lazy).
+  useEffect(() => {
+    const h = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      const tipo = String(d.tipo || '');
+      if (tipo === 'itinerario') {
+        setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
+        setActiveTab('plan');
+        const detail: any = { id: d.id, handled: false };
+        let tentativi = 0;
+        const spara = () => {
+          window.dispatchEvent(new CustomEvent('wip-apri-itinerario-offline', { detail }));
+          if (!detail.handled && ++tentativi < 40) setTimeout(spara, 300);
+        };
+        setTimeout(spara, 50);
+      } else if (tipo === 'zona') {
+        setActiveTab('map');
+        if (typeof d.lat === 'number' && typeof d.lon === 'number') {
+          setTimeout(() => window.dispatchEvent(new CustomEvent('wip-open-map-area', { detail: { lat: d.lat, lon: d.lon, zoom: d.zoom || 13 } })), 50);
+        }
+      } else if (tipo === 'audioguida') {
+        // Scheda del POI con riproduzione: lo stesso evento del geofencing.
+        setActiveTab('map');
+        setTimeout(() => window.dispatchEvent(new CustomEvent('wip-poi-trigger', {
+          detail: { poiId: d.id, poi: d.poi || { id: d.id, name: d.nome, lat: d.lat, lon: d.lon }, alreadyPaid: true, autoPlay: true, fromDownloads: true },
+        })), 50);
+      } else if (tipo === 'guida') {
+        // Le guide/audiolibri vivono nell'Archivio del Piano.
+        setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
+        setActiveTab('plan');
+        setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
+      }
+    };
+    window.addEventListener('wip-apri-download', h);
+    return () => window.removeEventListener('wip-apri-download', h);
   }, []);
 
   // --- Handlers ---
@@ -2027,6 +2071,8 @@ export default function App() {
                   endCoords: routeModalConfig.endCoords,
                   destinationName: routeModalConfig.destinationName,
                   poiId: (routeModalConfig as any).poiId || null,
+                  // Paese della meta → pronuncia locale delle vie (08/09/2026).
+                  country: (routeModalConfig as any).country || null,
                   origin: origin || null,
                   pois,
                   handled: false,

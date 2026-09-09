@@ -2202,6 +2202,36 @@ async function saveToCache(cacheKey: string, contentType: string, textContent: a
   }
 }
 
+// ── BUDGET MENSILE MAPBOX ROUTING (walking directions) ──
+// Richiesta utente 08/09/2026, dopo aver notato che Mapbox in FONTI_ROUTE
+// (ultima riserva della catena di routing pedonale, vedi
+// server.ts~22826) non aveva NESSUN tetto di spesa — a differenza di
+// TripAdvisor/Foursquare qui sotto, restava attivo solo perché la chiave
+// era configurata, senza limite. Stesso schema di quei due (contatore in
+// api_cache, chiave per YYYY-MM), fail-open se il contatore non è leggibile.
+//
+// Tetto stimato per restare sotto 30€/mese: la tariffa Mapbox Directions
+// pubblica storicamente parte da ~0,50$/1.000 richieste oltre la quota
+// gratuita, ma varia per piano/volume — qui si usa una stima PRUDENTE
+// (più cara) per non rischiare di sforare: 3.000 richieste/mese. Verificare
+// contro la fattura Mapbox reale e aggiustare se serve.
+const MAPBOX_ROUTING_MONTHLY_BUDGET = 3000;
+async function mapboxRoutingBudgetOk(): Promise<boolean> {
+  try {
+    const key = `mapbox_routing_budget_${new Date().toISOString().slice(0, 7)}`;
+    const row = await getFromCache(key);
+    const count = Number(row?.text_content) || 0;
+    if (count >= MAPBOX_ROUTING_MONTHLY_BUDGET) {
+      console.warn(`[Mapbox routing] Budget mensile esaurito (${count}/${MAPBOX_ROUTING_MONTHLY_BUDGET})`);
+      return false;
+    }
+    saveToCache(key, 'counter', String(count + 1));
+    return true;
+  } catch (e) {
+    return true;
+  }
+}
+
 // ── BUDGET MENSILE TRIPADVISOR ──
 // Contatore persistito in api_cache così sopravvive ai cold start serverless.
 // Tetto unico mensile (chiave per YYYY-MM): 1.000 chiamate, ben sotto il
@@ -22742,11 +22772,23 @@ ${testo}`;
     waypoints: [],
   });
 
-  type FonteRoute = { nome: string; attiva: boolean; run: (a: number[], b: number[], lang: string) => Promise<any | null> };
+  // EVITA SCALE (08/09/2026): richiesta per famiglie con passeggino e mobilita'
+  // ridotta, in citta' italiane fatte di scalinate. Non tutte le fonti sanno
+  // farlo: OSRM foot no (il profilo e' fisso), Valhalla si' (penalita' sugli
+  // archi "steps" + tipo wheelchair), ORS si' (profilo `wheelchair`),
+  // Geoapify/Mapbox no. Con `evita=scale` si SALTANO le fonti che non lo
+  // sanno fare: meglio nessun percorso che una scalinata a chi non puo' farla.
+  type OpzioniRoute = { evitaScale?: boolean };
+  type FonteRoute = {
+    nome: string; attiva: boolean;
+    /** true se la fonte sa evitare le scale quando richiesto. */
+    scale?: boolean;
+    run: (a: number[], b: number[], lang: string, opz?: OpzioniRoute) => Promise<any | null>;
+  };
 
   const FONTI_ROUTE: FonteRoute[] = [
     {
-      nome: 'fossgis-osrm', attiva: true,
+      nome: 'fossgis-osrm', attiva: true, scale: false,
       // Gia' nel dialetto giusto: si passa attraverso senza conversioni.
       run: async (a, b) => {
         const r = await axios.get(
@@ -22756,15 +22798,22 @@ ${testo}`;
       },
     },
     {
-      nome: 'fossgis-valhalla', attiva: true,
+      nome: 'fossgis-valhalla', attiva: true, scale: true,
       // Software DIVERSO dal primo: un guasto di OSRM non lo tocca. Stesso
       // gestore pero', quindi non copre il rischio "FOSSGIS chiude".
-      run: async (a, b, lang) => {
-        const body = {
+      run: async (a, b, lang, opz) => {
+        const body: any = {
           locations: [{ lat: a[1], lon: a[0] }, { lat: b[1], lon: b[0] }],
           costing: 'pedestrian',
           directions_options: { language: `${lang}-${lang.toUpperCase()}`, units: 'kilometers' },
         };
+        if (opz?.evitaScale) {
+          // step_penalty: secondi di penalita' per ogni arco "scale" — alto
+          // abbastanza da farle evitare quando c'e' un'alternativa; tipo
+          // wheelchair per marciapiedi/rampe. Se l'unica strada e' una
+          // scalinata, Valhalla la restituisce comunque (meglio che nulla).
+          body.costing_options = { pedestrian: { type: 'wheelchair', step_penalty: 600, max_hiking_difficulty: 0 } };
+        }
         const r = await axios.get('https://valhalla1.openstreetmap.de/route',
           { params: { json: JSON.stringify(body) }, timeout: 7000 });
         const leg = r.data?.trip?.legs?.[0];
@@ -22784,11 +22833,13 @@ ${testo}`;
       },
     },
     {
-      nome: 'openrouteservice', attiva: !!process.env.ORS_API_KEY,
+      nome: 'openrouteservice', attiva: !!process.env.ORS_API_KEY, scale: true,
       // Gestore indipendente da FOSSGIS: e' la riserva che copre il rischio
       // organizzativo, non solo quello tecnico. Piano gratuito a quota.
-      run: async (a, b) => {
-        const r = await axios.post('https://api.openrouteservice.org/v2/directions/foot-walking/geojson',
+      run: async (a, b, _lang, opz) => {
+        // Profilo `wheelchair` = niente scale, pendenze e marciapiedi adatti.
+        const profilo = opz?.evitaScale ? 'wheelchair' : 'foot-walking';
+        const r = await axios.post(`https://api.openrouteservice.org/v2/directions/${profilo}/geojson`,
           { coordinates: [a, b] },
           { headers: { Authorization: process.env.ORS_API_KEY, 'Content-Type': 'application/json' }, timeout: 8000 });
         const f = r.data?.features?.[0];
@@ -22806,7 +22857,7 @@ ${testo}`;
       },
     },
     {
-      nome: 'geoapify', attiva: !!process.env.GEOAPIFY_API_KEY,
+      nome: 'geoapify', attiva: !!process.env.GEOAPIFY_API_KEY, scale: false,
       run: async (a, b) => {
         const r = await axios.get('https://api.geoapify.com/v1/routing', {
           params: { waypoints: `${a[1]},${a[0]}|${b[1]},${b[0]}`, mode: 'walk', details: 'instruction_details',
@@ -22823,10 +22874,13 @@ ${testo}`;
       },
     },
     {
-      nome: 'mapbox', attiva: !!(process.env.MAPBOX_TOKEN || process.env.VITE_MAPBOX_TOKEN),
+      nome: 'mapbox', attiva: !!(process.env.MAPBOX_TOKEN || process.env.VITE_MAPBOX_TOKEN), scale: false,
       // Mapbox parla nativamente OSRM: passa attraverso. E' l'ultima perche'
-      // e' l'unica che oltre una certa soglia si paga.
+      // e' l'unica che oltre una certa soglia si paga. Tetto mensile
+      // (08/09/2026, vedi mapboxRoutingBudgetOk): senza, un guasto prolungato
+      // delle prime 4 fonti farebbe salire la spesa Mapbox senza freno.
       run: async (a, b, lang) => {
+        if (!(await mapboxRoutingBudgetOk())) return null;
         const tok = process.env.MAPBOX_TOKEN || process.env.VITE_MAPBOX_TOKEN;
         const r = await axios.get(`https://api.mapbox.com/directions/v5/mapbox/walking/${a[0]},${a[1]};${b[0]},${b[1]}`,
           { params: { geometries: 'geojson', steps: true, overview: 'full', language: lang, access_token: tok }, timeout: 8000 });
@@ -22846,10 +22900,14 @@ ${testo}`;
       const [a, b] = parti.map(p => p.split(',').map(Number));
       if (![...a, ...b].every(Number.isFinite)) return res.status(400).json({ code: 'InvalidInput', message: 'coordinate non valide' });
       const lang = String(req.query.language || 'it').slice(0, 2).toLowerCase();
+      // `evita=scale` (08/09/2026): percorso senza scalinate, vedi OpzioniRoute.
+      const evitaScale = String(req.query.evita || '').split(',').includes('scale');
+      const opzioni: OpzioniRoute = { evitaScale };
 
       // Cache a ~11 m di risoluzione: due richieste dallo stesso marciapiede
-      // riusano lo stesso percorso invece di uscire di nuovo.
-      const chiave = `${a[0].toFixed(4)},${a[1].toFixed(4)};${b[0].toFixed(4)},${b[1].toFixed(4)};${lang}`;
+      // riusano lo stesso percorso invece di uscire di nuovo. La chiave
+      // include l'opzione scale: lo stesso tratto ha due percorsi diversi.
+      const chiave = `${a[0].toFixed(4)},${a[1].toFixed(4)};${b[0].toFixed(4)},${b[1].toFixed(4)};${lang}${evitaScale ? ';noscale' : ''}`;
       // La cache si salta quando si stanno provando le riserve, altrimenti
       // risponderebbe col percorso della fonte che si voleva escludere.
       const c = req.query.senza ? null : routeCache.get(chiave);
@@ -22864,8 +22922,9 @@ ${testo}`;
       for (const f of FONTI_ROUTE) {
         if (saltate.has(f.nome)) { errori.push(`${f.nome}: saltata su richiesta`); continue; }
         if (!f.attiva) { errori.push(`${f.nome}: non configurato`); continue; }
+        if (evitaScale && !f.scale) { errori.push(`${f.nome}: non sa evitare le scale`); continue; }
         try {
-          const out = await f.run(a, b, lang);
+          const out = await f.run(a, b, lang, opzioni);
           if (out?.routes?.[0]?.legs?.[0]?.steps?.length) {
             const dati = { ...out, wip_fonte: f.nome };
             routeCache.set(chiave, { ts: Date.now(), data: dati });
@@ -23519,6 +23578,33 @@ ${testo}`;
       res.json(data);
     } catch (e: any) {
       console.error('[roads/tile] Errore:', e?.message);
+      res.status(500).json({ error: 'roads_failed' });
+    }
+  });
+
+  /**
+   * GET /api/roads/cell?gx=10.05&gy=44.10
+   * UNA cella pedonale pre-estratta (griglia 0,05°, stessa dello script
+   * generate_road_tiles), per la NAVIGAZIONE OFFLINE (08/09/2026): il client
+   * scarica le celle attorno a un itinerario insieme alla "porta offline" e
+   * le salva in IndexedDB come grafo per il ricalcolo senza rete. Il bucket
+   * road_tiles e' privato (chiave di servizio), quindi si passa da qui.
+   * 404 se la cella non e' stata pre-estratta (fuori copertura): il client
+   * la segna come mancante, non c'e' fallback Overpass — un download
+   * offline non deve dipendere da un servizio esterno a runtime.
+   */
+  app.get("/api/roads/cell", rateLimiter, async (req, res) => {
+    try {
+      const gx = parseFloat(String(req.query.gx));
+      const gy = parseFloat(String(req.query.gy));
+      if (isNaN(gx) || isNaN(gy)) return res.status(400).json({ error: 'invalid_cell' });
+      const nome = `x${gx.toFixed(2)}_y${gy.toFixed(2)}_foot.json.gz`;
+      const foot = await loadStorageRoadTile(nome);
+      if (!foot) return res.status(404).json({ error: 'cell_not_available', cella: `${gx.toFixed(2)}_${gy.toFixed(2)}` });
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      res.json({ cella: `${gx.toFixed(2)}_${gy.toFixed(2)}`, foot, count: foot.length });
+    } catch (e: any) {
+      console.error('[roads/cell] Errore:', e?.message);
       res.status(500).json({ error: 'roads_failed' });
     }
   });
@@ -24624,17 +24710,35 @@ Usa SEMPRE E SOLO questo schema JSON:
       let finalPlanStr = null;
       for (let i = 0; i < 5; i++) {
         let responseMessage: any;
-        // Chat sull'itinerario: c'e' un utente che aspetta la risposta, quindi
-        // rientra nella parte in diretta e DeepSeek resta (02/09/2026).
-        // ATTENZIONE, pero': questo ciclo chiama DeepSeek DIRETTAMENTE, fuori
-        // da callUniversalAi. Non ha ripiego sui gratuiti se DeepSeek cade
-        // (fa throw), non scrive NIENTE in api_usage_logs — quindi il suo
-        // costo non compare in nessun cruscotto — e puo' fare fino a 5 giri di
-        // tool-calling per singolo messaggio. Andrebbe portato dentro
-        // callUniversalAi come tutti gli altri.
+        // MOTORE (08/09/2026, richiesto esplicitamente dal committente: «le
+        // chat devono usare sempre Groq e poi fallback DeepSeek»). Vale per
+        // entrambe le chat di questa rotta — quella che modifica un
+        // itinerario e quella generica "Chiedi a WIP" (scheda POI o tasto
+        // fisso in barra): sempre Groq per primo (gratis), DeepSeek solo se
+        // Groq non risponde, Gemini come ultimo ripiego.
+        // ATTENZIONE residua: questo ciclo chiama i motori DIRETTAMENTE, fuori
+        // da callUniversalAi, quindi non scrive in api_usage_logs — andrebbe
+        // portato dentro callUniversalAi come tutti gli altri.
         const deepseekKey = process.env.DEEPSEEK_API_KEY;
-
-        if (deepseekKey) {
+        let rispostaData: any = null;
+        if (groqClient) {
+          try {
+            const response = await callGroqWithFallback(
+              groqClient,
+              messages,
+              "openai/gpt-oss-120b",
+              "openai/gpt-oss-20b",
+              { tools, tool_choice: "auto", max_tokens: 8000 },
+              "optimize_itinerary",
+              supabaseUrl,
+              supabaseServiceKey
+            );
+            rispostaData = response.choices[0].message;
+          } catch (e: any) {
+            console.warn("Groq Chatbot Error, ripiego su DeepSeek:", e?.message);
+          }
+        }
+        if (!rispostaData && deepseekKey) {
           try {
             const dsResponse = await axios.post("https://api.deepseek.com/chat/completions", {
               model: "deepseek-chat",
@@ -24649,32 +24753,21 @@ Usa SEMPRE E SOLO questo schema JSON:
               },
               timeout: 60000
             });
-            responseMessage = dsResponse.data.choices[0].message;
+            rispostaData = dsResponse.data.choices[0].message;
           } catch (e: any) {
             console.error("Deepseek Chatbot Error:", e.response?.data || e.message);
-            throw e;
           }
-        } else if (groqClient) {
-          const response = await callGroqWithFallback(
-            groqClient,
-            messages,
-            "openai/gpt-oss-120b",
-            "openai/gpt-oss-20b",
-            { tools, tool_choice: "auto", max_tokens: 8000 },
-            "optimize_itinerary",
-            supabaseUrl,
-            supabaseServiceKey
-          );
-          responseMessage = response.choices[0].message;
-        } else {
-           // Fallback base to gemini
+        }
+        if (!rispostaData) {
+           // Ultimo ripiego: Gemini (nessun tool-calling, risposta diretta).
            const aiRes = await ai.models.generateContent({
              model: "gemini-3.5-flash-lite",
              contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content || JSON.stringify(m) }] })),
              config: { responseMimeType: "application/json" }
            });
-           responseMessage = { content: aiRes.text };
+           rispostaData = { content: aiRes.text };
         }
+        responseMessage = rispostaData;
         
         if (responseMessage.tool_calls && responseMessage.tool_calls.length > 0) {
           messages.push(responseMessage);

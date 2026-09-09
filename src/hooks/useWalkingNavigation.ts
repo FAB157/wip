@@ -12,18 +12,44 @@
 // =====================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { locationService } from '../services/locationService';
-import { fetchWalkingRoute, type WalkingRoute } from '../services/osrmService';
+import { fetchWalkingRoute, translateManeuver, type WalkingRoute } from '../services/osrmService';
 import { speakInstruction, speakArrivalNative } from '../services/ttsService';
 import { haversineMeters, type LatLon } from '../lib/geo';
 import { notify } from '../lib/toast';
 import { reportTrigger } from '../lib/geofencing/telemetry';
 import { puntoArrivo } from '../lib/puntoArrivo';
 import { getTranslation, type Language } from '../lib/i18n';
+import { getGemmeVicine } from '../services/poiRepository';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
 const SPEAK_DISTANCE_M = 30;    // leggi la manovra entro 30 m dalla svolta
+// PRE-ANNUNCIO (08/09/2026): a piedi 30 m sono ~25 secondi — se sei distratto
+// o c'e' rumore, la svolta letta una volta sola si perde e sei gia' oltre
+// l'incrocio. Come ogni navigatore vero: "tra 150 metri gira a destra" prima,
+// "gira a destra" a ridosso. Si legge una sola volta per manovra, solo se la
+// manovra e' ancora abbastanza lontana da valere l'avviso (>60 m).
+const PREANNOUNCE_DISTANCE_M = 150;
+const PREANNOUNCE_MIN_M = 60;
+// "GIRATI" ALL'AVVIO (08/09/2026): il primo passo sbagliato e' l'errore piu'
+// comune a piedi — "Inizia il percorso" non dice verso dove. Con la direzione
+// di marcia del GPS (heading, disponibile appena ci si muove) si confronta
+// con il rilevamento verso il primo tratto: se differiscono di oltre questa
+// soglia, si e' rivolti dalla parte sbagliata e lo si dice.
+const GIRATI_SOGLIA_GRADI = 110;
+const GIRATI_MAX_FIX = 6;       // si controlla solo nei primi fix con heading valido
+// DEVIAZIONE VERSO UNA GEMMA (08/09/2026): il vantaggio che nessun altro
+// navigatore ha — milioni di POI e le gemme curate. Camminando, se una gemma
+// sta VICINO al percorso ma non sopra (fra GEMMA_MIN_M e GEMMA_MAX_M dal
+// tracciato), la si propone: "gemma a 60 m dal percorso, deviare?". Si
+// cerca ogni GEMMA_OGNI_MS, mai piu' di una proposta alla volta, e una gemma
+// ignorata non si ripropone.
+const GEMMA_OGNI_MS = 45000;
+const GEMMA_RAGGIO_RICERCA_M = 180;
+const GEMMA_MIN_M = 25;
+const GEMMA_MAX_M = 120;
 // Soglia di arrivo: 30 m DALLA PORTA (la meta e' l'ingresso, o il civico
 // dell'indirizzo, vedi puntoArrivoSuStrada), la stessa distanza a cui il
 // geofence fa partire la guida dal perimetro. Il router ci porta sulla via del
@@ -85,6 +111,85 @@ const ROUTE_FAIL_PHRASES: Record<string, string> = {
   zh: '无法计算路线，请重试。',
 };
 
+// Pre-annuncio: "{m}" = metri arrotondati, "{i}" = istruzione (minuscola).
+const PREANNOUNCE_PHRASES: Record<string, string> = {
+  it: 'Tra {m} metri, {i}',
+  en: 'In {m} meters, {i}',
+  fr: 'Dans {m} mètres, {i}',
+  es: 'En {m} metros, {i}',
+  de: 'In {m} Metern, {i}',
+  ru: 'Через {m} метров {i}',
+  zh: '{m}米后{i}',
+};
+
+const GIRATI_PHRASES: Record<string, string> = {
+  it: 'Girati: il percorso parte dietro di te',
+  en: 'Turn around: the route starts behind you',
+  fr: 'Faites demi-tour : le trajet commence derrière vous',
+  es: 'Date la vuelta: la ruta empieza detrás de ti',
+  de: 'Umdrehen: die Route beginnt hinter dir',
+  ru: 'Развернитесь: маршрут начинается позади вас',
+  zh: '请转身：路线从您身后开始',
+};
+
+// PRONUNCIA LOCALE DELLE VIE (08/09/2026): la voce TTS della lingua
+// dell'UTENTE che legge "Rue de la Paix" o "Hauptstraße" storpia il nome, e
+// chi cammina non lo riconosce sul cartello. La frase resta nella lingua
+// dell'utente, il nome della via viene letto nella lingua del PAESE della
+// meta (il POI ha `country`). Solo quando le due lingue differiscono.
+const LINGUA_PAESE: Record<string, string> = {
+  Italy: 'it', Italia: 'it', IT: 'it', ITA: 'it',
+  France: 'fr', Francia: 'fr', FR: 'fr', FRA: 'fr', Monaco: 'fr', Belgium: 'fr', Belgio: 'fr',
+  Switzerland: 'de', Svizzera: 'de', CH: 'de', Germany: 'de', Germania: 'de', DE: 'de', DEU: 'de',
+  Austria: 'de', AT: 'de', AUT: 'de', Liechtenstein: 'de',
+  Spain: 'es', Spagna: 'es', ES: 'es', ESP: 'es', Mexico: 'es', Argentina: 'es', Chile: 'es',
+  Peru: 'es', Colombia: 'es', Ecuador: 'es', Uruguay: 'es', Venezuela: 'es', Bolivia: 'es',
+  'United Kingdom': 'en', UK: 'en', GB: 'en', GBR: 'en', Ireland: 'en', 'United States': 'en',
+  USA: 'en', US: 'en', Canada: 'en', Australia: 'en', 'New Zealand': 'en',
+  Russia: 'ru', RU: 'ru', RUS: 'ru', China: 'zh', CN: 'zh', CHN: 'zh',
+};
+function linguaLocale(country?: string | null): string | null {
+  if (!country) return null;
+  return LINGUA_PAESE[country] || LINGUA_PAESE[String(country).trim()] || null;
+}
+
+// Rilevamento (gradi, 0-360) da a verso b.
+function bearingGradi(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const rad = Math.PI / 180;
+  const dLon = (bLon - aLon) * rad;
+  const y = Math.sin(dLon) * Math.cos(bLat * rad);
+  const x = Math.cos(aLat * rad) * Math.sin(bLat * rad) - Math.sin(aLat * rad) * Math.cos(bLat * rad) * Math.cos(dLon);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+function differenzaAngolare(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+// VIBRAZIONE ALLA SVOLTA (08/09/2026): telefono in tasca e cuffie e' il caso
+// d'uso principale — un impulso aptico distinto per destra/sinistra passa
+// anche se la voce e' coperta dall'audioguida in corso o dal traffico. Solo
+// su nativo (Capacitor Haptics); sul web niente, best-effort.
+async function vibraManovra(modifier?: string): Promise<void> {
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    const { Haptics, ImpactStyle } = await import('@capacitor/haptics');
+    const mod = (modifier || '').toLowerCase();
+    const attesa = (ms: number) => new Promise(r => setTimeout(r, ms));
+    if (mod.includes('left')) {
+      // Sinistra: due impulsi brevi
+      await Haptics.impact({ style: ImpactStyle.Medium });
+      await attesa(140);
+      await Haptics.impact({ style: ImpactStyle.Medium });
+    } else if (mod.includes('right')) {
+      // Destra: un impulso lungo
+      await Haptics.impact({ style: ImpactStyle.Heavy });
+    } else {
+      await Haptics.impact({ style: ImpactStyle.Light });
+    }
+  } catch { /* plugin assente o negato: si va avanti senza */ }
+}
+
 // Frase d'arrivo di riserva ({name} = nome del POI), quando il router non ne
 // fornisce una propria nell'ultimo step.
 const ARRIVE_PHRASES: Record<string, string> = {
@@ -124,6 +229,19 @@ export interface NavTarget extends LatLon {
    *  QUELLA tappa e non tutte le omonime (ITI-12). */
   dayIndex?: number;
   stopIndex?: number;
+  /** Paese della meta (shared_pois.country): decide la lingua in cui si
+   *  pronunciano i nomi delle vie (08/09/2026). Opzionale: senza, si legge
+   *  tutto nella lingua dell'utente come prima. */
+  country?: string | null;
+}
+
+/** Riepilogo del percorso appena calcolato, mostrato all'avvio (08/09/2026):
+ *  chi parte deve sapere quanto e' lungo, quanto ci vuole e quante svolte
+ *  aspettarsi — prima si partiva direttamente con "Inizia il percorso". */
+export interface RouteSummary {
+  distanceM: number;
+  durationSec: number;
+  turns: number;
 }
 
 /** POI lungo il percorso scelto nel modal WIP Nav. */
@@ -167,6 +285,24 @@ export interface UseWalkingNavigationResult {
   recalculateRoute: () => Promise<boolean>;
   /** Ricalcolo manuale in corso (per lo spinner dell'overlay). */
   recalculating: boolean;
+  /** Riepilogo del percorso (distanza/durata/svolte), null fuori navigazione. */
+  routeSummary: RouteSummary | null;
+  /** Gemma vicina al percorso proposta all'utente (null = nessuna proposta). */
+  gemmaVicina: GemmaVicina | null;
+  /** Accetta la deviazione: si naviga verso la gemma, poi si riprende la meta. */
+  deviaVersoGemma: () => Promise<void>;
+  /** Rifiuta la proposta (quella gemma non si ripropone piu'). */
+  ignoraGemma: () => void;
+  /** Meta originale da riprendere dopo la gemma (null = nessuna deviazione in corso). */
+  metaDaRiprendere: NavTarget | null;
+  /** Dopo la gemma: riparte verso la meta originale. */
+  riprendiMeta: () => Promise<void>;
+}
+
+export interface GemmaVicina {
+  poi: RoutePoi;
+  /** Metri dal tracciato (perpendicolare). */
+  distM: number;
 }
 
 export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResult {
@@ -180,11 +316,26 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const [routeGeometry, setRouteGeometry] = useState<[number, number][]>([]);
   /** «Ricalcola da qui» in corso: l'overlay fa girare l'icona (03/09/2026). */
   const [recalculating, setRecalculating] = useState(false);
+  const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null);
+  const [gemmaVicina, setGemmaVicina] = useState<GemmaVicina | null>(null);
+  const [metaDaRiprendere, setMetaDaRiprendere] = useState<NavTarget | null>(null);
+  // Ultima ricerca gemme, gemme gia' proposte/ignorate (mai due volte), meta
+  // originale mentre si devia (ref, per leggerla dentro le callback GPS).
+  const gemmaUltimaRicercaRef = useRef(0);
+  const gemmeViste = useRef<Set<string>>(new Set());
+  const gemmaInCorsoRef = useRef(false);
+  const ripresaRef = useRef<NavTarget | null>(null);
 
   const routeRef = useRef<WalkingRoute | null>(null);
   const targetRef = useRef<NavTarget | null>(null);
   const stepIdxRef = useRef(0);
   const spokenRef = useRef<Set<number>>(new Set());
+  // Manovre gia' pre-annunciate ("tra 150 m ...") — una sola volta ciascuna.
+  const preannouncedRef = useRef<Set<number>>(new Set());
+  // "Girati": quanti fix con heading valido si sono gia' esaminati, e se
+  // l'avviso e' gia' stato dato (una volta sola per navigazione).
+  const giratiFixRef = useRef(0);
+  const giratiDettoRef = useRef(false);
   const unsubRef = useRef<(() => void) | null>(null);
   // Lunghezze cumulate del tracciato (dal vertice i alla fine), per la
   // distanza residua lungo il percorso reale.
@@ -285,6 +436,26 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });
   };
 
+  /**
+   * Legge una manovra. Se la via ha un nome e il paese della meta parla una
+   * lingua diversa da quella dell'utente, la frase si legge nella lingua
+   * dell'utente e il nome della via, subito dopo, in quella LOCALE — cosi'
+   * "Rue de la Paix" si sente come lo dice un francese e si riconosce sul
+   * cartello. Altrimenti si legge tutto insieme come prima.
+   */
+  const parlaManovra = (step: { instruction: string; maneuverType: string; maneuverModifier?: string; name?: string }) => {
+    const locale = linguaLocale(targetRef.current?.country);
+    const utente = String(language || 'it').toLowerCase().slice(0, 2);
+    if (step.name && locale && locale !== utente) {
+      // Frase SENZA il nome (la variante generica), poi il nome in lingua locale.
+      const senzaNome = translateManeuver(step.maneuverType, step.maneuverModifier, language, targetRef.current?.poiName, undefined, undefined);
+      speakInstruction(senzaNome, language);
+      speakInstruction(step.name, locale);
+      return;
+    }
+    speakInstruction(step.instruction, language);
+  };
+
   const releaseWakeLock = () => {
     try { wakeLockRef.current?.release?.(); } catch { /* già rilasciato */ }
     wakeLockRef.current = null;
@@ -338,6 +509,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
     setRouteGeometry(g);
     emitRoute(g, fit);
+    // Riepilogo per l'overlay: le "svolte" sono le manovre vere, senza
+    // partenza e arrivo.
+    const turns = route.steps.filter(s => {
+      const t = String(s.maneuverType || '').toLowerCase();
+      return t !== 'depart' && t !== 'arrive';
+    }).length;
+    setRouteSummary({ distanceM: Math.round(route.distance), durationSec: Math.round(route.duration), turns });
   };
 
   // Punto più vicino sul TRACCIATO (proiezione sul segmento, non sul vertice):
@@ -406,6 +584,54 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     pendingPoisRef.current = stillPending;
   };
 
+  // Distanza perpendicolare di un punto dal tracciato (stessa proiezione di
+  // nearestOnRoute, ma per un punto qualsiasi, non per la posizione).
+  const distanzaDalTracciato = (lat: number, lon: number): number => {
+    const g = routeRef.current?.geometry || [];
+    if (g.length < 2) return Infinity;
+    let best = Infinity;
+    for (let i = 0; i + 1 < g.length; i++) {
+      const d = projectToSeg(lat, lon, g[i], g[i + 1]).distM;
+      if (d < best) best = d;
+    }
+    return best;
+  };
+
+  // Gemme vicine al percorso (una proposta alla volta, throttling, mai la
+  // meta stessa ne' i POI gia' scelti lungo il percorso ne' quelle gia' viste).
+  const cercaGemmaVicina = (here: LatLon) => {
+    const ora = Date.now();
+    if (gemmaInCorsoRef.current || gemmaVicina || ora - gemmaUltimaRicercaRef.current < GEMMA_OGNI_MS) return;
+    if (!joinedRouteRef.current) return;
+    gemmaUltimaRicercaRef.current = ora;
+    gemmaInCorsoRef.current = true;
+    const t = targetRef.current;
+    getGemmeVicine(here.lat, here.lon, GEMMA_RAGGIO_RICERCA_M, 12)
+      .then((gemme) => {
+        if (targetRef.current !== t || !routeRef.current) return;
+        const esclusi = new Set<string>([
+          ...(t?.poiId != null ? [String(t.poiId)] : []),
+          ...pendingPoisRef.current.map(p => String(p.id)),
+          ...(ripresaRef.current?.poiId != null ? [String(ripresaRef.current.poiId)] : []),
+        ]);
+        let migliore: GemmaVicina | null = null;
+        for (const g of gemme) {
+          const id = String(g.id);
+          if (esclusi.has(id) || gemmeViste.current.has(id)) continue;
+          const d = distanzaDalTracciato(g.lat, g.lon);
+          if (d < GEMMA_MIN_M || d > GEMMA_MAX_M) continue;
+          if (!migliore || d < migliore.distM) migliore = { poi: g as unknown as RoutePoi, distM: Math.round(d) };
+        }
+        if (migliore) {
+          gemmeViste.current.add(String(migliore.poi.id));
+          setGemmaVicina(migliore);
+          void vibraManovra('straight');
+        }
+      })
+      .catch(() => {})
+      .finally(() => { gemmaInCorsoRef.current = false; });
+  };
+
   // Fuori rotta: dopo OFF_ROUTE_FIXES fix consecutivi oltre OFF_ROUTE_M dal
   // tracciato, si ricalcola il percorso dalla posizione corrente.
   const maybeRecalc = async (here: LatLon, distFromRoute: number) => {
@@ -428,6 +654,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         setRoute(route);
         stepIdxRef.current = 0;
         spokenRef.current.clear();
+        preannouncedRef.current.clear();
         // Lo step 0 di un reroute e' un 'depart' nel punto in cui si e' gia'
         // (ITI-10): letto ad alta voce interrompeva «Percorso ricalcolato»
         // con un «Prosegui su via X» un secondo dopo. Si marca come gia'
@@ -489,6 +716,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     targetRef.current = null;
     stepIdxRef.current = 0;
     spokenRef.current.clear();
+    preannouncedRef.current.clear();
+    giratiFixRef.current = 0;
+    giratiDettoRef.current = false;
     pendingPoisRef.current = [];
     remainingFromVertexRef.current = [];
     offRouteCountRef.current = 0;
@@ -513,7 +743,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     setDistanceToDestination(null);
     setEtaSeconds(null);
     setProgress(null);
+    setRouteSummary(null);
     setRouteGeometry([]);
+    // Stop esplicito: si chiude anche la deviazione verso la gemma.
+    ripresaRef.current = null;
+    setMetaDaRiprendere(null);
+    setGemmaVicina(null);
+    gemmaInCorsoRef.current = false;
     emitRoute([], false);
   }, []);
 
@@ -555,6 +791,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       setRoute(route, true);
       stepIdxRef.current = 0;
       spokenRef.current.clear();
+      preannouncedRef.current.clear();
       route.steps.forEach((s, i) => { if (String(s.maneuverType || '').toLowerCase() === 'depart') spokenRef.current.add(i); });
       offRouteCountRef.current = 0;
       lastRecalcRef.current = Date.now();
@@ -608,6 +845,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       setState('routing');
       targetRef.current = target;
       spokenRef.current.clear();
+      preannouncedRef.current.clear();
+      giratiFixRef.current = 0;
+      giratiDettoRef.current = false;
+      // Nuova navigazione: via la proposta di gemma pendente (ripresaRef NO:
+      // la imposta deviaVersoGemma subito prima di chiamarci).
+      setGemmaVicina(null);
+      gemmaUltimaRicercaRef.current = Date.now(); // niente proposta nei primi 45 s
       stepIdxRef.current = 0;
       offRouteCountRef.current = 0;
       recalcBackoffRef.current = 0;
@@ -697,6 +941,36 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         const fixBuono = loc.accuracy <= MAX_GPS_ACCURACY_M;
         if (!fixBuono && !(loc.accuracy <= ARRIVE_ACCURACY_MAX_M && dDestGrezza <= ARRIVE_DISTANCE_M && joinedRouteRef.current)) return;
 
+        // "GIRATI" (08/09/2026): nei primi fix con direzione di marcia valida
+        // (heading arriva solo in movimento) si confronta la direzione in cui
+        // si sta andando con il rilevamento verso il primo tratto del
+        // percorso. Oltre la soglia si e' partiti dalla parte sbagliata: lo
+        // si dice UNA volta, poi il navigatore normale fa il resto. Solo
+        // all'inizio (stepIdx 0/1) e solo se si e' vicini al tracciato.
+        if (!giratiDettoRef.current && giratiFixRef.current < GIRATI_MAX_FIX && stepIdxRef.current <= 1
+            && Number.isFinite(loc.heading as number) && (loc.heading as number) >= 0
+            && Number.isFinite(loc.speed as number) && (loc.speed as number) > 0.4) {
+          giratiFixRef.current += 1;
+          const g = r.geometry;
+          // Punto del tracciato a ~25 m avanti dal piu' vicino: il rilevamento
+          // verso il vertice immediatamente successivo e' troppo rumoroso.
+          const vicino = nearestOnRoute(here);
+          let j = vicino.idx + 1, acc = 0;
+          while (j + 1 < g.length && acc < 25) { acc += haversineMeters(g[j][0], g[j][1], g[j + 1][0], g[j + 1][1]); j++; }
+          const avanti = g[Math.min(j, g.length - 1)];
+          if (avanti && vicino.dist <= 40) {
+            const versoPercorso = bearingGradi(here.lat, here.lon, avanti[0], avanti[1]);
+            if (differenzaAngolare(loc.heading as number, versoPercorso) > GIRATI_SOGLIA_GRADI) {
+              giratiDettoRef.current = true;
+              const frase = GIRATI_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || GIRATI_PHRASES.en;
+              setCurrentInstruction(frase);
+              setCurrentManeuver({ type: 'uturn', modifier: 'uturn' });
+              speakInstruction(frase, language);
+              void vibraManovra('uturn');
+            }
+          }
+        }
+
         // Distanza residua LUNGO IL TRACCIATO (non in linea d'aria) + ETA.
         // In linea d'aria un percorso a U dava ETA assurde ("200 m" con 15
         // minuti reali di cammino).
@@ -723,6 +997,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // Fuori rotta → ricalcolo automatico (solo se già sul percorso)
         if (joinedRouteRef.current) maybeRecalc(here, nearest.dist);
 
+        // Gemme vicine al percorso (throttled dentro): solo se sul tracciato
+        // e non gia' in deviazione verso una gemma.
+        if (joinedRouteRef.current && nearest.dist <= OFF_ROUTE_M && !ripresaRef.current) cercaGemmaVicina(here);
+
         // Arrivo. Tre modi, perche' i 30 m in linea d'aria da soli non bastavano:
         //  1. entro 30 m dalla meta (la porta, se il POI ha l'ingresso);
         //  2. il tracciato e' finito (meno di 15 m residui) e la meta e' a
@@ -741,6 +1019,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           setState('arrived');
           setProgress(1);
           setCurrentManeuver({ type: 'arrive' });
+          setGemmaVicina(null);
+          void vibraManovra('straight');
           // A destinazione il cruscotto si chiude: Live Activity/notifica via.
           spegniBannerNav();
           releaseWakeLock();
@@ -773,7 +1053,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               spokenRef.current.add(idx);
               setCurrentInstruction(step.instruction);
               setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
-              speakInstruction(step.instruction, language);
+              parlaManovra(step);
+              void vibraManovra(step.maneuverModifier);
               // (31/08/2026) Al posto della sola notifica locale della svolta
               // c'e' il cruscotto persistente: FGS Android / Live Activity
               // iOS, con la notifica locale come ripiego DENTRO updateNavBanner.
@@ -799,6 +1080,24 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               ? Math.max(0, remaining - remAllaManovra)
               : dStep;
             setDistanceToNext(Math.round(dLungoStrada));
+
+            // PRE-ANNUNCIO: "tra 120 metri, gira a destra" — una volta per
+            // manovra, solo per svolte vere (non per partenza/arrivo, che
+            // hanno gia' la loro frase) e solo se la manovra e' ancora
+            // abbastanza lontana da valere l'avviso. Metri SULLA STRADA,
+            // arrotondati a 10 per non dire "tra 137 metri".
+            const tipo = String(step.maneuverType || '').toLowerCase();
+            if (!preannouncedRef.current.has(idx) && !spokenRef.current.has(idx)
+                && tipo !== 'depart' && tipo !== 'arrive'
+                && dLungoStrada <= PREANNOUNCE_DISTANCE_M && dLungoStrada >= PREANNOUNCE_MIN_M) {
+              preannouncedRef.current.add(idx);
+              const metri = Math.round(dLungoStrada / 10) * 10;
+              const l2 = (language || 'it').toLowerCase().slice(0, 2);
+              const modello = PREANNOUNCE_PHRASES[l2] || PREANNOUNCE_PHRASES.en;
+              // L'istruzione in minuscola iniziale dentro la frase ("Tra 120 metri, gira a destra").
+              const istr = step.instruction ? step.instruction.charAt(0).toLowerCase() + step.instruction.slice(1) : '';
+              speakInstruction(modello.replace('{m}', String(metri)).replace('{i}', istr), language);
+            }
             setCurrentInstruction(step.instruction);
             setCurrentManeuver({ type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
             aggiornaBannerNav(t, step.instruction, Math.round(dLungoStrada), metriResidui, etaSec, { type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
@@ -809,6 +1108,40 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     },
     [language],
   );
+
+  /** Accetta la gemma: la meta attuale diventa "da riprendere", si naviga
+   *  verso la gemma (dal punto d'arrivo/porta, come per ogni POI). Se si era
+   *  gia' in deviazione, la meta da riprendere resta quella originale. */
+  const deviaVersoGemma = useCallback(async () => {
+    const g = gemmaVicina;
+    const t = targetRef.current;
+    if (!g || !t) return;
+    if (!ripresaRef.current) {
+      ripresaRef.current = t;
+      setMetaDaRiprendere(t);
+    }
+    setGemmaVicina(null);
+    const arrivo = puntoArrivo(g.poi as any);
+    await startNavigation({
+      lat: arrivo.lat, lon: arrivo.lon,
+      poiId: g.poi.id, poiName: g.poi.name || g.poi.nome,
+      country: (g.poi as any).country ?? t.country ?? null,
+    }, null, []);
+  }, [gemmaVicina, startNavigation]);
+
+  const ignoraGemma = useCallback(() => {
+    if (gemmaVicina) gemmeViste.current.add(String(gemmaVicina.poi.id));
+    setGemmaVicina(null);
+  }, [gemmaVicina]);
+
+  /** Dopo la gemma: si riparte verso la meta originale e la deviazione si chiude. */
+  const riprendiMeta = useCallback(async () => {
+    const meta = ripresaRef.current;
+    if (!meta) return;
+    ripresaRef.current = null;
+    setMetaDaRiprendere(null);
+    await startNavigation(meta, null, []);
+  }, [startNavigation]);
 
   // Cleanup su unmount
   useEffect(() => () => {
@@ -840,5 +1173,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     repeatInstruction,
     recalculateRoute,
     recalculating,
+    routeSummary,
+    gemmaVicina,
+    deviaVersoGemma,
+    ignoraGemma,
+    metaDaRiprendere,
+    riprendiMeta,
   };
 }

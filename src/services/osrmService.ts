@@ -211,6 +211,20 @@ export function translateManeuver(
   }
 }
 
+// EVITA SCALE (08/09/2026): preferenza dell'utente, persistente. Quando e'
+// attiva il server salta le fonti che non sanno evitare le scalinate (OSRM
+// foot, Geoapify, Mapbox) e usa Valhalla/ORS con profilo accessibile.
+const EVITA_SCALE_KEY = 'wip_nav_evita_scale';
+export function getEvitaScale(): boolean {
+  try { return typeof localStorage !== 'undefined' && localStorage.getItem(EVITA_SCALE_KEY) === '1'; } catch { return false; }
+}
+export function setEvitaScale(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(EVITA_SCALE_KEY, '1'); else localStorage.removeItem(EVITA_SCALE_KEY);
+    window.dispatchEvent(new CustomEvent('wip-settings-updated', { detail: { evitaScale: on } }));
+  } catch { /* storage non disponibile */ }
+}
+
 /**
  * Calcola il percorso pedonale da -> a.
  * Ritorna null se OSRM non risponde o non trova rotte.
@@ -226,7 +240,8 @@ export async function fetchWalkingRoute(
     // `language`: il server la passa a Valhalla/ORS/Geoapify per le istruzioni
     // testuali; senza, usava 'it' per tutti (anche utenti EN/FR/DE).
     const langCode = String(lang || 'it').slice(0, 2).toLowerCase();
-    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}`;
+    const evita = getEvitaScale() ? '&evita=scale' : '';
+    const url = `${OSRM_FOOT_BASE}${coords}?overview=full&geometries=geojson&steps=true&language=${encodeURIComponent(langCode)}${evita}`;
     // Timeout: senza, una richiesta appesa lasciava la navigazione bloccata in
     // "routing" all'infinito. Ma 6 s erano TROPPO POCHI: dietro /api/route/foot
     // il server prova cinque fonti in serie (6+7+8+8+8 s) e il client mollava

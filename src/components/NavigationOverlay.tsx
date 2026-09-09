@@ -9,9 +9,9 @@ import { createPortal } from 'react-dom';
 import {
   Flag, Clock, X, Volume2, Footprints, Navigation2, ArrowUp, ArrowUpLeft,
   ArrowUpRight, ArrowLeft, ArrowRight, CornerUpLeft, CornerUpRight,
-  RotateCcw, RotateCw, RefreshCw, MapPin,
+  RotateCcw, RotateCw, RefreshCw, MapPin, Gem, Shuffle,
 } from 'lucide-react';
-import type { NavState, ManeuverInfo } from '../hooks/useWalkingNavigation';
+import type { NavState, ManeuverInfo, RouteSummary, GemmaVicina, NavTarget } from '../hooks/useWalkingNavigation';
 import { getTranslation, type Language } from '../lib/i18n';
 
 interface NavigationOverlayProps {
@@ -46,6 +46,15 @@ interface NavigationOverlayProps {
    * dal cruscotto, non da qui.
    */
   senzaChiudi?: boolean;
+  /** (08/09/2026) Riepilogo del percorso: numero di svolte nel piede. */
+  routeSummary?: RouteSummary | null;
+  /** (08/09/2026) Gemma vicina al percorso da proporre, con le due azioni. */
+  gemmaVicina?: GemmaVicina | null;
+  onDeviaGemma?: () => void;
+  onIgnoraGemma?: () => void;
+  /** (08/09/2026) All'arrivo su una gemma: la meta originale da riprendere. */
+  metaDaRiprendere?: NavTarget | null;
+  onRiprendiMeta?: () => void;
 }
 
 function fmtMeters(m: number | null): string {
@@ -117,6 +126,12 @@ export default function NavigationOverlay({
   recalcInCorso = false,
   language = 'IT',
   senzaChiudi = false,
+  routeSummary = null,
+  gemmaVicina = null,
+  onDeviaGemma,
+  onIgnoraGemma,
+  metaDaRiprendere = null,
+  onRiprendiMeta,
 }: NavigationOverlayProps) {
   if (state === 'idle') return null;
 
@@ -175,6 +190,17 @@ export default function NavigationOverlay({
                 <X size={18} />
               </button>
             </div>
+            {/* Arrivati su una GEMMA in deviazione: si riparte verso la meta
+                originale con un tasto, non si resta appesi (08/09/2026). */}
+            {metaDaRiprendere && onRiprendiMeta && (
+              <button
+                onClick={onRiprendiMeta}
+                className="mt-3 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-secondary py-3 text-primary text-xs font-black uppercase tracking-widest shadow-md active:scale-[0.98] transition-transform"
+              >
+                <Navigation2 size={14} />
+                <span className="truncate">{t('nav_riprendi_verso').replace('{name}', metaDaRiprendere.poiName || '')}</span>
+              </button>
+            )}
             {onNextStop && (
               <button
                 onClick={onNextStop}
@@ -255,6 +281,45 @@ export default function NavigationOverlay({
               </div>
             </div>
 
+            {/* GEMMA VICINA AL PERCORSO (08/09/2026): la proposta che nessun
+                altro navigatore puo' fare. Due tasti, una riga: si decide in
+                un colpo d'occhio camminando. */}
+            {gemmaVicina && (onDeviaGemma || onIgnoraGemma) && (
+              <div className="mx-4 mb-3 rounded-2xl bg-white/10 p-3 ring-1 ring-secondary/40">
+                <div className="flex items-start gap-2.5">
+                  <div className="shrink-0 grid place-items-center w-9 h-9 rounded-xl bg-secondary text-primary">
+                    <Gem size={18} strokeWidth={2.5} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-secondary">
+                      {t('nav_gemma_vicina').replace('{m}', String(gemmaVicina.distM))}
+                    </p>
+                    <p className="mt-0.5 text-sm font-bold leading-snug text-white line-clamp-2">
+                      {gemmaVicina.poi.name || gemmaVicina.poi.nome}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-2.5 flex gap-2">
+                  {onDeviaGemma && (
+                    <button
+                      onClick={onDeviaGemma}
+                      className="flex-1 rounded-xl bg-secondary py-2 text-primary text-[11px] font-black uppercase tracking-widest active:scale-[0.98] transition-transform"
+                    >
+                      {t('nav_deviare')}
+                    </button>
+                  )}
+                  {onIgnoraGemma && (
+                    <button
+                      onClick={onIgnoraGemma}
+                      className="flex-1 rounded-xl bg-white/10 hover:bg-white/20 py-2 text-white text-[11px] font-black uppercase tracking-widest active:scale-[0.98] transition-transform"
+                    >
+                      {t('nav_ignora')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* «Salta tappa» anche IN NAVIGAZIONE (ITI-04): una tappa chiusa,
                 irraggiungibile o senza coordinate valide bloccava l'utente
                 finche' non "arrivava" — il bottone esisteva solo in stato
@@ -282,6 +347,12 @@ export default function NavigationOverlay({
                 <span className="inline-flex items-center gap-1.5">
                   <Flag size={13} className="text-secondary" /> {fmtMeters(distanceToDestination)}
                 </span>
+                {/* Svolte rimaste: quante manovre aspettarsi (08/09/2026). */}
+                {routeSummary && routeSummary.turns > 0 && (
+                  <span className="inline-flex items-center gap-1.5" title={t('nav_svolte')}>
+                    <Shuffle size={13} className="text-secondary" /> {routeSummary.turns}
+                  </span>
+                )}
                 <span className="inline-flex items-center gap-1.5">
                   <Clock size={13} className="text-secondary" />
                   {fmtEta(etaSeconds)}

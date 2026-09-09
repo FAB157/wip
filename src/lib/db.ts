@@ -45,9 +45,57 @@ export interface VisionQueueItem {
   attempts?: number;     // tentativi falliti non-rete (max 3, poi scartata)
 }
 
+/**
+ * REGISTRO UNICO DEI DOWNLOAD (08/09/2026): una riga per ogni cosa che
+ * l'utente ha scaricato — itinerario, zona mappa, audioguide, guida — con le
+ * PARTI che la compongono e il loro stato. Tutti i flussi di download
+ * esistenti (mappe offline, bundle audio, pacchetti nativi) scrivono qui, e
+ * la schermata "I miei download" legge solo da qui. Prima erano tre posti
+ * diversi senza una vista d'insieme.
+ */
+export type DownloadTipo = 'itinerario' | 'zona' | 'audioguida' | 'guida';
+export interface DownloadRecord {
+  /** Chiave stabile: `iti:<id>`, `zona:<areaId>`, `audio:<poiId>`, `guida:<id>`. */
+  id: string;
+  tipo: DownloadTipo;
+  nome: string;
+  sottotitolo?: string;
+  /** Byte stimati/misurati di tutto il pacchetto. */
+  bytes: number;
+  parti: {
+    /** Tile della mappa per la zona del percorso/area. */
+    mappa?: boolean;
+    /** Celle stradali pedonali per la navigazione offline. */
+    strade?: boolean;
+    /** POI della zona nel mirror locale. */
+    poi?: boolean;
+    /** Audioguide delle tappe: quante pronte su quante previste. */
+    audioguide?: { fatte: number; totali: number };
+  };
+  /** Dati di appoggio: bbox, id dell'itinerario/area, lingua, voce... */
+  meta?: Record<string, unknown>;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * CELLE STRADALI PEDONALI (08/09/2026): la stessa griglia 0,05° delle road
+ * tiles del server (`x{gx}_y{gy}_foot.json.gz` su Supabase Storage). Sono il
+ * grafo per il ricalcolo del percorso SENZA rete. `geometrie` = elenco di
+ * polilinee [lat, lon][]. `cella` e' la chiave "gx_gy".
+ */
+export interface RoadCell {
+  cella: string;
+  geometrie: number[][][];
+  bytes: number;
+  lastUpdated: number;
+}
+
 const db = new Dexie('ItaliaInTascaDB') as Dexie & {
   pois: EntityTable<LocalPoi, 'id'>;
   visionQueue: EntityTable<VisionQueueItem, 'id'>;
+  downloads: EntityTable<DownloadRecord, 'id'>;
+  roadCells: EntityTable<RoadCell, 'cella'>;
 };
 
 // Schema declaration:
@@ -64,6 +112,15 @@ db.version(1).stores({
 db.version(2).stores({
   pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated',
   visionQueue: '++id, ts'
+});
+
+// v3 (08/09/2026): registro unico dei download + celle stradali pedonali per
+// la navigazione offline. Upgrade additivo: le store precedenti non cambiano.
+db.version(3).stores({
+  pois: 'id, name, lat, lon, category, is_gem, status, lastUpdated',
+  visionQueue: '++id, ts',
+  downloads: 'id, tipo, updatedAt',
+  roadCells: 'cella, lastUpdated',
 });
 
 /**

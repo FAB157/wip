@@ -3,7 +3,10 @@
 import { Mic, Trash2, User, History, Landmark, Check, MapPin, Calendar, Compass, Sparkles, Plus, X, RotateCcw, Save, Loader2, ListChecks, Map as MapIcon, Heart, Printer, Navigation, ChevronDown, ChevronUp, Download, Lock, Unlock, Headphones, ArrowUp, ArrowDown, Clock, Church, Utensils, Trees, AlertTriangle, ShieldAlert, Lightbulb, ThumbsUp, Ticket, Bus, Coffee, Wine, Wallet, LocateFixed, ArrowLeft, ExternalLink, Star, Radio, Square, Info, Eye, Play, Pause, SkipBack, RefreshCw, Globe, Music } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { saveOfflineItinerary, getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
+import { saveOfflineItinerary, getOfflineItinerary } from '../lib/offlineStorage';
+import { scaricaPacchettoOffline } from '../lib/pacchettoOffline';
+import { registraDownload } from '../lib/downloadsRegistry';
+import DownloadsScreen from './DownloadsScreen';
 import { tourService, MAX_TAPPE } from '../services/tourService';
 import NavChoiceSheet from './NavChoiceSheet';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
@@ -1990,6 +1993,17 @@ export default function PlanScreen({
         setOfflineStatus(okCount < selectedPoiIds.length ? `${ready} (${okCount}/${selectedPoiIds.length})` : ready);
         setTimeout(() => setOfflineStatus(null), 4000);
       }
+
+      // "I MIEI DOWNLOAD" (08/09/2026): il conteggio audioguide dell'itinerario
+      // nel registro (stesso id offline di handleSaveOffline).
+      try {
+        const titleSlug = (generatedPlan?.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
+        const offlineId = generatedPlan?.id ? `${titleSlug}_${String(generatedPlan.id).slice(0, 8)}` : titleSlug;
+        await registraDownload('itinerario', offlineId, {
+          nome: generatedPlan?.titolo || 'Itinerario',
+          parti: { audioguide: { fatte: okCount, totali: selectedPoiIds.length } },
+        });
+      } catch { /* registro best-effort */ }
       
     } catch (error) {
       console.error("Bundle download error:", error);
@@ -2345,6 +2359,12 @@ export default function PlanScreen({
     repeatInstruction,
     recalculateRoute,
     recalculating: navRecalculating,
+    routeSummary: navRouteSummary,
+    gemmaVicina: navGemmaVicina,
+    deviaVersoGemma: navDeviaVersoGemma,
+    ignoraGemma: navIgnoraGemma,
+    metaDaRiprendere: navMetaDaRiprendere,
+    riprendiMeta: navRiprendiMeta,
   } = useWalkingNavigation(language);
 
   // Avvio WIP Nav dal modal "Rotta Intelligente" (bottone per tappa in
@@ -2358,7 +2378,7 @@ export default function PlanScreen({
       // Senza, chi avviava la navigazione dalla mappa prima di aver mai aperto
       // questa tab (montata lazy) sparava l'evento nel vuoto.
       if (e.detail) e.detail.handled = true;
-      const { endCoords, destinationName, origin, pois, poiId } = e.detail || {};
+      const { endCoords, destinationName, origin, pois, poiId, country } = e.detail || {};
       if (!endCoords?.lat) return;
       startNavigation(
         {
@@ -2368,6 +2388,8 @@ export default function PlanScreen({
           // e avvia l'audioguida. Sintetico solo per gli indirizzi liberi.
           poiId: poiId ? String(poiId) : `wipnav_${String(destinationName || '').slice(0, 40)}`,
           poiName: destinationName || '',
+          // Paese della meta: pronuncia locale dei nomi delle vie (08/09/2026).
+          country: country ?? null,
         },
         origin || undefined,
         Array.isArray(pois) ? pois : []
@@ -2930,13 +2952,30 @@ export default function PlanScreen({
     // dell'email (?archivio=guide|itinerari).
     const apri = () => { setPlannerMode('my_itineraries'); void fetchMyItineraries(); void fetchSavedPremiumGuides(); try { sessionStorage.removeItem('wip_apri_archivio'); } catch { /* niente */ } };
     window.addEventListener('wip-apri-archivio', apri);
+    // "I MIEI DOWNLOAD" (08/09/2026): un tocco su un itinerario scaricato lo
+    // apre direttamente — stesso percorso del tasto "Apri" della lista
+    // offline, ma pilotato da fuori (App.tsx porta al tab Piano, qui si carica).
+    const apriOffline = async (e: Event) => {
+      const d = (e as CustomEvent).detail;
+      if (d) d.handled = true; // ricevuta: App.tsx ridispatcha finche' il tab non e' montato
+      const id = d?.id;
+      if (!id) return;
+      const data = await getOfflineItinerary(String(id));
+      if (!data) return;
+      setGeneratedPlan(data);
+      setLockedStops({});
+      setExpandedStops({});
+      if (data.podcast_cache && typeof data.podcast_cache === 'object') setPodcastCache(data.podcast_cache);
+      setPlannerMode('view');
+    };
+    window.addEventListener('wip-apri-itinerario-offline', apriOffline);
     try {
       // Dal link dell'email: App.tsx mette la destinazione in sessionStorage
       // (sopravvive al login), qui si consuma.
       const p = new URLSearchParams(window.location.search).get('archivio') || sessionStorage.getItem('wip_apri_archivio');
       if (p) { apri(); window.history.replaceState({}, '', window.location.pathname); }
     } catch { /* niente */ }
-    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); };
+    return () => { window.removeEventListener('wip-generazioni-aggiornate', h); window.removeEventListener('wip-apri-archivio', apri); window.removeEventListener('wip-apri-itinerario-offline', apriOffline); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -4604,13 +4643,6 @@ export default function PlanScreen({
   };
 
   const [offlineStatus, setOfflineStatus] = useState<string | null>(null);
-  const [offlinePlans, setOfflinePlans] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (plannerMode === 'offline_list') {
-      getOfflineItinerariesList().then(list => setOfflinePlans(list));
-    }
-  }, [plannerMode]);
 
   const handleSaveOffline = async () => {
     if (!generatedPlan) return;
@@ -4634,8 +4666,23 @@ export default function PlanScreen({
       const titleSlug = (generatedPlan.titolo || 'itinerario').replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
       const id = generatedPlan.id ? `${titleSlug}_${String(generatedPlan.id).slice(0, 8)}` : titleSlug;
       await saveOfflineItinerary(id, salvataggio);
-      
-      setOfflineStatus("Disponibile Offline ✓");
+
+      // PACCHETTO OFFLINE (08/09/2026): insieme al piano si scaricano la mappa
+      // della zona del percorso e le celle stradali per la navigazione senza
+      // rete, e tutto finisce in "I miei download". Best-effort: il piano e'
+      // gia' salvato, una parte che manca si vede nel registro e si completa
+      // da li'.
+      setOfflineStatus(getTranslation('dl_in_corso', language));
+      try {
+        const esito = await scaricaPacchettoOffline(salvataggio, id, { mappa: true, strade: true }, (fase, fr) => {
+          setOfflineStatus(`${getTranslation(fase === 'mappa' ? 'dl_mappa' : 'dl_navigazione', language)} ${Math.round(fr * 100)}%`);
+        });
+        if (esito.strade && esito.strade.mancanti > 0) notify(getTranslation('dl_strade_fuori_copertura', language), 'info');
+      } catch (e) {
+        console.warn('[offline] pacchetto non completo', e);
+      }
+
+      setOfflineStatus(getTranslation('dl_fatto', language) + ' ✓');
       setTimeout(() => setOfflineStatus(null), 3000);
     } catch (e) {
       console.error(e);
@@ -5452,7 +5499,7 @@ export default function PlanScreen({
                     <Download className="w-5 h-5 text-white" />
                   </div>
                   <div className="text-left">
-                    <h3 className="text-xs font-black text-white">{getTranslation("offline_mode", language)}</h3>
+                    <h3 className="text-xs font-black text-white">{getTranslation("dl_titolo", language)}</h3>
                     <p className="text-[10px] text-white/70 font-bold">{getTranslation('no_internet', language)}</p>
                   </div>
                 </button>
@@ -7076,73 +7123,10 @@ export default function PlanScreen({
               animate={{ opacity: 1, scale: 1 }}
               className="space-y-6 pt-4"
             >
-              <div className="flex justify-between items-center mb-4 px-1">
-                <h3 className="text-xl font-black text-primary">{getTranslation('offline_itineraries_title', language)}</h3>
-                <span className="text-[10px] font-black text-on-surface-variant/40 uppercase tracking-widest bg-white px-3 py-1 rounded-full border border-outline-variant/10 shadow-sm">
-                  {offlinePlans.length} {getTranslation('offline_saved_count', language)}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 max-h-[60dvh] overflow-y-auto pr-2 no-scrollbar">
-                {offlinePlans.length === 0 ? (
-                   <div className="p-12 border-2 border-dashed border-outline-variant/30 rounded-[2.5rem] flex flex-col items-center text-center opacity-40">
-                      <Download className="w-12 h-12 mb-4" />
-                      <p className="text-sm font-bold">{getTranslation('offline_none', language)}</p>
-                      <p className="text-[10px] uppercase font-black tracking-widest mt-2 px-6">{getTranslation('offline_none_hint', language)}</p>
-                   </div>
-                ) : (
-                  offlinePlans.map((plan: any, i: number) => (
-                    <div 
-                      key={plan.id || i}
-                      className="p-5 rounded-[2rem] bg-white border border-outline-variant/10 shadow-sm flex flex-col gap-3 group relative overflow-hidden"
-                    >
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <h4 className="font-black text-on-surface text-lg leading-tight mb-1">{plan.title || plan.titolo}</h4>
-                          <h5 className="text-[11px] font-bold text-primary uppercase tracking-widest bg-primary/5 inline-flex px-2 py-0.5 rounded-lg mb-2">
-                            Offline
-                          </h5>
-                          <p className="text-[10px] text-on-surface-variant/60 font-bold mt-2">
-                            {getTranslation('offline_saved_on', language)} {new Date(plan.date || plan.data_salvataggio).toLocaleDateString(language.toLowerCase())}
-                          </p>
-                        </div>
-                        <button
-                           onClick={async (e) => {
-                             e.stopPropagation();
-                             if (plan.id) {
-                               await deleteOfflineItinerary(plan.id);
-                             }
-                             const newPlans = await getOfflineItinerariesList();
-                             setOfflinePlans(newPlans);
-                           }}
-                           className="w-10 h-10 rounded-full bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center justify-center shrink-0 border border-red-100"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                      <button
-                        onClick={async () => {
-                          const data = await getOfflineItinerary(plan.id);
-                          if (data) {
-                            setGeneratedPlan(data);
-                            // Stato blocchi/espansioni appartiene al vecchio itinerario: azzeriamo
-                            setLockedStops({});
-                            setExpandedStops({});
-                            // Ripristina podcast cache salvata localmente
-                            if (data.podcast_cache && typeof data.podcast_cache === 'object') {
-                              setPodcastCache(data.podcast_cache);
-                            }
-                            setPlannerMode('view');
-                          }
-                        }}
-                        className="w-full mt-2 py-3 bg-primary/5 text-primary rounded-xl font-bold text-sm border border-primary/10 hover:bg-primary hover:text-white transition-colors"
-                      >
-                        {getTranslation('offline_open', language)}
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
+              {/* "I MIEI DOWNLOAD" (08/09/2026): la stessa area unica del Profilo.
+                  Un tocco su un itinerario lo apre qui (evento
+                  wip-apri-download → App → wip-apri-itinerario-offline). */}
+              <DownloadsScreen language={language} />
 
               <div className="flex gap-4 pt-4">
                 <button 
@@ -8147,6 +8131,12 @@ export default function PlanScreen({
             recalcInCorso={navRecalculating}
             onNextStop={navDayIndex !== null && navStopIndex !== null && (generatedPlan?.giorni[navDayIndex]?.tappe.length || 0) > (navStopIndex || 0) + 1 ? handleNextStop : undefined}
             onRepeat={repeatInstruction}
+            routeSummary={navRouteSummary}
+            gemmaVicina={navGemmaVicina}
+            onDeviaGemma={() => { void navDeviaVersoGemma(); }}
+            onIgnoraGemma={navIgnoraGemma}
+            metaDaRiprendere={navMetaDaRiprendere}
+            onRiprendiMeta={() => { void navRiprendiMeta(); }}
           />
         )}
       </AnimatePresence>

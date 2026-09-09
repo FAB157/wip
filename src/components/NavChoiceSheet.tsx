@@ -1,8 +1,9 @@
-import React from "react";
+import React, { useState } from "react";
 import { createPortal } from "react-dom";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Language, getTranslation } from "../lib/i18n";
 import { puntoArrivoSuStrada } from "../lib/puntoArrivo";
+import { getEvitaScale, setEvitaScale } from "../services/osrmService";
 
 /**
  * La doppia scelta di navigazione verso un POI, la stessa degli itinerari
@@ -34,6 +35,9 @@ export async function navigaAPiediVerso(poi: NavChoicePoi) {
       poiId: poi.id,
       mode: "foot",
       arrivoDa: a.fonte,
+      // Paese del POI (shared_pois.country): serve al navigatore per leggere
+      // i nomi delle vie nella lingua locale (08/09/2026).
+      country: poi.country ?? null,
     },
   }));
 }
@@ -128,6 +132,10 @@ interface Props {
 }
 
 export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi, titolo, tappeAuto }: Props) {
+  // EVITA SCALE (08/09/2026): preferenza persistente letta da osrmService al
+  // calcolo del percorso. L'hook sta prima del return condizionale (regole
+  // degli hook), il default e' quello salvato.
+  const [evitaScale, setEvitaScaleUi] = useState<boolean>(() => getEvitaScale());
   if (!poi) return null;
   const lang = language as Language;
   const modoItinerario = Array.isArray(tappe) && tappe.length > 0;
@@ -162,6 +170,21 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
             </span>
           </span>
         </button>
+        {/* Evita scale: per passeggini e mobilita' ridotta. Il percorso a piedi
+            usa Valhalla/ORS con profilo accessibile quando e' attivo. */}
+        <label
+          onClick={stop}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-t border-gray-100 cursor-pointer select-none"
+        >
+          <span className="text-xl">♿</span>
+          <span className="flex-1 text-sm font-semibold text-gray-800">{getTranslation("nav_evita_scale", lang)}</span>
+          <input
+            type="checkbox"
+            checked={evitaScale}
+            onChange={(e) => { const on = e.target.checked; setEvitaScaleUi(on); setEvitaScale(on); }}
+            className="h-5 w-5 accent-blue-700"
+          />
+        </label>
         <button
           onClick={(e) => {
             stop(e); onClose();

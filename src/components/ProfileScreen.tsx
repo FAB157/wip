@@ -60,7 +60,7 @@ import AppGuide from './AppGuide';
 import PriceList from './PriceList';
 import DayPassCard from './DayPassCard';
 import FreeFeaturesModal from './FreeFeaturesModal';
-import OfflineMapsTab from './OfflineMapsTab';
+import DownloadsScreen from './DownloadsScreen';
 import RainGuaranteeCard from './RainGuaranteeCard';
 import { PilgrimCertificateAction } from './PilgrimWaysSheet';
 import ProminentDisclosure from './ProminentDisclosure';
@@ -731,8 +731,8 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
   };
 
   const TABS = profile?.is_admin
-    ? (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy', 'admin'] as const)
-    : (['diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'offline', 'pricing', 'listino', 'guida', 'supporto', 'privacy'] as const);
+    ? (['offline', 'diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'pricing', 'listino', 'guida', 'supporto', 'privacy', 'admin'] as const)
+    : (['offline', 'diario', 'myvision', 'itinerari', 'missioni', 'livetour', 'cronologia', 'impostazioni', 'pricing', 'listino', 'guida', 'supporto', 'privacy'] as const);
 
   const handleSwipe = (e: any, direction: 'left' | 'right') => {
     if (e.event && e.event.target) {
@@ -1253,14 +1253,38 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
           onOpenMyVision={() => setActiveTab('myvision')}
         />
 
+        {/* "I MIEI DOWNLOAD" IN CIMA (08/09/2026): l'unica area con tutto cio'
+            che l'utente ha scaricato — itinerari, mappe, audioguide, guide.
+            Sta qui, sopra le tab, perche' serve soprattutto quando NON c'e'
+            rete e deve essere il primo tasto che si vede. */}
+        {activeTab !== 'offline' && (
+          <button
+            onClick={() => setActiveTab('offline')}
+            className="mt-6 w-full flex items-center gap-3 rounded-2xl bg-primary text-white p-4 shadow-md active:scale-[0.99] transition-transform text-left"
+          >
+            <span className="shrink-0 grid place-items-center w-11 h-11 rounded-xl bg-white/15"><Download className="w-5 h-5" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-black">{getTranslation('dl_titolo', language)}</span>
+              <span className="block text-[11px] text-white/80 font-semibold truncate">{getTranslation('dl_sottotitolo', language)}</span>
+            </span>
+            <ChevronRight className="w-5 h-5 shrink-0 text-white/70" />
+          </button>
+        )}
+
         {/* Navigation Tabs - Minimalist Style */}
         <div className="mt-8 overflow-x-auto pb-2 custom-scrollbar">
           <div className="flex items-center gap-6 min-w-max px-1">
-            <TabButton 
-              active={activeTab === 'diario'} 
-              onClick={() => setActiveTab('diario')} 
-              icon={<BookOpen className="w-3.5 h-3.5" />} 
-              label={getTranslation("diary", language)} 
+            <TabButton
+              active={activeTab === 'offline'}
+              onClick={() => setActiveTab('offline')}
+              icon={<Download className="w-3.5 h-3.5" />}
+              label={getTranslation('dl_titolo', language)}
+            />
+            <TabButton
+              active={activeTab === 'diario'}
+              onClick={() => setActiveTab('diario')}
+              icon={<BookOpen className="w-3.5 h-3.5" />}
+              label={getTranslation("diary", language)}
             />
             <TabButton
               active={activeTab === 'myvision'}
@@ -1296,15 +1320,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               active={activeTab === 'impostazioni'} 
               onClick={() => setActiveTab('impostazioni')} 
               icon={<Settings className="w-3.5 h-3.5" />} 
-              label={getTranslation("setup_tab", language)} 
+              label={getTranslation("setup_tab", language)}
             />
-            <TabButton 
-              active={activeTab === 'offline'} 
-              onClick={() => setActiveTab('offline')} 
-              icon={<Download className="w-3.5 h-3.5" />}
-              label={getTranslation('pf_mappe_offline_tab', language)}
-            />
-            <TabButton 
+            <TabButton
               active={activeTab === 'pricing'} 
               onClick={() => setActiveTab('pricing')} 
               icon={<Ticket className="w-3.5 h-3.5" />} 
@@ -2958,7 +2976,9 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
               exit={{ opacity: 0, y: -10 }}
               className="space-y-6"
             >
-              <OfflineMapsTab language={language} />
+              {/* "I MIEI DOWNLOAD" (08/09/2026): l'area unica di tutto cio' che
+                  l'utente ha scaricato — include il vecchio pannello zone. */}
+              <DownloadsScreen language={language} />
             </motion.div>
           )}
 
