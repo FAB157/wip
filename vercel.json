@@ -22,6 +22,18 @@
       "destination": "/terms.html"
     },
     {
+      "source": "/robots.txt",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/sitemap(.*).xml",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/luogo/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

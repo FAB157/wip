@@ -11321,6 +11321,269 @@ ${description}
     res.json({ checks: await runAllHealthChecks() });
   });
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // PAGINE PUBBLICHE INDICIZZABILI (09/09/2026)
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // PERCHE'. Fino a oggi wip.guide non aveva né sitemap né robots.txt, e ogni
+  // URL cadeva sull'index.html dell'SPA: per Google il sito era una pagina
+  // sola, vuota. Nel frattempo in shared_pois ci sono milioni di luoghi con
+  // descrizione e foto — l'inventario di contenuto piu' grande della
+  // categoria, invisibile.
+  //
+  // E' esattamente la mossa con cui Wanderlog ha vinto la sua nicchia
+  // (itinerari utente resi pubblici = inventario SEO perpetuo). Qui la stessa
+  // mossa parte da un catalogo gia' scritto, senza aspettare gli utenti.
+  //
+  // REGOLA DI QUALITA', NON DI QUANTITA'. Non si pubblicano 9,3 milioni di
+  // pagine: una pagina senza contenuto vero e' una pagina sottile, e a
+  // milioni diventa una penalizzazione, non traffico. Passano solo i POI con
+  // una descrizione di sostanza E una foto reale — le stesse due condizioni
+  // che la regola «foto e testi veri» impone gia' al resto del prodotto.
+  // Tutto il resto resta fuori dalla sitemap (e la pagina risponde 404).
+  const SEO_MIN_DESCRIZIONE = 180;      // caratteri: sotto, e' una didascalia
+  // 1000 e non 5000: PostgREST tronca in silenzio a 1000 righe per risposta.
+  // Con 5000 l'indice prometteva cinque volte le pagine che le sitemap
+  // contenevano davvero, e l'80% dei luoghi non sarebbe mai finito in nessuna
+  // sitemap (visto in prova il 09/09). Il tetto di Google e' 50.000 URL per
+  // sitemap e 50.000 sitemap per indice: mille alla volta ci sta comodo.
+  const SEO_PAGINE_PER_SITEMAP = 1000;
+  const SEO_CACHE_MS = 24 * 60 * 60 * 1000;
+  // TETTO ALLE PAGINE PUBBLICATE (09/09/2026). Due ragioni, una tecnica e una
+  // di posizionamento.
+  //  - Tecnica: `offset` su un filtro che tocca milioni di righe costa quanto
+  //    l'offset stesso — lo shard 200 rileggerebbe 200.000 righe a ogni
+  //    passaggio del crawler. In prova il database ha risposto con un timeout
+  //    (57014) gia' allo shard 0, perche' e' condiviso con i lavori di massa.
+  //  - Posizionamento: 50.000 pagine buone si indicizzano; 265.000 mediocri
+  //    diluiscono il dominio. Meglio poche pagine che Google tiene, che tante
+  //    che scarta.
+  // Quando servira' allargare, la strada giusta non e' alzare questo numero
+  // ma precalcolare le sitemap con un cron a passi (paginazione per chiave,
+  // non per offset).
+  const SEO_MAX_SHARD = 50;
+
+  const seoEscape = (s: any) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  /** Slug leggibile per l'URL: «Basilica di San Marco» → «basilica-di-san-marco». */
+  const seoSlug = (s: any) => String(s ?? '')
+    .normalize('NFD').replace(new RegExp('[\u0300-\u036f]', 'g'), '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
+
+  /**
+   * L'indirizzo di un luogo, costruito in UN SOLO posto: la sitemap e la
+   * pagina devono per forza produrre la stessa stringa, altrimenti la
+   * sitemap elenca URL che rispondono 404 — che e' peggio di non averla
+   * (Google la legge come un sito che promette pagine e non le mantiene).
+   *
+   * Separatore TILDE, non trattino. Gli id qui dentro non sono numeri:
+   * possono contenere trattini e underscore («osm-123», «-0_0002_-78_1752»),
+   * quindi da «equator--0_0002_-78_1752» non c'e' modo di sapere dove
+   * finisce il nome e comincia l'id. La tilde non compare mai in uno slug
+   * (seoSlug tiene solo a-z, 0-9 e trattino), quindi separa senza ambiguita'.
+   */
+  const seoUrlLuogo = (p: any) =>
+    `${seoSlug(p?.name) || 'luogo'}~${encodeURIComponent(String(p?.id ?? ''))}`;
+
+  /** Il filtro di ammissione, uno solo, usato sia dalla sitemap che dalla pagina. */
+  const SEO_FILTRO = `is_hidden=is.false&description_short=not.is.null&image_url=not.is.null`;
+
+  const seoPoiAmmesso = (p: any) =>
+    p && p.is_hidden !== true
+    && String(p.description_short || '').length >= SEO_MIN_DESCRIZIONE
+    && !!p.image_url
+    && !['draft', 'needs_revision', 'rejected', 'hidden'].includes(String(p.status || ''));
+
+  app.get("/robots.txt", (req, res) => {
+    res.type('text/plain').send([
+      'User-agent: *',
+      'Allow: /',
+      // L'area applicativa non ha nulla da indicizzare e brucerebbe crawl budget.
+      'Disallow: /api/',
+      'Disallow: /auth/',
+      '',
+      'Sitemap: https://wip.guide/sitemap.xml',
+      '',
+    ].join('\n'));
+  });
+
+  // Indice delle sitemap. Il conteggio esatto costerebbe una scansione su
+  // milioni di righe a ogni richiesta: si tiene in cache un giorno, che e'
+  // anche la frequenza con cui un crawler ha senso che ripassi.
+  app.get("/sitemap.xml", rateLimiter, async (req, res) => {
+    try {
+      // Quanti shard esistono davvero lo sa solo chi li ha costruiti
+      // (scripts/costruisci-sitemap.mjs, che scrive qui il numero). Un
+      // conteggio a richiesta sarebbe l'ennesima scansione, e soprattutto
+      // dichiarerebbe sitemap che non esistono — un indice che punta a 404
+      // vale meno di nessun indice.
+      const riga = await getFromCache('seo_sitemap_shard_totale');
+      const pagine = Math.min(SEO_MAX_SHARD, Number(riga?.text_content) || 0);
+      if (!pagine) {
+        res.status(404).type('text/plain').send('sitemap non ancora generata');
+        return;
+      }
+
+      const oggi = new Date().toISOString().slice(0, 10);
+      const righe: string[] = [];
+      for (let i = 0; i < pagine; i++) {
+        righe.push(`<sitemap><loc>https://wip.guide/sitemap-luoghi-${i}.xml</loc><lastmod>${oggi}</lastmod></sitemap>`);
+      }
+      res.type('application/xml').send(
+        `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${righe.join('\n')}\n</sitemapindex>`,
+      );
+    } catch (e: any) {
+      console.warn('[seo] sitemap indice:', e?.message);
+      res.status(503).type('text/plain').send('sitemap non disponibile');
+    }
+  });
+
+  app.get("/sitemap-luoghi-:n.xml", rateLimiter, async (req, res) => {
+    try {
+      const n = Math.max(0, Math.min(SEO_MAX_SHARD - 1, parseInt(String((req.params as any).n), 10) || 0));
+
+      // Servita dalla cache quando c'e': un crawler ripassa sulle stesse
+      // sitemap in continuazione, e ognuna costa una scansione filtrata al
+      // database — che qui e' lo stesso database che serve l'app.
+      // SOLO CACHE, MAI UNA SCANSIONE QUI (09/09/2026). Costruire lo shard
+      // al volo voleva dire chiedere a Postgres mille righe che soddisfano
+      // tre filtri senza un indice adatto: misurato, `limit=3` risponde in
+      // 625 ms e `limit=1000` muore in timeout dopo 8 secondi (57014). Un
+      // crawler ripassa su queste sitemap in continuazione, e sarebbe una
+      // scansione da milioni di righe a ogni passaggio, sullo stesso
+      // database che serve l'app.
+      // A riempire la cache e' `scripts/costruisci-sitemap.mjs`, che cammina
+      // per chiave a piccoli lotti quando il database e' libero.
+      const inCache = await getFromCache(`seo_sitemap_shard_${n}`);
+      if (!inCache?.text_content) {
+        res.status(404).type('text/plain').send('sitemap non ancora generata');
+        return;
+      }
+      res.type('application/xml').set('Cache-Control', 'public, max-age=86400').send(inCache.text_content);
+    } catch (e: any) {
+      console.warn('[seo] sitemap luoghi:', e?.message);
+      res.status(503).type('text/plain').send('sitemap non disponibile');
+    }
+  });
+
+  /**
+   * La pagina di un luogo, servita in HTML vero al primo byte: un crawler non
+   * esegue l'SPA, quindi tutto cio' che deve leggere (titolo, descrizione,
+   * foto, dati strutturati) sta gia' nella risposta. Un utente umano vede la
+   * stessa cosa e ha il pulsante per aprire l'app.
+   */
+  app.get("/luogo/:slug", rateLimiter, async (req, res) => {
+    try {
+      // L'id sta dopo l'ULTIMA tilde: «basilica-di-san-marco~osm-123» →
+      // «osm-123». Vedi seoUrlLuogo() per il perche' della tilde.
+      const slug = String((req.params as any).slug || '');
+      const id = decodeURIComponent(slug.split('~').pop() || slug);
+
+      const { data } = await axios.get(
+        `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(id)}`
+        + `&select=id,name,description_short,description_long,image_url,city,country,lat,lon,category,is_hidden,status,updated_at&limit=1`,
+        { headers: SB_HDR(), timeout: 15000 },
+      );
+      const poi = Array.isArray(data) ? data[0] : null;
+
+      // Un luogo senza contenuto vero non diventa una pagina: 404, e non entra
+      // in sitemap. Meglio nessuna pagina che una pagina vuota.
+      if (!seoPoiAmmesso(poi)) {
+        res.status(404).type('text/html').send(seoPaginaVuota());
+        return;
+      }
+
+      const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: storia, foto e audioguida gratis`;
+      const descr = String(poi.description_short).replace(/\s+/g, ' ').trim().slice(0, 300);
+      const url = `https://wip.guide/luogo/${seoUrlLuogo(poi)}`;
+      const testoLungo = String(poi.description_long || '').replace(/\s+/g, ' ').trim();
+
+      const jsonLd = {
+        '@context': 'https://schema.org',
+        '@type': 'TouristAttraction',
+        name: poi.name,
+        description: descr,
+        image: poi.image_url,
+        url,
+        ...(Number.isFinite(Number(poi.lat)) && Number.isFinite(Number(poi.lon)) ? {
+          geo: { '@type': 'GeoCoordinates', latitude: Number(poi.lat), longitude: Number(poi.lon) },
+        } : {}),
+        ...(poi.city || poi.country ? {
+          address: {
+            '@type': 'PostalAddress',
+            ...(poi.city ? { addressLocality: poi.city } : {}),
+            ...(poi.country ? { addressCountry: poi.country } : {}),
+          },
+        } : {}),
+      };
+
+      res.type('text/html').set('Cache-Control', 'public, max-age=3600, s-maxage=86400').send(`<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${seoEscape(titolo.slice(0, 60))}</title>
+<meta name="description" content="${seoEscape(descr.slice(0, 160))}">
+<link rel="canonical" href="${seoEscape(url)}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="${seoEscape(titolo)}">
+<meta property="og:description" content="${seoEscape(descr.slice(0, 200))}">
+<meta property="og:image" content="${seoEscape(poi.image_url)}">
+<meta property="og:url" content="${seoEscape(url)}">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>
+<style>
+:root{color-scheme:light}
+body{margin:0;font:16px/1.65 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111;background:#fff}
+.wrap{max-width:760px;margin:0 auto;padding:24px 20px 64px}
+header a{color:#1e3a8a;font-weight:800;text-decoration:none;font-size:18px}
+h1{font-size:30px;line-height:1.2;margin:22px 0 6px}
+.dove{color:#555;font-size:15px;margin:0 0 18px}
+img.hero{width:100%;height:auto;border-radius:14px;display:block;margin:0 0 22px}
+.cta{display:block;background:#1e3a8a;color:#fff;text-decoration:none;font-weight:700;
+     padding:16px 20px;border-radius:14px;text-align:center;margin:28px 0}
+.cta small{display:block;font-weight:400;opacity:.85;margin-top:4px}
+footer{margin-top:40px;padding-top:20px;border-top:1px solid #eee;color:#666;font-size:14px}
+footer a{color:#1e3a8a}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><a href="https://wip.guide">WIP · World in Pocket</a></header>
+<h1>${seoEscape(poi.name)}</h1>
+<p class="dove">${seoEscape([poi.city, poi.country].filter(Boolean).join(', '))}</p>
+<img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">
+<p>${seoEscape(descr)}</p>
+${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
+<a class="cta" href="https://wip.guide">Ascolta l'audioguida di ${seoEscape(poi.name)}
+<small>Gratis su WIP — parte da sola quando arrivi sul posto, anche a schermo spento</small></a>
+<footer>
+<p><strong>WIP · World in Pocket</strong> racconta oltre 9 milioni di luoghi in 7 lingue.
+L'audioguida parte da sola mentre cammini: non devi cercare niente.</p>
+<p><a href="https://wip.guide">wip.guide</a></p>
+</footer>
+</div>
+</body>
+</html>`);
+    } catch (e: any) {
+      console.warn('[seo] pagina luogo:', e?.message);
+      res.status(503).type('text/plain').send('pagina non disponibile');
+    }
+  });
+
+  function seoPaginaVuota() {
+    return `<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>Luogo non disponibile · WIP</title></head>
+<body style="font:16px system-ui;padding:40px;max-width:600px;margin:0 auto">
+<h1>Questo luogo non ha ancora una scheda</h1>
+<p>Su WIP ci sono oltre 9 milioni di luoghi: cercalo nell'app.</p>
+<p><a href="https://wip.guide" style="color:#1e3a8a;font-weight:700">Vai a wip.guide</a></p>
+</body></html>`;
+  }
+
   // ── MONITORAGGIO ESTERNO: pannello unico (30/08/2026) ───────────────────
   // I quattro servizi (Sentry/Checkly/PostHog/UptimeRobot) vivono ognuno sulla
   // propria dashboard: qui si aggregano le statistiche di lettura per non
