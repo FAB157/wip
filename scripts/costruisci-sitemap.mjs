@@ -42,7 +42,12 @@ const MAX_SHARD = 50;
 const MIN_DESCRIZIONE = 180;
 
 const LOTTO = 1000;    // righe lette per giro: senza filtri in SQL regge
-const PAUSA_MS = 300;  // respiro: il database serve anche l'app
+// Respiro fra un lotto e l'altro. Tenuto alto apposta: questo database serve
+// anche l'app e i lavori di massa delle altre sessioni, e il 09/09/2026 il
+// login degli utenti e' caduto proprio mentre era sotto pressione. Una
+// sitemap che ci mette un'ora in piu' non fa male a nessuno; un login che
+// non funziona si'.
+const PAUSA_MS = 1500;
 
 // SI CAMMINA PER CATEGORIA, NON SU TUTTA LA TABELLA (misurato il 09/09/2026).
 // Sull'intera tabella la resa e' dell'1% — per 50.000 pagine servirebbe
