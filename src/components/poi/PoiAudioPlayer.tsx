@@ -7,8 +7,10 @@ import {
 import { getTranslation, Language } from '../../lib/i18n';
 import { useAudioState } from '../../hooks/useAudioState';
 import { locationService, parseDuetLines } from '../../services/locationService';
+import { speakAudioguide } from '../../services/ttsService';
 import { getApiUrl, apiFetch } from '../../lib/api';
 import { notify } from '../../lib/toast';
+import { avviaAscolto, voceDisponibile, type SessioneVoce } from '../../lib/voceInput';
 
 export type GuideRegister = 'standard' | 'breve' | 'bambini' | 'duetto';
 
@@ -178,8 +180,13 @@ export default function PoiAudioPlayer({
   const [askAnswer, setAskAnswer] = useState('');
   const [askBusy, setAskBusy] = useState(false);
   const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<any>(null);
-  const speechSupported = typeof window !== 'undefined' && !!((window as any).webkitSpeechRecognition || (window as any).SpeechRecognition);
+  // Dettatura: stesso modulo dell'agente WIP generico (voceInput.ts) —
+  // nativo su app (SFSpeechRecognizer/SpeechRecognizer), Web Speech sul web.
+  // Prima usava webkitSpeechRecognition diretto: su iOS/Android nativi
+  // quell'API non esiste, quindi il microfono qui non compariva mai
+  // nell'app installata, solo nel browser (10/09/2026).
+  const sessioneVoceRef = useRef<SessioneVoce | null>(null);
+  const speechSupported = voceDisponibile();
 
   const openAsk = () => {
     if (audioState.isPlaying && isCurrentPoi) onToggleSpeech(); // pausa
@@ -188,29 +195,32 @@ export default function PoiAudioPlayer({
     setAskOpen(true);
   };
 
-  const startListening = () => {
-    try {
-      const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-      if (!SR) return;
-      const rec = new SR();
-      recognitionRef.current = rec;
-      rec.lang = SPEECH_LANGS[String(language)] || 'it-IT';
-      rec.interimResults = false;
-      rec.maxAlternatives = 1;
-      rec.onresult = (e: any) => {
-        const said = e.results?.[0]?.[0]?.transcript || '';
-        setAskQuestion(prev => (prev ? `${prev} ${said}` : said));
-        setListening(false);
-      };
-      rec.onerror = () => setListening(false);
-      rec.onend = () => setListening(false);
-      setListening(true);
-      rec.start();
-    } catch { setListening(false); }
+  useEffect(() => {
+    // Chat chiusa o scheda smontata: il microfono va rilasciato subito, non
+    // lasciato acceso in background (stessa cura di AgentControls).
+    if (!askOpen) { sessioneVoceRef.current?.annulla(); sessioneVoceRef.current = null; setListening(false); }
+    return () => { sessioneVoceRef.current?.annulla(); };
+  }, [askOpen]);
+
+  const startListening = async () => {
+    if (listening) return;
+    setListening(true);
+    sessioneVoceRef.current = await avviaAscolto({
+      lingua: SPEECH_LANGS[String(language)] || 'it-IT',
+      onRisultato: (testo) => {
+        // Conversazione, non dettatura: la domanda parte da sola appena
+        // riconosciuta, senza un secondo tocco su «invia» — così il gesto
+        // resta parla → ascolti la risposta, come con l'agente WIP generico.
+        setAskQuestion(testo);
+        void doAsk(testo);
+      },
+      onFine: () => { setListening(false); sessioneVoceRef.current = null; },
+      onErrore: (motivo) => notify(getTranslation(motivo === 'permesso_negato' ? 'voce_permesso_negato' : 'voce_non_disponibile', language), 'error'),
+    });
   };
 
-  const doAsk = async () => {
-    const q = askQuestion.trim();
+  const doAsk = async (testoParlato?: string) => {
+    const q = (testoParlato ?? askQuestion).trim();
     if (q.length < 3 || askBusy) return;
     setAskBusy(true);
     setAskAnswer('');
@@ -232,9 +242,17 @@ export default function PoiAudioPlayer({
       const answer = String(data?.result || '').trim();
       if (!answer) throw new Error('Risposta vuota');
       setAskAnswer(answer);
-      // La risposta viene letta con la voce del personaggio; id dedicato per
-      // non sporcare la posizione salvata dell'audioguida principale.
-      locationService.playAudio(answer, getTranslation('sk_risposta_suffisso', language).replace('{name}', String(poi?.name || '')), poi?.category, `${String(poi?.id)}_ask`, localGuideMode, undefined, poi?.photo_url || poi?.image_url);
+      // La risposta va letta SUBITO con la voce del personaggio. Prima
+      // passava da locationService.playAudio(), che è la coda della guida
+      // principale: openAsk() la mette in pausa (activeGuideAudio resta
+      // non-nullo, solo fermo), quindi isGuidePlaybackActive() restituiva
+      // vero e la risposta finiva ACCODATA dietro un audio in pausa che non
+      // riparte mai da solo — si vedeva il testo ma non si sentiva mai nulla
+      // (10/09/2026). Il canale di ttsService è indipendente dalla coda
+      // della guida (lo stesso usato dall'agente WIP generico per leggere le
+      // sue risposte): parte subito, senza toccare lo stato della guida
+      // messa in pausa, che resta ripristinabile col chip «riprendi».
+      void speakAudioguide(answer, String(language).toLowerCase(), localGuideMode);
     } catch {
       setAskAnswer(getTranslation('sk_risposta_errore', language));
     } finally {
@@ -658,7 +676,14 @@ export default function PoiAudioPlayer({
             onClick={() => setAskOpen(false)}
           >
             <div
-              className="w-full max-w-md bg-white rounded-3xl p-5 space-y-3 shadow-2xl"
+              // TUTTO il cartellino scorre come UN blocco solo (non più un
+              // riquadro interno con `max-h-48` a sé): su schermo stretto una
+              // risposta lunga finiva tagliata a metà frase, senza modo di
+              // leggere il resto — due aree con overflow annidate si
+              // contendono il gesto di scorrimento sul telefono e quella
+              // interna spesso non risponde al dito (10/09/2026).
+              className="w-full max-w-md max-h-[85vh] overflow-y-auto overscroll-contain bg-white rounded-3xl p-5 space-y-3 shadow-2xl"
+              style={{ WebkitOverflowScrolling: 'touch' }}
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
@@ -687,7 +712,7 @@ export default function PoiAudioPlayer({
                   </button>
                 )}
                 <button
-                  onClick={doAsk}
+                  onClick={() => doAsk()}
                   disabled={askBusy || askQuestion.trim().length < 3}
                   className="p-2.5 rounded-xl bg-secondary text-white disabled:opacity-50"
                   title={getTranslation('sk_invia_domanda', language)}
@@ -696,8 +721,16 @@ export default function PoiAudioPlayer({
                 </button>
               </div>
 
+              {askBusy && !askAnswer && (
+                <div className="flex items-center gap-2 text-xs text-primary/60 px-1">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  {getTranslation('sk_sto_pensando', language)}
+                </div>
+              )}
               {askAnswer && (
-                <div className="bg-surface-warm rounded-2xl p-3 text-sm text-primary/90 leading-relaxed max-h-48 overflow-y-auto">
+                // Testo pieno, non più tagliato: scorre insieme al resto del
+                // cartellino invece che in un riquadro-scatola a parte.
+                <div className="bg-surface-warm rounded-2xl p-3 text-sm text-primary/90 leading-relaxed whitespace-pre-wrap">
                   {askAnswer}
                 </div>
               )}
