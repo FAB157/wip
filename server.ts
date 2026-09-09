@@ -11341,6 +11341,12 @@ ${description}
   // una descrizione di sostanza E una foto reale — le stesse due condizioni
   // che la regola «foto e testi veri» impone gia' al resto del prodotto.
   // Tutto il resto resta fuori dalla sitemap (e la pagina risponde 404).
+  // IL DOMINIO CANONICO E' QUELLO CON www (09/09/2026). wip.guide risponde
+  // 308 e rimanda a www.wip.guide: dichiarare come canonico un indirizzo che
+  // reindirizza e' un errore — Google deve seguire un salto in piu' per ogni
+  // pagina, e i segnali si dividono fra due indirizzi. Sta scritto qui una
+  // volta sola perche' sitemap, canonico e collegamenti non possano divergere.
+  const SEO_SITO = 'https://www.wip.guide';
   const SEO_MIN_DESCRIZIONE = 180;      // caratteri: sotto, e' una didascalia
   // 1000 e non 5000: PostgREST tronca in silenzio a 1000 righe per risposta.
   // Con 5000 l'indice prometteva cinque volte le pagine che le sitemap
@@ -11402,7 +11408,7 @@ ${description}
       q.set('lat', String(p.lat));
       q.set('lon', String(p.lon));
     }
-    return `https://wip.guide/?${q.toString()}`;
+    return `${SEO_SITO}/?${q.toString()}`;
   };
 
   /** Il filtro di ammissione, uno solo, usato sia dalla sitemap che dalla pagina. */
@@ -11422,7 +11428,7 @@ ${description}
       'Disallow: /api/',
       'Disallow: /auth/',
       '',
-      'Sitemap: https://wip.guide/sitemap.xml',
+      `Sitemap: ${SEO_SITO}/sitemap.xml`,
       '',
     ].join('\n'));
   });
@@ -11447,7 +11453,7 @@ ${description}
       const oggi = new Date().toISOString().slice(0, 10);
       const righe: string[] = [];
       for (let i = 0; i < pagine; i++) {
-        righe.push(`<sitemap><loc>https://wip.guide/sitemap-luoghi-${i}.xml</loc><lastmod>${oggi}</lastmod></sitemap>`);
+        righe.push(`<sitemap><loc>${SEO_SITO}/sitemap-luoghi-${i}.xml</loc><lastmod>${oggi}</lastmod></sitemap>`);
       }
       res.type('application/xml').send(
         `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${righe.join('\n')}\n</sitemapindex>`,
@@ -11515,7 +11521,7 @@ ${description}
 
       const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: storia, foto e audioguida gratis`;
       const descr = String(poi.description_short).replace(/\s+/g, ' ').trim().slice(0, 300);
-      const url = `https://wip.guide/luogo/${seoUrlLuogo(poi)}`;
+      const url = `${SEO_SITO}/luogo/${seoUrlLuogo(poi)}`;
       const testoLungo = String(poi.description_long || '').replace(/\s+/g, ' ').trim();
 
       const jsonLd = {
@@ -11569,7 +11575,7 @@ footer a{color:#1e3a8a}
 </head>
 <body>
 <div class="wrap">
-<header><a href="https://wip.guide">WIP · World in Pocket</a></header>
+<header><a href="${seoEscape(SEO_SITO)}">WIP · World in Pocket</a></header>
 <h1>${seoEscape(poi.name)}</h1>
 <p class="dove">${seoEscape([poi.city, poi.country].filter(Boolean).join(', '))}</p>
 <img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">
@@ -11580,7 +11586,7 @@ ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
 <footer>
 <p><strong>WIP · World in Pocket</strong> racconta oltre 9 milioni di luoghi in 7 lingue.
 L'audioguida parte da sola mentre cammini: non devi cercare niente.</p>
-<p><a href="https://wip.guide">wip.guide</a></p>
+<p><a href="${seoEscape(SEO_SITO)}">wip.guide</a></p>
 </footer>
 </div>
 </body>

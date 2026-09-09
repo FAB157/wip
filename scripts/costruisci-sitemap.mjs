@@ -160,7 +160,7 @@ async function main() {
         && !STATI_ESCLUSI.has(String(p.status || '')));
 
       for (const p of ammesse) {
-        const loc = `https://wip.guide/luogo/${urlLuogo(p)}`;
+        const loc = `https://www.wip.guide/luogo/${urlLuogo(p)}`;
         const lastmod = p.updated_at ? String(p.updated_at).slice(0, 10) : '';
         buffer.push(`<url><loc>${escapeXml(loc)}</loc>${lastmod ? `<lastmod>${lastmod}</lastmod>` : ''}<changefreq>monthly</changefreq></url>`);
         ammesseQui++;
