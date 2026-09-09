@@ -390,6 +390,8 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_off_li_3')}</Li>
             <Li>{t('man_off_li_4')}</Li>
           </ul>
+          <H><Download className="w-4 h-4 inline" /> {t('man_off_h_download')}</H>
+          <P>{t('man_off_p_download')}</P>
           <H>{t('man_off_h_consigli')}</H>
           <ul className="mb-2">
             <Li>{t('man_off_li_5')}</Li>
@@ -461,6 +463,13 @@ export default function AppGuide({ language }: AppGuideProps) {
             <Li>{t('man_wn_li_2')}</Li>
             <Li>{t('man_wn_li_3')}</Li>
             <Li>{t('man_wn_li_4')}</Li>
+          </ul>
+          <H>{t('man_wn_h_svolte')}</H>
+          <ul className="mb-2">
+            <Li>{t('man_wn_li_preannuncio')}</Li>
+            <Li>{t('man_wn_li_vie')}</Li>
+            <Li>{t('man_wn_li_scale')}</Li>
+            <Li>{t('man_wn_li_gemma')}</Li>
           </ul>
           <H>{t('man_wn_h_cruscotto')}</H>
           <P>{t('man_wn_p_cruscotto')}</P>
