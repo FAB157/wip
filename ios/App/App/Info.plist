@@ -35,6 +35,19 @@
 				<string>itainta</string>
 			</array>
 		</dict>
+		<!-- Accedi con Google NATIVO (10/09/2026): l'SDK di Google torna
+		     nell'app su questo schema, che e' il client ID iOS al contrario.
+		     Client "WIP iOS" del progetto Google Cloud wip-ita, autorizzato
+		     anche fra i Client IDs del provider Google su Supabase. Senza
+		     questo schema il foglio di accesso si apre e non torna indietro. -->
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.itaintasca.app.google</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.363241288394-ur4d52235e9mpm75mmaslt7shm4ufiae</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>

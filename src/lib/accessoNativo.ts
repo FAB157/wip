@@ -19,9 +19,28 @@
 
 import { Capacitor } from '@capacitor/core';
 
-/** Client ID iOS di Google (Google Cloud Console → Credenziali → iOS). */
-const GOOGLE_IOS_CLIENT_ID = String(import.meta.env.VITE_GOOGLE_IOS_CLIENT_ID || '').trim();
-/** Client ID "web" dello stesso progetto: e' l'audience che vogliamo nel token. */
+/**
+ * Client ID iOS di Google — client "WIP iOS" del progetto Google Cloud
+ * `wip-ita`, creato il 10/09/2026 e autorizzato fra i Client IDs del provider
+ * Google su Supabase (senza quel passaggio Supabase rifiuta il token).
+ *
+ * E' scritto in chiaro di proposito: i client ID OAuth di Google sono pubblici
+ * per definizione — questo stesso valore, al contrario, sta gia' in
+ * `ios/App/App/Info.plist` dentro ogni copia dell'app. Il segreto e' il client
+ * SECRET, che qui non c'e' e non deve esserci. L'env permette comunque di
+ * cambiarlo senza toccare il codice.
+ */
+const GOOGLE_IOS_CLIENT_ID = String(
+  import.meta.env.VITE_GOOGLE_IOS_CLIENT_ID ||
+    '363241288394-ur4d52235e9mpm75mmaslt7shm4ufiae.apps.googleusercontent.com',
+).trim();
+/**
+ * Client ID "web" da usare come audience del token (`iOSServerClientId`).
+ * VUOTO DI PROPOSITO: Google lo accetta solo se il client web sta nello STESSO
+ * progetto del client iOS, e il nostro client web vive in un progetto
+ * (908373483783) a cui non abbiamo piu' accesso. Lasciandolo vuoto il token
+ * esce con l'audience del client iOS, che e' quella autorizzata su Supabase.
+ */
 const GOOGLE_WEB_CLIENT_ID = String(import.meta.env.VITE_GOOGLE_WEB_CLIENT_ID || '').trim();
 
 let inizializzato = false;
