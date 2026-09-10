@@ -436,6 +436,10 @@ export default function ItineraryLibrarySheet({
   // combinazione di itinerari che insieme coprano i giorni richiesti. Solo
   // roba GIÀ in libreria: se non basta si dice, non si genera nulla.
   const [fonteProposta, setFonteProposta] = useState<LibraryResult[]>([]);
+  // Titoli della lista tradotti (slug → titolo). Arrivano DOPO che la lista è
+  // già a schermo: la ricerca parte a ogni digitazione e non deve aspettare
+  // una traduzione. Con UI in italiano non si chiama niente.
+  const [titoliTradotti, setTitoliTradotti] = useState<Record<string, string>>({});
   // Generazione on-demand di un descrittore: slug → messaggio di stato
   const [genState, setGenState] = useState<Record<string, string>>({});
   const [genError, setGenError] = useState<string | null>(null);
@@ -999,6 +1003,42 @@ export default function ItineraryLibrarySheet({
   useEffect(() => { setQuanti(60); }, [query, kind, group, cityFilter, maxHours, daysFilter]);
   const vociVisibili = useMemo(() => voci.slice(0, quanti), [voci, quanti]);
 
+  // Traduzione dei titoli VISIBILI: si chiede solo per quelli non ancora
+  // tradotti, così scorrendo la lista non si ripete il lavoro già fatto.
+  // Sta QUI, dopo vociVisibili: metterlo più in alto darebbe un errore a
+  // runtime (variabile usata prima di essere inizializzata), lo stesso difetto
+  // che l'08/09 aveva fatto crashare la pagina Eventi.
+  useEffect(() => {
+    if (String(language).toUpperCase() === 'IT') { setTitoliTradotti({}); return; }
+    const slugs = vociVisibili
+      .filter(v => v.tipo === 'pronto')
+      .map(v => (v as any).r?.slug)
+      .filter((s: string) => s && !titoliTradotti[s])
+      .slice(0, 150);
+    if (!slugs.length) return;
+    let vivo = true;
+    (async () => {
+      try {
+        const r = await fetch(getApiUrl('/api/library/translate-titles'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slugs, lang: String(language) }),
+          signal: AbortSignal.timeout(45000),
+        });
+        const d = await r.json().catch(() => null);
+        const t = d?.titles;
+        if (vivo && t && typeof t === 'object' && Object.keys(t).length) {
+          setTitoliTradotti(prev => ({ ...prev, ...t }));
+        }
+      } catch { /* rete giù: restano i titoli italiani, senza rumore */ }
+    })();
+    return () => { vivo = false; };
+    // titoliTradotti volutamente FUORI dalle dipendenze: serve a calcolare i
+    // mancanti, ma metterlo qui creerebbe un ciclo (ogni risposta lo cambia e
+    // farebbe ripartire l'effetto).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vociVisibili, language]);
+
   const verifiedBadge = (r: LibraryResult) => {
     const n = Array.isArray(r.verifiedBy) ? r.verifiedBy.length : Number(r.verifiedBy) || 0;
     if (n < 2) return null;
@@ -1331,7 +1371,7 @@ export default function ItineraryLibrarySheet({
                   {proposta.scelti.map((r) => (
                     <li key={`prop-${r.slug}`} className="text-[11px] font-bold text-gray-600 flex items-center gap-1.5">
                       <span className="text-primary">•</span>
-                      <span className="truncate">{r.title || r.slug}</span>
+                      <span className="truncate">{titoliTradotti[r.slug] || r.title || r.slug}</span>
                       <span className="text-gray-400 shrink-0">· {Number(r.days) || 1} {dayWord(Number(r.days) || 1)}</span>
                     </li>
                   ))}
@@ -1366,7 +1406,7 @@ export default function ItineraryLibrarySheet({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-xs font-black text-primary leading-tight">{v.r.title || v.r.slug}</div>
+                    <div className="text-xs font-black text-primary leading-tight">{titoliTradotti[v.r.slug] || v.r.title || v.r.slug}</div>
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                       <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full">
                         ✓ Pronto

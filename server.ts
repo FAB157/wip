@@ -19114,6 +19114,88 @@ ${elenco}`;
     }
   });
 
+  // ── POST /api/library/translate-titles { slugs[], lang } ────────────────
+  // I TITOLI DELLA LISTA (10/09/2026). Tradurre il contenuto dell'itinerario
+  // non basta: un francese sfoglia la libreria e legge «Bonifacio in 2 giorni
+  // — 🆓 Tutta gratis», sceglie al buio, e solo aprendo trova il francese.
+  //
+  // Perché una rotta a parte e non dentro /api/library/search: la ricerca è
+  // interattiva (parte a ogni digitazione) e una traduzione da qualche secondo
+  // la bloccherebbe. Così la lista compare SUBITO in italiano e i titoli si
+  // sostituiscono un attimo dopo — lo stesso schema già usato per le
+  // ispirazioni stagionali (/api/seasonal-catalog/translate).
+  //
+  // La cache è SERVER-side per lingua (`lib_titles_<lang>`), non nel browser:
+  // il primo francese paga la traduzione, tutti i francesi successivi no —
+  // mentre una cache nel browser la farebbe ripagare a ogni dispositivo.
+  app.post('/api/library/translate-titles', rateLimiter, async (req, res) => {
+    try {
+      const L = String(req.body?.lang || 'IT').toUpperCase().slice(0, 2);
+      if (L === 'IT' || !LIB_LINGUE[L]) return res.json({ titles: {} });
+      const slugs: string[] = Array.isArray(req.body?.slugs)
+        ? [...new Set(req.body.slugs.map((s: any) => String(s || '').trim().toLowerCase()).filter((s: string) => libSlugRe.test(s)))].slice(0, 150)
+        : [];
+      if (!slugs.length) return res.json({ titles: {} });
+
+      const chiave = `lib_titles_${L.toLowerCase()}`;
+      const mappa: Record<string, string> = libParseCachedJson((await getFromCache(chiave))?.text_content)?.titles || {};
+      const mancanti = slugs.filter((s) => !mappa[s]);
+      if (!mancanti.length) {
+        return res.json({ titles: Object.fromEntries(slugs.map((s) => [s, mappa[s]])) });
+      }
+
+      // Titoli originali dall'indice già in memoria: nessuna lettura extra.
+      const metas = await libraryLoadMetas();
+      const perSlug = new Map<string, string>();
+      for (const m of metas) {
+        const s = String(m?.slug || '').toLowerCase();
+        if (mancanti.includes(s) && m?.title) perSlug.set(s, String(m.title));
+      }
+      const daTradurre = [...perSlug.entries()];
+      if (!daTradurre.length) return res.json({ titles: Object.fromEntries(slugs.filter((s) => mappa[s]).map((s) => [s, mappa[s]])) });
+
+      const elenco = daTradurre.map(([, t], i) => `${i}. ${t}`).join('\n');
+      const prompt = `Traduci in ${LIB_LINGUE[L]} questi titoli di itinerari di viaggio.
+
+REGOLE:
+- I NOMI DI CITTÀ E LUOGO restano IDENTICI: «Bonifacio» resta «Bonifacio», «Val d'Orcia» resta «Val d'Orcia». Traduci solo le parole intorno.
+- Mantieni le emoji dove sono.
+- Una riga tradotta per ogni riga ricevuta, stesso ordine, niente aggiunte.
+
+Rispondi SOLO con {"t": [...]} con ESATTAMENTE ${daTradurre.length} elementi.
+
+TITOLI:
+${elenco}`;
+
+      try {
+        const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+        }, 'library_titles', supabaseUrl, supabaseServiceKey, null);
+        const out = parseSafeJSON(String(r?.data || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
+        const t = Array.isArray(out?.t) ? out.t : null;
+        if (t && t.length === daTradurre.length) {
+          daTradurre.forEach(([s], i) => {
+            const v = String(t[i] ?? '').trim();
+            if (v) mappa[s] = v;
+          });
+          await saveToCache(chiave, 'library_titles', { titles: mappa });
+        } else {
+          console.warn(`[library/titles] ${L}: attesi ${daTradurre.length}, ricevuti ${t?.length ?? 0}`);
+        }
+      } catch (e: any) {
+        console.warn(`[library/titles] ${L} non tradotti:`, e?.message);
+      }
+
+      // Si restituisce solo ciò che si è riusciti a tradurre: per il resto il
+      // client tiene il titolo italiano, che è meglio di uno spazio vuoto.
+      res.json({ titles: Object.fromEntries(slugs.filter((s) => mappa[s]).map((s) => [s, mappa[s]])) });
+    } catch (e: any) {
+      console.error('[library/translate-titles] Errore:', e?.message);
+      res.json({ titles: {} });
+    }
+  });
+
   // ── POST /api/library/merge { slugs[] } ─────────────────────────────────
   // UNIONE DI PIÙ ITINERARI DI LIBRERIA (10/09/2026, richiesta del
   // committente: «se user vuole stare 7 giorni, unire 2 o più itinerari, le
