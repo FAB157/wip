@@ -8987,6 +8987,309 @@ ${manuale}`;
   // delle chiamate a wikipedia/wikidata/commons/wikivoyage qui sotto e in
   // /api/poi/enrich aveva un User-Agent). Stesso schema di NOMINATIM_UA.
   const WIKI_UA = "WorldInPocket/1.0 (https://wip.guide; support@wip.guide)";
+
+  // ── MAPILLARY: la foto dalla strada, ULTIMA RISORSA (10/09/2026) ────────
+  //
+  // Decisione del committente: per i POI che non hanno una foto da fonti
+  // ufficiali (Wikipedia, Wikidata, Commons) meglio l'esterno visto dalla
+  // strada che il riquadro vuoto — vale anche per chiese, musei e panorami,
+  // dove almeno la facciata si vede. Le immagini Mapillary sono CC BY-SA
+  // 4.0: uso commerciale ammesso CITANDO l'autore, per questo la funzione
+  // restituisce anche attribuzione e licenza, che il chiamante DEVE
+  // scrivere insieme all'URL.
+  //
+  // Il rischio qui non è la foto del posto sbagliato (le coordinate sono
+  // giuste per definizione): è la foto giusta in cui il soggetto NON si
+  // vede. Un'immagine Mapillary è scattata DA un punto VERSO una direzione,
+  // quasi sempre dal parabrezza di un'auto: quella più vicina a un monumento
+  // spesso inquadra l'asfalto o le auto parcheggiate. Da qui i tre filtri,
+  // che sono la ragione per cui questa funzione non è una riga di fetch:
+  //   1. DIREZIONE — la bussola dello scatto deve puntare verso il POI
+  //      (tolleranza ±45°): è ciò che separa «quel monumento visto dalla
+  //      strada» da «una strada qualunque».
+  //   2. DISTANZA — entro `raggioM` metri (default 40): più lontano il
+  //      soggetto è un puntino in fondo alla via.
+  //   3. NIENTE PANORAMICHE — `is_pano` escluse: come copertina di una
+  //      scheda escono deformate.
+  // A parità di filtri vince lo scatto più recente e più vicino.
+  //
+  // Senza MAPILLARY_TOKEN la funzione non fa nulla e ritorna null: la
+  // catena resta quella di prima, nessuna rotta si rompe.
+  // PERCHÉ LE MAPPE VETTORIALI E NON LA RICERCA PER ZONA (10/09/2026).
+  // La strada ovvia sarebbe `graph.mapillary.com/images?bbox=...`, ma quella
+  // ricerca è chiusa: con questo token risponde 200 e `{"data":[]}` SEMPRE —
+  // provato con token nell'URL e in intestazione OAuth, con bbox e con
+  // lat/lng/radius, sulle coordinate di un POI italiano, su Amsterdam e
+  // perfino sull'esempio della documentazione ufficiale (Miami). Nessun
+  // errore, solo vuoto. I permessi dell'app NON c'entrano: READ e WRITE
+  // sono attivi (verificato nel pannello sviluppatori). Le mappe vettoriali
+  // invece rispondono (4,3 MB di dati su Amsterdam) e sono la stessa fonte
+  // che usa la mappa del sito Mapillary: si legge il riquadro attorno al
+  // punto, si scelgono gli scatti, e SOLO per il vincitore si chiede la
+  // foto vera a `graph.mapillary.com/{id}`, che per singolo id funziona.
+  const MAPILLARY_Z = 14; // zoom del livello `image` nelle tile mly1_public
+
+  // IL GIUDICE FINALE: si GUARDA la foto (10/09/2026, scelta del committente).
+  //
+  // I filtri su distanza, bussola e qualità sanno dov'era la fotocamera e
+  // dove guardava, non che cosa è finito nell'inquadratura. Provato sul
+  // campo: alla rotatoria di Avenza la scultura si vede, in un vicolo di
+  // Carrara la stessa regola sceglie una bella strada dove la chiesa è
+  // nascosta dietro un palazzo. Nessun dato può accorgersene, perché non
+  // esiste il campo «cosa c'è davanti all'obiettivo».
+  //
+  // Quindi l'ultima parola è di chi guarda: stesso schema già usato dalla
+  // verifica visiva della cache Vision (gpt-4o-mini, `detail: 'low'`, JSON
+  // secco), che costa pochissimo per immagine. Al massimo tre immagini per
+  // POI, e solo quando un utente apre davvero una scheda senza foto: la
+  // spesa segue l'uso, non il catalogo.
+  //
+  // Senza chiave OpenAI la funzione dice NO: meglio nessuna foto che una
+  // foto non verificata — è la regola non negoziabile di CLAUDE.md.
+  async function mostraDavveroIlPosto(urlFoto: string, nomePoi: string): Promise<boolean> {
+    const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+    if (!key || !nomePoi) return false;
+    try {
+      const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: `Questa è una foto scattata dalla strada vicino a "${nomePoi}". Rispondi SOLO con JSON: {"si_vede": true/false, "vetro": true/false, "confidenza": 0-100}.\n"si_vede" è true SOLO se il soggetto "${nomePoi}" è riconoscibile nell'inquadratura, non se la foto mostra soltanto la via, il piazzale o gli edifici accanto.\n"vetro" è true se si vede un parabrezza, un finestrino, un cruscotto o l'interno di un veicolo.` },
+          { type: 'image_url', image_url: { url: urlFoto, detail: 'low' } },
+        ] }],
+        temperature: 0, max_tokens: 60, response_format: { type: 'json_object' },
+      }, { timeout: 12000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+      const v = JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
+      const ok = v?.si_vede === true && v?.vetro !== true && Number(v?.confidenza || 0) >= 60;
+      if (!ok) console.log(`[Mapillary] scartata: si_vede=${v?.si_vede} vetro=${v?.vetro} conf=${v?.confidenza} ("${nomePoi}")`);
+      return ok;
+    } catch (e: any) {
+      console.debug('[Mapillary] controllo visivo non riuscito:', e?.message);
+      return false;
+    }
+  }
+
+  type FotoStrada = { url: string; attribuzione: string; licenza: string; id: string; fonte: 'mapillary' | 'kartaview' };
+
+  // ── KARTAVIEW: la seconda fonte dalla strada (10/09/2026) ───────────────
+  //
+  // Proposta dal committente accanto a Mapillary, e si è rivelata
+  // complementare: dove Mapillary non aveva nulla di utile (l'ingresso del
+  // Duomo di Carrara) KartaView trova 17 foto entro 60 m, 4 ben orientate.
+  // Due archivi diversi, percorsi diversi, coperture diverse: unirli alza la
+  // probabilità che almeno uno scatto inquadri davvero il luogo.
+  //
+  // Vantaggi pratici: API pubblica SENZA token (niente chiave da gestire né
+  // da ruotare) e licenza libera. In cambio non c'è un punteggio di qualità
+  // come quello di Mapillary — il filtro contro parabrezza e cruscotti qui
+  // lo fa solo il controllo visivo, che è comunque l'ultima parola per
+  // entrambe le fonti.
+  //
+  // L'indirizzo delle immagini NON si compone dal campo `name`: il dominio
+  // giusto è storage<N>.openstreetcam.org (verificato dall'API 2.0, che
+  // restituisce `fileurl` completo). Con storage.kartaview.org non risolve.
+  type ScattoStrada = { id: string; lat: number; lon: number; bussola: number; quando: number; url: string; autore: string; fonte: 'mapillary' | 'kartaview'; qualita: number };
+  async function scattiKartaView(lat: number, lon: number, raggioM: number): Promise<ScattoStrada[]> {
+    try {
+      const body = new URLSearchParams({ lat: String(lat), lng: String(lon), radius: String(Math.round(raggioM)), page: '1', ipp: '80' });
+      const r = await fetch('https://api.kartaview.org/1.0/list/nearby-photos/', {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body, signal: AbortSignal.timeout(8000),
+      });
+      if (!r.ok) return [];
+      const d: any = await r.json();
+      const righe: any[] = Array.isArray(d?.currentPageItems) ? d.currentPageItems : [];
+      return righe.map((f) => {
+        const la = Number(f.lat), lo = Number(f.lng), h = Number(f.heading);
+        // `projection` PLANE = foto normale; le equirettangolari (360°) si
+        // scartano come le panoramiche di Mapillary.
+        if (!Number.isFinite(la) || !Number.isFinite(lo) || !Number.isFinite(h)) return null;
+        if (String(f.projection || 'PLANE') !== 'PLANE') return null;
+        const nome = String(f.lth_name || f.name || '');
+        const m = nome.match(/^storage(\d+)\/(.+)$/);
+        if (!m) return null;
+        return {
+          id: String(f.id || ''), lat: la, lon: lo, bussola: h,
+          quando: Date.parse(String(f.shot_date || f.date_added || '')) || 0,
+          url: `https://storage${m[1]}.openstreetcam.org/${m[2]}`,
+          autore: String(f.username || 'KartaView'),
+          fonte: 'kartaview' as const,
+          // KartaView non pubblica un punteggio: si parte da un valore neutro
+          // e a decidere sarà il controllo visivo.
+          qualita: 0.75,
+        };
+      }).filter((x): x is ScattoStrada => !!x && !!x.id);
+    } catch { return []; }
+  }
+
+  async function fotoMapillary(lat: number, lon: number, nomePoi: string, raggioM = 45): Promise<FotoStrada | null> {
+    // Il token serve SOLO a Mapillary: KartaView è pubblica. Senza token si
+    // continua lo stesso con la sola KartaView, invece di non cercare nulla.
+    const token = process.env.MAPILLARY_TOKEN || process.env.VITE_MAPILLARY_TOKEN || '';
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    try {
+      // pbf v5 e vector-tile v3 sono ESM e NON hanno export default: si
+      // importano per nome (`PbfReader`, non `Pbf`). Import dinamico perché
+      // servono solo qui, cioè di rado: nessun costo all'avvio a freddo.
+      const { VectorTile } = await import('@mapbox/vector-tile');
+      const { PbfReader } = await import('pbf');
+
+      const rad = (g: number) => g * Math.PI / 180;
+      const gradi = (r: number) => r * 180 / Math.PI;
+      const distanzaM = (la1: number, lo1: number, la2: number, lo2: number) => {
+        const R = 6371000;
+        const dφ = rad(la2 - la1), dλ = rad(lo2 - lo1);
+        const a = Math.sin(dφ / 2) ** 2 + Math.cos(rad(la1)) * Math.cos(rad(la2)) * Math.sin(dλ / 2) ** 2;
+        return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+      };
+      // Direzione bussola dallo scatto verso il POI, 0=nord in senso orario.
+      const rotta = (la1: number, lo1: number, la2: number, lo2: number) => {
+        const φ1 = rad(la1), φ2 = rad(la2), Δλ = rad(lo2 - lo1);
+        const y = Math.sin(Δλ) * Math.cos(φ2);
+        const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+        return (gradi(Math.atan2(y, x)) + 360) % 360;
+      };
+      const scarto = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+      const tileX = (lo: number, z: number) => Math.floor((lo + 180) / 360 * 2 ** z);
+      const tileY = (la: number, z: number) =>
+        Math.floor((1 - Math.log(Math.tan(rad(la)) + 1 / Math.cos(rad(la))) / Math.PI) / 2 * 2 ** z);
+
+      // Il POI può cadere vicino al bordo di una tile: si guardano anche le
+      // otto adiacenti, altrimenti uno scatto a dieci metri ma "di là dal
+      // confine" verrebbe perso.
+      const x0 = tileX(lon, MAPILLARY_Z), y0 = tileY(lat, MAPILLARY_Z);
+      const tiles: Array<[number, number]> = [];
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) tiles.push([x0 + dx, y0 + dy]);
+
+      type Scatto = { id: string; lat: number; lon: number; bussola: number; pano: boolean; quando: number; qualita: number };
+      const scatti: Scatto[] = [];
+      for (const [tx, ty] of (token ? tiles : [])) {
+        const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${MAPILLARY_Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) }).catch(() => null);
+        if (!res?.ok) continue;
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (!buf.length) continue;
+        const tile = new VectorTile(new PbfReader(buf));
+        const livello = (tile.layers as any)?.image;
+        if (!livello) continue;
+        for (let i = 0; i < livello.length; i++) {
+          const f = livello.feature(i);
+          const g = f.toGeoJSON(tx, ty, MAPILLARY_Z);
+          const c = (g as any)?.geometry?.coordinates;
+          if (!Array.isArray(c) || c.length < 2) continue;
+          const p: any = f.properties || {};
+          const bussola = Number(p.computed_compass_angle ?? p.compass_angle);
+          if (!Number.isFinite(bussola)) continue;
+          scatti.push({
+            id: String(p.id ?? ''), lon: Number(c[0]), lat: Number(c[1]), bussola,
+            pano: p.is_pano === true || p.is_pano === 1, quando: Number(p.captured_at || 0),
+            qualita: Number(p.quality_score ?? 0),
+          });
+        }
+      }
+      // Nessun `return` se Mapillary non ha dato nulla: KartaView viene
+      // interrogata comunque poco più sotto, ed è proprio il caso in cui
+      // serve (l'ingresso del Duomo di Carrara, dove Mapillary è muta).
+
+      // SOGLIA DI QUALITÀ = il filtro anti-parabrezza (misurato 10/09/2026).
+      // Il committente non vuole vedere vetri e cruscotti nell'inquadratura,
+      // ma Mapillary non dice se lo scatto è stato fatto attraverso un vetro.
+      // Provando sulla rotatoria di Avenza è emersa una correlazione netta:
+      // gli scatti con `quality_score` alto vengono da telecamere montate
+      // FUORI dal veicolo (immagine pulita, orizzonte libero), quelli col
+      // parabrezza — cruscotto in primo piano, riflessi, sole sporco — hanno
+      // punteggi bassi. Con la soglia a 0,70 i quattro scatti migliori della
+      // rotatoria erano tutti puliti e in due la scultura si vedeva bene;
+      // senza soglia il primo scelto era ripreso dall'abitacolo.
+      // Vale sia per gli scatti a piedi sia per quelli da veicolo: quello che
+      // conta è l'immagine, non il mezzo.
+      const QUALITA_MINIMA = 0.70;
+      // L'ALLINEAMENTO CONTA PIÙ DELLA VICINANZA (misurato 10/09/2026).
+      // Con tolleranza a 45° la scelta cadeva su uno scatto a 17 m girato di
+      // 44°: vicino, ma col soggetto fuori o al bordo dell'inquadratura,
+      // perché una fotocamera copre sì e no 60-70° in orizzontale. Stringendo
+      // a 25° e pesando il disallineamento il doppio della distanza, sulla
+      // rotatoria di Avenza la scelta è passata allo scatto a 39 m puntato a
+      // 14°: la scultura al centro, ben visibile. Meglio lontano e centrato
+      // che vicino e di sbieco.
+      const MAX_SCARTO = 25;
+
+      // DUE ARCHIVI, UN SOLO ELENCO (10/09/2026, richiesta del committente:
+      // «usa uno e l'altro per avere la foto migliore»). Mapillary porta il
+      // punteggio di qualità, KartaView porta copertura dove l'altro non
+      // arriva: si mettono insieme e vince il candidato migliore, chiunque
+      // l'abbia scattato. Le foto di Mapillary hanno bisogno di una seconda
+      // chiamata per avere l'URL, quelle di KartaView ce l'hanno già: per
+      // questo l'indirizzo si risolve solo per i tre finalisti.
+      const daMapillary: ScattoStrada[] = scatti
+        .filter((s) => s.id && !s.pano && s.qualita >= QUALITA_MINIMA)
+        .map((s) => ({ id: s.id, lat: s.lat, lon: s.lon, bussola: s.bussola, quando: s.quando, url: '', autore: '', fonte: 'mapillary' as const, qualita: s.qualita }));
+      const daKartaView = await scattiKartaView(lat, lon, Math.max(raggioM, 60));
+      const tutti = [...daMapillary, ...daKartaView];
+
+      const candidati = tutti
+        .map((s) => ({
+          s,
+          dist: distanzaM(s.lat, s.lon, lat, lon),
+          disallineamento: scarto(s.bussola, rotta(s.lat, s.lon, lat, lon)),
+        }))
+        .filter((c) => c.dist <= raggioM && c.disallineamento <= MAX_SCARTO);
+      if (!candidati.length) return null;
+
+      candidati.sort((a, b) => {
+        const pa = a.disallineamento / MAX_SCARTO * 2 + a.dist / raggioM;
+        const pb = b.disallineamento / MAX_SCARTO * 2 + b.dist / raggioM;
+        if (Math.abs(pa - pb) > 0.15) return pa - pb;
+        if (Math.abs(a.s.qualita - b.s.qualita) > 0.05) return b.s.qualita - a.s.qualita;
+        return b.s.quando - a.s.quando;
+      });
+
+      // NIENTE DOPPIONI FRA I TENTATIVI (10/09/2026). Le auto che mappano
+      // scattano a raffica: i primi candidati sono spesso lo STESSO punto di
+      // vista ripetuto (misurato: due scatti a «31 m · 6°» identici). Senza
+      // questo filtro il controllo visivo verrebbe speso due volte sulla
+      // stessa immagine invece che su inquadrature diverse. Si tiene un solo
+      // scatto per ogni "posto da cui si guarda": 8 metri di griglia e 15°
+      // di settore.
+      const visti = new Set<string>();
+      const distinti = candidati.filter((c) => {
+        const chiave = `${Math.round(c.s.lat * 11000)}_${Math.round(c.s.lon * 11000)}_${Math.round(c.disallineamento / 15)}`;
+        if (visti.has(chiave)) return false;
+        visti.add(chiave);
+        return true;
+      });
+
+      // Ora si risolve l'indirizzo della foto e si passa il CONTROLLO VISIVO,
+      // che è l'ultima parola per entrambe le fonti. Quattro tentativi su
+      // inquadrature diverse: se falliscono tutti, il POI resta senza foto.
+      for (const c of distinti.slice(0, 4)) {
+        let urlFoto = c.s.url;
+        let autore = c.s.autore;
+        if (c.s.fonte === 'mapillary') {
+          const det = await fetch(
+            `https://graph.mapillary.com/${encodeURIComponent(c.s.id)}?access_token=${encodeURIComponent(token)}&fields=thumb_1024_url,creator,captured_at`,
+            { signal: AbortSignal.timeout(6000) }
+          ).catch(() => null);
+          if (!det?.ok) continue;
+          const d: any = await det.json().catch(() => null);
+          if (!d?.thumb_1024_url) continue;
+          urlFoto = String(d.thumb_1024_url);
+          autore = d?.creator?.username ? String(d.creator.username) : 'Mapillary';
+        }
+        if (!urlFoto) continue;
+        if (!(await mostraDavveroIlPosto(urlFoto, nomePoi))) continue;
+        const nomeFonte = c.s.fonte === 'kartaview' ? 'KartaView' : 'Mapillary';
+        return {
+          url: urlFoto,
+          attribuzione: `${autore || nomeFonte} su ${nomeFonte}`,
+          licenza: 'CC BY-SA 4.0',
+          id: c.s.id,
+          fonte: c.s.fonte,
+        };
+      }
+      return null;
+    } catch { return null; }
+  }
+
   async function fotoDelLuogo(name: string, lat: number, lon: number, lang = 'it'): Promise<string | null> {
     if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     const wikiLang = /^[a-z]{2}$/.test(String(lang || '').toLowerCase()) ? String(lang).toLowerCase() : 'it';
@@ -20883,6 +21186,23 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       }
 
 
+      // ULTIMA RISORSA: la foto dalla strada (Mapillary), 10/09/2026.
+      // Scatta solo se Wikipedia, Wikidata e Commons non hanno dato nulla:
+      // meglio l'esterno visto dalla strada che il riquadro vuoto, anche per
+      // chiese, musei e panorami (decisione del committente). I filtri di
+      // direzione/distanza stanno dentro fotoMapillary: qui arriva solo uno
+      // scatto che il POI lo inquadra davvero. L'attribuzione NON è
+      // facoltativa — CC BY-SA vuole il nome dell'autore — quindi viaggia
+      // insieme all'URL fino alla scrittura su shared_pois, qui sotto.
+      let fotoStrada: { attribuzione: string; licenza: string; fonte: string } | null = null;
+      if (!thumbnail) {
+        const m = await fotoMapillary(targetLat, targetLon, String(name || ''));
+        if (m) {
+          thumbnail = m.url;
+          fotoStrada = { attribuzione: m.attribuzione, licenza: m.licenza, fonte: m.fonte };
+        }
+      }
+
       // Fallback foto finale. findFallbackPhoto è disattivata dal 22/08/2026
       // (ritorna sempre null): Unsplash non è una fonte per una foto di
       // QUESTO posto (query per keyword, non per luogo — vedi CLAUDE.md).
@@ -21038,7 +21358,18 @@ ${extract || "Nessuna fonte trovata"}
         // trovata. Stesso identico difetto gia' corretto in /api/poi/enrich-
         // stream (variabile `existingImage`): qui mancava.
         const fotoEsistenteMorta = !existing?.image_url || String(existing.image_url).includes('source.unsplash.com');
-        if (thumbnail && fotoEsistenteMorta) { content.image_url = thumbnail; content.photo_url = thumbnail; }
+        if (thumbnail && fotoEsistenteMorta) {
+          content.image_url = thumbnail; content.photo_url = thumbnail;
+          // Foto dalla strada: l'attribuzione viaggia SEMPRE con l'immagine.
+          // CC BY-SA consente l'uso commerciale a condizione di citare
+          // l'autore: senza questi due campi la scheda mostrerebbe la foto
+          // senza il credito e la licenza non sarebbe rispettata.
+          if (fotoStrada) {
+            content.image_source = fotoStrada.fonte;
+            content.image_attribution = fotoStrada.attribuzione;
+            content.image_license = fotoStrada.licenza;
+          }
+        }
         // Nome tradotto/traslitterato: merge nel JSONB per-lingua, mai
         // sovrascrive le altre lingue già presenti (colonna condivisa).
         if ((jsonResponse as any).name_translit) {
@@ -21056,7 +21387,15 @@ ${extract || "Nessuna fonte trovata"}
             // scrivibili anche su un POI già arricchito (mai il contrario:
             // qui non si tocca description_short/long esistente).
             const extra: any = { updated_at: content.updated_at };
-            if (content.image_url) { extra.image_url = content.image_url; extra.photo_url = content.photo_url; }
+            if (content.image_url) {
+              extra.image_url = content.image_url; extra.photo_url = content.photo_url;
+              // Il credito segue la foto anche qui: è il ramo del POI che ha
+              // già il testo e riceve SOLO l'immagine — cioè esattamente il
+              // caso «Scultura Dunchi», il più probabile per Mapillary.
+              if (content.image_source) extra.image_source = content.image_source;
+              if (content.image_attribution) extra.image_attribution = content.image_attribution;
+              if (content.image_license) extra.image_license = content.image_license;
+            }
             if (content.name_translated) extra.name_translated = content.name_translated;
             await axios.patch(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(precisionId)}`, extra, { headers: svcHeaders });
           }
