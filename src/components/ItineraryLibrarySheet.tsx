@@ -430,6 +430,12 @@ export default function ItineraryLibrarySheet({
   const [selezionati, setSelezionati] = useState<string[]>([]);
   const [unendo, setUnendo] = useState(false);
   const [erroreUnione, setErroreUnione] = useState<string | null>(null);
+  // PROPOSTA AUTOMATICA: chi chiede 7 giorni non trova nulla, perché il filtro
+  // «giorni» cerca la corrispondenza ESATTA e gli itinerari curati sono da 1-3.
+  // Qui si ricarica la città SENZA quel filtro, per poter proporre una
+  // combinazione di itinerari che insieme coprano i giorni richiesti. Solo
+  // roba GIÀ in libreria: se non basta si dice, non si genera nulla.
+  const [fonteProposta, setFonteProposta] = useState<LibraryResult[]>([]);
   // Generazione on-demand di un descrittore: slug → messaggio di stato
   const [genState, setGenState] = useState<Record<string, string>>({});
   const [genError, setGenError] = useState<string | null>(null);
@@ -925,6 +931,66 @@ export default function ItineraryLibrarySheet({
     return out;
   }, [results, descriptors, query]);
 
+  // Elenco della città SENZA il filtro giorni, per costruire la proposta.
+  // Parte solo quando serve davvero (giorni ≥ 2 richiesti e una città), così
+  // non si aggiunge una chiamata a ogni digitazione.
+  useEffect(() => {
+    const giorni = Number(daysFilter);
+    const citta = cityFilter.trim() || query.trim();
+    if (!(giorni >= 2) || citta.length < 2) { setFonteProposta([]); return; }
+    let vivo = true;
+    (async () => {
+      try {
+        const p = new URLSearchParams({ limit: '200', lang: String(language) });
+        if (cityFilter.trim()) p.set('city', cityFilter.trim()); else p.set('q', citta);
+        const r = await fetch(getApiUrl(`/api/library/search?${p.toString()}`), { signal: AbortSignal.timeout(20000) });
+        const d = await r.json().catch(() => null);
+        if (vivo) setFonteProposta(Array.isArray(d?.results) ? d.results : []);
+      } catch { if (vivo) setFonteProposta([]); }
+    })();
+    return () => { vivo = false; };
+  }, [daysFilter, cityFilter, query, language]);
+
+  /**
+   * La combinazione proposta: si prendono gli itinerari con più punteggio
+   * preferendo TEMI DIVERSI (chi resta una settimana vuole varietà, non tre
+   * volte lo stesso taglio) finché si arriva ai giorni richiesti.
+   * Non si supera mai il numero di giorni chiesto: meglio coprirne 5 su 7 e
+   * dirlo, che proporne 9 a chi ne ha 7.
+   */
+  const proposta = useMemo(() => {
+    const target = Number(daysFilter);
+    if (!(target >= 2) || fonteProposta.length < 2) return null;
+    // Se un singolo itinerario copre già tutto, la proposta non serve.
+    if (fonteProposta.some(r => Number(r.days) === target)) return null;
+    const cand = [...fonteProposta]
+      .filter(r => Number(r.days) >= 1 && Number(r.days) <= target)
+      .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+    const scelti: LibraryResult[] = [];
+    const temiUsati = new Set<string>();
+    let somma = 0;
+    // Primo giro: un itinerario per tema, dal più forte.
+    for (const r of cand) {
+      const g = Number(r.days) || 1;
+      const tema = String(r.theme || r.angle || r.slug).toLowerCase();
+      if (temiUsati.has(tema) || somma + g > target) continue;
+      scelti.push(r); temiUsati.add(tema); somma += g;
+      if (somma === target) break;
+    }
+    // Secondo giro: si riempiono i giorni avanzati anche ripetendo un tema.
+    if (somma < target) {
+      for (const r of cand) {
+        if (scelti.includes(r)) continue;
+        const g = Number(r.days) || 1;
+        if (somma + g > target) continue;
+        scelti.push(r); somma += g;
+        if (somma === target) break;
+      }
+    }
+    if (scelti.length < 2) return null;
+    return { scelti, giorni: somma, target, completa: somma === target };
+  }, [fonteProposta, daysFilter]);
+
   // Carte visibili: si riparte da capo a ogni cambio di ricerca o filtro.
   const [quanti, setQuanti] = useState(60);
   useEffect(() => { setQuanti(60); }, [query, kind, group, cityFilter, maxHours, daysFilter]);
@@ -1246,6 +1312,43 @@ export default function ItineraryLibrarySheet({
                 PERTINENZA, non il tipo: a parità, quello pronto viene prima
                 perché è immediato. Il tipo resta leggibile dal bordo e dal
                 distintivo, non dalla posizione nella pagina. */}
+            {/* PROPOSTA AUTOMATICA. Chi cerca 7 giorni non trova nulla, perché
+                il filtro cerca la corrispondenza esatta e gli itinerari curati
+                sono da 1-3: invece della lista vuota, qui c'è la combinazione
+                già pronta. Solo itinerari GIÀ in libreria — se non bastano si
+                dice quanti giorni si coprono, senza generare niente. */}
+            {!loading && proposta && (
+              <div className="bg-gradient-to-br from-primary/5 to-amber-50 border border-primary/30 rounded-2xl p-3.5">
+                <p className="text-xs font-black text-primary leading-tight">
+                  {proposta.completa
+                    ? t('proposal_title_full').replace('{n}', String(proposta.target))
+                    : t('proposal_title_partial').replace('{n}', String(proposta.giorni)).replace('{t}', String(proposta.target))}
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {proposta.scelti.map((r) => (
+                    <li key={`prop-${r.slug}`} className="text-[11px] font-bold text-gray-600 flex items-center gap-1.5">
+                      <span className="text-primary">•</span>
+                      <span className="truncate">{r.title || r.slug}</span>
+                      <span className="text-gray-400 shrink-0">· {Number(r.days) || 1} {dayWord(Number(r.days) || 1)}</span>
+                    </li>
+                  ))}
+                </ul>
+                {!proposta.completa && (
+                  <p className="mt-2 text-[10px] font-medium text-gray-500 leading-snug">
+                    {t('proposal_gap')}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  disabled={unendo}
+                  onClick={() => { setSelezionati(proposta.scelti.map((r) => r.slug)); setErroreUnione(null); }}
+                  className="mt-3 w-full py-2.5 rounded-xl text-xs font-black bg-primary text-white hover:bg-primary/90 disabled:opacity-50 transition"
+                >
+                  ✨ {t('proposal_cta')}
+                </button>
+              </div>
+            )}
+
             {!loading && vociVisibili.map(v => v.tipo === 'pronto' ? (
               /* Contenitore: il tasto di selezione non può stare DENTRO il
                  bottone che apre la scheda (un bottone dentro un bottone non
