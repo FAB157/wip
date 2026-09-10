@@ -318,7 +318,13 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
   const effectiveFOV = compassAvailable ? FOV : 360;
 
   return (
-    <div className="absolute inset-0 bg-[#0a0a0a] z-50 overflow-hidden flex flex-col">
+    /* Radar AR nella grafica delle tavole (10/09/2026). Qui sotto scorre il
+       video, quindi il fondo si vede solo quando la fotocamera manca o sta
+       ancora partendo: in quel caso è panna come il resto dell'app, non nero.
+       Le sovrapposizioni diventano schede bianche con ombra — si leggono sia
+       sopra l'immagine dal vivo sia sopra il fondo chiaro, mentre le pillole
+       nere sparivano contro una facciata in ombra. */
+    <div className="absolute inset-0 bg-background z-50 overflow-hidden flex flex-col">
       {/* Video Stream Container */}
       <div className="absolute inset-0 z-0">
         {!cameraError ? (
@@ -330,42 +336,127 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-[#151619]">
-            <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4 border border-red-500/20">
-              <CameraOff className="w-8 h-8 text-red-500" />
+          /* SENZA FOTOCAMERA IL RADAR FUNZIONA LO STESSO (10/09/2026).
+             Prima qui c'era un vicolo cieco: icona rossa, «errore» e un tasto
+             per tornare indietro — con il GPS acceso, la bussola attiva e i
+             luoghi intorno già caricati. Ma per sapere che cosa hai attorno e
+             in che direzione guardare la fotocamera non serve: serve solo per
+             disegnarci sopra. La tavola lo dice apertamente («Fotocamera in
+             attesa · il radar funziona lo stesso»), e questo è quel disegno:
+             radar dall'alto, nord in cima, i luoghi alla loro distanza vera,
+             e sotto l'elenco dei più vicini che si tocca per aprire la scheda.
+             L'avviso resta, ma come nota in cima e non come muro. */
+          <div className="w-full h-full flex flex-col bg-background overflow-y-auto">
+            {/* Avviso, non bloccante */}
+            <div className="mx-6 mt-4 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 flex items-center gap-2.5 shrink-0">
+              <CameraOff className="w-[18px] h-[18px] text-slate-500 shrink-0" />
+              <p className="flex-1 text-[11px] font-bold text-slate-600 leading-snug">{t('vr_a_ar_camera_error_desc')}</p>
             </div>
-            <h3 className="text-secondary font-black text-xl mb-2">{t('vr_a_ar_camera_error_title')}</h3>
-            <p className="text-secondary/60 text-sm font-medium mb-6">{t('vr_a_ar_camera_error_desc')}</p>
-            <button
-              onClick={onClose}
-              className="px-8 py-3 bg-surface/10 text-secondary font-black text-sm rounded-2xl hover:bg-surface/20 transition-colors"
-            >
-              {t('vr_a_ar_back')}
-            </button>
+
+            {/* Radar dall'alto: 2 km di raggio, nord in cima */}
+            {(() => {
+              const R = 140, CX = 150, CY = 150, RAGGIO_M = 2000;
+              const punti = (pois || []).map((p: any) => {
+                const la = typeof p.lat === 'number' ? p.lat : parseFloat(p.lat);
+                const lo = typeof p.lon === 'number' ? p.lon : parseFloat(p.lon);
+                if (!gps || isNaN(la) || isNaN(lo)) return null;
+                const d = calculateDistance(gps.lat, gps.lon, la, lo);
+                if (d > RAGGIO_M) return null;
+                // La bussola gira la mappa sotto di te: quello che hai davanti
+                // sta in alto, come su un radar vero.
+                const ang = (calculateBearing(gps.lat, gps.lon, la, lo) - heading) * Math.PI / 180;
+                const r = (d / RAGGIO_M) * R;
+                return { p, d, x: CX + r * Math.sin(ang), y: CY - r * Math.cos(ang) };
+              }).filter(Boolean).sort((a: any, b: any) => a.d - b.d).slice(0, 24);
+
+              return (
+                <div className="px-6 pt-4 shrink-0 flex justify-center">
+                  <svg width="300" height="300" viewBox="0 0 300 300" className="max-w-full">
+                    <circle cx={CX} cy={CY} r={R} fill="#ffffff" stroke="#e5e7eb" strokeWidth="1" />
+                    <circle cx={CX} cy={CY} r={100} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+                    <circle cx={CX} cy={CY} r={55} fill="none" stroke="#e5e7eb" strokeWidth="1" />
+                    <line x1={CX} y1="10" x2={CX} y2="290" stroke="#eef2f7" strokeWidth="1" />
+                    <line x1="10" y1={CY} x2="290" y2={CY} stroke="#eef2f7" strokeWidth="1" />
+                    <text x={CX} y="26" textAnchor="middle" fontSize="11" fontWeight="900" fill="#b45309">N</text>
+                    <text x="278" y="154" textAnchor="middle" fontSize="10" fontWeight="900" fill="#475569">E</text>
+                    <text x={CX} y="284" textAnchor="middle" fontSize="10" fontWeight="900" fill="#475569">S</text>
+                    <text x="22" y="154" textAnchor="middle" fontSize="10" fontWeight="900" fill="#475569">O</text>
+                    <text x="207" y="154" textAnchor="middle" fontSize="9" fontWeight="700" fill="#475569">500 m</text>
+                    <text x="252" y="154" textAnchor="middle" fontSize="9" fontWeight="700" fill="#475569">2 km</text>
+                    {punti.map((n: any, i: number) => (
+                      <g key={n.p.id || i} onClick={() => onPoiClick(n.p)} style={{ cursor: 'pointer' }}>
+                        {/* Vicino = grande. La dimensione dice la distanza
+                            prima ancora di leggere i metri. */}
+                        <circle cx={n.x} cy={n.y} r={Math.max(5, 9 - (n.d / RAGGIO_M) * 4)} fill={n.p.is_gem ? '#d4af37' : '#1e3a8a'} />
+                        {i === 0 && <circle cx={n.x} cy={n.y} r="14" fill="none" stroke="#1e3a8a" strokeOpacity="0.25" strokeWidth="2" />}
+                      </g>
+                    ))}
+                    <circle cx={CX} cy={CY} r="7" fill="#ffffff" stroke="#1e3a8a" strokeWidth="3" />
+                  </svg>
+                </div>
+              );
+            })()}
+
+            {/* I più vicini: si tocca e si apre la scheda, come nella tavola */}
+            <div className="px-6 pb-8 pt-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{t('vr_a_ar_nearest')}</span>
+                <span className="text-[10px] font-black text-slate-500">{pois.length}</span>
+              </div>
+              {(pois || [])
+                .map((p: any) => ({ p, d: gps ? calculateDistance(gps.lat, gps.lon, Number(p.lat), Number(p.lon)) : Infinity }))
+                .filter((x: any) => Number.isFinite(x.d))
+                .sort((a: any, b: any) => a.d - b.d)
+                .slice(0, 12)
+                .map(({ p, d }: any) => (
+                  <button
+                    key={p.id}
+                    onClick={() => onPoiClick(p)}
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left active:scale-95 transition-transform"
+                  >
+                    {p.photo_url || p.image_url ? (
+                      <img src={p.photo_url || p.image_url} alt="" loading="lazy" className="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                        <MapPin className="w-[18px] h-[18px] text-primary" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-black text-slate-900 truncate">{p.nome || p.name || 'POI'}</p>
+                      <p className="text-[11px] font-bold text-slate-500 truncate">{p.category || p.categoria || ''}</p>
+                    </div>
+                    <span className="px-2.5 py-1.5 rounded-full bg-primary text-white text-[11px] font-black shrink-0">
+                      {d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`}
+                    </span>
+                  </button>
+                ))}
+            </div>
           </div>
         )}
       </div>
 
       {/* Loading State */}
       {isLoading && !cameraError && (
-        <div className="absolute inset-0 z-40 bg-black flex flex-col items-center justify-center">
+        <div className="absolute inset-0 z-40 bg-background flex flex-col items-center justify-center">
           <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
-          <p className="text-white/60 text-xs font-black uppercase tracking-widest">{t('vr_a_ar_init')}</p>
+          <p className="text-slate-500 text-xs font-black uppercase tracking-widest">{t('vr_a_ar_init')}</p>
         </div>
       )}
 
-      {/* Header Overlay */}
-      <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-10 flex justify-between items-start">
-        <div className="text-white">
-          <h2 className="font-black text-lg flex items-center gap-2">
-            <Compass className={`w-5 h-5 ${compassAvailable ? 'text-emerald-400' : 'text-amber-400'}`} />
+      {/* Testata: scheda bianca, come nella tavola. Sopra il video serviva un
+          gradiente nero per leggere il testo bianco; una scheda con la sua
+          ombra si legge su qualunque sfondo e non annerisce l'immagine. */}
+      <div className="absolute top-0 left-0 right-0 p-4 z-10 flex justify-between items-start gap-3">
+        <div className="bg-white/95 backdrop-blur-sm border border-gray-200 rounded-2xl px-3.5 py-2.5 shadow-[0_1px_3px_rgba(15,23,42,0.08)]">
+          <h2 className="font-black text-lg text-primary flex items-center gap-2">
+            <Compass className={`w-5 h-5 ${compassAvailable ? 'text-emerald-700' : 'text-amber-700'}`} />
             Radar AR
           </h2>
-          <p className="text-xs text-white/80 font-medium">
+          <p className="text-[11px] text-slate-500 font-bold">
             {t('vr_a_ar_compass')}: {Math.round(heading)}° | POI: {pois.length}
           </p>
         </div>
-        <button onClick={onClose} className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white">
+        <button onClick={onClose} className="w-10 h-10 bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-full flex items-center justify-center text-slate-900 shrink-0">
           <X className="w-6 h-6" />
         </button>
       </div>
@@ -411,9 +502,9 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             exit={{ opacity: 0 }}
             className="absolute bottom-24 left-0 right-0 flex justify-center z-20"
           >
-            <div className="bg-black/60 backdrop-blur-md rounded-full px-4 py-2 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 text-white animate-spin" />
-              <span className="text-white text-xs font-bold">{t('vr_a_ar_loading_pois')}</span>
+            <div className="bg-white/95 backdrop-blur-sm border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-full px-4 py-2 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 text-primary animate-spin" />
+              <span className="text-slate-600 text-xs font-bold">{t('vr_a_ar_loading_pois')}</span>
             </div>
           </motion.div>
         )}
@@ -428,9 +519,9 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             exit={{ opacity: 0 }}
             className="absolute bottom-24 left-0 right-0 flex justify-center z-20"
           >
-            <div className="bg-black/60 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-3 mx-6">
-              <MapPin className="w-5 h-5 text-amber-400 shrink-0" />
-              <span className="text-white text-xs font-bold">{t('vr_a_ar_no_pois')}</span>
+            <div className="bg-white/95 backdrop-blur-sm border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-2xl px-5 py-3 flex items-center gap-3 mx-6">
+              <MapPin className="w-5 h-5 text-amber-700 shrink-0" />
+              <span className="text-slate-600 text-xs font-bold">{t('vr_a_ar_no_pois')}</span>
             </div>
           </motion.div>
         )}
@@ -502,17 +593,20 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
                     zIndex: 100 - idx
                   }}
                 >
-                  <div className="bg-[#151619]/80 backdrop-blur-xl p-1 pr-4 rounded-full shadow-2xl mb-1.5 flex items-center gap-2.5 border border-white/20 hover:border-primary/50 transition-colors">
+                  {/* Etichetta bianca, come i cartellini della tavola: si legge
+                      sopra una facciata chiara e sopra una in ombra, mentre la
+                      pillola nera spariva contro i portali scuri. */}
+                  <div className="bg-white/95 backdrop-blur-sm p-1 pr-4 rounded-full shadow-[0_4px_14px_rgba(15,23,42,0.18)] mb-1.5 flex items-center gap-2.5 border border-gray-200 hover:border-primary transition-colors">
                     {poi.photo_url || poi.image_url ? (
-                      <img src={poi.photo_url || poi.image_url} alt="" className="w-8 h-8 rounded-full object-cover border border-white/20 shadow-inner" />
+                      <img src={poi.photo_url || poi.image_url} alt="" className="w-8 h-8 rounded-full object-cover border border-gray-200" />
                     ) : (
-                      <div className="w-8 h-8 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center">
+                      <div className="w-8 h-8 rounded-full bg-blue-50 border border-[#dbe4f5] flex items-center justify-center">
                          <MapPin className="w-4 h-4 text-primary" />
                       </div>
                     )}
-                    <span className="text-xs font-black text-white truncate max-w-[140px] drop-shadow-md">{poiName}</span>
+                    <span className="text-xs font-black text-slate-900 truncate max-w-[140px]">{poiName}</span>
                   </div>
-                  <div className="bg-primary text-white text-[11px] font-black px-3 py-1 rounded-full shadow-[0_0_15px_rgba(var(--color-primary),0.5)] border border-white/30">
+                  <div className="bg-primary text-white text-[11px] font-black px-3 py-1 rounded-full shadow-[0_4px_12px_rgba(30,58,138,0.3)]">
                     {dist >= 1000 ? (dist/1000).toFixed(1) + ' km' : Math.round(dist) + ' m'}
                   </div>
                   <div className="w-0.5 h-10 bg-gradient-to-b from-primary to-transparent mt-1 rounded-full opacity-80 blur-[0.5px]"></div>

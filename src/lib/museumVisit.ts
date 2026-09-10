@@ -26,6 +26,16 @@ export type VenueTappa = {
   foto?: string;
   /** La stessa foto a 160 px, per il cerchio accanto al nome. */
   fotoIcona?: string;
+  /** Il titolo com'è scritto sul cartellino, quando è diverso dal nostro:
+   *  chi cerca l'opera con gli occhi legge il muro, non la traduzione. Non
+   *  si traduce mai, in nessuna lingua. */
+  nomeOriginale?: string;
+  /** Opera della collezione di cui il museo NON dichiara la sala: si mostra
+   *  senza numero, in fondo, perché «la possiede» non è «oggi la vedi». */
+  soloCollezione?: boolean;
+  /** Saltata da chi sta visitando: sala chiusa, opera in prestito, fila. */
+  skipped?: boolean;
+  skippedAt?: number | null;
   /** id della scheda Vision con cui l'utente l'ha spuntata, se l'ha inquadrata. */
   seenCardId?: string | null;
   seenAt?: number | null;
@@ -36,6 +46,10 @@ export type VenueGuide = {
   intro: string;
   consiglio: string;
   tappe: VenueTappa[];
+  /** Il museo dichiara le sale? Se no, l'ordine è un consiglio di visita e
+   *  non un percorso: si dice, invece di numerare tappe che il visitatore
+   *  non saprebbe dove cercare. */
+  saleDichiarate?: boolean;
   language: string;
 };
 
@@ -51,6 +65,11 @@ export type MuseumVisit = {
   venueKey: string;
   venue: VenueInfo;
   guide: VenueGuide;
+  /** Foto DEL LUOGO per la testata e per il cerchio accanto al nome: stessa
+   *  regola delle opere, due misure, e niente quando nessuna fonte la
+   *  dichiara. */
+  venuePhoto?: string;
+  venuePhotoIcon?: string;
   source: { lang: string; title: string; url: string } | null;
   startedAt: number;
   updatedAt: number;
@@ -120,7 +139,7 @@ export function matchTappa(guide: VenueGuide, workName: string): number {
 }
 
 type VenueGuideResponse =
-  | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null }
+  | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null; venuePhoto?: string; venuePhotoIcon?: string }
   // 'needs_tour_pass': la visita guidata è del Pass Museo con itinerario.
   | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number };
 
@@ -184,6 +203,12 @@ export type MuseumLibraryItem = {
   stops_with_room: number;
   official_site: string | null;
   distance_m?: number | null;
+  /** Foto DEL LUOGO (Wikidata P18 del museo, o l'immagine del POI): due
+   *  misure, come per le opere — grande per la scheda, 160 px per il
+   *  cerchio accanto al nome. Assenti quando nessuna fonte ne dichiara
+   *  una: in quel caso resta il simbolo, mai la foto di un altro posto. */
+  venue_photo?: string;
+  venue_photo_icon?: string;
 };
 
 export async function fetchMuseumLibrary(args: { lat?: number | null; lon?: number | null; q?: string; language: Language; radiusKm?: number; limit?: number }): Promise<MuseumLibraryItem[]> {
@@ -223,7 +248,13 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
       const hit = seenNames.find(s => Math.max(overlap(t.nome, s.name), overlap(s.name, t.nome)) >= 0.6);
       return hit ? { ...t, seenCardId: hit.cardId, seenAt: hit.ts } : { ...t, seenCardId: null, seenAt: null };
     });
-    const v: MuseumVisit = { ...current, venue: resp.venue, guide: { ...resp.guide, tappe }, source: resp.source, updatedAt: now };
+    // La foto già trovata non si perde se questa risposta non ne porta una
+    // (una traduzione, per esempio, non la ricerca).
+    const v: MuseumVisit = {
+      ...current, venue: resp.venue, guide: { ...resp.guide, tappe }, source: resp.source, updatedAt: now,
+      venuePhoto: resp.venuePhoto || current.venuePhoto,
+      venuePhotoIcon: resp.venuePhotoIcon || current.venuePhotoIcon,
+    };
     saveVisit(v);
     return v;
   }
@@ -231,6 +262,8 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
     venueKey: key,
     venue: resp.venue,
     guide: { ...resp.guide, tappe: resp.guide.tappe.map(t => ({ ...t, seenCardId: null, seenAt: null })) },
+    ...(resp.venuePhoto ? { venuePhoto: resp.venuePhoto } : {}),
+    ...(resp.venuePhotoIcon ? { venuePhotoIcon: resp.venuePhotoIcon } : {}),
     source: resp.source,
     startedAt: now,
     updatedAt: now,
@@ -250,6 +283,89 @@ export function markWorkSeen(workName: string, cardId: string | null): MuseumVis
   if (idx >= 0 && !v.guide.tappe[idx].seenCardId) {
     v.guide.tappe[idx] = { ...v.guide.tappe[idx], seenCardId: cardId || `seen-${Date.now()}`, seenAt: Date.now() };
   }
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
+}
+
+/**
+ * RIAPRE UNA VISITA CONSERVATA, senza rete e senza pagare (11/09/2026).
+ *
+ * La visita «in corso» vive in localStorage e scade dopo sei ore, perché
+ * serve a sapere dove sei ADESSO. L'archivio invece non scade: è roba già
+ * pagata. Questa funzione prende una visita dall'archivio e la rimette in
+ * corso così com'era — percorso, sale, foto, opere spuntate — senza toccare
+ * il server, che è il modo in cui «non si ripaga» smette di essere una
+ * promessa e diventa un fatto: la richiesta non parte proprio.
+ */
+export function riapriVisitaConservata(archiviata: {
+  venueKey: string; venueName: string; guide: VenueGuide; venuePhotoIcon?: string;
+}): MuseumVisit | null {
+  if (!archiviata?.venueKey || !archiviata?.guide?.tappe?.length) return null;
+  const now = Date.now();
+  const v: MuseumVisit = {
+    venueKey: archiviata.venueKey,
+    venue: { id: null, name: archiviata.venueName, lat: null, lon: null, category: archiviata.guide.tipo || 'museo' },
+    guide: archiviata.guide,
+    ...(archiviata.venuePhotoIcon ? { venuePhotoIcon: archiviata.venuePhotoIcon } : {}),
+    source: null,
+    startedAt: now,
+    updatedAt: now,
+    // Le spunte sono quelle salvate nel percorso archiviato: chi aveva già
+    // visto dieci opere le ritrova spuntate.
+    seen: archiviata.guide.tappe
+      .filter(t => t.seenCardId)
+      .map(t => ({ name: t.nome, cardId: t.seenCardId || null, ts: t.seenAt || now })),
+  };
+  saveVisit(v);
+  return v;
+}
+
+/**
+ * «NON LA TROVO» (10/09/2026).
+ *
+ * Dentro un museo vero la sala è chiusa per allestimento, l'opera è partita
+ * in prestito, davanti c'è la fila, oppure semplicemente non si riesce a
+ * capire dove sia. Fino a ieri il percorso non lo prevedeva: le tappe erano
+ * numerate e immobili, e chi restava bloccato sulla 3 non arrivava mai alla 4.
+ *
+ * Il tasto fa due cose, e la seconda vale più della prima:
+ *  1. per chi visita: la tappa si chiude, il percorso prosegue;
+ *  2. per noi: se la stessa opera viene saltata da tante persone diverse, non
+ *     è sfortuna — è una tappa sbagliata, e ce lo sta dicendo il posto invece
+ *     di un controllo automatico. È il segnale più onesto che possiamo avere,
+ *     perché arriva da qualcuno che era lì davanti.
+ * Il secondo punto è best-effort e anonimo: se la rete non c'è, il salto
+ * resta valido lo stesso sul telefono.
+ */
+export function skipStop(index: number, motivo: 'non_trovata' | 'chiusa' | 'coda' = 'non_trovata'): MuseumVisit | null {
+  const v = getVisit();
+  if (!v || !v.guide?.tappe?.[index]) return null;
+  const tappa = v.guide.tappe[index];
+  v.guide.tappe[index] = { ...tappa, skipped: true, skippedAt: Date.now() };
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  // Il segnale al server non blocca nulla e non aspetta risposta.
+  void (async () => {
+    try {
+      const headers = await authHeaders();
+      if (!headers) return;
+      await fetch(getApiUrl('/api/museums/stop-skipped'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ venueKey: v.venueKey, stopName: tappa.nome, reason: motivo }),
+      });
+    } catch { /* il salto vale comunque */ }
+  })();
+  return v;
+}
+
+/** Rimette in percorso una tappa saltata per errore. */
+export function unskipStop(index: number): MuseumVisit | null {
+  const v = getVisit();
+  if (!v || !v.guide?.tappe?.[index]) return null;
+  const { skipped, skippedAt, ...resto } = v.guide.tappe[index] as any;
+  v.guide.tappe[index] = resto;
   v.updatedAt = Date.now();
   saveVisit(v);
   return v;

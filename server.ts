@@ -1286,15 +1286,26 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
   // DeepSeek entra solo con l'utente in attesa, mai nei lavori di sfondo
   // (regola del committente sulla spesa); in background il secondo atlante è
   // un gratuito diverso.
-  const secondoMotore: any = inDiretta === true ? 'deepseek' : 'mistral';
+  // Quale sia il secondo motore conta davvero: mistral e together rispondono
+  // 402 da tempo (credito zero), quindi indicarli significa cadere subito
+  // nella catena di ripiego. Con l'utente in attesa il secondo atlante è
+  // DeepSeek (il più preciso sui luoghi, misurato); nei lavori di sfondo è
+  // Gemini, e Agnes resta fuori da ENTRAMBE le domande cieche: impiega 2-4
+  // minuti e bloccherebbe la semina della libreria per una domanda che vale
+  // pochi secondi.
+  const secondoMotore: any = inDiretta === true ? 'deepseek' : 'gemini';
+  const opzioniAtlante = { ...opzioniAi, excludeEngines: [...new Set([...opzioniAi.excludeEngines, 'agnes'])] };
   const [aiRes, localizerA, localizerB] = await Promise.all([
     callUniversalAi('groq', [{ role: 'user', content: verifierPrompt }], opzioniAi,
       'itinerary_verify', vSupabaseUrl, vServiceKey, null),
     // Le domande cieche non devono mai far fallire la prima: se un motore non
     // risponde si resta con l'altro, e se cadono entrambi con la sola prima.
-    callUniversalAi('groq', [{ role: 'user', content: localizerPrompt }], { ...opzioniAi, excludeEngines: [...opzioniAi.excludeEngines, 'deepseek'] },
+    // Il primo atlante non usa mai DeepSeek: se lo usasse, i due atlanti
+    // finirebbero sullo stesso motore e le risposte non sarebbero più
+    // indipendenti — che è tutto il punto del doppio controllo.
+    callUniversalAi('groq', [{ role: 'user', content: localizerPrompt }], { ...opzioniAtlante, excludeEngines: [...opzioniAtlante.excludeEngines, 'deepseek'] },
       'itinerary_verify_dove', vSupabaseUrl, vServiceKey, null).catch(() => null),
-    callUniversalAi(secondoMotore, [{ role: 'user', content: localizerPrompt }], opzioniAi,
+    callUniversalAi(secondoMotore, [{ role: 'user', content: localizerPrompt }], opzioniAtlante,
       'itinerary_verify_dove2', vSupabaseUrl, vServiceKey, null).catch(() => null),
   ]);
 
@@ -6828,20 +6839,26 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
    * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
    */
-  async function opereDaWikidata(qid: string, lang: string): Promise<{ righe: string[]; foto: Record<string, string> }> {
-    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {} };
+  async function opereDaWikidata(qid: string, lang: string): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string> }> {
+    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {} };
     // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
     // QUELL'opera: il legame è con l'opera, non con una parola chiave — la
     // regola del progetto sulle foto vere vale anche qui.
-    const sparql = `SELECT ?opera ?operaLabel ?autoreLabel ?anno ?inv ?immagine (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
+    // ?labUser è l'etichetta ESPLICITA nella lingua dell'utente; ?operaLabel
+    // è quella con ripiego, che quando la traduzione non esiste torna nella
+    // lingua di casa dell'opera. Averle entrambe è ciò che permette di dire
+    // «Campo di iris — sul cartellino: Veld met irissen bij Arles» invece di
+    // far uscire l'olandese dentro una guida in inglese (Van Gogh Museum).
+    const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
   ?opera wdt:P195 wd:${qid} .
+  OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
   OPTIONAL { ?opera wdt:P170 ?autore . }
   OPTIONAL { ?opera wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
   OPTIONAL { ?opera wdt:P217 ?inv . }
   OPTIONAL { ?opera wdt:P18 ?immagine . }
   OPTIONAL { ?sitelink schema:about ?opera . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},it,en". }
-} GROUP BY ?opera ?operaLabel ?autoreLabel ?anno ?inv ?immagine
+} GROUP BY ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine
 ORDER BY DESC(?fama) LIMIT 60`;
     try {
       const r = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
@@ -6850,21 +6867,125 @@ ORDER BY DESC(?fama) LIMIT 60`;
       });
       const righe: string[] = [];
       const foto: Record<string, string> = {};
+      // I titoli certificati da P195: sono le opere che Wikidata dichiara di
+      // QUESTA collezione. Servono come lasciapassare — quello che è qui
+      // dentro non ha bisogno di essere verificato di nuovo.
+      const titoli = new Set<string>();
+      // IL TITOLO COM'È SCRITTO SUL CARTELLINO. Chi cerca l'opera con gli
+      // occhi legge quello che c'è sul muro, non la nostra traduzione: al
+      // Louvre trova «La Joconde», non «La Gioconda». Si conserva quando è
+      // diverso dal titolo nella lingua dell'utente, e non si traduce mai.
+      const originali: Record<string, string> = {};
       for (const b of (r.data?.results?.bindings || [])) {
-        const titolo = String(b?.operaLabel?.value || '').trim();
+        const conRipiego = String(b?.operaLabel?.value || '').trim();
+        const inLinguaUtente = String(b?.labUser?.value || '').trim();
+        // Il titolo che si mostra è quello nella lingua dell'utente se esiste;
+        // altrimenti resta l'originale, ma dichiarato come tale.
+        const titolo = inLinguaUtente || conRipiego;
         if (!titolo || /^Q\d+$/.test(titolo)) continue;
+        const chiave = normalizzaTesto(titolo);
+        titoli.add(chiave);
+        if (conRipiego && conRipiego !== titolo) originali[chiave] = conRipiego;
         const autore = String(b?.autoreLabel?.value || '').trim();
         const anno = String(b?.anno?.value || '').trim();
         const inv = String(b?.inv?.value || '').trim();
-        const riga = `${titolo}${autore && !/^Q\d+$/.test(autore) ? ` — ${autore}` : ''}${anno ? ` (${anno})` : ''}${inv ? ` [inv. ${inv}]` : ''}`;
+        const riga = `${titolo}${originali[chiave] ? ` [sul cartellino: ${originali[chiave]}]` : ''}${autore && !/^Q\d+$/.test(autore) ? ` — ${autore}` : ''}${anno ? ` (${anno})` : ''}${inv ? ` [inv. ${inv}]` : ''}`;
         if (!righe.includes(riga)) righe.push(riga);
         const img = String(b?.immagine?.value || '');
-        if (img && !foto[normalizzaTesto(titolo)]) foto[normalizzaTesto(titolo)] = img;
+        if (img && !foto[chiave]) foto[chiave] = img;
+        // Anche col titolo originale come chiave: il modello può ripetere
+        // quello, e la foto deve trovarsi lo stesso.
+        if (img && originali[chiave] && !foto[normalizzaTesto(conRipiego)]) foto[normalizzaTesto(conRipiego)] = img;
       }
-      return { righe, foto };
+      return { righe, foto, titoli, originali };
     } catch (e: any) {
       console.warn('[VenueGuide] Wikidata opere non disponibili:', e?.message);
-      return { righe: [], foto: {} };
+      return { righe: [], foto: {}, titoli: new Set(), originali: {} };
+    }
+  }
+
+  /**
+   * L'OPERA È DAVVERO IN QUESTO MUSEO? (10/09/2026)
+   *
+   * Il difetto che questa funzione chiude, visto dal vivo: al Rijksmuseum il
+   * percorso proponeva «La congiura di Claudio Civile», che è del
+   * Nationalmuseum di Stoccolma e ad Amsterdam sta solo in prestito. Non è
+   * un'allucinazione — l'opera esiste e la voce Wikipedia del Rijksmuseum la
+   * nomina davvero — ed è proprio per questo che il filtro «la tappa deve
+   * comparire nel materiale» la lasciava passare: una voce cita di continuo
+   * opere di ALTRI musei, per confronto o per storia.
+   *
+   * La cura non usa l'AI e non costa niente: si chiede a Wikidata di CHI È
+   * quell'opera (P195) e si confronta con il museo che stiamo raccontando.
+   * Si interroga solo per le tappe che P195 non ha già certificato.
+   *
+   * Tre risposte possibili, e due su tre non decidono nulla:
+   *  - collezione dichiarata e DIVERSA dal nostro museo → la tappa esce;
+   *  - collezione dichiarata e uguale → la tappa resta, ora certificata;
+   *  - nessuna entità trovata, o trovata senza P195 → non si sa, e non
+   *    sapere non è una prova: la tappa resta com'era.
+   * La terza è la regola che tiene: un archivio che tace non autorizza a
+   * cancellare, esattamente come non autorizza a confermare.
+   */
+  async function operaDiAltroMuseo(titolo: string, autore: string, nomeMuseo: string, qidMuseo: string, lang: string): Promise<boolean> {
+    try {
+      const cerca = await axios.get(
+        `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(titolo)}&language=${lang}&uselang=${lang}&type=item&limit=3&format=json&origin=*`,
+        { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+      );
+      const candidati = (cerca.data?.search || []).filter((s: any) => {
+        // Il titolo deve corrispondere davvero: «Notte stellata» non deve
+        // finire su «Notte stellata sul Rodano», che è un altro quadro.
+        const et = String(s?.label || '');
+        return Math.max(sovrapposizioneNomi(titolo, et), sovrapposizioneNomi(et, titolo)) >= 0.75;
+      });
+      if (!candidati.length) return false;
+
+      for (const c of candidati.slice(0, 2)) {
+        const claims = await axios.get(
+          `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P195|P170&format=json&origin=*`,
+          { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+        );
+        const collezioni = (claims.data?.claims?.P195 || [])
+          .map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || ''))
+          .filter(Boolean);
+        if (!collezioni.length) continue;
+        // Il nostro museo è fra le collezioni dichiarate? Allora va bene.
+        if (qidMuseo && collezioni.includes(qidMuseo)) return false;
+
+        // Se l'autore è noto e NON corrisponde, abbiamo trovato un omonimo:
+        // non è l'opera di cui parliamo, e non prova niente su di essa.
+        if (autore) {
+          const autori = (claims.data?.claims?.P170 || []).map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || '')).filter(Boolean);
+          if (autori.length) {
+            const et = await axios.get(
+              `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${autori.slice(0, 3).join('|')}&props=labels&languages=${lang}|it|en&format=json&origin=*`,
+              { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+            );
+            const nomi = Object.values(et.data?.entities || {}).flatMap((e: any) => Object.values(e?.labels || {}).map((l: any) => String(l?.value || '')));
+            const combacia = nomi.some(n => Math.max(sovrapposizioneNomi(autore, n), sovrapposizioneNomi(n, autore)) >= 0.6);
+            if (!combacia) continue;
+          }
+        }
+
+        // Collezione dichiarata, e non è la nostra: l'opera sta altrove.
+        const nomiColl = await axios.get(
+          `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${collezioni.slice(0, 3).join('|')}&props=labels&languages=${lang}|it|en&format=json&origin=*`,
+          { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+        );
+        const etichette = Object.values(nomiColl.data?.entities || {}).flatMap((e: any) => Object.values(e?.labels || {}).map((l: any) => String(l?.value || '')));
+        // Ultimo controllo prima di scartare: il nome della collezione
+        // potrebbe essere una variante del nostro (Uffizi / Gallerie degli
+        // Uffizi). Nel dubbio la tappa resta.
+        const eNostro = etichette.some(n => Math.max(sovrapposizioneNomi(nomeMuseo, n), sovrapposizioneNomi(n, nomeMuseo)) >= 0.6);
+        if (eNostro) return false;
+        console.warn(`[VenueGuide] "${titolo}" è di ${etichette[0] || collezioni[0]}, non di ${nomeMuseo}: tappa scartata`);
+        return true;
+      }
+      return false;
+    } catch {
+      // Wikidata non risponde: non si sa, quindi non si tocca nulla.
+      return false;
     }
   }
 
@@ -6882,12 +7003,106 @@ ORDER BY DESC(?fama) LIMIT 60`;
   }
 
   /**
+   * LA FOTO DEL LUOGO, per il cerchio accanto al nome nell'elenco e per la
+   * testata della visita (10/09/2026, richiesta del committente: «la foto
+   * accanto al nome in un cerchio come icona, di tutti i musei e tutte le
+   * opere»). Le opere l'avevano già da P18; i musei no.
+   *
+   * Due sole fonti, ed entrambe legano l'immagine a QUESTO luogo, mai a una
+   * parola chiave — è la regola delle foto vere del progetto:
+   *  1. Wikidata P18 dell'entità del museo: è l'immagine che Wikidata
+   *     associa a quel museo, non a "museo" come concetto.
+   *  2. `shared_pois.image_url` del POI collegato, che nel nostro archivio è
+   *     già passato dai controlli sulle foto del luogo.
+   * Se nessuna delle due esiste non si ripiega su niente: l'elenco mostra il
+   * simbolo. Nessuna foto è meglio della foto di un altro posto.
+   */
+  async function fotoDelMuseo(qid: string, poiId: string | null): Promise<string> {
+    if (/^Q\d+$/.test(qid)) {
+      try {
+        const r = await axios.get(
+          `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P18&format=json`,
+          { timeout: 6000, headers: { 'User-Agent': 'WIP-Guide/1.0 (museum photos)' } }
+        );
+        const nomeFile = r.data?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+        if (nomeFile) {
+          return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(String(nomeFile))}`;
+        }
+      } catch { /* senza P18 si prova il POI */ }
+    }
+    if (poiId) {
+      try {
+        const r = await axios.get(
+          `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=image_url&limit=1`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
+        );
+        const u = r.data?.[0]?.image_url;
+        if (u && /^https?:\/\//i.test(String(u))) return String(u);
+      } catch { /* nessuna foto: resta il simbolo */ }
+    }
+    return '';
+  }
+
+  /**
    * SITO UFFICIALE del museo: la disposizione delle sale la dichiara il museo
    * stesso. Si legge la home e poche pagine plausibili ("visita", "collezione",
    * "mappa"…) e se ne estrae il testo. Nessun crawling: al massimo 4 pagine,
    * timeout corti, e in caso di errore la guida si costruisce lo stesso.
    */
   const PAGINE_UTILI = ['', 'visita', 'visit', 'plan-your-visit', 'collezione', 'collezioni', 'collection', 'collections', 'mappa', 'map', 'sale', 'percorsi', 'highlights', 'opere', 'musee', 'museo'];
+
+  /**
+   * QUANTO PROMETTE UN LINK DEL SITO (10/09/2026).
+   *
+   * Prima si accettava solo l'ultimo pezzo dell'indirizzo, e per intero:
+   * «/visit» entrava, «/plan-your-visit-museum-map» no, «/le-nostre-sale»
+   * nemmeno. Bastava che il museo scrivesse l'indirizzo in modo un po' suo
+   * per perdere l'unica pagina che dichiara dove stanno le opere — ed è
+   * esattamente quello che è successo al Van Gogh Museum, dodici opere vere
+   * e ZERO sale.
+   *
+   * Ora si guarda l'indirizzo intero, per pezzi di parola e in sette lingue,
+   * e si ordinano i link per quanto promettono: prima le mappe e le sale, poi
+   * i capolavori, infine le pagine generiche di visita.
+   */
+  function promessaLink(percorso: string): number {
+    const p = percorso.toLowerCase();
+    // Le pagine che dichiarano DOVE stanno le opere: sono l'oro.
+    if (/(sale|sala|room|rooms|salle|salles|saal|saele|gallery|galleries|galleria|gallerie|floor|piano|plan(o|ta)?|mapp?a|map|karte|plattegrond|itinerar|percors|parcours|rundgang)/.test(p)) return 3;
+    // I capolavori: spesso ognuno con la sua sala in scheda.
+    if (/(highlight|masterpiece|capolavor|obras-maestras|meisterwerk|top-?\d+|must-?see|opere|works|collectie)/.test(p)) return 2;
+    // Le pagine di visita in genere: utili, ma meno.
+    if (/(visit|visita|besuch|bezoek|collezion|collection|colecc|sammlung|museo|musee|museum)/.test(p)) return 1;
+    return 0;
+  }
+
+  /**
+   * LE FRASI CHE DICONO LA SALA, IN CIMA (10/09/2026).
+   *
+   * Il testo di un sito è per la maggior parte orari, biglietti, cookie e
+   * novità; le righe che dicono «Room 12» o «primo piano» sono poche e
+   * sparse. Tagliando i primi 3000 caratteri si prendeva quasi sempre il
+   * menù, e la sala non arrivava mai al modello.
+   * Qui si estraggono per prime le frasi che contengono un'indicazione di
+   * sala o piano — nelle sette lingue dell'app più olandese, che serve per i
+   * musei dei Paesi Bassi — e si mette il resto dopo. Stessa idea di
+   * `ordinaSezioniPerVisita` per Wikipedia: non si aggiunge nulla, si mette
+   * davanti quello che conta.
+   */
+  const RE_SALA = /\b(sala|sale|salone|room|rooms|salle|salles|saal|säle|sala\s*\d|zaal|zalen|gallery|galleries|galleria|planta|piano\s+(terra|primo|secondo|nobile)|first\s+floor|second\s+floor|ground\s+floor|étage|stock|piso)\b[^.;]{0,60}/i;
+  function primaLeSale(testo: string): string {
+    const frasi = String(testo || '').split(/(?<=[.;!?])\s+/);
+    const conSala: string[] = [];
+    const resto: string[] = [];
+    for (const f of frasi) {
+      // Una sala serve solo se ha un'identità: un numero o un nome proprio
+      // accanto. «Le nostre sale sono accoglienti» non dice dove andare.
+      if (RE_SALA.test(f) && /\d|[A-ZÀ-Þ][a-zà-ÿ]{3,}/.test(f)) conSala.push(f.trim());
+      else resto.push(f.trim());
+    }
+    if (!conSala.length) return testo;
+    return `${conSala.join(' ')}\n\n${resto.join(' ')}`;
+  }
   function testoPaginaMuseo(html: string): string {
     return String(html || '')
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -6911,18 +7126,24 @@ ORDER BY DESC(?fama) LIMIT 60`;
       const html = String(home.data || '');
       out.push(testoPaginaMuseo(html).slice(0, 3500));
       visitate.push(base.href);
+      // I link si pesano invece di filtrarli: si guarda l'indirizzo intero e
+      // si tengono i più promettenti, mappa delle sale per prima.
       const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
+      const candidati: { href: string; peso: number }[] = [];
       for (const l of link) {
         try {
           const u = new URL(l, base.href);
           if (u.hostname !== base.hostname) continue;
-          const seg = u.pathname.toLowerCase().split('/').filter(Boolean).pop() || '';
-          if (!PAGINE_UTILI.includes(seg)) continue;
-          if (daProvare.includes(u.href) || u.href === base.href) continue;
-          daProvare.push(u.href);
-          if (daProvare.length >= 4) break;
+          if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|ics)$/i.test(u.pathname)) continue;
+          if (u.href === base.href || candidati.some(c => c.href === u.href)) continue;
+          const peso = promessaLink(u.pathname);
+          if (peso > 0) candidati.push({ href: u.href, peso });
         } catch { /* link non valido */ }
       }
+      candidati.sort((a, b) => b.peso - a.peso);
+      // Sei pagine invece di quattro: la mappa delle sale sta quasi sempre in
+      // una pagina sua, e prima veniva scavalcata da orari e biglietti.
+      for (const c of candidati.slice(0, 5)) daProvare.push(c.href);
     } catch (e: any) {
       console.warn('[VenueGuide] sito ufficiale non raggiungibile:', e?.message);
       return { testo: '', pagine: [] };
@@ -6931,9 +7152,11 @@ ORDER BY DESC(?fama) LIMIT 60`;
       try {
         const r = await axios.get(u, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000, maxRedirects: 2, validateStatus: (s) => s < 400 });
         const t = testoPaginaMuseo(String(r.data || ''));
-        if (t.length > 300) { out.push(t.slice(0, 3000)); visitate.push(u); }
+        if (t.length > 300) { out.push(primaLeSale(t).slice(0, 3000)); visitate.push(u); }
       } catch { /* pagina saltata */ }
     }
+    // Anche nella home le righe con le sale vanno davanti al resto.
+    if (out.length) out[0] = primaLeSale(out[0]);
     return { testo: out.join('\n\n').slice(0, maxChars), pagine: visitate };
   }
 
@@ -6953,6 +7176,7 @@ ORDER BY DESC(?fama) LIMIT 60`;
     origin: 'auto' | 'seeded' | 'curated';
     city?: string | null;
     countryCode?: string | null;
+    venuePhoto?: string | null;
   }): Promise<void> {
     try {
       const tappe = Array.isArray(args.guide?.tappe) ? args.guide.tappe : [];
@@ -6971,6 +7195,9 @@ ORDER BY DESC(?fama) LIMIT 60`;
         stops_count: tappe.length,
         stops_with_room: tappe.filter((t: any) => String(t?.dove || '').trim()).length,
         origin: args.origin,
+        // Vuota resta vuota: non si sovrascrive con null una foto già trovata
+        // da un passaggio precedente (la traduzione, per esempio, non la cerca).
+        ...(args.venuePhoto ? { venue_photo: args.venuePhoto } : {}),
         updated_at: new Date().toISOString(),
       }, {
         headers: {
@@ -7067,13 +7294,24 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         ...guide,
         intro: String(t[0] || guide.intro || ''),
         consiglio: String(t[1] || ''),
-        tappe: tappe.map((tap: any, i: number) => ({
-          ...tap,
-          nome: String(t[2 + i * 2] || tap.nome || ''),
-          perche: String(t[3 + i * 2] || tap.perche || ''),
-          // `dove` NON si traduce: è quello che c'è scritto sul cartello.
-          dove: tap.dove,
-        })),
+        tappe: tappe.map((tap: any, i: number) => {
+          const tradotto = String(t[2 + i * 2] || tap.nome || '');
+          return {
+            ...tap,
+            nome: tradotto,
+            perche: String(t[3 + i * 2] || tap.perche || ''),
+            // `dove` NON si traduce: è quello che c'è scritto sul cartello.
+            dove: tap.dove,
+            // E nemmeno il titolo del cartellino. Anzi: se la traduzione ha
+            // cambiato il nome e non c'era ancora un originale, quello di
+            // partenza DIVENTA l'originale — è la forma che il visitatore
+            // troverà scritta, e perderla significherebbe mandarlo a cercare
+            // un titolo che sul muro non c'è.
+            ...(tap.nomeOriginale
+              ? { nomeOriginale: tap.nomeOriginale }
+              : (tradotto && tradotto !== tap.nome ? { nomeOriginale: String(tap.nome) } : {})),
+          };
+        }),
         language: A,
         translatedFrom: String(daLingua || '').toUpperCase().slice(0, 2),
       };
@@ -7703,7 +7941,112 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         .slice(0, 20);
       const scartate = tappeIn.length - tappe.length;
       if (scartate > 0) console.warn(`[VenueGuide] ${venue.name}: scartate ${scartate} tappe non presenti nel materiale`);
-      if (tappe.length < 3) {
+
+      // ── 5-bis. E l'opera sta DAVVERO qui? ──
+      // Comparire nel materiale non basta: la voce di un museo nomina anche
+      // opere di altri musei. Le tappe già certificate da P195 passano senza
+      // controlli; le altre si chiedono a Wikidata, poche per volta per non
+      // trasformare la generazione in un'attesa. Tetto a 12 verifiche: oltre
+      // quella soglia il costo in secondi supera il beneficio, e le tappe non
+      // verificate restano — non si scarta ciò che non si è controllato.
+      let tappeVere = tappe;
+      if (tappe.length) {
+        const daVerificare = tappe
+          .map((t: any, i: number) => ({ t, i }))
+          .filter(({ t }: any) => !opereWd.titoli.has(normalizzaTesto(t.nome)))
+          .slice(0, 12);
+        if (daVerificare.length) {
+          const fuori = new Set<number>();
+          for (let k = 0; k < daVerificare.length; k += 4) {
+            const gruppo = daVerificare.slice(k, k + 4);
+            const esiti = await Promise.all(gruppo.map(({ t }: any) =>
+              operaDiAltroMuseo(t.nome, t.autore || '', venue!.name, wikidataId, langCfg.wiki)
+            ));
+            esiti.forEach((altrove, j) => { if (altrove) fuori.add(gruppo[j].i); });
+          }
+          if (fuori.size) {
+            tappeVere = tappe.filter((_: any, i: number) => !fuori.has(i));
+            console.warn(`[VenueGuide] ${venue.name}: ${fuori.size} opere risultano di altri musei, tolte dal percorso`);
+          }
+        }
+      }
+      const tappe2 = tappeVere;
+
+      // ── 5-quater. Il titolo com'è scritto sul cartellino ──
+      // Chi cerca l'opera con gli occhi legge il muro, non la nostra
+      // traduzione. Quando Wikidata ha entrambi, la tappa li porta tutti e
+      // due: il nome nella lingua dell'utente e quello che troverà davanti.
+      const conCartellino = tappeVere.map((t: any) => {
+        const orig = opereWd.originali[normalizzaTesto(t.nome)];
+        return orig && orig !== t.nome ? { ...t, nomeOriginale: orig } : t;
+      });
+      tappeVere = conCartellino;
+
+      // ── 5-ter. Proprietà non è allestimento ──
+      // «Il museo la possiede» e «oggi la vedi» sono due promesse diverse.
+      // Se il museo dichiara le sale, le opere senza sala scendono in fondo
+      // e perdono il numero: restano consigli, non tappe di un percorso con
+      // un ordine e un orario. Se invece NESSUNA sala è dichiarata — capita,
+      // il Van Gogh Museum non le pubblica — non si finge un itinerario:
+      // l'ordine consigliato resta, ma la guida lo dichiara.
+      const conSala = tappe2.filter((t: any) => String(t.dove || '').trim());
+      const senzaSala = tappe2.filter((t: any) => !String(t.dove || '').trim());
+      const saleDichiarate = conSala.length > 0;
+
+      // ── 5-quinquies. SI VISITA PER STANZE, NON A ZIGZAG ──
+      //
+      // L'ordine che arrivava dalle fonti poteva mandare il visitatore dalla
+      // Sala 2 alla 15 e poi di nuovo alla 3: dentro un museo vero sono
+      // centinaia di metri e due rampe di scale per tornare dove si era già
+      // stati. Le opere della stessa sala vanno viste insieme — è l'unica
+      // cosa che trasforma un elenco in un percorso.
+      //
+      // Le sale si ordinano per numero quando ce l'hanno (Sala 2 prima della
+      // 15, e «10» dopo «9» perché si confronta il numero, non il testo), e
+      // per prima apparizione quando sono nomi (Tribuna, Salle des États):
+      // quell'ordine è quello che la fonte suggeriva, ed è il meglio che
+      // abbiamo senza una pianta del museo.
+      const numeroSala = (s: string): number => {
+        const m = String(s).match(/\d+/);
+        return m ? parseInt(m[0], 10) : Number.NaN;
+      };
+      const pianoSala = (s: string): number => {
+        const t = String(s).toLowerCase();
+        if (/(terra|ground|rez|erdgeschoss|planta\s*baja|begane)/.test(t)) return 0;
+        if (/(primo|first|1er|1st|premier|erste|primera)/.test(t)) return 1;
+        if (/(secondo|second|2e|2nd|deuxieme|zweite|segunda)/.test(t)) return 2;
+        if (/(terzo|third|3e|3rd|troisieme|dritte|tercera)/.test(t)) return 3;
+        if (/(seminterrato|basement|sous-sol|untergeschoss|sotano|cripta|crypt)/.test(t)) return -1;
+        return Number.NaN;
+      };
+      const raggruppaPerSala = (elenco: any[]): any[] => {
+        const gruppi = new Map<string, any[]>();
+        for (const t of elenco) {
+          const k = String(t.dove || '').trim();
+          if (!gruppi.has(k)) gruppi.set(k, []);
+          gruppi.get(k)!.push(t);
+        }
+        const chiavi = [...gruppi.keys()];
+        const ordine = new Map(chiavi.map((k, i) => [k, i]));
+        chiavi.sort((a, b) => {
+          // Prima per piano, quando il museo lo dichiara: si finisce un piano
+          // prima di prendere le scale.
+          const pa = pianoSala(a), pb = pianoSala(b);
+          if (Number.isFinite(pa) && Number.isFinite(pb) && pa !== pb) return pa - pb;
+          const na = numeroSala(a), nb = numeroSala(b);
+          if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+          if (Number.isFinite(na)) return -1;
+          if (Number.isFinite(nb)) return 1;
+          return (ordine.get(a) ?? 0) - (ordine.get(b) ?? 0);
+        });
+        return chiavi.flatMap(k => gruppi.get(k)!);
+      };
+
+      const tappeOrdinate = saleDichiarate
+        ? [...raggruppaPerSala(conSala), ...senzaSala.map((t: any) => ({ ...t, soloCollezione: true }))]
+        : tappe2;
+
+      if (tappeOrdinate.length < 3) {
         const out = { ok: false, reason: 'insufficient', venue, negativoDel: new Date().toISOString() };
         await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
         return res.json(out);
@@ -7713,7 +8056,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // da Wikidata P18, cioè dall'immagine legata a QUELL'opera — mai da una
       // parola chiave, come vuole la regola sulle foto vere. Le opere senza
       // immagine restano senza: meglio un cerchio vuoto di una foto altrui.
-      const tappeConFoto = tappe.map((t: any) => {
+      const tappeConFoto = tappeOrdinate.map((t: any) => {
         const chiave = normalizzaTesto(t.nome);
         let img = opereWd.foto[chiave] || '';
         if (!img) {
@@ -7729,9 +8072,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           : t;
       });
       const conFoto = tappeConFoto.filter((t: any) => t.foto).length;
-      if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappe.length} con la foto`);
+      if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappeOrdinate.length} con la foto`);
 
       const guide = {
+        // Le sale le dichiara il museo o non le dichiara nessuno: dirlo
+        // apertamente vale più di un percorso che finge di sapere dove sono
+        // le opere. L'app lo scrive in testata invece di numerare tappe che
+        // il visitatore non saprebbe dove cercare.
+        saleDichiarate,
         // Se il luogo È una chiesa lo sappiamo noi dalla categoria e dal nome,
         // e vale più della risposta del modello: il Duomo di Firenze usciva
         // classificato «museo» e la scheda mostrava l'icona sbagliata.
@@ -7741,7 +8089,15 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         tappe: tappeConFoto,
         language: outLang,
       };
-      const payload = { ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null };
+      // La foto del luogo si cerca PRIMA di mettere in cache, così la testata
+      // della visita ce l'ha anche al secondo ingresso senza ricercarla.
+      const fotoLuogoRaw = await fotoDelMuseo(wikidataId, venue.id);
+      const daCommonsLuogo = /commons\.wikimedia\.org/i.test(fotoLuogoRaw);
+      const payload = {
+        ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null,
+        venuePhoto: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 900) : fotoLuogoRaw) : '',
+        venuePhotoIcon: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 160) : fotoLuogoRaw) : '',
+      };
       await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payload));
       // LIBRERIA: la guida entra anche in museum_guides, così è elencabile,
       // cercabile per vicinanza e riusabile da chiunque passi di lì domani.
@@ -7764,7 +8120,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       await salvaInLibreriaMusei({
         venueKey: chiaveLuogo, venue, guide, source: wikiSource,
         officialSite: sitoOut.pagine[0] || null, language: outLang, origin: 'auto',
-        city: cittaLuogo, countryCode: paeseLuogo,
+        city: cittaLuogo, countryCode: paeseLuogo, venuePhoto: fotoLuogoRaw || null,
       });
       res.json({ ...payload, cached: false });
     } catch (e: any) {
@@ -8400,6 +8756,35 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
    * nessuna generazione: chi non trova nulla qui chiede /venue-guide, che la
    * crea al volo e la deposita in libreria per chi verrà dopo.
    */
+  /**
+   * «NON LA TROVO»: il visitatore salta una tappa (10/09/2026).
+   *
+   * È il solo segnale sulla qualità di una guida che arriva da qualcuno che
+   * è FISICAMENTE davanti all'opera. Vale più di qualunque verifica nostra:
+   * noi possiamo controllare che l'opera sia della collezione, non che oggi
+   * la sala sia aperta. Si conta e basta — niente persone, niente storico.
+   */
+  app.post("/api/museums/stop-skipped", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const venueKey = String(req.body?.venueKey || '').trim().slice(0, 200);
+      const stopName = String(req.body?.stopName || '').trim().slice(0, 140);
+      if (!venueKey || !stopName) return res.status(400).json({ error: 'dati_mancanti' });
+      await axios.post(
+        `${supabaseUrl}/rest/v1/rpc/increment_museum_stop_skip`,
+        { p_venue_key: venueKey, p_stop_name: stopName },
+        { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 6000 }
+      );
+      res.json({ ok: true });
+    } catch (e: any) {
+      // Il salto vale sul telefono anche se qui non arriva: mai un errore
+      // in faccia a chi sta visitando per un contatore.
+      console.warn('[MuseumSkip] non registrato:', e?.response?.data?.message || e?.message);
+      res.json({ ok: true, recorded: false });
+    }
+  });
+
   app.get("/api/museums/library", rateLimiter, async (req, res) => {
     try {
       const lang = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
@@ -8410,7 +8795,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
       const kmRaggio = Math.min(200, Math.max(1, parseFloat(String(req.query.radius_km || '25')) || 25));
 
-      const campi = 'venue_key,venue_name,poi_id,language,venue_type,city,country_code,lat,lon,stops_count,stops_with_room,official_site,source,hits,updated_at';
+      const campi = 'venue_key,venue_name,poi_id,language,venue_type,city,country_code,lat,lon,stops_count,stops_with_room,official_site,source,hits,updated_at,venue_photo';
       let url = `${supabaseUrl}/rest/v1/museum_guides?language=eq.${encodeURIComponent(lang)}&select=${campi}&limit=${limit}`;
       if (haGeo) {
         // Riquadro attorno al punto: la libreria è piccola, non serve PostGIS.
@@ -8423,6 +8808,19 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
 
       const r = await axios.get(url, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 });
       let righe = Array.isArray(r.data) ? r.data : [];
+      // Due misure della stessa foto, come per le opere: 900 px per la testata
+      // della visita, 160 per il cerchio accanto al nome nell'elenco. Il
+      // ridimensionamento vale solo per Commons; una foto nostra si serve com'è.
+      righe = righe.map((x: any) => {
+        const f = String(x?.venue_photo || '');
+        if (!f) return x;
+        const daCommons = /commons\.wikimedia\.org/i.test(f);
+        return {
+          ...x,
+          venue_photo: daCommons ? fotoCommons(f, 900) : f,
+          venue_photo_icon: daCommons ? fotoCommons(f, 160) : f,
+        };
+      });
       if (haGeo) {
         righe = righe
           .map((x: any) => ({ ...x, distance_m: (Number.isFinite(x.lat) && Number.isFinite(x.lon)) ? Math.round(getHaversineDistance(lat, lon, x.lat, x.lon)) : null }))
@@ -11366,9 +11764,43 @@ ${manuale}`;
         }
         if (!urlFoto) continue;
         if (!(await mostraDavveroIlPosto(urlFoto, nomePoi))) continue;
+
+        // L'INDIRIZZO SALVATO DEVE ESSERE NOSTRO (10/09/2026).
+        //
+        // `thumb_1024_url` di Mapillary non è permanente: è un link firmato
+        // sulla CDN di Meta (parametri `oe=`/`oh=`) valido ~30 giorni. Messo
+        // in `image_url` diventa un riquadro rotto UN MESE DOPO — quando
+        // nessuno guarda più — e siccome la ricerca riparte solo se
+        // `image_url` è vuoto, quel POI resterebbe rotto per sempre: è
+        // l'incidente delle «foto morte» del 07/09 in forma differita.
+        //
+        // Quindi la foto si conserva: stesso bucket già usato dalle immagini
+        // di Vision, sotto un prefisso suo. Se la conservazione non riesce si
+        // rinuncia allo scatto invece di salvare un link a termine — nessuna
+        // foto è meglio di una foto che sparirà.
+        // Gli URL di KartaView (storage<N>.openstreetcam.org) sono statici e
+        // non avrebbero bisogno di questo, ma si conservano lo stesso: una
+        // sola strada, e le immagini restano nostre.
+        let urlStabile = urlFoto;
+        try {
+          const scaricata = await axios.get(urlFoto, { responseType: 'arraybuffer', timeout: 15000 });
+          // Il nome del file si costruisce dalle COORDINATE, non dal nome del
+          // POI: qui dentro l'id non c'è, e due luoghi possono chiamarsi
+          // uguale mentre le coordinate a cinque decimali (~1 m) no.
+          const nomeFile = `foto-strada/p_${lat.toFixed(5)}_${lon.toFixed(5)}`.replace(/[^a-zA-Z0-9_./-]/g, '_') + '.jpg';
+          await axios.post(`${supabaseUrl}/storage/v1/object/vision-public/${nomeFile}`, Buffer.from(scaricata.data), {
+            headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+            maxBodyLength: Infinity,
+          });
+          urlStabile = `${supabaseUrl}/storage/v1/object/public/vision-public/${nomeFile}`;
+        } catch (e: any) {
+          console.warn('[FotoStrada] conservazione fallita, scatto scartato:', e?.message);
+          continue;
+        }
+
         const nomeFonte = c.s.fonte === 'kartaview' ? 'KartaView' : 'Mapillary';
         return {
-          url: urlFoto,
+          url: urlStabile,
           attribuzione: `${autore || nomeFonte} su ${nomeFonte}`,
           licenza: 'CC BY-SA 4.0',
           id: c.s.id,

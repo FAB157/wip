@@ -29,6 +29,10 @@ export type ArchivioMuseo = {
   /** Testo completo per ogni opera, indicizzato per nome normalizzato. */
   opere: Record<string, ArtworkGuide>;
   scaricatoIl: number;
+  /** Foto del luogo, per il cerchio nell'elenco delle visite conservate. */
+  venuePhotoIcon?: string;
+  /** Ultima volta che ci si è stati: ordina l'elenco «le tue visite». */
+  visitatoIl?: number;
 };
 
 const normalizza = (s: any) =>
@@ -66,6 +70,74 @@ export function operaDallArchivio(venueKey: string, lang: string, nomeOpera: str
   // Il titolo può differire di poco fra percorso e scheda.
   const vicino = Object.keys(a.opere).find(x => x === k || (x.length > 6 && k.includes(x)) || (k.length > 6 && x.includes(k)));
   return vicino ? a.opere[vicino] : null;
+}
+
+/**
+ * TUTTO QUELLO CHE ASCOLTI RESTA (11/09/2026, richiesta del committente:
+ * «deve essere tutto salvato e riutilizzabile»).
+ *
+ * Fino a ieri l'archivio si riempiva solo premendo «scarica tutto». Chi
+ * invece visitava e basta — apriva sei audioguide girando per le sale — la
+ * sera non aveva più niente: la visita vive in localStorage e scade dopo sei
+ * ore. Cento crediti spesi al mattino e in mano nulla.
+ *
+ * Ora ogni audioguida che si apre finisce nello stesso archivio del
+ * pacchetto offline, man mano. Le conseguenze sono tre, e sono il punto:
+ *  - riascoltare è gratis per sempre, perché `operaDallArchivio` risponde
+ *    prima che si pensi a chiamare il server;
+ *  - la visita si riapre anche dopo giorni, quando quella «in corso» è
+ *    scaduta da un pezzo;
+ *  - chi ha ascoltato mezza collezione si ritrova mezzo pacchetto già
+ *    scaricato, e «scarica tutto» finisce il lavoro senza rifarlo.
+ * È lo stesso archivio, la stessa scheda dei download: non un secondo posto
+ * dove cercare le proprie cose.
+ */
+export function conservaVisita(visit: MuseumVisit, language: Language): void {
+  const archivio = leggiTutto();
+  const chiave = chiaveArchivio(visit.venueKey, language);
+  const gia = archivio[chiave];
+  archivio[chiave] = {
+    venueKey: visit.venueKey,
+    venueName: visit.venue.name,
+    language: String(language).toUpperCase(),
+    // Il percorso più ricco vince: se si erano aggiunte opere minori, non si
+    // torna indietro a quello di partenza.
+    guide: (visit.guide?.tappe?.length || 0) >= (gia?.guide?.tappe?.length || 0) ? visit.guide : gia.guide,
+    opere: gia?.opere || {},
+    scaricatoIl: gia?.scaricatoIl || Date.now(),
+    ...(visit.venuePhotoIcon ? { venuePhotoIcon: visit.venuePhotoIcon } : (gia?.venuePhotoIcon ? { venuePhotoIcon: gia.venuePhotoIcon } : {})),
+    visitatoIl: Date.now(),
+  };
+  scriviTutto(archivio);
+}
+
+/** Un'audioguida appena ascoltata entra nell'archivio: non si ripagherà più. */
+export function conservaOpera(venueKey: string, language: Language, nomeOpera: string, guida: ArtworkGuide): void {
+  const archivio = leggiTutto();
+  const chiave = chiaveArchivio(venueKey, language);
+  const gia = archivio[chiave];
+  if (!gia) return; // La visita si conserva per prima: senza di lei non c'è dove metterla.
+  gia.opere = { ...gia.opere, [normalizza(nomeOpera)]: guida };
+  gia.visitatoIl = Date.now();
+  archivio[chiave] = gia;
+  scriviTutto(archivio);
+}
+
+/**
+ * Le visite conservate, dalla più recente. È l'elenco che si mostra sotto
+ * «qui vicino»: sono cose già pagate, si riaprono senza toccare il server.
+ */
+export function visiteConservate(language?: Language): ArchivioMuseo[] {
+  const L = language ? String(language).toUpperCase() : null;
+  return Object.values(leggiTutto())
+    .filter(a => !L || a.language === L)
+    .sort((a, b) => (b.visitatoIl || b.scaricatoIl || 0) - (a.visitatoIl || a.scaricatoIl || 0));
+}
+
+/** Quante audioguide di quel museo sono già in archivio (quindi gratis). */
+export function opereInArchivio(venueKey: string, language: Language): number {
+  const a = museoScaricato(venueKey, language);
+  return a ? Object.keys(a.opere || {}).length : 0;
 }
 
 export type EsitoPacchettoMuseo = {

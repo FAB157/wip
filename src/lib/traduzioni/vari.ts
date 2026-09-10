@@ -590,6 +590,10 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
     RU: "В радиусе 5 км не найдено точек интереса",
     ZH: "5公里范围内未找到兴趣点",
   },
+  // Titolo dell'elenco sotto il radar dall'alto, quando la fotocamera non c'è.
+  vr_a_ar_nearest: {
+    IT: "I più vicini", EN: "Closest to you", FR: "Les plus proches", ES: "Los más cercanos", DE: "Am nächsten", RU: "Ближайшие", ZH: "距离最近",
+  },
 
   // ── LiveTourPanel ──────────────────────────────────────────────────────────
   vr_a_lt_leader_title: {
@@ -630,6 +634,42 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   },
   vr_a_lt_participants: {
     IT: "partecipanti connessi", EN: "participants connected", FR: "participants connectés", ES: "participantes conectados", DE: "Teilnehmer verbunden", RU: "участников подключено", ZH: "位参与者在线",
+  },
+  vr_a_lt_in_gruppo: {
+    IT: "Nel gruppo", EN: "In the group", FR: "Dans le groupe", ES: "En el grupo", DE: "In der Gruppe", RU: "В группе", ZH: "群组成员",
+  },
+  vr_a_lt_tu: {
+    IT: "tu", EN: "you", FR: "vous", ES: "tú", DE: "du", RU: "вы", ZH: "你",
+  },
+  vr_a_lt_ruolo_guida: {
+    IT: "Guida", EN: "Guide", FR: "Guide", ES: "Guía", DE: "Guide", RU: "Гид", ZH: "导览者",
+  },
+  vr_a_lt_gate_muto: {
+    IT: "L'audioguida è in muto",
+    EN: "The audio guide is muted",
+    FR: "L'audioguide est en sourdine",
+    ES: "La audioguía está silenciada",
+    DE: "Der Audioguide ist stummgeschaltet",
+    RU: "Аудиогид выключен",
+    ZH: "语音导览已静音",
+  },
+  vr_a_lt_gate_bloccato: {
+    IT: "Il leader ha sbloccato un luogo",
+    EN: "The leader unlocked a place",
+    FR: "Le leader a débloqué un lieu",
+    ES: "El líder ha desbloqueado un lugar",
+    DE: "Der Leader hat einen Ort freigeschaltet",
+    RU: "Лидер открыл место",
+    ZH: "领队解锁了一个地点",
+  },
+  vr_a_lt_gate_tocca: {
+    IT: "Tocca per ascoltare dall'altoparlante",
+    EN: "Tap to listen on the speaker",
+    FR: "Touchez pour écouter sur le haut-parleur",
+    ES: "Toca para escuchar por el altavoz",
+    DE: "Tippen, um über den Lautsprecher zu hören",
+    RU: "Нажмите, чтобы слушать через динамик",
+    ZH: "点击用扬声器收听",
   },
   vr_a_lt_leader_note: {
     IT: "Puoi navigare liberamente nell'app: il tour resta attivo e ogni audioguida che avvii arriva a tutto il gruppo.",

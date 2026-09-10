@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo } from '../lib/museumVisit';
-import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio } from '../lib/pacchettoMuseo';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop } from '../lib/museumVisit';
+import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { formatPassRemaining } from '../lib/museumPass';
@@ -40,6 +40,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
 
   useEffect(() => () => { stopSpeech(); }, []);
+
+  // La visita entra in archivio appena si apre, e si aggiorna quando il
+  // percorso cambia (opere aggiunte, tappe spuntate o saltate). Senza questo
+  // le audioguide ascoltate non avrebbero dove essere conservate, e fra sei
+  // ore — quando la visita in corso scade — resterebbe solo il ricordo.
+  useEffect(() => {
+    conservaVisita(visit, language);
+  }, [visit.venueKey, visit.guide?.tappe?.length, visit.updatedAt, language]);
 
   useEffect(() => {
     const su = () => setOnline(true);
@@ -175,6 +183,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       }
       guida = resp.guide;
       setOperaGuide(prev => ({ ...prev, [i]: guida }));
+      // TUTTO QUELLO CHE ASCOLTI RESTA: l'audioguida appena pagata entra
+      // subito nell'archivio. Da adesso in poi il riascolto — stasera, fra
+      // un mese, senza rete — non chiama più il server e non costa più nulla.
+      conservaOpera(visit.venueKey, language, tappa.nome, guida);
     }
     setOperaAperta(i);
     try {
@@ -199,7 +211,19 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       >
         {/* Testata */}
         <div className="px-5 pt-5 pb-3 flex items-start justify-between gap-3 shrink-0">
-          <div className="min-w-0">
+          {/* La foto DEL LUOGO nel cerchio, accanto al nome: la stessa cosa
+              che fanno le opere nel percorso. Senza foto dichiarata resta il
+              solo nome — mai l'immagine di un altro museo. */}
+          {visit.venuePhotoIcon && (
+            <img
+              src={visit.venuePhotoIcon}
+              alt=""
+              loading="lazy"
+              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+            />
+          )}
+          <div className="min-w-0 flex-1">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_title')}</p>
             <h2 className="text-lg font-black text-primary leading-tight truncate">{visit.venue.name}</h2>
             <p className="text-[11px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
@@ -250,11 +274,46 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
 
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
+          {/* Se il museo non pubblica le sale lo si dice qui, una volta: senza
+              questa riga venti tappe numerate promettono un itinerario che il
+              museo non ha mai dichiarato. */}
+          {visit.guide.saleDichiarate === false && (
+            <p className="text-[11px] font-bold text-slate-500 leading-snug mb-2 px-3 py-2 rounded-xl bg-white border border-slate-200">
+              {t('mv_no_rooms')}
+            </p>
+          )}
           <ol className="space-y-2">
             {visit.guide.tappe.map((tappa, i) => {
               const done = !!tappa.seenCardId;
+              // Il numero conta solo le tappe con una sala dichiarata: quelle
+              // «della collezione» non hanno un posto nel percorso, quindi non
+              // hanno un numero.
+              const numero = visit.guide.tappe.slice(0, i + 1).filter(x => !x.soloCollezione).length;
+              // Si visita per stanze: quando cambia la sala si apre un gruppo,
+              // così si vede a colpo d'occhio quante opere ci sono in questa
+              // stanza prima di spostarsi. Il server le ha già raggruppate.
+              const salaQui = tappa.soloCollezione ? '' : String(tappa.dove || '').trim();
+              const salaPrima = i === 0 ? null : (visit.guide.tappe[i - 1].soloCollezione ? '' : String(visit.guide.tappe[i - 1].dove || '').trim());
+              const apreSala = !!salaQui && salaQui !== salaPrima;
+              const quanteQui = apreSala ? visit.guide.tappe.filter(x => !x.soloCollezione && String(x.dove || '').trim() === salaQui).length : 0;
+              const primaSenzaSala = !!tappa.soloCollezione && (i === 0 || !visit.guide.tappe[i - 1].soloCollezione);
               return (
-                <li key={`${i}-${tappa.nome}`} className={`flex gap-3 px-3.5 py-3 rounded-2xl border ${done ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200'}`}>
+              <div key={`g-${i}-${tappa.nome}`}>
+                {apreSala && (
+                  <div className="flex items-center gap-2 px-1 pt-2 pb-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
+                    <span className="text-[11px] font-black text-primary truncate">{salaQui}</span>
+                    <span className="text-[10px] font-bold text-slate-400 shrink-0">
+                      {t('mv_in_room').replace('{n}', String(quanteQui))}
+                    </span>
+                  </div>
+                )}
+                {primaSenzaSala && (
+                  <div className="flex items-center gap-2 px-1 pt-3 pb-1.5">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{t('mv_also_in_collection')}</span>
+                  </div>
+                )}
+                <li key={`${i}-${tappa.nome}`} className={`flex gap-3 px-3.5 py-3 rounded-2xl border transition-opacity ${done ? 'bg-emerald-50 border-emerald-200' : tappa.skipped ? 'bg-white border-slate-200 opacity-60' : 'bg-white border-slate-200'}`}>
                   {/* La foto dell'opera nel cerchio, col numero quando manca */}
                   {tappa.fotoIcona ? (
                     <div className="relative w-11 h-11 shrink-0">
@@ -265,17 +324,24 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         className="w-11 h-11 rounded-full object-cover border border-slate-200"
                         onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
                       />
-                      <div className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black border-2 border-white ${done ? 'bg-emerald-600 text-white' : 'bg-primary text-white'}`}>
-                        {done ? <Check className="w-2.5 h-2.5" /> : i + 1}
+                      <div className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black border-2 border-white ${done ? 'bg-emerald-600 text-white' : tappa.soloCollezione ? 'bg-slate-400 text-white' : 'bg-primary text-white'}`}>
+                        {done ? <Check className="w-2.5 h-2.5" /> : tappa.soloCollezione ? '·' : numero}
                       </div>
                     </div>
                   ) : (
-                    <div className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-[11px] font-black ${done ? 'bg-emerald-600 text-white' : 'bg-primary text-white'}`}>
-                      {done ? <Check className="w-3.5 h-3.5" /> : i + 1}
+                    <div className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center text-[11px] font-black ${done ? 'bg-emerald-600 text-white' : tappa.soloCollezione ? 'bg-slate-400 text-white' : 'bg-primary text-white'}`}>
+                      {done ? <Check className="w-3.5 h-3.5" /> : tappa.soloCollezione ? '·' : numero}
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-black text-slate-900 leading-tight">{tappa.nome}</p>
+                    {/* Il titolo com'è scritto sul muro: è quello che il
+                        visitatore legge davvero mentre cerca l'opera. */}
+                    {tappa.nomeOriginale && (
+                      <p className="text-[11px] font-bold text-slate-400 italic leading-tight mt-0.5">
+                        {t('mv_on_the_label')}: {tappa.nomeOriginale}
+                      </p>
+                    )}
                     {(tappa.autore || tappa.anno || tappa.dove) && (
                       <p className="text-[11px] font-bold text-slate-500 mt-0.5">
                         {[tappa.autore, tappa.anno].filter(Boolean).join(' · ')}
@@ -283,6 +349,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       </p>
                     )}
                     {tappa.perche && <p className="text-[12px] text-slate-700 leading-snug mt-1">{tappa.perche}</p>}
+                    {/* Promessa onesta: il museo la possiede, ma non dice dove
+                        è esposta — e potrebbe essere in deposito o in prestito. */}
+                    {tappa.soloCollezione && !done && (
+                      <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mt-1">{t('mv_only_collection')}</p>
+                    )}
                     {done && <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700 mt-1">{t('mv_seen')}</p>}
 
                     {/* Audioguida dettagliata dell'opera: il testo si apre
@@ -297,6 +368,24 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         : <Volume2 className="w-3.5 h-3.5" />}
                       {operaParla === i ? t('vis_pause') : t('mv_art_listen')}
                     </button>
+
+                    {/* «Non la trovo»: la sala è chiusa, l'opera è in prestito
+                        o c'è la fila. Il percorso prosegue invece di fermarsi
+                        qui — e se in tanti saltano la stessa opera, quella
+                        tappa è sbagliata e ce lo stanno dicendo dal posto. */}
+                    {!done && (
+                      <button
+                        onClick={() => { if (tappa.skipped) unskipStop(i); else skipStop(i); }}
+                        className={`mt-2 ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-black active:scale-95 transition-transform ${
+                          tappa.skipped
+                            ? 'bg-white border-slate-300 text-slate-500'
+                            : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                        }`}
+                      >
+                        <SkipForward className="w-3.5 h-3.5" />
+                        {tappa.skipped ? t('mv_unskip') : t('mv_skip')}
+                      </button>
+                    )}
 
                     {operaAperta === i && operaGuide[i] && (
                       <div className="mt-2 rounded-2xl bg-[#f8f5f0] border border-slate-200 overflow-hidden">
@@ -367,6 +456,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     )}
                   </div>
                 </li>
+              </div>
               );
             })}
           </ol>

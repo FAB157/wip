@@ -23,7 +23,8 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata } from '../lib/museumVisit';
+import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
 import { Landmark } from 'lucide-react';
 
 // ── Provenienza della foto (Vision v2) ──────────────────────────────────────
@@ -225,6 +226,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // Sezione Visite: i musei e le chiese qui intorno che hanno la guida pronta.
   const [museiVicini, setMuseiVicini] = useState<MuseumLibraryItem[] | null>(null);
   const [cercaMuseo, setCercaMuseo] = useState('');
+  // LE TUE VISITE: quelle già fatte, conservate per sempre. Sono roba già
+  // pagata e si riaprono senza chiamare il server — anche in aereo.
+  const [visiteSalvate, setVisiteSalvate] = useState<ArchivioMuseo[]>([]);
   // Quiz durante l'attesa (10/09/2026, richiesta del committente: «come negli
   // itinerari»). Costruire il percorso di un museo richiede 20-35 secondi:
   // invece di far guardare una rotellina, si gioca e si vincono crediti — un
@@ -248,11 +252,24 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
 
   /** Elenco dei luoghi con visita già pronta, per la sezione Visite. */
   const caricaMuseiVicini = async () => {
+    // Le visite già fatte si leggono dal telefono: nessuna attesa, nessuna
+    // rete. Si mostrano PRIMA dell'elenco «qui vicino», perché sono già
+    // dell'utente.
+    setVisiteSalvate(visiteConservate(language));
     const coords = await resolveVisitCoords();
     const elenco = await fetchMuseumLibrary({
       lat: coords.lat, lon: coords.lon, language, radiusKm: 30, limit: 20,
     });
     setMuseiVicini(elenco);
+  };
+
+  /**
+   * Riapre una visita conservata. Non chiama il server, quindi non consuma
+   * pass né crediti: è esattamente il senso di «quello che hai è tuo».
+   */
+  const riapriConservata = (a: ArchivioMuseo) => {
+    const v = riapriVisitaConservata(a);
+    if (v) { setVisit(v); setVisitOpen(true); }
   };
 
   /** Apre la visita di un museo scelto dall'elenco (o cercato per nome). */
@@ -1177,7 +1194,22 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   };
 
   return (
-    <div className="flex-1 w-full h-full relative bg-[#0a0a0a] overflow-hidden flex flex-col font-sans">
+    /* TEMA CHIARO COME LE TAVOLE (10/09/2026, decisione del committente).
+       Questa schermata era l'unica isola scura di un'app che è chiara da
+       sempre (--color-background: #fdfbf7). Il nero aveva senso quando qui
+       viveva solo il mirino; ora ci abitano tre sezioni di lettura — la
+       scansione, il Radar AR e le Visite — e su fondo nero `text-secondary`
+       vale ORO CHAMPAGNE (#d4af37), scelta buona per un mirino e pessima
+       per un elenco di musei.
+       Palette presa dalle tavole approvate, una per una: fondo #fdfbf7,
+       schede bianche con bordo #e5e7eb, testo #0f172a/#64748b/#94a3b8,
+       accento #1e3a8a, chiese in ambra #b45309. Sono i valori di
+       slate-900/500/400, gray-200 e blue-50, quindi si scrivono con le
+       classi di sempre invece che a mano.
+       Resta nero SOLO il mirino a tutto schermo (in fondo al file): lì
+       sotto scorre il video, e qualunque fondo chiaro sarebbe una cornice
+       bianca attorno all'immagine. */
+    <div className="flex-1 w-full h-full relative bg-background overflow-hidden flex flex-col font-sans">
       {quotaToast && <QuotaLimitToast feature={quotaToast} onClose={closeQuotaToast} />}
 
       {/* Prima card guidata: overlay una-tantum al primo ingresso in camera */}
@@ -1189,20 +1221,20 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             exit={{ opacity: 0 }}
             className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6"
           >
-            <div className="w-full max-w-sm bg-[#111827] border border-white/15 rounded-3xl p-6 space-y-4 text-white shadow-2xl">
+            <div className="w-full max-w-sm bg-white border border-gray-200 rounded-3xl p-6 space-y-4 text-slate-900 shadow-[0_24px_48px_rgba(15,23,42,0.18)]">
               <h3 className="text-lg font-black text-center">{tr('vis_first_title')}</h3>
               <div className="space-y-3">
                 {(['vis_first_step1', 'vis_first_step2', 'vis_first_step3'] as const).map((key, i) => (
                   <div key={key} className="flex items-start gap-3">
-                    <span className="w-7 h-7 shrink-0 rounded-full bg-primary flex items-center justify-center text-xs font-black">{i + 1}</span>
-                    <p className="text-sm text-white/85">{tr(key)}</p>
+                    <span className="w-7 h-7 shrink-0 rounded-full bg-primary text-white flex items-center justify-center text-xs font-black">{i + 1}</span>
+                    <p className="text-sm text-slate-600">{tr(key)}</p>
                   </div>
                 ))}
               </div>
               {nearbySuggestion && (
-                <div className="bg-primary/20 border border-primary/40 rounded-2xl px-4 py-3 text-center">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-0.5">{tr('vis_first_nearby')}</p>
-                  <p className="text-sm font-black">{nearbySuggestion.name} <span className="font-bold text-white/60">~{nearbySuggestion.dist} m</span></p>
+                <div className="bg-blue-50 border border-primary/30 rounded-2xl px-4 py-3 text-center">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-0.5">{tr('vis_first_nearby')}</p>
+                  <p className="text-sm font-black text-primary">{nearbySuggestion.name} <span className="font-bold text-slate-500">~{nearbySuggestion.dist} m</span></p>
                 </div>
               )}
               <button
@@ -1218,16 +1250,19 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       {onClose && mode !== 'ar' && (
         <button 
           onClick={onClose}
-          className="absolute top-6 right-6 z-40 w-10 h-10 rounded-full bg-surface/10 backdrop-blur-md border border-white/20 flex items-center justify-center text-secondary active:scale-90 transition-transform shadow-lg cursor-pointer hover:bg-surface/20"
+          className="absolute top-6 right-6 z-40 w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-slate-900 active:scale-90 transition-transform shadow-[0_1px_3px_rgba(15,23,42,0.08)] cursor-pointer hover:bg-gray-50"
         >
           <X className="w-5 h-5" />
         </button>
       )}
 
-      {/* Decorative Background */}
-      <div className="absolute inset-0 pointer-events-none opacity-40">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[100px]" />
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/20 rounded-full blur-[100px]" />
+      {/* Sfondo decorativo. Su nero due macchie al 40% erano un alone; su
+          panna la stessa intensità sporca il foglio e fa sembrare sbiadito
+          il testo. Restano, molto più tenui: danno profondità al fondo senza
+          entrare in concorrenza con le schede bianche. */}
+      <div className="absolute inset-0 pointer-events-none opacity-[0.55]">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-[100px]" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#d4af37]/[0.07] rounded-full blur-[100px]" />
       </div>
 
       <div className="flex-1 relative flex flex-col items-center justify-center p-8 z-10">
@@ -1236,35 +1271,35 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             {/* I TRE MODI DI WIP VISION (10/09/2026): scansione, radar e le
                 VISITE dentro musei e chiese. La sezione musei sta qui, non in
                 una tab nuova: la barra in basso è già piena. */}
-            <div className="w-full flex bg-surface/10 rounded-2xl p-1 backdrop-blur-md border border-white/10 mb-8 max-w-xs">
+            <div className="w-full flex bg-white rounded-2xl p-1 border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] gap-0.5 mb-8 max-w-xs">
               <button
                 onClick={() => setMode('vision')}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'vision' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'vision' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 {tr('vis_tab_scan')}
               </button>
               <button
                 onClick={() => setMode('ar')}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'ar' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'ar' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 {tr('vis_tab_ar')}
               </button>
               <button
                 onClick={() => { setMode('visite'); void caricaMuseiVicini(); }}
-                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'visite' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+                className={`flex-1 py-2.5 text-[11px] font-black rounded-xl transition-all ${mode === 'visite' ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 {tr('vis_tab_visite')}
               </button>
             </div>
 
-            <div className="w-24 h-24 bg-surface/5 rounded-[2.5rem] flex items-center justify-center mb-8 border border-white/10 backdrop-blur-xl shadow-2xl">
+            <div className="w-24 h-24 bg-blue-50 rounded-[2.5rem] flex items-center justify-center mb-8 border border-[#dbe4f5] shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
               <Search className="w-12 h-12 text-primary" />
             </div>
-        
-        <h2 className="text-3xl font-black text-secondary text-center mb-4 tracking-tight">
+
+        <h2 className="text-3xl font-black text-slate-900 text-center mb-4 tracking-tight">
           {tr('vis_title')}
         </h2>
-        <p className="text-xs text-secondary/40 font-medium max-w-[200px] text-center mx-auto">
+        <p className="text-xs text-slate-500 font-medium max-w-[200px] text-center mx-auto">
           {visionTarget === 'artwork'
             ? tr('vis_hint_artwork')
             : visionTarget === 'nature'
@@ -1275,8 +1310,8 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         <div className="flex flex-col gap-4 w-full max-w-xs">
           {/* Coda Vision offline: foto scattate senza rete, in attesa */}
           {queueCount > 0 && (
-            <div className="w-full px-4 py-3 rounded-2xl border border-sky-400/30 bg-sky-400/10 backdrop-blur-md text-left">
-              <p className="text-xs font-black text-sky-300">
+            <div className="w-full px-4 py-3 rounded-2xl border border-sky-200 bg-sky-50 text-left">
+              <p className="text-xs font-black text-sky-800">
                 {(queueProcessing ? tr('vis_queue_processing') : tr('vis_queue_waiting')).replace('{n}', String(queueCount))}
               </p>
             </div>
@@ -1286,7 +1321,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               dall'interfaccia il 22/08/2026 per decisione del committente: il
               ramo analyzeScreenshot e la rotta server restano, ma senza
               questo pulsante non si raggiungono. */}
-          <div className="w-full flex items-center gap-1 p-1 bg-surface/10 border border-white/10 rounded-2xl backdrop-blur-md">
+          <div className="w-full flex items-center gap-0.5 p-1 bg-white border border-gray-200 rounded-2xl shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
             {([
               { key: 'place', label: tr('vis_mode_place') },
               { key: 'artwork', label: tr('vis_mode_artwork') },
@@ -1298,7 +1333,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 onClick={() => setVisionTarget(opt.key)}
                 aria-pressed={visionTarget === opt.key}
                 className={`flex-1 py-2.5 px-0.5 rounded-xl text-[11px] font-black transition-all active:scale-95 ${
-                  visionTarget === opt.key ? 'bg-primary text-white shadow-lg' : 'text-secondary/50 hover:text-secondary'
+                  visionTarget === opt.key ? 'bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]' : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
                 {opt.label}
@@ -1308,7 +1343,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           <button
             onClick={openCamera}
             disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_0_40px_rgba(var(--color-primary),0.3)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
+            className="w-full flex items-center justify-center gap-3 py-4 bg-primary text-white font-black text-base rounded-2xl shadow-[0_12px_28px_rgba(30,58,138,0.25)] active:scale-95 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:active:scale-100"
           >
             <Camera className="w-5 h-5" />
             <span>{tr('vis_take_photo')}</span>
@@ -1317,7 +1352,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           <button
             onClick={() => galleryInputRef.current?.click()}
             disabled={isScanning}
-            className="w-full flex items-center justify-center gap-3 py-4 bg-surface/10 text-secondary font-black text-base rounded-2xl border border-white/10 backdrop-blur-md active:scale-95 transition-all hover:bg-surface/20 disabled:opacity-50 disabled:active:scale-100"
+            className="w-full flex items-center justify-center gap-3 py-4 bg-white text-slate-900 font-black text-base rounded-2xl border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-gray-50 disabled:opacity-50 disabled:active:scale-100"
           >
             <ImageIcon className="w-5 h-5" />
             <span>{tr('vis_pick_gallery')}</span>
@@ -1328,14 +1363,14 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           {(visionTarget === 'artwork' || passActive || visit) && (
             needsTourPass && !visit ? (
               // Il server ha detto che il percorso è del pass con itinerario.
-              <div className="w-full px-4 py-3 rounded-2xl border border-primary/50 bg-primary/10 backdrop-blur-md text-left space-y-2">
+              <div className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                     <Landmark className="w-5 h-5 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-black text-secondary">{tr('mv_locked_title')}</p>
-                    <p className="text-[10px] font-bold text-secondary/60 leading-snug">{tr('mv_locked_desc')}</p>
+                    <p className="text-xs font-black text-slate-900">{tr('mv_locked_title')}</p>
+                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
                   </div>
                 </div>
                 <button
@@ -1353,14 +1388,14 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             ) : visit ? (
               <button
                 onClick={() => setVisitOpen(true)}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md text-left active:scale-95 transition-all"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all"
               >
-                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                   <Landmark className="w-5 h-5 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-black text-secondary truncate">{tr('mv_title')} · {visit.venue.name}</p>
-                  <p className="text-[10px] font-bold text-secondary/60">
+                  <p className="text-xs font-black text-slate-900 truncate">{tr('mv_title')} · {visit.venue.name}</p>
+                  <p className="text-[10px] font-bold text-slate-500">
                     {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))} · {tr('mv_open')}
                   </p>
                 </div>
@@ -1368,15 +1403,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             ) : visitNameFallback !== null ? (
               <form
                 onSubmit={(e) => { e.preventDefault(); void startGuidedVisit(visitNameFallback); }}
-                className="w-full px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md text-left space-y-2"
+                className="w-full px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left space-y-2"
               >
-                <p className="text-[11px] font-bold text-secondary/80 leading-snug">{tr('mv_ask_name')}</p>
+                <p className="text-[11px] font-bold text-slate-600 leading-snug">{tr('mv_ask_name')}</p>
                 <div className="flex gap-2">
                   <input
                     value={visitNameFallback}
                     onChange={(e) => setVisitNameFallback(e.target.value)}
                     placeholder={tr('mv_name_placeholder')}
-                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-surface/10 border border-white/15 text-sm text-white placeholder:text-white/40 outline-none"
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-white border border-gray-200 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
                   />
                   <button type="submit" disabled={visitStarting || visitNameFallback.trim().length < 3} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black disabled:opacity-50">
                     {visitStarting ? <Loader2 className="w-4 h-4 animate-spin" /> : tr('mv_go')}
@@ -1387,14 +1422,14 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               <button
                 onClick={() => void startGuidedVisit()}
                 disabled={isScanning || visitStarting}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-surface/5 backdrop-blur-md text-left active:scale-95 transition-all hover:bg-primary/10 disabled:opacity-50"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50"
               >
-                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                   {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-black text-secondary">{tr('mv_start')}</p>
-                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{tr('mv_start_desc')}</p>
+                  <p className="text-xs font-black text-slate-900">{tr('mv_start')}</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
                 </div>
               </button>
             )
@@ -1405,16 +1440,16 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               (40 audioguide) e con itinerario (anche la visita guidata). */}
           {passActive && passExpiresAt !== null ? (
             <div className="w-full flex flex-col gap-2">
-              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 backdrop-blur-md">
-                <div className="w-9 h-9 rounded-xl bg-amber-400/20 flex items-center justify-center shrink-0">
-                  <Ticket className="w-5 h-5 text-amber-400" />
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-[#d4af37] bg-[#f8f5f0] shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#e8dfc9] flex items-center justify-center shrink-0">
+                  <Ticket className="w-5 h-5 text-amber-700" />
                 </div>
                 <div className="flex-1 min-w-0 text-left">
-                  <p className="text-xs font-black text-amber-300">
+                  <p className="text-xs font-black text-amber-800">
                     {getTranslation("museum_pass_active", language)}
                     {passTier === 'tour' ? ` · ${getTranslation("museum_pass_tour_badge", language)}` : ''}
                   </p>
-                  <p className="text-[10px] font-bold text-amber-200/70">
+                  <p className="text-[10px] font-bold text-amber-700/80">
                     {tr('museum_pass_scans_left').replace('{n}', String(Math.max(0, passScans.limit - passScans.used))).replace('{t}', String(passScans.limit))} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
                   </p>
                 </div>
@@ -1424,16 +1459,16 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 <button
                   onClick={() => void handleBuyPass('tour')}
                   disabled={isScanning || buyingPass}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md active:scale-95 transition-all disabled:opacity-50"
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all disabled:opacity-50"
                 >
-                  <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                     {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
                   </div>
                   <div className="flex-1 min-w-0 text-left">
-                    <p className="text-xs font-black text-secondary">
+                    <p className="text-xs font-black text-slate-900">
                       {tr('museum_pass_upgrade')} · +{Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} {getTranslation("credits_word", language)}
                     </p>
-                    <p className="text-[10px] font-bold text-secondary/50 leading-snug">{tr('museum_pass_upgrade_desc')}</p>
+                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('museum_pass_upgrade_desc')}</p>
                   </div>
                 </button>
               )}
@@ -1443,31 +1478,31 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               <button
                 onClick={() => void handleBuyPass('base')}
                 disabled={isScanning || buyingPass}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-surface/5 backdrop-blur-md active:scale-95 transition-all hover:bg-amber-400/10 disabled:opacity-50 disabled:active:scale-100"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-[#f8f5f0] disabled:opacity-50 disabled:active:scale-100"
               >
-                <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
-                  {buyingPass ? <Loader2 className="w-5 h-5 text-amber-400 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-400" />}
+                <div className="w-9 h-9 rounded-xl bg-[#f8f5f0] flex items-center justify-center shrink-0">
+                  {buyingPass ? <Loader2 className="w-5 h-5 text-amber-700 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-700" />}
                 </div>
                 <div className="flex-1 min-w-0 text-left">
-                  <p className="text-xs font-black text-secondary">
+                  <p className="text-xs font-black text-slate-900">
                     {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
                   </p>
-                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
                 </div>
               </button>
               <button
                 onClick={() => void handleBuyPass('tour')}
                 disabled={isScanning || buyingPass}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/50 bg-primary/10 backdrop-blur-md active:scale-95 transition-all hover:bg-primary/20 disabled:opacity-50 disabled:active:scale-100"
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50 disabled:active:scale-100"
               >
-                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                   {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
                 </div>
                 <div className="flex-1 min-w-0 text-left">
-                  <p className="text-xs font-black text-secondary">
+                  <p className="text-xs font-black text-slate-900">
                     {getTranslation("museum_pass_tour_title", language)} · {PRICING_LIST.museum_pass_tour} {getTranslation("credits_word", language)}
                   </p>
-                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
                 </div>
               </button>
             </div>
@@ -1477,25 +1512,25 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         ) : mode === 'visite' ? (
           /* ── SEZIONE VISITE: musei e chiese ────────────────────────────── */
           <div className="w-full max-w-xs flex flex-col gap-3">
-            <div className="w-full flex bg-surface/10 rounded-2xl p-1 backdrop-blur-md border border-white/10">
-              <button onClick={() => setMode('vision')} className="flex-1 py-2 text-xs font-black rounded-xl text-secondary/60">{tr('vis_tab_scan')}</button>
-              <button onClick={() => setMode('ar')} className="flex-1 py-2 text-xs font-black rounded-xl text-secondary/60">{tr('vis_tab_ar')}</button>
-              <button className="flex-1 py-2 text-xs font-black rounded-xl bg-primary text-white shadow-lg">{tr('vis_tab_visite')}</button>
+            <div className="w-full flex bg-white rounded-2xl p-1 border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] gap-0.5">
+              <button onClick={() => setMode('vision')} className="flex-1 py-2.5 text-[11px] font-black rounded-xl text-slate-500 hover:text-slate-900 transition-colors">{tr('vis_tab_scan')}</button>
+              <button onClick={() => setMode('ar')} className="flex-1 py-2.5 text-[11px] font-black rounded-xl text-slate-500 hover:text-slate-900 transition-colors">{tr('vis_tab_ar')}</button>
+              <button className="flex-1 py-2.5 text-[11px] font-black rounded-xl bg-primary text-white shadow-[0_4px_12px_rgba(30,58,138,0.25)]">{tr('vis_tab_visite')}</button>
             </div>
 
             {/* Visita in corso: si riprende da dove si era rimasti */}
             {visit && (
               <button
                 onClick={() => setVisitOpen(true)}
-                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl border border-primary/50 bg-primary/15 text-left active:scale-95 transition-all"
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-3xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all"
               >
-                <div className="w-10 h-10 rounded-xl bg-primary/25 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                   <Landmark className="w-5 h-5 text-primary" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-primary">{tr('mv_title')}</p>
-                  <p className="text-sm font-black text-secondary truncate">{visit.venue.name}</p>
-                  <p className="text-[10px] font-bold text-secondary/60">
+                  <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary">{tr('mv_title')}</p>
+                  <p className="text-[19px] leading-tight font-black text-slate-900 truncate">{visit.venue.name}</p>
+                  <p className="text-[11px] font-bold text-slate-500">
                     {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))}
                   </p>
                 </div>
@@ -1507,14 +1542,14 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
               <button
                 onClick={() => void startGuidedVisit()}
                 disabled={visitStarting}
-                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl border-2 border-primary bg-primary/10 text-left active:scale-95 transition-all disabled:opacity-50"
+                className="w-full flex items-center gap-3 px-4 py-4 rounded-3xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all disabled:opacity-50"
               >
-                <div className="w-10 h-10 rounded-xl bg-primary/25 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
                   {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-black text-secondary">{tr('mv_start')}</p>
-                  <p className="text-[10px] font-bold text-secondary/55 leading-snug">{tr('mv_start_desc')}</p>
+                  <p className="text-sm font-black text-slate-900">{tr('mv_start')}</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
                 </div>
               </button>
             )}
@@ -1528,51 +1563,107 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 value={cercaMuseo}
                 onChange={(e) => setCercaMuseo(e.target.value)}
                 placeholder={tr('mv_cerca_luogo')}
-                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-surface/10 border border-white/15 text-sm text-white placeholder:text-white/40 outline-none"
+                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-2xl bg-white border border-gray-200 text-[13px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
               />
-              <button type="submit" disabled={visitStarting || cercaMuseo.trim().length < 3} className="px-3.5 rounded-xl bg-primary text-white disabled:opacity-40">
+              <button type="submit" disabled={visitStarting || cercaMuseo.trim().length < 3} className="px-3.5 rounded-2xl bg-primary text-white disabled:opacity-40">
                 <Search className="w-4 h-4" />
               </button>
             </form>
 
+            {/* LE TUE VISITE: già pagate, si riaprono gratis e senza rete */}
+            {visiteSalvate.length > 0 && (
+              <div className="w-full">
+                <p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 mb-2">{tr('mv_le_tue_visite')}</p>
+                <div className="space-y-2 max-h-[26vh] overflow-y-auto">
+                  {visiteSalvate.map(a => (
+                    <button
+                      key={`${a.venueKey}-${a.language}`}
+                      onClick={() => riapriConservata(a)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left active:scale-95 transition-all"
+                    >
+                      {a.venuePhotoIcon ? (
+                        <img
+                          src={a.venuePhotoIcon}
+                          alt=""
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          className="w-9 h-9 rounded-full object-cover shrink-0 border border-gray-200"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                          <Landmark className="w-4 h-4 text-primary" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-black text-slate-900 truncate">{a.venueName}</p>
+                        <p className="text-[11px] font-bold text-slate-500">
+                          {tr('mv_n_opere').replace('{n}', String(a.guide?.tappe?.length || 0))}
+                          {opereInArchivio(a.venueKey, language) > 0
+                            ? ` · ${tr('mv_audioguide_tue').replace('{n}', String(opereInArchivio(a.venueKey, language)))}`
+                            : ''}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">{tr('mv_gia_tua')}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Qui vicino, già pronti */}
             <div className="w-full">
-              <p className="text-[10px] font-black uppercase tracking-widest text-secondary/45 mb-2">{tr('mv_qui_vicino')}</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500 mb-2">{tr('mv_qui_vicino')}</p>
               {museiVicini === null ? (
                 <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 text-primary animate-spin" /></div>
               ) : museiVicini.length === 0 ? (
-                <p className="text-[11px] font-bold text-secondary/45 leading-snug py-2">{tr('mv_nessuno_vicino')}</p>
+                <p className="text-[11px] font-bold text-slate-400 leading-snug py-2">{tr('mv_nessuno_vicino')}</p>
               ) : (
                 <div className="space-y-2 max-h-[38vh] overflow-y-auto">
-                  {museiVicini.map(m => (
+                  {museiVicini.map(m => {
+                    const chiesa = m.venue_type === 'chiesa';
+                    return (
                     <button
                       key={m.venue_key}
                       onClick={() => void apriVisitaDiElenco(m)}
                       disabled={visitStarting}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-surface/8 border border-white/10 text-left active:scale-95 transition-all disabled:opacity-50"
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] text-left active:scale-95 transition-all disabled:opacity-50"
                     >
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${m.venue_type === 'chiesa' ? 'bg-amber-400/15' : 'bg-primary/20'}`}>
-                        <Landmark className={`w-4 h-4 ${m.venue_type === 'chiesa' ? 'text-amber-400' : 'text-primary'}`} />
-                      </div>
+                      {/* La FOTO del luogo nel cerchio, come per le opere. Se il
+                          museo non ne ha una dichiarata resta il simbolo: mai
+                          la foto di un altro posto, mai una foto "a tema". */}
+                      {m.venue_photo_icon ? (
+                        <img
+                          src={m.venue_photo_icon}
+                          alt=""
+                          loading="lazy"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                          className="w-9 h-9 rounded-full object-cover shrink-0 border border-gray-200"
+                        />
+                      ) : (
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                          <Landmark className={`w-4 h-4 ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-black text-secondary truncate">{m.venue_name}</p>
-                        <p className="text-[10px] font-bold text-secondary/50">
+                        <p className="text-[13px] font-black text-slate-900 truncate">{m.venue_name}</p>
+                        <p className="text-[11px] font-bold text-slate-500">
                           {tr('mv_n_opere').replace('{n}', String(m.stops_count))}
                           {m.stops_with_room > 0 ? ` · ${tr('mv_con_sale')}` : ''}
                         </p>
                       </div>
                       {m.distance_m != null && (
-                        <span className="text-[10px] font-black text-secondary/40 shrink-0">
+                        <span className="text-[11px] font-black text-slate-400 shrink-0">
                           {m.distance_m >= 1000 ? `${(m.distance_m / 1000).toFixed(1)} km` : `${m.distance_m} m`}
                         </span>
                       )}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
 
-            <p className="text-[10px] font-bold text-secondary/35 text-center leading-relaxed">{tr('mv_promessa')}</p>
+            <p className="text-[10px] font-bold text-slate-400 text-center leading-relaxed">{tr('mv_promessa')}</p>
           </div>
         ) : (
           <AROverlay

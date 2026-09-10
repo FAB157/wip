@@ -23,6 +23,48 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   mv_you_are_at: { IT: "Sei a", EN: "You are at", FR: "Tu es à", ES: "Estás en", DE: "Du bist in", RU: "Вы находитесь в", ZH: "你在" },
   mv_route: { IT: "Percorso consigliato", EN: "Suggested route", FR: "Parcours conseillé", ES: "Recorrido recomendado", DE: "Empfohlener Rundgang", RU: "Рекомендуемый маршрут", ZH: "推荐路线" },
   mv_seen: { IT: "Vista", EN: "Seen", FR: "Vue", ES: "Vista", DE: "Gesehen", RU: "Осмотрено", ZH: "已看" },
+  // Proprietà non è allestimento: il museo la possiede, ma nessuna fonte dice
+  // in quale sala si trovi — potrebbe essere in deposito, in restauro o in
+  // prestito. Si dice, invece di darle un numero nel percorso.
+  mv_only_collection: {
+    IT: "Della collezione · chiedi se è esposta", EN: "In the collection · ask if it's on display",
+    FR: "De la collection · demande si elle est exposée", ES: "De la colección · pregunta si está expuesta",
+    DE: "Aus der Sammlung · frag, ob es ausgestellt ist", RU: "Из коллекции · уточните, выставлено ли",
+    ZH: "馆藏 · 请询问是否展出",
+  },
+  // L'archivio delle visite: roba già pagata, si riapre gratis e senza rete.
+  mv_le_tue_visite: {
+    IT: "Le tue visite", EN: "Your visits", FR: "Tes visites", ES: "Tus visitas",
+    DE: "Deine Besuche", RU: "Ваши визиты", ZH: "你的参观记录",
+  },
+  mv_gia_tua: { IT: "Tua", EN: "Yours", FR: "À toi", ES: "Tuya", DE: "Deins", RU: "Ваше", ZH: "已拥有" },
+  mv_audioguide_tue: {
+    IT: "{n} audioguide tue", EN: "{n} audio guides yours", FR: "{n} audioguides à toi",
+    ES: "{n} audioguías tuyas", DE: "{n} Audioguides gehören dir", RU: "{n} аудиогидов ваши", ZH: "{n} 段语音导览已拥有",
+  },
+  // Si visita per stanze: le opere della stessa sala stanno insieme.
+  mv_in_room: { IT: "{n} qui", EN: "{n} here", FR: "{n} ici", ES: "{n} aquí", DE: "{n} hier", RU: "{n} здесь", ZH: "此处 {n} 件" },
+  mv_also_in_collection: {
+    IT: "Anche in collezione", EN: "Also in the collection", FR: "Également dans la collection",
+    ES: "También en la colección", DE: "Ebenfalls in der Sammlung", RU: "Также в коллекции", ZH: "馆藏其他作品",
+  },
+  // Il titolo com'è scritto sul muro: quello che l'occhio cerca davvero.
+  mv_on_the_label: {
+    IT: "Sul cartellino", EN: "On the label", FR: "Sur le cartel", ES: "En la cartela",
+    DE: "Auf dem Schild", RU: "На табличке", ZH: "展签上",
+  },
+  // «Non la trovo»: la sala è chiusa, l'opera è in prestito, c'è la fila.
+  mv_skip: { IT: "Non la trovo", EN: "Can't find it", FR: "Je ne la trouve pas", ES: "No la encuentro", DE: "Nicht zu finden", RU: "Не нахожу", ZH: "找不到" },
+  mv_unskip: { IT: "Rimettila", EN: "Put it back", FR: "La remettre", ES: "Devolverla", DE: "Zurücklegen", RU: "Вернуть", ZH: "恢复" },
+  mv_no_rooms: {
+    IT: "Questo museo non pubblica le sale: l'ordine qui sotto è un consiglio di visita, non un percorso segnalato.",
+    EN: "This museum doesn't publish its rooms: the order below is a suggested visit, not a signposted route.",
+    FR: "Ce musée ne publie pas ses salles : l'ordre ci-dessous est un conseil de visite, pas un parcours balisé.",
+    ES: "Este museo no publica sus salas: el orden de abajo es un consejo de visita, no un recorrido señalizado.",
+    DE: "Dieses Museum veröffentlicht seine Säle nicht: Die Reihenfolge unten ist ein Vorschlag, kein ausgeschilderter Rundgang.",
+    RU: "Этот музей не публикует залы: порядок ниже — совет по осмотру, а не размеченный маршрут.",
+    ZH: "该馆未公布展厅编号：以下顺序是参观建议，并非馆方标示的路线。",
+  },
   mv_seen_count: { IT: "{n} di {t} viste", EN: "{n} of {t} seen", FR: "{n} sur {t} vues", ES: "{n} de {t} vistas", DE: "{n} von {t} gesehen", RU: "{n} из {t} осмотрено", ZH: "已看 {n}/{t}" },
   mv_next: { IT: "Inquadra la prossima opera", EN: "Frame the next work", FR: "Cadre l'œuvre suivante", ES: "Enfoca la siguiente obra", DE: "Nächstes Werk aufnehmen", RU: "Наведите камеру на следующее произведение", ZH: "拍摄下一件作品" },
   mv_end: { IT: "Termina la visita", EN: "End the visit", FR: "Terminer la visite", ES: "Terminar la visita", DE: "Besuch beenden", RU: "Завершить визит", ZH: "结束参观" },
