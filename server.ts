@@ -18748,7 +18748,10 @@ ${elenco}`;
         temperature: 0.1,
         response_format: { type: 'json_object' },
       }, 'library_translate', supabaseUrl, supabaseServiceKey, null);
-      const out = parseSafeJSON(String(r?.textContent || '{}').replace(/^```json\s*|\s*```$/g, ''));
+      // Il testo sta in `.data` (come ogni altro chiamante di callUniversalAi):
+      // leggere `.textContent` restituiva sempre vuoto, la traduzione falliva
+      // in silenzio e l'utente straniero continuava a vedere l'italiano.
+      const out = parseSafeJSON(String(r?.data || '{}').replace(/^```json\s*/i, '').replace(/```\s*$/, ''));
       const t = Array.isArray(out?.t) ? out.t : null;
       if (!t || t.length !== pezzi.length) {
         // Traduzione incompleta: meglio l'originale che un itinerario a metà.

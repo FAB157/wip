@@ -945,7 +945,10 @@ export default function ItineraryLibrarySheet({
         if (cityFilter.trim()) p.set('city', cityFilter.trim()); else p.set('q', citta);
         const r = await fetch(getApiUrl(`/api/library/search?${p.toString()}`), { signal: AbortSignal.timeout(20000) });
         const d = await r.json().catch(() => null);
-        if (vivo) setFonteProposta(Array.isArray(d?.results) ? d.results : []);
+        // Il contratto server è { items, total }: leggere `results` (come
+        // facevo) restituiva sempre vuoto e la proposta non compariva mai.
+        const righe = Array.isArray(d?.items) ? d.items : d?.results;
+        if (vivo) setFonteProposta(Array.isArray(righe) ? righe.filter((x: any) => x?.slug) : []);
       } catch { if (vivo) setFonteProposta([]); }
     })();
     return () => { vivo = false; };
