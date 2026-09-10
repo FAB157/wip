@@ -32,7 +32,7 @@ import {
   type TappaGiro, type StatoCorrente, type StatoGiro, type LivelloIngresso,
 } from '../lib/tour/tourState';
 import { decidi, CodaVoci, VOLUME_ABBASSATO } from '../lib/tour/audioDirector';
-import { istruzionePerStep } from './osrmService';
+import { istruzionePerStep, getEvitaScale } from './osrmService';
 import { poiLungoIlCorridoio, type PoiLungoStrada } from '../lib/tour/corridoio';
 import { getOrCreateAudioguideText } from './audioguideService';
 import { azureVoiceName } from './ttsService';
@@ -1196,7 +1196,11 @@ class TourService {
     const p = opzioni.percorso && !opzioni.anteprima
       ? `&modo=percorso&percorso=${encodeURIComponent(opzioni.percorso.id)}${opzioni.percorso.modifica ? '&modifica=1' : ''}`
       : '';
-    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}&language=${linguaGiro}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}${p}`);
+    // EVITA SCALE (10/09/2026): la preferenza e` persistente e globale (vedi
+    // osrmService.ts), non solo per il percorso singolo — chi la attiva si
+    // aspetta che valga anche nel giro a piu` tappe.
+    const evita = getEvitaScale() ? '&evita=scale' : '';
+    const url = getApiUrl(`/api/tour/foot/${coords}?anello=${opzioni.anello ? 'true' : 'false'}&ordina=${opzioni.ordina === false ? 'false' : 'true'}&language=${linguaGiro}${opzioni.anteprima ? '&anteprima=true' : ''}${r2}${p}${evita}`);
     // 45 s: il server ottimizza l'ordine e chiede OSRM per ogni tratta; oltre
     // e' rete morta, e prima la promise restava appesa per sempre (ITI-07).
     const r = await apiFetch(url, { headers: intestazioni }, 45000);
