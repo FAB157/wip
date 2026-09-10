@@ -766,6 +766,43 @@ export default function PoiDetailSheet({
     setIsTyping(false);
     setDisplayedText("");
     
+    // BUGFIX 10/09/2026: un POI con testo già pronto (description_long, es.
+    // "Scultura Dunchi") ma senza foto restava SENZA FOTO PER SEMPRE. La
+    // ricerca vera dell'immagine (Wikipedia/Commons via /api/poi/enrich,
+    // fast+mode:"short") esisteva già più sotto in runEnrichment — ma tre
+    // scorciatoie diverse (cache globale, isAlreadyEnriched, cache locale
+    // con testo lungo) tornavano prima di arrivarci, appena il testo c'era,
+    // senza mai controllare la foto. Qui si tenta la stessa chiamata
+    // leggera, in background, SOLO per la foto: il testo già mostrato non
+    // viene toccato. Il server (già pronto per questo, vedi /api/poi/enrich)
+    // scrive la foto trovata su shared_pois senza sovrascrivere la
+    // descrizione esistente, quindi la prossima apertura la trova subito.
+    const provaFotoMancante = async (poiTarget: typeof poi) => {
+      try {
+        const res = await fetchWithTimeout("/api/poi/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: poiTarget.id, name: poiTarget.name, lat: poiTarget.lat, lon: poiTarget.lon,
+            category: poiTarget.category, subCategory: (poiTarget as any).subCategory,
+            wikipedia: (poiTarget as any).wikipedia, lang: language, fast: true, mode: "short",
+          }),
+        }, 12000);
+        if (!res.ok || !active) return;
+        const data = await res.json();
+        const thumb = data?.thumbnail;
+        if (!thumb) return;
+        setWikiData((prev) => prev ? { ...prev, thumbnail: thumb } : prev);
+        const chiave = chiaveScheda(poiTarget.id);
+        const attuale = getCachedPoiDetails(chiave);
+        if (attuale?.wikiData) {
+          setCachedPoiDetails(chiave, { ...attuale, wikiData: { ...attuale.wikiData, thumbnail: thumb } });
+        }
+      } catch (e) {
+        console.debug('[DetailSheet] Foto mancante: tentativo in background fallito:', e);
+      }
+    };
+
     const loadPoiDetails = async () => {
       if (!poi) {
         processedRef.current = ""; // Reset when closed
@@ -840,6 +877,8 @@ export default function PoiDetailSheet({
           });
 
           setIsLoading(false);
+          // Stesso bugfix: anche questa cache più vecchia può non avere foto.
+          if (!cachedWiki?.thumbnail) void provaFotoMancante(poi);
           return;
         }
       } catch(e) {
@@ -883,6 +922,10 @@ export default function PoiDetailSheet({
         });
 
         setIsLoading(false);
+        // Testo già pronto, ma se manca la foto la si cerca in background
+        // (vedi provaFotoMancante sopra): l'utente vede subito il testo e la
+        // foto compare quando arriva, senza bloccare l'apertura della scheda.
+        if (!wikiPayload.thumbnail) void provaFotoMancante(poi);
         return;
       } else if (poi.description || poi.description_short || poi.description_ai) {
         const shortDesc = poi.description_short || poi.description_ai || poi.description || "";
@@ -924,6 +967,11 @@ export default function PoiDetailSheet({
 
         if (hasDetailedContent) {
           setIsLoading(false);
+          // Stesso bugfix del ramo isAlreadyEnriched: la cache locale può
+          // avere un testo lungo ma nessuna foto, se fu popolata prima che
+          // ne esistesse una. Non si tocca il testo già mostrato.
+          const fotoInCache = cached.wikiData?.thumbnail || migliorFoto(cached) || migliorFoto(poi);
+          if (!fotoInCache) void provaFotoMancante(poi);
           return;
         }
       }
