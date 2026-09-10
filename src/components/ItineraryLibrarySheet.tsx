@@ -423,6 +423,13 @@ export default function ItineraryLibrarySheet({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [using, setUsing] = useState(false);
+  // UNIONE DI PIÙ ITINERARI (10/09/2026). Gli itinerari curati sono da 1-3
+  // giorni: chi resta una settimana ne vuole due o tre, scelti PER TEMA, uniti
+  // senza tappe ripetute. Si selezionano dalla lista (solo quelli già pronti:
+  // unire non genera niente) e la barra in fondo compare da due in su.
+  const [selezionati, setSelezionati] = useState<string[]>([]);
+  const [unendo, setUnendo] = useState(false);
+  const [erroreUnione, setErroreUnione] = useState<string | null>(null);
   // Generazione on-demand di un descrittore: slug → messaggio di stato
   const [genState, setGenState] = useState<Record<string, string>>({});
   const [genError, setGenError] = useState<string | null>(null);
@@ -818,6 +825,47 @@ export default function ItineraryLibrarySheet({
     }
   };
 
+  const commutaSelezione = (slug: string) => {
+    setErroreUnione(null);
+    setSelezionati((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
+  };
+
+  /** Giorni totali dei selezionati: è il numero che l'utente vuole vedere. */
+  const giorniSelezionati = selezionati.reduce((tot, slug) => {
+    const r = results.find((x) => x.slug === slug);
+    return tot + (Number(r?.days) > 0 ? Number(r?.days) : 1);
+  }, 0);
+
+  /**
+   * Unione: il server prende gli itinerari già scritti, toglie le tappe
+   * doppie e ricalcola le giornate. Non genera nulla e non costa crediti —
+   * per questo il pulsante dice "gratis" come il resto della libreria.
+   */
+  const handleUnisci = async () => {
+    if (selezionati.length < 2 || unendo) return;
+    setUnendo(true);
+    setErroreUnione(null);
+    try {
+      const res = await fetch(getApiUrl('/api/library/merge'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slugs: selezionati, lang: String(language || 'IT') }),
+        signal: AbortSignal.timeout(60000),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.itinerary) {
+        setErroreUnione(String(data?.detail || data?.error || 'Unione non riuscita: riprova.'));
+        return;
+      }
+      await onUse(data.itinerary, data.meta);
+      setSelezionati([]);
+    } catch {
+      setErroreUnione('Unione non riuscita: riprova.');
+    } finally {
+      setUnendo(false);
+    }
+  };
+
   // Riga meta ben visibile: "Napoli · 8h · Gastronomica"
   const metaLine = (r: { city?: string; country?: string; hours?: number; days?: number; angle?: string; theme?: string }) => {
     const parts: string[] = [];
@@ -1199,11 +1247,16 @@ export default function ItineraryLibrarySheet({
                 perché è immediato. Il tipo resta leggibile dal bordo e dal
                 distintivo, non dalla posizione nella pagina. */}
             {!loading && vociVisibili.map(v => v.tipo === 'pronto' ? (
+              /* Contenitore: il tasto di selezione non può stare DENTRO il
+                 bottone che apre la scheda (un bottone dentro un bottone non
+                 è valido e su iOS il tocco finisce a quello sbagliato). */
+              <div key={`p-${v.r.slug}`} className="relative">
               <button
-                key={`p-${v.r.slug}`}
                 type="button"
                 onClick={() => openItem(v.r)}
-                className="w-full text-left bg-white border border-outline-variant/20 rounded-2xl p-3 shadow-sm hover:border-primary/40 hover:shadow-md transition-all active:scale-[0.99]"
+                className={`w-full text-left bg-white border rounded-2xl p-3 pr-12 shadow-sm hover:border-primary/40 hover:shadow-md transition-all active:scale-[0.99] ${
+                  selezionati.includes(v.r.slug) ? 'border-primary ring-2 ring-primary/30' : 'border-outline-variant/20'
+                }`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -1232,6 +1285,21 @@ export default function ItineraryLibrarySheet({
                   </div>
                 </div>
               </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); commutaSelezione(v.r.slug); }}
+                aria-pressed={selezionati.includes(v.r.slug)}
+                aria-label={selezionati.includes(v.r.slug) ? `Togli "${v.r.title || v.r.slug}" dall'unione` : `Aggiungi "${v.r.title || v.r.slug}" all'unione`}
+                title={selezionati.includes(v.r.slug) ? 'Tolto dall\'unione' : 'Aggiungi all\'unione'}
+                className={`absolute top-2 right-2 w-8 h-8 rounded-full flex items-center justify-center text-sm font-black transition-colors ${
+                  selezionati.includes(v.r.slug)
+                    ? 'bg-primary text-white'
+                    : 'bg-primary/10 text-primary hover:bg-primary/20'
+                }`}
+              >
+                {selezionati.includes(v.r.slug) ? '✓' : '+'}
+              </button>
+              </div>
             ) : (
               <div
                 key={`g-${v.key}`}
@@ -1328,7 +1396,51 @@ export default function ItineraryLibrarySheet({
                 </p>
               </div>
             )}
+            {/* Spazio per non far coprire l'ultima carta dalla barra dell'unione. */}
+            {selezionati.length > 0 && <div className="h-24" aria-hidden="true" />}
           </div>
+
+          {/* BARRA DELL'UNIONE: compare appena si seleziona qualcosa, ma unisce
+              solo da due in su. Con uno solo selezionato dice cosa manca,
+              invece di mostrare un pulsante spento senza spiegazione. */}
+          {selezionati.length > 0 && (
+            <div className="absolute left-0 right-0 bottom-0 bg-white/95 backdrop-blur-xl border-t border-outline-variant/30 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] shadow-2xl z-10">
+              {erroreUnione && (
+                <p className="text-[11px] font-bold text-red-500 text-center mb-2">{erroreUnione}</p>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-primary leading-tight">
+                    {selezionati.length} {selezionati.length === 1 ? t('selected_one') : t('selected_many')}
+                    {giorniSelezionati > 0 && (
+                      <span className="text-gray-400"> · {giorniSelezionati} {dayWord(giorniSelezionati)}</span>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => { setSelezionati([]); setErroreUnione(null); }}
+                    className="text-[10px] font-bold text-gray-400 hover:text-gray-600 underline"
+                  >
+                    {t('clear_selection')}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  disabled={selezionati.length < 2 || unendo}
+                  onClick={handleUnisci}
+                  className="shrink-0 px-4 py-3 rounded-2xl text-xs font-black bg-primary text-white disabled:opacity-40 hover:bg-primary/90 transition flex items-center gap-2"
+                >
+                  {unendo ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> {t('merging')}</>
+                  ) : selezionati.length < 2 ? (
+                    t('pick_one_more')
+                  ) : (
+                    <>✨ {t('merge_cta')}</>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </>
       )}
 

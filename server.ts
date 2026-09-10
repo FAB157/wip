@@ -18722,6 +18722,276 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     }
   });
 
+  // ── POST /api/library/merge { slugs[] } ─────────────────────────────────
+  // UNIONE DI PIÙ ITINERARI DI LIBRERIA (10/09/2026, richiesta del
+  // committente: «se user vuole stare 7 giorni, unire 2 o più itinerari, le
+  // tappe non si ripetano e siano calcolati itinerari giornalieri più adatti»).
+  //
+  // GRATIS come il resto della libreria, e per la stessa ragione: qui NON si
+  // genera niente. Si prendono itinerari già scritti e già verificati e se ne
+  // riordinano le tappe. L'AI non entra mai — così non può inventare un luogo,
+  // che in questo progetto è la colpa capitale.
+  //
+  // GIORNATE A TEMA PURO (scelta del committente): chi seleziona due itinerari
+  // lo fa PER I TEMI, quindi ogni giornata resta quella dell'itinerario da cui
+  // viene e non si mescola. Si ottimizza dentro la giornata (ordine delle
+  // tappe) e nell'ordine delle giornate, che è dove si guadagna senza rompere
+  // il filo del racconto.
+  app.post('/api/library/merge', rateLimiter, async (req, res) => {
+    try {
+      const slugs: string[] = Array.isArray(req.body?.slugs)
+        ? req.body.slugs.map((s: any) => String(s || '').trim().toLowerCase()).filter((s: string) => libSlugRe.test(s))
+        : [];
+      const unici = [...new Set(slugs)];
+      if (unici.length < 2) return res.status(400).json({ error: 'servono_almeno_due', detail: 'Seleziona almeno due itinerari da unire.' });
+      if (unici.length > 5) return res.status(400).json({ error: 'troppi', detail: 'Massimo cinque itinerari per volta.' });
+
+      // LINGUA delle frasi che scriviamo NOI (trasferimenti e note). Le tappe
+      // restano nella lingua in cui l'itinerario è stato generato — oggi
+      // sempre italiano, perché la libreria non è ancora multilingua. Meglio
+      // però non aggiungere altro italiano addosso a un utente straniero:
+      // quando la libreria diventerà multilingua, questa parte è già pronta.
+      const L = String(req.body?.lang || 'IT').toUpperCase().slice(0, 2);
+      const FRASI: Record<string, { viaggio: string; trasf: (km: number) => string; consiglio: string; nato: (n: number, titoli: string) => string; tenute: (elenco: string) => string; titolo: (n: number) => string }> = {
+        IT: {
+          viaggio: 'In viaggio', trasf: (km) => `Trasferimento di circa ${km} km su strada.`,
+          consiglio: 'Tieni attiva l\'audioguida di WIP durante il tragitto: i luoghi lungo la strada si raccontano da soli.',
+          nato: (n, t) => `Piano nato dall'unione di ${n} itinerari della libreria: ${t}.`,
+          tenute: (e) => `Tappe presenti in più itinerari e tenute una volta sola: ${e}.`,
+          titolo: (n) => `${n} giorni`,
+        },
+        EN: {
+          viaggio: 'On the road', trasf: (km) => `About ${km} km by road.`,
+          consiglio: 'Keep the WIP audio guide on along the way: the places by the roadside tell their own story.',
+          nato: (n, t) => `Plan built by merging ${n} library itineraries: ${t}.`,
+          tenute: (e) => `Stops that appeared in more than one itinerary, kept once: ${e}.`,
+          titolo: (n) => `${n} days`,
+        },
+        FR: {
+          viaggio: 'En route', trasf: (km) => `Environ ${km} km par la route.`,
+          consiglio: 'Garde l\'audioguide WIP actif pendant le trajet : les lieux au bord de la route se racontent tout seuls.',
+          nato: (n, t) => `Itinéraire né de la fusion de ${n} itinéraires de la bibliothèque : ${t}.`,
+          tenute: (e) => `Étapes présentes dans plusieurs itinéraires, gardées une seule fois : ${e}.`,
+          titolo: (n) => `${n} jours`,
+        },
+        ES: {
+          viaggio: 'En ruta', trasf: (km) => `Unos ${km} km por carretera.`,
+          consiglio: 'Manten activa la audioguía de WIP durante el trayecto: los lugares del camino se cuentan solos.',
+          nato: (n, t) => `Plan nacido de la unión de ${n} itinerarios de la biblioteca: ${t}.`,
+          tenute: (e) => `Paradas presentes en varios itinerarios, mantenidas una sola vez: ${e}.`,
+          titolo: (n) => `${n} días`,
+        },
+        DE: {
+          viaggio: 'Unterwegs', trasf: (km) => `Rund ${km} km auf der Straße.`,
+          consiglio: 'Lass den WIP-Audioguide unterwegs aktiv: die Orte am Straßenrand erzählen sich von selbst.',
+          nato: (n, t) => `Plan aus der Zusammenführung von ${n} Bibliotheks-Routen: ${t}.`,
+          tenute: (e) => `Stationen, die in mehreren Routen vorkamen, einmal behalten: ${e}.`,
+          titolo: (n) => `${n} Tage`,
+        },
+        RU: {
+          viaggio: 'В пути', trasf: (km) => `Около ${km} км по дороге.`,
+          consiglio: 'Не выключайте аудиогид WIP в дороге: места вдоль пути расскажут о себе сами.',
+          nato: (n, t) => `План собран из ${n} маршрутов библиотеки: ${t}.`,
+          tenute: (e) => `Точки, встречавшиеся в нескольких маршрутах, оставлены один раз: ${e}.`,
+          titolo: (n) => `${n} дн.`,
+        },
+        ZH: {
+          viaggio: '在路上', trasf: (km) => `公路约 ${km} 公里。`,
+          consiglio: '路上请保持 WIP 语音导览开启：沿途的地方会自己讲述故事。',
+          nato: (n, t) => `由 ${n} 条图书馆行程合并而成：${t}。`,
+          tenute: (e) => `在多条行程中重复、仅保留一次的站点：${e}。`,
+          titolo: (n) => `${n} 天`,
+        },
+      };
+      const F = FRASI[L] || FRASI.IT;
+
+      // 1. CARICAMENTO — solo dalla cache: se un item non c'è, NON lo si
+      // genera qui (la generazione ha il suo percorso, con lock e budget).
+      const pezzi: any[] = [];
+      for (const slug of unici) {
+        const obj = libParseCachedJson((await getFromCache(`lib_item_${slug}`))?.text_content);
+        if (!obj?.itinerary) return res.status(409).json({ error: 'item_non_pronto', slug, detail: 'Uno degli itinerari non è ancora stato generato: aprilo una volta e riprova.' });
+        pezzi.push({ slug, itin: obj.itinerary, meta: obj.meta || {} });
+      }
+
+      // 2. IDENTITÀ DI UNA TAPPA — stessa regola del client
+      // (PlanScreen.idPoiDaTappa): poi_id vero se c'è, altrimenti nome
+      // normalizzato + coordinate arrotondate (~100 m).
+      const chiaveTappa = (t: any): string => {
+        const p = String(t?.poi_id || '');
+        if (p && !p.startsWith('ov-')) return `poi:${p}`;
+        const lat = Number(t?.coordinate?.lat), lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+        // I segni diacritici si tolgono per intervallo di codici (U+0300-U+036F)
+        // e non scrivendo i caratteri: cosi' un salvataggio in codifica diversa
+        // non li perde facendo smettere la deduplica in silenzio.
+        const slug = String(t?.titolo_tappa || '').toLowerCase().normalize('NFD').replace(new RegExp('[\u0300-\u036f]', 'g'), '').replace(/[^a-z0-9]/g, '');
+        const geo = Number.isFinite(lat) && Number.isFinite(lon) ? `${lat.toFixed(3)}_${lon.toFixed(3)}` : 'na';
+        return `iti:${slug}-${geo}`;
+      };
+      // Tappe di servizio (pranzo, cena, trasferimenti): NON sono doppioni da
+      // togliere — si mangia tutti i giorni. Si deduplicano solo le visite.
+      const eServizio = (t: any) => /^(pasto|trasferimento|pausa|hotel|alloggio)$/i.test(String(t?.tipo || ''))
+        || /^(pranzo|cena|colazione|aperitivo|check-?in|rientro|in viaggio)\b/i.test(String(t?.titolo_tappa || ''));
+
+      const distKm = (a: any, b: any) => {
+        const dLat = (a.lat - b.lat) * 111.32;
+        const dLon = (a.lon - b.lon) * 111.32 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+        return Math.sqrt(dLat * dLat + dLon * dLon);
+      };
+      const coordDi = (t: any) => {
+        const lat = Number(t?.coordinate?.lat), lon = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
+      };
+
+      // 3. GIORNATE, con doppioni tolti. Il primo itinerario selezionato tiene
+      // la tappa; i successivi la perdono — così l'ordine di selezione
+      // dell'utente decide, invece di una regola oscura.
+      const viste = new Set<string>();
+      const nomiVisti: string[] = [];
+      const giornate: any[] = [];
+      const tolte: string[] = [];
+      for (const pezzo of pezzi) {
+        const tema = String(pezzo.meta?.theme || pezzo.meta?.angle || pezzo.meta?.title || '').trim();
+        const citta = String(pezzo.meta?.city || '').trim();
+        for (const g of (Array.isArray(pezzo.itin?.giorni) ? pezzo.itin.giorni : [])) {
+          const tappe: any[] = [];
+          for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
+            if (eServizio(t)) { tappe.push(t); continue; }
+            const k = chiaveTappa(t);
+            const titolo = String(t?.titolo_tappa || '');
+            // Doppione esatto, oppure stesso luogo scritto in modo diverso
+            // («Chiesa di San Frediano» / «San Frediano») a meno di 150 m.
+            const quasiUguale = nomiVisti.some((n) => somiglianzaNomi(n, titolo) >= 0.7);
+            if (viste.has(k) || quasiUguale) { tolte.push(titolo); continue; }
+            viste.add(k); if (titolo) nomiVisti.push(titolo);
+            tappe.push(t);
+          }
+          // Giornata rimasta senza visite (tutte doppie): si scarta, altrimenti
+          // resterebbe un giorno di soli pasti.
+          if (!tappe.some((t) => !eServizio(t))) continue;
+          giornate.push({ ...g, tappe, _tema: tema, _citta: citta, _slug: pezzo.slug });
+        }
+      }
+      if (!giornate.length) return res.status(422).json({ error: 'nessuna_giornata', detail: 'Gli itinerari scelti coprono le stesse tappe.' });
+
+      // 4. ORDINE DELLE TAPPE DENTRO LA GIORNATA — nearest-neighbour dalla
+      // tappa più periferica, come fa il generatore. I pasti restano dove
+      // sono: spostare il pranzo alle 18 non aiuta nessuno.
+      for (const g of giornate) {
+        const visite = g.tappe.filter((t: any) => !eServizio(t) && coordDi(t));
+        if (visite.length >= 3) {
+          const pts = visite.map((t: any) => ({ t, ...coordDi(t)! }));
+          const cLat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+          const cLon = pts.reduce((s, p) => s + p.lon, 0) / pts.length;
+          let startIdx = 0, maxD = -1;
+          pts.forEach((p, i) => { const d = distKm(p, { lat: cLat, lon: cLon }); if (d > maxD) { maxD = d; startIdx = i; } });
+          const rest = [...pts];
+          const ord = [rest.splice(startIdx, 1)[0]];
+          while (rest.length) {
+            let bi = 0, bd = Infinity;
+            rest.forEach((p, i) => { const d = distKm(ord[ord.length - 1], p); if (d < bd) { bd = d; bi = i; } });
+            ord.push(rest.splice(bi, 1)[0]);
+          }
+          // Si riscrivono SOLO le visite, lasciando i pasti nelle loro posizioni.
+          const coda = ord.map((p) => p.t);
+          let j = 0;
+          g.tappe = g.tappe.map((t: any) => (!eServizio(t) && coordDi(t) ? coda[j++] : t));
+        }
+      }
+
+      // 5. ORDINE DELLE GIORNATE — le giornate della stessa città restano
+      // insieme e in sequenza, così non si rimbalza fra due città. Dentro la
+      // città l'ordine originale del tema è rispettato.
+      const perCitta = new Map<string, any[]>();
+      for (const g of giornate) {
+        const k = (g._citta || '—').toLowerCase();
+        if (!perCitta.has(k)) perCitta.set(k, []);
+        perCitta.get(k)!.push(g);
+      }
+      const ordinate = [...perCitta.values()].flat();
+
+      // 6. TRASFERIMENTI fra città diverse, CALCOLATI (mai chiesti all'AI):
+      // senza di questi un piano che salta da Firenze a Siena non supererebbe
+      // nessun controllo geografico, e l'utente non saprebbe come spostarsi.
+      const centroide = (g: any) => {
+        const pts = g.tappe.map(coordDi).filter(Boolean) as any[];
+        if (!pts.length) return null;
+        return { lat: pts.reduce((s, p) => s + p.lat, 0) / pts.length, lon: pts.reduce((s, p) => s + p.lon, 0) / pts.length };
+      };
+      const fmtDur = (min: number) => (min >= 60 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${min} min`);
+      for (let i = 1; i < ordinate.length; i++) {
+        const prima = centroide(ordinate[i - 1]), dopo = centroide(ordinate[i]);
+        if (!prima || !dopo) continue;
+        const km = distKm({ lat: prima.lat, lon: prima.lon }, { lat: dopo.lat, lon: dopo.lon });
+        if (km <= 25) continue; // stessa area: nessun trasferimento da annunciare
+        const daCitta = ordinate[i - 1]._citta || 'tappa precedente';
+        const aCitta = ordinate[i]._citta || 'tappa successiva';
+        const roadKm = Math.round(km * 1.3);
+        const minuti = Math.max(15, Math.round((roadKm / 70) * 60));
+        ordinate[i].tappe.unshift({
+          id_tappa: `trasf_${i}`,
+          ora: '09:00',
+          titolo_tappa: `${F.viaggio}: ${daCitta} → ${aCitta}`,
+          attivita: F.trasf(roadKm),
+          consiglio_guida: F.consiglio,
+          tempo_necessario: `~${fmtDur(minuti)}`,
+          tipo: 'trasferimento',
+          coordinate: { lat: dopo.lat, lng: dopo.lon },
+        });
+      }
+
+      // 7. RINUMERAZIONE E ORARI. Gli orari originali valgono dentro la
+      // giornata di partenza ma non dopo il riordino: si ricalcolano a partire
+      // dalle 9:00 sommando il tempo dichiarato di ogni tappa.
+      const minutiDi = (s: any): number => {
+        const txt = String(s || '');
+        const h = txt.match(/(\d+)\s*h/i); const m = txt.match(/(\d+)\s*min/i);
+        const tot = (h ? Number(h[1]) * 60 : 0) + (m ? Number(m[1]) : 0);
+        return tot > 0 ? tot : 60;
+      };
+      const giorniFinali = ordinate.map((g: any, idx: number) => {
+        let cursore = 9 * 60;
+        const tappe = g.tappe.map((t: any) => {
+          const ora = `${String(Math.floor(cursore / 60) % 24).padStart(2, '0')}:${String(cursore % 60).padStart(2, '0')}`;
+          cursore += minutiDi(t?.tempo_necessario) + 20; // 20 min di spostamento fra tappe
+          return { ...t, ora };
+        });
+        return {
+          giorno: idx + 1,
+          tema: g._tema || undefined,
+          citta: g._citta || undefined,
+          tappe,
+          // La tabella spese del giorno d'origine non vale più: le tappe sono
+          // altre. Meglio assente che sbagliata.
+        };
+      });
+
+      const citta = [...new Set(pezzi.map((p) => String(p.meta?.city || '').trim()).filter(Boolean))];
+      const titoli = pezzi.map((p) => String(p.meta?.title || p.slug));
+      const merged = {
+        titolo: `${citta.join(' + ') || titoli[0] || 'WIP'} — ${F.titolo(giorniFinali.length)}`,
+        giorni: giorniFinali,
+        destinazione: citta[0] || undefined,
+        info_viaggio: {
+          suggerimenti: [
+            F.nato(pezzi.length, titoli.join(' + ')),
+            ...(tolte.length ? [F.tenute([...new Set(tolte)].slice(0, 8).join(', '))] : []),
+          ],
+        },
+      };
+
+      res.json({
+        itinerary: merged,
+        meta: { title: merged.titolo, city: citta[0] || '', days: giorniFinali.length, unioneDi: unici, theme: titoli.join(' + ') },
+        rimosse: [...new Set(tolte)],
+        giorni: giorniFinali.length,
+      });
+    } catch (e: any) {
+      console.error('[library/merge] Errore:', e?.message);
+      res.status(500).json({ error: 'Unione non riuscita: riprova.' });
+    }
+  });
+
   // POST /api/library/request { descriptor } — GRATIS by design (il costo
   // utente resta su podcast/guide premium). Se l'item esiste lo ritorna
   // subito; altrimenti genera+verifica ON-DEMAND, in modo SINCRONO dentro il
