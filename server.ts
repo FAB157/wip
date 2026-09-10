@@ -8140,8 +8140,20 @@ Regole:
     const registerRule = register === 'breve'
       ? `\n\nFORMATO RICHIESTO — VERSIONE BREVE: massimo 80-100 parole (circa 40 secondi di ascolto). Solo l'essenziale: un'apertura d'effetto e i 2-3 fatti che restano in mente. Niente giri di parole.`
       : register === 'bambini'
-        ? `\n\nFORMATO RICHIESTO — VERSIONE PER BAMBINI (8-10 anni): parole semplici, frasi corte, tono giocoso e curioso, una similitudine divertente. Niente date complesse né tecnicismi; una piccola domanda finale per incuriosire. Massimo 150 parole.`
+        ? `\n\nFORMATO RICHIESTO — VERSIONE PER BAMBINI (8-10 anni): parole semplici, frasi corte, tono giocoso e curioso, una similitudine divertente. Niente date complesse né tecnicismi; una piccola domanda finale per incuriosire. Tra 80 e 150 parole.`
         : '';
+    // REGOLA FONDAMENTALE — SPECIFICITÀ (10/09/2026, richiesta esplicita del
+    // committente dopo l'audioguida del Museo del Marmo di Carrara, uscita
+    // "troppo generalista" in tutte e tre le voci). Ogni frase deve agganciarsi
+    // a un elemento concreto del POI; le frasi di circostanza che varrebbero
+    // per qualunque museo/monumento sono VIETATE, non solo sconsigliate. Vale
+    // per tutti i personaggi e tutti i registri (breve, bambini, duetto e
+    // "Chiedi di più"): per questo è una costante unica iniettata in ogni
+    // prompt, non una riga copiata tre volte da tenere allineata.
+    const REGOLA_SPECIFICITA = `
+           REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.
+           DURATA MINIMA (anch'essa vincolante): la narrazione deve durare ALMENO 30-40 secondi di parlato, cioè non meno di 80-100 parole, e di più quando il materiale lo permette. Per raggiungere la durata attingi ad ALTRI fatti specifici del materiale (altre opere, altre date, altri dettagli), MAI a frasi di riempimento: la lunghezza si guadagna con la sostanza, non con le parole vuote.`;
+
     // Registro "duetto" (🎭): dialogo a due voci NICKY/DANTE sullo stesso POI.
     // Il formato riga-per-battuta con prefisso "NICKY:"/"DANTE:" è un CONTRATTO
     // col client (locationService.parseDuetLines): ogni battuta viene letta con
@@ -8154,18 +8166,18 @@ Regole:
            Regole tassative di aderenza al contesto e anti-allucinazione:
            1. Entrambi parlano del luogo basandosi esclusivamente e rigidamente sul testo originale fornito. NON inventare fatti, date, aneddoti o leggende non esplicitamente citati nel testo.
            2. Scrivi un dialogo VIVACE di 8-14 battute BREVI (1-2 frasi ciascuna) in cui i due si passano la parola in modo naturale, si completano a vicenda e ogni tanto si punzecchiano con simpatia.
-           3. FORMATO OBBLIGATORIO: ogni battuta su una NUOVA riga che inizia ESATTAMENTE con "NICKY:" oppure "DANTE:" (nome in maiuscolo seguito dai due punti). Nessun testo prima della prima battuta, dopo l'ultima o fuori dalle battute; niente didascalie, titoli, numeri di battuta o simboli markdown (asterischi, cancelletti): il testo sarà letto da due voci sintetizzate e ogni carattere estraneo disturba l'ascolto.`
+           3. FORMATO OBBLIGATORIO: ogni battuta su una NUOVA riga che inizia ESATTAMENTE con "NICKY:" oppure "DANTE:" (nome in maiuscolo seguito dai due punti). Nessun testo prima della prima battuta, dopo l'ultima o fuori dalle battute; niente didascalie, titoli, numeri di battuta o simboli markdown (asterischi, cancelletti): il testo sarà letto da due voci sintetizzate e ogni carattere estraneo disturba l'ascolto.${REGOLA_SPECIFICITA}`
       : baseMode === 'nicky'
       ? `Sei Nicky, ${personaDescription('nicky')}. Crea una narrazione per una audioguida su "${poiName}"${locContext} in lingua ${targetLangName}.
            Regole tassative di aderenza al contesto e anti-allucinazione:
            1. Parla del luogo basandoti esclusivamente e rigidamente sul testo originale fornito. NON inventare assolutamente storie storiche drammatiche o fatti cronaca nera se non sono esplicitamente citati nel testo originale.
            2. Usa espressioni naturali come "vibe", "top", "must-see".
-           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown, poiché il testo sarà letto da una voce sintetizzata e questi simboli disturbano l'ascolto. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`
+           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown, poiché il testo sarà letto da una voce sintetizzata e questi simboli disturbano l'ascolto. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).${REGOLA_SPECIFICITA}`
       : `Sei Dante, ${personaDescription('dante')}. Crea una narrazione su "${poiName}"${locContext} in lingua ${targetLangName}.
            Regole tassative di aderenza al contesto e anti-allucinazione:
            1. Fornisci informazioni reali e storicamente provate basandoti sul testo originale fornito. NON inventare leggende o associazioni errate con monumenti famosi estranei se non sono citati nel testo.
            2. Scendi nel dettaglio tecnico/storico in modo affascinante.
-           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).`;
+           3. Restituisci SOLO ed esclusivamente la narrazione in testo piano in lingua ${targetLangName}. NON USARE ASSOLUTAMENTE simboli come asterischi (*), cancelletti (#) o altri caratteri di formattazione markdown. La lunghezza del testo deve essere ideale per un audio di 40-120 secondi (quindi tra 100 e 250 parole).${REGOLA_SPECIFICITA}`;
     // ANTI-PROMPT-INJECTION: `text`/`previousText` sono contenuti NON fidati
     // (Wikipedia/OSM/Foursquare o campi POI editabili). Vanno delimitati e
     // marcati come MATERIALE, mai come istruzioni: senza questo, una frase tipo
@@ -8185,7 +8197,7 @@ Il blocco <gia_detto> è SOLO ciò che hai già raccontato (da NON ripetere né 
 <gia_detto>
 ${previousText}
 </gia_detto>
-Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista, mantenendo lo stile richiesto e restando nei limiti di lunghezza stabiliti.`;
+Fornisci nuove curiosità, nuovi riferimenti specifici e un nuovo punto di vista, mantenendo lo stile richiesto e restando nei limiti di lunghezza stabiliti. Vale anche qui la REGOLA FONDAMENTALE di specificità: ogni frase agganciata a un dettaglio concreto di "${poiName}", nessuna frase generica di riempimento, durata minima di 30-40 secondi.`;
     }
     // ISTRUZIONE APP: a differenza di `text`/`previousText` (materiale NON
     // fidato, delimitato sopra) questo campo arriva dall'app stessa (es. i
@@ -20332,7 +20344,33 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       const { id, name, lat, lon, category, subCategory, wikidata: clientWikidata, wikipedia: clientWikipedia, lang = "it", fast = false, mode = "full", engine: requestedEngine } = req.body;
       const userId: string = req.userId; // dal token (requireAuth), mai dal body
       const poiEnrichEngine: 'groq' | 'agnes' | 'cerebras' = (requestedEngine === 'agnes' || requestedEngine === 'cerebras') ? requestedEngine : 'groq';
-      
+
+      // BUGFIX 10/09/2026 (caso "Scultura Dunchi"): il client raramente porta
+      // wikipedia/wikidata nel body (il campo poi.wikipedia non esiste quasi
+      // mai lato client, solo poi.wikipedia_url — un disallineamento vecchio,
+      // mai notato perché finora nessuno collegava un POI a un articolo
+      // verificato per aggirare una ricerca geografica fallita). Se il
+      // client non manda nulla ma la riga ha già un wikipedia_url/wikidata
+      // salvato (collegato a mano o da un arricchimento precedente), lo si
+      // usa qui: una sola query leggera, e la regola vale per QUALUNQUE POI
+      // collegato così, non solo per questo caso — niente più affidato alla
+      // sola ricerca per coordinate quando la fonte esatta è già nota.
+      let wikipediaDaUsare = typeof clientWikipedia === 'string' ? clientWikipedia : '';
+      let wikidataDaUsare = typeof clientWikidata === 'string' ? clientWikidata : '';
+      if ((!wikipediaDaUsare || !wikidataDaUsare) && id) {
+        try {
+          const rSalvato = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&select=wikipedia_url,wikidata&limit=1`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }
+          );
+          const riga = rSalvato.data?.[0];
+          if (riga) {
+            if (!wikipediaDaUsare && riga.wikipedia_url) wikipediaDaUsare = riga.wikipedia_url;
+            if (!wikidataDaUsare && riga.wikidata) wikidataDaUsare = riga.wikidata;
+          }
+        } catch { /* best-effort: si prosegue con la ricerca geografica */ }
+      }
+
       const targetLat = parseFloat(lat);
       const targetLon = parseFloat(lon);
 
@@ -20394,7 +20432,7 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       // ricerca per coordinate non trovava nulla). Col QID si va all'articolo
       // esatto e alla foto ufficiale (P18). Rilevante ora che ~15.000 POI
       // importati da Wikidata portano il proprio identificativo.
-      const qid = String(clientWikidata || '').trim();
+      const qid = String(wikidataDaUsare || '').trim();
       if (/^Q\d+$/.test(qid)) {
         try {
           const eRes = await fetch(
@@ -20460,15 +20498,15 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
       }
 
       // 2. Wikipedia Client Fallback (Improved)
-      if (!extract && clientWikipedia) {
-        const titleMatch = clientWikipedia.match(/wiki\/([^#?]+)/);
+      if (!extract && wikipediaDaUsare) {
+        const titleMatch = wikipediaDaUsare.match(/wiki\/([^#?]+)/);
         if (titleMatch) {
-          const wikiCode = clientWikipedia.match(/:\/\/([a-z]+)\.wikipedia/)?.[1] || "en";
+          const wikiCode = wikipediaDaUsare.match(/:\/\/([a-z]+)\.wikipedia/)?.[1] || "en";
           const summaryRes = await fetch(`https://${wikiCode}.wikipedia.org/api/rest_v1/page/summary/${titleMatch[1]}`, { headers: { 'User-Agent': WIKI_UA } });
           if (summaryRes.ok) {
             const summary = await summaryRes.json();
             extract = summary.extract || "";
-            pageUrl = summary.content_urls?.mobile?.page || clientWikipedia;
+            pageUrl = summary.content_urls?.mobile?.page || wikipediaDaUsare;
             if (!thumbnail) thumbnail = summary.thumbnail?.source || summary.originalimage?.source || "";
           }
         }
@@ -25358,7 +25396,33 @@ RISPONDI SOLO con questo JSON, nient'altro:
       if (!groqKey && !ai) throw new Error("API Keys missing");
       const groqClient = groqKey ? new GroqConstructor({ apiKey: groqKey }) : null;
 
-      let systemPrompt = `Sei WIP, l'Assistente di Viaggio AI tuttofare per 'World in Pocket'. Il tuo compito è interagire con l'utente in modo VELOCISSIMO, ACCURATO e MULTILINGUA (rispondi sempre nella lingua usata dall'utente).
+      // DUE AGENTI, DUE MESTIERI (10/09/2026, decisione del committente).
+      // Prima la chat della barra ereditava il prompt dell'itinerario e si
+      // ritrovava a parlare di "updatedPlan" e modifiche al piano anche quando
+      // un itinerario non c'era: fuori luogo. Ora:
+      // - agente dell'ITINERARIO (`/api/itinerary/converse` e questa rotta con
+      //   un itinerario vero): autonomo, si occupa SOLO di itinerari;
+      // - agente della BARRA (chat generale): generalista — informa, aiuta,
+      //   consiglia cosa vedere e ascoltare, ma NON costruisce itinerari: per
+      //   quelli manda alla scheda Itinerario, dove c'è l'agente dedicato.
+      let systemPrompt = isGeneralChat
+        ? `Sei WIP, l'assistente di 'World in Pocket': un'app che racconta i luoghi con audioguide mentre l'utente cammina o guida. Rispondi SEMPRE nella lingua dell'utente, in modo breve, concreto e amichevole.
+
+IL TUO MESTIERE QUI è essere GENERALISTA: dare informazioni e dare una mano.
+- Rispondi a domande su luoghi, storia, arte, come arrivarci, orari, meteo, eventi, biglietti.
+- Consiglia cosa vedere e cosa ASCOLTARE nei dintorni: le audioguide dei punti d'interesse sono il cuore dell'app, suggeriscile quando c'entrano.
+- Aiuta anche sull'uso dell'app (dove si trova una funzione, come scaricare per l'offline, come funzionano i crediti).
+- Usa i tools per meteo, distanze, eventi, tour e biglietti reali. Gli URL dei tools vanno copiati INTATTI: contengono i codici partner, ed è VIETATO costruire a memoria link viator.com / getyourguide / tiqets.com.
+- Se non sai una cosa, dillo invece di inventarla. Mai inventare luoghi, orari o prezzi.
+
+NON sei tu a costruire gli itinerari: se l'utente ne vuole uno, rispondi con un consiglio utile e digli che nella scheda "Itinerario" c'è WIP dedicato, che glielo prepara su misura.
+
+IMPORTANTE: l'output DEVE essere ESCLUSIVAMENTE JSON, senza saluti fuori dal JSON e senza markdown. Usa SEMPRE E SOLO questo schema, con "type" sempre "chat_only":
+{
+  "type": "chat_only",
+  "message": "La tua risposta discorsiva."
+}`
+        : `Sei WIP, l'Assistente di Viaggio AI tuttofare per 'World in Pocket'. Il tuo compito è interagire con l'utente in modo VELOCISSIMO, ACCURATO e MULTILINGUA (rispondi sempre nella lingua usata dall'utente).
 Puoi usare i tools a disposizione per trovare eventi, meteo, percorsi, tour (Viator) e biglietti d'ingresso reali (Tiqets). Quando inserisci un link di prenotazione in una tappa usa SOLO gli URL restituiti dai tools, copiati INTATTI: contengono i codici partner, ed è VIETATO costruire URL viator.com/getyourguide/tiqets.com a memoria.
 Se l'utente ti fa una domanda, rispondi in modo conciso e utile nel campo "message" e imposta il "type" su "chat_only".
 Se l'utente ti chiede esplicitamente di MODIFICARE o AGGIORNARE l'itinerario (es. "Ho un ritardo", "Meteo cambiato", "Voglio visitare un museo"), modifica l'itinerario JSON esistente mantenendo inalterata la struttura, imposta "type" su "itinerary_update" e inserisci l'itinerario modificato nel campo "updatedPlan".
@@ -25427,7 +25491,7 @@ Usa SEMPRE E SOLO questo schema JSON:
       const messages: any[] = [
         { role: "system", content: systemPrompt },
         { role: "user", content: `(Contesto Nascosto) ${isGeneralChat
-          ? "Nessun itinerario attivo: è una chat generica di consigli di viaggio. Rispondi sempre con type \"chat_only\"."
+          ? "Nessun itinerario attivo: sei l'assistente generalista della barra. Informa, aiuta, consiglia luoghi e audioguide vicine; non costruire itinerari. Rispondi sempre con type \"chat_only\"."
           : `Itinerario attuale: ${JSON.stringify(dbItinerary.plan)}`}\nPosizione attuale utente: ${currentLocation ? `${currentLocation.lat}, ${currentLocation.lng}` : 'N/A'}` }
       ];
 

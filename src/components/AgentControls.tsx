@@ -544,7 +544,17 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSendEvent(customEvent); }}
               onFocus={() => !isExpanded && setIsExpanded(true)}
-              placeholder={isListening ? tr('chat_listening') : modalita === 'aiuto' ? tr('chat_ask_help') : isExpanded ? tr('chat_write_message') : tr('chat_ask_wip')}
+              placeholder={
+                isListening
+                  ? tr('chat_listening')
+                  : modalita === 'aiuto'
+                    ? tr('chat_ask_help')
+                    : isExpanded
+                      ? tr('chat_write_message')
+                      // Senza itinerario aperto WIP qui è generalista: non
+                      // promettere di ottimizzare un itinerario che non c'è.
+                      : tr(itineraryId === 'general' ? 'chat_ask_wip_generale' : 'chat_ask_wip')
+              }
               className={`w-full ${isExpanded ? 'bg-gray-50' : 'bg-white/50 placeholder-gray-600'} border-none rounded-full py-2 pl-4 ${isExpanded ? 'pr-20' : 'pr-10'} text-sm focus:ring-2 focus:ring-primary transition-colors ${isListening ? 'ring-2 ring-red-400 bg-red-50 placeholder-red-500' : ''}`}
             />
             
