@@ -18689,6 +18689,89 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     }
   });
 
+  // ── LIBRERIA MULTILINGUA (10/09/2026) ───────────────────────────────────
+  // La libreria nasceva solo in italiano: il client mandava `lang` da sempre e
+  // il server la ignorava, così un utente francese o tedesco leggeva le tappe
+  // in italiano. Ora si traduce SU RICHIESTA e si mette in cache per lingua
+  // (`lib_item_<slug>_<lang>`), lo stesso schema delle audioguide: si paga una
+  // sola volta per (itinerario × lingua) davvero aperta, invece di generare in
+  // sette lingue anche gli itinerari che nessuno guarderà.
+  //
+  // COSA NON SI TRADUCE, ed è la parte che conta: i NOMI DEI LUOGHI restano
+  // come sono. Tradurre «Ponte Vecchio» in «Vieux Pont» manderebbe l'utente a
+  // cercare un posto che non esiste — la stessa colpa dell'inventare una
+  // tappa. Coordinate, poi_id, orari e link non si toccano proprio.
+  const LIB_LINGUE: Record<string, string> = {
+    IT: 'italiano', EN: 'inglese', FR: 'francese', ES: 'spagnolo',
+    DE: 'tedesco', RU: 'russo', ZH: 'cinese semplificato',
+  };
+  /** Testi tradotti di un itinerario, con cache per lingua. IT torna com'è. */
+  async function libTraduci(slug: string, itinerary: any, lang: string): Promise<any> {
+    const L = String(lang || 'IT').toUpperCase().slice(0, 2);
+    if (L === 'IT' || !LIB_LINGUE[L]) return itinerary;
+    const chiave = `lib_item_${slug}_${L.toLowerCase()}`;
+    const gia = libParseCachedJson((await getFromCache(chiave))?.text_content);
+    if (gia?.itinerary) return gia.itinerary;
+
+    // Si manda all'AI SOLO il testo, numerato: niente coordinate, niente id.
+    // Così non può spostare un luogo nemmeno volendo, e il prompt resta corto.
+    const pezzi: Array<{ p: string; v: string }> = [];
+    const raccogli = (obj: any, percorso: string) => {
+      if (!obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) {
+        const q = `${percorso}.${k}`;
+        if (typeof v === 'string' && v.trim() && /^(titolo|titolo_tappa|attivita|consiglio_guida|tempo_necessario|spostamento_precedente|tema)$/.test(k)) pezzi.push({ p: q, v });
+        else if (Array.isArray(v)) v.forEach((x, i) => (typeof x === 'string' && x.trim() ? pezzi.push({ p: `${q}.${i}`, v: x }) : raccogli(x, `${q}.${i}`)));
+        else if (v && typeof v === 'object') raccogli(v, q);
+      }
+    };
+    raccogli(itinerary, '');
+    if (!pezzi.length) return itinerary;
+
+    const elenco = pezzi.map((x, i) => `${i}. ${x.v}`).join('\n');
+    const prompt = `Traduci in ${LIB_LINGUE[L]} le righe numerate qui sotto, prese da un itinerario di viaggio.
+
+REGOLE TASSATIVE:
+- I NOMI PROPRI DI LUOGO restano IDENTICI all'originale: musei, chiese, palazzi, piazze, vie, quartieri, ristoranti, città. «Ponte Vecchio» resta «Ponte Vecchio», «Galleria degli Uffizi» resta «Galleria degli Uffizi». Traduci solo le parole intorno (visita, passeggiata, salita, mattina…).
+- Non aggiungere, non togliere, non riassumere: una riga tradotta per ogni riga ricevuta.
+- Mantieni i prefissi «✨ Nicky» e «📜 Dante» invariati.
+- Mantieni numeri, orari e durate come sono.
+
+Rispondi SOLO con un oggetto JSON: {"t": ["riga 0 tradotta", "riga 1 tradotta", ...]} con ESATTAMENTE ${pezzi.length} elementi, nell'ordine ricevuto.
+
+RIGHE:
+${elenco}`;
+
+    try {
+      // Motore gratuito in testa: è una traduzione, non serve il modello caro.
+      const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+        temperature: 0.1,
+        response_format: { type: 'json_object' },
+      }, 'library_translate', supabaseUrl, supabaseServiceKey, null);
+      const out = parseSafeJSON(String(r?.textContent || '{}').replace(/^```json\s*|\s*```$/g, ''));
+      const t = Array.isArray(out?.t) ? out.t : null;
+      if (!t || t.length !== pezzi.length) {
+        // Traduzione incompleta: meglio l'originale che un itinerario a metà.
+        console.warn(`[library/lang] "${slug}" ${L}: attese ${pezzi.length} righe, ricevute ${t?.length ?? 0}`);
+        return itinerary;
+      }
+      const copia = JSON.parse(JSON.stringify(itinerary));
+      pezzi.forEach((x, i) => {
+        const val = String(t[i] ?? '').trim();
+        if (!val) return;
+        const parti = x.p.split('.').filter(Boolean);
+        let n: any = copia;
+        for (let j = 0; j < parti.length - 1; j++) n = n?.[parti[j]];
+        if (n) n[parti[parti.length - 1]] = val;
+      });
+      await saveToCache(chiave, 'library_itinerary_lang', { itinerary: copia, lang: L });
+      return copia;
+    } catch (e: any) {
+      console.warn(`[library/lang] "${slug}" ${L} non tradotto:`, e?.message);
+      return itinerary;
+    }
+  }
+
   // GET /api/library/item?slug= — item completo {itinerary, meta}; 404 se assente.
   // ?review=1 SOLO dal client quando l'utente apre davvero questo itinerario
   // (mai dai worker di semina, che chiamano questa stessa rotta senza il
@@ -18715,7 +18798,10 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         }
         saveToCache(`lib_item_${slug}`, 'library_itinerary', obj).catch(() => {});
       }
-      res.json({ slug, itinerary: obj.itinerary, meta: obj.meta || null });
+      // `lang` arrivava dal client da sempre ed era ignorata: ora l'itinerario
+      // esce nella lingua dell'utente (tradotto una volta e messo in cache).
+      const itinLang = await libTraduci(slug, obj.itinerary, String(req.query.lang || 'IT'));
+      res.json({ slug, itinerary: itinLang, meta: obj.meta || null });
     } catch (e: any) {
       console.error('[library/item] Errore:', e?.message);
       res.status(500).json({ error: 'Libreria non disponibile al momento: riprova.' });
@@ -18746,64 +18832,20 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
       if (unici.length < 2) return res.status(400).json({ error: 'servono_almeno_due', detail: 'Seleziona almeno due itinerari da unire.' });
       if (unici.length > 5) return res.status(400).json({ error: 'troppi', detail: 'Massimo cinque itinerari per volta.' });
 
-      // LINGUA delle frasi che scriviamo NOI (trasferimenti e note). Le tappe
-      // restano nella lingua in cui l'itinerario è stato generato — oggi
-      // sempre italiano, perché la libreria non è ancora multilingua. Meglio
-      // però non aggiungere altro italiano addosso a un utente straniero:
-      // quando la libreria diventerà multilingua, questa parte è già pronta.
+      // L'itinerario unito si COSTRUISCE in italiano e si traduce una volta
+      // sola alla fine (libTraduci sul risultato). Due motivi: la deduplica
+      // confronta i nomi con somiglianzaNomi, le cui parole da ignorare sono
+      // italiane e su un testo già tradotto perderebbe colpi; e si fa UNA
+      // chiamata di traduzione invece di una per ogni itinerario scelto.
       const L = String(req.body?.lang || 'IT').toUpperCase().slice(0, 2);
-      const FRASI: Record<string, { viaggio: string; trasf: (km: number) => string; consiglio: string; nato: (n: number, titoli: string) => string; tenute: (elenco: string) => string; titolo: (n: number) => string }> = {
-        IT: {
-          viaggio: 'In viaggio', trasf: (km) => `Trasferimento di circa ${km} km su strada.`,
-          consiglio: 'Tieni attiva l\'audioguida di WIP durante il tragitto: i luoghi lungo la strada si raccontano da soli.',
-          nato: (n, t) => `Piano nato dall'unione di ${n} itinerari della libreria: ${t}.`,
-          tenute: (e) => `Tappe presenti in più itinerari e tenute una volta sola: ${e}.`,
-          titolo: (n) => `${n} giorni`,
-        },
-        EN: {
-          viaggio: 'On the road', trasf: (km) => `About ${km} km by road.`,
-          consiglio: 'Keep the WIP audio guide on along the way: the places by the roadside tell their own story.',
-          nato: (n, t) => `Plan built by merging ${n} library itineraries: ${t}.`,
-          tenute: (e) => `Stops that appeared in more than one itinerary, kept once: ${e}.`,
-          titolo: (n) => `${n} days`,
-        },
-        FR: {
-          viaggio: 'En route', trasf: (km) => `Environ ${km} km par la route.`,
-          consiglio: 'Garde l\'audioguide WIP actif pendant le trajet : les lieux au bord de la route se racontent tout seuls.',
-          nato: (n, t) => `Itinéraire né de la fusion de ${n} itinéraires de la bibliothèque : ${t}.`,
-          tenute: (e) => `Étapes présentes dans plusieurs itinéraires, gardées une seule fois : ${e}.`,
-          titolo: (n) => `${n} jours`,
-        },
-        ES: {
-          viaggio: 'En ruta', trasf: (km) => `Unos ${km} km por carretera.`,
-          consiglio: 'Manten activa la audioguía de WIP durante el trayecto: los lugares del camino se cuentan solos.',
-          nato: (n, t) => `Plan nacido de la unión de ${n} itinerarios de la biblioteca: ${t}.`,
-          tenute: (e) => `Paradas presentes en varios itinerarios, mantenidas una sola vez: ${e}.`,
-          titolo: (n) => `${n} días`,
-        },
-        DE: {
-          viaggio: 'Unterwegs', trasf: (km) => `Rund ${km} km auf der Straße.`,
-          consiglio: 'Lass den WIP-Audioguide unterwegs aktiv: die Orte am Straßenrand erzählen sich von selbst.',
-          nato: (n, t) => `Plan aus der Zusammenführung von ${n} Bibliotheks-Routen: ${t}.`,
-          tenute: (e) => `Stationen, die in mehreren Routen vorkamen, einmal behalten: ${e}.`,
-          titolo: (n) => `${n} Tage`,
-        },
-        RU: {
-          viaggio: 'В пути', trasf: (km) => `Около ${km} км по дороге.`,
-          consiglio: 'Не выключайте аудиогид WIP в дороге: места вдоль пути расскажут о себе сами.',
-          nato: (n, t) => `План собран из ${n} маршрутов библиотеки: ${t}.`,
-          tenute: (e) => `Точки, встречавшиеся в нескольких маршрутах, оставлены один раз: ${e}.`,
-          titolo: (n) => `${n} дн.`,
-        },
-        ZH: {
-          viaggio: '在路上', trasf: (km) => `公路约 ${km} 公里。`,
-          consiglio: '路上请保持 WIP 语音导览开启：沿途的地方会自己讲述故事。',
-          nato: (n, t) => `由 ${n} 条图书馆行程合并而成：${t}。`,
-          tenute: (e) => `在多条行程中重复、仅保留一次的站点：${e}。`,
-          titolo: (n) => `${n} 天`,
-        },
+      const F = {
+        viaggio: 'In viaggio',
+        trasf: (km: number) => `Trasferimento di circa ${km} km su strada.`,
+        consiglio: 'Tieni attiva l\'audioguida di WIP durante il tragitto: i luoghi lungo la strada si raccontano da soli.',
+        nato: (n: number, t: string) => `Piano nato dall'unione di ${n} itinerari della libreria: ${t}.`,
+        tenute: (e: string) => `Tappe presenti in più itinerari e tenute una volta sola: ${e}.`,
+        titolo: (n: number) => `${n} giorni`,
       };
-      const F = FRASI[L] || FRASI.IT;
 
       // 1. CARICAMENTO — solo dalla cache: se un item non c'è, NON lo si
       // genera qui (la generazione ha il suo percorso, con lock e budget).
@@ -18980,9 +19022,16 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
         },
       };
 
+      // Traduzione UNICA del risultato, con cache sulla combinazione scelta:
+      // due utenti francesi che uniscono gli stessi itinerari pagano una
+      // traduzione sola. La chiave è un hash perché cinque slug in fila
+      // sforerebbero la lunghezza ragionevole di una chiave di cache.
+      const chiaveUnione = `merge_${crypto.createHash('md5').update(unici.join('|')).digest('hex')}`;
+      const finale = await libTraduci(chiaveUnione, merged, L);
+
       res.json({
-        itinerary: merged,
-        meta: { title: merged.titolo, city: citta[0] || '', days: giorniFinali.length, unioneDi: unici, theme: titoli.join(' + ') },
+        itinerary: finale,
+        meta: { title: finale.titolo || merged.titolo, city: citta[0] || '', days: giorniFinali.length, unioneDi: unici, theme: titoli.join(' + ') },
         rimosse: [...new Set(tolte)],
         giorni: giorniFinali.length,
       });
