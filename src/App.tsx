@@ -1676,17 +1676,23 @@ export default function App() {
   if (authLoading || isRecovering) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setIsRecovering(false); }} initialAuthLoading={authLoading} forceMethod={isRecovering ? "update_password" : undefined} />;
   if (!session && !ospite) return <LoginScreen onLoginSuccess={(s) => { setSession(s); setOspite(false); }} onClose={() => setOspite(true)} />;
 
-  // Cornice "anteprima desktop" (bordo grigio, card 1200x800 centrata):
-  // pensata per chi apre wip.guide da un vero browser desktop. Il breakpoint
-  // `sm:` (640px+) non sa distinguere quel caso da un iPad in landscape
-  // (1180px) — App Store l'ha respinta l'8/09/2026 su iPad Air 11" proprio
-  // per questo: l'app nativa restava incorniciata in un riquadro con due
-  // bande vuote, mai a schermo intero. La cornice è SOLO per il web, mai
-  // per l'app nativa: qui la larghezza dello schermo non conta.
-  const cornicePreview = !Capacitor.isNativePlatform();
+  // SCHERMO PIENO OVUNQUE (10/09/2026, decisione del committente).
+  //
+  // Fino a oggi il web girava dentro una cornice "anteprima desktop": sfondo
+  // grigio e card centrata di 1200x800, per far vedere l'app come su un
+  // telefono a chi arrivava sul sito da computer. Era già costata un rifiuto
+  // di App Store (08/09, iPad Air 11": il breakpoint `sm:` non distingue un
+  // browser desktop da un iPad in landscape, e l'app nativa restava
+  // incorniciata con due bande vuote). Ora la cornice sparisce del tutto:
+  // dal browser wip.guide si vede come un sito a tutta larghezza, e la PWA
+  // installata sul PC apre a schermo pieno nella sua finestra.
+  //
+  // Chi ha bisogno di una vetrina "a forma di telefono" per gli screenshot
+  // dello store la ottiene restringendo la finestra del browser, non
+  // costringendo tutti gli altri dentro un riquadro.
   return (
-    <div className={cornicePreview ? "min-h-[100dvh] bg-[#323639] flex justify-center items-center p-0 sm:p-4" : "min-h-[100dvh] bg-surface"}>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={cornicePreview ? "w-full h-[100dvh] sm:h-[800px] max-w-[1200px] bg-surface relative overflow-hidden flex flex-col rounded-none sm:rounded-2xl lg:shadow-2xl border border-white/10" : "w-full h-[100dvh] bg-surface relative overflow-hidden flex flex-col"}>
+    <div className="min-h-[100dvh] bg-surface">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="w-full h-[100dvh] bg-surface relative overflow-hidden flex flex-col">
         <PermissionsModal onComplete={() => setPermissionsGranted(true)} language={language} />
         
         {session?.user && <ZeroCreditsBanner userId={session.user.id} />}
