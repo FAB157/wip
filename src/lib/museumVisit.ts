@@ -26,6 +26,10 @@ export type VenueTappa = {
   foto?: string;
   /** La stessa foto a 160 px, per il cerchio accanto al nome. */
   fotoIcona?: string;
+  /** Dove DENTRO la sala: «parete di fondo», «prima campata a destra»,
+   *  «sopra l'altare». È il dato che porta davvero davanti all'opera —
+   *  in una sala con ottanta quadri il numero della sala non basta. */
+  puntoPreciso?: string;
   /** Il titolo com'è scritto sul cartellino, quando è diverso dal nostro:
    *  chi cerca l'opera con gli occhi legge il muro, non la traduzione. Non
    *  si traduce mai, in nessuna lingua. */
@@ -73,6 +77,8 @@ export type MuseumVisit = {
   source: { lang: string; title: string; url: string } | null;
   startedAt: number;
   updatedAt: number;
+  /** La sala in cui ci si trova, letta dal cartello sul muro. */
+  salaCorrente?: string;
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
@@ -286,6 +292,126 @@ export function markWorkSeen(workName: string, cardId: string | null): MuseumVis
   v.updatedAt = Date.now();
   saveVisit(v);
   return v;
+}
+
+/**
+ * IL CARTELLO DELLA SALA COME BUSSOLA (11/09/2026).
+ *
+ * Si inquadra il numero scritto sul muro all'ingresso della stanza e l'app
+ * sa dove sei. Il percorso si riordina da lì: le opere di questa sala
+ * vengono prima, e «quanto manca» smette di indovinare.
+ * Non consuma il pass: sapere dove si è non è contenuto, è orientamento.
+ */
+export async function leggiCartelloSala(imageBase64: string, sale: string[]): Promise<{ ok: boolean; sala?: string; reason?: string }> {
+  const headers = await authHeaders();
+  if (!headers) return { ok: false, reason: 'login' };
+  try {
+    const res = await fetch(getApiUrl('/api/museums/read-room-sign'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ imageBase64, rooms: sale.slice(0, 60) }),
+    });
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` };
+    const d = await res.json();
+    return d?.ok === true ? { ok: true, sala: String(d.sala) } : { ok: false, reason: String(d?.reason || 'nessun_cartello') };
+  } catch {
+    return { ok: false, reason: 'rete' };
+  }
+}
+
+/**
+ * Segna la sala in cui ci si trova. Le tappe di QUESTA sala salgono in cima
+ * al percorso — non si riscrive la guida, si cambia il punto di vista: sei
+ * qui, quindi queste vengono prima. Le altre restano nel loro ordine.
+ */
+export function impostaSalaCorrente(sala: string): MuseumVisit | null {
+  const v = getVisit();
+  if (!v?.guide?.tappe?.length || !sala) return null;
+  const s = normalize(sala);
+  const qui = v.guide.tappe.filter(t => normalize(String(t.dove || '')) === s);
+  if (!qui.length) {
+    // La sala letta non è fra quelle del percorso: si registra lo stesso
+    // (serve a «quanto manca»), ma non si riordina niente.
+    v.salaCorrente = sala;
+    v.updatedAt = Date.now();
+    saveVisit(v);
+    return v;
+  }
+  const altre = v.guide.tappe.filter(t => normalize(String(t.dove || '')) !== s);
+  v.guide = { ...v.guide, tappe: [...qui, ...altre] };
+  v.salaCorrente = sala;
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
+}
+
+/**
+ * DOVE SEI E QUANTO MANCA (11/09/2026).
+ *
+ * Dentro un museo il GPS non c'è e — per decisione del committente — niente
+ * QR e niente beacon. Ma la posizione non serve inventarla: la si deduce da
+ * quello che il visitatore ha appena fatto. L'ULTIMA OPERA INQUADRATA è un
+ * check-in che finora buttavamo via: se hai appena riconosciuto la Nascita
+ * di Venere, sei nella sala che la nostra stessa guida dichiara.
+ *
+ * Da lì la domanda che uno si fa ogni volta che finisce di ascoltare —
+ * «e adesso dove vado?» — ha una risposta: la prossima tappa non vista, e
+ * quante sale la separano da qui. Quando le sale hanno un numero il conto è
+ * una sottrazione; quando sono nomi si contano i gruppi da attraversare.
+ * Nessuna infrastruttura, nessuna chiamata: solo dati che abbiamo già.
+ */
+export type ProssimaTappa = {
+  indice: number;
+  tappa: VenueTappa;
+  /** Sala di partenza dedotta dall'ultima opera vista, se si sa. */
+  daSala: string;
+  /** Quante sale ci sono in mezzo. 0 = stessa sala. null = non calcolabile. */
+  saleDiDistanza: number | null;
+};
+
+export function prossimaTappa(v: MuseumVisit | null): ProssimaTappa | null {
+  if (!v?.guide?.tappe?.length) return null;
+  const tappe = v.guide.tappe;
+  // La prossima è la prima non vista e non saltata, nell'ordine del percorso.
+  const idx = tappe.findIndex(t => !t.seenCardId && !t.skipped);
+  if (idx < 0) return null;
+
+  // Da dove si parte, in ordine di certezza:
+  //  1. il cartello della sala appena inquadrato — è scritto sul muro;
+  //  2. la sala dell'ultima opera spuntata: il check-in che il visitatore ha
+  //     già fatto senza saperlo.
+  let daSala = String(v.salaCorrente || '').trim();
+  if (!daSala) {
+    for (let i = tappe.length - 1; i >= 0; i--) {
+      if (tappe[i].seenCardId && String(tappe[i].dove || '').trim()) { daSala = String(tappe[i].dove).trim(); break; }
+    }
+  }
+
+  const aSala = String(tappe[idx].dove || '').trim();
+  let saleDiDistanza: number | null = null;
+  if (daSala && aSala) {
+    if (daSala === aSala) {
+      saleDiDistanza = 0;
+    } else {
+      const na = parseInt((daSala.match(/\d+/) || [''])[0], 10);
+      const nb = parseInt((aSala.match(/\d+/) || [''])[0], 10);
+      if (Number.isFinite(na) && Number.isFinite(nb)) {
+        // Sale numerate: la distanza è la differenza fra i numeri.
+        saleDiDistanza = Math.abs(nb - na);
+      } else {
+        // Sale con un nome: si contano i gruppi da attraversare nel percorso.
+        const sale: string[] = [];
+        for (const t of tappe) {
+          const s = String(t.dove || '').trim();
+          if (s && sale[sale.length - 1] !== s) sale.push(s);
+        }
+        const ia = sale.indexOf(daSala);
+        const ib = sale.indexOf(aSala);
+        saleDiDistanza = ia >= 0 && ib >= 0 ? Math.abs(ib - ia) : null;
+      }
+    }
+  }
+  return { indice: idx, tappa: tappe[idx], daSala, saleDiDistanza };
 }
 
 /**

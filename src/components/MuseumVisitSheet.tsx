@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente } from '../lib/museumVisit';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
+import { printScoped } from '../lib/printScoped';
+import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { formatPassRemaining } from '../lib/museumPass';
 
@@ -38,6 +40,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [scaricato, setScaricato] = useState(() => !!museoScaricato(visit.venueKey, language));
   const [aggiungendo, setAggiungendo] = useState(false);
   const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine !== false);
+  // La foto dell'opera a tutto schermo: si tiene in mano e si confronta con
+  // quello che si ha davanti. È il modo più veloce per trovare un quadro.
+  const [fotoGrande, setFotoGrande] = useState<{ url: string; nome: string; dove: string } | null>(null);
 
   useEffect(() => () => { stopSpeech(); }, []);
 
@@ -130,7 +135,77 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     }
   };
 
+  /**
+   * PRIMA DI USCIRE (11/09/2026).
+   *
+   * Chi esce da un museo non sa mai cosa si è perso: il percorso resta
+   * aperto sul telefono, ma nessuno lo rilegge in senso inverso. Al tocco su
+   * «termina» si mostra una volta sola quello che manca — le opere non viste
+   * e quelle saltate — raggruppato per sala, così la scelta è concreta:
+   * «sono tutte al primo piano, dieci minuti» e non «hai visto 12 su 20».
+   * Se non manca niente, la visita finisce senza cerimonie.
+   */
+  const [primaDiUscire, setPrimaDiUscire] = useState(false);
+  // «Dove sono»: si inquadra il cartello della sala e il percorso si
+  // riordina da lì. È l'unico orientamento indoor possibile senza QR,
+  // beacon o accordi con i musei — la scritta sul muro c'è già.
+  const [leggendoSala, setLeggendoSala] = useState(false);
+  const cartelloRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * LA GUIDA SU CARTA. Il nome del file lo decide `document.title` quando si
+   * cade sulla stampa del browser: senza questo giro ogni guida stampata si
+   * salverebbe con lo stesso nome dell'app, e dieci musei diventerebbero
+   * dieci file identici nella cartella dei download.
+   */
+  const handleStampa = () => {
+    const titoloPrima = document.title;
+    document.title = `WIP - ${visit.venue.name}`;
+    printScoped('museum', () => {
+      window.print();
+      document.title = titoloPrima;
+    });
+  };
+
+  const handleCartello = async (file: File | null) => {
+    if (!file) return;
+    setLeggendoSala(true);
+    try {
+      const b64 = await new Promise<string>((risolvi, rifiuta) => {
+        const fr = new FileReader();
+        fr.onload = () => risolvi(String(fr.result || ''));
+        fr.onerror = () => rifiuta(new Error('lettura fallita'));
+        fr.readAsDataURL(file);
+      });
+      const sale = visit.guide.tappe.map(t => String(t.dove || '').trim()).filter(Boolean);
+      const esito = await leggiCartelloSala(b64, [...new Set(sale)]);
+      if (esito.ok && esito.sala) {
+        impostaSalaCorrente(esito.sala);
+        notify(t('mv_room_found').replace('{s}', esito.sala));
+      } else {
+        notify(t('mv_room_not_read'));
+      }
+    } catch {
+      notify(t('vis_generic_error'));
+    } finally {
+      setLeggendoSala(false);
+      if (cartelloRef.current) cartelloRef.current.value = '';
+    }
+  };
+
+  const mancanti = visit.guide.tappe.filter(t => !t.seenCardId);
+  const mancantiPerSala = (() => {
+    const m = new Map<string, typeof mancanti>();
+    for (const t of mancanti) {
+      const k = String(t.dove || '').trim();
+      if (!m.has(k)) m.set(k, [] as any);
+      (m.get(k) as any).push(t);
+    }
+    return [...m.entries()];
+  })();
+
   const handleEnd = () => {
+    if (mancanti.length > 0 && !primaDiUscire) { setPrimaDiUscire(true); return; }
     stopSpeech();
     endVisit();
     onClose();
@@ -198,6 +273,97 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   };
 
   return (
+    <>
+    {/* Il documento da stampare: invisibile a schermo, acceso solo da
+        printScoped('museum'). */}
+    <MuseumPrintView visit={visit} language={language} opere={operaGuide} />
+
+    {/* PRIMA DI USCIRE: cosa ti manca, raggruppato per sala */}
+    {primaDiUscire && (
+      <div className="fixed inset-0 z-[2700] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center p-0 sm:p-6" onClick={() => setPrimaDiUscire(false)}>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="bg-[#fdfbf7] w-full sm:max-w-sm max-h-[80vh] rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden flex flex-col shadow-2xl"
+        >
+          <div className="px-5 pt-5 pb-3 shrink-0">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_before_leaving')}</p>
+            <h3 className="text-lg font-black text-slate-900 leading-tight">
+              {t('mv_missing_count').replace('{n}', String(mancanti.length))}
+            </h3>
+          </div>
+          <div className="flex-1 overflow-y-auto px-5 pb-3 space-y-3">
+            {mancantiPerSala.map(([sala, opere]) => (
+              <div key={sala || 'senza-sala'}>
+                <p className="text-[11px] font-black text-primary mb-1.5 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 shrink-0" />
+                  {sala || t('mv_room_unknown')}
+                  <span className="text-slate-400 font-bold">· {opere.length}</span>
+                </p>
+                <div className="space-y-1.5">
+                  {opere.map((t2, k) => (
+                    <div key={`${sala}-${k}`} className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white border border-slate-200">
+                      {t2.fotoIcona && (
+                        <img src={t2.fotoIcona} alt="" loading="lazy" className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                      )}
+                      <span className="text-[12px] font-bold text-slate-800 truncate flex-1">{t2.nome}</span>
+                      {t2.skipped && <span className="text-[9px] font-black uppercase text-slate-400 shrink-0">{t('mv_skipped_badge')}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="px-5 pb-5 pt-2 flex gap-2 shrink-0">
+            <button
+              onClick={() => setPrimaDiUscire(false)}
+              className="flex-1 py-3 rounded-2xl bg-primary text-white font-black text-[13px] active:scale-[0.98] transition-transform"
+            >
+              {t('mv_keep_visiting')}
+            </button>
+            <button
+              onClick={() => { stopSpeech(); endVisit(); onClose(); }}
+              className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-[13px] active:scale-[0.98] transition-transform"
+            >
+              {t('mv_end')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    {/* CERCA CON GLI OCCHI: la foto a tutto schermo, il titolo e la sala.
+        Si alza il telefono e si confronta con la parete. Fondo scuro qui è
+        giusto — è l'unico posto dove conta solo l'immagine. */}
+    {fotoGrande && (
+      <div
+        className="fixed inset-0 z-[2700] bg-black/92 flex flex-col items-center justify-center p-4"
+        onClick={() => setFotoGrande(null)}
+      >
+        <img
+          src={fotoGrande.url}
+          alt={fotoGrande.nome}
+          className="max-w-full max-h-[74vh] object-contain rounded-2xl"
+          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+        <div className="mt-4 text-center px-4">
+          <p className="text-white font-black text-base leading-tight">{fotoGrande.nome}</p>
+          {fotoGrande.dove && (
+            <p className="text-white/70 text-[13px] font-bold mt-1 flex items-center justify-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5" />
+              {fotoGrande.dove}
+            </p>
+          )}
+          <p className="text-white/45 text-[11px] font-bold mt-3">{t('mv_tap_to_close')}</p>
+        </div>
+        <button
+          onClick={() => setFotoGrande(null)}
+          aria-label={t('vis_close')}
+          className="absolute top-6 right-6 w-11 h-11 rounded-full bg-white/15 border border-white/25 flex items-center justify-center text-white active:scale-90 transition-transform"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+    )}
     <div className="fixed inset-0 z-[2600] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center" onClick={onClose}>
       <motion.div
         role="dialog"
@@ -272,6 +438,76 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </div>
           </div>
 
+          {/* DOVE SONO: si inquadra il cartello della sala. La scritta sul
+              muro c'è in ogni museo del mondo, è grande e ad alto contrasto,
+              e nessuno la usa: è l'unica infrastruttura di orientamento
+              indoor già installata ovunque. */}
+          <input
+            ref={cartelloRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => void handleCartello(e.target.files?.[0] || null)}
+          />
+          <button
+            onClick={() => cartelloRef.current?.click()}
+            disabled={leggendoSala}
+            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white border border-slate-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] mb-3 text-left active:scale-[0.99] transition-transform disabled:opacity-60"
+          >
+            {leggendoSala ? <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" /> : <MapPin className="w-4 h-4 text-primary shrink-0" />}
+            <span className="flex-1 min-w-0">
+              <span className="block text-[12px] font-black text-slate-900">
+                {visit.salaCorrente ? t('mv_you_are_in_room').replace('{s}', visit.salaCorrente) : t('mv_where_am_i')}
+              </span>
+              <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_where_am_i_desc')}</span>
+            </span>
+            <Camera className="w-4 h-4 text-slate-400 shrink-0" />
+          </button>
+
+          {/* E ADESSO DOVE VADO. La domanda che uno si fa ogni volta che
+              finisce di ascoltare, e a cui il percorso non rispondeva mai.
+              Da dove sei — il cartello letto, o l'ultima opera inquadrata —
+              alla prossima non vista, con quante sale in mezzo. */}
+          {(() => {
+            const p = prossimaTappa(visit);
+            if (!p) return null;
+            return (
+              <button
+                onClick={() => { setOperaAperta(null); void handleOpera(p.indice); }}
+                className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white border-2 border-primary shadow-[0_12px_28px_rgba(30,58,138,0.12)] mb-3 text-left active:scale-[0.99] transition-transform"
+              >
+                {p.tappa.fotoIcona ? (
+                  <img
+                    src={p.tappa.fotoIcona}
+                    alt=""
+                    loading="lazy"
+                    onClick={(e) => { e.stopPropagation(); setFotoGrande({ url: p.tappa.foto || p.tappa.fotoIcona || '', nome: p.tappa.nome, dove: p.tappa.dove || '' }); }}
+                    className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    <Landmark className="w-5 h-5 text-primary" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary">{t('mv_next_stop')}</p>
+                  <p className="text-sm font-black text-slate-900 leading-tight truncate">{p.tappa.nome}</p>
+                  <p className="text-[11px] font-bold text-slate-500 leading-snug">
+                    {p.saleDiDistanza === 0
+                      ? t('mv_same_room')
+                      : p.saleDiDistanza != null
+                        ? t('mv_rooms_away').replace('{n}', String(p.saleDiDistanza))
+                        : (p.tappa.dove || t('mv_room_unknown'))}
+                    {p.tappa.puntoPreciso ? ` · ${p.tappa.puntoPreciso}` : (p.saleDiDistanza != null && p.tappa.dove ? ` · ${p.tappa.dove}` : '')}
+                  </p>
+                </div>
+                <Volume2 className="w-5 h-5 text-primary shrink-0" />
+              </button>
+            );
+          })()}
+
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
           {/* Se il museo non pubblica le sale lo si dice qui, una volta: senza
@@ -314,9 +550,21 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                   </div>
                 )}
                 <li key={`${i}-${tappa.nome}`} className={`flex gap-3 px-3.5 py-3 rounded-2xl border transition-opacity ${done ? 'bg-emerald-50 border-emerald-200' : tappa.skipped ? 'bg-white border-slate-200 opacity-60' : 'bg-white border-slate-200'}`}>
-                  {/* La foto dell'opera nel cerchio, col numero quando manca */}
+                  {/* La foto dell'opera nel cerchio, col numero quando manca.
+                      UN TOCCO E SI APRE GRANDE (11/09/2026): dentro una sala
+                      affollata l'occhio riconosce un quadro in un secondo,
+                      molto prima di leggere «Sala 12, parete di fronte». La
+                      foto grande è lo strumento di ricerca più veloce che
+                      abbiamo, e stava chiusa dentro un cerchio da 44 px. */}
                   {tappa.fotoIcona ? (
-                    <div className="relative w-11 h-11 shrink-0">
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t('mv_open_photo')}
+                      onClick={(e) => { e.stopPropagation(); setFotoGrande({ url: tappa.foto || tappa.fotoIcona || '', nome: tappa.nome, dove: tappa.dove || '' }); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFotoGrande({ url: tappa.foto || tappa.fotoIcona || '', nome: tappa.nome, dove: tappa.dove || '' }); } }}
+                      className="relative w-11 h-11 shrink-0 cursor-pointer active:scale-90 transition-transform"
+                    >
                       <img
                         src={tappa.fotoIcona}
                         alt=""
@@ -346,6 +594,15 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       <p className="text-[11px] font-bold text-slate-500 mt-0.5">
                         {[tappa.autore, tappa.anno].filter(Boolean).join(' · ')}
                         {tappa.dove ? `${tappa.autore || tappa.anno ? ' · ' : ''}${tappa.dove}` : ''}
+                      </p>
+                    )}
+                    {/* DOVE GUARDARE, dentro la sala. Riga sua, in evidenza:
+                        è l'unica informazione che porta il visitatore davanti
+                        all'opera invece che dentro la stanza giusta. */}
+                    {tappa.puntoPreciso && !done && (
+                      <p className="text-[11px] font-black text-primary leading-snug mt-1 flex items-start gap-1.5">
+                        <MapPin className="w-3.5 h-3.5 shrink-0 mt-px" />
+                        {tappa.puntoPreciso}
                       </p>
                     )}
                     {tappa.perche && <p className="text-[12px] text-slate-700 leading-snug mt-1">{tappa.perche}</p>}
@@ -543,6 +800,16 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </button>
           </div>
 
+          {/* La guida su carta: si piega in quattro e sta in tasca anche col
+              telefono spento, e si manda agli amici prima di partire. */}
+          <button
+            onClick={handleStampa}
+            className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+          >
+            <Printer className="w-4 h-4" />
+            {t('mv_stampa_guida')}
+          </button>
+
           <button onClick={handleEnd} className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2">
             <MapPin className="w-4 h-4" />
             {t('mv_end')}
@@ -550,5 +817,6 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         </div>
       </motion.div>
     </div>
+    </>
   );
 }

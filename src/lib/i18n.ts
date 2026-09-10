@@ -32,6 +32,61 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     DE: "Aus der Sammlung · frag, ob es ausgestellt ist", RU: "Из коллекции · уточните, выставлено ли",
     ZH: "馆藏 · 请询问是否展出",
   },
+  // «E adesso dove vado»: la prossima tappa e quante sale la separano da qui.
+  mv_next_stop: { IT: "Prossima", EN: "Next", FR: "Suivante", ES: "Siguiente", DE: "Als Nächstes", RU: "Далее", ZH: "下一件" },
+  mv_same_room: { IT: "In questa sala", EN: "In this room", FR: "Dans cette salle", ES: "En esta sala", DE: "In diesem Saal", RU: "В этом зале", ZH: "就在本厅" },
+  mv_rooms_away: {
+    IT: "{n} sale più avanti", EN: "{n} rooms further on", FR: "{n} salles plus loin",
+    ES: "{n} salas más adelante", DE: "{n} Säle weiter", RU: "Через {n} зала", ZH: "再走 {n} 个展厅",
+  },
+  mv_room_unknown: {
+    IT: "Sala non indicata", EN: "Room not stated", FR: "Salle non indiquée", ES: "Sala no indicada",
+    DE: "Saal nicht angegeben", RU: "Зал не указан", ZH: "未标明展厅",
+  },
+  // La guida su carta: si piega in quattro e non ha batteria.
+  mv_stampa_guida: {
+    IT: "Stampa la guida", EN: "Print the guide", FR: "Imprimer le guide", ES: "Imprimir la guía",
+    DE: "Guide drucken", RU: "Распечатать гид", ZH: "打印导览",
+  },
+  // «Dove sono»: il cartello della sala letto dalla fotocamera.
+  mv_where_am_i: { IT: "Dove sono?", EN: "Where am I?", FR: "Où suis-je ?", ES: "¿Dónde estoy?", DE: "Wo bin ich?", RU: "Где я?", ZH: "我在哪儿？" },
+  mv_where_am_i_desc: {
+    IT: "Inquadra il cartello della sala e il percorso riparte da qui",
+    EN: "Frame the room sign and the route restarts from here",
+    FR: "Cadre le panneau de la salle : le parcours repart d'ici",
+    ES: "Enfoca el cartel de la sala y el recorrido sigue desde aquí",
+    DE: "Das Saalschild aufnehmen — der Rundgang beginnt hier neu",
+    RU: "Наведите камеру на табличку зала — маршрут продолжится отсюда",
+    ZH: "拍下展厅标识，路线从这里重新开始",
+  },
+  mv_you_are_in_room: { IT: "Sei in {s}", EN: "You're in {s}", FR: "Tu es en {s}", ES: "Estás en {s}", DE: "Du bist in {s}", RU: "Вы в {s}", ZH: "你在 {s}" },
+  mv_room_found: { IT: "Sei in {s}", EN: "You're in {s}", FR: "Tu es en {s}", ES: "Estás en {s}", DE: "Du bist in {s}", RU: "Вы в {s}", ZH: "你在 {s}" },
+  mv_room_not_read: {
+    IT: "Non ho letto nessun cartello: prova a inquadrare il numero della sala",
+    EN: "No sign read: try framing the room number",
+    FR: "Aucun panneau lu : essaie de cadrer le numéro de la salle",
+    ES: "No he leído ningún cartel: prueba a enfocar el número de sala",
+    DE: "Kein Schild erkannt: Versuch, die Saalnummer aufzunehmen",
+    RU: "Табличка не распознана: наведите камеру на номер зала",
+    ZH: "未读取到标识：请对准展厅编号",
+  },
+  // Prima di uscire: cosa ti manca, raggruppato per sala.
+  mv_before_leaving: {
+    IT: "Prima di uscire", EN: "Before you leave", FR: "Avant de sortir", ES: "Antes de salir",
+    DE: "Bevor du gehst", RU: "Перед выходом", ZH: "离开之前",
+  },
+  mv_missing_count: {
+    IT: "Ti mancano {n} opere", EN: "{n} works still to see", FR: "Il te reste {n} œuvres",
+    ES: "Te faltan {n} obras", DE: "Dir fehlen noch {n} Werke", RU: "Осталось {n} произведений", ZH: "还有 {n} 件未看",
+  },
+  mv_keep_visiting: {
+    IT: "Continuo la visita", EN: "Keep visiting", FR: "Je continue", ES: "Sigo la visita",
+    DE: "Weiter besuchen", RU: "Продолжить", ZH: "继续参观",
+  },
+  mv_skipped_badge: { IT: "Saltata", EN: "Skipped", FR: "Sautée", ES: "Saltada", DE: "Übersprungen", RU: "Пропущено", ZH: "已跳过" },
+  // La foto a tutto schermo: si cerca l'opera con gli occhi.
+  mv_open_photo: { IT: "Apri la foto", EN: "Open the photo", FR: "Ouvrir la photo", ES: "Abrir la foto", DE: "Foto öffnen", RU: "Открыть фото", ZH: "打开照片" },
+  mv_tap_to_close: { IT: "Tocca per chiudere", EN: "Tap to close", FR: "Touche pour fermer", ES: "Toca para cerrar", DE: "Zum Schließen tippen", RU: "Нажмите, чтобы закрыть", ZH: "轻触关闭" },
   // L'archivio delle visite: roba già pagata, si riapre gratis e senza rete.
   mv_le_tue_visite: {
     IT: "Le tue visite", EN: "Your visits", FR: "Tes visites", ES: "Tus visitas",

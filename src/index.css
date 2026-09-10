@@ -229,6 +229,12 @@
   body:not(.printing-manual) #app-guide-print-view {
     display: none !important;
   }
+  /* La guida del museo da portarsi dietro stampata (11/09/2026): stesso
+     patto degli altri tre documenti — invisibile finché non è lei quella
+     richiesta. */
+  body:not(.printing-museum) #museum-print-view {
+    display: none !important;
+  }
 
   /* ── ISOLAMENTO: si stampa IL DOCUMENTO, non la pagina ──────────────
      Le regole qui sopra nascondono gli ALTRI documenti stampabili, ma non
@@ -247,7 +253,8 @@
      26/08/2026. */
   body.printing-itinerary,
   body.printing-guide,
-  body.printing-manual {
+  body.printing-manual,
+  body.printing-museum {
     visibility: hidden !important;
   }
   body.printing-itinerary .print-optimized-view,
@@ -255,12 +262,15 @@
   body.printing-guide #premium-guide-pdf-container,
   body.printing-guide #premium-guide-pdf-container *,
   body.printing-manual #app-guide-print-view,
-  body.printing-manual #app-guide-print-view * {
+  body.printing-manual #app-guide-print-view *,
+  body.printing-museum #museum-print-view,
+  body.printing-museum #museum-print-view * {
     visibility: visible !important;
   }
   body.printing-itinerary .print-optimized-view,
   body.printing-guide #premium-guide-pdf-container,
-  body.printing-manual #app-guide-print-view {
+  body.printing-manual #app-guide-print-view,
+  body.printing-museum #museum-print-view {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;

@@ -7839,6 +7839,7 @@ REGOLE TASSATIVE:
 - SOLO OPERE PRINCIPALI E FAMOSE: il percorso è fatto dei capolavori per cui questo luogo è conosciuto, mai di pezzi minori messi lì per allungare l'elenco. Se le opere famose citate dal materiale sono meno di quante ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 20 di cui 14 dimenticabili.
 - Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione.
 - Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (sala, piano, ala, navata, cappella). È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota. Se il materiale dà il piano ma non la sala, scrivi il piano.
+- Il campo "puntoPreciso": DOVE DENTRO LA SALA, se il materiale lo dice — "parete di fondo", "prima campata a destra", "sopra l'altare", "in fondo alla galleria, dopo la scalinata", "vetrina centrale". In una sala del Louvre con ottanta quadri il numero della sala non fa trovare niente: è questo che porta il visitatore davanti all'opera. Solo se il materiale lo dichiara, altrimenti "". Non dedurlo e non inventarlo mai.
 - Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
 - Ogni tappa deve essere un'opera, una sala o un elemento NOMINATO ESPLICITAMENTE nel materiale. Niente opere che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
 - Copia i nomi delle opere come compaiono nel materiale (nella lingua di uscita, se il materiale li dà tradotti).
@@ -7852,7 +7853,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "tipo": "${isChurch ? 'chiesa' : 'museo'}" oppure "sito",
   "intro": "...",
   "consiglio": "...",
-  "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "perche": "..." } ]
+  "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "..." } ]
 }`;
 
       // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
@@ -7926,6 +7927,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
+          // Dove DENTRO la sala: è questo che porta davanti all'opera. In una
+          // sala del Louvre con ottanta quadri «Sala 711» non fa trovare nulla.
+          puntoPreciso: campoOpzionale(t?.puntoPreciso, 120),
           perche: campoOpzionale(t?.perche, 500),
         }))
         .filter((t: any) => {
@@ -8756,6 +8760,102 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
    * nessuna generazione: chi non trova nulla qui chiede /venue-guide, che la
    * crea al volo e la deposita in libreria per chi verrà dopo.
    */
+  /**
+   * DOVE SONO: IL CARTELLO DELLA SALA (11/09/2026).
+   *
+   * Dentro un museo il GPS non arriva, e il committente ha escluso QR e
+   * beacon — giustamente: sarebbero migliaia di accordi con migliaia di
+   * musei per una funzione che deve nascere mondiale.
+   *
+   * Ma l'infrastruttura per sapere dove sei ESISTE GIÀ, in ogni museo del
+   * mondo, e nessuno la usa: il numero della sala scritto sul muro
+   * all'ingresso di ogni stanza. È testo grande, dritto, ad alto contrasto,
+   * fatto apposta per essere letto da lontano. Si inquadra e si sa dove si
+   * è — senza installare niente, senza chiedere niente a nessuno.
+   *
+   * La rotta fa UNA cosa sola: leggere quel numero. Non riconosce opere, non
+   * racconta niente, non consuma il pass — è un'operazione di orientamento,
+   * non di contenuto, e deve costare quanto costa girare la testa. Per
+   * questo va sui motori gratuiti con visione, e la riserva pagante entra
+   * solo se i gratuiti tacciono.
+   *
+   * Se il cartello non si legge, si risponde che non si è letto. Un numero
+   * di sala inventato manderebbe una persona vera dall'altra parte di un
+   * edificio: qui il silenzio è l'unica risposta onesta.
+   */
+  app.post("/api/museums/read-room-sign", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const imageBase64 = String(req.body?.imageBase64 || '');
+      if (!imageBase64 || imageBase64.length < 100) return res.status(400).json({ error: 'immagine_mancante' });
+      // Le sale che conosciamo per questo museo: servono a riconoscere la
+      // scritta anche quando è scritta in modo diverso («Sala 12» / «Room 12»
+      // / «Saal XII»), e a non accettare numeri che qui non esistono.
+      const saleNote: string[] = (Array.isArray(req.body?.rooms) ? req.body.rooms : [])
+        .map((r: any) => String(r || '').trim()).filter(Boolean).slice(0, 60);
+
+      const prompt = `Guarda questa foto scattata dentro un museo. Cerca UNA cosa sola: il CARTELLO che indica la sala — il numero o il nome della stanza, di solito scritto sopra o accanto alla porta, su una targa o direttamente sul muro.
+
+${saleNote.length ? `Le sale di questo museo che conosciamo sono:\n${saleNote.map(s => `- ${s}`).join('\n')}\nSe quello che leggi corrisponde a una di queste, riporta la nostra forma ESATTA come compare nell'elenco.` : ''}
+
+REGOLE:
+- Riporta SOLO ciò che è scritto davvero nella foto. Non dedurre la sala dalle opere che vedi, non tirare a indovinare: se il cartello non c'è o non è leggibile, dillo.
+- Ignora le didascalie delle opere, i pannelli esplicativi, i cartelli di divieto, le insegne di uscita e bagni: cerchi l'identificativo della STANZA.
+- "letto": esattamente il testo che vedi sul cartello (es. "SALA 12", "Room 711", "Salle des États").
+- "sala": la forma da usare — quella dell'elenco se combacia, altrimenti quella letta.
+- "confidenza": 0-100, quanto sei sicuro di aver letto un cartello di sala e non altro.
+
+Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "confidenza": 0}`;
+
+      const pulito = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      let esito: any = null;
+
+      // Gratuito per primo: leggere una scritta grande non vale una chiamata
+      // a pagamento.
+      if (ai) {
+        try {
+          const g = await withTimeout(ai.models.generateContent({
+            model: "gemini-3.5-flash-lite",
+            contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: pulito } }] }],
+            config: { responseMimeType: "application/json" }
+          }), 'Gemini (cartello sala)');
+          esito = JSON.parse(String(g.text || '{}'));
+        } catch (e: any) {
+          console.warn('[CartelloSala] Gemini non ha letto:', e?.message);
+        }
+      }
+      if (!esito) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (key) {
+          try {
+            const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o-mini',
+              messages: [{ role: 'user', content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pulito}`, detail: 'low' } },
+              ] }],
+              temperature: 0, max_tokens: 120, response_format: { type: 'json_object' },
+            }, { timeout: 15000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+            esito = JSON.parse(String(r.data?.choices?.[0]?.message?.content || '{}'));
+          } catch (e: any) {
+            console.warn('[CartelloSala] riserva fallita:', e?.message);
+          }
+        }
+      }
+
+      if (!esito || esito.trovato !== true || Number(esito.confidenza || 0) < 55) {
+        return res.json({ ok: false, reason: 'nessun_cartello' });
+      }
+      const sala = String(esito.sala || esito.letto || '').trim().slice(0, 100);
+      if (!sala) return res.json({ ok: false, reason: 'nessun_cartello' });
+      res.json({ ok: true, sala, letto: String(esito.letto || '').slice(0, 100), confidenza: Number(esito.confidenza) });
+    } catch (e: any) {
+      console.error('[CartelloSala] Errore:', e?.message);
+      res.status(500).json({ error: 'lettura_fallita' });
+    }
+  });
+
   /**
    * «NON LA TROVO»: il visitatore salta una tappa (10/09/2026).
    *
