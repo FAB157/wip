@@ -861,6 +861,56 @@ function somiglianzaNomi(a: any, b: any): number {
   return comuni / Math.min(A.size, B.size);
 }
 
+// ── «ESISTE? E DOVE?» — città dichiarata vs destinazione (10/09/2026) ───────
+//
+// Il revisore anti-allucinazione ora dichiara in quale città si trova ogni
+// tappa (vedi verifyItineraryAntiHallucination). Qui si decide se quella
+// città è un'ALTRA città o solo un altro modo di nominare la stessa.
+//
+// La regola è prudente per costruzione: nel dubbio NON segnala. Un falso
+// allarme su una tappa giusta consuma la fiducia dell'utente in tutte le
+// segnalazioni — che è la cosa che rende utile il sistema.
+const CITTA_SINONIMI: string[][] = [
+  ['ho chi minh', 'saigon'], ['citta del capo', 'cape town'], ['firenze', 'florence', 'florenz'],
+  ['roma', 'rome'], ['milano', 'milan', 'mailand'], ['venezia', 'venice', 'venedig'],
+  ['napoli', 'naples', 'neapel'], ['torino', 'turin'], ['genova', 'genoa'], ['padova', 'padua'],
+  ['londra', 'london'], ['parigi', 'paris'], ['marsiglia', 'marseille'], ['lione', 'lyon'],
+  ['nizza', 'nice'], ['monaco di baviera', 'munchen', 'munich', 'muenchen'], ['colonia', 'cologne', 'koln'],
+  ['amburgo', 'hamburg'], ['norimberga', 'nuremberg', 'nurnberg'], ['francoforte', 'frankfurt'],
+  ['vienna', 'wien'], ['praga', 'prague', 'praha'], ['varsavia', 'warsaw', 'warszawa'],
+  ['bruxelles', 'brussels', 'brussel'], ['anversa', 'antwerp', 'antwerpen'], ['ginevra', 'geneva', 'geneve'],
+  ['zurigo', 'zurich'], ['lisbona', 'lisbon', 'lisboa'], ['siviglia', 'seville', 'sevilla'],
+  ['saragozza', 'zaragoza'], ['atene', 'athens', 'athina'], ['salonicco', 'thessaloniki'],
+  ['copenaghen', 'copenhagen', 'kobenhavn'], ['stoccolma', 'stockholm'], ['mosca', 'moscow', 'moskva'],
+  ['pechino', 'beijing'], ['il cairo', 'cairo'], ['citta del messico', 'mexico city', 'ciudad de mexico'],
+  ['nuova delhi', 'new delhi', 'delhi'], ['bucarest', 'bucharest', 'bucuresti'], ['belgrado', 'belgrade'],
+  ['istanbul', 'costantinopoli'], ['gerusalemme', 'jerusalem'], ['la valletta', 'valletta'],
+];
+function cittaDiscordante(dichiarata: any, destinazione: any): boolean {
+  const d = String(dichiarata || '').trim();
+  const dest = String(destinazione || '').trim();
+  // Nessuna dichiarazione utilizzabile: il revisore non sa dove sia, e il
+  // «non so» lo gestisce già il verdetto "dubbio".
+  if (!d || !dest || d === '?' || d.length < 2) return false;
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const nd = norm(d), ndest = norm(dest);
+  if (!nd || !ndest) return false;
+  // Uno contiene l'altro: quartiere dentro la città, città dentro «Città,
+  // Paese», destinazione ampia che comprende la località.
+  if (nd.includes(ndest) || ndest.includes(nd)) return false;
+  // Stessa città con due nomi (italiano/locale/inglese).
+  for (const gruppo of CITTA_SINONIMI) {
+    const inD = gruppo.some((g) => nd.includes(g));
+    const inDest = gruppo.some((g) => ndest.includes(g));
+    if (inD && inDest) return false;
+  }
+  // Una parola significativa in comune basta a non segnalare: copre
+  // «Chatuchak, Bangkok» vs «Bangkok» e le forme con virgola o provincia.
+  if (somiglianzaNomi(nd, ndest) > 0) return false;
+  return true;
+}
+
 // ── AGGANCIO DELLE TAPPE AL DATABASE (05/09/2026) ───────────────────────────
 //
 // Verifica sull'itinerario di Greve in Chianti: le coordinate delle tappe
@@ -896,7 +946,7 @@ function orariCopronoPasto(orariOsm: string, tipo: string): boolean | null {
   if (!finestra) return null;
   return fasce.some(f => f.da <= finestra[0] && f.a >= finestra[1]);
 }
-async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number; lon: number } | null): Promise<{ agganciate: number; pasti_fuori_orario: number }> {
+async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number; lon: number } | null, destination?: string, cancelToken?: { cancelled: boolean }): Promise<{ agganciate: number; pasti_fuori_orario: number }> {
   const esito = { agganciate: 0, pasti_fuori_orario: 0 };
   if (!supabaseUrl || !supabaseServiceKey) return esito;
   const stops = extractItineraryStops(itineraryObj).slice(0, 80);
@@ -907,6 +957,7 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
   const lavoratore = async () => { while (coda.length) { const s = coda.shift(); if (s) await unaTappa(s.ref); } };
   async function unaTappa(t: any) {
     try {
+      if (cancelToken?.cancelled) return; // il chiamante ha smesso di aspettare: non mutare piu' "parsed"
       if (t?.poi_id) return; // gia' agganciata (chiamata ripetuta): niente doppio lavoro
       const nome = String(t?.titolo_tappa || t?.titolo || '').replace(/\s*\(.*?\)\s*$/, '');
       if (paroleNome(nome).length === 0) return;
@@ -952,12 +1003,19 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         if (meglio) { punteggio = s; migliore = riga; migliorQualita = qualita; distMigliore = d; }
       }
       if (!migliore || punteggio < 0.6) return;
+      if (cancelToken?.cancelled) return; // il timeout a monte e' gia' scattato: non mutare piu' "parsed"
       esito.agganciate++;
+      // Città del candidato vs destinazione dichiarata (10/09/2026): il nome
+      // può combaciare ma essere l'omonimo di un'altra città. In quel caso
+      // NON si marca la tappa come agganciata al DB — che a valle vuol dire
+      // "esiste, punto, salta il revisore" — e si lascia decidere all'AI.
+      // Indirizzo/telefono/coordinate restano utili anche così: si tengono.
+      const cittaCombacia = !destination || !migliore.city || !cittaDiscordante(migliore.city, destination);
       // Coordinate: quelle che usa il navigatore (arrivo > ingresso > POI).
       const cLat = Number(migliore.arrival_lat || migliore.entrance_lat || migliore.lat);
       const cLon = Number(migliore.arrival_lon || migliore.entrance_lon || migliore.lon);
       if (Number.isFinite(cLat) && Number.isFinite(cLon) && (cLat !== 0 || cLon !== 0)) t.coordinate = { lat: cLat, lng: cLon };
-      t.poi_id = String(migliore.id);
+      if (cittaCombacia) t.poi_id = String(migliore.id);
       if (migliore.address) {
         const citta = migliore.city && !String(migliore.address).toLowerCase().includes(String(migliore.city).toLowerCase()) ? `, ${migliore.city}` : '';
         t.indirizzo = `${migliore.address}${citta}`;
@@ -1065,7 +1123,7 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
   //    controllo geografico, che altrimenti giudica coordinate inventate.
   try {
     const centro = typeof lat === 'number' && typeof lon === 'number' ? { lat, lon } : null;
-    const ag = await agganciaTappeAlDatabase(itineraryObj, centro);
+    const ag = await agganciaTappeAlDatabase(itineraryObj, centro, destination);
     console.log(`[Itinerario] tappe agganciate al DB: ${ag.agganciate}/${stops.length}, pasti fuori orario: ${ag.pasti_fuori_orario}`);
   } catch (e: any) {
     console.warn('[Itinerario] aggancio al DB fallito:', e?.message);
@@ -1088,8 +1146,17 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
   // 1) Controllo geografico deterministico: tappe lontane dalla destinazione
   //    = probabile luogo omonimo in un'altra città o coordinate inventate.
   let flagged = 0;
+  // Tappe che le coordinate collocano DENTRO la destinazione: su queste il
+  // controllo «esiste? e dove?» non deve intervenire, altrimenti segnala i
+  // sobborghi e le frazioni (Positano nella Costiera Amalfitana, Maipu a
+  // Mendoza) che sono tappe legittime con un nome di località diverso.
+  const dentroPerCoordinate = new Set<any>();
   if (typeof lat === 'number' && typeof lon === 'number') {
-    const maxKm = Math.max(Number(radiusKm) || 100, 30) * 1.5;
+    // Tetto assoluto 80 km (10/09/2026, era *1.5 = 150 km col raggio di
+    // default): un raggio di ricerca da 150 km per una meta turistica
+    // lasciava passare come "dentro" tappe in un'altra città, che poi il
+    // match sul DB marcava "verificata" senza mai confrontare le città.
+    const maxKm = Math.min(80, Math.max(Number(radiusKm) || 100, 30));
     stops.forEach((s) => {
       const c = s.ref?.coordinate;
       const slat = Number(c?.lat), slng = Number(c?.lng ?? c?.lon);
@@ -1098,6 +1165,7 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
           Math.pow((slat - lat) * 111, 2) +
           Math.pow((slng - lon) * 111 * Math.cos(lat * Math.PI / 180), 2)
         );
+        if (dKm <= maxKm) dentroPerCoordinate.add(s.ref);
         if (dKm > maxKm) {
           s.ref.verifica = 'da_verificare';
           s.ref.nota_verifica = `⚠ Coordinate a ~${Math.round(dKm)} km dalla destinazione: possibile luogo omonimo o coordinate errate.`;
@@ -1154,15 +1222,44 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
 
   const verifierPrompt = `Sei il revisore anti-allucinazioni di un'app di viaggi. Un ALTRO modello ha generato un itinerario per "${destination}". Il tuo compito è SOLO verificare, non riscrivere.
 Per OGNI tappa dell'elenco valuta:
+- "citta": la città o località dove QUEL NOME si trova DAVVERO, secondo quello che sai. Scrivi il nome della città, non un giudizio. Se il nome appartiene a un luogo famoso di un'ALTRA città, scrivi QUELLA città. Se non sai dove sia, scrivi "?".
 - "esiste": "si" se sei certo che il luogo esista con quel nome in quella città; "no" se sei certo che NON esista o che sia in un'altra città; "dubbio" se non ne hai mai sentito parlare.
 - "conforme": "si" o "no" rispetto ai vincoli espliciti dell'utente: ${constraints}. (Es.: se il vincolo è "pranzo gluten free", un locale per i pasti senza opzioni senza glutine note è "no".)
 - "motivo": max 15 parole, solo se esiste è diverso da "si" oppure conforme è "no".
-- "alternativa": SOLO se esiste="no", il nome di un luogo REALE e famoso equivalente nella stessa città; altrimenti null.
+- "alternativa": SOLO se esiste="no" oppure il luogo sta in un'altra città, il nome di un luogo REALE ed equivalente che si trova DAVVERO a "${destination}"; altrimenti null.
 Sii severo sulle invenzioni ma non bocciare luoghi veri poco famosi: in quel caso usa "dubbio".
-Rispondi SOLO con JSON: {"verdetti":[{"n":0,"esiste":"si","conforme":"si","motivo":null,"alternativa":null}]}
+
+ATTENZIONE — È QUI CHE SI SBAGLIA: la domanda non è solo «esiste?», è «esiste, E DOVE?». Molti nomi esistono davvero ma in un'ALTRA città, e messi in questo itinerario mandano il viaggiatore a cercare un posto che lì non c'è. Esempi veri trovati nella nostra libreria: «Cattedrale Notre-Dame de la Garde» in un itinerario di Antibes (è a Marsiglia; ad Antibes è Notre-Dame de la Platea); «Thai Hua Museum» a Bangkok (è a Phuket); «Sanctuary of Truth» a Bangkok (è a Pattaya); «Cattedrale anglicana di St. George» a Castries (è a Kingstown). In tutti questi casi la risposta giusta a «esiste?» è sì — e infatti il controllo non li ha presi. Compila "citta" per PRIMA, prima di decidere "esiste": scrivi dove sta il luogo, poi guarda se è la città dell'itinerario.
+
+Rispondi SOLO con JSON: {"verdetti":[{"n":0,"citta":"Bangkok","esiste":"si","conforme":"si","motivo":null,"alternativa":null}]}
 
 TAPPE:
 ${JSON.stringify(compact)}`;
+
+  // ── SECONDA DOMANDA, ALLA CIECA (10/09/2026) ────────────────────────────
+  //
+  // Il filtro è a DUE domande indipendenti, ed è la seconda a fare il lavoro:
+  //   1ª — «questo luogo esiste a <destinazione>?» → il revisore sa già quale
+  //        risposta ci aspettiamo, e per un nome che esiste davvero (altrove)
+  //        conferma. È così che «Thai Hua Museum» è passato per Bangkok.
+  //   2ª — «dove si trova questo luogo?» posta SENZA MAI NOMINARE la
+  //        destinazione: niente da confermare, nessun suggerimento. Un modello
+  //        a cui si chiede soltanto dove sta il Thai Hua Museum risponde
+  //        «Phuket», e la contraddizione con l'itinerario emerge da sé.
+  //
+  // Le due domande partono INSIEME: la seconda non costa latenza, solo una
+  // chiamata in più ai motori gratuiti.
+  const localizerPrompt = `Sei un atlante: dato un elenco di nomi di luoghi, dici DOVE SI TROVA ciascuno. Nient'altro.
+Per ogni voce rispondi:
+- "citta": la città o località in cui quel luogo si trova. Se non lo conosci o il nome è troppo generico (es. "centro storico", "lungomare", "pranzo in trattoria"), scrivi "?".
+- "regione": la provincia, regione o area amministrativa che contiene quella città (es. per Maipú scrivi "Mendoza"; per Chatuchak scrivi "Bangkok"), oppure "?".
+- "anche_a": elenco di ALTRE città dove esiste un luogo con lo STESSO nome. Questo campo è importante: molti nomi sono omonimi (il Musée Picasso è a Parigi ma anche ad Antibes e a Málaga; la Cattedrale di San Giorgio esiste in decine di città). Elenca tutte quelle che conosci, altrimenti [].
+- "paese": lo stato, oppure "?".
+Non commentare, non giudicare, non chiedere contesto: solo dove si trova.
+Rispondi SOLO con JSON: {"luoghi":[{"n":0,"citta":"Parigi","regione":"Île-de-France","anche_a":["Antibes","Málaga","Barcellona"],"paese":"Francia"}]}
+
+NOMI:
+${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
 
   const vSupabaseUrl = process.env.VITE_SUPABASE_URL || '';
   const vServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -1170,26 +1267,73 @@ ${JSON.stringify(compact)}`;
   // attesa (`inDiretta`, mai dalla libreria di sfondo) DeepSeek come ultima
   // spiaggia — «deve essere deepseek» (committente, 05/09/2026), non Agnes
   // che ci mette minuti e fa scadere il tetto di 20 s.
-  const aiRes = await callUniversalAi('groq', [
-    { role: 'user', content: verifierPrompt }
-  ], {
+  const opzioniAi = {
     temperature: 0.1,
-    response_format: { type: 'json_object' },
+    response_format: { type: 'json_object' as const },
     ultimaSpiaggiaPagante: inDiretta === true,
     // In diretta Agnes (60 s di timeout, 2-4 min reali) non entra in coda:
     // brucerebbe da solo il tetto di 20 s e DeepSeek non verrebbe mai
     // raggiunto. Nella libreria di sfondo resta.
     excludeEngines: inDiretta === true ? ['agnes'] : [],
-  }, 'itinerary_verify', vSupabaseUrl, vServiceKey, null);
+  };
+  // DUE ATLANTI, NON UNO (10/09/2026). Provato sul campo con i casi veri:
+  // alla domanda cieca Groq colloca il «Thai Hua Museum» a Bangkok (sbagliato,
+  // è a Phuket) mentre DeepSeek risponde Phuket, Pattaya, Marsiglia e Torres
+  // Novas — tutte giuste. Un solo atlante lascia passare proprio gli errori
+  // che questo filtro deve prendere, quindi la domanda si fa a due motori
+  // DIVERSI e basta che UNO collochi il luogo altrove per segnalare: un
+  // avviso prudente costa poco, una tappa inesistente costa il viaggio.
+  // DeepSeek entra solo con l'utente in attesa, mai nei lavori di sfondo
+  // (regola del committente sulla spesa); in background il secondo atlante è
+  // un gratuito diverso.
+  const secondoMotore: any = inDiretta === true ? 'deepseek' : 'mistral';
+  const [aiRes, localizerA, localizerB] = await Promise.all([
+    callUniversalAi('groq', [{ role: 'user', content: verifierPrompt }], opzioniAi,
+      'itinerary_verify', vSupabaseUrl, vServiceKey, null),
+    // Le domande cieche non devono mai far fallire la prima: se un motore non
+    // risponde si resta con l'altro, e se cadono entrambi con la sola prima.
+    callUniversalAi('groq', [{ role: 'user', content: localizerPrompt }], { ...opzioniAi, excludeEngines: [...opzioniAi.excludeEngines, 'deepseek'] },
+      'itinerary_verify_dove', vSupabaseUrl, vServiceKey, null).catch(() => null),
+    callUniversalAi(secondoMotore, [{ role: 'user', content: localizerPrompt }], opzioniAi,
+      'itinerary_verify_dove2', vSupabaseUrl, vServiceKey, null).catch(() => null),
+  ]);
+
+  // Risposte degli atlanti, per tappa. Di ognuna si tiene la città PRINCIPALE
+  // (quella che fa scattare la segnalazione) e tutti i luoghi «compatibili»:
+  // la regione che la contiene e le città omonime. Senza questi ultimi due il
+  // filtro segnalava tappe giuste — misurato: il «Musée Picasso» di Antibes
+  // (l'atlante nomina quello di Parigi, ma esiste in entrambe) e la «Bodega
+  // La Rural» di Maipú, che è nella provincia di Mendoza.
+  const atlanti = new Map<number, Array<{ citta: string; compatibili: string[] }>>();
+  for (const risposta of [localizerA, localizerB]) {
+    try {
+      const grezzo = String((risposta as any)?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '');
+      for (const l of (JSON.parse(grezzo)?.luoghi || [])) {
+        const n = Number(l?.n);
+        const c = String(l?.citta || '').trim();
+        if (!Number.isFinite(n) || !c || c === '?') continue;
+        const compatibili = [
+          String(l?.regione || '').trim(),
+          ...(Array.isArray(l?.anche_a) ? l.anche_a.map((x: any) => String(x || '').trim()) : []),
+        ].filter((x) => x && x !== '?');
+        const gia = atlanti.get(n) || [];
+        gia.push({ citta: c, compatibili });
+        atlanti.set(n, gia);
+      }
+    } catch { /* atlante illeggibile: vale l'altro */ }
+  }
 
   let verdicts: any[] = [];
+  let primaDomandaPersa = false;
   try {
     const cleaned = String(aiRes.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '');
     const parsed = JSON.parse(cleaned);
     verdicts = parsed.verdetti || parsed.verdicts || [];
   } catch (e) {
-    await linkChecksPromise;
-    return { checked: stops.length, flagged, note: 'verifier_parse_failed' };
+    // Le due domande sono indipendenti APPOSTA: se cade la prima, la seconda
+    // regge da sola. Prima qui si usciva subito, buttando via una risposta
+    // già pagata e lasciando l'itinerario senza alcun controllo.
+    primaDomandaPersa = true;
   }
 
   verdicts.forEach((v: any) => {
@@ -1236,11 +1380,47 @@ ${JSON.stringify(compact)}`;
     }
   });
 
+  // ── SECONDA DOMANDA: «E DOVE?» — passaggio a sé, su TUTTE le tappe ───────
+  //
+  // Gira dopo i verdetti e indipendentemente da essi: copre anche le tappe
+  // che il primo revisore ha saltato (elenco incompleto) o che ha dichiarato
+  // "verificate", che sono proprio quelle dove l'errore si nasconde — un nome
+  // vero, ma di un'altra città. Chi ha già un'etichetta peggiore
+  // (da_verificare / non_conforme) resta com'è: non si sovrascrive un
+  // allarme con un altro.
+  let discordanti = 0;
+  stops.forEach((s, i) => {
+    if (s.ref.poi_id) return;                       // agganciata al DB: esiste, punto
+    if (dentroPerCoordinate.has(s.ref)) return;     // le coordinate la mettono in zona
+    if (s.ref.verifica === 'da_verificare' || s.ref.verifica === 'non_conforme') return;
+    // Basta un atlante che lo collochi altrove: i due motori sbagliano su
+    // luoghi diversi, e l'unione delle due risposte è ciò che copre il buco.
+    // Ma se ANCHE UNO SOLO dice che il luogo sta (anche) nella destinazione —
+    // per omonimia o perché la destinazione è la regione — la tappa passa: nel
+    // dubbio non si allarma.
+    const risposte = atlanti.get(i) || [];
+    const qualcunoLoMetteQui = risposte.some((r) =>
+      !cittaDiscordante(r.citta, destination) || r.compatibili.some((c) => !cittaDiscordante(c, destination)));
+    if (qualcunoLoMetteQui) return;
+    const fuori = [...new Set(risposte.map((r) => r.citta))];
+    if (!fuori.length) return;
+    s.ref.verifica = 'da_verificare';
+    s.ref.nota_verifica = `⚠ Questo luogo risulta a ${fuori.join(' / ')}, non a ${destination}: verifica prima di andarci`;
+    discordanti++;
+    flagged++;
+  });
+  if (discordanti) {
+    console.warn(`[Itinerario] "${destination}": ${discordanti} tappe collocate in un'altra città dalla seconda domanda`);
+  }
+  if (primaDomandaPersa) {
+    console.warn(`[Itinerario] "${destination}": prima domanda illeggibile, è valso il solo controllo «dove»`);
+  }
+
   // I controlli link corrono in parallelo alla chiamata AI: qui di norma
   // sono già finiti, l'await è solo la garanzia di completezza.
   await linkChecksPromise;
 
-  return { checked: stops.length, flagged };
+  return { checked: stops.length, flagged, discordanti, soloSecondaDomanda: primaDomandaPersa || undefined };
 }
 
 // osm_diet in locali_pois è un JSON tipo {"vegan":true,"gluten_free":true},
@@ -2176,6 +2356,20 @@ out tags center 60;`;
   return null;
 }
 
+// REGOLA FONDAMENTALE — SPECIFICITÀ (10/09/2026, richiesta esplicita del
+// committente dopo l'audioguida del Museo del Marmo di Carrara, uscita
+// "troppo generalista" in tutte e tre le voci). Ogni frase deve agganciarsi a
+// un elemento concreto del soggetto; le frasi di circostanza che varrebbero
+// per qualunque museo/monumento sono VIETATE, non solo sconsigliate. Vale per
+// tutti i personaggi, tutti i registri (breve, bambini, duetto, "Chiedi di
+// più"), la scheda Vision e la visita guidata: per questo è UNA funzione
+// iniettata in ogni prompt, non una riga copiata da tenere allineata.
+function regolaSpecificita(poiName: string): string {
+  return `
+           REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.
+           DURATA MINIMA (anch'essa vincolante): la narrazione deve durare ALMENO 30-40 secondi di parlato, cioè non meno di 80-100 parole, e di più quando il materiale lo permette. Per raggiungere la durata attingi ad ALTRI fatti specifici del materiale (altre opere, altre date, altri dettagli), MAI a frasi di riempimento: la lunghezza si guadagna con la sostanza, non con le parole vuote.`;
+}
+
 async function getFromCache(cacheKey: string) {
   try {
      const res = await axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=eq.${encodeURIComponent(cacheKey)}&select=*`, {
@@ -3025,10 +3219,14 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     // il prezzo, ma ora l'addebito lo fa lui e senza questa voce `prezzoDi`
     // avrebbe restituito `undefined`. Stesso valore di PRICING_LIST.day_pass.
     day_pass: 200,
-    // Pass Museo: Vision illimitata per MUSEUM_PASS_HOURS ore (visita indoor).
-    // 100 crediti (~1€): break-even col costo AI (~1,2 cent/scansione gpt-4o)
-    // anche nel caso peggiore del tetto scansioni (MUSEUM_PASS_MAX_SCANS=100).
+    // Pass Museo: riconoscimenti Vision per MUSEUM_PASS_HOURS ore (indoor).
+    // 100 crediti (~1€) per 40 audioguide (MUSEUM_PASS_MAX_SCANS), inquadrando
+    // le opere che si vogliono: break-even col costo AI (~1,2 cent/scansione
+    // gpt-4o). 150 con la VISITA GUIDATA: stesse 40 audioguide più il percorso
+    // interno del museo (sale, ordine, opere da non perdere), che costa una
+    // generazione in più e vale come servizio a sé (10/09/2026).
     museum_pass: 100,
+    museum_pass_tour: 150,
     // NUOVO (hardening ago 2026) — /api/regenerate: src/lib/pricing.ts
     // (PRICING_LIST) NON ha una voce dedicata per questa rotta. Il client
     // oggi addebita `audio_guide` A PARTE (nel modale crediti) PRIMA di
@@ -4082,6 +4280,16 @@ app.post("/api/groq/itinerary", rateLimiter, async (req, res) => {
     let itinRefunded = false; // rimborso totale avvenuto: la quota non va incrementata
     let lavoro: any = null;   // lavoro in coda (generazioni) che ha chiesto questo itinerario
     try {
+      // AUTH PRIMA DI TUTTO (10/09/2026), header SSE compreso: un 401 JSON
+      // arrivato DOPO aver già dichiarato text/event-stream confondeva un
+      // client/proxy che si aspetta SSE (e .type('application/json') lo
+      // riscriveva pure, contraddicendo l'header appena mandato). L'unica
+      // cosa che serve qui è req/headers, non il body: si puo' controllare
+      // prima di impostare qualunque header di risposta.
+      lavoro = await lavoroInterno(req);
+      itinUserId = lavoro ? String(lavoro.user_id) : await verifyUserToken(req);
+      if (!itinUserId) { res.status(401).type('application/json').json({ error: 'UNAUTHORIZED' }); return; }
+
       // Header SSE in cima, PRIMA di qualsiasi write: prima si scrivevano
       // FEATURE_DISABLED/QUOTA_EXCEEDED senza Content-Type event-stream.
       res.setHeader('Content-Type', 'text/event-stream');
@@ -4195,14 +4403,9 @@ ${dayLines.join("\n")}
       // giorni realmente consegnati (rimborso della differenza; rimborso
       // TOTALE se la generazione fallisce o il JSON è inutilizzabile).
       // settleItineraryCost lato client è diventata un no-op di refresh UI:
-      // niente doppio addebito.
+      // niente doppio addebito. (lavoro/itinUserId sono già stati risolti
+      // in cima alla rotta, prima degli header SSE — vedi sopra.)
       const requestedDays = Math.min(30, Math.max(1, Math.floor(Number(days)) || 1));
-      // LAVORO IN DIFFERITA (06/09/2026): chiamata dalla coda `generazioni`
-      // con il segreto di infrastruttura → utente e crediti sono quelli del
-      // lavoro (gia' addebitati), nessun token e nessuna quota.
-      lavoro = await lavoroInterno(req);
-      itinUserId = lavoro ? String(lavoro.user_id) : await verifyUserToken(req);
-      if (!itinUserId) { res.status(401).type('application/json').json({ error: 'UNAUTHORIZED' }); return; }
 
       // Quota DOPO l'auth: il contatore è per utente verificato, mai per
       // lo userId del body.
@@ -4578,7 +4781,22 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
             // Blocchi successivi (solo oltre i 3 giorni): ricuciti qui prima
             // dell'aggancio, del revisore e del conguaglio.
             await generaBlocchiRestanti(parsed);
-            const delivered = parsed.giorni.length;
+            // Un giorno non è "consegnato" se la deduplicazione gli ha
+            // svuotato le tappe: contare gli oggetti giorno (anche vuoti)
+            // faceva credere consegnato un giorno senza niente dentro, e
+            // faceva quadrare il conguaglio su un giorno fatturato a vuoto.
+            const delivered = parsed.giorni.filter((g: any) => Array.isArray(g?.tappe) && g.tappe.length > 0).length;
+            // Struttura sempre sicura da iterare per il client: mai
+            // "tappe" undefined/null (schermata bianca alla riapertura).
+            parsed.giorni = parsed.giorni.map((g: any) => ({ ...(g || {}), tappe: Array.isArray(g?.tappe) ? g.tappe : [] }));
+            // Meno giorni di quelli richiesti (un blocco è arrivato vuoto):
+            // il risultato NON è il viaggio completo pagato. Si marca
+            // esplicitamente "incompleto" — non esiste una cache condivisa
+            // separata in questa rotta, quindi il flag va sull'unico oggetto
+            // che finisce sia nell'evento `verified` sia nell'archivio
+            // (dati_itinerario), così un client accorto non lo tratta come
+            // definitivo.
+            if (delivered < requestedDays) parsed.incompleto = true;
 
             // Verifica anti-allucinazione lato server (motore diverso,
             // tetto 20 s, fail-open): le tappe marcate arrivano al client
@@ -4590,7 +4808,19 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
               // tempi del revisore AI. Il revisore lo ripete a vuoto (le tappe
               // gia' agganciate vengono saltate).
               const centro = (typeof lat === "number" && typeof lon === "number") ? { lat, lon } : null;
-              try { await Promise.race([agganciaTappeAlDatabase(parsed, centro), new Promise((r) => setTimeout(r, 12000))]); } catch { /* fail-open */ }
+              // Il timeout qui sotto sblocca la race a 12 s, ma senza un modo
+              // per dirlo alla funzione questa continuava a girare e a
+              // mutare "parsed" in sottofondo mentre il codice andava avanti
+              // a mandare `verified` e a salvare — un salvataggio con dati
+              // scritti a metà. Il flag "cancelled" ferma le mutazioni.
+              const aggCancel = { cancelled: false };
+              let aggTimer: any;
+              try {
+                await Promise.race([
+                  agganciaTappeAlDatabase(parsed, centro, destination, aggCancel),
+                  new Promise((r) => { aggTimer = setTimeout(() => { aggCancel.cancelled = true; r(null); }, 12000); }),
+                ]);
+              } catch { /* fail-open */ } finally { clearTimeout(aggTimer); }
               const report: any = await Promise.race([
                 verifyItineraryAntiHallucination(parsed, { destination, lat, lon, radiusKm: radius, specialRequests, interests: interestsArr, language, inDiretta: true }),
                 new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 20000)),
@@ -5893,8 +6123,12 @@ function isNameMatching(name1: string, name2: string): boolean {
       if (natureRequested) {
         promptText += `\n\nCONTESTO NATURA (modalità "🌿 Natura"): l'utente ha inquadrato DI PROPOSITO un soggetto naturale. Comportati da naturalista e guida ambientale: identifica con precisione la pianta, il fungo, l'animale, il panorama o la formazione geologica mostrati nella foto — NON il monumento eventualmente suggerito dal GPS. Usa "categoria": "natura". Per piante, funghi e animali indica in "nome" il nome comune seguito dal nome scientifico tra parentesi; in "autore" scrivi "Natura"; in "anno_produzione" scrivi "N/D" (o l'epoca di formazione per le formazioni geologiche); in "stile" la classificazione (famiglia/specie, oppure il tipo di formazione o di ecosistema). In "storia" racconta habitat, distribuzione, stagionalità (quando e dove osservarlo al meglio) e ruolo nell'ecosistema. In "curiosita" una curiosità naturalistica sorprendente. In "descrizione_dettagliata" e "spiegazione_audio" includi SEMPRE le eventuali avvertenze rilevanti: specie protetta (vietato raccoglierla o disturbarla), urticante, velenosa o pericolosa. REGOLE DI SICUREZZA TASSATIVE: non dare MAI consigli di raccolta, preparazione o consumo di funghi, bacche o piante, nemmeno se ritenute commestibili; ricorda esplicitamente di non consumare nulla di raccolto in natura senza il parere di un esperto (per i funghi, solo il controllo di un ispettorato micologico o dell'autorità sanitaria locale). Imposta "riconosciuto": false solo se la foto non mostra alcun soggetto naturale identificabile.`;
       } else if (museumPassActive || artworkRequested) {
-        promptText += `\n\nCONTESTO ${artworkRequested ? `OPERA (modalità "Inquadra l'opera")` : 'MUSEO (Pass Museo attivo)'}: l'utente è probabilmente all'INTERNO di un museo o luogo espositivo${artworkRequested ? ' e ha inquadrato DI PROPOSITO una singola opera' : ''}. Se l'immagine mostra un quadro, una statua, un affresco o un reperto, identifica l'OPERA specifica (titolo esatto, autore, datazione; nel campo "stile" indica stile e tecnica, es. "Barocco — olio su tela"), NON l'edificio che la ospita. Le coordinate GPS indicano il museo, non l'opera; l'eventuale "monumento più vicino" suggerito sopra è l'edificio in cui ti trovi, NON la risposta. Usa "categoria": "musei". In "storia" racconta la genesi dell'opera e come è arrivata nella collezione; in "spiegazione_audio" guida l'occhio del visitatore sui dettagli VISIBILI dell'opera (composizione, materiali, particolari da cercare).`;
+        promptText += `\n\nCONTESTO ${artworkRequested ? `OPERA (modalità "Inquadra l'opera")` : 'MUSEO (Pass Museo attivo)'}: l'utente è probabilmente all'INTERNO di un museo o luogo espositivo${artworkRequested ? ' e ha inquadrato DI PROPOSITO una singola opera' : ''}. Se l'immagine mostra un quadro, una statua, un affresco o un reperto, identifica l'OPERA specifica (titolo esatto, autore, datazione; nel campo "stile" indica stile e tecnica, es. "Barocco — olio su tela"), NON l'edificio che la ospita. Le coordinate GPS indicano il museo, non l'opera; l'eventuale "monumento più vicino" suggerito sopra è l'edificio in cui ti trovi, NON la risposta. Usa "categoria": "musei". In "storia" racconta la genesi dell'opera e come è arrivata nella collezione; in "spiegazione_audio" guida l'occhio del visitatore sui dettagli VISIBILI dell'opera (composizione, materiali, particolari da cercare). Aggiungi al JSON il campo "luogo_esposizione": il nome ufficiale del museo, della chiesa o del palazzo in cui l'opera è esposta OGGI, se lo conosci con certezza (es. "Galleria degli Uffizi", "Basilica di Santa Croce"); altrimenti "" — mai un nome tirato a indovinare. Serve alla visita guidata per capire dove si trova l'utente.`;
       }
+
+      // Regola di specificità (10/09/2026): stessa funzione delle audioguide,
+      // qui applicata ai testi narrativi della scheda Vision.
+      promptText += `\n\nPER "storia", "descrizione_dettagliata" e "spiegazione_audio" vale inoltre:${regolaSpecificita('il soggetto riconosciuto')}`;
 
       // Parse difensivo: alcuni modelli avvolgono il JSON in ```json o
       // aggiungono testo attorno. Estraiamo SEMPRE il primo oggetto JSON valido.
@@ -5971,30 +6205,11 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
             await reportVisionFundsIssue('OpenAI (vision)', e1);
           }
         }
-        if (!shot && groq) {
-          try {
-            console.log("[Vision:screenshot] Fallback: Groq llama-4-scout");
-            const gr: any = await withTimeout(groq.chat.completions.create({
-              model: "meta-llama/llama-4-scout-17b-16e-instruct",
-              messages: [{
-                role: "user",
-                content: [
-                  { type: "text", text: screenshotPrompt },
-                  { type: "image_url", image_url: { url: visionImageBase64 } }
-                ]
-              }],
-              temperature: 0.1,
-              max_tokens: 1000,
-              response_format: { type: "json_object" }
-            }), 'Groq (vision screenshot)');
-            shot = parseVisionJson(gr.choices?.[0]?.message?.content || "");
-            shotProvider = 'groq';
-          } catch (e2: any) {
-            shotErr = e2;
-            console.error("[Vision:screenshot] Errore anche con Groq:", e2.response?.data || e2.message);
-            await reportVisionFundsIssue('Groq (vision)', e2);
-          }
-        }
+        // Fallback Groq rimosso (10/09/2026): "meta-llama/llama-4-scout-17b-16e-instruct"
+        // rispondeva 404 "does not exist or you do not have access to it" —
+        // nessun altro modello Groq vision-capable risulta usato con successo
+        // altrove nel file, quindi si salta direttamente alla riserva Gemini
+        // invece di fallire a vuoto su un motore morto.
         if (!shot && ai) {
           try {
             console.log("[Vision:screenshot] Ultima riserva: Gemini");
@@ -6122,35 +6337,9 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
         }
       }
 
-      if (!result && groq) {
-        try {
-          // Groq multimodale serverless (Llama-4 Scout): veloce ed economico,
-          // rimpiazza il vecchio Together vision (i cui modelli non sono più
-          // serverless). Stesso formato messaggi OpenAI (text + image_url).
-          console.log("[Vision] Fallback: Groq meta-llama/llama-4-scout-17b-16e-instruct");
-          const gr: any = await withTimeout(groq.chat.completions.create({
-            model: "meta-llama/llama-4-scout-17b-16e-instruct",
-            messages: [
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: promptText },
-                  { type: "image_url", image_url: { url: visionImageBase64 } }
-                ]
-              }
-            ],
-            temperature: 0.2,
-            max_tokens: 2000,
-            response_format: { type: "json_object" }
-          }), 'Groq (vision)');
-          result = parseVisionJson(gr.choices?.[0]?.message?.content || "");
-          visionProvider = 'groq';
-        } catch (groqErr: any) {
-          lastEngineErr = groqErr;
-          console.error("[Vision] Errore anche con Groq:", groqErr.response?.data || groqErr.message);
-          await reportVisionFundsIssue('Groq (vision)', groqErr);
-        }
-      }
+      // Fallback Groq rimosso (10/09/2026): stesso motivo del ripiego
+      // screenshot qui sopra — "meta-llama/llama-4-scout-17b-16e-instruct"
+      // risponde 404 su Groq, si salta direttamente a Gemini.
 
       if (!result && ai) {
         try {
@@ -6360,13 +6549,13 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   // scrivibile solo dalla service role) con la scadenza codificata nel
   // reward_source_id ("mpass-<expiresMs>-<rnd>").
   const MUSEUM_PASS_HOURS = 4;
-  // Tetto anti-spam nella finestra del pass. Ricalibrato col passaggio del
-  // motore Vision a gpt-4o (~1,2 cent/scansione contro ~0,4 del mini): a 300
-  // scansioni il pass da 100 crediti (~1€) andava in perdita nel caso
-  // peggiore. 100 scansioni in 4 ore (una ogni ~2,5 minuti di media) coprono
-  // comunque il completista vero; oltre è uno script. Superato il tetto il
-  // pass smette di coprire e ogni scansione torna a costare i crediti standard.
-  const MUSEUM_PASS_MAX_SCANS = 100;
+  // Quante audioguide comprende il pass nella sua finestra. Deciso dal
+  // committente il 10/09/2026: 40 audioguide, opere scelte liberamente
+  // inquadrandole. Regge il conto (~1,2 cent a scansione con gpt-4o, quindi
+  // ~0,50 € di costo AI contro 100 crediti ≈ 1 €) e resta un numero che un
+  // visitatore vero non esaurisce in quattro ore. Superato il tetto il pass
+  // smette di coprire e ogni scansione torna a costare i crediti standard.
+  const MUSEUM_PASS_MAX_SCANS = 40;
 
   /**
    * Scansioni fatte nella finestra del pass corrente: ogni /api/vision salva
@@ -6400,39 +6589,67 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     }
   }
 
-  async function getActiveMuseumPassExpiry(userId: string): Promise<number | null> {
+  /**
+   * Pass attivo e suo LIVELLO. Due livelli dal 10/09/2026:
+   *  - 'base'  (100 crediti): 40 audioguide inquadrando le opere che si vuole
+   *  - 'tour'  (150 crediti): le stesse 40 più la VISITA GUIDATA del museo
+   * Il livello sta nell'id, non in una colonna nuova: "mpass-<ms>-t-<rnd>" per
+   * il tour, "mpass-<ms>-<rnd>" per il base. `split('-')[1]` continua a dare la
+   * scadenza, quindi i pass già venduti restano validi come 'base'.
+   */
+  async function getActiveMuseumPass(userId: string): Promise<{ expiresAt: number; tier: 'base' | 'tour' } | null> {
     try {
       const { data } = await axios.get(
         `${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_pass&select=reward_source_id`,
         { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` } }
       );
       let best = 0;
+      let tier: 'base' | 'tour' = 'base';
       for (const row of data || []) {
-        const ms = parseInt(String(row.reward_source_id || '').split('-')[1] || '0', 10);
-        if (Number.isFinite(ms) && ms > best) best = ms;
+        const id = String(row.reward_source_id || '');
+        const ms = parseInt(id.split('-')[1] || '0', 10);
+        if (!Number.isFinite(ms) || ms < best) continue;
+        const questoTier: 'base' | 'tour' = /^mpass-\d+-t-/.test(id) ? 'tour' : 'base';
+        // A PARITÀ di scadenza vince 'tour': l'upgrade da base a tour scrive
+        // una riga con la STESSA scadenza (chi ha già pagato non ricomincia),
+        // e con un confronto stretto quella riga veniva ignorata — l'upgrade
+        // non sarebbe mai stato riconosciuto.
+        if (ms === best && questoTier === 'base') continue;
+        best = ms;
+        tier = questoTier;
       }
-      return best > Date.now() ? best : null;
+      return best > Date.now() ? { expiresAt: best, tier } : null;
     } catch {
       // In dubbio niente pass: al peggio l'utente paga i 5 crediti standard.
       return null;
     }
   }
 
+  /** Solo la scadenza: firma storica, usata dove il livello non serve. */
+  async function getActiveMuseumPassExpiry(userId: string): Promise<number | null> {
+    const p = await getActiveMuseumPass(userId);
+    return p ? p.expiresAt : null;
+  }
+
   // Stato del pass (banner in CameraScreen).
   app.get("/api/vision/museum-pass", rateLimiter, async (req, res) => {
     const userId = await verifyUserToken(req);
     if (!userId) return res.status(401).json({ error: 'login_required' });
-    const expiresAt = await getActiveMuseumPassExpiry(userId);
+    const pass = await getActiveMuseumPass(userId);
+    const expiresAt = pass?.expiresAt ?? null;
     const scansUsed = expiresAt ? await countMuseumPassScans(userId, expiresAt) : 0;
     res.json({
       active: !!expiresAt && scansUsed < MUSEUM_PASS_MAX_SCANS,
       expiresAt,
+      tier: pass?.tier || null,
+      tourIncluded: pass?.tier === 'tour',
       scansUsed,
       scansLimit: MUSEUM_PASS_MAX_SCANS,
       hours: MUSEUM_PASS_HOURS,
-      // Prezzo effettivo: l'acquisto passa da chargeOrReject('museum_pass'),
-      // che usa lo stesso listino — banner e addebito non possono divergere.
-      priceCredits: await prezzoDi('museum_pass')
+      // Prezzi effettivi: l'acquisto passa da chargeOrReject, che usa lo stesso
+      // listino — banner e addebito non possono divergere.
+      priceCredits: await prezzoDi('museum_pass'),
+      priceCreditsTour: await prezzoDi('museum_pass_tour'),
     });
   });
 
@@ -6442,10 +6659,40 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       const userId = await verifyUserToken(req);
       if (!userId) return res.status(401).json({ error: 'login_required' });
 
-      const existing = await getActiveMuseumPassExpiry(userId);
-      if (existing) return res.json({ active: true, expiresAt: existing, charged: 0, alreadyActive: true, hours: MUSEUM_PASS_HOURS });
+      // Livello scelto: 'tour' include la visita guidata del museo.
+      const tier: 'base' | 'tour' = String(req.body?.tier || 'base') === 'tour' ? 'tour' : 'base';
+      const existing = await getActiveMuseumPass(userId);
+      if (existing) {
+        // Con un pass base attivo si può salire a 'tour' pagando la differenza:
+        // chi ha già pagato non ricomincia da capo e la scadenza non si muove.
+        if (!(tier === 'tour' && existing.tier === 'base')) {
+          return res.json({ active: true, expiresAt: existing.expiresAt, tier: existing.tier, tourIncluded: existing.tier === 'tour', charged: 0, alreadyActive: true, hours: MUSEUM_PASS_HOURS });
+        }
+        // Differenza fra i due listini (non `units` di chargeOrReject, che è
+        // un moltiplicatore): si addebita l'importo esatto che manca.
+        const differenza = Math.max(0, (await prezzoDi('museum_pass_tour')) - (await prezzoDi('museum_pass')));
+        let chargeUp: { cost: number } | null = { cost: 0 };
+        if (differenza > 0) {
+          const esito = await consumeCreditsServer(userId, differenza, 'museum_pass_tour (upgrade)');
+          if (esito === 'insufficient') { res.status(402).json({ error: 'insufficient_credits', cost: differenza }); return; }
+          if (esito === 'error') { res.status(500).json({ error: 'charge_failed' }); return; }
+          chargeUp = { cost: differenza };
+        }
+        if (!chargeUp) return;
+        try {
+          await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, {
+            user_id: userId,
+            reward_source_type: 'museum_pass',
+            reward_source_id: `mpass-${existing.expiresAt}-t-${Math.random().toString(36).slice(2, 7)}`
+          }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } });
+        } catch {
+          if (chargeUp.cost > 0) await refundServer(userId, chargeUp.cost);
+          return res.status(500).json({ error: 'pass_activation_failed' });
+        }
+        return res.json({ active: true, expiresAt: existing.expiresAt, tier: 'tour', tourIncluded: true, charged: chargeUp.cost, upgraded: true, hours: MUSEUM_PASS_HOURS });
+      }
 
-      const charge = await chargeOrReject(req, res, 'museum_pass');
+      const charge = await chargeOrReject(req, res, tier === 'tour' ? 'museum_pass_tour' : 'museum_pass');
       if (!charge) return;
 
       const expiresAt = Date.now() + MUSEUM_PASS_HOURS * 3_600_000;
@@ -6453,17 +6700,1741 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
         await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, {
           user_id: userId,
           reward_source_type: 'museum_pass',
-          reward_source_id: `mpass-${expiresAt}-${Math.random().toString(36).slice(2, 7)}`
+          reward_source_id: `mpass-${expiresAt}-${tier === 'tour' ? 't-' : ''}${Math.random().toString(36).slice(2, 7)}`
         }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } });
       } catch (insErr: any) {
         // Pass non registrato = servizio non erogato: crediti indietro.
         await refundServer(userId, charge.cost);
         return res.status(500).json({ error: 'pass_activation_failed' });
       }
-      res.json({ active: true, expiresAt, charged: charge.cost, hours: MUSEUM_PASS_HOURS });
+      res.json({ active: true, expiresAt, tier, tourIncluded: tier === 'tour', charged: charge.cost, hours: MUSEUM_PASS_HOURS });
     } catch (e: any) {
       console.error('[MuseumPass] Errore acquisto:', e.message);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  /**
+   * VISITA GUIDATA DALL'AI (10/09/2026, richiesta del committente).
+   *
+   * Dopo il primo scatto di un'opera l'app deve dire all'utente DOVE si trova
+   * e proporgli un percorso: in un museo le opere da non perdere in ordine di
+   * sala, in una chiesa cosa guardare (cappelle, affreschi, pale). Il luogo si
+   * risolve dal POI più vicino al GPS (musei/chiese/monumenti entro 200 m),
+   * con il "luogo_esposizione" dichiarato dal modello Vision come conferma o
+   * come ripiego quando il GPS manca.
+   *
+   * Anti-allucinazione (regola "foto e testi VERI"): le tappe vengono estratte
+   * SOLO dalla voce Wikipedia del luogo (più la descrizione del POI se c'è) e
+   * ogni tappa che non compare nel materiale viene scartata prima di
+   * rispondere. Se il materiale non basta, la risposta è { ok:false } e il
+   * client non mostra nulla: meglio niente che un percorso inventato.
+   *
+   * Nessun addebito: la guida si genera UNA volta per (luogo, lingua) e resta
+   * in api_cache, come le audioguide dei POI.
+   */
+  const VENUE_CATEGORIES = new Set([
+    'museum', 'musei', 'museo', 'gallery', 'galleria', 'art_gallery',
+    'church', 'chiesa', 'chiese', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario',
+    'monument', 'monumenti', 'monumento', 'attraction', 'attrazioni', 'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo', 'fort', 'tower', 'palace', 'palazzo', 'villa'
+  ]);
+  // Sottoinsieme "si visita dentro": ha un percorso interno da raccontare.
+  const MUSEI_TYPES_VENUE = new Set([
+    'museum', 'musei', 'museo', 'gallery', 'galleria', 'art_gallery',
+    'church', 'chiesa', 'chiese', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario',
+    'palace', 'palazzo', 'castle', 'castelli', 'villa'
+  ]);
+  // Per quanto vale un «non ho trovato fonti». Tre giorni: abbastanza da non
+  // ripetere la stessa ricerca a vuoto per ogni visitatore, poco abbastanza da
+  // non condannare un museo che intanto ha avuto la sua voce Wikipedia.
+  const ESITO_NEGATIVO_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+  const normalizzaTesto = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9一-鿿Ѐ-ӿ ]/g, ' ').replace(/\s+/g, ' ').trim();
+  /** "''", '""', 'N/D', '-', 'sconosciuto' → stringa vuota. */
+  const campoOpzionale = (v: any, max: number): string => {
+    const s = String(v ?? '').trim().replace(/^['"`]+|['"`]+$/g, '').trim();
+    if (!s || /^(n\/?d|n\/?a|null|undefined|sconosciut[oa]|unknown|ignoto|-{1,2})$/i.test(s)) return '';
+    return s.slice(0, max);
+  };
+  // Parole di TIPOLOGIA: non identificano nulla da sole. Senza toglierle,
+  // "Palazzo delle Logge" (Carrara) somigliava al 50% a "Palazzo dei Priori"
+  // (Perugia) e la guida raccontava un'altra città — la violazione peggiore.
+  const PAROLE_GENERICHE_LUOGO = ['della', 'delle', 'dello', 'degli', 'nella', 'nelle', 'sala', 'room', 'museo', 'museum', 'musee', 'chiesa', 'church', 'eglise', 'iglesia', 'kirche', 'galleria', 'gallery', 'galerie', 'santa', 'santo', 'saint', 'basilica', 'palazzo', 'palace', 'palais', 'villa', 'casa', 'house', 'cattedrale', 'cathedral', 'duomo', 'castello', 'castle', 'chateau', 'convento', 'monastero', 'monastery', 'abbazia', 'abbey', 'pinacoteca', 'collezione', 'collection', 'nazionale', 'national', 'civico', 'civica', 'comunale', 'municipale', 'statale', 'centro', 'centre', 'center', 'fondazione', 'foundation'];
+  const tokenSignificativi = (s: string) => normalizzaTesto(s).split(' ').filter(t => t.length >= 4 && !PAROLE_GENERICHE_LUOGO.includes(t));
+  /** Tutte le parole, comprese quelle di tipologia: serve quando il nome NE È FATTO SOLO. */
+  const tokenTutti = (s: string) => normalizzaTesto(s).split(' ').filter(t => t.length >= 3);
+
+  /**
+   * Quanto il nome A è contenuto nel nome B (0-1).
+   *
+   * DUE CASI, imparati dalla prova mondiale del 10/09/2026:
+   *
+   * 1. Nomi con almeno una parola propria → si confrontano SOLO quelle, e le
+   *    parole di tipologia si buttano: senza, «Palazzo delle Logge» (Carrara)
+   *    somigliava al 50% a «Palazzo dei Priori» (Perugia).
+   *
+   * 2. Nomi fatti SOLO di parole di tipologia («National Gallery», «Museo
+   *    Nazionale», «Galleria Nazionale») → dopo il filtro non resta nulla e il
+   *    nome non somigliava NEMMENO A SE STESSO: la National Gallery di Londra,
+   *    con una voce Wikipedia da 39.637 caratteri, riceveva «non ho fonti».
+   *    In quel caso si confrontano le parole INTERE. E il confronto diventa
+   *    simmetrico (si divide per il nome più lungo), perché con i soli token
+   *    comuni «National Gallery, London» combaciava al 100% con «National
+   *    Portrait Gallery, London»: non un rifiuto, ma la guida del museo
+   *    SBAGLIATO, che è molto peggio.
+   */
+  const sovrapposizioneNomi = (a: string, b: string): number => {
+    const sa = tokenSignificativi(a);
+    const sb = tokenSignificativi(b);
+    if (sa.length && sb.length) {
+      const setB = new Set(sb);
+      return sa.filter(t => setB.has(t)).length / sa.length;
+    }
+    // Almeno uno dei due è fatto solo di parole di tipologia: si guardano
+    // tutte le parole, e si divide per il nome PIÙ LUNGO — così un nome corto
+    // contenuto in uno lungo non fa più 100%.
+    const ta = tokenTutti(a);
+    const tb = tokenTutti(b);
+    if (!ta.length || !tb.length) return 0;
+    const setTb = new Set(tb);
+    const comuni = ta.filter(t => setTb.has(t)).length;
+    return comuni / Math.max(ta.length, tb.length);
+  };
+
+  // ── Sezioni della voce Wikipedia utili a un PERCORSO ────────────────────
+  // `exsectionformat=plain` restituisce i titoli di sezione su riga propria.
+  // Le sezioni che descrivono sale, piani e collezioni valgono più
+  // dell'introduzione per costruire un itinerario nello spazio: si portano in
+  // cima così sopravvivono al taglio dei caratteri.
+  const SEZIONI_VISITA = /^(collezion|opere|sale|sala|percorso|itinerar|piano|piani|ala |ali |galler|dipartiment|reparti|allestiment|esposizion|museo|patrimonio|interno|interni|architettur|descrizion|cappell|navat|collection|works|rooms|floor|wing|department|highlights|visit|layout|interior|salle|collezioni|collections)/i;
+  function ordinaSezioniPerVisita(testo: string, maxChars = 24000): string {
+    const righe = String(testo || '').split('\n');
+    // Un titolo di sezione: riga corta, senza punto finale, seguita da testo.
+    const blocchi: { titolo: string; corpo: string[] }[] = [{ titolo: '', corpo: [] }];
+    for (const riga of righe) {
+      const r = riga.trim();
+      const sembraTitolo = r.length > 0 && r.length <= 60 && !/[.!?;:,]$/.test(r) && !/^\d+$/.test(r) && r.split(' ').length <= 7;
+      if (sembraTitolo && blocchi[blocchi.length - 1].corpo.length > 0) blocchi.push({ titolo: r, corpo: [] });
+      else if (r) blocchi[blocchi.length - 1].corpo.push(r);
+    }
+    const utili = blocchi.filter(b => SEZIONI_VISITA.test(b.titolo));
+    const resto = blocchi.filter(b => !SEZIONI_VISITA.test(b.titolo));
+    const rendi = (b: { titolo: string; corpo: string[] }) => (b.titolo ? `## ${b.titolo}\n` : '') + b.corpo.join(' ');
+    return [...utili, ...resto].map(rendi).filter(s => s.trim()).join('\n\n').slice(0, maxChars);
+  }
+
+  /**
+   * OPERE VERE del museo da Wikidata (P195 "collezione"), ordinate per
+   * notorietà (numero di lingue in cui esiste la voce): è l'elenco più
+   * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
+   * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
+   */
+  async function opereDaWikidata(qid: string, lang: string): Promise<{ righe: string[]; foto: Record<string, string> }> {
+    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {} };
+    // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
+    // QUELL'opera: il legame è con l'opera, non con una parola chiave — la
+    // regola del progetto sulle foto vere vale anche qui.
+    const sparql = `SELECT ?opera ?operaLabel ?autoreLabel ?anno ?inv ?immagine (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
+  ?opera wdt:P195 wd:${qid} .
+  OPTIONAL { ?opera wdt:P170 ?autore . }
+  OPTIONAL { ?opera wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
+  OPTIONAL { ?opera wdt:P217 ?inv . }
+  OPTIONAL { ?opera wdt:P18 ?immagine . }
+  OPTIONAL { ?sitelink schema:about ?opera . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},it,en". }
+} GROUP BY ?opera ?operaLabel ?autoreLabel ?anno ?inv ?immagine
+ORDER BY DESC(?fama) LIMIT 60`;
+    try {
+      const r = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
+        headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' },
+        timeout: 12000,
+      });
+      const righe: string[] = [];
+      const foto: Record<string, string> = {};
+      for (const b of (r.data?.results?.bindings || [])) {
+        const titolo = String(b?.operaLabel?.value || '').trim();
+        if (!titolo || /^Q\d+$/.test(titolo)) continue;
+        const autore = String(b?.autoreLabel?.value || '').trim();
+        const anno = String(b?.anno?.value || '').trim();
+        const inv = String(b?.inv?.value || '').trim();
+        const riga = `${titolo}${autore && !/^Q\d+$/.test(autore) ? ` — ${autore}` : ''}${anno ? ` (${anno})` : ''}${inv ? ` [inv. ${inv}]` : ''}`;
+        if (!righe.includes(riga)) righe.push(riga);
+        const img = String(b?.immagine?.value || '');
+        if (img && !foto[normalizzaTesto(titolo)]) foto[normalizzaTesto(titolo)] = img;
+      }
+      return { righe, foto };
+    } catch (e: any) {
+      console.warn('[VenueGuide] Wikidata opere non disponibili:', e?.message);
+      return { righe: [], foto: {} };
+    }
+  }
+
+  /**
+   * L'URL di una foto Commons alla larghezza voluta. Si passa da
+   * Special:FilePath, che regge il ridimensionamento e non richiede di
+   * calcolare l'hash del nome file.
+   */
+  function fotoCommons(url: string, larghezza: number): string {
+    if (!url) return '';
+    // Wikidata dà "http://commons.wikimedia.org/wiki/Special:FilePath/Nome.jpg"
+    const nome = decodeURIComponent(String(url).split('/').pop() || '');
+    if (!nome) return '';
+    return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nome)}?width=${larghezza}`;
+  }
+
+  /**
+   * SITO UFFICIALE del museo: la disposizione delle sale la dichiara il museo
+   * stesso. Si legge la home e poche pagine plausibili ("visita", "collezione",
+   * "mappa"…) e se ne estrae il testo. Nessun crawling: al massimo 4 pagine,
+   * timeout corti, e in caso di errore la guida si costruisce lo stesso.
+   */
+  const PAGINE_UTILI = ['', 'visita', 'visit', 'plan-your-visit', 'collezione', 'collezioni', 'collection', 'collections', 'mappa', 'map', 'sale', 'percorsi', 'highlights', 'opere', 'musee', 'museo'];
+  function testoPaginaMuseo(html: string): string {
+    return String(html || '')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+      .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&[a-z]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  async function testoDalSitoUfficiale(sito: string, maxChars = 9000): Promise<{ testo: string; pagine: string[] }> {
+    const out: string[] = [];
+    const visitate: string[] = [];
+    let base: URL;
+    try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return { testo: '', pagine: [] }; }
+    // La home prima: da lì si scoprono i link veri alle sezioni di visita.
+    const daProvare: string[] = [base.href];
+    try {
+      const home = await axios.get(base.href, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 3, validateStatus: (s) => s < 400 });
+      const html = String(home.data || '');
+      out.push(testoPaginaMuseo(html).slice(0, 3500));
+      visitate.push(base.href);
+      const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
+      for (const l of link) {
+        try {
+          const u = new URL(l, base.href);
+          if (u.hostname !== base.hostname) continue;
+          const seg = u.pathname.toLowerCase().split('/').filter(Boolean).pop() || '';
+          if (!PAGINE_UTILI.includes(seg)) continue;
+          if (daProvare.includes(u.href) || u.href === base.href) continue;
+          daProvare.push(u.href);
+          if (daProvare.length >= 4) break;
+        } catch { /* link non valido */ }
+      }
+    } catch (e: any) {
+      console.warn('[VenueGuide] sito ufficiale non raggiungibile:', e?.message);
+      return { testo: '', pagine: [] };
+    }
+    for (const u of daProvare.slice(1)) {
+      try {
+        const r = await axios.get(u, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000, maxRedirects: 2, validateStatus: (s) => s < 400 });
+        const t = testoPaginaMuseo(String(r.data || ''));
+        if (t.length > 300) { out.push(t.slice(0, 3000)); visitate.push(u); }
+      } catch { /* pagina saltata */ }
+    }
+    return { testo: out.join('\n\n').slice(0, maxChars), pagine: visitate };
+  }
+
+  /**
+   * LIBRERIA DELLE VISITE GUIDATE: una riga per (museo, lingua) in
+   * museum_guides. È ciò che rende le guide elencabili e riusabili invece che
+   * sepolte in api_cache. Best-effort: un errore qui non deve mai far fallire
+   * la visita dell'utente che l'ha appena generata.
+   */
+  async function salvaInLibreriaMusei(args: {
+    venueKey: string;
+    venue: { id: string | null; name: string; lat: number | null; lon: number | null; category: string };
+    guide: { tipo: string; intro: string; consiglio: string; tappe: any[] };
+    source: { lang: string; title: string; url: string } | null;
+    officialSite: string | null;
+    language: string;
+    origin: 'auto' | 'seeded' | 'curated';
+    city?: string | null;
+    countryCode?: string | null;
+  }): Promise<void> {
+    try {
+      const tappe = Array.isArray(args.guide?.tappe) ? args.guide.tappe : [];
+      await axios.post(`${supabaseUrl}/rest/v1/museum_guides`, {
+        venue_key: args.venueKey,
+        venue_name: args.venue.name,
+        poi_id: args.venue.id,
+        language: args.language,
+        venue_type: args.guide?.tipo || 'museo',
+        city: args.city || null,
+        country_code: args.countryCode || null,
+        lat: args.venue.lat, lon: args.venue.lon,
+        guide: args.guide,
+        source: args.source,
+        official_site: args.officialSite,
+        stops_count: tappe.length,
+        stops_with_room: tappe.filter((t: any) => String(t?.dove || '').trim()).length,
+        origin: args.origin,
+        updated_at: new Date().toISOString(),
+      }, {
+        headers: {
+          apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json',
+          // Una guida per (luogo, lingua): la nuova sostituisce la vecchia.
+          Prefer: 'resolution=merge-duplicates',
+        },
+        params: { on_conflict: 'venue_key,language' },
+        timeout: 8000,
+      });
+    } catch (e: any) {
+      console.warn('[VenueGuide] libreria non aggiornata:', e?.response?.data?.message || e?.message);
+    }
+  }
+
+  /**
+   * LE GUIDE DEI MUSEI IN TUTTE LE LINGUE DELL'APP (10/09/2026).
+   *
+   * Rigenerare la guida in sette lingue significherebbe sette ricerche, sette
+   * letture del sito e sette chiamate AI per museo — e, peggio, sette percorsi
+   * DIVERSI: l'italiano con dieci tappe, il tedesco con otto, e nessuno che
+   * corrisponde. Si genera UNA volta e si traduce: stesse opere, stesse sale,
+   * stessi fatti, in tutte le lingue.
+   *
+   * LA REGOLA CHE CONTA — che cosa NON si traduce:
+   * - I NOMI DELLE SALE restano come li scrive il museo. «Salle des États»
+   *   tradotto in «Sala degli Stati» manda il visitatore a cercare un cartello
+   *   che non esiste. È lo stesso principio dei nomi dei luoghi negli
+   *   itinerari, e qui pesa di più: la sala serve a camminare.
+   * - I TITOLI DELLE OPERE si traducono SOLO se in quella lingua esiste il
+   *   titolo consolidato (Nascita di Venere → The Birth of Venus); altrimenti
+   *   restano nell'originale. Un titolo tradotto a orecchio non si ritrova né
+   *   sul cartellino né in rete.
+   */
+  const GUIDA_LINGUE: Record<string, string> = {
+    IT: 'italiano', EN: 'inglese', FR: 'francese', ES: 'spagnolo',
+    DE: 'tedesco', RU: 'russo', ZH: 'cinese semplificato',
+  };
+
+  async function traduciGuidaMuseo(guide: any, daLingua: string, aLingua: string, nomeMuseo: string, inDiretta = false): Promise<any | null> {
+    const A = String(aLingua || '').toUpperCase().slice(0, 2);
+    if (!GUIDA_LINGUE[A] || A === String(daLingua || '').toUpperCase().slice(0, 2)) return null;
+    const tappe = Array.isArray(guide?.tappe) ? guide.tappe : [];
+    if (!tappe.length) return null;
+
+    // Si manda SOLO il testo, numerato: le sale viaggiano a parte e non si
+    // toccano, così il modello non può riscriverle nemmeno volendo.
+    const pezzi: string[] = [String(guide.intro || ''), String(guide.consiglio || '')];
+    tappe.forEach((t: any) => { pezzi.push(String(t?.nome || '')); pezzi.push(String(t?.perche || '')); });
+
+    const prompt = `Traduci in ${GUIDA_LINGUE[A]} le righe numerate qui sotto, prese dalla visita guidata del museo "${nomeMuseo}".
+
+Le righe sono, nell'ordine: [0] l'introduzione al museo, [1] un consiglio pratico, poi a coppie per ogni tappa: il TITOLO DELL'OPERA e la spiegazione del perché vederla.
+
+REGOLE TASSATIVE:
+- TITOLI DELLE OPERE (righe di indice pari da 2 in poi): usa il titolo con cui l'opera è conosciuta in ${GUIDA_LINGUE[A]}, se esiste davvero ed è quello corrente. Se NON lo conosci con certezza, lascia il titolo IDENTICO all'originale. Mai tradurre un titolo alla lettera inventandolo: il visitatore deve ritrovare l'opera sul cartellino e in rete.
+- I nomi propri di persona (artisti, committenti, santi) e i nomi del museo restano nella forma corrente della lingua d'arrivo; nel dubbio, invariati.
+- Non aggiungere, non togliere, non riassumere: una riga tradotta per ogni riga ricevuta, stesso numero, stesso ordine.
+- Mantieni date, misure, numeri di sala e cifre esattamente come sono.
+- Una riga vuota resta vuota.
+
+Rispondi SOLO con un oggetto JSON: {"t": ["riga 0 tradotta", ...]} con ESATTAMENTE ${pezzi.length} elementi.
+
+RIGHE:
+${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
+
+    try {
+      let raw = '';
+      try {
+        const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.1, response_format: { type: 'json_object' }, excludeEngines: ['agnes'],
+          ultimaSpiaggiaPagante: inDiretta,
+        }, 'museum_guide_translate', supabaseUrl, supabaseServiceKey, groq);
+        raw = String(r?.data || '');
+      } catch { /* si prova OpenAI */ }
+      if (!raw.includes('{')) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (!key) return null;
+        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.1, response_format: { type: 'json_object' }
+        }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+        raw = String(r.data?.choices?.[0]?.message?.content || '');
+      }
+      const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+      const out = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
+      const t = Array.isArray(out?.t) ? out.t : [];
+      // Numero di righe diverso = allineamento perso: si scarta tutto invece
+      // di accoppiare la spiegazione di un'opera al titolo di un'altra.
+      if (t.length !== pezzi.length) {
+        console.warn(`[GuidaMuseo] traduzione ${A} scartata: ${t.length} righe invece di ${pezzi.length}`);
+        return null;
+      }
+      return {
+        ...guide,
+        intro: String(t[0] || guide.intro || ''),
+        consiglio: String(t[1] || ''),
+        tappe: tappe.map((tap: any, i: number) => ({
+          ...tap,
+          nome: String(t[2 + i * 2] || tap.nome || ''),
+          perche: String(t[3 + i * 2] || tap.perche || ''),
+          // `dove` NON si traduce: è quello che c'è scritto sul cartello.
+          dove: tap.dove,
+        })),
+        language: A,
+        translatedFrom: String(daLingua || '').toUpperCase().slice(0, 2),
+      };
+    } catch (e: any) {
+      console.warn('[GuidaMuseo] traduzione fallita:', e?.message);
+      return null;
+    }
+  }
+
+  /**
+   * L'audioguida di un'opera in un'altra lingua: si traduce il testo invece
+   * di rigenerarlo. I dati tecnici (misure, tecnica, anno) e i dettagli da
+   * cercare viaggiano insieme, così restano identici in tutte le lingue.
+   */
+  async function traduciTestoOpera(guide: any, daLingua: string, aLingua: string, opera: string, museo: string, inDiretta = false): Promise<any | null> {
+    const A = String(aLingua || '').toUpperCase().slice(0, 2);
+    if (!GUIDA_LINGUE[A] || !guide?.testo) return null;
+    const pezzi = [String(guide.testo || ''), String(guide.titolo || ''), String(guide.tecnica || ''), String(guide.curiosita || ''), ...(Array.isArray(guide.daGuardare) ? guide.daGuardare.map(String) : [])];
+    const prompt = `Traduci in ${GUIDA_LINGUE[A]} le righe numerate qui sotto: sono l'audioguida dell'opera "${opera}" esposta a ${museo}.
+
+Le righe sono, nell'ordine: [0] il testo dell'audioguida, [1] il titolo dell'opera, [2] la tecnica e i materiali, [3] una curiosità sull'opera, poi i dettagli da cercare guardando l'opera.
+
+REGOLE TASSATIVE:
+- Il testo dell'audioguida va tradotto INTERO, senza riassumere e senza aggiungere: sarà letto ad alta voce, deve restare della stessa lunghezza e dello stesso tono.
+- Il TITOLO dell'opera: usa quello con cui è conosciuta in ${GUIDA_LINGUE[A]} se esiste davvero; altrimenti lascialo IDENTICO. Mai un titolo tradotto a orecchio.
+- Nomi di artisti, committenti, luoghi e sale restano invariati; date, misure e numeri esattamente come sono.
+- Nessun asterisco, cancelletto o markdown: lo legge una voce sintetica.
+
+Rispondi SOLO con un oggetto JSON: {"t": ["riga 0 tradotta", ...]} con ESATTAMENTE ${pezzi.length} elementi.
+
+RIGHE:
+${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
+    try {
+      let raw = '';
+      try {
+        const r = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.1, max_tokens: 2000, response_format: { type: 'json_object' }, excludeEngines: ['agnes'],
+          ultimaSpiaggiaPagante: inDiretta,
+        }, 'artwork_translate', supabaseUrl, supabaseServiceKey, groq);
+        raw = String(r?.data || '');
+      } catch { /* si prova OpenAI */ }
+      if (!raw.includes('{')) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (!key) return null;
+        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.1, max_tokens: 2000, response_format: { type: 'json_object' }
+        }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+        raw = String(r.data?.choices?.[0]?.message?.content || '');
+      }
+      const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+      const out = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
+      const t = Array.isArray(out?.t) ? out.t : [];
+      if (t.length !== pezzi.length) return null;
+      const testo = String(t[0] || '').replace(/[*#`]/g, '').trim();
+      if (testo.split(/\s+/).filter(Boolean).length < 100) return null;
+      return {
+        ...guide,
+        testo,
+        titolo: String(t[1] || guide.titolo || ''),
+        tecnica: String(t[2] || guide.tecnica || ''),
+        curiosita: String(t[3] || guide.curiosita || ''),
+        daGuardare: t.slice(4).map((s: any) => String(s || '')).filter(Boolean).slice(0, 5),
+        language: A,
+        translatedFrom: String(daLingua || '').toUpperCase().slice(0, 2),
+      };
+    } catch (e: any) {
+      console.warn('[ArtworkGuide] traduzione fallita:', e?.message);
+      return null;
+    }
+  }
+
+  /** Sito ufficiale dichiarato da Wikidata (P856). */
+  async function sitoUfficialeDaWikidata(qid: string): Promise<string> {
+    if (!/^Q\d+$/.test(qid)) return '';
+    try {
+      const r = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&property=P856&entity=${qid}&format=json`, {
+        headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000,
+      });
+      return String(r.data?.claims?.P856?.[0]?.mainsnak?.datavalue?.value || '');
+    } catch { return ''; }
+  }
+
+  /**
+   * Sito ufficiale a partire dal solo NOME del museo (10/09/2026, richiesta
+   * del committente: «cerca per ognuno anche il sito ufficiale»). Serve quando
+   * il museo non è nel nostro archivio e la sua voce Wikipedia non ha portato
+   * un identificativo Wikidata: senza sito, il percorso resta senza sale.
+   *
+   * Due strade, in ordine di affidabilità: l'entità Wikidata cercata per nome
+   * (il sito lo dichiara il museo stesso), poi la ricerca web se il progetto
+   * ha una chiave configurata. Mai un dominio scelto a caso: deve somigliare
+   * al nome del museo o essere il primo risultato di una ricerca mirata.
+   */
+  async function trovaSitoUfficiale(nome: string, lingua: string): Promise<string> {
+    if (!nome || nome.length < 3) return '';
+    try {
+      const s = await axios.get(
+        `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(nome)}&language=${lingua}&uselang=${lingua}&type=item&limit=5&format=json`,
+        { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000 }
+      );
+      for (const hit of (s.data?.search || [])) {
+        const etichetta = String(hit?.label || '');
+        if (Math.max(sovrapposizioneNomi(nome, etichetta), sovrapposizioneNomi(etichetta, nome)) < 0.5) continue;
+        const sito = await sitoUfficialeDaWikidata(String(hit?.id || ''));
+        if (sito) return sito;
+      }
+    } catch { /* si prova la ricerca web */ }
+    try {
+      // Ricerca web: la stessa usata per gli eventi (Brave o Google CSE).
+      if (!eventiFeed.fornitoreRicerca()) return '';
+      const risultati = await eventiFeed.ricercaWeb(`${nome} sito ufficiale museo`, { lang: lingua, count: 5 });
+      for (const r of risultati) {
+        const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+        if (!host) continue;
+        // Niente aggregatori: il sito deve essere del museo.
+        if (/wikipedia|wikidata|tripadvisor|facebook|instagram|youtube|booking|getyourguide|viator|tiqets|google\./i.test(host)) continue;
+        // Il dominio deve richiamare il nome, oppure il titolo del risultato
+        // deve essere quello del museo: altrimenti è un portale qualsiasi.
+        const dominioParla = tokenSignificativi(nome).some(t => host.includes(t));
+        const titoloParla = Math.max(sovrapposizioneNomi(nome, r.title), sovrapposizioneNomi(r.title, nome)) >= 0.6;
+        if (dominioParla || titoloParla) return `https://${host}`;
+      }
+    } catch (e: any) {
+      console.warn('[VenueGuide] ricerca web del sito fallita:', e?.message);
+    }
+    return '';
+  }
+
+  app.post("/api/vision/venue-guide", rateLimiter, async (req, res) => {
+    try {
+      // Chi sta chiamando: un visitatore fermo davanti al museo, oppure la
+      // semina di sfondo (che entra col segreto di infrastruttura, mai mandato
+      // dal client). Da qui dipende se DeepSeek entra in coda ai gratuiti.
+      const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+      const userId = daScript ? 'background-script' : await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const inDiretta = !daScript;
+
+      let { lat, lon } = req.body || {};
+      if (typeof lat === 'string') lat = parseFloat(lat);
+      if (typeof lon === 'string') lon = parseFloat(lon);
+      let hasGps = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+      const venueHint = String(req.body?.venueHint || '').trim().slice(0, 120);
+      // 'user' = nome scritto dall'utente all'inizio della visita ("sono agli
+      // Uffizi"): vince sul POI più vicino al GPS, che dentro un edificio può
+      // essere sbagliato. 'model' = luogo_esposizione dichiarato da Vision.
+      const hintDaUtente = String(req.body?.venueHintSource || '') === 'user' && venueHint.length >= 3;
+      const currentWork = String(req.body?.currentWork || '').trim().slice(0, 160);
+      const langKey = String(req.body?.language || 'IT').toUpperCase();
+      const LANGS: Record<string, { name: string; wiki: string }> = {
+        IT: { name: 'italiano', wiki: 'it' }, EN: { name: 'inglese', wiki: 'en' }, FR: { name: 'francese', wiki: 'fr' },
+        ES: { name: 'spagnolo', wiki: 'es' }, DE: { name: 'tedesco', wiki: 'de' }, RU: { name: 'russo', wiki: 'ru' }, ZH: { name: 'cinese semplificato', wiki: 'zh' }
+      };
+      const langCfg = LANGS[langKey] || LANGS.IT;
+      const outLang = LANGS[langKey] ? langKey : 'IT';
+
+      // ── 0. Chi ha diritto al percorso ────────────────────────────────────
+      // Listino del committente (10/09/2026): il Pass Museo base (100 crediti)
+      // dà 40 audioguide inquadrando le opere che si vogliono; la VISITA
+      // GUIDATA — il percorso interno con le sale — è del pass "con itinerario"
+      // (150). Senza, si risponde con il prezzo invece che con la guida: il
+      // client mostra «Sblocca la visita guidata» e non si genera nulla (così
+      // non si spende AI per chi non ha pagato).
+      // La semina di sfondo non ha (né deve avere) un pass: sta riempiendo la
+      // libreria per tutti, non consumando il pass di qualcuno.
+      if (inDiretta) {
+        const pass = await getActiveMuseumPass(userId);
+        if (pass?.tier !== 'tour') {
+          return res.json({
+            ok: false,
+            reason: 'needs_tour_pass',
+            hasBasePass: pass?.tier === 'base',
+            priceCredits: await prezzoDi('museum_pass_tour'),
+            upgradeCredits: Math.max(0, (await prezzoDi('museum_pass_tour')) - (await prezzoDi('museum_pass'))),
+            hours: MUSEUM_PASS_HOURS,
+          });
+        }
+      }
+
+      // ── 1. Dove sei: POI del DB entro 200 m (categorie "luogo visitabile") ──
+      let venue: { id: string | null; name: string; lat: number | null; lon: number | null; category: string; description: string } | null = null;
+
+      // Museo indicato per id: si arriva qui anche dalla scheda di un museo
+      // sulla mappa ("Visita guidata"), senza essere sul posto. Regola del
+      // committente: QUALSIASI museo o chiesa con sito o Wikipedia deve poter
+      // avere la sua guida, generata al volo se non è già in libreria.
+      const poiIdRichiesto = String(req.body?.poiId || '').trim().slice(0, 120);
+      if (poiIdRichiesto && !poiIdRichiesto.startsWith('vision-')) {
+        try {
+          const r = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdRichiesto)}&select=id,name,lat,lon,category,poi_type,description_long,contact_website&limit=1`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 7000 }
+          );
+          const p = r.data?.[0];
+          if (p?.name) {
+            venue = {
+              id: String(p.id), name: String(p.name), lat: p.lat ?? null, lon: p.lon ?? null,
+              category: String(p.category || p.poi_type || ''), description: String(p.description_long || ''),
+            };
+            // Il POI porta le sue coordinate: valgono per la conferma
+            // geografica della voce Wikipedia anche senza GPS del telefono.
+            if (!hasGps && Number.isFinite(p.lat) && Number.isFinite(p.lon)) { lat = p.lat; lon = p.lon; hasGps = true; }
+          }
+        } catch (e: any) {
+          console.warn('[VenueGuide] POI richiesto non leggibile:', e?.message);
+        }
+      }
+
+      if (!venue && hasGps) {
+        try {
+          // Due strade verso lo stesso dato: la RPC PostGIS indicizzata e, se
+          // il database è sotto carico e va in statement timeout, la bbox.
+          // Nessuna delle due è affidabile da sola su shared_pois (milioni di
+          // righe, lavori di massa in corso), e restituiscono colonne diverse:
+          // la RPC può dare "nome" al posto di "name".
+          const svcH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+          let righe: any[] = [];
+          try {
+            const r = await axios.post(
+              `${supabaseUrl}/rest/v1/rpc/nearby_pois`,
+              { p_lat: lat, p_lon: lon, radius_m: 200, limit_num: 60 },
+              { headers: svcH, timeout: 7000 }
+            );
+            righe = Array.isArray(r.data) ? r.data : [];
+          } catch (rpcErr: any) {
+            console.warn('[VenueGuide] RPC nearby_pois non disponibile, provo la bbox:', rpcErr?.message);
+          }
+          if (!righe.length) {
+            const d = 0.002; // ~200 m
+            const r2 = await axios.get(
+              `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - d).toFixed(5)}&lat=lte.${(lat + d).toFixed(5)}&lon=gte.${(lon - d).toFixed(5)}&lon=lte.${(lon + d).toFixed(5)}&select=id,name,lat,lon,category,poi_type,status&limit=60`,
+              { headers: svcH, timeout: 7000 }
+            );
+            righe = Array.isArray(r2.data) ? r2.data : [];
+          }
+          const cands = righe
+            .map((p: any) => ({ ...p, name: p?.name ?? p?.nome }))
+            .filter((p: any) => p?.name && p.status !== 'rejected' && String(p.category || '') !== 'community')
+            // Le schede Vision pubblicate come POI (id "vision-…") NON sono
+            // luoghi visitabili: a Carrara una panca scultorea community
+            // vinceva sul Duomo perché più vicina al punto.
+            .filter((p: any) => !String(p.id || '').startsWith('vision-'))
+            .filter((p: any) => VENUE_CATEGORIES.has(String(p.category || '').toLowerCase()) || VENUE_CATEGORIES.has(String(p.poi_type || '').toLowerCase()))
+            .map((p: any) => ({
+              ...p,
+              _dist: getHaversineDistance(lat, lon, p.lat, p.lon),
+              _sim: venueHint ? sovrapposizioneNomi(venueHint, p.name) : 0,
+              // Un museo o una chiesa è un luogo da visitare dentro; un
+              // monumento o una statua all'aperto no: a parità di distanza
+              // vince chi ha davvero un percorso interno.
+              _rank: (MUSEI_TYPES_VENUE.has(String(p.category || '').toLowerCase()) || MUSEI_TYPES_VENUE.has(String(p.poi_type || '').toLowerCase())) ? 0 : 1,
+            }))
+            .filter((p: any) => p._dist <= 200);
+          // Il nome dichiarato dal modello vince sulla distanza (dentro un
+          // museo il GPS sbaglia di decine di metri); poi i luoghi con interno
+          // visitabile; a parità, il più vicino.
+          cands.sort((a: any, b: any) => (b._sim - a._sim) || (a._rank - b._rank) || (a._dist - b._dist));
+          const best = cands[0];
+          if (best && (best._sim >= 0.5 || (!hintDaUtente && best._dist <= 120))) {
+            // La RPC non restituisce description_long: si legge per chiave
+            // primaria solo per il POI scelto (istantaneo).
+            let descrizione = '';
+            try {
+              const d = await axios.get(
+                `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(best.id))}&select=description_long,poi_type&limit=1`,
+                { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
+              );
+              descrizione = String(d.data?.[0]?.description_long || '');
+            } catch { /* la guida si costruisce comunque su Wikipedia */ }
+            venue = { id: String(best.id), name: String(best.name), lat: best.lat, lon: best.lon, category: String(best.category || best.poi_type || ''), description: descrizione };
+          }
+        } catch (e: any) {
+          console.warn('[VenueGuide] shared_pois non raggiungibile:', e?.message);
+        }
+      }
+      if (!venue && venueHint.length >= 4) {
+        venue = { id: null, name: venueHint, lat: hasGps ? lat : null, lon: hasGps ? lon : null, category: '', description: '' };
+      }
+      // Il museo può non essere nel nostro archivio (o il DB può essere giù):
+      // Wikipedia per coordinate sa dove siamo in tutto il mondo. Si accetta
+      // solo una voce che PARLA di un luogo visitabile, non un monumento
+      // qualsiasi: la guida interna esiste solo per musei, chiese e palazzi.
+      if (!venue && hasGps) {
+        const PAROLE_LUOGO = /\b(museo|museum|mus[ée]e|galler[iy]|galerie|pinacoteca|chiesa|church|église|eglise|iglesia|kirche|basilica|cattedrale|cathedral|cath[ée]drale|duomo|abbazia|abbey|monastero|monastery|santuario|palazzo|palace|villa|castello|castle|chateau|château)\b/i;
+        for (const wl of [...new Set([langCfg.wiki, 'it', 'en'])]) {
+          try {
+            const geo = await axios.get(
+              `https://${wl}.wikipedia.org/w/api.php?action=query&generator=geosearch&ggscoord=${lat}%7C${lon}&ggsradius=250&ggslimit=8&prop=extracts&exintro=1&explaintext=1&exchars=500&format=json`,
+              { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000 }
+            );
+            const pagine: any[] = Object.values(geo.data?.query?.pages || {});
+            const hit = pagine.find((p: any) => PAROLE_LUOGO.test(`${p?.title || ''} ${p?.extract || ''}`));
+            if (hit) {
+              venue = { id: null, name: String(hit.title), lat, lon, category: PAROLE_LUOGO.exec(`${hit.title} ${hit.extract}`)?.[0]?.toLowerCase() || '', description: '' };
+              break;
+            }
+          } catch { /* si prova la lingua successiva */ }
+        }
+      }
+      if (!venue) return res.json({ ok: false, reason: 'venue_unknown' });
+
+      // ── 2. Cache per (luogo, lingua): una generazione sola, per sempre ──
+      const chiaveLuogo = venue.id ? `poi_${venue.id}` : `nome_${normalizzaTesto(venue.name).replace(/ /g, '_').slice(0, 60)}`;
+      const cacheKey = `venue_guide:v1:${chiaveLuogo}:${outLang}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const parsed = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
+          if (parsed?.ok === false) {
+            // UN NO NON È PER SEMPRE (10/09/2026, prova mondiale): Wikipedia
+            // cambia, i siti tornano su, un motore satura per un'ora. Un
+            // fallimento salvato senza scadenza rendeva un museo irraggiungibile
+            // a vita — «Rijksmuseum» rispondeva insufficient per sempre mentre
+            // lo stesso museo con un nome un po' diverso dava 10 tappe su 10.
+            const eta = Date.now() - Date.parse(String(parsed?.negativoDel || 0));
+            if (Number.isFinite(eta) && eta < ESITO_NEGATIVO_TTL_MS) return res.json(parsed);
+            console.log(`[VenueGuide] ${venue.name}: esito negativo scaduto, si riprova`);
+          } else {
+            // LA GUIDA BUONA NON SCADE MAI (regola del committente,
+            // 10/09/2026). Un museo raccontato bene resta raccontato bene: le
+            // opere non cambiano, le sale nemmeno, e rigenerare costerebbe
+            // una chiamata AI per ogni visitatore senza migliorare nulla.
+            // Nessun TTL qui, e non aggiungetene: se una guida va rifatta si
+            // svuota la sua riga di cache a mano o si aggiorna dalla libreria.
+            return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source });
+          }
+        } catch { /* cache illeggibile: si rigenera */ }
+      }
+      // LIBRERIA: una guida seminata (o generata da un altro utente su un'altra
+      // istanza serverless, che non condivide la cache in memoria) è già
+      // pronta. Si serve quella invece di rigenerare: costo zero, risposta
+      // immediata, e lo stesso museo racconta la stessa cosa a tutti.
+      try {
+        // UNA sola lettura per tutte le lingue di questo museo, cercato per
+        // chiave E per nome: lo stesso museo raggiunto dal GPS (chiave
+        // "poi_<id>") o scritto a mano ("nome_<slug>") è lo stesso museo, e
+        // senza il secondo criterio la libreria si riempie di doppioni che poi
+        // vanno tradotti due volte. Il database è spesso in sofferenza: meglio
+        // una query sola che tre.
+        const lib = await axios.get(
+          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(venue.name)})&select=guide,source,official_site,venue_name,language,stops_count&order=stops_count.desc&limit=8`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
+        );
+        const righe = (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
+
+        // 1) LINGUA DELL'UTENTE, sempre per prima: è già pronta, costo zero.
+        const riga = righe.find((r: any) => String(r?.language) === outLang);
+        if (riga) {
+          const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null };
+          await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
+          // Contatore d'uso: dice quali musei della libreria servono davvero.
+          axios.post(`${supabaseUrl}/rest/v1/rpc/increment_museum_guide_hits`, { p_venue_key: chiaveLuogo, p_language: outLang },
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 4000 }
+          ).catch(() => { /* il contatore è un di più */ });
+          return res.json({ ...payloadLib, cached: true, fromLibrary: true });
+        }
+
+        // 2) Nessuna guida nella lingua dell'utente, ma ce n'è in un'altra: si
+        // TRADUCE invece di rigenerare. Costa una frazione, è immediata, e
+        // soprattutto tiene lo stesso percorso in tutte le lingue dell'app —
+        // stesse opere, stesse sale, stessi fatti. È così che i musei del
+        // mondo diventano disponibili in sette lingue senza sette semine.
+        // Si parte dalla guida più ricca (order=stops_count.desc).
+        const sorgente = righe[0];
+        if (sorgente) {
+          const tradotta = await traduciGuidaMuseo(sorgente.guide, sorgente.language, outLang, sorgente.venue_name || venue.name, inDiretta);
+          if (tradotta) {
+            const payloadTr = {
+              ok: true,
+              venue: { ...venue, name: sorgente.venue_name || venue.name },
+              guide: tradotta,
+              source: sorgente.source || null,
+              officialSite: sorgente.official_site || null,
+            };
+            await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadTr));
+            await salvaInLibreriaMusei({
+              venueKey: chiaveLuogo, venue: { ...venue, name: sorgente.venue_name || venue.name },
+              guide: tradotta, source: sorgente.source || null,
+              officialSite: sorgente.official_site || null, language: outLang, origin: 'auto',
+            });
+            console.log(`[VenueGuide] ${venue.name}: guida tradotta da ${sorgente.language} a ${outLang}`);
+            return res.json({ ...payloadTr, cached: true, fromLibrary: true, translated: true });
+          }
+        }
+      } catch (e: any) {
+        console.warn('[VenueGuide] libreria non consultabile:', e?.message);
+      }
+
+      // ── 3. Materiale VERO: voce Wikipedia del luogo (lingua utente → it → en) ──
+      const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000 };
+      let wikiText = '';
+      let wikiSource: { lang: string; title: string; url: string } | null = null;
+      let wikidataId = '';
+      // La voce deve essere QUESTO luogo, non un omonimo: nome molto simile E
+      // — quando abbiamo il GPS — coordinate entro 400 m. Senza il controllo
+      // geografico "Palazzo delle Logge" (Carrara) pescava la voce del
+      // "Palazzo dei Priori" di Perugia e la visita raccontava un'altra città.
+      const RAGGIO_CONFERMA_M = 400;
+      // SI SCEGLIE IL MIGLIORE, non il primo che passa la soglia (10/09/2026).
+      // Cercando «National Gallery» il primo risultato utile era la «National
+      // Portrait Gallery», che sta a cento metri: passava sia la somiglianza
+      // sia il controllo geografico, e la visita raccontava un altro museo.
+      // Ora si raccolgono tutti i candidati validi e vince chi ha il titolo
+      // più vicino al nome cercato, con precedenza assoluta al titolo IDENTICO.
+      const nomeCercatoNorm = normalizzaTesto(venue.name);
+      for (const wl of [...new Set([langCfg.wiki, 'it', 'en'])]) {
+        try {
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=6&format=json&srsearch=${encodeURIComponent(venue.name)}`, ua);
+          const hits = (s.data?.query?.search || []);
+          const candidati: { h: any; page: any; coord: any; punteggio: number; dist: number }[] = [];
+          for (const h of hits) {
+            const simNome = Math.max(sovrapposizioneNomi(venue!.name, h.title), sovrapposizioneNomi(h.title, venue!.name));
+            if (simNome < 0.5) continue;
+            const ext = await axios.get(
+              `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|coordinates|pageprops&ppprop=wikibase_item&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(h.title)}`,
+              ua
+            );
+            const page: any = Object.values(ext.data?.query?.pages || {})[0];
+            const coord = page?.coordinates?.[0];
+            let dist = Number.POSITIVE_INFINITY;
+            if (hasGps) {
+              if (!coord) continue; // senza coordinate non posso escludere l'omonimo
+              dist = getHaversineDistance(lat, lon, Number(coord.lat), Number(coord.lon));
+              if (dist > RAGGIO_CONFERMA_M) {
+                console.warn(`[VenueGuide] scartata voce "${h.title}" (${wl}): a ${Math.round(dist)} m dal punto`);
+                continue;
+              }
+            } else if (simNome < 0.8) {
+              continue; // senza GPS serve un nome che combaci davvero
+            }
+            const testoIntero = String(page?.extract || '');
+            if (testoIntero.replace(/\s+/g, ' ').trim().length < 400) continue;
+
+            // Titolo IDENTICO al nome cercato: è quello e basta. Il titolo
+            // Wikipedia porta spesso la città in coda («National Gallery,
+            // London»), quindi si confronta anche la parte prima della virgola.
+            const titoloNorm = normalizzaTesto(h.title);
+            const titoloSenzaCitta = normalizzaTesto(String(h.title).split(',')[0]);
+            const identico = titoloNorm === nomeCercatoNorm || titoloSenzaCitta === nomeCercatoNorm;
+            // Un candidato che ha parole proprie IN PIÙ rispetto al nome
+            // cercato è probabilmente un altro museo («Portrait» in mezzo).
+            const paroleInPiu = tokenSignificativi(h.title).filter(t => !tokenSignificativi(venue!.name).includes(t) && !nomeCercatoNorm.includes(t)).length;
+            const punteggio = (identico ? 100 : 0) + simNome * 10 - paroleInPiu * 3;
+            candidati.push({ h, page, coord, punteggio, dist });
+          }
+          if (!candidati.length) continue;
+          candidati.sort((a, b) => (b.punteggio - a.punteggio) || (a.dist - b.dist));
+          const vinto = candidati[0];
+          if (candidati.length > 1) {
+            console.log(`[VenueGuide] "${venue.name}" → scelto "${vinto.h.title}" fra ${candidati.length} candidati (scartati: ${candidati.slice(1).map(c => c.h.title).join(', ')})`);
+          }
+          // Testo INTERO della voce, non solo l'introduzione: le sezioni
+          // "Collezioni", "Sale", "Percorso di visita" sono ciò che rende il
+          // percorso spaziale invece che cronologico. Le si porta in cima
+          // perché non vengano tagliate dal limite di caratteri.
+          // Le coordinate della voce diventano quelle del luogo quando il
+          // museo è stato cercato per NOME: senza, la riga finisce in libreria
+          // con lat/lon vuoti e non compare MAI nella ricerca «qui vicino».
+          if (vinto.coord && venue && (venue.lat == null || venue.lon == null)) {
+            venue.lat = Number(vinto.coord.lat);
+            venue.lon = Number(vinto.coord.lon);
+          }
+          wikiText = ordinaSezioniPerVisita(String(vinto.page?.extract || ''));
+          wikidataId = String(vinto.page?.pageprops?.wikibase_item || '');
+          wikiSource = { lang: wl, title: vinto.h.title, url: `https://${wl}.wikipedia.org/wiki/${encodeURIComponent(String(vinto.h.title).replace(/ /g, '_'))}` };
+          // Nome scritto a mano ("uffizi"): in scheda va il titolo ufficiale.
+          if (!venue.id) venue.name = String(vinto.h.title);
+          break;
+        } catch { /* si prova la lingua successiva */ }
+      }
+      // ── 3b. Le altre due fonti VERE: le opere censite e il museo stesso ──
+      // Wikipedia da sola non basta a fare un percorso: dice poco su QUALI
+      // opere ci sono (Wikidata le elenca una per una) e quasi nulla su DOVE
+      // stanno (lo dichiara il sito del museo, che pubblica sale e piani).
+      // Entrambe sono best-effort e in parallelo: se cadono, resta Wikipedia.
+      const [opereWd, sitoOut] = await Promise.all([
+        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki) : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string> }),
+        (async () => {
+          let sito = '';
+          if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
+          if (!sito && venue!.id) {
+            // Il nostro archivio ha contact_website per molti POI.
+            try {
+              const w = await axios.get(
+                `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(venue!.id))}&select=contact_website&limit=1`,
+                { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }
+              );
+              sito = String(w.data?.[0]?.contact_website || '');
+            } catch { /* niente sito: pazienza */ }
+          }
+          // Ultima strada: cercarlo per nome (Wikidata per etichetta, poi
+          // ricerca web). Senza sito il percorso resta senza sale, quindi
+          // vale la pena insistere per ogni museo.
+          if (!sito) sito = await trovaSitoUfficiale(venue!.name, langCfg.wiki);
+          if (!sito) return { testo: '', pagine: [] as string[] };
+          return testoDalSitoUfficiale(sito);
+        })(),
+      ]);
+
+      const materiale = [
+        // Il sito ufficiale per primo: è la fonte più aggiornata su sale,
+        // piani e allestimento, ed è ciò che rende il percorso navigabile.
+        sitoOut.testo ? `DAL SITO UFFICIALE DEL MUSEO (disposizione delle sale, orari, allestimento):\n${sitoOut.testo}` : '',
+        opereWd.righe.length ? `OPERE CENSITE IN QUESTA COLLEZIONE (fonte Wikidata, le più note per prime):\n- ${opereWd.righe.join('\n- ')}` : '',
+        wikiText,
+        venue.description ? `Descrizione dal nostro archivio: ${venue.description.slice(0, 3000)}` : '',
+      ].filter(Boolean).join('\n\n');
+      if (materiale.length < 600) {
+        const out = { ok: false, reason: 'no_source', venue, negativoDel: new Date().toISOString() };
+        await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
+        return res.json(out);
+      }
+
+      // ── 4. Il percorso, SOLO dal materiale ──
+      const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
+      const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}" per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork || 'sconosciuta'}".
+
+MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):
+"""
+${materiale}
+"""
+
+COMPITO: scegli le ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani o navate se il materiale la descrive; altrimenti l'ordine cronologico delle opere. Se l'opera "${currentWork || ''}" è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
+REGOLE TASSATIVE:
+- SOLO OPERE PRINCIPALI E FAMOSE: il percorso è fatto dei capolavori per cui questo luogo è conosciuto, mai di pezzi minori messi lì per allungare l'elenco. Se le opere famose citate dal materiale sono meno di quante ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 20 di cui 14 dimenticabili.
+- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione.
+- Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (sala, piano, ala, navata, cappella). È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota. Se il materiale dà il piano ma non la sala, scrivi il piano.
+- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
+- Ogni tappa deve essere un'opera, una sala o un elemento NOMINATO ESPLICITAMENTE nel materiale. Niente opere che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
+- Copia i nomi delle opere come compaiono nel materiale (nella lingua di uscita, se il materiale li dà tradotti).
+- "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
+- "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
+- "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
+${regolaSpecificita(venue.name)}
+
+LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo attorno:
+{
+  "tipo": "${isChurch ? 'chiesa' : 'museo'}" oppure "sito",
+  "intro": "...",
+  "consiglio": "...",
+  "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "perche": "..." } ]
+}`;
+
+      // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
+      // tutti a quota esaurita, OpenAI gpt-4o-mini come riserva pagante —
+      // stesso ordine di /api/vision/choose. Il materiale è lungo (fino a
+      // 16k caratteri): con gpt-4o-mini costa meno di un centesimo a luogo.
+      let rawAi = '';
+      try {
+        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.2,
+          // 12-20 tappe con autore, anno, sala e motivo non stanno in 2500
+          // token: la risposta veniva troncata a metà e il JSON non si
+          // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026).
+          max_tokens: 5000,
+          response_format: { type: 'json_object' },
+          // Agnes fuori: risponde in 2-4 minuti e qui c'è qualcuno fermo
+          // davanti all'ingresso del museo.
+          excludeEngines: ['agnes'],
+          // DeepSeek dopo i gratuiti, MAI nei lavori di sfondo (regola del
+          // committente, stessa logica degli itinerari): il flag non è una
+          // dichiarazione ma il riflesso di un fatto verificabile — chi entra
+          // col segreto di infrastruttura è la semina, e resta sui gratuiti.
+          ultimaSpiaggiaPagante: inDiretta,
+        }, 'venue_guide', supabaseUrl, supabaseServiceKey, groq, userId);
+        rawAi = String(ai?.data || '');
+      } catch (e: any) {
+        console.warn('[VenueGuide] motori universali saturi, provo OpenAI:', e?.message);
+      }
+      if (!rawAi.includes('{')) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (!key) return res.json({ ok: false, reason: 'ai_unavailable', venue });
+        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 5000, response_format: { type: 'json_object' }
+        }, { timeout: 60000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+        rawAi = String(r.data?.choices?.[0]?.message?.content || '');
+      }
+      let parsed: any = null;
+      try {
+        const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      } catch {
+        // Risposta troncata a metà (succede con percorsi lunghi): si recupera
+        // quello che c'è invece di buttare tutto. Le tappe complete si leggono
+        // una per una dal testo, l'ultima incompleta si scarta.
+        const tappeSalvate: any[] = [];
+        for (const m of rawAi.matchAll(/\{[^{}]*"nome"\s*:\s*"[^"]+"[^{}]*\}/g)) {
+          try { tappeSalvate.push(JSON.parse(m[0])); } catch { /* frammento rotto */ }
+        }
+        if (tappeSalvate.length >= 3) {
+          const introM = rawAi.match(/"intro"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+          const consM = rawAi.match(/"consiglio"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+          parsed = {
+            intro: introM ? introM[1].replace(/\\"/g, '"') : '',
+            consiglio: consM ? consM[1].replace(/\\"/g, '"') : '',
+            tappe: tappeSalvate,
+          };
+          console.warn(`[VenueGuide] ${venue.name}: risposta troncata, recuperate ${tappeSalvate.length} tappe`);
+        } else {
+          return res.json({ ok: false, reason: 'ai_parse_failed', venue, negativoDel: new Date().toISOString() });
+        }
+      }
+
+      // ── 5. Verifica: ogni tappa deve stare nel materiale ──
+      const materialeNorm = normalizzaTesto(materiale);
+      const tappeIn = Array.isArray(parsed?.tappe) ? parsed.tappe : [];
+      const tappe = tappeIn
+        .map((t: any) => ({
+          // I modelli scrivono a volte il letterale "''" dove il prompt
+          // chiedeva stringa vuota: in scheda diventava «Venere — '' ('')».
+          nome: campoOpzionale(t?.nome, 140),
+          autore: campoOpzionale(t?.autore, 100),
+          anno: campoOpzionale(t?.anno, 40),
+          dove: campoOpzionale(t?.dove, 100),
+          perche: campoOpzionale(t?.perche, 500),
+        }))
+        .filter((t: any) => {
+          if (!t.nome) return false;
+          // Una tappa che è il luogo stesso non è una tappa (il Palazzo delle
+          // Logge proponeva come tappa "Palazzo Diana", il suo vecchio nome).
+          if (sovrapposizioneNomi(t.nome, venue!.name) >= 0.8 && sovrapposizioneNomi(venue!.name, t.nome) >= 0.8) return false;
+          const tok = tokenSignificativi(t.nome);
+          if (!tok.length) return false;
+          const presenti = tok.filter(x => materialeNorm.includes(x)).length;
+          return presenti / tok.length >= 0.6;
+        })
+        .slice(0, 20);
+      const scartate = tappeIn.length - tappe.length;
+      if (scartate > 0) console.warn(`[VenueGuide] ${venue.name}: scartate ${scartate} tappe non presenti nel materiale`);
+      if (tappe.length < 3) {
+        const out = { ok: false, reason: 'insufficient', venue, negativoDel: new Date().toISOString() };
+        await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
+        return res.json(out);
+      }
+
+      // LA FOTO DI OGNI OPERA (10/09/2026, richiesta del committente): viene
+      // da Wikidata P18, cioè dall'immagine legata a QUELL'opera — mai da una
+      // parola chiave, come vuole la regola sulle foto vere. Le opere senza
+      // immagine restano senza: meglio un cerchio vuoto di una foto altrui.
+      const tappeConFoto = tappe.map((t: any) => {
+        const chiave = normalizzaTesto(t.nome);
+        let img = opereWd.foto[chiave] || '';
+        if (!img) {
+          // Il modello può aver scritto il titolo in modo un po' diverso da
+          // Wikidata: si cerca la corrispondenza più vicina fra i titoli noti.
+          const vicino = Object.keys(opereWd.foto).find(k =>
+            k === chiave || (k.length > 6 && chiave.includes(k)) || (chiave.length > 6 && k.includes(chiave))
+          );
+          if (vicino) img = opereWd.foto[vicino];
+        }
+        return img
+          ? { ...t, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) }
+          : t;
+      });
+      const conFoto = tappeConFoto.filter((t: any) => t.foto).length;
+      if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappe.length} con la foto`);
+
+      const guide = {
+        // Se il luogo È una chiesa lo sappiamo noi dalla categoria e dal nome,
+        // e vale più della risposta del modello: il Duomo di Firenze usciva
+        // classificato «museo» e la scheda mostrava l'icona sbagliata.
+        tipo: isChurch ? 'chiesa' : (['museo', 'chiesa', 'sito'].includes(String(parsed?.tipo)) ? String(parsed.tipo) : 'museo'),
+        intro: String(parsed?.intro || '').trim().slice(0, 900),
+        consiglio: String(parsed?.consiglio || '').trim().slice(0, 400),
+        tappe: tappeConFoto,
+        language: outLang,
+      };
+      const payload = { ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null };
+      await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payload));
+      // LIBRERIA: la guida entra anche in museum_guides, così è elencabile,
+      // cercabile per vicinanza e riusabile da chiunque passi di lì domani.
+      // Best-effort: se la tabella non c'è ancora (migration non applicata) la
+      // visita funziona lo stesso, servita da api_cache.
+      // Città e paese dalla voce Wikipedia (una riga in più nella libreria
+      // che rende leggibile l'elenco: «Rijksmuseum · Amsterdam» invece del
+      // solo nome).
+      let cittaLuogo: string | null = null;
+      let paeseLuogo: string | null = null;
+      if (venue.lat != null && venue.lon != null) {
+        try {
+          const nom = await axios.get(`https://nominatim.openstreetmap.org/reverse?lat=${venue.lat}&lon=${venue.lon}&format=json&zoom=10&accept-language=${langCfg.wiki}`, {
+            headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 6000,
+          });
+          cittaLuogo = nom.data?.address?.city || nom.data?.address?.town || nom.data?.address?.village || null;
+          paeseLuogo = String(nom.data?.address?.country_code || '').toLowerCase() || null;
+        } catch { /* la libreria funziona anche senza città */ }
+      }
+      await salvaInLibreriaMusei({
+        venueKey: chiaveLuogo, venue, guide, source: wikiSource,
+        officialSite: sitoOut.pagine[0] || null, language: outLang, origin: 'auto',
+        city: cittaLuogo, countryCode: paeseLuogo,
+      });
+      res.json({ ...payload, cached: false });
+    } catch (e: any) {
+      console.error('[VenueGuide] Errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'venue_guide_failed' });
+    }
+  });
+
+  /**
+   * AUDIOGUIDA DI UNA SINGOLA OPERA (10/09/2026, richiesta del committente:
+   * «le descrizioni delle opere devono essere superdettagliate e accurate,
+   * come le audioguide dei musei»).
+   *
+   * Il percorso della visita elenca le opere; qui si ascolta la singola opera
+   * come davanti al quadro: 250-350 parole che guidano l'occhio su ciò che si
+   * VEDE e lo intrecciano con la storia documentata.
+   *
+   * Le fonti sono le stesse della visita, ma puntate sull'opera: la voce
+   * Wikipedia DELL'OPERA (cercata insieme al nome del museo, così una
+   * "Annunciazione" non diventa quella di un altro museo), i dati Wikidata
+   * (autore, data, materiale, misure, numero d'inventario) e il materiale del
+   * museo già raccolto per il percorso. Se non c'è nulla di verificabile la
+   * rotta risponde ok:false invece di inventare: regola dei contenuti veri.
+   *
+   * Cache per (museo, opera, lingua) in api_cache: un'opera famosa si genera
+   * una volta sola per tutti. Inclusa nel Pass Museo (base o tour): chi ha già
+   * pagato le 40 audioguide le ascolta anche dal percorso, senza inquadrare.
+   */
+  app.post("/api/museums/artwork-guide", rateLimiter, async (req, res) => {
+    try {
+      // Come per la visita: la semina entra col segreto di infrastruttura e
+      // resta sui motori gratuiti; il visitatore in ascolto davanti all'opera
+      // ha DeepSeek in coda ai gratuiti.
+      const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+      const userId = daScript ? 'background-script' : await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const inDiretta = !daScript;
+
+      const opera = String(req.body?.artwork || '').trim().slice(0, 160);
+      const museo = String(req.body?.venueName || '').trim().slice(0, 160);
+      const autoreDetto = String(req.body?.artist || '').trim().slice(0, 120);
+      const salaDetta = String(req.body?.room || '').trim().slice(0, 100);
+      if (!opera || !museo) return res.status(400).json({ error: 'artwork e venueName richiesti' });
+
+      const langKey = String(req.body?.language || 'IT').toUpperCase();
+      const LANGS: Record<string, { name: string; wiki: string }> = {
+        IT: { name: 'italiano', wiki: 'it' }, EN: { name: 'inglese', wiki: 'en' }, FR: { name: 'francese', wiki: 'fr' },
+        ES: { name: 'spagnolo', wiki: 'es' }, DE: { name: 'tedesco', wiki: 'de' }, RU: { name: 'russo', wiki: 'ru' }, ZH: { name: 'cinese semplificato', wiki: 'zh' }
+      };
+      const langCfg = LANGS[langKey] || LANGS.IT;
+      const outLang = LANGS[langKey] ? langKey : 'IT';
+
+      // Il Pass Museo (qualunque livello) comprende l'ascolto delle opere del
+      // percorso: sono le stesse 40 audioguide, ascoltate senza inquadrare.
+      // La semina riempie la libreria per tutti: nessun pass da consumare.
+      let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
+      let usate = 0;
+      if (inDiretta) {
+        pass = await getActiveMuseumPass(userId);
+        if (!pass) {
+          return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
+        }
+        usate = await countMuseumPassScans(userId, pass.expiresAt);
+        if (usate >= MUSEUM_PASS_MAX_SCANS) {
+          return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+        }
+      }
+
+      const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
+      const cacheKey = `artwork_guide:v1:${chiaveOpera}:${outLang}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const parsed = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
+          if (parsed?.ok === false) {
+            // Solo i NO scadono (3 giorni): un'opera senza fonti oggi può
+            // averle domani. Le audioguide buone, sotto, restano per sempre.
+            const eta = Date.now() - Date.parse(String(parsed?.negativoDel || 0));
+            if (Number.isFinite(eta) && eta < ESITO_NEGATIVO_TTL_MS) return res.json(parsed);
+          } else {
+            // L'AUDIOGUIDA BUONA NON SCADE MAI (regola del committente): il
+            // racconto di un'opera è scritto una volta e vale per tutti.
+            // Anche una replica dalla cache consuma una delle audioguide del
+            // pass? No: il servizio è già stato erogato una volta e il costo
+            // AI è zero. Si conta solo la generazione vera (più sotto).
+            return res.json({ ...parsed, cached: true });
+          }
+        } catch { /* cache illeggibile: si rigenera */ }
+      }
+
+      // Stessa opera già raccontata in un'ALTRA lingua: si traduce il testo
+      // invece di rifare ricerche e generazione. Trecento parole tradotte
+      // costano una frazione, e l'opera racconta gli stessi fatti a tutti.
+      for (const altra of Object.keys(GUIDA_LINGUE).filter(l => l !== outLang)) {
+        const cAltra = await getFromCache(`artwork_guide:v1:${chiaveOpera}:${altra}`);
+        if (!cAltra?.text_content) continue;
+        try {
+          const p = typeof cAltra.text_content === 'string' ? JSON.parse(cAltra.text_content) : cAltra.text_content;
+          if (p?.ok !== true || !p?.guide?.testo) continue;
+          const tradotta = await traduciTestoOpera(p.guide, altra, outLang, opera, museo, inDiretta);
+          if (!tradotta) continue;
+          const payloadTr = { ...p, guide: tradotta, cached: true, translated: true };
+          await saveToCache(cacheKey, 'artwork_guide', JSON.stringify({ ...p, guide: tradotta }));
+          return res.json(payloadTr);
+        } catch { /* si prova la lingua successiva */ }
+      }
+
+      // ── Fonti dell'OPERA ────────────────────────────────────────────────
+      const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000 };
+      let testoOpera = '';
+      let fonteOpera: { lang: string; title: string; url: string } | null = null;
+      let datiWikidata = '';
+      let fotoOpera = '';
+      for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
+        try {
+          // Il nome del museo nella ricerca è ciò che tiene l'opera al SUO
+          // museo: "Annunciazione" da sola pesca quella sbagliata.
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=5&format=json&srsearch=${encodeURIComponent(`${opera} ${autoreDetto || museo}`)}`, ua);
+          for (const h of (s.data?.query?.search || [])) {
+            const sim = Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera));
+            if (sim < 0.6) continue;
+            const ext = await axios.get(
+              `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|pageprops&ppprop=wikibase_item&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(h.title)}`,
+              ua
+            );
+            const page: any = Object.values(ext.data?.query?.pages || {})[0];
+            const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+            if (testo.length < 300) continue;
+            testoOpera = testo.slice(0, 14000);
+            fonteOpera = { lang: wl, title: h.title, url: `https://${wl}.wikipedia.org/wiki/${encodeURIComponent(String(h.title).replace(/ /g, '_'))}` };
+            // Scheda tecnica da Wikidata: materiale, misure, inventario,
+            // collezione. Sono i dati che un'audioguida vera cita.
+            const qid = String(page?.pageprops?.wikibase_item || '');
+            if (/^Q\d+$/.test(qid)) {
+              try {
+                const sparql = `SELECT ?autoreLabel ?anno ?materialeLabel ?altezza ?larghezza ?inv ?collezioneLabel ?movimentoLabel ?immagine WHERE {
+  OPTIONAL { wd:${qid} wdt:P18 ?immagine . }
+  OPTIONAL { wd:${qid} wdt:P170 ?autore . }
+  OPTIONAL { wd:${qid} wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
+  OPTIONAL { wd:${qid} wdt:P186 ?materiale . }
+  OPTIONAL { wd:${qid} p:P2048/psv:P2048 ?hN . ?hN wikibase:quantityAmount ?altezza . }
+  OPTIONAL { wd:${qid} p:P2049/psv:P2049 ?wN . ?wN wikibase:quantityAmount ?larghezza . }
+  OPTIONAL { wd:${qid} wdt:P217 ?inv . }
+  OPTIONAL { wd:${qid} wdt:P195 ?collezione . }
+  OPTIONAL { wd:${qid} wdt:P135 ?movimento . }
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${langCfg.wiki},it,en". }
+} LIMIT 5`;
+                const wd = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
+                  headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' }, timeout: 12000,
+                });
+                const b = wd.data?.results?.bindings?.[0] || {};
+                const campi = [
+                  b.autoreLabel?.value && `autore: ${b.autoreLabel.value}`,
+                  b.anno?.value && `anno: ${b.anno.value}`,
+                  b.materialeLabel?.value && `materiale/tecnica: ${b.materialeLabel.value}`,
+                  b.altezza?.value && b.larghezza?.value && `misure: ${b.altezza.value} × ${b.larghezza.value} cm`,
+                  b.movimentoLabel?.value && `movimento: ${b.movimentoLabel.value}`,
+                  b.collezioneLabel?.value && `collezione: ${b.collezioneLabel.value}`,
+                  b.inv?.value && `numero d'inventario: ${b.inv.value}`,
+                ].filter(Boolean);
+                if (campi.length) datiWikidata = campi.join('\n');
+                // La foto DELL'OPERA (Wikidata P18): legata a quest'opera, non
+                // a una parola chiave. Se manca, la scheda resta senza foto.
+                if (b.immagine?.value) fotoOpera = String(b.immagine.value);
+              } catch { /* la scheda tecnica è un di più */ }
+            }
+            break;
+          }
+          if (testoOpera) break;
+        } catch { /* si prova la lingua successiva */ }
+      }
+
+      // La scheda dell'opera sul SITO DEL MUSEO: è il museo stesso a
+      // descrivere ciò che espone, spesso con la sala e dettagli che
+      // l'enciclopedia non ha. Solo se il progetto ha una chiave di ricerca.
+      let schedaMuseo = '';
+      let urlSchedaMuseo = '';
+      try {
+        const sitoMuseo = String(req.body?.officialSite || '') || await trovaSitoUfficiale(museo, langCfg.wiki);
+        if (sitoMuseo && eventiFeed.fornitoreRicerca()) {
+          const host = (() => { try { return new URL(/^https?:\/\//i.test(sitoMuseo) ? sitoMuseo : `https://${sitoMuseo}`).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+          if (host) {
+            const trovati = await eventiFeed.ricercaWeb(`${opera} site:${host}`, { lang: langCfg.wiki, count: 3 });
+            for (const t of trovati) {
+              try {
+                const p = await axios.get(t.url, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 2, validateStatus: (s) => s < 400 });
+                const testo = testoPaginaMuseo(String(p.data || ''));
+                // Deve parlare dell'opera, non essere la home del museo.
+                if (testo.length > 400 && normalizzaTesto(testo).includes(normalizzaTesto(opera).split(' ')[0] || '')) {
+                  schedaMuseo = testo.slice(0, 5000);
+                  urlSchedaMuseo = t.url;
+                  break;
+                }
+              } catch { /* pagina saltata */ }
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn('[ArtworkGuide] scheda dal sito del museo non trovata:', e?.message);
+      }
+
+      const materiale = [
+        datiWikidata ? `SCHEDA TECNICA VERIFICATA (Wikidata):\n${datiWikidata}` : '',
+        schedaMuseo ? `SCHEDA DELL'OPERA SUL SITO DEL MUSEO (${urlSchedaMuseo}):\n${schedaMuseo}` : '',
+        testoOpera ? `VOCE ENCICLOPEDICA DELL'OPERA:\n${testoOpera}` : '',
+      ].filter(Boolean).join('\n\n');
+      if (materiale.length < 400) {
+        // Nessuna fonte sull'opera: meglio il silenzio di un testo inventato.
+        const out = { ok: false, reason: 'no_source', artwork: opera, venue: museo, negativoDel: new Date().toISOString() };
+        await saveToCache(cacheKey, 'artwork_guide', JSON.stringify(out));
+        return res.json(out);
+      }
+
+      const prompt = `Sei la voce di un'audioguida museale, di quelle serie: il visitatore è FERMO DAVANTI all'opera "${opera}"${autoreDetto ? ` di ${autoreDetto}` : ''}, ${museo}${salaDetta ? `, ${salaDetta}` : ''}.
+
+MATERIALE (unica fonte ammessa — ogni fatto che scrivi deve venire da qui):
+"""
+${materiale}
+"""
+
+SCRIVI il testo dell'audioguida di QUESTA opera, in ${langCfg.name}, 250-350 parole, da leggere ad alta voce (due o tre minuti di ascolto). Struttura, senza titoli né elenchi, come un discorso continuo:
+1. UNA frase che porta lo sguardo sull'opera e dice che cosa si sta guardando.
+2. DESCRIZIONE DI CIÒ CHE SI VEDE, guidando l'occhio con precisione: la composizione, i personaggi e cosa fanno, i gesti, gli sguardi, i colori, la luce, i dettagli che sfuggono a chi passa. Usa "osserva", "guarda in basso a destra", "nota come". Questa è la parte più lunga e importante: un'audioguida serve a FAR VEDERE.
+3. La tecnica e i materiali con i dati della scheda: supporto, misure reali, tecnica, stato di conservazione se il materiale lo dice.
+4. La storia documentata: chi la commissionò e perché, quando fu eseguita, come arrivò in questo museo, le vicende che l'hanno attraversata.
+5. Il significato e la lettura dell'opera secondo il materiale: simboli, iconografia, ciò che i contemporanei ci vedevano.
+6. Un dettaglio finale memorabile e concreto, che resta in mente uscendo dalla sala.
+
+REGOLE TASSATIVE:
+- Ogni frase deve portare un fatto preso dal materiale. Se il materiale non dice qualcosa, NON la dire: niente ipotesi, niente "probabilmente l'artista voleva", niente psicologia inventata dell'autore.
+- Nessuna frase da brochure: vietati «capolavoro senza tempo», «vi lascerà senza fiato», «un'emozione unica», «da non perdere». Se te ne accorgi, sostituiscila con un dettaglio visivo concreto.
+- Nomi, date, misure e attribuzioni SOLO se stanno nel materiale. Se un dato manca, taci quel dato.
+- Testo piano, senza asterischi, cancelletti o markdown: lo leggerà una voce sintetica.
+- Non aprire con formule di benvenuto al museo: il visitatore è già dentro e sta guardando l'opera.
+${regolaSpecificita(opera)}
+
+Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
+{
+  "testo": "il testo dell'audioguida, 250-350 parole",
+  "titolo": "titolo dell'opera come compare nel materiale",
+  "autore": "autore secondo il materiale, oppure ''",
+  "anno": "datazione secondo il materiale, oppure ''",
+  "tecnica": "tecnica e materiali secondo il materiale, oppure ''",
+  "misure": "misure secondo il materiale, oppure ''",
+  "daGuardare": ["3-5 dettagli concreti da cercare guardando l'opera, brevissimi"],
+  "curiosita": "una curiosità vera e documentata su quest'opera, una o due frasi"
+}
+
+"daGuardare" e "curiosita" sono OBBLIGATORI, per ogni opera, senza eccezioni: sono la parte che il visitatore si porta via. Devono venire dal materiale, non dalla fantasia.
+- "daGuardare": elementi che si VEDONO stando davanti all'opera (un gesto, un oggetto in un angolo, un colore, una firma, un pentimento, una crepa, un particolare dello sfondo). Non concetti astratti: cose da trovare con gli occhi.
+- "curiosita": un fatto sorprendente e documentato — un furto, un restauro che ha rivelato qualcosa, un committente scontento, un dettaglio nascosto, un errore dell'artista, un soprannome popolare. Se il materiale non contiene nulla di sorprendente, scrivi il fatto più concreto e meno noto che trovi (una data precisa, una cifra, un passaggio di proprietà); mai una frase vuota, mai un'invenzione.`;
+
+      let rawAi = '';
+      try {
+        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' }, excludeEngines: ['agnes'],
+          // DeepSeek dopo i gratuiti solo per chi è davanti all'opera.
+          ultimaSpiaggiaPagante: inDiretta,
+        }, 'artwork_guide', supabaseUrl, supabaseServiceKey, groq, userId);
+        rawAi = String(ai?.data || '');
+      } catch (e: any) {
+        console.warn('[ArtworkGuide] motori universali saturi, provo OpenAI:', e?.message);
+      }
+      if (!rawAi.includes('{')) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (!key) return res.json({ ok: false, reason: 'ai_unavailable', artwork: opera });
+        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' }
+        }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+        rawAi = String(r.data?.choices?.[0]?.message?.content || '');
+      }
+      let parsed: any = null;
+      try {
+        const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      } catch {
+        return res.json({ ok: false, reason: 'ai_parse_failed', artwork: opera });
+      }
+
+      const testo = String(parsed?.testo || '').replace(/[*#`]/g, '').trim();
+      const parole = testo.split(/\s+/).filter(Boolean).length;
+      // Un'audioguida di tre righe non è un'audioguida: sotto le 120 parole
+      // si rifiuta invece di servire un testo povero.
+      if (parole < 120) {
+        console.warn(`[ArtworkGuide] "${opera}": solo ${parole} parole, scartata`);
+        return res.json({ ok: false, reason: 'too_short', artwork: opera, parole });
+      }
+
+      const guida = {
+        testo,
+        titolo: campoOpzionale(parsed?.titolo, 160) || opera,
+        autore: campoOpzionale(parsed?.autore, 120),
+        anno: campoOpzionale(parsed?.anno, 60),
+        tecnica: campoOpzionale(parsed?.tecnica, 160),
+        misure: campoOpzionale(parsed?.misure, 80),
+        daGuardare: (Array.isArray(parsed?.daGuardare) ? parsed.daGuardare : [])
+          .map((s: any) => campoOpzionale(s, 120)).filter(Boolean).slice(0, 5),
+        // Richiesta del committente (10/09/2026): dopo il racconto ci vuole
+        // SEMPRE qualcosa da portarsi via — i dettagli da cercare e una
+        // curiosità. Se il modello non li ha dati, si annota: sono la parte
+        // che il visitatore ricorda uscendo dalla sala.
+        curiosita: campoOpzionale(parsed?.curiosita, 400),
+        // La foto dell'opera, in due misure: grande per la scheda, piccola per
+        // il cerchio accanto al nome nella lista.
+        foto: fotoOpera ? fotoCommons(fotoOpera, 900) : '',
+        fotoIcona: fotoOpera ? fotoCommons(fotoOpera, 160) : '',
+        parole,
+        language: outLang,
+      };
+      if (!guida.daGuardare.length || !guida.curiosita) {
+        console.warn(`[ArtworkGuide] "${opera}": ${!guida.daGuardare.length ? 'nessun dettaglio da cercare' : ''}${!guida.curiosita ? ' nessuna curiosità' : ''}`);
+      }
+      const payload = { ok: true, artwork: opera, venue: museo, guide: guida, source: fonteOpera, museumPage: urlSchedaMuseo || null };
+      await saveToCache(cacheKey, 'artwork_guide', JSON.stringify(payload));
+      // Una generazione vera consuma una delle audioguide del pass — ma solo
+      // per un visitatore: la semina non ha pass da consumare.
+      if (inDiretta && pass) await recordMuseumPassScan(userId, pass.expiresAt, `art-${chiaveOpera}`.slice(0, 90));
+      res.json({ ...payload, cached: false, ...(pass ? { scansUsed: usate + 1, scansLimit: MUSEUM_PASS_MAX_SCANS } : {}) });
+    } catch (e: any) {
+      console.error('[ArtworkGuide] Errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'artwork_guide_failed' });
+    }
+  });
+
+  /**
+   * ALTRE OPERE DEL MUSEO (10/09/2026, richiesta del committente: «un tasto
+   * aggiungi opere, e l'AI inserisce altre opere minori del museo non ancora
+   * inserite»).
+   *
+   * Il percorso principale porta i capolavori; chi ha tempo vuole andare oltre.
+   * Si riparte dalle stesse fonti — le opere censite su Wikidata (che ne
+   * elenca molte più di quante ne stiano in un percorso), il sito del museo,
+   * la voce Wikipedia — ESCLUDENDO quelle già presenti, e si chiedono le
+   * successive per notorietà.
+   *
+   * Funziona solo con la rete: senza, il client nasconde il tasto. Le opere
+   * aggiunte finiscono nella guida in libreria, quindi le trova anche il
+   * prossimo visitatore.
+   */
+  app.post("/api/museums/more-artworks", rateLimiter, async (req, res) => {
+    try {
+      const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+      const userId = daScript ? 'background-script' : await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const inDiretta = !daScript;
+
+      const museo = String(req.body?.venueName || '').trim().slice(0, 160);
+      const chiaveLuogo = String(req.body?.venueKey || '').trim().slice(0, 120);
+      const gia: string[] = (Array.isArray(req.body?.existing) ? req.body.existing : [])
+        .map((s: any) => String(s || '').trim()).filter(Boolean).slice(0, 60);
+      if (!museo) return res.status(400).json({ error: 'venueName richiesto' });
+
+      const langKey = String(req.body?.language || 'IT').toUpperCase();
+      const langCfg = GUIDA_LINGUE[langKey] ? { name: GUIDA_LINGUE[langKey], wiki: langKey.toLowerCase() } : { name: 'italiano', wiki: 'it' };
+      const outLang = GUIDA_LINGUE[langKey] ? langKey : 'IT';
+
+      // Il percorso è del pass con itinerario: anche il suo ampliamento.
+      if (inDiretta) {
+        const pass = await getActiveMuseumPass(userId);
+        if (pass?.tier !== 'tour') {
+          return res.json({ ok: false, reason: 'needs_tour_pass', priceCredits: await prezzoDi('museum_pass_tour') });
+        }
+      }
+
+      // Si riparte dalla guida in libreria: lì c'è l'identificativo Wikidata
+      // e la fonte, e lì torneranno le opere nuove.
+      let riga: any = null;
+      try {
+        const lib = await axios.get(
+          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(museo)})&language=eq.${encodeURIComponent(outLang)}&select=venue_key,venue_name,guide,source,official_site&limit=1`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
+        );
+        riga = lib.data?.[0] || null;
+      } catch { /* si prova lo stesso */ }
+
+      const nomiGia = new Set([...gia, ...((riga?.guide?.tappe || []).map((t: any) => normalizzaTesto(t?.nome)))].map(normalizzaTesto).filter(Boolean));
+
+      // Fonti: Wikidata (l'elenco lungo) + Wikipedia della voce già usata.
+      let qid = '';
+      try {
+        const t = String(riga?.source?.title || museo);
+        const wl = String(riga?.source?.lang || langCfg.wiki);
+        const ext = await axios.get(
+          `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|pageprops&ppprop=wikibase_item&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(t)}`,
+          { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000 }
+        );
+        const page: any = Object.values(ext.data?.query?.pages || {})[0];
+        qid = String(page?.pageprops?.wikibase_item || '');
+        var testoWiki = ordinaSezioniPerVisita(String(page?.extract || ''));
+      } catch { var testoWiki = ''; }
+
+      const opere = qid ? await opereDaWikidata(qid, langCfg.wiki) : { righe: [] as string[], foto: {} as Record<string, string> };
+      // Le opere che NON sono già nel percorso: sono queste le "minori".
+      const nuoveCensite = opere.righe.filter(r => {
+        const titolo = normalizzaTesto(String(r).split('—')[0]);
+        return titolo && ![...nomiGia].some(g => g === titolo || (g.length > 6 && titolo.includes(g)) || (titolo.length > 6 && g.includes(titolo)));
+      });
+
+      const materiale = [
+        nuoveCensite.length ? `ALTRE OPERE CENSITE IN QUESTA COLLEZIONE (fonte Wikidata, non ancora nel percorso):\n- ${nuoveCensite.join('\n- ')}` : '',
+        testoWiki,
+      ].filter(Boolean).join('\n\n');
+      if (materiale.length < 400) return res.json({ ok: false, reason: 'no_more', added: [] });
+
+      const prompt = `Il visitatore è a "${museo}" e ha già visto le opere principali. Vuole ANDARE OLTRE: opere meno note ma che valgono la sosta.
+
+MATERIALE (unica fonte ammessa):
+"""
+${materiale}
+"""
+
+GIÀ NEL PERCORSO, da NON ripetere:
+${[...nomiGia].slice(0, 40).join(' · ') || '(nessuna)'}
+
+Scegli da 5 a 10 ALTRE opere di questo museo, prese dal materiale, diverse da quelle già viste. Non i capolavori arcinoti (quelli ci sono già): opere di secondo piano che un visitatore attento è contento di scoprire.
+REGOLE TASSATIVE:
+- Ogni opera deve essere NOMINATA nel materiale. Niente opere che sai essere lì ma che il materiale non cita.
+- "dove" si compila solo se il materiale dice dove sta; altrimenti "".
+- "perche": una o due frasi con un fatto preciso del materiale, e il motivo per cui merita la sosta pur non essendo famosa.
+${regolaSpecificita(museo)}
+
+LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
+{ "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "... o ''", "perche": "..." } ] }`;
+
+      let rawAi = '';
+      try {
+        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' },
+          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: inDiretta,
+        }, 'museum_more_artworks', supabaseUrl, supabaseServiceKey, groq, userId);
+        rawAi = String(ai?.data || '');
+      } catch { /* si prova OpenAI */ }
+      if (!rawAi.includes('{')) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (!key) return res.json({ ok: false, reason: 'ai_unavailable', added: [] });
+        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' }
+        }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+        rawAi = String(r.data?.choices?.[0]?.message?.content || '');
+      }
+      let parsed: any = null;
+      try {
+        const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      } catch {
+        return res.json({ ok: false, reason: 'ai_parse_failed', added: [] });
+      }
+
+      // Stessa verifica del percorso: ogni tappa deve stare nel materiale e
+      // non essere una di quelle già viste.
+      const materialeNorm = normalizzaTesto(materiale);
+      const nuove = (Array.isArray(parsed?.tappe) ? parsed.tappe : [])
+        .map((t: any) => ({
+          nome: campoOpzionale(t?.nome, 140),
+          autore: campoOpzionale(t?.autore, 100),
+          anno: campoOpzionale(t?.anno, 40),
+          dove: campoOpzionale(t?.dove, 100),
+          perche: campoOpzionale(t?.perche, 500),
+        }))
+        .filter((t: any) => {
+          if (!t.nome) return false;
+          const n = normalizzaTesto(t.nome);
+          if ([...nomiGia].some(g => g === n)) return false;
+          const tok = tokenSignificativi(t.nome);
+          if (!tok.length) return false;
+          return tok.filter(x => materialeNorm.includes(x)).length / tok.length >= 0.6;
+        })
+        .map((t: any) => {
+          const img = opere.foto[normalizzaTesto(t.nome)] || '';
+          return img ? { ...t, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) } : t;
+        })
+        .slice(0, 10);
+
+      if (!nuove.length) return res.json({ ok: false, reason: 'no_more', added: [] });
+
+      // Le opere nuove entrano nella guida in libreria: le troverà anche chi
+      // arriva domani, senza rigenerare.
+      if (riga?.venue_key) {
+        try {
+          const guidaAggiornata = { ...riga.guide, tappe: [...(riga.guide?.tappe || []), ...nuove] };
+          await axios.patch(
+            `${supabaseUrl}/rest/v1/museum_guides?venue_key=eq.${encodeURIComponent(riga.venue_key)}&language=eq.${encodeURIComponent(outLang)}`,
+            { guide: guidaAggiornata, stops_count: guidaAggiornata.tappe.length, stops_with_room: guidaAggiornata.tappe.filter((t: any) => t?.dove).length, updated_at: new Date().toISOString() },
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+          );
+          // La cache della lingua va rinfrescata, altrimenti serve la vecchia.
+          await saveToCache(`venue_guide:v1:${riga.venue_key}:${outLang}`, 'venue_guide', JSON.stringify({
+            ok: true, venue: { id: null, name: riga.venue_name, lat: null, lon: null, category: '' },
+            guide: guidaAggiornata, source: riga.source || null, officialSite: riga.official_site || null,
+          }));
+        } catch (e: any) {
+          console.warn('[MoreArtworks] libreria non aggiornata:', e?.message);
+        }
+      }
+
+      console.log(`[MoreArtworks] ${museo}: +${nuove.length} opere`);
+      res.json({ ok: true, added: nuove, count: nuove.length });
+    } catch (e: any) {
+      console.error('[MoreArtworks] Errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'more_artworks_failed' });
+    }
+  });
+
+  /**
+   * ESPERIENZE PRENOTABILI PER QUESTO MUSEO (10/09/2026, richiesta del
+   * committente): biglietti salta-fila e visite guidate da Tiqets, Viator e
+   * GetYourGuide, col prezzo, per il museo in cui il visitatore si trova.
+   *
+   * REGOLA DEL COMMITTENTE: si mostrano SOLO a chi ha acquistato le guide,
+   * cioè a chi ha il Pass Museo attivo. Non è una vetrina pubblicitaria messa
+   * davanti a tutti: è un servizio in più per chi sta già usando la visita, e
+   * gli evita la coda alla biglietteria.
+   *
+   * I link escono già affiliati dalle rispettive fonti e passano dal
+   * redirect /api/out, che li conta: nessun link diretto e nessuna
+   * ricostruzione a mano dei parametri.
+   */
+  app.get("/api/museums/experiences", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+
+      // Le guide acquistate sono la chiave d'accesso.
+      const pass = await getActiveMuseumPass(userId);
+      if (!pass) {
+        return res.json({ ok: false, reason: 'needs_pass', experiences: [] });
+      }
+
+      const museo = String(req.query.venueName || '').trim().slice(0, 160);
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      const lang = String(req.query.language || 'IT').toLowerCase().slice(0, 2);
+      const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
+      if (!museo && !haGeo) return res.status(400).json({ error: 'venueName o coordinate richiesti' });
+
+      // Cache per (museo, lingua): i prodotti cambiano lentamente e le API
+      // hanno tetti mensili. Un giorno è il compromesso giusto.
+      const cacheKey = `museum_exp:v1:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const p = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
+          const eta = Date.now() - Date.parse(String(p?.quando || 0));
+          if (Number.isFinite(eta) && eta < 24 * 60 * 60 * 1000) {
+            return res.json({ ok: true, cached: true, experiences: p.experiences || [] });
+          }
+        } catch { /* si rigenera */ }
+      }
+
+      const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([
+        p, new Promise<T>((r) => setTimeout(() => r(fallback), 9000)),
+      ]).catch(() => fallback);
+
+      // Raggio stretto: deve essere il biglietto di QUESTO museo, non un tour
+      // della città a venti chilometri.
+      const [tiqets, viatorRaw, gyg] = await Promise.all([
+        conTimeout(haGeo
+          ? fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 12 })
+          : fetchTiqetsProducts({ cityName: museo, lang, pageSize: 12 }), [] as any[]),
+        conTimeout(haGeo
+          ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, museo)
+          : Promise.resolve('[]'), '[]'),
+        conTimeout(museo ? fetchGygExperiencesScraped(museo, lang) : Promise.resolve([] as any[]), [] as any[]),
+      ]);
+
+      let viator: any[] = [];
+      try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
+
+      const nomeNorm = normalizzaTesto(museo);
+      const tokenMuseo = tokenSignificativi(museo);
+      /** Il prodotto parla di QUESTO museo? Col nome o, in mancanza, con la vicinanza. */
+      const parlaDelMuseo = (titolo: string, descrizione: string): boolean => {
+        if (!tokenMuseo.length) return true; // nome tutto generico: vale la vicinanza
+        const t = normalizzaTesto(`${titolo} ${descrizione}`);
+        return tokenMuseo.some(x => t.includes(x)) || t.includes(nomeNorm);
+      };
+
+      const esperienze = [
+        ...tiqets.map((p: any) => ({
+          fonte: 'tiqets',
+          titolo: String(p.name || ''),
+          descrizione: String(p.description || '').slice(0, 240),
+          prezzo: String(p.price || ''),
+          durata: String(p.duration || ''),
+          voto: String(p.rating || ''),
+          foto: String(p.imageUrl || ''),
+          url: String(p.bookingUrl || p.product_url || p.url || ''),
+        })),
+        ...viator.map((p: any) => ({
+          fonte: 'viator',
+          titolo: String(p.title || p.name || ''),
+          descrizione: String(p.description || p.shortDescription || '').slice(0, 240),
+          prezzo: String(p.price || p.fromPrice || ''),
+          durata: String(p.duration || ''),
+          voto: String(p.rating || ''),
+          foto: String(p.imageUrl || p.thumbnail || ''),
+          url: String(p.url || p.productUrl || p.webURL || ''),
+        })),
+        ...gyg.map((p: any) => ({
+          fonte: 'getyourguide',
+          titolo: String(p.titolo || p.title || ''),
+          descrizione: '',
+          prezzo: '',
+          durata: '',
+          voto: '',
+          foto: '',
+          url: String(p.url || ''),
+        })),
+      ]
+        .filter(e => e.titolo && e.url && libIsBookableHost(e.url))
+        .filter(e => parlaDelMuseo(e.titolo, e.descrizione))
+        // Un titolo per fonte: niente dieci varianti dello stesso biglietto.
+        .filter((e, i, arr) => arr.findIndex(x => normalizzaTesto(x.titolo) === normalizzaTesto(e.titolo)) === i)
+        .slice(0, 6)
+        // Il link passa dal redirect che conta i clic, mai diretto.
+        .map(e => ({ ...e, url: `/api/out?src=${encodeURIComponent(e.fonte)}&url=${encodeURIComponent(e.url)}` }));
+
+      await saveToCache(cacheKey, 'museum_exp', JSON.stringify({ quando: new Date().toISOString(), experiences: esperienze }));
+      res.set('Cache-Control', 'private, max-age=600');
+      res.json({ ok: true, cached: false, experiences: esperienze });
+    } catch (e: any) {
+      console.error('[MuseumExperiences] Errore:', e?.message);
+      // Le esperienze sono un di più: mai un errore in faccia al visitatore.
+      res.json({ ok: true, experiences: [] });
+    }
+  });
+
+  /**
+   * LIBRERIA DELLE VISITE GUIDATE — elenco pubblico.
+   *
+   * Tre usi: "quali musei qui vicino hanno già la visita pronta" (lat/lon),
+   * la ricerca per nome (q) e la vetrina generale. Solo lettura, nessun costo,
+   * nessuna generazione: chi non trova nulla qui chiede /venue-guide, che la
+   * crea al volo e la deposita in libreria per chi verrà dopo.
+   */
+  app.get("/api/museums/library", rateLimiter, async (req, res) => {
+    try {
+      const lang = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
+      const q = String(req.query.q || '').trim().slice(0, 80);
+      const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
+      const kmRaggio = Math.min(200, Math.max(1, parseFloat(String(req.query.radius_km || '25')) || 25));
+
+      const campi = 'venue_key,venue_name,poi_id,language,venue_type,city,country_code,lat,lon,stops_count,stops_with_room,official_site,source,hits,updated_at';
+      let url = `${supabaseUrl}/rest/v1/museum_guides?language=eq.${encodeURIComponent(lang)}&select=${campi}&limit=${limit}`;
+      if (haGeo) {
+        // Riquadro attorno al punto: la libreria è piccola, non serve PostGIS.
+        const dLat = kmRaggio / 111;
+        const dLon = kmRaggio / (111 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+        url += `&lat=gte.${(lat - dLat).toFixed(4)}&lat=lte.${(lat + dLat).toFixed(4)}&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}`;
+      }
+      if (q) url += `&venue_name=ilike.${encodeURIComponent(`*${q}*`)}`;
+      url += haGeo ? '' : '&order=hits.desc,updated_at.desc';
+
+      const r = await axios.get(url, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 });
+      let righe = Array.isArray(r.data) ? r.data : [];
+      if (haGeo) {
+        righe = righe
+          .map((x: any) => ({ ...x, distance_m: (Number.isFinite(x.lat) && Number.isFinite(x.lon)) ? Math.round(getHaversineDistance(lat, lon, x.lat, x.lon)) : null }))
+          .filter((x: any) => x.distance_m === null || x.distance_m <= kmRaggio * 1000)
+          .sort((a: any, b: any) => (a.distance_m ?? 1e9) - (b.distance_m ?? 1e9));
+      }
+      res.set('Cache-Control', 'public, max-age=300');
+      res.json({ ok: true, language: lang, count: righe.length, museums: righe });
+    } catch (e: any) {
+      console.error('[MuseumLibrary] Errore:', e?.response?.data?.message || e?.message);
+      // Tabella non ancora creata o DB giù: la libreria è vuota, non è un errore.
+      res.json({ ok: true, language: String(req.query.language || 'IT').toUpperCase().slice(0, 2), count: 0, museums: [] });
     }
   });
 
@@ -8128,6 +10099,57 @@ Regole:
   // ottiene i motori gratuiti, non l'addebito. E' la stessa inversione di
   // default adottata il 18/08 per le code di `callUniversalAi`, e per lo
   // stesso motivo: un dimenticanza deve costare latenza, mai denaro.
+
+  /**
+   * SALVATAGGIO IN CACHE DI UN'AUDIOGUIDA — «DEVE SEMPRE SALVARE SU SUPABASE»
+   * (regola del committente, 10/09/2026).
+   *
+   * Prima c'erano cinque upsert sparsi su poi_audioguides, tutti a UN
+   * tentativo e tutti con l'errore ingoiato (`.catch(warn)`, uno persino
+   * `.catch(() => {})`), quattro dei quali senza `on_conflict` nell'URL —
+   * cioe' con una riga gia' esistente l'upsert poteva fallire in silenzio
+   * invece di aggiornarla. Cosi' e' sparito il duetto del Museo del Marmo
+   * (09/09): generato, pagato, ascoltato, mai scritto, perche' Supabase era
+   * in sola lettura e nessuno se n'e' accorto.
+   *
+   * Qui: un solo punto, chiave (poi, LINGUA maiuscola, personaggio+registro)
+   * esplicita nell'`on_conflict`, tre tentativi con pausa crescente, e se
+   * fallisce anche il terzo NON si tace: logSystemError → Sentry e pannello
+   * Diagnostica. Il testo all'utente si manda comunque (la narrazione c'e'),
+   * ma la perdita della cache diventa un evento visibile, non un warning
+   * nei log di Vercel che nessuno legge.
+   */
+  const AUDIOGUIDA_CACHE_TENTATIVI = 3;
+  const AUDIOGUIDA_CACHE_PAUSE_MS = [1000, 3000];
+  async function salvaAudioguidaInCache(opts: { poiId: string; language: string; character: string; text: string; origine: string }): Promise<boolean> {
+    const { poiId, language, character, text, origine } = opts;
+    if (!poiId || !text || !String(text).trim()) return false;
+    const sUrl = process.env.VITE_SUPABASE_URL || '';
+    const sKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+    const body = { poi_id: poiId, language: String(language).toUpperCase(), guide_character: character, audio_text: text, generated_at: new Date().toISOString() };
+    let ultimoErrore = '';
+    for (let tentativo = 0; tentativo < AUDIOGUIDA_CACHE_TENTATIVI; tentativo++) {
+      try {
+        await axios.post(
+          `${sUrl}/rest/v1/poi_audioguides?on_conflict=poi_id,language,guide_character`,
+          body,
+          { headers: { apikey: sKey, Authorization: `Bearer ${sKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 8000 }
+        );
+        return true;
+      } catch (e: any) {
+        ultimoErrore = e?.response?.data?.message || e?.response?.data?.hint || e?.message || String(e);
+        console.warn(`[${origine}] salvataggio poi_audioguides fallito (tentativo ${tentativo + 1}/${AUDIOGUIDA_CACHE_TENTATIVI}): ${ultimoErrore}`);
+        if (tentativo < AUDIOGUIDA_CACHE_TENTATIVI - 1) await new Promise(r => setTimeout(r, AUDIOGUIDA_CACHE_PAUSE_MS[tentativo] || 3000));
+      }
+    }
+    try {
+      await logSystemError('error', `Audioguida generata ma NON salvata in poi_audioguides dopo ${AUDIOGUIDA_CACHE_TENTATIVI} tentativi: ${ultimoErrore}`, {
+        origine, poi_id: poiId, language: body.language, guide_character: character, caratteri: String(text).length,
+      });
+    } catch { /* il log non deve mai rompere la risposta */ }
+    return false;
+  }
+
   async function regenerateAudioguideText(opts: { text: string; poiName: string; mode?: string; location?: string; previousText?: string; lang?: string; focusInstruction?: string; utenteInAttesa?: boolean; }): Promise<string> {
     const { text, poiName, mode, location, previousText, lang = "it", focusInstruction, utenteInAttesa = false } = opts;
     const targetLangName = LANG_NAMES[String(lang).toLowerCase()] || "italiano";
@@ -8142,17 +10164,10 @@ Regole:
       : register === 'bambini'
         ? `\n\nFORMATO RICHIESTO — VERSIONE PER BAMBINI (8-10 anni): parole semplici, frasi corte, tono giocoso e curioso, una similitudine divertente. Niente date complesse né tecnicismi; una piccola domanda finale per incuriosire. Tra 80 e 150 parole.`
         : '';
-    // REGOLA FONDAMENTALE — SPECIFICITÀ (10/09/2026, richiesta esplicita del
-    // committente dopo l'audioguida del Museo del Marmo di Carrara, uscita
-    // "troppo generalista" in tutte e tre le voci). Ogni frase deve agganciarsi
-    // a un elemento concreto del POI; le frasi di circostanza che varrebbero
-    // per qualunque museo/monumento sono VIETATE, non solo sconsigliate. Vale
-    // per tutti i personaggi e tutti i registri (breve, bambini, duetto e
-    // "Chiedi di più"): per questo è una costante unica iniettata in ogni
-    // prompt, non una riga copiata tre volte da tenere allineata.
-    const REGOLA_SPECIFICITA = `
-           REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.
-           DURATA MINIMA (anch'essa vincolante): la narrazione deve durare ALMENO 30-40 secondi di parlato, cioè non meno di 80-100 parole, e di più quando il materiale lo permette. Per raggiungere la durata attingi ad ALTRI fatti specifici del materiale (altre opere, altre date, altri dettagli), MAI a frasi di riempimento: la lunghezza si guadagna con la sostanza, non con le parole vuote.`;
+    // Regola di specificità: UNA sola definizione a livello di modulo
+    // (regolaSpecificita, accanto alla cache), condivisa con la scheda Vision
+    // e la visita guidata. Qui si istanzia sul nome del POI.
+    const REGOLA_SPECIFICITA = regolaSpecificita(poiName);
 
     // Registro "duetto" (🎭): dialogo a due voci NICKY/DANTE sullo stesso POI.
     // Il formato riga-per-battuta con prefisso "NICKY:"/"DANTE:" è un CONTRATTO
@@ -8490,11 +10505,10 @@ ${manuale}`;
       // più" (previousText/focusInstruction) restano volutamente NON cachati.
       // Si cacha SOLO se il testo base è quello del catalogo (poiInCatalogo).
       if (regenPoiId && poiInCatalogo && isBaseNarration && cleanResult && cleanResult.trim() && /^[A-Za-z0-9_:.-]{1,80}$/.test(regenPoiId)) {
-        axios.post(
-          `${supabaseUrl}/rest/v1/poi_audioguides?on_conflict=poi_id,language,guide_character`,
-          { poi_id: regenPoiId, language: langSafe.toUpperCase(), guide_character: guideMode, audio_text: cleanResult, generated_at: new Date().toISOString() },
-          { headers: { ...CREDIT_SVC_HEADERS, Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 6000 }
-        ).catch((e: any) => console.warn('[api/regenerate] upsert poi_audioguides fallito:', e?.message));
+        // AWAIT, non spara-e-dimentica: su Vercel la funzione puo' essere
+        // congelata appena parte la risposta, e un upsert ancora in volo
+        // muore con lei. Il salvataggio deve concludersi PRIMA di rispondere.
+        await salvaAudioguidaInCache({ poiId: regenPoiId, language: langSafe, character: guideMode, text: cleanResult, origine: 'api/regenerate' });
         // La scheda POI e l'audioguida sono due pipeline separate: molti POI
         // hanno l'audio (generato qui, gratuito) ma description_long resta
         // vuota perché popolata solo dall'arricchimento "full" a crediti
@@ -8731,11 +10745,7 @@ ${manuale}`;
 
       // 4. Salva in poi_audioguides per lingua (formato MAIUSCOLO come il web:
       //    cache condivisa e riusabile da entrambi).
-      await axios.post(
-        `${sUrl}/rest/v1/poi_audioguides`,
-        { poi_id: poiId, language: languageDb, guide_character: guideChar, audio_text: text, generated_at: new Date().toISOString() },
-        { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' } }
-      ).catch((e: any) => console.warn('[api/poi/audioguide] save failed:', e?.message));
+      await salvaAudioguidaInCache({ poiId, language: languageDb, character: guideChar, text, origine: 'api/poi/audioguide' });
 
       // Stessa logica di /api/regenerate: la scheda POI resta muta (niente
       // description_long) per molti POI che HANNO comunque l'audioguida,
@@ -9038,32 +11048,111 @@ ${manuale}`;
   // nascosta dietro un palazzo. Nessun dato può accorgersene, perché non
   // esiste il campo «cosa c'è davanti all'obiettivo».
   //
-  // Quindi l'ultima parola è di chi guarda: stesso schema già usato dalla
-  // verifica visiva della cache Vision (gpt-4o-mini, `detail: 'low'`, JSON
-  // secco), che costa pochissimo per immagine. Al massimo tre immagini per
-  // POI, e solo quando un utente apre davvero una scheda senza foto: la
-  // spesa segue l'uso, non il catalogo.
+  // Quindi l'ultima parola è di chi guarda, e guarda GRATIS: **Agnes**
+  // (`agnes-2.5-flash`), scelta del committente il 10/09/2026 dopo averla
+  // messa alla prova. Quello che è stato verificato, non supposto:
   //
-  // Senza chiave OpenAI la funzione dice NO: meglio nessuna foto che una
-  // foto non verificata — è la regola non negoziabile di CLAUDE.md.
+  //  - guarda davvero l'immagine (972 `image_tokens` nella risposta) e
+  //    accetta l'URL pubblico dello scatto — niente download, nessun peso in
+  //    più sulla funzione serverless;
+  //  - risponde in 3-7 s, non nei 2-4 MINUTI del commento su callUniversalAi:
+  //    quelli valgono per i prompt lunghi, non per una domanda di due righe;
+  //  - alla controprova (lo STESSO scatto di una via di Carrara presentato
+  //    come «Torre Eiffel») risponde `si_vede: false` 3 volte su 3.
+  //
+  // Con una cautela, perché su una quarta controprova isolata aveva detto di
+  // sì: **si chiede DUE volte e devono concordare**. Agnes ragiona prima di
+  // rispondere e a temperatura 0 varia lo stesso; essendo gratuita, la
+  // seconda domanda non costa niente e porta l'errore da ~1 su 4 a ~1 su 16.
+  // Sui positivi veri era già stabile (3 giri identici), quindi il doppio
+  // controllo non fa perdere foto buone.
+  //
+  // ATTENZIONE al budget token: Agnes spende 200-700 token a RAGIONARE prima
+  // di scrivere. Con `max_tokens` basso finisce il budget pensando e torna
+  // `finish_reason: length` con contenuto VUOTO — sembra rotta e non lo è.
+  //
+  // OpenAI (gpt-4o-mini, ~0,045 centesimi a scatto) resta dietro come rete di
+  // sicurezza per quando Agnes non risponde. Anche lui ha passato la stessa
+  // controprova 3 su 3.
+  //
+  // Senza nessuna delle due chiavi la funzione dice NO: meglio nessuna foto
+  // che una foto non verificata — è la regola non negoziabile di CLAUDE.md.
   async function mostraDavveroIlPosto(urlFoto: string, nomePoi: string): Promise<boolean> {
+    if (!nomePoi) return false;
+    const domanda = `Questa è una foto scattata dalla strada vicino a "${nomePoi}". Rispondi SOLO con JSON: {"si_vede": true/false, "vetro": true/false, "confidenza": 0-100}.\n"si_vede" è true SOLO se il soggetto "${nomePoi}" è riconoscibile nell'inquadratura, non se la foto mostra soltanto la via, il piazzale o gli edifici accanto.\n"vetro" è true se si vede un parabrezza, un finestrino, un cruscotto o l'interno di un veicolo.`;
+
+    // Il JSON può arrivare incorniciato in ```json … ```: si prende il primo
+    // oggetto graffo, non tutta la risposta. `null` = risposta inutilizzabile
+    // (motore muto o troncato), che è diverso da «no».
+    const leggi = (grezzo: string, chi: string): boolean | null => {
+      try {
+        const t = String(grezzo || '');
+        const v = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1) || '{}');
+        if (typeof v?.si_vede !== 'boolean') return null;
+        const ok = v.si_vede === true && v?.vetro !== true && Number(v?.confidenza || 0) >= 60;
+        if (!ok) console.log(`[FotoStrada/${chi}] scartata: si_vede=${v?.si_vede} vetro=${v?.vetro} conf=${v?.confidenza} ("${nomePoi}")`);
+        return ok;
+      } catch { return null; }
+    };
+
+    // ── AGNES, gratuita, due volte ────────────────────────────────────────
+    //
+    // L'immagine le va INCORPORATA, non passata come link: sugli URL di
+    // Mapillary (link firmati CloudFront da 414 caratteri) Agnes risponde
+    // HTTP 500 su ognuno. Verificato il 10/09/2026 su dodici scatti diversi:
+    // con l'URL zero risposte, con l'immagine dentro risposte valide. Era il
+    // difetto che sulla passata di massa produceva zero foto sembrando che
+    // il giudice bocciasse tutto.
+    const chiaviAgnes = [process.env.AGNES_API_KEY, process.env.AGNES_API_KEY_2, process.env.AGNES_AI_API_KEY, process.env.AGNES_AI_API_KEY2].filter(Boolean);
+    let dentro = '';
+    if (chiaviAgnes.length) {
+      try {
+        const img = await axios.get(urlFoto, { responseType: 'arraybuffer', timeout: 15000 });
+        dentro = `data:image/jpeg;base64,${Buffer.from(img.data).toString('base64')}`;
+      } catch { dentro = ''; }
+    }
+    if (chiaviAgnes.length && dentro) {
+      const chiediAdAgnes = async (): Promise<boolean | null> => {
+        try {
+          const chiave = chiaviAgnes[agnesKeyCounter++ % chiaviAgnes.length];
+          const r = await axios.post('https://apihub.agnes-ai.com/v1/chat/completions', {
+            model: 'agnes-2.5-flash',
+            messages: [{ role: 'user', content: [
+              { type: 'text', text: domanda },
+              { type: 'image_url', image_url: { url: dentro } },
+            ] }],
+            temperature: 0, max_tokens: 1200,
+          }, { timeout: 45000, headers: { Authorization: `Bearer ${chiave}`, 'Content-Type': 'application/json' } });
+          return leggi(r.data?.choices?.[0]?.message?.content || '', 'agnes');
+        } catch (e: any) {
+          console.debug('[FotoStrada] Agnes non ha giudicato:', e?.response?.data?.error?.message || e?.message);
+          return null;
+        }
+      };
+      const [primo, secondo] = await Promise.all([chiediAdAgnes(), chiediAdAgnes()]);
+      // Verdetto solo all'unanimità: un solo «sì» non basta, e un «no» di
+      // entrambe chiude la partita senza spendere un centesimo da OpenAI.
+      if (primo !== null && secondo !== null) {
+        if (primo !== secondo) console.log(`[FotoStrada/agnes] i due giri non concordano su "${nomePoi}": scartata`);
+        return primo === true && secondo === true;
+      }
+    }
+
+    // ── OPENAI, a pagamento, solo se Agnes è muta ─────────────────────────
     const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
-    if (!key || !nomePoi) return false;
+    if (!key) return false;
     try {
       const r = await axios.post('https://api.openai.com/v1/chat/completions', {
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: [
-          { type: 'text', text: `Questa è una foto scattata dalla strada vicino a "${nomePoi}". Rispondi SOLO con JSON: {"si_vede": true/false, "vetro": true/false, "confidenza": 0-100}.\n"si_vede" è true SOLO se il soggetto "${nomePoi}" è riconoscibile nell'inquadratura, non se la foto mostra soltanto la via, il piazzale o gli edifici accanto.\n"vetro" è true se si vede un parabrezza, un finestrino, un cruscotto o l'interno di un veicolo.` },
+          { type: 'text', text: domanda },
           { type: 'image_url', image_url: { url: urlFoto, detail: 'low' } },
         ] }],
         temperature: 0, max_tokens: 60, response_format: { type: 'json_object' },
       }, { timeout: 12000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
-      const v = JSON.parse(r.data?.choices?.[0]?.message?.content || '{}');
-      const ok = v?.si_vede === true && v?.vetro !== true && Number(v?.confidenza || 0) >= 60;
-      if (!ok) console.log(`[Mapillary] scartata: si_vede=${v?.si_vede} vetro=${v?.vetro} conf=${v?.confidenza} ("${nomePoi}")`);
-      return ok;
+      return leggi(r.data?.choices?.[0]?.message?.content || '', 'openai') === true;
     } catch (e: any) {
-      console.debug('[Mapillary] controllo visivo non riuscito:', e?.message);
+      console.debug('[FotoStrada] controllo visivo non riuscito:', e?.message);
       return false;
     }
   }
@@ -18149,8 +20238,21 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
   // lo riscrivono a vicenda perdono uno dei due inserimenti.
   // Adesso ogni itinerario scrive la SUA riga `lib_meta_<slug>`: nessuna
   // lettura, nessuna contesa, scritture da poche centinaia di byte.
+  // Chiavi dell'istantanea dell'indice: dichiarate qui perché le usa già
+  // libraryUpdateIndex, che nel file viene prima di libraryLoadMetas.
+  const LIB_SNAPSHOT_KEY = 'lib_index_all';
+  const LIB_SNAPSHOT_STAMP = 'lib_index_stamp';
+  const LIB_SNAPSHOT_MAX_MS = 6 * 60 * 60 * 1000;
+
   async function libraryUpdateIndex(meta: any): Promise<void> {
     await saveToCache(`lib_meta_${meta.slug}`, 'library_meta', meta);
+    // Timbro dell'ultima modifica: dice all'istantanea dell'indice (vedi
+    // libraryLoadMetas) che c'è qualcosa di più nuovo di lei. È una riga di
+    // pochi byte, non il read-modify-write dei vecchi shard: due semine
+    // simultanee possono sovrascriverselo a vicenda senza danno, perché
+    // serve solo a rispondere «dopo l'istantanea è cambiato qualcosa».
+    saveToCache(LIB_SNAPSHOT_STAMP, 'library_meta_stamp', { at: Date.now(), slug: meta.slug })
+      .catch(() => { /* al peggio l'istantanea vive fino alla scadenza */ });
   }
 
   // Lettura dell'indice: una sola query indicizzata su content_type, più i
@@ -18161,8 +20263,42 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
   let libMetaCache: { at: number; metas: any[] } | null = null;
   const LIB_META_CACHE_MS = 120000;
 
+  // ── L'ISTANTANEA DELL'INDICE (10/09/2026) ────────────────────────────────
+  // Il giro completo qui sotto legge una riga per itinerario: con 6.349
+  // itinerari costa ~13 SECONDI, misurati in produzione. La cache in processo
+  // li nasconde solo finché il processo vive: su Vercel ogni avvio a freddo
+  // riparte da zero, quindi quei 13 secondi li paga *un utente vero*, quello
+  // che apre la libreria per primo dopo una pausa.
+  // Rimedio: le stesse voci, impacchettate in UNA riga (`lib_index_all`).
+  // Leggerla costa una query invece di 6.349 righe. Si rigenera da sé ogni
+  // volta che il giro completo viene fatto davvero, quindi non serve nessun
+  // lavoro programmato che la tenga aggiornata: al massimo è vecchia di
+  // LIB_SNAPSHOT_MAX_MS, e in quel caso si rilegge tutto e la si riscrive.
+  // Sicurezza: se l'istantanea è più povera dell'ultimo giro completo noto
+  // (semina in corso, scrittura tronca) viene ignorata — meglio 13 secondi
+  // che una libreria a cui mancano pezzi.
   async function libraryLoadMetas(): Promise<any[]> {
     if (libMetaCache && Date.now() - libMetaCache.at < LIB_META_CACHE_MS) return libMetaCache.metas;
+
+    // 0) istantanea: due righe lette insieme invece di 6.349. Vale solo se è
+    //    più recente dell'ultimo itinerario seminato (timbro), altrimenti la
+    //    libreria nasconderebbe le novità fino alla scadenza.
+    try {
+      const [rigaSnap, rigaStamp] = await Promise.all([
+        getFromCache(LIB_SNAPSHOT_KEY),
+        getFromCache(LIB_SNAPSHOT_STAMP),
+      ]);
+      const snap = libParseCachedJson(rigaSnap?.text_content);
+      const stamp = Number(libParseCachedJson(rigaStamp?.text_content)?.at) || 0;
+      const eta = snap?.at ? Date.now() - Number(snap.at) : Infinity;
+      const aggiornata = Number(snap?.at) >= stamp;
+      if (Array.isArray(snap?.metas) && snap.metas.length && eta < LIB_SNAPSHOT_MAX_MS && aggiornata) {
+        libMetaCache = { at: Date.now(), metas: snap.metas };
+        console.log(`[library] indice dall'istantanea: ${snap.metas.length} voci (${Math.round(eta / 60000)} min)`);
+        return snap.metas;
+      }
+    } catch { /* istantanea assente o illeggibile: si fa il giro completo */ }
+
     const bySlug = new Map<string, any>();
     // 1) shard storici (fino a 800 voci per kind)
     try {
@@ -18188,6 +20324,13 @@ Rispondi SOLO con un oggetto JSON: {"approved": true|false, "score": 0-100, "pro
     }
     const metas = [...bySlug.values()];
     libMetaCache = { at: Date.now(), metas };
+
+    // Si riscrive l'istantanea solo se il giro è andato bene: una lettura
+    // parziale (timeout a metà) non deve diventare l'indice ufficiale.
+    if (metas.length) {
+      saveToCache(LIB_SNAPSHOT_KEY, 'library_meta_snapshot', { at: Date.now(), n: metas.length, metas })
+        .catch((e: any) => console.warn('[library] istantanea non salvata:', e?.message));
+    }
     return metas;
   }
 
@@ -21000,11 +23143,8 @@ Wikipedia: <materiale>${String(extract || "Nessuna fonte trovata").replace(/<\/?
              // Persistenza SERVER-SIDE (service role) in poi_audioguides: il
              // vecchio upsertAudioguide client è un no-op dopo il lock RLS.
              // Formato lingua MAIUSCOLO (IT) come il lato lettura (/api/poi/audioguide).
-             const agH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' };
              for (const ch of ['nicky', 'dante']) {
-               await axios.post(`${supabaseUrl}/rest/v1/poi_audioguides`,
-                 { poi_id: precisionId, language: String(lang || 'it').toUpperCase(), guide_character: ch, audio_text: jsonResponse.audio_script, generated_at: new Date().toISOString() },
-                 { headers: agH }).catch((e: any) => console.warn('[batch-ensure] audioguide save failed:', e?.message));
+               await salvaAudioguidaInCache({ poiId: precisionId, language: String(lang || 'it'), character: ch, text: jsonResponse.audio_script, origine: 'batch-ensure' });
              }
           }
           
@@ -21494,11 +23634,8 @@ ${extract || "Nessuna fonte trovata"}
         if (didWrite && (jsonResponse as any).audio_script) {
            // Persistenza SERVER-SIDE (service role) in poi_audioguides: il
            // vecchio upsertAudioguide client è un no-op dopo il lock RLS.
-           const agH = { ...svcHeaders, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' };
            for (const ch of ['nicky', 'dante']) {
-             await axios.post(`${supabaseUrl}/rest/v1/poi_audioguides`,
-               { poi_id: precisionId, language: String(lang || 'it').toUpperCase(), guide_character: ch, audio_text: (jsonResponse as any).audio_script, generated_at: new Date().toISOString() },
-               { headers: agH }).catch((e: any) => console.warn('[enrich] audioguide save failed:', e?.message));
+             await salvaAudioguidaInCache({ poiId: precisionId, language: String(lang || 'it'), character: ch, text: (jsonResponse as any).audio_script, origine: 'api/poi/enrich' });
            }
         }
 
@@ -22675,14 +24812,25 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
    *  se esiste nel catalogo curato (30 città) — SOLA LETTURA di
    *  libraryDescriptors.ts via il loader già usato dalla Libreria
    *  (libLoadDescriptorsModule, definito più sopra in questo file). */
-  async function extFindZoneDaySlug(cityName: string, theme?: string): Promise<string | null> {
+  async function extFindZoneDaySlug(cityName: string, theme?: string, coords?: { lat: number; lon: number } | null): Promise<string | null> {
     if (!cityName || !theme || theme === 'sorprendimi') return null;
     try {
       const mod = await libLoadDescriptorsModule();
       if (!mod || typeof mod.zoneDescriptors !== 'function') return null;
       const target = extNormCity(cityName);
       const hit = mod.zoneDescriptors().find((d: any) => d?.days === 1 && d?.angle === theme && extNormCity(d?.city) === target);
-      return hit?.slug || null;
+      if (!hit) return null;
+      // Il nome combacia ma potrebbe essere un omonimo (una "Roma" che non è
+      // quella d'Italia): il descrittore porta le SUE coordinate (coords in
+      // zoneDescriptors) — si accetta solo se sono vicine a quelle vere
+      // della destinazione richiesta. Controllo qui, alla ricerca, non solo
+      // nella verifica finale a 60 km (extVerifyDay), che arriva troppo
+      // tardi: a quel punto il giorno è già stato "servito dalla cache".
+      if (coords && hit.coords && Number.isFinite(hit.coords.lat) && Number.isFinite(hit.coords.lon)) {
+        const km = getHaversineDistance(coords.lat, coords.lon, hit.coords.lat, hit.coords.lon) / 1000;
+        if (km > 100) return null;
+      }
+      return hit.slug || null;
     } catch { return null; }
   }
 
@@ -22711,10 +24859,17 @@ IMPORTANTE: Inizia subito con il simbolo '{' e scrivi SOLO il JSON. Non aggiunge
     return out;
   }
 
-  /** Prima coordinata plausibile dell'itinerario salvato (mai fidarsi del client). */
+  /** Ultima coordinata plausibile dell'itinerario salvato (mai fidarsi del
+   *  client). Dall'ULTIMO giorno, non dal primo (10/09/2026): "Aggiungi un
+   *  giorno" si usa tipicamente per allungare la fine del viaggio, e
+   *  ancorarsi al primo giorno mandava il giorno nuovo di un roadtrip nella
+   *  città di partenza invece che in quella dove il viaggio finisce davvero. */
   function extItineraryCoords(dati: any): { lat: number; lon: number } | null {
-    for (const g of (Array.isArray(dati?.giorni) ? dati.giorni : [])) {
-      for (const t of (Array.isArray(g?.tappe) ? g.tappe : [])) {
+    const giorni = Array.isArray(dati?.giorni) ? dati.giorni : [];
+    for (let i = giorni.length - 1; i >= 0; i--) {
+      const tappe = Array.isArray(giorni[i]?.tappe) ? giorni[i].tappe : [];
+      for (let j = tappe.length - 1; j >= 0; j--) {
+        const t = tappe[j];
         const la = Number(t?.coordinate?.lat), lo = Number(t?.coordinate?.lng ?? t?.coordinate?.lon);
         if (Number.isFinite(la) && Number.isFinite(lo) && (la !== 0 || lo !== 0)) return { lat: la, lon: lo };
       }
@@ -22846,7 +25001,17 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       if (giorniEsistenti.length === 0) return res.status(400).json({ error: 'itinerario_senza_giorni' });
       const nextDayNum = Math.max(...giorniEsistenti.map((g: any) => Number(g?.giorno) || 0)) + 1;
       const avoidTitles = extExistingTitles(dati);
-      const baseCity = String(dati.destinazione || dati.destination || itin.titolo || '').split(':')[0].split(' — ')[0].trim() || 'la destinazione';
+      // Un roadtrip ha piu' città nel titolo ("Roadtrip: Roma, Firenze,
+      // Venezia", 10/09/2026): la vecchia estrazione prendeva la prima
+      // parola prima dei due punti ("Roadtrip", non una città). Ora si
+      // guarda DOPO i due punti e, se ci sono più città separate da virgola,
+      // si prende l'ULTIMA — un giorno si aggiunge tipicamente in fondo al
+      // viaggio, dove il roadtrip finisce.
+      const baseCityGrezza = String(dati.destinazione || dati.destination || itin.titolo || '');
+      const baseCityDopoIDuePunti = baseCityGrezza.includes(':') ? baseCityGrezza.split(':').slice(1).join(':') : baseCityGrezza;
+      const baseCityParte = baseCityDopoIDuePunti.split(' — ')[0];
+      const baseCityElenco = baseCityParte.split(',').map((s) => s.trim()).filter(Boolean);
+      const baseCity = (baseCityElenco.length ? baseCityElenco[baseCityElenco.length - 1] : baseCityParte.trim()) || 'la destinazione';
       const baseCoords = extItineraryCoords(dati);
 
       // (b) Città/coordinate target del nuovo giorno + eventuale blocco di
@@ -22892,7 +25057,7 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
       // specifica per un item generico della Libreria), stesso tema/città
       // tra le 30 curate in libraryDescriptors.ts.
       if (theme && !transferBlock) {
-        const slug = await extFindZoneDaySlug(targetCity, theme);
+        const slug = await extFindZoneDaySlug(targetCity, theme, targetCoords);
         if (slug) {
           try {
             const cached = await getFromCache(`lib_item_${slug}`);
@@ -24361,6 +26526,14 @@ ${testo}`;
    */
   app.get("/api/route/foot/:coords", rateLimiter, async (req, res) => {
     try {
+      // Bearer obbligatorio anche qui (audit SEC-01): senza, questa resta
+      // un'API di routing pedonale anonima a nostre spese, gemella di
+      // /api/tour/foot che lo richiede già anche in anteprima.
+      let uid: string | null = null;
+      try { uid = await verifyUserToken(req); } catch { uid = null; }
+      if (!uid) return res.status(401).json({ error: 'auth_required' });
+      (req as any).userId = uid;
+
       const parti = String(req.params.coords || '').split(';');
       if (parti.length !== 2) return res.status(400).json({ code: 'InvalidInput', message: 'servono due coordinate' });
       const [a, b] = parti.map(p => p.split(',').map(Number));
@@ -24751,6 +26924,11 @@ ${testo}`;
       const lang = String(req.query.language || 'it').slice(0, 2).toLowerCase();
       const anello = String(req.query.anello || 'false') === 'true';
       const vuoleOrdine = String(req.query.ordina || 'true') !== 'false';
+      // `evita=scale` (10/09/2026): tourService.ts la manda già anche qui,
+      // ma la rotta la ignorava — stesso filtro di /api/route/foot sulle
+      // fonti senza supporto alle scale (f.scale).
+      const evitaScale = String(req.query.evita || '').split(',').includes('scale');
+      const opzioniGiro: OpzioniRoute = { evitaScale };
       const partenza = punti[0];
       const tappe = punti.slice(1);
 
@@ -24822,7 +27000,7 @@ ${testo}`;
       // istruzioni passo-passo, ed e` esattamente la differenza che si paga.
       // Senza, una risposta senza `steps` finirebbe servita a chi ha il pass
       // (o, peggio, quella completa a chi non ce l'ha).
-      const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine};${anteprima ? 'ant' : 'full'}${puntoRientro ? `;r${puntoRientro[0].toFixed(4)},${puntoRientro[1].toFixed(4)}` : ''}`;
+      const chiave = `${punti.map(p => `${p[0].toFixed(4)},${p[1].toFixed(4)}`).join(';')};${lang};${anello};${vuoleOrdine};${anteprima ? 'ant' : 'full'}${puntoRientro ? `;r${puntoRientro[0].toFixed(4)},${puntoRientro[1].toFixed(4)}` : ''}${evitaScale ? ';noscale' : ''}`;
       const c = req.query.senza ? null : tourCache.get(chiave);
       // Lo stato del percorso su misura e` di QUESTA richiesta (l'ha appena
       // contato il cancello), non della risposta in cache.
@@ -24883,8 +27061,9 @@ ${testo}`;
           const b = sequenza[i + 1];
           for (const f of FONTI_ROUTE) {
             if (saltate.has(f.nome) || !f.attiva) continue;
+            if (evitaScale && !f.scale) continue;
             try {
-              const out = await f.run(a, b, lang);
+              const out = await f.run(a, b, lang, opzioniGiro);
               if (out?.routes?.[0]?.legs?.[0]?.steps?.length) { contaFonteRoute(f.nome); return { ...out.routes[0], wip_fonte: f.nome }; }
             } catch { /* fonte successiva */ }
           }
@@ -24896,6 +27075,15 @@ ${testo}`;
           return { distance: d, duration: d / 1.35, geometry: { type: 'LineString', coordinates: [a, b] }, legs: [{ steps: [] }], wip_fonte: 'linea-retta', irraggiungibile: true };
         })
       );
+
+      // Se OGNI tratta e' caduta sulla linea d'aria, il giro non e' un giro:
+      // e' un segmento retto che non rispecchia nessun cammino vero. Per un
+      // percorso su misura pagato a crediti questo non deve passare come
+      // "risultato": si lancia un errore cosi' il catch qui sotto rimborsa
+      // (era silenzioso e i crediti restavano presi senza percorso reale).
+      if (tratte.length > 0 && tratte.every((t: any) => t.irraggiungibile)) {
+        throw new Error('nessun percorso pedonale disponibile');
+      }
 
       // ── 3. il giro, nel dialetto che il client gia' parla ──────────────
       const coordinate: number[][] = [];
@@ -24951,7 +27139,10 @@ ${testo}`;
       // una volta sola.
       const pp = (req as any).percorsoAppenaPagato;
       if (pp?.uid) {
-        try { await refundCreditsServer(pp.uid, PERCORSO_COSTO); } catch { /* si logga sotto */ }
+        // refundServer (non refundCreditsServer): se il rimborso fallisce
+        // finisce in logSystemError('critical', ...) invece di sparire in
+        // un catch muto.
+        try { await refundServer(pp.uid, PERCORSO_COSTO); } catch { /* si logga sotto */ }
         try { await saveToCache(pp.chiaveP, 'percorso', JSON.stringify({ pagato: false, rimborsatoIl: Date.now() })); } catch { /* niente */ }
       }
       res.status(500).json({ code: 'Error', message: e?.message });
@@ -25451,11 +27642,20 @@ out center tags;`;
     try {
       // preloadOnly: il client chiede solo di scaldare la cache (warm-up del
       // POI in avvicinamento): si sintetizza e si salva, senza rispedire l'MP3.
-      const { text, voice, preloadOnly } = req.body || {};
+      const { text: rawText, voice, preloadOnly } = req.body || {};
       // Validazione DENTRO il try: prima un body senza `text` faceva
       // esplodere createHash fuori da ogni catch (500 grezzo).
-      if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'missing_text' });
-      if (text.length > TTS_MAX_TEXT_CHARS) return res.status(400).json({ error: 'text_too_long', max: TTS_MAX_TEXT_CHARS });
+      if (typeof rawText !== 'string' || !rawText.trim()) return res.status(400).json({ error: 'missing_text' });
+      // Oltre il tetto si TRONCA su un confine di frase invece di rifiutare
+      // con 400 (10/09/2026): un'audioguida troncata è comunque un'audioguida,
+      // un 400 secco è muta — vedi la regola "audioguida mai muta".
+      let text = rawText;
+      if (text.length > TTS_MAX_TEXT_CHARS) {
+        const tagliato = text.slice(0, TTS_MAX_TEXT_CHARS);
+        const confine = Math.max(tagliato.lastIndexOf('. '), tagliato.lastIndexOf('.\n'), tagliato.lastIndexOf('\n'));
+        text = confine > TTS_MAX_TEXT_CHARS * 0.5 ? tagliato.slice(0, confine + 1) : tagliato;
+        console.warn(`[tts/smart] testo troncato da ${rawText.length} a ${text.length} caratteri (limite ${TTS_MAX_TEXT_CHARS})`);
+      }
       const voiceName = normalizeTtsVoice(voice);
       const cacheKey = ttsCacheKeyFor(text, voiceName);
 
@@ -26062,6 +28262,25 @@ RISPONDI SOLO con questo JSON, nient'altro:
           });
           authUserId = userRes.data?.id || null;
         } catch { /* token non valido → authUserId resta null */ }
+      }
+
+      // IL CANCELLO STA QUI, PRIMA DELLA QUERY (10/09/2026). Il controllo
+      // c'era già, ma dopo la lettura dell'itinerario: un anonimo faceva
+      // interrogare `itineraries` con la chiave di servizio e, dalle risposte,
+      // distingueva un id inesistente (404) da uno di un altro utente (403).
+      // Nessun dato usciva, ma erano lavoro sul database e una conferma di
+      // esistenza regalati a chi non ha nemmeno un account — su un database
+      // che il 09/09 è caduto proprio per eccesso di lavoro.
+      if (!authUserId) {
+        return res.status(401).json({ error: "login_required" });
+      }
+      // L'id arriva dal client: se non è un uuid (né la chat generale) la
+      // query a PostgREST fallisce con un 400 che axios trasforma in
+      // eccezione, e il catch generale rispondeva 500 «errore del server»
+      // nascondendo che era solo un input sbagliato.
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!isGeneralChat && !UUID_RE.test(String(itineraryId))) {
+        return res.status(400).json({ error: "itineraryId non valido" });
       }
 
       // 1. Fetch current plan
@@ -29378,11 +31597,7 @@ out body;`;
         const base = sp.audio_script || sp.description_long || sp.description_ai || sp.description_short || sp.description || poiName;
         text = await regenerateAudioguideText({ text: base, poiName, mode: guideChar, lang: langLower, utenteInAttesa: req.userId !== 'background-script' });
         if (text && text.trim()) {
-          await axios.post(
-            `${supabaseUrl}/rest/v1/poi_audioguides`,
-            { poi_id: poiId, language: languageDb, guide_character: guideChar, audio_text: text, generated_at: new Date().toISOString() },
-            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' } }
-          ).catch(() => {});
+          await salvaAudioguidaInCache({ poiId, language: languageDb, character: guideChar, text, origine: 'audioguida-nativa' });
         } else {
           text = `Benvenuto a ${poiName}!`;
         }

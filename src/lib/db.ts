@@ -53,7 +53,10 @@ export interface VisionQueueItem {
  * la schermata "I miei download" legge solo da qui. Prima erano tre posti
  * diversi senza una vista d'insieme.
  */
-export type DownloadTipo = 'itinerario' | 'zona' | 'audioguida' | 'guida';
+// 'museo' (10/09/2026): il pacchetto della visita a un museo o a una chiesa —
+// percorso, audioguide di tutte le opere, foto. Si scarica la sera prima col
+// wifi dell'albergo e il giorno dopo funziona senza rete.
+export type DownloadTipo = 'itinerario' | 'zona' | 'audioguida' | 'guida' | 'museo';
 export interface DownloadRecord {
   /** Chiave stabile: `iti:<id>`, `zona:<areaId>`, `audio:<poiId>`, `guida:<id>`. */
   id: string;

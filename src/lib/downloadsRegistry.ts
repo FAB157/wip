@@ -18,7 +18,11 @@ function avvisa() {
 }
 
 export function chiaveDownload(tipo: DownloadTipo, id: string | number): string {
-  const pref = tipo === 'itinerario' ? 'iti' : tipo === 'zona' ? 'zona' : tipo === 'audioguida' ? 'audio' : 'guida';
+  const pref = tipo === 'itinerario' ? 'iti'
+    : tipo === 'zona' ? 'zona'
+    : tipo === 'audioguida' ? 'audio'
+    : tipo === 'museo' ? 'museo'
+    : 'guida';
   return `${pref}:${String(id)}`;
 }
 

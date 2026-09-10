@@ -41,6 +41,9 @@ const PlanScreen = lazy(() => import("./components/PlanScreen"));
 const EventsScreen = lazy(() => import("./components/EventsScreen"));
 const CameraScreen = lazy(() => import("./components/CameraScreen"));
 import VisionCardSheet from "./components/VisionCardSheet";
+import MuseumVisitSheet from "./components/MuseumVisitSheet";
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit } from "./lib/museumVisit";
+import { getLocalMuseumPassExpiry } from "./lib/museumPass";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
 import TourBanner from "./components/TourBanner";
@@ -52,6 +55,7 @@ import { avviaGiroDriver } from "./lib/tour/giroDriver";
 import { gestisciErroreGiro } from "./lib/tour/passRichiesto";
 import PercorsoPanel, { type AvvioRapido } from "./components/PercorsoPanel";
 import AudioPlayerBanner from "./components/AudioPlayerBanner";
+import LiveTourAudioGate from "./components/LiveTourAudioGate";
 import ApproachBanner from "./components/ApproachBanner";
 import { OnboardingCarousel } from "./components/OnboardingCarousel";
 import RoutePoisModal from "./components/RoutePoisModal";
@@ -354,6 +358,26 @@ export default function App() {
   }, [riascoltaTappa]);
   // Scheda Vision (riconoscimento fotocamera): NON è un POI, ha una vista dedicata
   const [visionCard, setVisionCard] = useState<any | null>(null);
+  // Visita guidata nei musei: il foglio vive anche fuori dalla fotocamera,
+  // perché la scheda Vision si apre pure da My Vision (Profilo), dove
+  // CameraScreen è smontato e nessuno ascolterebbe l'evento.
+  const [visitaAperta, setVisitaAperta] = useState(false);
+  const [visitaCorrente, setVisitaCorrente] = useState<MuseumVisit | null>(null);
+  useEffect(() => {
+    const aggiorna = () => setVisitaCorrente(getVisit());
+    const apri = () => {
+      const v = getVisit();
+      // Solo se la fotocamera NON è in primo piano: lì il foglio ce l'ha già
+      // lei, e due copie aperte insieme si darebbero fastidio.
+      if (v && activeTab !== "camera") { setVisitaCorrente(v); setVisitaAperta(true); }
+    };
+    window.addEventListener(MUSEUM_VISIT_EVENT, aggiorna);
+    window.addEventListener(OPEN_MUSEUM_VISIT_EVENT, apri);
+    return () => {
+      window.removeEventListener(MUSEUM_VISIT_EVENT, aggiorna);
+      window.removeEventListener(OPEN_MUSEUM_VISIT_EVENT, apri);
+    };
+  }, [activeTab]);
 
   // --- 3. Audio Guide State ---
   // Ripristino dal flag persistito: partendo sempre da `false`, riaprire
@@ -1537,7 +1561,9 @@ export default function App() {
       recordNotification({
         tipo: 'poi',
         titolo: `🔔 Audioguida: ${nome}`,
-        corpo: d.autoPlay ? 'Riproduzione avviata automaticamente' : 'Tocca per ascoltare la guida',
+        corpo: d.autoPlay
+          ? getTranslation('notif_riproduzione_auto', linguaCorrente())
+          : getTranslation('notif_tocca_per_ascoltare', linguaCorrente()),
         meta: { poiId: d.poiId ?? d.poi?.id },
       });
     };
@@ -1622,6 +1648,15 @@ export default function App() {
 
     locationService.syncSettings(itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted);
   }, [itinerary, guideMode, language, isAudioGuideActive, isAudioGuideMuted, selectedCategories]);
+
+  // Tour di gruppo: il follower che preme «Ascolta ora» col muto acceso lo
+  // toglie davvero (locationService lo ha gia' fatto subito per non perdere
+  // il gesto; qui si allinea lo switch della barra in basso).
+  useEffect(() => {
+    const togliMuto = () => setIsAudioGuideMuted(false);
+    window.addEventListener('wip-live-unmute', togliMuto);
+    return () => window.removeEventListener('wip-live-unmute', togliMuto);
+  }, []);
 
   // Rimozione persistita via lib/favorites: aggiorna il mirror locale,
   // emette FAVORITES_EVENT (che riallinea `itinerary` e le altre liste) e
@@ -2023,6 +2058,20 @@ export default function App() {
           <VisionCardSheet card={visionCard} language={language} onClose={() => setVisionCard(null)} />
         )}
 
+        {/* La visita guidata si può aprire da una scheda Vision anche quando
+            la fotocamera è smontata (per esempio da My Vision, nel Profilo):
+            l'evento va ascoltato QUI, dove c'è sempre qualcuno. Senza, il
+            tasto «Sei a…» non faceva nulla fuori dalla tab fotocamera. */}
+        {visitaAperta && visitaCorrente && (
+          <MuseumVisitSheet
+            visit={visitaCorrente}
+            language={language}
+            passExpiresAt={getLocalMuseumPassExpiry()}
+            onClose={() => setVisitaAperta(false)}
+            onScanNext={() => { setVisitaAperta(false); setActiveTab("camera"); }}
+          />
+        )}
+
         {mountedTabs.has("profile") && (
         <div className={`flex-1 w-full overflow-hidden ${activeTab === "profile" ? "flex flex-col relative" : "hidden"}`}>
           <motion.div
@@ -2053,6 +2102,9 @@ export default function App() {
         <div className="print:hidden">
           <GeofenceAudioGuide isActive={isAudioGuideActive} isMuted={isAudioGuideMuted} itinerary={itinerary} guideMode={guideMode} language={language} />
           <AudioPlayerBanner />
+          {/* Tour di gruppo: se l'audio del leader non parte da solo sul
+              telefono del follower, qui compare «Tocca per ascoltare». */}
+          <LiveTourAudioGate language={language} />
 
           <AnimatePresence>
             {globalChatConfig.isOpen && (
@@ -2063,6 +2115,10 @@ export default function App() {
                 language={language}
                 onClose={() => setGlobalChatConfig(prev => ({ ...prev, isOpen: false }))}
                 initialMessage={globalChatConfig.initialMessage}
+                // La chat globale si apre sulla mappa (l'evento wip-open-chat
+                // porta anche a activeTab 'map'): va alzata sopra la fila dei
+                // controlli mappa, altrimenti li copre.
+                sopraControlliMappa={activeTab === 'map'}
               />
             )}
           </AnimatePresence>

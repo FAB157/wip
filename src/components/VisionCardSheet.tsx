@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, User, CalendarDays, Palette, MapPin, BookOpen, Landmark, Sparkles, Volume2, Pause, Loader2, Download, Share2, MessageCircle, Navigation, Crown } from 'lucide-react';
+import { X, User, CalendarDays, Palette, MapPin, BookOpen, Landmark, Sparkles, Volume2, Pause, Play, Loader2, Download, Share2, MessageCircle, Navigation, Crown, Headphones } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { getTranslation, Language } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, countSeen, fetchArtworkGuide, ArtworkGuide } from '../lib/museumVisit';
 
 interface VisionCardSheetProps {
   card: any;           // risultato di /api/vision (+ image base64 lato client)
@@ -30,6 +31,58 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
   useEffect(() => {
     return () => { stopSpeech(); };
   }, []);
+
+  // Visita guidata: se c'è una visita in corso (arriva in sottofondo dopo il
+  // riconoscimento dell'opera) la scheda dice DOVE sei e apre il percorso.
+  const [visit, setVisit] = useState<MuseumVisit | null>(() => getVisit());
+  useEffect(() => {
+    const onVisit = () => setVisit(getVisit());
+    window.addEventListener(MUSEUM_VISIT_EVENT, onVisit);
+    return () => window.removeEventListener(MUSEUM_VISIT_EVENT, onVisit);
+  }, []);
+  const showVisit = !!visit && (card.categoria === 'musei' || card.category === 'musei' || !!card.luogo_esposizione);
+  const handleOpenVisit = () => {
+    window.dispatchEvent(new CustomEvent(OPEN_MUSEUM_VISIT_EVENT));
+    onClose();
+  };
+
+  // ── VERSIONE DA MUSEO (10/09/2026) ──────────────────────────────────────
+  // Un'opera inquadrata dentro un museo merita lo stesso racconto di quella
+  // ascoltata dal percorso: 250-350 parole che guidano l'occhio, con tecnica,
+  // misure e dettagli da cercare. Senza questo tasto la stessa opera veniva
+  // raccontata in due modi diversi a seconda di come ci si arrivava.
+  const [estesa, setEstesa] = useState<ArtworkGuide | null>(null);
+  const [estesaLoading, setEstesaLoading] = useState(false);
+  const nomeMuseo = String(card.luogo_esposizione || visit?.venue?.name || '').trim();
+  const isOpera = (card.categoria === 'musei' || card.category === 'musei') && !!nomeMuseo && !!card.nome;
+
+  const handleEstesa = async () => {
+    if (estesaLoading || !isOpera) return;
+    if (estesa) {
+      // Già aperta: la si ascolta.
+      if (audioPlaying) { stopSpeech(); setAudioPlaying(false); return; }
+      setAudioLoading(true);
+      try {
+        await speakAudioguide(estesa.testo, String(estesa.language || language).toLowerCase(), getGuideCharacter(), () => setAudioPlaying(false));
+        setAudioPlaying(true);
+      } catch { setAudioPlaying(false); } finally { setAudioLoading(false); }
+      return;
+    }
+    setEstesaLoading(true);
+    const resp = await fetchArtworkGuide({
+      artwork: String(card.nome),
+      venueName: nomeMuseo,
+      artist: card.autore && card.autore !== 'Ignoto' ? String(card.autore) : null,
+      language,
+    });
+    setEstesaLoading(false);
+    if (!resp) { notify(t('vis_generic_error')); return; }
+    if (resp.ok !== true) {
+      notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : resp.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_art_no_source'));
+      return;
+    }
+    setEstesa(resp.guide);
+  };
 
   // A11y: focus trap + ritorno del focus alla chiusura, Esc chiude.
   useEffect(() => {
@@ -373,6 +426,25 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
             </div>
           )}
 
+          {showVisit && visit && (
+            <button
+              onClick={handleOpenVisit}
+              className="w-full mb-5 flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-[#eff6ff] border border-primary/40 text-left active:scale-[0.98] transition-transform"
+            >
+              <div className="w-9 h-9 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
+                <Landmark className="w-4 h-4 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_you_are_at')}</p>
+                <p className="text-sm font-black text-primary truncate">{visit.venue.name}</p>
+                <p className="text-[11px] font-bold text-slate-500">
+                  {t('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))} · {t('mv_route')}
+                </p>
+              </div>
+              <Navigation className="w-4 h-4 text-primary shrink-0" />
+            </button>
+          )}
+
           {card.descrizione_breve && (
             <p className="text-[15px] text-slate-800 font-medium leading-relaxed mb-5">{card.descrizione_breve}</p>
           )}
@@ -380,6 +452,79 @@ export default function VisionCardSheet({ card, language, onClose }: VisionCardS
           <Section icon={BookOpen} title={t('vis_section_desc')} text={card.descrizione_dettagliata} />
           <Section icon={Landmark} title={t('vis_section_history')} text={card.storia} />
           <Section icon={Sparkles} title={t('vis_section_curiosity')} text={card.curiosita} />
+
+          {/* Versione da museo: il racconto lungo dell'opera, come al museo */}
+          {isOpera && (
+            <div className="mb-5">
+              <button
+                onClick={handleEstesa}
+                disabled={estesaLoading}
+                className="w-full py-3 rounded-2xl bg-[#eff6ff] border border-primary/40 text-primary font-black text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {estesaLoading ? <Loader2 className="w-4 h-4 animate-spin" />
+                  : estesa ? (audioPlaying ? <Pause className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />)
+                  : <Headphones className="w-4 h-4" />}
+                {estesa ? (audioPlaying ? t('vis_pause') : t('mv_art_listen')) : t('vis_museum_version')}
+              </button>
+
+              {estesa && (
+                <div className="mt-3 rounded-2xl bg-[#f8f5f0] border border-slate-200 overflow-hidden">
+                  {/* Comandi da audioguida: play e pausa sempre a portata. */}
+                  <div className="flex items-center gap-3 px-3 py-2.5 bg-white border-b border-slate-200">
+                    <button
+                      onClick={handleEstesa}
+                      aria-label={audioPlaying ? t('vis_pause') : t('mv_art_listen')}
+                      className="w-11 h-11 shrink-0 rounded-full bg-primary text-white flex items-center justify-center shadow-md active:scale-90 transition-transform"
+                    >
+                      {audioLoading ? <Loader2 className="w-5 h-5 animate-spin" />
+                        : audioPlaying ? <Pause className="w-5 h-5" />
+                        : <Play className="w-5 h-5 ml-0.5" />}
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-black text-slate-900 truncate">{estesa.titolo || card.nome}</p>
+                      <p className="text-[10px] font-bold text-slate-500">
+                        {audioPlaying ? t('mv_art_playing') : t('mv_art_ready')} · {Math.max(1, Math.round((estesa.parole || 0) / 150))} min
+                      </p>
+                    </div>
+                  </div>
+
+                  {estesa.foto && (
+                    <img
+                      src={estesa.foto}
+                      alt={estesa.titolo || String(card.nome || '')}
+                      loading="lazy"
+                      className="w-full max-h-64 object-contain bg-slate-100"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  )}
+                  <div className="p-4">
+                    {(estesa.tecnica || estesa.misure) && (
+                      <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-2">
+                        {[estesa.tecnica, estesa.misure].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                    <p className="text-[13px] text-slate-800 leading-relaxed whitespace-pre-line">{estesa.testo}</p>
+                    {estesa.daGuardare.length > 0 && (
+                      <div className="mt-3 p-3 rounded-xl bg-white border border-slate-200">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-primary mb-1">{t('mv_art_look_for')}</p>
+                        <ul className="space-y-0.5">
+                          {estesa.daGuardare.map((d, k) => (
+                            <li key={k} className="text-[12px] text-slate-700 leading-snug">· {d}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {estesa.curiosita && (
+                      <div className="mt-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-amber-800 mb-1">{t('mv_art_curiosity')}</p>
+                        <p className="text-[12px] text-amber-900 leading-snug">{estesa.curiosita}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* "Chiedi di più" in fondo al testo: chi ha letto tutto ha la
               domanda pronta. Apre la chat AI col contesto della scheda. */}

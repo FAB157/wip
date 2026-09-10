@@ -18,6 +18,184 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   // ── 🧭 Gate di bussola (22/08/2026): non raccontare ciò che hai alle spalle ──
   bearing_gate_label: { IT: "Racconta solo ciò che hai davanti", EN: "Only tell me what's in front of me", FR: "Ne raconter que ce qui est devant moi", ES: "Cuenta solo lo que tienes delante", DE: "Nur erzählen, was vor dir liegt", RU: "Рассказывать только о том, что впереди", ZH: "只讲述你前方的地点" },
   bearing_gate_desc: { IT: "Se hai già superato un luogo, l'audioguida aspetta invece di partire quando ce l'hai alle spalle: riparte se torni indietro o ti giri a guardarlo. Se dopo un po' non ti sei girato, la racconta comunque.", EN: "If you've already walked past a place, the audio guide waits instead of starting when it's behind you: it starts if you turn back or turn to look at it. If you haven't turned after a while, it tells you anyway.", FR: "Si tu as déjà dépassé un lieu, l'audioguide attend au lieu de démarrer quand tu l'as dans le dos : il démarre si tu reviens ou si tu te retournes pour le regarder. Si tu ne t'es pas retourné au bout d'un moment, il le raconte quand même.", ES: "Si ya has pasado un lugar, la audioguía espera en vez de arrancar cuando lo tienes a tu espalda: arranca si vuelves atrás o te giras a mirarlo. Si al cabo de un rato no te has girado, te lo cuenta igualmente.", DE: "Wenn du einen Ort schon passiert hast, wartet der Audioguide, statt loszulegen, wenn du ihn im Rücken hast: Er startet, sobald du umkehrst oder dich danach umdrehst. Drehst du dich eine Weile nicht um, erzählt er ihn trotzdem.", RU: "Если вы уже прошли мимо места, аудиогид подождёт, а не начнёт рассказ, когда объект у вас за спиной: он включится, если вы вернётесь или обернётесь. Если вы так и не обернулись, через некоторое время он расскажет всё равно.", ZH: "如果你已经走过某个地点，语音导览会先等待，而不是在它已在你身后时才开口：当你折返或转身望向它时才会播放。若过一会儿你仍未转身，它也会照常讲述。" },
+  // ── Visita guidata dall'AI dentro musei e chiese (10/09/2026) ──
+  mv_title: { IT: "La tua visita", EN: "Your visit", FR: "Ta visite", ES: "Tu visita", DE: "Dein Besuch", RU: "Ваш визит", ZH: "你的参观" },
+  mv_you_are_at: { IT: "Sei a", EN: "You are at", FR: "Tu es à", ES: "Estás en", DE: "Du bist in", RU: "Вы находитесь в", ZH: "你在" },
+  mv_route: { IT: "Percorso consigliato", EN: "Suggested route", FR: "Parcours conseillé", ES: "Recorrido recomendado", DE: "Empfohlener Rundgang", RU: "Рекомендуемый маршрут", ZH: "推荐路线" },
+  mv_seen: { IT: "Vista", EN: "Seen", FR: "Vue", ES: "Vista", DE: "Gesehen", RU: "Осмотрено", ZH: "已看" },
+  mv_seen_count: { IT: "{n} di {t} viste", EN: "{n} of {t} seen", FR: "{n} sur {t} vues", ES: "{n} de {t} vistas", DE: "{n} von {t} gesehen", RU: "{n} из {t} осмотрено", ZH: "已看 {n}/{t}" },
+  mv_next: { IT: "Inquadra la prossima opera", EN: "Frame the next work", FR: "Cadre l'œuvre suivante", ES: "Enfoca la siguiente obra", DE: "Nächstes Werk aufnehmen", RU: "Наведите камеру на следующее произведение", ZH: "拍摄下一件作品" },
+  mv_end: { IT: "Termina la visita", EN: "End the visit", FR: "Terminer la visite", ES: "Terminar la visita", DE: "Besuch beenden", RU: "Завершить визит", ZH: "结束参观" },
+  mv_listen: { IT: "Ascolta la guida", EN: "Listen to the guide", FR: "Écouter le guide", ES: "Escuchar la guía", DE: "Guide anhören", RU: "Прослушать гид", ZH: "收听导览" },
+  mv_open: { IT: "Apri", EN: "Open", FR: "Ouvrir", ES: "Abrir", DE: "Öffnen", RU: "Открыть", ZH: "打开" },
+  mv_source: { IT: "Fonte", EN: "Source", FR: "Source", ES: "Fuente", DE: "Quelle", RU: "Источник", ZH: "来源" },
+  mv_type_museum: { IT: "Museo", EN: "Museum", FR: "Musée", ES: "Museo", DE: "Museum", RU: "Музей", ZH: "博物馆" },
+  mv_type_church: { IT: "Chiesa", EN: "Church", FR: "Église", ES: "Iglesia", DE: "Kirche", RU: "Церковь", ZH: "教堂" },
+  mv_type_site: { IT: "Sito", EN: "Site", FR: "Site", ES: "Sitio", DE: "Stätte", RU: "Объект", ZH: "遗址" },
+  mv_start: { IT: "Avvia la visita guidata", EN: "Start the guided visit", FR: "Lancer la visite guidée", ES: "Iniciar la visita guiada", DE: "Geführten Besuch starten", RU: "Начать экскурсию", ZH: "开始导览参观" },
+  mv_start_desc: { IT: "WIP capisce dove sei e ti accompagna: le opere da non perdere, in ordine, e la spiegazione di ogni opera che inquadri.", EN: "WIP works out where you are and guides you: the must-see works, in order, plus an explanation of every work you frame.", FR: "WIP comprend où tu es et t'accompagne : les œuvres à ne pas manquer, dans l'ordre, et l'explication de chaque œuvre que tu cadres.", ES: "WIP entiende dónde estás y te acompaña: las obras imprescindibles, en orden, y la explicación de cada obra que enfocas.", DE: "WIP erkennt, wo du bist, und begleitet dich: die wichtigsten Werke der Reihe nach und eine Erklärung zu jedem Werk, das du aufnimmst.", RU: "WIP определяет, где вы, и сопровождает вас: главные произведения по порядку и объяснение каждого, на которое вы наведёте камеру.", ZH: "WIP 会判断你的位置并全程陪同：按顺序介绍必看作品，并讲解你拍摄的每一件作品。" },
+  mv_ready: { IT: "Sei a {name}: il percorso della visita è pronto", EN: "You are at {name}: your visit route is ready", FR: "Tu es à {name} : le parcours de visite est prêt", ES: "Estás en {name}: el recorrido de la visita está listo", DE: "Du bist in {name}: dein Rundgang ist bereit", RU: "Вы в {name}: маршрут визита готов", ZH: "你在 {name}：参观路线已就绪" },
+  mv_ask_name: { IT: "Qui il GPS non basta a capire dove sei. Scrivi il nome del museo o della chiesa:", EN: "GPS is not enough to tell where you are here. Type the name of the museum or church:", FR: "Ici le GPS ne suffit pas à savoir où tu es. Écris le nom du musée ou de l'église :", ES: "Aquí el GPS no basta para saber dónde estás. Escribe el nombre del museo o de la iglesia:", DE: "Hier reicht das GPS nicht, um zu wissen, wo du bist. Gib den Namen des Museums oder der Kirche ein:", RU: "Здесь GPS не хватает, чтобы понять, где вы. Введите название музея или церкви:", ZH: "这里仅靠 GPS 无法判断你的位置。请输入博物馆或教堂的名称：" },
+  mv_name_placeholder: { IT: "es. Galleria degli Uffizi", EN: "e.g. Uffizi Gallery", FR: "ex. Musée du Louvre", ES: "p. ej. Museo del Prado", DE: "z. B. Alte Pinakothek", RU: "напр. Эрмитаж", ZH: "例如：故宫博物院" },
+  mv_go: { IT: "Vai", EN: "Go", FR: "Aller", ES: "Ir", DE: "Los", RU: "Найти", ZH: "开始" },
+  vis_museum_version: {
+    IT: "Versione da museo · più lunga e dettagliata",
+    EN: "Museum version · longer and more detailed",
+    FR: "Version musée · plus longue et détaillée",
+    ES: "Versión de museo · más larga y detallada",
+    DE: "Museumsfassung · länger und ausführlicher",
+    RU: "Музейная версия · длиннее и подробнее",
+    ZH: "博物馆版本 · 更长更详细"
+  },
+  mv_art_listen: {
+    IT: "Ascolta l'opera", EN: "Listen to this work", FR: "Écouter l'œuvre", ES: "Escuchar la obra",
+    DE: "Werk anhören", RU: "Прослушать о произведении", ZH: "收听作品讲解"
+  },
+  // ── Aggiungi opere e pacchetto offline del museo (10/09/2026) ──
+  vis_tab_visite: {
+    IT: "Visite", EN: "Visits", FR: "Visites", ES: "Visitas", DE: "Besuche", RU: "Визиты", ZH: "参观"
+  },
+  mv_cerca_luogo: {
+    IT: "Cerca un museo o una chiesa", EN: "Search a museum or church", FR: "Chercher un musée ou une église",
+    ES: "Busca un museo o una iglesia", DE: "Museum oder Kirche suchen", RU: "Найти музей или церковь", ZH: "搜索博物馆或教堂"
+  },
+  mv_qui_vicino: {
+    IT: "Qui vicino, da visitare dentro", EN: "Nearby, to visit inside", FR: "Tout près, à visiter à l'intérieur",
+    ES: "Cerca de aquí, para visitar por dentro", DE: "In der Nähe, von innen zu besichtigen", RU: "Рядом, можно зайти внутрь", ZH: "附近可入内参观"
+  },
+  mv_nessuno_vicino: {
+    IT: "Qui vicino non ho ancora visite pronte. Cerca un luogo per nome: la visita si crea in mezzo minuto.",
+    EN: "No ready visits nearby yet. Search a place by name: the visit is created in half a minute.",
+    FR: "Aucune visite prête à proximité. Cherche un lieu par son nom : la visite se crée en trente secondes.",
+    ES: "Aún no hay visitas listas cerca. Busca un lugar por su nombre: la visita se crea en medio minuto.",
+    DE: "In der Nähe gibt es noch keine fertigen Besuche. Suche einen Ort nach Namen: Der Besuch entsteht in einer halben Minute.",
+    RU: "Поблизости готовых визитов пока нет. Найдите место по названию: визит создастся за полминуты.",
+    ZH: "附近还没有现成的参观路线。按名称搜索一个地点：路线会在半分钟内生成。"
+  },
+  mv_n_opere: {
+    IT: "{n} opere", EN: "{n} works", FR: "{n} œuvres", ES: "{n} obras", DE: "{n} Werke", RU: "произведений: {n}", ZH: "{n} 件作品"
+  },
+  mv_con_sale: {
+    IT: "con le sale", EN: "with rooms", FR: "avec les salles", ES: "con las salas", DE: "mit Sälen", RU: "с залами", ZH: "含展厅"
+  },
+  mv_promessa: {
+    IT: "Nessun elenco da compilare: il nome del luogo lo dice la tua posizione. Ogni museo e ogni chiesa con un sito o una voce Wikipedia ha la sua visita.",
+    EN: "No list to compile: your position tells the name of the place. Every museum and church with a website or a Wikipedia entry has its visit.",
+    FR: "Aucune liste à remplir : ta position donne le nom du lieu. Chaque musée et chaque église avec un site ou une notice Wikipédia a sa visite.",
+    ES: "Ninguna lista que rellenar: tu posición dice el nombre del lugar. Cada museo y cada iglesia con web o entrada en Wikipedia tiene su visita.",
+    DE: "Keine Liste zu pflegen: Dein Standort nennt den Namen des Ortes. Jedes Museum und jede Kirche mit Website oder Wikipedia-Eintrag hat ihren Rundgang.",
+    RU: "Никаких списков: название места подсказывает ваше местоположение. У каждого музея и храма с сайтом или статьёй в Википедии есть свой маршрут.",
+    ZH: "无需维护名单：你的位置就能说出地点的名字。每一座有官网或维基百科条目的博物馆和教堂，都有自己的参观路线。"
+  },
+  mv_esperienze: {
+    IT: "Biglietti e visite guidate", EN: "Tickets and guided tours", FR: "Billets et visites guidées",
+    ES: "Entradas y visitas guiadas", DE: "Tickets und Führungen", RU: "Билеты и экскурсии", ZH: "门票与导览团"
+  },
+  mv_esperienze_nota: {
+    IT: "Prenotazioni su siti partner. Il prezzo per te non cambia.",
+    EN: "Bookings on partner sites. The price for you is the same.",
+    FR: "Réservations sur des sites partenaires. Le prix ne change pas pour toi.",
+    ES: "Reservas en sitios asociados. El precio para ti no cambia.",
+    DE: "Buchungen auf Partnerseiten. Für dich ändert sich der Preis nicht.",
+    RU: "Бронирование на сайтах-партнёрах. Цена для вас не меняется.",
+    ZH: "在合作网站预订。价格对你没有变化。"
+  },
+  mv_aggiungi_opere: {
+    IT: "Aggiungi opere", EN: "Add more works", FR: "Ajouter des œuvres", ES: "Añadir obras",
+    DE: "Weitere Werke", RU: "Добавить произведения", ZH: "添加更多作品"
+  },
+  mv_aggiunte: {
+    IT: "{n} opere in più nel percorso", EN: "{n} more works added to your route", FR: "{n} œuvres de plus dans le parcours",
+    ES: "{n} obras más en el recorrido", DE: "{n} weitere Werke im Rundgang", RU: "Добавлено произведений: {n}", ZH: "路线中新增 {n} 件作品"
+  },
+  mv_niente_altre: {
+    IT: "Non ho altre opere documentate per questo luogo.",
+    EN: "I have no other documented works for this place.",
+    FR: "Je n'ai pas d'autres œuvres documentées pour ce lieu.",
+    ES: "No tengo más obras documentadas de este lugar.",
+    DE: "Ich habe keine weiteren belegten Werke für diesen Ort.",
+    RU: "Других задокументированных произведений для этого места нет.",
+    ZH: "这个地方没有更多有据可查的作品了。"
+  },
+  mv_scarica_tutto: {
+    IT: "Scarica tutto", EN: "Download all", FR: "Tout télécharger", ES: "Descargar todo",
+    DE: "Alles laden", RU: "Скачать всё", ZH: "全部下载"
+  },
+  mv_disponibile_offline: {
+    IT: "Scaricata", EN: "Downloaded", FR: "Téléchargée", ES: "Descargada",
+    DE: "Geladen", RU: "Скачано", ZH: "已下载"
+  },
+  mv_scaricato: {
+    IT: "Visita scaricata: {n} audioguide, funzionano anche senza rete.",
+    EN: "Visit downloaded: {n} audio guides, they work without a connection.",
+    FR: "Visite téléchargée : {n} audioguides, ils marchent sans réseau.",
+    ES: "Visita descargada: {n} audioguías, funcionan sin conexión.",
+    DE: "Besuch geladen: {n} Audioguides, sie laufen auch ohne Netz.",
+    RU: "Визит скачан: {n} аудиогидов, работают без сети.",
+    ZH: "参观已下载：{n} 段讲解，无网络也能用。"
+  },
+  mv_scaricato_parziale: {
+    IT: "Scaricate {n} audioguide su {t}: delle altre non ho fonti.",
+    EN: "Downloaded {n} of {t} audio guides: I have no sources for the others.",
+    FR: "{n} audioguides sur {t} téléchargés : pour les autres je n'ai pas de sources.",
+    ES: "Descargadas {n} de {t} audioguías: de las demás no tengo fuentes.",
+    DE: "{n} von {t} Audioguides geladen: für die anderen fehlen mir Quellen.",
+    RU: "Скачано {n} из {t} аудиогидов: по остальным нет источников.",
+    ZH: "已下载 {n}/{t} 段讲解：其余的没有可靠资料。"
+  },
+  mv_offline_non_scaricata: {
+    IT: "Sei senza rete e quest'opera non è nel pacchetto scaricato.",
+    EN: "You're offline and this work isn't in the downloaded package.",
+    FR: "Tu es hors ligne et cette œuvre n'est pas dans le paquet téléchargé.",
+    ES: "Estás sin conexión y esta obra no está en el paquete descargado.",
+    DE: "Du bist offline und dieses Werk ist nicht im geladenen Paket.",
+    RU: "Вы офлайн, а этого произведения нет в скачанном пакете.",
+    ZH: "你已离线，而这件作品不在已下载的内容中。"
+  },
+  mv_art_curiosity: {
+    IT: "Lo sapevi", EN: "Did you know", FR: "Le saviez-vous", ES: "¿Sabías que?",
+    DE: "Wusstest du", RU: "А вы знали", ZH: "你知道吗"
+  },
+  mv_art_playing: {
+    IT: "In ascolto", EN: "Playing", FR: "En écoute", ES: "Reproduciendo",
+    DE: "Läuft", RU: "Воспроизведение", ZH: "播放中"
+  },
+  mv_art_ready: {
+    IT: "Tocca per ascoltare", EN: "Tap to listen", FR: "Touche pour écouter", ES: "Toca para escuchar",
+    DE: "Zum Anhören tippen", RU: "Нажмите, чтобы слушать", ZH: "点按收听"
+  },
+  mv_art_look_for: {
+    IT: "Da cercare guardando", EN: "Look for these details", FR: "À chercher du regard", ES: "Detalles que buscar",
+    DE: "Darauf achten", RU: "На что обратить внимание", ZH: "观看时留意"
+  },
+  mv_art_needs_pass: {
+    IT: "L'ascolto delle opere è incluso nel Pass Museo.",
+    EN: "Listening to the works is included in the Museum Pass.",
+    FR: "L'écoute des œuvres est incluse dans le Pass Musée.",
+    ES: "Escuchar las obras está incluido en el Pase Museo.",
+    DE: "Das Anhören der Werke ist im Museumspass enthalten.",
+    RU: "Прослушивание произведений входит в Музейный пасс.",
+    ZH: "作品讲解已包含在博物馆通票中。"
+  },
+  mv_art_exhausted: {
+    IT: "Hai usato tutte le audioguide del pass.",
+    EN: "You have used all the pass audio guides.",
+    FR: "Tu as utilisé tous les audioguides du pass.",
+    ES: "Has usado todas las audioguías del pase.",
+    DE: "Du hast alle Audioguides des Passes verbraucht.",
+    RU: "Вы использовали все аудиогиды пасса.",
+    ZH: "通票内的语音讲解已用完。"
+  },
+  mv_art_no_source: {
+    IT: "Su quest'opera non ho fonti verificate: non invento una descrizione.",
+    EN: "I have no verified sources on this work: I won't invent a description.",
+    FR: "Je n'ai pas de sources vérifiées sur cette œuvre : je n'invente pas de description.",
+    ES: "No tengo fuentes verificadas sobre esta obra: no invento una descripción.",
+    DE: "Zu diesem Werk habe ich keine geprüften Quellen: Ich erfinde keine Beschreibung.",
+    RU: "По этому произведению нет проверенных источников: выдумывать описание я не буду.",
+    ZH: "这件作品没有可核实的资料：我不会编造描述。"
+  },
+  mv_not_found: { IT: "Non ho trovato abbastanza materiale verificato su questo luogo per guidarti: inquadra le opere e te le racconto una per una.", EN: "I couldn't find enough verified material about this place to guide you: frame the works and I'll tell you about them one by one.", FR: "Je n'ai pas trouvé assez de matériel vérifié sur ce lieu pour te guider : cadre les œuvres et je te les raconte une par une.", ES: "No he encontrado suficiente material verificado sobre este lugar para guiarte: enfoca las obras y te las cuento una a una.", DE: "Ich habe nicht genug geprüftes Material über diesen Ort, um dich zu führen: Nimm die Werke auf und ich erzähle sie dir eins nach dem anderen.", RU: "Недостаточно проверенных материалов об этом месте, чтобы вести вас: наводите камеру на произведения, и я расскажу о каждом.", ZH: "关于这个地方，我没有找到足够的可靠资料来引导你：请拍摄作品，我会逐一为你讲解。" },
   // ── Vision / WIP Community v2 (21/08/2026) ──
   // CameraScreen
   vis_tab_scan: { IT: "Scansione AI", EN: "AI Scan", FR: "Scan IA", ES: "Escaneo IA", DE: "KI-Scan", RU: "ИИ-сканирование", ZH: "AI 扫描" },
@@ -1235,6 +1413,23 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "💡 友情提示：请先点击播放（Play）试听语音，即可解锁离线保存功能。"
   , DE: "💡 Höre dir das Audio zuerst an (Play drücken), um das Offline-Speichern zu aktivieren."},
 
+  notif_riproduzione_auto: {
+    IT: "Riproduzione avviata automaticamente",
+    EN: "Playback started automatically",
+    FR: "Lecture démarrée automatiquement",
+    ES: "Reproducción iniciada automáticamente",
+    RU: "Воспроизведение началось автоматически",
+    ZH: "已自动开始播放"
+  , DE: "Wiedergabe automatisch gestartet"},
+  notif_tocca_per_ascoltare: {
+    IT: "Tocca per ascoltare la guida",
+    EN: "Tap to listen to the guide",
+    FR: "Touchez pour écouter le guide",
+    ES: "Toca para escuchar la guía",
+    RU: "Нажмите, чтобы прослушать гид",
+    ZH: "点击收听语音导览"
+  , DE: "Zum Anhören des Guides tippen"},
+
   // Profile / Settings Panel
   my_discoveries: {
     IT: "Le Mie Scoperte",
@@ -1900,13 +2095,86 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "博物馆通票"
   },
   museum_pass_desc: {
-    IT: "Riconoscimenti illimitati per 4 ore: inquadra le opere, WIP te le racconta.",
-    EN: "Unlimited recognitions for 4 hours: frame the artworks, WIP tells their story.",
-    FR: "Reconnaissances illimitées pendant 4 heures : cadrez les œuvres, WIP les raconte.",
-    ES: "Reconocimientos ilimitados durante 4 horas: encuadra las obras y WIP te las cuenta.",
-    DE: "Unbegrenzte Erkennungen für 4 Stunden: Kunstwerke anvisieren, WIP erzählt.",
-    RU: "Безлимитное распознавание на 4 часа: наведите камеру на экспонат — WIP расскажет.",
-    ZH: "4小时内无限识别：对准展品，WIP 为你讲解。"
+    IT: "40 audioguide in 4 ore: inquadra le opere che vuoi, WIP te le racconta.",
+    EN: "40 audio guides in 4 hours: frame the artworks you like, WIP tells their story.",
+    FR: "40 audioguides en 4 heures : cadrez les œuvres que vous voulez, WIP les raconte.",
+    ES: "40 audioguías en 4 horas: encuadra las obras que quieras y WIP te las cuenta.",
+    DE: "40 Audioguides in 4 Stunden: Werke anvisieren, WIP erzählt sie dir.",
+    RU: "40 аудиогидов за 4 часа: наводите камеру на любые экспонаты — WIP расскажет.",
+    ZH: "4 小时内 40 段语音讲解：想看哪件就对准哪件，WIP 为你讲解。"
+  },
+  // ── Pass Museo con VISITA GUIDATA (10/09/2026) ──
+  museum_pass_tour_title: {
+    IT: "Pass Museo con visita guidata",
+    EN: "Museum Pass with guided visit",
+    FR: "Pass Musée avec visite guidée",
+    ES: "Pase Museo con visita guiada",
+    DE: "Museumspass mit Führung",
+    RU: "Музейный пасс с экскурсией",
+    ZH: "博物馆通票（含导览路线）"
+  },
+  museum_pass_tour_desc: {
+    IT: "Le stesse 40 audioguide più il percorso dentro il museo: dove sei, quali opere vedere e in che ordine.",
+    EN: "The same 40 audio guides plus the route inside the museum: where you are, which works to see and in what order.",
+    FR: "Les mêmes 40 audioguides plus le parcours dans le musée : où vous êtes, quelles œuvres voir et dans quel ordre.",
+    ES: "Las mismas 40 audioguías más el recorrido dentro del museo: dónde estás, qué obras ver y en qué orden.",
+    DE: "Dieselben 40 Audioguides plus der Rundgang im Museum: wo du bist, welche Werke du sehen solltest und in welcher Reihenfolge.",
+    RU: "Те же 40 аудиогидов плюс маршрут по музею: где вы, какие произведения смотреть и в каком порядке.",
+    ZH: "同样的 40 段语音讲解，外加馆内路线：你在哪里、看哪些作品、按什么顺序。"
+  },
+  museum_pass_tour_badge: {
+    IT: "con visita guidata",
+    EN: "with guided visit",
+    FR: "avec visite guidée",
+    ES: "con visita guiada",
+    DE: "mit Führung",
+    RU: "с экскурсией",
+    ZH: "含导览路线"
+  },
+  museum_pass_upgrade: {
+    IT: "Aggiungi la visita guidata",
+    EN: "Add the guided visit",
+    FR: "Ajouter la visite guidée",
+    ES: "Añadir la visita guiada",
+    DE: "Führung hinzufügen",
+    RU: "Добавить экскурсию",
+    ZH: "加购导览路线"
+  },
+  museum_pass_upgrade_desc: {
+    IT: "Il tuo pass resta valido fino alla stessa ora: paghi solo la differenza.",
+    EN: "Your pass stays valid until the same time: you only pay the difference.",
+    FR: "Votre pass reste valable jusqu'à la même heure : vous ne payez que la différence.",
+    ES: "Tu pase sigue válido hasta la misma hora: solo pagas la diferencia.",
+    DE: "Dein Pass bleibt bis zur selben Uhrzeit gültig: Du zahlst nur die Differenz.",
+    RU: "Ваш пасс действует до того же времени: вы платите только разницу.",
+    ZH: "通票有效时间不变：只需补差价。"
+  },
+  museum_pass_scans_left: {
+    IT: "{n} audioguide su {t} ancora disponibili",
+    EN: "{n} of {t} audio guides left",
+    FR: "{n} audioguides sur {t} restants",
+    ES: "Quedan {n} de {t} audioguías",
+    DE: "Noch {n} von {t} Audioguides",
+    RU: "Осталось {n} из {t} аудиогидов",
+    ZH: "还剩 {n}/{t} 段讲解"
+  },
+  mv_locked_title: {
+    IT: "La visita guidata è nel pass con itinerario",
+    EN: "The guided visit comes with the itinerary pass",
+    FR: "La visite guidée est dans le pass avec itinéraire",
+    ES: "La visita guiada está en el pase con itinerario",
+    DE: "Die Führung gehört zum Pass mit Rundgang",
+    RU: "Экскурсия входит в пасс с маршрутом",
+    ZH: "导览路线包含在含路线的通票中"
+  },
+  mv_locked_desc: {
+    IT: "WIP capisce in che museo sei e ti porta di sala in sala fra le opere da non perdere.",
+    EN: "WIP works out which museum you are in and takes you from room to room among the works not to miss.",
+    FR: "WIP comprend dans quel musée vous êtes et vous emmène de salle en salle parmi les œuvres à ne pas manquer.",
+    ES: "WIP entiende en qué museo estás y te lleva de sala en sala entre las obras imprescindibles.",
+    DE: "WIP erkennt, in welchem Museum du bist, und führt dich von Saal zu Saal zu den wichtigsten Werken.",
+    RU: "WIP определяет, в каком вы музее, и ведёт вас из зала в зал к главным произведениям.",
+    ZH: "WIP 会判断你在哪座博物馆，并带你逐厅参观不可错过的作品。"
   },
   museum_pass_active: {
     IT: "Pass Museo attivo",

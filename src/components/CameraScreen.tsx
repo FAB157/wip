@@ -12,7 +12,7 @@ import ShopScreen from './ShopScreen';
 import { logApiCall } from '../lib/apiLogger';
 import { getApiUrl } from '../lib/api';
 import { locationService } from '../services/locationService';
-import { getLocalMuseumPassExpiry, fetchMuseumPassStatus, buyMuseumPass, formatPassRemaining } from '../lib/museumPass';
+import { getLocalMuseumPassExpiry, getLocalMuseumPassTier, fetchMuseumPassFull, buyMuseumPass, formatPassRemaining, MuseumPassTier } from '../lib/museumPass';
 import AROverlay from './AROverlay';
 import VisionCommentModal from './VisionCommentModal';
 import VisionLocationPicker, { VisionCoordsSource, VisionLocationPick } from './VisionLocationPicker';
@@ -21,6 +21,10 @@ import { readJpegExif } from '../lib/exif';
 import { db } from '../lib/db';
 import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
+import MuseumVisitSheet from './MuseumVisitSheet';
+import LoadingQuiz from './LoadingQuiz';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem } from '../lib/museumVisit';
+import { Landmark } from 'lucide-react';
 
 // ── Provenienza della foto (Vision v2) ──────────────────────────────────────
 // photoSource: da dove arriva l'immagine. coordsSource: da dove arrivano le
@@ -155,7 +159,8 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [showCamera, setShowCamera] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string>('');
-  const [mode, setMode] = useState<'vision' | 'ar'>('vision');
+  // 'visite': la sezione musei e chiese, terzo modo di WIP Vision.
+  const [mode, setMode] = useState<'vision' | 'ar' | 'visite'>('vision');
   // Vision opere musei (ondata 7): in modalità "Opera" il server riceve
   // mode:'artwork' → prompt da storico dell'arte, cache GPS bypassata (due
   // opere distano pochi metri). Col Pass Museo attivo la scansione è inclusa.
@@ -191,6 +196,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const tr = (key: string) => getTranslation(key, language);
   // Pass Museo: mirror locale subito (musei = rete scarsa), poi verità server.
   const [passExpiresAt, setPassExpiresAt] = useState<number | null>(getLocalMuseumPassExpiry());
+  // Livello del pass: 'base' (40 audioguide) o 'tour' (anche la visita guidata).
+  const [passTier, setPassTier] = useState<MuseumPassTier | null>(getLocalMuseumPassTier());
+  const [passScans, setPassScans] = useState<{ used: number; limit: number }>({ used: 0, limit: 40 });
   const [buyingPass, setBuyingPass] = useState(false);
   // Foto in analisi: sfondo del mirino di scansione stile AR.
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -202,8 +210,145 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [queueProcessing, setQueueProcessing] = useState(false);
   const processingQueueRef = useRef(false);
 
+  // ── VISITA GUIDATA DALL'AI (10/09/2026) ─────────────────────────────────
+  // Dentro un museo/chiesa WIP accompagna: dopo il primo scatto (o col tasto
+  // «Avvia la visita guidata») risolve DOVE sei da GPS + luogo dichiarato
+  // dal modello e propone il percorso; ogni opera inquadrata viene spuntata.
+  // Lo stato vive in museumVisit.ts; qui solo la vista.
+  const [visit, setVisit] = useState<MuseumVisit | null>(() => getVisit());
+  const [visitOpen, setVisitOpen] = useState(false);
+  const [visitStarting, setVisitStarting] = useState(false);
+  // Ripiego SOLO quando il GPS non trova nessun luogo: campo per il nome.
+  const [visitNameFallback, setVisitNameFallback] = useState<string | null>(null);
+  // Il server ha risposto che la visita guidata è del pass con itinerario.
+  const [needsTourPass, setNeedsTourPass] = useState(false);
+  // Sezione Visite: i musei e le chiese qui intorno che hanno la guida pronta.
+  const [museiVicini, setMuseiVicini] = useState<MuseumLibraryItem[] | null>(null);
+  const [cercaMuseo, setCercaMuseo] = useState('');
+  // Quiz durante l'attesa (10/09/2026, richiesta del committente: «come negli
+  // itinerari»). Costruire il percorso di un museo richiede 20-35 secondi:
+  // invece di far guardare una rotellina, si gioca e si vincono crediti — un
+  // credito e 20 punti per risposta giusta, accreditati dal server.
+  const [quizUserId, setQuizUserId] = useState<string | null>(null);
+  const [quizAperto, setQuizAperto] = useState(false);
+  const [quizLuogo, setQuizLuogo] = useState('');
+
+  /** Apre il quiz mentre la guida si costruisce. Senza login niente quiz. */
+  const apriQuizAttesa = async (nomeLuogo: string) => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const uid = data?.session?.user?.id;
+      if (!uid) return;
+      setQuizUserId(uid);
+      setQuizLuogo(nomeLuogo || visit?.venue?.name || '');
+      setQuizAperto(true);
+    } catch { /* il quiz è un di più: mai bloccare la generazione */ }
+  };
+  const chiudiQuiz = () => setQuizAperto(false);
+
+  /** Elenco dei luoghi con visita già pronta, per la sezione Visite. */
+  const caricaMuseiVicini = async () => {
+    const coords = await resolveVisitCoords();
+    const elenco = await fetchMuseumLibrary({
+      lat: coords.lat, lon: coords.lon, language, radiusKm: 30, limit: 20,
+    });
+    setMuseiVicini(elenco);
+  };
+
+  /** Apre la visita di un museo scelto dall'elenco (o cercato per nome). */
+  const apriVisitaDiElenco = async (m: MuseumLibraryItem) => {
+    if (visitStarting) return;
+    setVisitStarting(true);
+    void apriQuizAttesa(m.venue_name);
+    try {
+      const out = m.poi_id
+        ? await startVisitByPoi(m.poi_id, language, { lat: m.lat, lon: m.lon })
+        : await startVisitByName(m.venue_name, { lat: m.lat, lon: m.lon }, language);
+      if (out.ok && out.visit) { setVisit(out.visit); setVisitOpen(true); }
+      else if (out.reason === 'needs_tour_pass') setNeedsTourPass(true);
+      else notify(tr('mv_not_found'));
+    } finally {
+      setVisitStarting(false);
+      setQuizAperto(false);
+    }
+  };
+
   useEffect(() => {
-    fetchMuseumPassStatus().then(setPassExpiresAt);
+    const onVisit = () => setVisit(getVisit());
+    const onOpen = () => { setVisit(getVisit()); setVisitOpen(true); };
+    window.addEventListener(MUSEUM_VISIT_EVENT, onVisit);
+    window.addEventListener(OPEN_MUSEUM_VISIT_EVENT, onOpen);
+    return () => {
+      window.removeEventListener(MUSEUM_VISIT_EVENT, onVisit);
+      window.removeEventListener(OPEN_MUSEUM_VISIT_EVENT, onOpen);
+    };
+  }, []);
+
+  /**
+   * Posizione per la visita: dentro un edificio il GPS puro spesso non
+   * aggancia, quindi si accetta l'ultimo fix noto (anche quello dell'ingresso,
+   * fino a 10 minuti prima) e la localizzazione di rete (Wi-Fi/celle), che sul
+   * telefono è già fusa nel servizio di geolocalizzazione del browser.
+   */
+  const resolveVisitCoords = async (): Promise<{ lat: number | null; lon: number | null }> => {
+    const last = locationService.getLastLocation();
+    if (last && last.latitude && last.longitude) return { lat: last.latitude, lon: last.longitude };
+    try {
+      const pos: any = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: false, timeout: 6000, maximumAge: 10 * 60 * 1000 });
+      });
+      return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    } catch {
+      return { lat: null, lon: null };
+    }
+  };
+
+  /** Tasto «Avvia la visita guidata»: dove sono? → percorso. */
+  const startGuidedVisit = async (typedName?: string) => {
+    if (visitStarting) return;
+    setVisitStarting(true);
+    // Il quiz parte SUBITO: la guida si costruisce dietro, e alla fine il
+    // quiz si chiude da solo consegnando i crediti vinti.
+    void apriQuizAttesa(typedName || '');
+    try {
+      const coords = await resolveVisitCoords();
+      if (typedName && typedName.trim().length >= 3) {
+        const out = await startVisitByName(typedName.trim(), coords, language);
+        if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
+        else if (out.reason === 'needs_tour_pass') setNeedsTourPass(true);
+        else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
+        return;
+      }
+      if (coords.lat === null) { setVisitNameFallback(''); return; }
+      const resp = await fetchVenueGuide({ lat: coords.lat, lon: coords.lon, language });
+      if (resp && resp.ok === true) {
+        const v = startVisitFromGuide(resp);
+        setVisit(v);
+        setVisitOpen(true);
+      } else if (resp && resp.ok === false && resp.reason === 'needs_tour_pass') {
+        // La visita guidata è del pass con itinerario: si propone lo sblocco,
+        // senza generare nulla (nessun costo AI per chi non ha pagato).
+        setNeedsTourPass(true);
+      } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
+        // Nessun museo/chiesa entro 200 m nel nostro archivio: si chiede il nome.
+        setVisitNameFallback('');
+      } else {
+        notify(tr('mv_not_found'));
+      }
+    } finally {
+      setVisitStarting(false);
+      // Guida pronta: il quiz si chiude e i crediti vinti vengono accreditati
+      // (LoadingQuiz li manda al server quando viene smontato).
+      setQuizAperto(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMuseumPassFull().then(s => {
+      setPassExpiresAt(s.expiresAt);
+      setPassTier(s.tier);
+      setPassScans({ used: s.scansUsed, limit: s.scansLimit });
+    });
     // Tick per countdown e scadenza del banner senza rifetch.
     const t = setInterval(() => setTick(x => x + 1), 30_000);
     return () => clearInterval(t);
@@ -389,21 +534,38 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     setShopUserId(data?.session?.user?.id || "mock-user-id");
   };
 
-  const handleBuyPass = async () => {
+  /**
+   * Acquisto del Pass Museo, due livelli (10/09/2026):
+   *  - 'base' 100 crediti: 40 audioguide, si inquadrano le opere che si vogliono
+   *  - 'tour' 150 crediti: le stesse 40 più la visita guidata del museo
+   * Con un pass base attivo, 'tour' costa solo la differenza e la scadenza
+   * resta quella già pagata.
+   */
+  const handleBuyPass = async (tier: 'base' | 'tour' = 'base') => {
     if (buyingPass) return;
     const { data } = await supabase.auth.getSession();
     const uid = data?.session?.user?.id;
     if (!uid) { setError(tr('vis_pass_login')); return; }
     const bal = await getWalletBalance(uid);
     setCurrentBalance(bal.total);
-    const confirmed = await creditConfirm.requestConfirmation(PRICING_LIST.museum_pass, getTranslation("museum_pass_title", language));
+    const upgrade = tier === 'tour' && passActive && passTier === 'base';
+    const costo = upgrade
+      ? Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)
+      : (tier === 'tour' ? PRICING_LIST.museum_pass_tour : PRICING_LIST.museum_pass);
+    const confirmed = await creditConfirm.requestConfirmation(
+      costo,
+      tier === 'tour' ? getTranslation('museum_pass_tour_title', language) : getTranslation('museum_pass_title', language)
+    );
     if (!confirmed) return;
     setBuyingPass(true);
-    const out = await buyMuseumPass();
+    const out = await buyMuseumPass(tier);
     setBuyingPass(false);
     if (out.ok && out.expiresAt) {
       setPassExpiresAt(out.expiresAt);
+      setPassTier(out.tier || tier);
       notify(getTranslation("museum_pass_bought", language));
+      // Comprato il pass con itinerario: la visita parte subito.
+      if ((out.tier || tier) === 'tour') void startGuidedVisit();
     } else if (out.error === 'credits') {
       notify(tr('vis_no_credits'));
       openCreditShop();
@@ -816,6 +978,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         const enrichedData = { ...data, image: `data:image/jpeg;base64,${base64Image}` };
         // Privacy: volti riconoscibili → se pubblicata verranno sfocati.
         if (data.privacy?.volti === true) notify(tr('vis_privacy_people'), 'success');
+        // Visita guidata: un'opera riconosciuta (modalità Opera o Pass Museo)
+        // avvia o aggiorna la visita in sottofondo. La scheda dell'opera si
+        // apre subito; il percorso arriva dopo, dalla scheda o dal riquadro.
+        if (visionTarget === 'artwork' || passActive) {
+          const hadVisit = !!getVisit();
+          void onArtworkRecognized(data, { lat: gpsLat, lon: gpsLon }, language).then(v => {
+            if (v && !hadVisit) notify(tr('mv_ready').replace('{name}', v.venue.name), 'success');
+          });
+        }
         // Bassa confidenza con candidati reali: selettore prima della scheda.
         const candidati: string[] = Array.isArray(data.candidati)
           ? data.candidati.filter((c: any) => typeof c === 'string' && c.trim()).slice(0, 3)
@@ -1062,8 +1233,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       <div className="flex-1 relative flex flex-col items-center justify-center p-8 z-10">
         {mode === 'vision' ? (
           <>
+            {/* I TRE MODI DI WIP VISION (10/09/2026): scansione, radar e le
+                VISITE dentro musei e chiese. La sezione musei sta qui, non in
+                una tab nuova: la barra in basso è già piena. */}
             <div className="w-full flex bg-surface/10 rounded-2xl p-1 backdrop-blur-md border border-white/10 mb-8 max-w-xs">
-              <button 
+              <button
                 onClick={() => setMode('vision')}
                 className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'vision' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
               >
@@ -1074,6 +1248,12 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'ar' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
               >
                 {tr('vis_tab_ar')}
+              </button>
+              <button
+                onClick={() => { setMode('visite'); void caricaMuseiVicini(); }}
+                className={`flex-1 py-2 text-xs font-black rounded-xl transition-all ${mode === 'visite' ? 'bg-primary text-white shadow-lg' : 'text-secondary/60 hover:text-secondary'}`}
+              >
+                {tr('vis_tab_visite')}
               </button>
             </div>
 
@@ -1143,42 +1323,260 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
             <span>{tr('vis_pick_gallery')}</span>
           </button>
 
+          {/* VISITA GUIDATA — WIP capisce dove sei (GPS + opera riconosciuta)
+              e ti accompagna nel museo o nella chiesa con un percorso. */}
+          {(visionTarget === 'artwork' || passActive || visit) && (
+            needsTourPass && !visit ? (
+              // Il server ha detto che il percorso è del pass con itinerario.
+              <div className="w-full px-4 py-3 rounded-2xl border border-primary/50 bg-primary/10 backdrop-blur-md text-left space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                    <Landmark className="w-5 h-5 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black text-secondary">{tr('mv_locked_title')}</p>
+                    <p className="text-[10px] font-bold text-secondary/60 leading-snug">{tr('mv_locked_desc')}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => void handleBuyPass('tour')}
+                  disabled={buyingPass}
+                  className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform disabled:opacity-50"
+                >
+                  {buyingPass ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (
+                    passActive && passTier === 'base'
+                      ? `${tr('museum_pass_upgrade')} · +${Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} ${getTranslation('credits_word', language)}`
+                      : `${getTranslation('museum_pass_tour_title', language)} · ${PRICING_LIST.museum_pass_tour} ${getTranslation('credits_word', language)}`
+                  )}
+                </button>
+              </div>
+            ) : visit ? (
+              <button
+                onClick={() => setVisitOpen(true)}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md text-left active:scale-95 transition-all"
+              >
+                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                  <Landmark className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-secondary truncate">{tr('mv_title')} · {visit.venue.name}</p>
+                  <p className="text-[10px] font-bold text-secondary/60">
+                    {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))} · {tr('mv_open')}
+                  </p>
+                </div>
+              </button>
+            ) : visitNameFallback !== null ? (
+              <form
+                onSubmit={(e) => { e.preventDefault(); void startGuidedVisit(visitNameFallback); }}
+                className="w-full px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md text-left space-y-2"
+              >
+                <p className="text-[11px] font-bold text-secondary/80 leading-snug">{tr('mv_ask_name')}</p>
+                <div className="flex gap-2">
+                  <input
+                    value={visitNameFallback}
+                    onChange={(e) => setVisitNameFallback(e.target.value)}
+                    placeholder={tr('mv_name_placeholder')}
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-surface/10 border border-white/15 text-sm text-white placeholder:text-white/40 outline-none"
+                  />
+                  <button type="submit" disabled={visitStarting || visitNameFallback.trim().length < 3} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-black disabled:opacity-50">
+                    {visitStarting ? <Loader2 className="w-4 h-4 animate-spin" /> : tr('mv_go')}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                onClick={() => void startGuidedVisit()}
+                disabled={isScanning || visitStarting}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-surface/5 backdrop-blur-md text-left active:scale-95 transition-all hover:bg-primary/10 disabled:opacity-50"
+              >
+                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                  {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-secondary">{tr('mv_start')}</p>
+                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{tr('mv_start_desc')}</p>
+                </div>
+              </button>
+            )
+          )}
+
           {/* PASS MUSEO — dentro un museo il geofencing tace per design:
-              l'esperienza indoor è inquadrare le opere, col pass è illimitata */}
+              l'esperienza indoor è inquadrare le opere. Due livelli: base
+              (40 audioguide) e con itinerario (anche la visita guidata). */}
           {passActive && passExpiresAt !== null ? (
-            <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 backdrop-blur-md">
-              <div className="w-9 h-9 rounded-xl bg-amber-400/20 flex items-center justify-center shrink-0">
-                <Ticket className="w-5 h-5 text-amber-400" />
+            <div className="w-full flex flex-col gap-2">
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 backdrop-blur-md">
+                <div className="w-9 h-9 rounded-xl bg-amber-400/20 flex items-center justify-center shrink-0">
+                  <Ticket className="w-5 h-5 text-amber-400" />
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-amber-300">
+                    {getTranslation("museum_pass_active", language)}
+                    {passTier === 'tour' ? ` · ${getTranslation("museum_pass_tour_badge", language)}` : ''}
+                  </p>
+                  <p className="text-[10px] font-bold text-amber-200/70">
+                    {tr('museum_pass_scans_left').replace('{n}', String(Math.max(0, passScans.limit - passScans.used))).replace('{t}', String(passScans.limit))} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
+                  </p>
+                </div>
               </div>
-              <div className="flex-1 min-w-0 text-left">
-                <p className="text-xs font-black text-amber-300">{getTranslation("museum_pass_active", language)}</p>
-                <p className="text-[10px] font-bold text-amber-200/70">
-                  {getTranslation("museum_pass_unlimited", language)} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
-                </p>
-              </div>
+              {/* Pass base attivo: si sale a "con itinerario" pagando la differenza. */}
+              {passTier === 'base' && (
+                <button
+                  onClick={() => void handleBuyPass('tour')}
+                  disabled={isScanning || buyingPass}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/40 bg-primary/10 backdrop-blur-md active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                    {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                  </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-xs font-black text-secondary">
+                      {tr('museum_pass_upgrade')} · +{Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} {getTranslation("credits_word", language)}
+                    </p>
+                    <p className="text-[10px] font-bold text-secondary/50 leading-snug">{tr('museum_pass_upgrade_desc')}</p>
+                  </div>
+                </button>
+              )}
             </div>
           ) : (
-            <button
-              onClick={handleBuyPass}
-              disabled={isScanning || buyingPass}
-              className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-surface/5 backdrop-blur-md active:scale-95 transition-all hover:bg-amber-400/10 disabled:opacity-50 disabled:active:scale-100"
-            >
-              <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
-                {buyingPass ? <Loader2 className="w-5 h-5 text-amber-400 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-400" />}
-              </div>
-              <div className="flex-1 min-w-0 text-left">
-                <p className="text-xs font-black text-secondary">
-                  {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
-                </p>
-                <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
-              </div>
-            </button>
+            <div className="w-full flex flex-col gap-2">
+              <button
+                onClick={() => void handleBuyPass('base')}
+                disabled={isScanning || buyingPass}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-surface/5 backdrop-blur-md active:scale-95 transition-all hover:bg-amber-400/10 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
+                  {buyingPass ? <Loader2 className="w-5 h-5 text-amber-400 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-400" />}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-secondary">
+                    {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
+                  </p>
+                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
+                </div>
+              </button>
+              <button
+                onClick={() => void handleBuyPass('tour')}
+                disabled={isScanning || buyingPass}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-primary/50 bg-primary/10 backdrop-blur-md active:scale-95 transition-all hover:bg-primary/20 disabled:opacity-50 disabled:active:scale-100"
+              >
+                <div className="w-9 h-9 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
+                  {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-secondary">
+                    {getTranslation("museum_pass_tour_title", language)} · {PRICING_LIST.museum_pass_tour} {getTranslation("credits_word", language)}
+                  </p>
+                  <p className="text-[10px] font-bold text-secondary/50 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
+                </div>
+              </button>
+            </div>
           )}
         </div>
         </>
+        ) : mode === 'visite' ? (
+          /* ── SEZIONE VISITE: musei e chiese ────────────────────────────── */
+          <div className="w-full max-w-xs flex flex-col gap-3">
+            <div className="w-full flex bg-surface/10 rounded-2xl p-1 backdrop-blur-md border border-white/10">
+              <button onClick={() => setMode('vision')} className="flex-1 py-2 text-xs font-black rounded-xl text-secondary/60">{tr('vis_tab_scan')}</button>
+              <button onClick={() => setMode('ar')} className="flex-1 py-2 text-xs font-black rounded-xl text-secondary/60">{tr('vis_tab_ar')}</button>
+              <button className="flex-1 py-2 text-xs font-black rounded-xl bg-primary text-white shadow-lg">{tr('vis_tab_visite')}</button>
+            </div>
+
+            {/* Visita in corso: si riprende da dove si era rimasti */}
+            {visit && (
+              <button
+                onClick={() => setVisitOpen(true)}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl border border-primary/50 bg-primary/15 text-left active:scale-95 transition-all"
+              >
+                <div className="w-10 h-10 rounded-xl bg-primary/25 flex items-center justify-center shrink-0">
+                  <Landmark className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-primary">{tr('mv_title')}</p>
+                  <p className="text-sm font-black text-secondary truncate">{visit.venue.name}</p>
+                  <p className="text-[10px] font-bold text-secondary/60">
+                    {tr('mv_seen_count').replace('{n}', String(countSeen(visit))).replace('{t}', String(visit.guide.tappe.length))}
+                  </p>
+                </div>
+              </button>
+            )}
+
+            {/* Sei qui: il luogo riconosciuto dalla posizione */}
+            {!visit && (
+              <button
+                onClick={() => void startGuidedVisit()}
+                disabled={visitStarting}
+                className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl border-2 border-primary bg-primary/10 text-left active:scale-95 transition-all disabled:opacity-50"
+              >
+                <div className="w-10 h-10 rounded-xl bg-primary/25 flex items-center justify-center shrink-0">
+                  {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-black text-secondary">{tr('mv_start')}</p>
+                  <p className="text-[10px] font-bold text-secondary/55 leading-snug">{tr('mv_start_desc')}</p>
+                </div>
+              </button>
+            )}
+
+            {/* Ricerca: qualsiasi museo o chiesa del mondo */}
+            <form
+              onSubmit={(e) => { e.preventDefault(); if (cercaMuseo.trim().length >= 3) void startGuidedVisit(cercaMuseo.trim()); }}
+              className="w-full flex gap-2"
+            >
+              <input
+                value={cercaMuseo}
+                onChange={(e) => setCercaMuseo(e.target.value)}
+                placeholder={tr('mv_cerca_luogo')}
+                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-surface/10 border border-white/15 text-sm text-white placeholder:text-white/40 outline-none"
+              />
+              <button type="submit" disabled={visitStarting || cercaMuseo.trim().length < 3} className="px-3.5 rounded-xl bg-primary text-white disabled:opacity-40">
+                <Search className="w-4 h-4" />
+              </button>
+            </form>
+
+            {/* Qui vicino, già pronti */}
+            <div className="w-full">
+              <p className="text-[10px] font-black uppercase tracking-widest text-secondary/45 mb-2">{tr('mv_qui_vicino')}</p>
+              {museiVicini === null ? (
+                <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 text-primary animate-spin" /></div>
+              ) : museiVicini.length === 0 ? (
+                <p className="text-[11px] font-bold text-secondary/45 leading-snug py-2">{tr('mv_nessuno_vicino')}</p>
+              ) : (
+                <div className="space-y-2 max-h-[38vh] overflow-y-auto">
+                  {museiVicini.map(m => (
+                    <button
+                      key={m.venue_key}
+                      onClick={() => void apriVisitaDiElenco(m)}
+                      disabled={visitStarting}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-surface/8 border border-white/10 text-left active:scale-95 transition-all disabled:opacity-50"
+                    >
+                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${m.venue_type === 'chiesa' ? 'bg-amber-400/15' : 'bg-primary/20'}`}>
+                        <Landmark className={`w-4 h-4 ${m.venue_type === 'chiesa' ? 'text-amber-400' : 'text-primary'}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-black text-secondary truncate">{m.venue_name}</p>
+                        <p className="text-[10px] font-bold text-secondary/50">
+                          {tr('mv_n_opere').replace('{n}', String(m.stops_count))}
+                          {m.stops_with_room > 0 ? ` · ${tr('mv_con_sale')}` : ''}
+                        </p>
+                      </div>
+                      {m.distance_m != null && (
+                        <span className="text-[10px] font-black text-secondary/40 shrink-0">
+                          {m.distance_m >= 1000 ? `${(m.distance_m / 1000).toFixed(1)} km` : `${m.distance_m} m`}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[10px] font-bold text-secondary/35 text-center leading-relaxed">{tr('mv_promessa')}</p>
+          </div>
         ) : (
-          <AROverlay 
-            onClose={() => setMode('vision')} 
+          <AROverlay
+            onClose={() => setMode('vision')}
             onPoiClick={(poi) => {
               // Passa il POI al parent (App.tsx) che aprirà la scheda.
               // Formattiamo il dato come se fosse stato riconosciuto
@@ -1381,6 +1779,30 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           language={language}
           onChoose={chooseCandidate}
           onKeep={keepRecognized}
+        />
+      )}
+
+      {/* Quiz mentre la guida del museo si costruisce: si gioca invece di
+          guardare una rotellina, e ogni risposta giusta vale un credito.
+          Chiudendolo la generazione continua lo stesso. */}
+      {quizAperto && quizUserId && (
+        <LoadingQuiz
+          destination={quizLuogo}
+          userId={quizUserId}
+          language={language}
+          quizLength={5}
+          onDismiss={chiudiQuiz}
+        />
+      )}
+
+      {/* Visita guidata: dove sei e percorso consigliato */}
+      {visitOpen && visit && (
+        <MuseumVisitSheet
+          visit={visit}
+          language={language}
+          passExpiresAt={passExpiresAt}
+          onClose={() => setVisitOpen(false)}
+          onScanNext={() => { setVisitOpen(false); setVisionTarget('artwork'); void openCamera(); }}
         />
       )}
 
