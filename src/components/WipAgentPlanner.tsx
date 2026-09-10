@@ -27,6 +27,8 @@ import { notify } from '../lib/toast';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
+import CreditConfirmationModal from './CreditConfirmationModal';
+import { PRICING_LIST, getWalletBalance } from '../lib/pricing';
 
 /** I parametri che l'agente consegna: sono ESATTAMENTE gli stati del form. */
 export interface WipAgentParams {
@@ -67,6 +69,12 @@ export default function WipAgentPlanner({
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState<WipAgentParams | null>(null);
+  // Pacchetto chat: 3 crediti / 10 messaggi (09/09/2026). Il contatore e
+  // l'addebito vivono sul SERVER; qui si mostra solo la conferma quando il
+  // pacchetto è finito, come fa la chat della barra.
+  const [mostraModaleCrediti, setMostraModaleCrediti] = useState(false);
+  const [saldoCrediti, setSaldoCrediti] = useState(0);
+  const [daConfermare, setDaConfermare] = useState('');
   // WIP parla di default: è il senso della modalità. Si può spegnere, e la
   // scelta resta (chi è in treno non vuole la voce ogni volta).
   const [voiceOn, setVoiceOn] = useState<boolean>(() => {
@@ -99,7 +107,9 @@ export default function WipAgentPlanner({
   // speakAudioguide per quando si è offline.
   const speak = (text: string) => {
     if (!voiceOn) return;
-    void speakAudioguide(text, language.toLowerCase(), getGuideCharacter());
+    // La barra del player deve dire "WIP", non "Audioguida": qui a parlare è
+    // l'agente, non la guida di un luogo (segnalato dal committente 09/09/2026).
+    void speakAudioguide(text, language.toLowerCase(), getGuideCharacter(), undefined, 'WIP');
   };
   const stopSpeaking = () => stopSpeech();
   // A schermo chiuso non deve restare né la voce né il microfono acceso:
@@ -107,15 +117,21 @@ export default function WipAgentPlanner({
   // Safari iOS lasciava la spia rossa accesa dopo l'uscita dall'agente.
   useEffect(() => () => { stopSpeaking(); sessioneVoceRef.current?.annulla(); }, []);
 
-  const send = async (text: string) => {
+  /**
+   * `confermaAcquisto` = l'utente ha già detto sì al pacchetto da 3 crediti:
+   * il server è autorizzato ad addebitarlo e a ricaricare i 10 messaggi.
+   * L'addebito NON avviene qui: il client non tocca il borsellino, chiede.
+   */
+  const send = async (text: string, confermaAcquisto = false) => {
     const clean = text.trim();
     if (!clean || thinking) return;
     setError(null);
     setReady(null);
     stopSpeaking();
-    const next: Msg[] = [...messages, { role: 'user', content: clean }];
-    setMessages(next);
-    setInput('');
+    // Al secondo giro (dopo la conferma) il messaggio è già in lista: non va
+    // aggiunto due volte.
+    const next: Msg[] = confermaAcquisto ? messages : [...messages, { role: 'user', content: clean }];
+    if (!confermaAcquisto) { setMessages(next); setInput(''); }
     setThinking(true);
     try {
       const { data: sess } = await supabase.auth.getSession();
@@ -126,11 +142,24 @@ export default function WipAgentPlanner({
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         // L'intro è testo nostro, non serve al modello: si manda solo il
         // dialogo vero.
-        body: JSON.stringify({ messages: next.slice(1), language }),
+        body: JSON.stringify({ messages: next.slice(1), language, confirmPurchase: confermaAcquisto }),
         signal: AbortSignal.timeout(60000),
       });
       const data = await res.json().catch(() => null);
       if (res.status === 401) { setError(t('wip_agent_login_required')); return; }
+      // 402 = pacchetto messaggi esaurito. Con crediti a sufficienza si chiede
+      // conferma (3 crediti / 10 messaggi); senza, si dice che sono finiti.
+      if (res.status === 402) {
+        if (data?.error === 'insufficient_credits') { setError(t('chat_no_credits')); return; }
+        const { data: u } = await supabase.auth.getUser();
+        if (u?.user?.id) {
+          const saldo = await getWalletBalance(u.user.id);
+          setSaldoCrediti(saldo.total);
+          setDaConfermare(clean);
+          setMostraModaleCrediti(true);
+        }
+        return;
+      }
       if (!res.ok || typeof data?.reply !== 'string') { setError(data?.error || t('wip_agent_error')); return; }
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
       speak(data.reply);
@@ -168,6 +197,21 @@ export default function WipAgentPlanner({
   };
 
   return (
+    <>
+    <CreditConfirmationModal
+      isOpen={mostraModaleCrediti}
+      onClose={() => setMostraModaleCrediti(false)}
+      onConfirm={() => {
+        setMostraModaleCrediti(false);
+        // Rimanda lo STESSO messaggio autorizzando l'addebito lato server.
+        if (daConfermare) void send(daConfermare, true);
+      }}
+      cost={PRICING_LIST.chat_session}
+      currentBalance={saldoCrediti}
+      serviceName={t('chat_service_name')}
+      onBuyCredits={() => {}}
+      language={language as any}
+    />
     <motion.div
       key="wip-agent"
       initial={{ opacity: 0, y: 20 }}
@@ -280,5 +324,6 @@ export default function WipAgentPlanner({
         </button>
       </form>
     </motion.div>
+    </>
   );
 }

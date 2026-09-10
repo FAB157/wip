@@ -6,6 +6,31 @@ import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
 import { useBiometricAuth, hasSavedBiometricCredentials } from '../hooks/useBiometricAuth';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
+import {
+  googleNativoDisponibile,
+  appleNativoDisponibile,
+  accediConGoogleNativo,
+  accediConAppleNativo,
+} from '../lib/accessoNativo';
+
+/**
+ * Chi chiude il foglio di sistema di Google/Apple ha DECISO di non accedere:
+ * in quel caso non si deve aprire il browser come ripiego, si torna e basta.
+ * I plugin nativi segnalano l'annullamento con messaggi diversi per piattaforma,
+ * quindi si guardano le formule ricorrenti invece di un codice solo.
+ */
+const utenteHaAnnullato = (e: any) => {
+  const m = String(e?.message || e?.errorMessage || e || '').toLowerCase();
+  return (
+    m.includes('cancel') ||
+    m.includes('canceled') ||
+    m.includes('cancelled') ||
+    m.includes('annull') ||
+    m.includes('user closed') ||
+    m.includes('the user canceled the sign-in flow') ||
+    m.includes('1001') // ASAuthorizationError.canceled su iOS
+  );
+};
 
 interface LoginScreenProps {
   onLoginSuccess: (session: any) => void;
@@ -192,6 +217,20 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     setGoogleLoading(true);
     setError('');
     try {
+      // Prima strada: accesso NATIVO, nessuna finestra del browser (vedi
+      // src/lib/accessoNativo.ts). Se non e' configurato o fallisce si ricade
+      // sul percorso col browser di sistema qui sotto, che resta valido.
+      if (googleNativoDisponibile()) {
+        try {
+          const token = await accediConGoogleNativo();
+          const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token });
+          if (error) throw error;
+          return; // onAuthStateChange in App.tsx chiude la schermata
+        } catch (e: any) {
+          if (utenteHaAnnullato(e)) return;
+          console.warn('[LoginScreen] Google nativo fallito, passo al browser', e);
+        }
+      }
       if (Capacitor.isNativePlatform()) {
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
@@ -230,6 +269,18 @@ export default function LoginScreen({ onLoginSuccess, initialAuthLoading = false
     setAppleLoading(true);
     setError('');
     try {
+      // Come Google: prima il nativo (foglio di sistema iOS), poi il browser.
+      if (appleNativoDisponibile()) {
+        try {
+          const { token, nonce } = await accediConAppleNativo();
+          const { error } = await supabase.auth.signInWithIdToken({ provider: 'apple', token, nonce });
+          if (error) throw error;
+          return;
+        } catch (e: any) {
+          if (utenteHaAnnullato(e)) return;
+          console.warn('[LoginScreen] Apple nativo fallito, passo al browser', e);
+        }
+      }
       if (Capacitor.isNativePlatform()) {
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'apple',

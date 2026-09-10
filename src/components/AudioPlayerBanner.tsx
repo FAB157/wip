@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, Pause, X, Volume2 } from 'lucide-react';
+import { Play, Pause, X, Volume2, RotateCcw } from 'lucide-react';
 import { locationService } from '../services/locationService';
-import { pauseSpeech, resumeSpeech, stopSpeech } from '../services/ttsService';
+import { pauseSpeech, resumeSpeech, stopSpeech, ripetiUltimaBattuta } from '../services/ttsService';
 import { useAudioState } from '../hooks/useAudioState';
 import { getTranslation, linguaCorrente } from '../lib/i18n';
 
@@ -12,15 +12,21 @@ export default function AudioPlayerBanner() {
   // ttsService e restava invisibile durante le audioguide.
   const audioState = useAudioState();
 
-  // Narrazioni avviate da ttsService (PoiCard / popup mappa).
+  // Narrazioni avviate da ttsService (PoiCard / popup mappa / agente WIP).
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const [ttsVisible, setTtsVisible] = useState(false);
+  // Chi parla: l'agente WIP si presenta come "WIP", non come "Audioguida"
+  // (richiesta del committente 09/09/2026). Null = narrazione anonima.
+  const [etichetta, setEtichetta] = useState<string | null>(null);
+  const [ripetibile, setRipetibile] = useState(false);
 
   useEffect(() => {
     const handleStateChange = (e: Event) => {
       const detail = (e as CustomEvent).detail || {};
       setTtsVisible(!!detail.isVisible);
       setTtsPlaying(!!detail.isPlaying);
+      setEtichetta(detail.etichetta ?? null);
+      setRipetibile(!!detail.ripetibile);
     };
 
     window.addEventListener('wip-audio-state-change', handleStateChange);
@@ -53,7 +59,16 @@ export default function AudioPlayerBanner() {
     stopSpeech();
     setTtsVisible(false);
     setTtsPlaying(false);
+    setEtichetta(null);
   };
+
+  // "Ripeti" riascolta l'ultima battuta: vale per l'agente WIP, dove capita di
+  // perdersi una frase, e non tocca il player principale delle audioguide.
+  const handleRepeat = () => { void ripetiUltimaBattuta(); };
+
+  // Titolo: etichetta di chi parla (es. "WIP") > nome del POI > "Audioguida".
+  const titolo = etichetta || audioState.poiName || t('audio_titolo_default');
+  const mostraRipeti = !usingMainPlayer && ripetibile;
 
   // bottom con safe-area (UX-12): `88px` fissi finivano sotto la gesture bar
   // su iPhone. 5,5 rem = barra tab (4 rem) + 1,5 rem d'aria.
@@ -65,7 +80,7 @@ export default function AudioPlayerBanner() {
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 100, opacity: 0 }}
           role="region"
-          aria-label={t('audio_titolo_default')}
+          aria-label={titolo}
           className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom,0px))] left-4 right-4 bg-surface/85 backdrop-blur-2xl border border-outline-variant/60 shadow-2xl rounded-2xl p-3 z-[90] flex items-center justify-between"
         >
           <div className="flex items-center gap-3 min-w-0">
@@ -74,7 +89,7 @@ export default function AudioPlayerBanner() {
             </div>
             <div className="min-w-0">
               <p className="text-sm font-bold text-on-surface leading-tight truncate">
-                {audioState.poiName || t('audio_titolo_default')}
+                {titolo}
               </p>
               <p className="text-xs text-on-surface-variant font-medium" aria-live="polite">
                 {isPlaying ? t('audio_in_riproduzione') : t('audio_in_pausa')}
@@ -83,6 +98,18 @@ export default function AudioPlayerBanner() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {mostraRipeti && (
+              <button
+                type="button"
+                onClick={handleRepeat}
+                aria-label={t('audio_ripeti')}
+                title={t('audio_ripeti')}
+                className="min-w-11 min-h-11 rounded-full bg-surface-variant flex items-center justify-center text-on-surface hover:bg-outline-variant transition-colors shadow-sm"
+              >
+                <RotateCcw className="w-5 h-5" />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleToggle}

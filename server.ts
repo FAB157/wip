@@ -17,6 +17,11 @@ import * as eventiFeed from "./eventiFeed.js";
 import { fontiPerPaese } from "./src/data/fontiEventi.js";
 // Libreria Itinerari: costanti condivise col client (SOLO tipi/costanti).
 import { LIBRARY_KINDS } from "./src/lib/libraryTypes.js";
+// Testi del manuale in-app (7 lingue): base di conoscenza per la chat
+// gratuita "Aiuto sull'app" dentro AgentControls (10/09/2026), vedi
+// testoManualeCompleto() più sotto — SOLO testo/costanti, nessuna dipendenza
+// da React.
+import { TRAD_MANUALE } from "./src/lib/traduzioni/manuale.js";
 // PDF «come un libro» generati dal server per gli allegati email (06/09/2026):
 // import DINAMICO dentro le funzioni (vedi pdfGuidaPerEmail). L'import
 // statico ha messo giu' l'API il 06/09 sera (ERR_MODULE_NOT_FOUND: su Vercel
@@ -8294,6 +8299,118 @@ ISTRUZIONE APP (fidata): ${String(focusInstruction).trim()}`;
     } catch (e: any) {
       console.error('[day-pass] errore:', e?.response?.data || e?.message);
       return res.status(500).json({ error: 'server_error' });
+    }
+  });
+
+  /**
+   * TESTO DEL MANUALE per lingua, come unico blocco (10/09/2026) — base di
+   * conoscenza della chat gratuita "Aiuto sull'app". TRAD_MANUALE è lo
+   * stesso dizionario che alimenta AppGuide.tsx: si riusa quello invece di
+   * mantenere un secondo testo duplicato che andrebbe disallineato a ogni
+   * modifica del manuale. Si escludono le chiavi che non sono prosa (badge
+   * prezzo, messaggi di errore export PDF). Cache in memoria per lingua:
+   * il dizionario non cambia a runtime, ricostruirlo a ogni richiesta è
+   * lavoro sprecato.
+   */
+  const manualeTestoCache = new Map<string, string>();
+  function testoManualeCompleto(lang: string): string {
+    const L = String(lang || 'IT').toUpperCase();
+    const cached = manualeTestoCache.get(L);
+    if (cached) return cached;
+    const escludiChiave = /^man_pdf_|^man_gratis$|^man_u_crediti/;
+    const righe: string[] = [];
+    for (const chiave in TRAD_MANUALE) {
+      if (escludiChiave.test(chiave)) continue;
+      const traduzioni: any = (TRAD_MANUALE as any)[chiave];
+      const testo = traduzioni?.[L] || traduzioni?.IT;
+      if (testo && String(testo).trim()) righe.push(String(testo).trim());
+    }
+    const risultato = righe.join('\n').slice(0, 20000);
+    manualeTestoCache.set(L, risultato);
+    return risultato;
+  }
+
+  /**
+   * "Aiuto sull'app" (10/09/2026) — chat GRATUITA separata da "Chiedi a WIP"
+   * (quella resta a pagamento e parla di viaggio/itinerario). Risponde SOLO
+   * a domande su come funziona l'app, basandosi sul testo del manuale, mai
+   * su consigli di viaggio. Stesso pattern gratuito di /api/regenerate:
+   * requireAuth (niente uso anonimo via curl) + tetto persistente, ma NESSUN
+   * addebito crediti — è un aiuto, non una funzione a pagamento.
+   */
+  const APP_HELP_MAX_MESSAGGI = 15;
+  app.post("/api/app-help", rateLimiter, ...guardiaCostosa, async (req, res) => {
+    try {
+      const { message, chatHistory = [], lang = 'it' } = req.body || {};
+      if (typeof message !== 'string' || !message.trim()) return res.status(400).json({ error: 'missing_message' });
+      const langSafe = AUDIO_LANGS.includes(String(lang).toLowerCase()) ? String(lang).toLowerCase() : 'it';
+      const langName = LANG_NAMES[langSafe] || 'italiano';
+      const manuale = testoManualeCompleto(langSafe);
+
+      const supabaseUrlHelp = process.env.VITE_SUPABASE_URL || '';
+      const supabaseServiceKeyHelp = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+      const helpHeaders = { apikey: supabaseServiceKeyHelp, Authorization: `Bearer ${supabaseServiceKeyHelp}` };
+
+      // Tetto di 15 messaggi per persona (richiesta esplicita 10/09/2026):
+      // niente crediti, ma nemmeno illimitata. Pre-controllo di lettura per
+      // non spendere una chiamata AI su chi ha già esaurito il tetto; la
+      // scrittura vera avviene dopo con la RPC atomica, che è l'autorità
+      // reale (chiude anche la corsa fra due richieste quasi simultanee).
+      try {
+        const usoRes = await axios.get(
+          `${supabaseUrlHelp}/rest/v1/app_help_usage?user_id=eq.${req.userId}&select=messages_used`,
+          { headers: helpHeaders, timeout: 6000 }
+        );
+        const usati = Number(usoRes.data?.[0]?.messages_used) || 0;
+        if (usati >= APP_HELP_MAX_MESSAGGI) {
+          return res.status(403).json({ error: 'help_limit_reached', messagesLeft: 0 });
+        }
+      } catch (e: any) {
+        console.warn('[api/app-help] lettura contatore fallita, procedo (la RPC resta l\'autorità):', e?.message);
+      }
+
+      const systemPrompt = `Sei l'assistente d'aiuto di WIP (World in Pocket), un'app di audioguide di viaggio. Il tuo UNICO compito è spiegare COME FUNZIONA L'APP, basandoti esclusivamente sulle informazioni del manuale riportato sotto. Non inventare funzioni, prezzi o pulsanti che non sono nel manuale: se non lo sai, dillo. Se la domanda non riguarda il funzionamento dell'app (es. consigli di viaggio, meteo, un itinerario specifico), rispondi che per quello serve la chat "Chiedi a WIP" e non entrare nel merito. Rispondi in lingua ${langName}, breve e concreta (poche frasi, elenco puntato se utile), senza markdown pesante.
+
+MANUALE DI WIP:
+${manuale}`;
+
+      const messages: any[] = [{ role: 'system', content: systemPrompt }];
+      if (Array.isArray(chatHistory)) {
+        for (const m of chatHistory.slice(-8)) {
+          if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string') {
+            messages.push({ role: m.role, content: m.content.slice(0, 2000) });
+          }
+        }
+      }
+      messages.push({ role: 'user', content: String(message).slice(0, 2000) });
+
+      const response = await callUniversalAi(
+        "groq", messages, { temperature: 0.4, ultimaSpiaggiaPagante: true },
+        "app_help", supabaseUrlHelp, supabaseServiceKeyHelp, getGroqClient(), req.userId
+      );
+      const testo = String(response?.data || response?.text || '').trim();
+      if (!testo) throw new Error('Risposta vuota dal motore AI');
+
+      // Il messaggio si consuma SOLO ora che la risposta è arrivata davvero
+      // (stesso principio della chat a pagamento): un errore AI non deve
+      // bruciare uno dei 15 messaggi gratuiti.
+      let messagesLeft = APP_HELP_MAX_MESSAGGI;
+      try {
+        const rpcRes = await axios.post(
+          `${supabaseUrlHelp}/rest/v1/rpc/increment_app_help_usage`,
+          { p_user_id: req.userId, p_max: APP_HELP_MAX_MESSAGGI },
+          { headers: { ...helpHeaders, 'Content-Type': 'application/json' }, timeout: 6000 }
+        );
+        const nuovoTotale = rpcRes.data; // numero, o null se il tetto era già raggiunto (corsa fra richieste)
+        messagesLeft = typeof nuovoTotale === 'number' ? Math.max(0, APP_HELP_MAX_MESSAGGI - nuovoTotale) : 0;
+      } catch (e: any) {
+        console.warn('[api/app-help] incremento contatore fallito:', e?.message);
+      }
+
+      res.json({ message: testo, messagesLeft });
+    } catch (e: any) {
+      console.error('[api/app-help]', e?.message);
+      res.status(500).json({ error: 'app_help_failed' });
     }
   });
 

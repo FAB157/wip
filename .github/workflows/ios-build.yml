@@ -56,9 +56,18 @@ jobs:
         # mappa esce con il watermark "API KEY REQUIRED" — visto sull'IPA del
         # 28/08/2026. Secret da creare come CARTO_API_KEY (chiave gratuita da
         # carto.com/basemaps/apikey, è una chiave pubblica di client).
+        # VITE_GOOGLE_IOS_CLIENT_ID / VITE_GOOGLE_WEB_CLIENT_ID (09/09/2026):
+        # abilitano l'accesso Google NATIVO (src/lib/accessoNativo.ts), quello
+        # senza finestra del browser. Non sono segreti — i client ID OAuth di
+        # Google sono pubblici per definizione, stanno dentro ogni app — ma
+        # passano da secret per non riscrivere il workflow quando cambiano.
+        # Se mancano, googleNativoDisponibile() e' falso e il login ricade sul
+        # percorso col browser di sistema, che continua a funzionare.
         env:
           VITE_REVENUECAT_IOS_KEY: ${{ secrets.REVENUECAT_IOS_KEY }}
           VITE_CARTO_API_KEY: ${{ secrets.CARTO_API_KEY }}
+          VITE_GOOGLE_IOS_CLIENT_ID: ${{ secrets.GOOGLE_IOS_CLIENT_ID }}
+          VITE_GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
         run: npm run build
 
       - name: Sync Capacitor

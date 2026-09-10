@@ -62,9 +62,39 @@ function bcp47(lang: string): string {
   return LOCALE_MAP[p] || `${p}-${p.toUpperCase()}`;
 }
 
+// CHI sta parlando (09/09/2026). La barra del player scriveva sempre
+// "Audioguida", anche quando a parlare era l'agente WIP in chat: il committente
+// l'ha segnalato come sbagliato — quella barra deve dire WIP. L'etichetta viene
+// impostata da chi avvia la voce e viaggia dentro l'evento di stato.
+let etichettaVoce: string | null = null;
+
+/** Imposta il nome mostrato dalla barra del player per la voce in corso. */
+export function impostaEtichettaVoce(nome: string | null) {
+  etichettaVoce = nome && nome.trim() ? nome.trim() : null;
+}
+
+// Ultima battuta pronunciata: serve al tasto "ripeti" della barra.
+let ultimaBattuta: { testo: string; lingua: string; personaggio: GuideCharacter } | null = null;
+
+/** C'e' qualcosa da ripetere? (la barra mostra il tasto solo in quel caso) */
+export function haBattutaDaRipetere(): boolean {
+  return ultimaBattuta !== null;
+}
+
+/** Ripete l'ultima battuta pronunciata, con la stessa voce e la stessa etichetta. */
+export async function ripetiUltimaBattuta(): Promise<void> {
+  if (!ultimaBattuta) return;
+  const { testo, lingua, personaggio } = ultimaBattuta;
+  await speakAudioguide(testo, lingua, personaggio, undefined, etichettaVoce ?? undefined);
+}
+
 function emitAudioState(isPlaying: boolean, isVisible: boolean) {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent('wip-audio-state-change', { detail: { isPlaying, isVisible } }));
+  window.dispatchEvent(
+    new CustomEvent('wip-audio-state-change', {
+      detail: { isPlaying, isVisible, etichetta: etichettaVoce, ripetibile: ultimaBattuta !== null },
+    }),
+  );
 }
 
 /**
@@ -517,6 +547,9 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
 
 /** Ferma qualsiasi audioguida/istruzione in corso (anche quella di locationService). */
 export function stopSpeech(): void {
+  // L'etichetta appartiene alla voce che si sta fermando: se restasse, la
+  // prossima audioguida di un POI si presenterebbe come "WIP".
+  etichettaVoce = null;
   try {
     if (Capacitor.isNativePlatform()) {
       WipBackgroundAudio.stop().catch(() => {});
@@ -589,10 +622,20 @@ export async function speakAudioguide(
   text: string,
   lang: string,
   character: GuideCharacter,
-  onEnd?: () => void
+  onEnd?: () => void,
+  /**
+   * Nome da mostrare nella barra del player al posto di "Audioguida"
+   * (l'agente WIP passa "WIP"). Va qui e non in una chiamata separata perché
+   * stopSpeech azzera l'etichetta e il primo evento di stato parte da dentro
+   * questa funzione: impostarla dopo farebbe lampeggiare il titolo sbagliato.
+   */
+  etichetta?: string,
 ): Promise<void> {
   if (locationService.getIsGuideMuted()) return;
   stopSpeech();
+  // Dopo stopSpeech, che azzera entrambi.
+  ultimaBattuta = { testo: text, lingua: lang, personaggio: character };
+  etichettaVoce = etichetta && etichetta.trim() ? etichetta.trim() : null;
 
   const online = typeof navigator === 'undefined' ? true : navigator.onLine;
   if (online) {

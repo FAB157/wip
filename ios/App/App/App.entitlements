@@ -11,5 +11,14 @@
 	<array>
 		<string>group.com.itaintasca.app</string>
 	</array>
+	<!-- Accedi con Apple NATIVO (09/09/2026): senza questa capability
+	     ASAuthorizationAppleIDProvider fallisce subito con errore 1000 e il
+	     login ricade sul browser. Come per l'App Group, va abilitata anche
+	     sull'App ID nel portale sviluppatori: in CI ci pensa xcodebuild con
+	     -allowProvisioningUpdates e la chiave API di App Store Connect. -->
+	<key>com.apple.developer.applesignin</key>
+	<array>
+		<string>Default</string>
+	</array>
 </dict>
 </plist>
