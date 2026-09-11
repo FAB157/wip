@@ -9135,7 +9135,18 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
         // 2) Le pagine giuste: home + fino a 3 fra orari, biglietti, visita.
         let base: URL;
         try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return res.json({ ok: false, reason: 'sito_non_valido' }); }
-        const UA = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400 };
+        // Un User-Agent da browser: il Prado risponde 403 a chi si presenta
+        // come un programma, e non è l'unico. Ci si presenta comunque
+        // (header From), ma con l'aspetto di un visitatore.
+        const UA = {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': `${wl},en;q=0.8`,
+            'From': 'support@wip.guide',
+          },
+          timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400,
+        };
         const testi: string[] = [];
         const pagine: string[] = [];
         try {
@@ -9173,9 +9184,15 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
               // Il testo del link vale come l'indirizzo, ma un testo da
               // eventi («Visite speciali», «Mostre») azzera anche un
               // indirizzo buono.
+              // Una pagina di eventi resta fuori QUALUNQUE cosa dica il testo
+              // del link: la seconda lettura degli Uffizi aveva preso
+              // «eventi/vasariano-apertura-serale-venerdi» perché il testo
+              // parlava di orari — ed erano gli orari dell'apertura serale.
+              const RE_EVENTI = /(eventi|event|mostr|exhibit|attivit|activit|visite-speciali|visite speciali|avvis|news|notiz|blog|serale|evening|night)/i;
+              if (RE_EVENTI.test(u.pathname) || RE_EVENTI.test(l.testo)) continue;
               const wTesto = peso(l.testo);
               const wPath = peso(u.pathname);
-              const w = /(eventi|event|mostr|exhibit|attivit|activit|visite speciali|avvis)/i.test(l.testo) ? 0 : Math.max(wPath, wTesto);
+              const w = Math.max(wPath, wTesto);
               if (w <= 0) continue;
               const gia = candidati.find(c => c.href === u.href);
               if (gia) gia.peso = Math.max(gia.peso, w); else candidati.push({ href: u.href, peso: w });
@@ -9183,12 +9200,47 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
           }
           candidati.sort((a, b) => b.peso - a.peso);
           const scelti = candidati.slice(0, 4).map(c => c.href);
+          const htmlPagine: string[] = [];
           for (const u of scelti) {
             try {
               const r = await axios.get(u, { ...UA, timeout: 7000 });
               const t = testoPaginaMuseo(String(r.data || ''));
-              if (t.length > 200) { testi.push(t.slice(0, 6000)); pagine.push(u); }
+              if (t.length > 200) { testi.push(t.slice(0, 6000)); pagine.push(u); htmlPagine.push(String(r.data || '')); }
             } catch { /* pagina saltata */ }
+          }
+          // UN LIVELLO IN PIÙ, SE SERVE (11/09/2026). Agli Uffizi la pagina
+          // degli orari («/gli-uffizi») non si raggiunge dalla home con un
+          // link che parli di orari: si raggiunge dalla pagina dei biglietti,
+          // col link «Vedi dettagli e orari». Se le pagine del primo livello
+          // non contengono orari veri, si seguono da lì fino a 4 link il cui
+          // TESTO promette orari o prezzi. Eventi esclusi anche qui.
+          const RE_ORA_RAPIDA = /\b\d{1,2}[:.]\d{2}\b/g;
+          const orariTrovati = Math.max(0, ...testi.slice(1).map(t => (t.match(RE_ORA_RAPIDA) || []).length));
+          if (orariTrovati < 4) {
+            const secondi: { href: string; peso: number }[] = [];
+            for (const h of htmlPagine) {
+              for (const m of h.matchAll(/<a\b[^>]*href=["']([^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+                try {
+                  const u = new URL(m[1], base.href);
+                  const testo = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+                  if (u.hostname !== base.hostname || pagine.includes(u.href) || u.href === base.href) continue;
+                  if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
+                  if (/(eventi|event|mostr|exhibit|attivit|activit|visite-speciali|visite speciali|avvis|news|notiz|blog|serale|evening|night|sconto|promo)/i.test(`${u.pathname} ${testo}`)) continue;
+                  const w = Math.max(peso(u.pathname), peso(testo));
+                  if (w < 2) continue;
+                  const gia = secondi.find(c => c.href === u.href);
+                  if (gia) gia.peso = Math.max(gia.peso, w); else secondi.push({ href: u.href, peso: w });
+                } catch { /* link non valido */ }
+              }
+            }
+            secondi.sort((a, b) => b.peso - a.peso);
+            for (const c of secondi.slice(0, 4)) {
+              try {
+                const r = await axios.get(c.href, { ...UA, timeout: 7000 });
+                const t = testoPaginaMuseo(String(r.data || ''));
+                if (t.length > 200) { testi.push(t.slice(0, 6000)); pagine.push(c.href); }
+              } catch { /* pagina saltata */ }
+            }
           }
         } catch (e: any) {
           return res.json({ ok: false, reason: 'sito_non_raggiungibile' });
@@ -9201,10 +9253,18 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
         // orario al museo.
         const RE_ORA = /\b\d{1,2}[:.]\d{2}\b/g;
         const RE_GIORNO = /\b(luned|marted|mercoled|gioved|venerd|sabato|domenica|monday|tuesday|wednesday|thursday|friday|saturday|sunday|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|lunes|martes|miércoles|jueves|viernes|sábado|domingo|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b/gi;
-        const documenti = testi.map((t, i) => ({
-          t, u: pagine[i],
-          densita: (t.match(RE_ORA) || []).length + (t.match(RE_GIORNO) || []).length,
-        })).sort((a, b) => b.densita - a.densita);
+        // Bonus alla pagina che parla DI QUESTO museo: in un sito con più
+        // sedi (Uffizi, Pitti, Boboli) ognuna ha i suoi orari, e la più densa
+        // non è detto sia quella giusta.
+        const tokNome = tokenSignificativi(venueName || '');
+        const documenti = testi.map((t, i) => {
+          const dove = normalizzaTesto(`${pagine[i]} ${t.slice(0, 400)}`);
+          const parlaDiNoi = tokNome.length > 0 && tokNome.some(x => dove.includes(x));
+          return {
+            t, u: pagine[i],
+            densita: (t.match(RE_ORA) || []).length + (t.match(RE_GIORNO) || []).length + (parlaDiNoi ? 6 : 0),
+          };
+        }).sort((a, b) => b.densita - a.densita);
         const utili = documenti.filter(d => d.densita > 0);
         const scelti2 = (utili.length ? utili : documenti).slice(0, 3);
         const materiale = scelti2.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 15000);
