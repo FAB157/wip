@@ -8013,7 +8013,7 @@ REGOLE TASSATIVE:
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
-- "servizi": DOVE SONO bagni, guardaroba, caffetteria o ristorante, bookshop, uscita, ascensori e accessibilità — SOLO se il materiale del sito ufficiale lo dice. Ogni voce una riga breve col piano o la posizione ("piano terra, dopo la biglietteria"). Voce vuota se il materiale non lo dice: dopo un'ora e mezza dentro un museo la cosa che serve è il bagno, e mandare qualcuno al piano sbagliato è peggio che non dirlo.
+- "servizi": DOVE SONO bagni, guardaroba, caffetteria o ristorante, bookshop, uscita, ascensori e accessibilità — SOLO se il materiale del sito ufficiale dice DOVE STA QUEL servizio, con una frase che parla di lui. Ogni voce una riga breve col piano o la posizione. Se per un servizio il materiale non dice dove sta, la voce resta VUOTA: non dedurlo dagli altri, non ripetere la stessa frase per più servizi, non scrivere «piano terra» perché è probabile. Dopo un'ora e mezza dentro un museo la cosa che serve è il bagno, e mandare qualcuno al piano sbagliato è peggio che non dirlo.
 ${regolaSpecificita(venue.name)}
 
 LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo attorno:
@@ -8304,8 +8304,16 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           const voci: Record<string, string> = {};
           for (const k of ['bagni', 'guardaroba', 'caffetteria', 'bookshop', 'uscita', 'accessibilita']) {
             const v = campoOpzionale((s as any)[k], 160);
-            if (v) voci[k] = v;
+            // Una parola sola («accessibile», «principale») non dice dove.
+            if (v && v.length >= 10) voci[k] = v;
           }
+          // RIEMPITIVO SMASCHERATO (12/09/2026): a Brera tutte e sei le voci
+          // dicevano «piano terra, dopo la biglietteria» — il modello che
+          // riempie, non il sito che dichiara. Una frase uguale su più
+          // servizi non è un dato: quelle voci si tolgono tutte.
+          const conteggio: Record<string, number> = {};
+          for (const v of Object.values(voci)) conteggio[normalizzaTesto(v)] = (conteggio[normalizzaTesto(v)] || 0) + 1;
+          for (const k of Object.keys(voci)) if (conteggio[normalizzaTesto(voci[k])] > 1) delete voci[k];
           return Object.keys(voci).length ? { servizi: voci } : {};
         })(),
         // Se il luogo È una chiesa lo sappiamo noi dalla categoria e dal nome,
