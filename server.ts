@@ -2403,9 +2403,29 @@ out tags center 60;`;
 // tutti i personaggi, tutti i registri (breve, bambini, duetto, "Chiedi di
 // più"), la scheda Vision e la visita guidata: per questo è UNA funzione
 // iniettata in ogni prompt, non una riga copiata da tenere allineata.
-function regolaSpecificita(poiName: string): string {
-  return `
-           REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.
+// Frasi da brochure, mai ammesse in nessun testo generato: stesso elenco
+// usato per i teaser (riga ~12611) — un controllo lato codice, non solo
+// una regola nel prompt, perché il modello ogni tanto la ignora lo stesso
+// (12/09/2026, trovato dal collaudo: "esperienza unica" in un "consiglio").
+const FRASI_GENERICHE_VIETATE = /\bscopri\b|immergiti|lasciati (incantare|sorprendere|trasportare)|un angolo di|custodisce segreti|raccontan[oa] l'anima|invita a riflettere|patrimonio (architettonico|culturale|storico) (locale|del territorio)|gioiello nascosto|viaggio nel tempo|atmosfera unica|un'esperienza (unica|indimenticabile)|esperienza unica|tappa imperdibile|senza fiato|tuffo nel passato|imperdibile|da non perdere|merita una visita|hidden gem|must-see|breathtaking|unforgettable experience/i;
+/** Toglie le frasi da brochure da un testo, frase per frase — mai il testo intero. */
+function togliFrasiGeneriche(testo: string): string {
+  const t = String(testo || '');
+  if (!t) return t;
+  const frasi = t.split(/(?<=[.!?])\s+/).filter(f => !FRASI_GENERICHE_VIETATE.test(f));
+  return frasi.join(' ').trim();
+}
+function regolaSpecificita(poiName: string, opzioni: { soloSpecificita?: boolean } = {}): string {
+  const specificita = `
+           REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.`;
+  // Per i lotti opera-per-opera la lunghezza è già dettata riga per riga
+  // (150-250 / 100-150 / 60-100 secondo la fonte): un minimo fisso di
+  // 80-100 parole qui sopra finiva per diventare IL bersaglio invece del
+  // pavimento, e ogni opera usciva sempre vicino a quel numero, mai oltre
+  // (12/09/2026, trovato dal collaudo: mediana ~110 parole ovunque, anche
+  // dove la fonte reggeva 150-250).
+  if (opzioni.soloSpecificita) return specificita;
+  return specificita + `
            DURATA MINIMA (anch'essa vincolante): la narrazione deve durare ALMENO 30-40 secondi di parlato, cioè non meno di 80-100 parole, e di più quando il materiale lo permette. Per raggiungere la durata attingi ad ALTRI fatti specifici del materiale (altre opere, altre date, altri dettagli), MAI a frasi di riempimento: la lunghezza si guadagna con la sostanza, non con le parole vuote.`;
 }
 
@@ -8693,11 +8713,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // Dove DENTRO la sala: è questo che porta davanti all'opera. In una
           // sala del Louvre con ottanta quadri «Sala 711» non fa trovare nulla.
           puntoPreciso: campoOpzionale(t?.puntoPreciso, 120),
-          perche: campoOpzionale(t?.perche, 500),
+          perche: togliFrasiGeneriche(campoOpzionale(t?.perche, 500)),
           // Se il modello lascia "curiosita" vuota (capita), un consiglio
           // pratico costruito dai dati che ci sono davvero — mai un'invenzione,
           // ma il committente vuole SEMPRE qualcosa sotto la spiegazione.
-          curiosita: campoOpzionale(t?.curiosita, 400) || (() => {
+          curiosita: togliFrasiGeneriche(campoOpzionale(t?.curiosita, 400)) || (() => {
             const puntoPreciso = campoOpzionale(t?.puntoPreciso, 120);
             const dove = campoOpzionale(t?.dove, 100);
             if (puntoPreciso) return `Cercala: ${puntoPreciso}.`;
@@ -8808,7 +8828,26 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // gratuito regge anche Agnes in diretta. 80-150 parole quando la fonte
       // è una voce vera o una scheda ufficiale, 40-60 asciutte quando è
       // solo Wikidata (niente riempitivo per allungare fatti che non ci sono).
+      // Frasi della voce/sito del MUSEO che nominano l'opera per titolo
+      // (12/09/2026, trovato dal collaudo: Orsay, Tate Modern, Pompidou e
+      // Sagrada Família hanno opere/parti SENZA voce Wikipedia propria — il
+      // ripiego "solo fatti Wikidata" produceva una riga tipo "Opera di
+      // Rodin (1880) n. inventario 1234.", non un'audioguida). Stesso
+      // materiale già raccolto per il percorso, mai una fonte nuova.
+      function fraseDalMuseoPer(titolo: string, corpus: string): string {
+        const t = String(titolo || '').trim();
+        if (!t || t.length < 4 || !corpus) return '';
+        const chiave = t.toLowerCase();
+        const frasi = corpus.split(/(?<=[.!?])\s+/).filter(f => f.length > 25 && f.length < 500 && f.toLowerCase().includes(chiave));
+        return frasi.slice(0, 3).join(' ');
+      }
       async function tappeOperaPerOpera(opere: OperaDelMuseo[]): Promise<any[]> {
+        const testoMuseo = `${sitoOut.testo} ${wikiText}`;
+        for (const o of opere) {
+          if (o.testoFonte) continue;
+          const daMuseo = fraseDalMuseoPer(o.titolo, testoMuseo) || fraseDalMuseoPer(o.titoloEn, testoMuseo);
+          if (daMuseo) o.testoFonte = daMuseo;
+        }
         const ordinate = [...opere.filter(o => o.esposta !== false), ...opere.filter(o => o.esposta === false)];
         const LOTTO = 5;
         for (let k = 0; k < ordinate.length; k += LOTTO) {
@@ -8821,10 +8860,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           const corpo = lotto.map((o, i) => {
             const lunghezza = o.fonteTesto === 'wikidata' ? '60-100 parole, fatti asciutti, NIENTE riempitivo'
               : o.testoFonte.length >= 2500 ? '150-250 parole'
-              : '100-150 parole';
+              : o.testoFonte.length >= 600 ? '100-150 parole'
+              // Fonte cortissima (una frase pescata dalla voce del museo):
+              // scrivi solo quello che permette, mai riempire per arrivare
+              // a un numero.
+              : '40-80 parole, scrivi solo quello che il materiale permette, niente riempitivo';
             return `OPERA ${i + 1} — "${o.titolo}"${o.autore ? ` di ${o.autore}` : ''}${o.anno ? ` (${o.anno})` : ''} — lunghezza attesa: ${lunghezza}\n${o.testoFonte}`;
           }).join('\n\n---\n\n');
-          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto).\n\n${corpo}\n${regolaSpecificita(venue.name)}\n\nPer ogni opera scrivi anche "curiosita": OBBLIGATORIA, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELL'opera (un furto, un restauro, un aneddoto, un errore dell'artista, un dettaglio nascosto), oppure — se il materiale non ne contiene uno — un consiglio pratico articolato per guardarla meglio. Sempre specifica, mai generica, mai identica fra due opere, sempre dal materiale: mai un'invenzione.\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "...", "curiosita": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
+          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto). Rispetta la lunghezza indicata per ciascuna opera: non è un minimo, è il traguardo — una fonte ricca (150-250 parole) va usata fino in fondo, non fermata al primo minimo raggiunto.\n\n${corpo}\n${regolaSpecificita(venue.name, { soloSpecificita: true })}\n\nPer ogni opera scrivi anche "curiosita": OBBLIGATORIA, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELL'opera (un furto, un restauro, un aneddoto, un errore dell'artista, un dettaglio nascosto), oppure — se il materiale non ne contiene uno — un consiglio pratico articolato per guardarla meglio. Sempre specifica, mai generica, mai identica fra due opere, sempre dal materiale: mai un'invenzione.\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "...", "curiosita": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
           try {
             const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
               // Fino a 250 parole per "perche" + 2-3 frasi di "curiosita" per
@@ -8846,16 +8889,29 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             console.warn(`[VenueGuide] ${venue.name}: lotto "perche" opera-per-opera fallito, ripiego sui fatti:`, e?.message);
           }
         }
-        return ordinate.map(o => {
+        const risultato: any[] = [];
+        for (const o of ordinate) {
           const fatti = [o.autore ? `di ${o.autore}` : '', o.anno ? `(${o.anno})` : '', o.inv ? `n. inventario ${o.inv}` : ''].filter(Boolean).join(' ');
-          const percheBase = (o as any)._perche || (fatti ? `Opera ${fatti}.` : '');
+          // NIENTE MATERIALE VERO (12/09/2026, trovato dal collaudo): senza
+          // testoFonte (nessuna voce, nessuna frase del museo) e senza un
+          // solo fatto anagrafico, la tappa era una riga vuota travestita da
+          // audioguida ("Opera di Rodin (1880)."). Meglio ometterla che
+          // mostrarla — l'opera resta comunque nella collezione, solo non
+          // diventa una tappa del percorso. Un testoFonte vero ma senza
+          // "_perche" (l'AI ha fallito il lotto) NON si esclude: si tiene i
+          // fatti come ripiego, come prima.
+          if (!o.testoFonte && !fatti) {
+            motiviScarto.push({ nome: o.titolo, motivo: 'nessun materiale (né voce né fatti Wikidata)' });
+            continue;
+          }
+          const percheBase = togliFrasiGeneriche((o as any)._perche || (fatti ? `Opera ${fatti}.` : ''));
           // Sotto la spiegazione ci vuole SEMPRE qualcosa (richiesta del
           // committente): se il lotto non l'ha scritta, un consiglio
           // costruito dai dati veri che abbiamo — mai un'invenzione.
-          const curiositaBase = (o as any)._curiosita || (o.dimensioni
+          const curiositaBase = togliFrasiGeneriche((o as any)._curiosita || '') || (o.dimensioni
             ? `Osservala da vicino: misura ${o.dimensioni}${o.materiale ? ` ed è realizzata in ${o.materiale}` : ''}.`
             : o.materiale ? `È realizzata in ${o.materiale}: guardala da vicino per coglierne la tecnica.` : '');
-          return {
+          risultato.push({
             nome: o.titolo, nomeFonte: o.titoloEn && o.titoloEn !== o.titolo ? o.titoloEn : '', autore: o.autore, anno: o.anno,
             dove: o.sala || '', puntoPreciso: '',
             perche: o.esposta === false ? `Attualmente non esposta. ${percheBase}`.trim() : percheBase,
@@ -8863,8 +8919,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             tipo: o.tipo, foto: o.foto ? fotoCommons(o.foto, 800) : '', fotoIcona: o.foto ? fotoCommons(o.foto, 160) : '',
             daListaOpere: true, qid: o.qid,
             ...(o.urlScheda ? { schedaUfficiale: o.urlScheda } : {}),
-          };
-        });
+          });
+        }
+        return risultato;
       }
 
       // Soglia più bassa per le chiese (6, come altrove nel file): chieste
@@ -9037,8 +9094,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // Firenze usciva classificato «museo» e la scheda mostrava l'icona
         // sbagliata.
         tipo: isChurch ? 'chiesa' : isSito ? 'sito' : (['museo', 'chiesa', 'sito'].includes(String(parsed?.tipo)) ? String(parsed.tipo) : 'museo'),
-        intro: String(parsed?.intro || '').trim().slice(0, 900),
-        consiglio: String(parsed?.consiglio || '').trim().slice(0, 400),
+        intro: togliFrasiGeneriche(String(parsed?.intro || '').trim()).slice(0, 900),
+        consiglio: togliFrasiGeneriche(String(parsed?.consiglio || '').trim()).slice(0, 400),
         tappe: tappeConFoto,
         language: outLang,
       };
@@ -9554,8 +9611,8 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
-          perche: campoOpzionale(t?.perche, 500),
-          curiosita: campoOpzionale(t?.curiosita, 400) || (campoOpzionale(t?.dove, 100)
+          perche: togliFrasiGeneriche(campoOpzionale(t?.perche, 500)),
+          curiosita: togliFrasiGeneriche(campoOpzionale(t?.curiosita, 400)) || (campoOpzionale(t?.dove, 100)
             ? `Si trova in ${campoOpzionale(t?.dove, 100)}: prenditi un minuto per osservarla da vicino.`
             : ''),
         }))
