@@ -6877,7 +6877,11 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   async function paginaDaWikidataQid(qid: string, linguaPreferita: string, ua: any): Promise<{ lang: string; title: string; extract: string; coord: { lat: number; lon: number } | null } | null> {
     if (!/^Q\d+$/.test(qid)) return null;
     try {
-      const s = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${qid}&props=sitelinks&format=json`, { timeout: 6000 });
+      // Wikimedia RIFIUTA le richieste senza uno User-Agent decente (403
+      // silenzioso, preso dal catch): trovato il 12/09/2026dopo che il
+      // Louvre continuava a uscire dalla pagina eventi anche col QID —
+      // questa chiamata non mandava `ua` come le altre nel file.
+      const s = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${qid}&props=sitelinks&format=json`, ua);
       const sitelinks = s.data?.entities?.[qid]?.sitelinks || {};
       for (const wl of [...new Set([linguaPreferita, 'en', 'it'])]) {
         const titolo = sitelinks[`${wl}wiki`]?.title;
@@ -6900,11 +6904,15 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
 
   async function classeWikidata(qid: string): Promise<{ museo: boolean; edificio: boolean }> {
     if (!/^Q\d+$/.test(qid)) return { museo: false, edificio: false };
+    // Stesso User-Agent delle altre chiamate Wikimedia nel file: senza,
+    // Wikidata risponde 403 e la funzione tornava sempre {false,false}
+    // (trovato il 12/09/2026 insieme al bug gemello in paginaDaWikidataQid).
+    const uaWd = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 5000 };
     try {
-      const c = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`, { timeout: 5000 });
+      const c = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`, uaWd);
       const ids: string[] = (c.data?.claims?.P31 || []).map((x: any) => x.mainsnak?.datavalue?.value?.id).filter(Boolean);
       if (!ids.length) return { museo: false, edificio: false };
-      const e = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.slice(0, 10).join('|')}&props=labels&languages=en&format=json`, { timeout: 5000 });
+      const e = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.slice(0, 10).join('|')}&props=labels&languages=en&format=json`, uaWd);
       const labels: string[] = Object.values(e.data?.entities || {}).map((x: any) => String(x?.labels?.en?.value || '').toLowerCase());
       return {
         museo: labels.some(l => /museum|art gallery|art collection/.test(l)),
@@ -7961,7 +7969,6 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // o in un'altra lingua salvato in shared_pois (caso Louvre/"Louvren").
       if (qidDelPoi) {
         const diretta = await paginaDaWikidataQid(qidDelPoi, langCfg.wiki, ua);
-        console.log(`[VenueGuide][DIAG] qidDelPoi=${qidDelPoi} diretta=${diretta ? `${diretta.lang}:"${diretta.title}" (${diretta.extract.length} car.)` : 'null'}`);
         if (diretta) {
           if (diretta.coord && (venue.lat == null || venue.lon == null)) { venue.lat = diretta.coord.lat; venue.lon = diretta.coord.lon; }
           wikiText = ordinaSezioniPerVisita(diretta.extract);
