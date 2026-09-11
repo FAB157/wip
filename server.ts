@@ -6863,6 +6863,41 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * "museum"/"gallery" il candidato sale, quando contiene "palace"/
    * "building"/"castle" scende. Nessuna chiamata se non serve.
    */
+  /**
+   * LA VOCE WIKIPEDIA DAL QID, NON DAL NOME (12/09/2026, trovato dalla
+   * semina). Il Louvre (POI `wd-Q19675`) ha in shared_pois il nome
+   * «Louvren» — un'etichetta svedese finita lì per sbaglio nell'importazione
+   * — e cercare "Louvren" su Wikipedia non trova niente: restava solo il
+   * sito ufficiale, e lo scraping prendeva la pagina eventi/concerti invece
+   * della collezione. Quando il POI porta un QID (id nella forma `wd-Q…`,
+   * la convenzione degli script di importazione), si risolve la voce
+   * Wikipedia dai SITELINK di Wikidata — deterministico, indifferente al
+   * nome salvato — PRIMA di provare la ricerca fuzzy per nome.
+   */
+  async function paginaDaWikidataQid(qid: string, linguaPreferita: string, ua: any): Promise<{ lang: string; title: string; extract: string; coord: { lat: number; lon: number } | null } | null> {
+    if (!/^Q\d+$/.test(qid)) return null;
+    try {
+      const s = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${qid}&props=sitelinks&format=json`, { timeout: 6000 });
+      const sitelinks = s.data?.entities?.[qid]?.sitelinks || {};
+      for (const wl of [...new Set([linguaPreferita, 'en', 'it'])]) {
+        const titolo = sitelinks[`${wl}wiki`]?.title;
+        if (!titolo) continue;
+        try {
+          const ext = await axios.get(
+            `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|coordinates&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(titolo)}`,
+            ua
+          );
+          const page: any = Object.values(ext.data?.query?.pages || {})[0];
+          const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+          if (testo.length < 400) continue;
+          const coord = page?.coordinates?.[0];
+          return { lang: wl, title: titolo, extract: String(page?.extract || ''), coord: coord ? { lat: Number(coord.lat), lon: Number(coord.lon) } : null };
+        } catch { /* si prova la lingua successiva */ }
+      }
+      return null;
+    } catch { return null; }
+  }
+
   async function classeWikidata(qid: string): Promise<{ museo: boolean; edificio: boolean }> {
     if (!/^Q\d+$/.test(qid)) return { museo: false, edificio: false };
     try {
@@ -7777,6 +7812,10 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         }
       }
       if (!venue) return res.json({ ok: false, reason: 'venue_unknown' });
+      // Il QID del POI, quando c'è: la convenzione degli script di
+      // importazione è `id = wd-<QID>`. Usato per risolvere la voce
+      // Wikipedia dai sitelink invece che dal nome (vedi paginaDaWikidataQid).
+      const qidDelPoi = String(venue.id || '').match(/^wd-(Q\d+)$/i)?.[1] || '';
 
       // ── 2. Cache per (luogo, lingua): una generazione sola, per sempre ──
       const chiaveLuogo = venue.id ? `poi_${venue.id}` : `nome_${normalizzaTesto(venue.name).replace(/ /g, '_').slice(0, 60)}`;
@@ -7893,7 +7932,20 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // Ora si raccolgono tutti i candidati validi e vince chi ha il titolo
       // più vicino al nome cercato, con precedenza assoluta al titolo IDENTICO.
       const nomeCercatoNorm = normalizzaTesto(venue.name);
+      // PRIMA il QID, se c'è: deterministico, indifferente a un nome sbagliato
+      // o in un'altra lingua salvato in shared_pois (caso Louvre/"Louvren").
+      if (qidDelPoi) {
+        const diretta = await paginaDaWikidataQid(qidDelPoi, langCfg.wiki, ua);
+        if (diretta) {
+          if (diretta.coord && (venue.lat == null || venue.lon == null)) { venue.lat = diretta.coord.lat; venue.lon = diretta.coord.lon; }
+          wikiText = ordinaSezioniPerVisita(diretta.extract);
+          wikidataId = qidDelPoi;
+          wikiSource = { lang: diretta.lang, title: diretta.title, url: `https://${diretta.lang}.wikipedia.org/wiki/${encodeURIComponent(diretta.title.replace(/ /g, '_'))}` };
+        }
+      }
       for (const wl of [...new Set([langCfg.wiki, 'it', 'en'])]) {
+        if (wikiSource) break; // già risolta dal QID, sopra
+
         try {
           const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=6&format=json&srsearch=${encodeURIComponent(venue.name)}`, ua);
           const hits = (s.data?.query?.search || []);
