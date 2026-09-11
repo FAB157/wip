@@ -6913,6 +6913,46 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     } catch { return null; }
   }
 
+  /**
+   * LA VOCE WIKIPEDIA DAL TITOLO GIÀ SALVATO SUL POI (12/09/2026,
+   * segnalazione dal vivo del committente: «Palazzo delle Logge» a Carrara
+   * dava «materiale insufficiente» pur avendo una guida pronta — sotto UN
+   * ALTRO id dello stesso luogo. Il POI toccato (una riga "gemma" duplicata
+   * alla stessa posizione) non ha `wikidata`, ma ha già
+   * `technical_data.wikipedia_raw.title` da un arricchimento precedente: si
+   * legge direttamente QUELLA pagina per titolo — niente ricerca fuzzy.
+   *
+   * Il pageid salvato insieme al titolo NON basta da solo a identificare la
+   * pagina: è specifico dell'edizione linguistica in cui è stato letto la
+   * prima volta (quasi sempre l'italiana, mai dichiarata), e lo stesso
+   * numero su un'altra lingua è una pagina qualunque. Si usa quindi il
+   * TITOLO, che è portabile, provando prima l'italiano (l'edizione con cui
+   * questi arricchimenti sono quasi sempre stati fatti), poi la lingua della
+   * guida e l'inglese.
+   */
+  async function paginaDaTitoloSalvato(titolo: string, linguaPreferita: string, ua: any): Promise<{ lang: string; title: string; extract: string; wikidataId: string; coord: { lat: number; lon: number } | null } | null> {
+    if (!titolo) return null;
+    for (const wl of [...new Set(['it', linguaPreferita, 'en'])]) {
+      try {
+        const r = await axios.get(
+          `https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts|coordinates|pageprops&ppprop=wikibase_item&explaintext=1&exsectionformat=plain&exlimit=1&redirects=1&format=json&titles=${encodeURIComponent(titolo)}`,
+          ua
+        );
+        const page: any = Object.values(r.data?.query?.pages || {})[0];
+        if (!page || page.missing !== undefined) continue;
+        const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+        if (testo.length < 400) continue;
+        const coord = page?.coordinates?.[0];
+        return {
+          lang: wl, title: String(page.title || titolo), extract: String(page?.extract || ''),
+          wikidataId: String(page?.pageprops?.wikibase_item || ''),
+          coord: coord ? { lat: Number(coord.lat), lon: Number(coord.lon) } : null,
+        };
+      } catch { /* si prova la lingua successiva */ }
+    }
+    return null;
+  }
+
   async function classeWikidata(qid: string): Promise<{ museo: boolean; edificio: boolean }> {
     if (!/^Q\d+$/.test(qid)) return { museo: false, edificio: false };
     // Stesso User-Agent delle altre chiamate Wikimedia nel file: senza,
@@ -7773,7 +7813,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       if (poiIdRichiesto && !poiIdRichiesto.startsWith('vision-')) {
         try {
           const r = await axios.get(
-            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdRichiesto)}&select=id,name,lat,lon,category,poi_type,description_long,contact_website&limit=1`,
+            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdRichiesto)}&select=id,name,lat,lon,category,poi_type,description_long,contact_website,wikidata,technical_data&limit=1`,
             { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 7000 }
           );
           const p = r.data?.[0];
@@ -7781,6 +7821,15 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             venue = {
               id: String(p.id), name: String(p.name), lat: p.lat ?? null, lon: p.lon ?? null,
               category: String(p.category || p.poi_type || ''), description: String(p.description_long || ''),
+              // Il QID e la pagina Wikipedia, quando il POI li porta GIÀ come
+              // colonne (12/09/2026, segnalazione dal vivo del committente:
+              // «Palazzo delle Logge» a Carrara dava «materiale insufficiente»
+              // pur avendo una guida pronta sotto un altro id — il doppione
+              // toccato dalla scheda, `wiki-8880081`, non aveva `wikidata` ma
+              // aveva già `technical_data.wikipedia_raw.pageid`/`title`: non
+              // c'era bisogno di indovinare nulla dal nome).
+              wikidata: String(p?.wikidata || '').match(/^Q\d+$/) ? String(p.wikidata) : '',
+              paginaWiki: (() => { const w = p?.technical_data?.wikipedia_raw; return w?.pageid && w?.title ? { pageid: Number(w.pageid), title: String(w.title) } : null; })(),
             };
             // Il POI porta le sue coordinate: valgono per la conferma
             // geografica della voce Wikipedia anche senza GPS del telefono.
@@ -7915,7 +7964,10 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // Il QID del POI, quando c'è: la convenzione degli script di
       // importazione è `id = wd-<QID>`. Usato per risolvere la voce
       // Wikipedia dai sitelink invece che dal nome (vedi paginaDaWikidataQid).
-      const qidDelPoi = String(venue.id || '').match(/^wd-(Q\d+)$/i)?.[1] || '';
+      const qidDelPoi = (venue as any).wikidata || String(venue.id || '').match(/^wd-(Q\d+)$/i)?.[1] || '';
+      // Il titolo Wikipedia già salvato sul POI (vedi paginaDaTitoloSalvato):
+      // ripiego quando il POI non ha un QID ma ha già un arricchimento.
+      const titoloWikiSalvato = (venue as any).paginaWiki?.title || '';
 
       // ── 2. Cache per (luogo, lingua): una generazione sola, per sempre ──
       const chiaveLuogo = venue.id ? `poi_${venue.id}` : `nome_${normalizzaTesto(venue.name).replace(/ /g, '_').slice(0, 60)}`;
@@ -8053,6 +8105,19 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             const somiglia = Math.max(sovrapposizioneNomi(venue.name, diretta.title), sovrapposizioneNomi(diretta.title, venue.name));
             if (somiglia < 0.5) venue.name = diretta.title;
           }
+        }
+      }
+      // RIPIEGO: nessun QID, ma il POI porta già un titolo Wikipedia salvato
+      // (caso "Palazzo delle Logge"/wiki-8880081: la riga duplicata senza
+      // wikidata, con solo technical_data.wikipedia_raw). Stessa logica,
+      // stesso guadagno — foto, opere, nome corretto — senza ricerca fuzzy.
+      if (!wikiSource && titoloWikiSalvato) {
+        const diretta = await paginaDaTitoloSalvato(titoloWikiSalvato, langCfg.wiki, ua);
+        if (diretta) {
+          if (diretta.coord && (venue.lat == null || venue.lon == null)) { venue.lat = diretta.coord.lat; venue.lon = diretta.coord.lon; }
+          wikiText = ordinaSezioniPerVisita(diretta.extract);
+          if (diretta.wikidataId) wikidataId = diretta.wikidataId;
+          wikiSource = { lang: diretta.lang, title: diretta.title, url: `https://${diretta.lang}.wikipedia.org/wiki/${encodeURIComponent(diretta.title.replace(/ /g, '_'))}` };
         }
       }
       for (const wl of [...new Set([langCfg.wiki, 'it', 'en'])]) {
