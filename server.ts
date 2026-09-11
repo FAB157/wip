@@ -7064,9 +7064,21 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // lista grigia di numeretti e una fila di opere riconoscibili.
     // Nei musei P276 si aggiunge lo stesso: dice dove una cosa sta esposta,
     // che è esattamente ciò che un percorso deve sapere.
+    //
+    // MA P276 (location) NON DISTINGUE UN PRESTITO DA UNA COLLEZIONE
+    // (12/09/2026, segnalato dalla semina: la guida del British Museum
+    // includeva l'«Arazzo di Bayeux» con tanto di "inclusa tra le opere
+    // censite" — falso, l'arazzo appartiene al museo di Bayeux (P195), ma un
+    // SECONDO item Wikidata dello stesso oggetto (Q187483, verosimilmente
+    // per una mostra/prestito) ha P276 = British Museum. La query lo
+    // prendeva come se fosse in collezione. Un'opera con un P195 dichiarato
+    // verso UN ALTRO museo non entra: la sua vera casa è quella, qualunque
+    // cosa dica un P276 di passaggio.
     const dovePrende = tipoLuogo === 'chiesa'
-      ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }`
-      : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }`;
+      ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }
+  FILTER NOT EXISTS { ?opera wdt:P195 ?altrove . FILTER(?altrove != wd:${qid}) }`
+      : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }
+  FILTER NOT EXISTS { ?opera wdt:P195 ?altrove . FILTER(?altrove != wd:${qid}) }`;
     // ?tipo = P31 «istanza di»: dipinto, scultura, affresco… Serve al
     // percorso su misura per interessi («solo sculture»). Un'opera con più
     // tipi produce più righe: si tiene il primo che si sa classificare.
@@ -8252,12 +8264,31 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         })(),
       ]);
 
+      // LE SALE DALLA VOCE INGLESE, QUANDO IL SITO È BLOCCATO (12/09/2026,
+      // segnalato dalla semina: British Museum, Louvre, Ermitage — sito a
+      // 403, e la voce Wikipedia nella lingua della guida spesso non nomina
+      // le sale mentre quella inglese sì ("Room 4", "Room 18 (Duveen
+      // Gallery)"). Si usa solo se il sito è muto (il sito resta la fonte
+      // migliore quando risponde) e solo le FRASI che nominano davvero una
+      // sala numerata — mai l'intera voce, per non aggiungere altro.
+      let saleDaEnglish = '';
+      if (!sitoOut.testo && wikidataId && wikiSource && wikiSource.lang !== 'en') {
+        const segnaliSala = (wikiText.match(/\b(room|sala|salle|saal|zaal|galería|galeria|wing|gallery)\s*\d/gi) || []).length;
+        if (segnaliSala < 3) {
+          const ingl = await paginaDaWikidataQid(wikidataId, 'en', ua);
+          if (ingl?.lang === 'en') {
+            const frasi = ingl.extract.split(/(?<=[.!?])\s+/).filter(f => /\b(room|gallery|wing|floor|level)\s*\d/i.test(f) && f.length < 300);
+            if (frasi.length) saleDaEnglish = frasi.slice(0, 40).join(' ');
+          }
+        }
+      }
       const materiale = [
         // Il sito ufficiale per primo: è la fonte più aggiornata su sale,
         // piani e allestimento, ed è ciò che rende il percorso navigabile.
         sitoOut.testo ? `DAL SITO UFFICIALE DEL MUSEO (disposizione delle sale, orari, allestimento):\n${sitoOut.testo}` : '',
         opereWd.righe.length ? `OPERE CENSITE IN QUESTA COLLEZIONE (fonte Wikidata, le più note per prime):\n- ${opereWd.righe.join('\n- ')}` : '',
         wikiText,
+        saleDaEnglish ? `DOVE SONO ESPOSTE LE OPERE, SOLO PER QUESTO (dalla voce inglese di Wikipedia — traduci il nome della sala in ${langCfg.name} se serve, ma non prendere altro da qui):\n${saleDaEnglish}` : '',
         venue.description ? `Descrizione dal nostro archivio: ${venue.description.slice(0, 3000)}` : '',
       ].filter(Boolean).join('\n\n');
       if (materiale.length < 600) {
@@ -8284,8 +8315,8 @@ ${materiale}
 COMPITO: scegli ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : isSito ? '6-15 PUNTI DI INTERESSE del percorso di visita — settori, ambienti, strutture ed elementi architettonici del sito (arena, ipogei, cavea, gradinate, porte, templi, terme, mosaici, are, iscrizioni, reperti visibili in loco), mai opere da museo con sale numerate' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani, navate${isSito ? ', settori o il percorso di visita consigliato' : ''} se il materiale la descrive; altrimenti l'ordine cronologico${isSito ? ' o quello logico del percorso (dall\'ingresso verso l\'uscita)' : ' delle opere'}. Se l'opera "${currentWork || ''}" è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
 REGOLE TASSATIVE:
 - SOLO ${isSito ? 'I PUNTI PRINCIPALI PER CUI QUESTO SITO È CONOSCIUTO' : 'OPERE PRINCIPALI E FAMOSE'}: il percorso è fatto dei ${isSito ? 'luoghi' : 'capolavori'} per cui questo luogo è conosciuto, mai di dettagli minori messi lì per allungare l'elenco. Se quelli citati dal materiale sono meno di quanti ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 15 di cui 9 dimenticabili.
-${isSito ? '' : `- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione.
-`}- Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (${isSito ? 'settore, livello, area' : 'sala, piano, ala, navata, cappella'}). È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota. Se il materiale dà il piano ma non la sala, scrivi il piano.
+${isSito ? '' : `- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione. QUESTA CAUTELA VALE PER LA PROSA, NON PER QUESTO ELENCO: ogni riga lì dentro è già stata scelta da Wikidata come opera vera e notevole di questo museo. SE L'ELENCO NE HA 15 O PIÙ, la tappa 15 non è "dimenticabile" solo perché non è fra le prime 6 — è comunque un capolavoro censito, e DEVI arrivare almeno a 15 tappe (fino a 20) pescandole in ordine dall'alto, non fermarti a 6-9: nei musei enormi (British Museum, Louvre, Metropolitan) fermarsi presto quando l'elenco ne offre decine lascia fuori dalla guida pezzi come il Vaso di Portland o lo Stendardo di Ur, che sono esattamente ciò per cui quel museo è famoso.
+`}- Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (${isSito ? 'settore, livello, area' : 'sala, piano, ala, navata, cappella'}), e SOLO se quella sala/settore è nominata NELLA STESSA FRASE O NELLE DUE FRASI ATTORNO al nome dell'opera — mai una sala presa da un'altra parte della stessa sezione o di un paragrafo diverso solo perché il museo ne parla lì vicino: un'opera citata nel testo generale del "Dipartimento X" NON sta automaticamente nella sala che quel dipartimento nomina altrove per un oggetto diverso. Nel dubbio, "dove" resta "". È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota, ma un dato inventato manda qualcuno davanti alla parete sbagliata. Se il materiale dà il piano ma non la sala, scrivi il piano.
 - Il campo "puntoPreciso": DOVE DENTRO ${isSito ? 'IL SETTORE' : 'LA SALA'}, se il materiale lo dice — "parete di fondo", "prima campata a destra", "sopra l'altare", "in fondo alla galleria, dopo la scalinata", "vetrina centrale"${isSito ? ', "livello inferiore dell\'arena", "lato nord della cavea"' : ''}. In una sala del Louvre con ottanta quadri il numero della sala non fa trovare niente: è questo che porta il visitatore davanti all'opera. Solo se il materiale lo dichiara, altrimenti "". Non dedurlo e non inventarlo mai.
 ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
 `}- Ogni tappa deve essere ${isSito ? 'un elemento, una struttura o un\'area' : 'un\'opera, una sala o un elemento'} NOMINATO ESPLICITAMENTE nel materiale. Niente ${isSito ? 'elementi' : 'opere'} che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
