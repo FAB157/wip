@@ -220,6 +220,11 @@ function isErroreQuota(err: any): boolean {
  */
 function valeLaPenaAltraChiave(err: any): boolean {
   if (isErroreQuota(err)) return true;
+  // Una chiave NON VALIDA è il caso in cui un'altra chiave serve di più:
+  // Gemini risponde 400 «API key not valid» e la rotazione si fermava lì
+  // (visto su Vercel il 12/09/2026: GOOGLE_API_KEY morta, le altre vive).
+  const msg = String(err?.message || err?.response?.data?.error?.message || '');
+  if (/API key not valid|API_KEY_INVALID|invalid api key|incorrect api key/i.test(msg)) return true;
   const status = Number(err?.status || err?.response?.status || 0);
   if (status === 400 || status === 422) return false;
   return true;
