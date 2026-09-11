@@ -357,7 +357,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
-        else if (out.reason === 'needs_tour_pass') { setNeedsTourPass(true); setPassSample(out.sample || null); }
+        else if (out.reason === 'needs_tour_pass') { setNeedsTourPass(true); setPassSample(out.sample || null); notify(tr('mv_locked_title')); }
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
       }
@@ -1219,6 +1219,49 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: 'reel-to-plan' } }));
   };
 
+  // LA SCHEDA «SERVE IL PASS CON ITINERARIO», una sola (11/09/2026, dalle
+  // foto del committente). Prima viveva solo nel modo Scansione, dove
+  // stava sopra i due pass in vendita e offriva il pass da 150 due volte;
+  // nel modo Visite non c'era affatto: si toccava un museo dell'elenco, il
+  // server rispondeva «serve il pass» e sullo schermo non succedeva nulla.
+  // Ora è una sola scheda, mostrata dove serve, e sotto di lei il pass da
+  // 150 non si ripete.
+  const schedaPassTour = needsTourPass && !visit ? (
+    <div className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+          <Landmark className="w-5 h-5 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-black text-slate-900">{tr('mv_locked_title')}</p>
+          <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
+        </div>
+      </div>
+      {/* Prima la voce, poi la cassa: trenta secondi dell'introduzione di
+          QUESTO museo, gratis. */}
+      {passSample && (
+        <button
+          onClick={() => void toggleSample()}
+          className="w-full py-2.5 rounded-xl bg-white border border-primary/40 text-primary text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
+        >
+          {samplePlaying ? <X className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+          {samplePlaying ? tr('mv_sample_stop') : tr('mv_sample_listen')}
+        </button>
+      )}
+      <button
+        onClick={() => { if (samplePlaying) { stopSpeech(); setSamplePlaying(false); } void handleBuyPass('tour'); }}
+        disabled={buyingPass}
+        className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform disabled:opacity-50"
+      >
+        {buyingPass ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (
+          passActive && passTier === 'base'
+            ? `${tr('museum_pass_upgrade')} · +${Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} ${getTranslation('credits_word', language)}`
+            : `${getTranslation('museum_pass_tour_title', language)} · ${PRICING_LIST.museum_pass_tour} ${getTranslation('credits_word', language)}`
+        )}
+      </button>
+    </div>
+  ) : null;
+
   return (
     /* TEMA CHIARO COME LE TAVOLE (10/09/2026, decisione del committente).
        Questa schermata era l'unica isola scura di un'app che è chiara da
@@ -1291,7 +1334,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#d4af37]/[0.07] rounded-full blur-[100px]" />
       </div>
 
-      <div className="flex-1 relative flex flex-col items-center justify-center p-8 z-10">
+      {/* pt-20: sotto la X in alto a destra (top-6 + 40 px) non deve finire
+          niente. Nel modo Scansione il contenuto è alto e il selettore dei
+          tre modi saliva fin sotto la X, che copriva «Visite». */}
+      <div className="flex-1 relative flex flex-col items-center justify-center px-8 pb-8 pt-20 z-10">
         {mode === 'vision' ? (
           <>
             {/* I TRE MODI DI WIP VISION (10/09/2026): scansione, radar e le
@@ -1389,39 +1435,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           {(visionTarget === 'artwork' || passActive || visit) && (
             needsTourPass && !visit ? (
               // Il server ha detto che il percorso è del pass con itinerario.
-              <div className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-                    <Landmark className="w-5 h-5 text-primary" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-black text-slate-900">{tr('mv_locked_title')}</p>
-                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
-                  </div>
-                </div>
-                {/* Prima la voce, poi la cassa: trenta secondi dell'introduzione
-                    di QUESTO museo, gratis. */}
-                {passSample && (
-                  <button
-                    onClick={() => void toggleSample()}
-                    className="w-full py-2.5 rounded-xl bg-white border border-primary/40 text-primary text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
-                  >
-                    {samplePlaying ? <X className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                    {samplePlaying ? tr('mv_sample_stop') : tr('mv_sample_listen')}
-                  </button>
-                )}
-                <button
-                  onClick={() => { if (samplePlaying) { stopSpeech(); setSamplePlaying(false); } void handleBuyPass('tour'); }}
-                  disabled={buyingPass}
-                  className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform disabled:opacity-50"
-                >
-                  {buyingPass ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : (
-                    passActive && passTier === 'base'
-                      ? `${tr('museum_pass_upgrade')} · +${Math.max(0, PRICING_LIST.museum_pass_tour - PRICING_LIST.museum_pass)} ${getTranslation('credits_word', language)}`
-                      : `${getTranslation('museum_pass_tour_title', language)} · ${PRICING_LIST.museum_pass_tour} ${getTranslation('credits_word', language)}`
-                  )}
-                </button>
-              </div>
+              schedaPassTour
             ) : visit ? (
               <button
                 onClick={() => setVisitOpen(true)}
@@ -1527,6 +1541,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                   <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
                 </div>
               </button>
+              {/* Il pass da 150 NON si ripete quando la scheda «serve il
+                  pass» qui sopra lo sta già offrendo. */}
+              {!(needsTourPass && !visit) && (
               <button
                 onClick={() => void handleBuyPass('tour')}
                 disabled={isScanning || buyingPass}
@@ -1542,6 +1559,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                   <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
                 </div>
               </button>
+              )}
             </div>
           )}
         </div>
@@ -1606,6 +1624,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 </div>
               </button>
             )}
+
+            {/* «Serve il pass»: anche qui, altrimenti toccare un museo
+                dell'elenco non fa succedere niente sullo schermo. */}
+            {schedaPassTour}
 
             {/* Ricerca: qualsiasi museo o chiesa del mondo */}
             <form

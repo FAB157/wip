@@ -7704,7 +7704,11 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         }
       }
       if (!venue && venueHint.length >= 4) {
-        venue = { id: null, name: venueHint, lat: hasGps ? lat : null, lon: hasGps ? lon : null, category: '', description: '' };
+        // Le coordinate di un museo scritto a mano arrivano dalla SUA voce
+        // Wikipedia, più sotto — non dal telefono di chi lo cerca: gli Uffizi
+        // cercati da Carrara finivano in libreria con le coordinate di
+        // Carrara e comparivano «qui vicino» a chi passava di lì.
+        venue = { id: null, name: venueHint, lat: hintDaUtente ? null : (hasGps ? lat : null), lon: hintDaUtente ? null : (hasGps ? lon : null), category: '', description: '' };
       }
       // Il museo può non essere nel nostro archivio (o il DB può essere giù):
       // Wikipedia per coordinate sa dove siamo in tutto il mondo. Si accetta
@@ -7770,7 +7774,11 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // vanno tradotti due volte. Il database è spesso in sofferenza: meglio
         // una query sola che tre.
         const lib = await axios.get(
-          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(venue.name)})&select=guide,source,official_site,venue_name,language,stops_count&order=stops_count.desc&limit=8`,
+          // ilike SENZA jolly era un'uguaglianza: «Uffizi» non trovava
+          // «Galleria degli Uffizi». Ora si cerca dentro il nome; le
+          // virgolette proteggono i nomi con la virgola («National Gallery,
+          // London») dalla sintassi dell'or.
+          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${String(venue.name).replace(/["*]/g, '')}*"`)})&select=guide,source,official_site,venue_name,language,stops_count&order=stops_count.desc&limit=8`,
           { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
         );
         const righe = (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
@@ -7855,9 +7863,18 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             const page: any = Object.values(ext.data?.query?.pages || {})[0];
             const coord = page?.coordinates?.[0];
             let dist = Number.POSITIVE_INFINITY;
-            if (hasGps) {
+            if (coord && hasGps) dist = getHaversineDistance(lat, lon, Number(coord.lat), Number(coord.lon));
+            if (hintDaUtente) {
+              // NOME SCRITTO DALLA PERSONA (11/09/2026, dalle foto del
+              // committente): da Carrara si cercava «Uffizi» e non usciva
+              // niente, perché la voce degli Uffizi sta a 100 km dal GPS e
+              // il controllo dei 400 m la scartava. Ma chi scrive un nome
+              // sta preparando la visita di domani, non chiedendo dov'è: il
+              // GPS non ha diritto di veto. Serve un nome che combaci
+              // davvero (0.8) oppure, se combacia meno, la vicinanza.
+              if (simNome < 0.8 && !(Number.isFinite(dist) && dist <= RAGGIO_CONFERMA_M)) continue;
+            } else if (hasGps) {
               if (!coord) continue; // senza coordinate non posso escludere l'omonimo
-              dist = getHaversineDistance(lat, lon, Number(coord.lat), Number(coord.lon));
               if (dist > RAGGIO_CONFERMA_M) {
                 console.warn(`[VenueGuide] scartata voce "${h.title}" (${wl}): a ${Math.round(dist)} m dal punto`);
                 continue;
