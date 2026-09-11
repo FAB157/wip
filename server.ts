@@ -8993,6 +8993,79 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
   });
 
   /**
+   * IL BIGLIETTO D'INGRESSO, LA SERA PRIMA (12/09/2026, richiesta del
+   * committente). Le ESPERIENZE (visite guidate a pagamento, tour) restano
+   * per chi ha comprato il pass — regola del committente. Il biglietto
+   * d'ingresso è un'altra cosa: è quello che serve a chiunque per entrare,
+   * e il momento giusto per comprarlo è quando «Domani» dice orari e prezzo.
+   * Stessi fornitori delle esperienze, filtrati ai soli ingressi (niente
+   * tour, niente cene, niente laboratori), UNO solo — il più economico con
+   * un prezzo — e il link che passa dal redirect che conta i clic.
+   * Nessun login: si sta scegliendo se venire, non ancora cosa ascoltare.
+   */
+  app.get("/api/museums/entrance-ticket", rateLimiter, async (req, res) => {
+    try {
+      const museo = String(req.query.venueName || '').trim().slice(0, 160);
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      const lang = String(req.query.language || 'IT').toLowerCase().slice(0, 2);
+      const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
+      if (!museo) return res.status(400).json({ ok: false, reason: 'venueName richiesto' });
+
+      const cacheKey = `museum_ticket:v1:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      const inCache = await getFromCache(cacheKey, 'museum_ticket', 24 * 60 * 60 * 1000);
+      if (inCache) {
+        try { const p = JSON.parse(inCache); return res.json({ ok: true, cached: true, ticket: p.ticket || null }); } catch { /* si rigenera */ }
+      }
+
+      const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([
+        p, new Promise<T>((r) => setTimeout(() => r(fallback), 9000)),
+      ]).catch(() => fallback);
+      const [tiqets, viatorRaw, gyg] = await Promise.all([
+        conTimeout(haGeo
+          ? fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 12 })
+          : fetchTiqetsProducts({ cityName: museo, lang, pageSize: 12 }), [] as any[]),
+        conTimeout(haGeo ? agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, museo) : Promise.resolve('[]'), '[]'),
+        conTimeout(fetchGygExperiencesScraped(museo, lang), [] as any[]),
+      ]);
+      let viator: any[] = [];
+      try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
+
+      const nomeNorm = normalizzaTesto(museo);
+      const tokenMuseo = tokenSignificativi(museo);
+      const parlaDelMuseo = (titolo: string, descrizione: string): boolean => {
+        if (!tokenMuseo.length) return true;
+        const t = normalizzaTesto(`${titolo} ${descrizione}`);
+        return tokenMuseo.some(x => t.includes(x)) || t.includes(nomeNorm);
+      };
+      // Un INGRESSO, non un tour: titolo da biglietto, senza parole da visita.
+      const RE_INGRESSO = /(bigliett|ticket|entrada|billet|entry|admission|ingresso|eintritt|skip[- ]the[- ]line|salta[- ]la[- ]fila|fast[- ]track|priority|reserved|prenotat)/i;
+      const RE_NON_INGRESSO = /(tour|guided|guidat|guidée|guiada|geführt|walking|city|cena|dinner|show|cooking|workshop|laboratori|class|combo|bus|boat|barca|bike|segway|wine)/i;
+      const prezzoNum = (s: string): number => { const m = String(s || '').replace(',', '.').match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : Number.POSITIVE_INFINITY; };
+
+      const candidati = [
+        ...tiqets.map((p: any) => ({ fonte: 'tiqets', titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
+        ...viator.map((p: any) => ({ fonte: 'viator', titolo: String(p.title || p.name || ''), descrizione: String(p.description || p.shortDescription || '').slice(0, 240), prezzo: String(p.price || p.fromPrice || ''), url: String(p.url || p.productUrl || p.webURL || '') })),
+        ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), descrizione: '', prezzo: '', url: String(p.url || '') })),
+      ]
+        .filter(e => e.titolo && e.url && libIsBookableHost(e.url))
+        .filter(e => parlaDelMuseo(e.titolo, e.descrizione))
+        .filter(e => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo))
+        // Il più economico con un prezzo; a parità Tiqets, che vende ingressi.
+        .sort((a, b) => (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)) || (a.fonte === 'tiqets' ? -1 : 1));
+
+      const scelto = candidati[0] || null;
+      const ticket = scelto ? { ...scelto, descrizione: undefined, url: `/api/out?src=${encodeURIComponent(scelto.fonte)}&url=${encodeURIComponent(scelto.url)}` } : null;
+      await saveToCache(cacheKey, 'museum_ticket', JSON.stringify({ ticket }));
+      res.set('Cache-Control', 'private, max-age=600');
+      res.json({ ok: true, ticket });
+    } catch (e: any) {
+      console.warn('[BigliettoIngresso] Errore:', e?.message);
+      res.json({ ok: true, ticket: null });
+    }
+  });
+
+  /**
    * LIBRERIA DELLE VISITE GUIDATE — elenco pubblico.
    *
    * Tre usi: "quali musei qui vicino hanno già la visita pronta" (lat/lon),

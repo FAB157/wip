@@ -15,11 +15,12 @@
  */
 import { db } from './db';
 import { registraDownload, rimuoviDownload, leggiDownload } from './downloadsRegistry';
-import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, tappeAttive } from './museumVisit';
+import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, tappeAttive, ARCHIVIO_MUSEI_KEY } from './museumVisit';
 import { Language } from './i18n';
 
-/** Le audioguide scaricate, per (museo, opera, lingua). Vivono in Dexie. */
-const CHIAVE_ARCHIVIO = 'wip_museo_offline';
+/** Le audioguide scaricate, per (museo, opera, lingua). La chiave vive in
+ *  museumVisit.ts, che la legge per riconoscere la seconda visita. */
+const CHIAVE_ARCHIVIO = ARCHIVIO_MUSEI_KEY;
 
 export type ArchivioMuseo = {
   venueKey: string;

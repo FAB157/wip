@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso } from '../lib/museumVisit';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -88,6 +88,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       window.dispatchEvent(new CustomEvent('wip-leader-museum-room', { detail: { sala: visit.salaCorrente } }));
     }
   }, [sonoLeader, visit.salaCorrente]);
+
+  // IL BIGLIETTO D'INGRESSO (12/09/2026): accanto agli orari di domani, il
+  // momento giusto per comprarlo. Non è un'esperienza a pagamento: si mostra
+  // anche senza pass.
+  const [biglietto, setBiglietto] = useState<BigliettoIngresso | null>(null);
+  useEffect(() => {
+    if (!online) return;
+    let vivo = true;
+    fetchBigliettoIngresso(visit, language).then(b => { if (vivo) setBiglietto(b); });
+    return () => { vivo = false; };
+  }, [visit.venueKey, online]);
 
   // DOMANI: orari, chiusure, biglietto dal sito ufficiale. Si chiede una
   // volta per visita; in cache sul server una settimana.
@@ -844,6 +855,43 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </div>
           )}
 
+          {/* COMPRA IL BIGLIETTO D'INGRESSO: la sera prima, accanto agli orari */}
+          {biglietto && (
+            <a
+              href={biglietto.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-primary text-white shadow-[0_12px_28px_rgba(30,58,138,0.25)] mb-3 active:scale-[0.99] transition-transform"
+            >
+              <Ticket className="w-5 h-5 shrink-0" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-[13px] font-black">{t('mv_buy_ticket')}</span>
+                <span className="block text-[11px] font-bold text-white/80 truncate">
+                  {biglietto.prezzo ? t('mv_ticket_from').replace('{p}', biglietto.prezzo).replace('{f}', biglietto.fonte === 'tiqets' ? 'Tiqets' : biglietto.fonte === 'viator' ? 'Viator' : 'GetYourGuide') : biglietto.titolo}
+                </span>
+              </span>
+              <ExternalLink className="w-4 h-4 shrink-0 text-white/80" />
+            </a>
+          )}
+
+          {/* SEI GIÀ STATO QUI (12/09/2026): la seconda visita non ripete la
+              prima. Un tocco e restano solo le opere non viste, più le
+              preferite dell'altra volta. */}
+          {visit.visitaPrecedente && (
+            <div className="px-3.5 py-3 rounded-2xl bg-white border border-slate-200 mb-3">
+              <p className="text-[12px] font-black text-slate-900 leading-snug">
+                {t('mv_been_here').replace('{d}', new Date(visit.visitaPrecedente.quando).toLocaleDateString(String(language).toLowerCase(), { day: 'numeric', month: 'long' })).replace('{n}', String(visit.visitaPrecedente.viste))}
+              </p>
+              <button
+                onClick={() => impostaPersonalizzazione({ soloNuove: !pers.soloNuove })}
+                aria-pressed={!!pers.soloNuove}
+                className={`mt-2 w-full py-2 rounded-xl text-[12px] font-black border transition-all ${pers.soloNuove ? 'bg-primary border-primary text-white' : 'bg-white border-primary/40 text-primary'}`}
+              >
+                {pers.soloNuove ? <Check className="w-4 h-4 inline-block mr-1 -mt-0.5" /> : null}{t('mv_only_new')}
+              </button>
+            </div>
+          )}
+
           {/* CHIUDE FRA N MINUTI: le mancanti più vicine per prime */}
           {minutiAllaChiusura !== null && mancanti.length > 0 && (() => {
             const salaQui = String(visit.salaCorrente || (() => { for (let i = visit.guide.tappe.length - 1; i >= 0; i--) { if (visit.guide.tappe[i].seenCardId && visit.guide.tappe[i].dove) return visit.guide.tappe[i].dove; } return ''; })() || '').trim();
@@ -1245,6 +1293,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     {tappa.perche && <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-700 mt-1`}>{tappa.perche}</p>}
                     {/* Promessa onesta: il museo la possiede, ma non dice dove
                         è esposta — e potrebbe essere in deposito o in prestito. */}
+                    {tappa.vistaInPassato && !done && (
+                      <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1 flex items-center gap-1"><Check className="w-3 h-3" />{t('mv_seen_before')}</p>
+                    )}
                     {tappa.affollata && !done && (
                       <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1 flex items-center gap-1">
                         <Clock className="w-3 h-3" />{t('mv_crowded_badge')}{tappa.rimandata ? ` · ${t('mv_postponed')}` : ''}

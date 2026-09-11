@@ -156,6 +156,19 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // Seconda visita: sei già stato qui.
+  mv_been_here: {
+    IT: "Sei già stato qui il {d}: avevi visto {n} opere", EN: "You were here on {d}: you saw {n} works", FR: "Tu es déjà venu le {d} : tu avais vu {n} œuvres",
+    ES: "Ya estuviste aquí el {d}: viste {n} obras", DE: "Du warst am {d} schon hier: {n} Werke gesehen", RU: "Вы уже были здесь {d}: видели {n} произведений", ZH: "你 {d} 来过：看了 {n} 件作品",
+  },
+  mv_only_new: {
+    IT: "Solo le nuove, più le preferite", EN: "Only the new ones, plus favourites", FR: "Seulement les nouvelles, plus les préférées",
+    ES: "Solo las nuevas, más las favoritas", DE: "Nur die neuen, plus Favoriten", RU: "Только новые, плюс любимые", ZH: "只看新的，加上最爱",
+  },
+  mv_seen_before: { IT: "Vista l'altra volta", EN: "Seen last time", FR: "Vue la dernière fois", ES: "Vista la otra vez", DE: "Beim letzten Mal gesehen", RU: "Видели в прошлый раз", ZH: "上次看过" },
+  // Il biglietto d'ingresso, la sera prima.
+  mv_buy_ticket: { IT: "Compra il biglietto d'ingresso", EN: "Buy the entrance ticket", FR: "Acheter le billet d'entrée", ES: "Comprar la entrada", DE: "Eintrittskarte kaufen", RU: "Купить входной билет", ZH: "购买门票" },
+  mv_ticket_from: { IT: "da {p} · {f}", EN: "from {p} · {f}", FR: "dès {p} · {f}", ES: "desde {p} · {f}", DE: "ab {p} · {f}", RU: "от {p} · {f}", ZH: "{p} 起 · {f}" },
   // «Chiedi alla guida»: una domanda sull'opera, un credito.
   mv_ask: { IT: "Chiedi alla guida", EN: "Ask the guide", FR: "Demande au guide", ES: "Pregunta a la guía", DE: "Frag den Guide", RU: "Спросить гида", ZH: "问导览员" },
   mv_ask_placeholder: { IT: "La tua domanda su quest'opera…", EN: "Your question about this work…", FR: "Ta question sur cette œuvre…", ES: "Tu pregunta sobre esta obra…", DE: "Deine Frage zu diesem Werk…", RU: "Ваш вопрос об этом произведении…", ZH: "关于这件作品的问题…" },

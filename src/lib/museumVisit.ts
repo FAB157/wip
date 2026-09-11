@@ -60,6 +60,8 @@ export type VenueTappa = {
   /** Il cuore: l'opera che ha colpito. Le preferite sono un ricordo, le
    *  viste un elenco — ed è il ricordo che si condivide. */
   preferita?: boolean;
+  /** Vista in una visita PRECEDENTE di questo museo (dall'archivio). */
+  vistaInPassato?: boolean;
   /** id della scheda Vision con cui l'utente l'ha spuntata, se l'ha inquadrata. */
   seenCardId?: string | null;
   seenAt?: number | null;
@@ -93,8 +95,10 @@ export type Personalizzazione = {
   tempo: 'tutto' | '30' | '60';
   interessi: 'tutto' | 'dipinti' | 'sculture' | 'altro';
   bambini: boolean;
+  /** Seconda visita: solo le opere non ancora viste, più le preferite. */
+  soloNuove?: boolean;
 };
-export const PERSONALIZZAZIONE_BASE: Personalizzazione = { tempo: 'tutto', interessi: 'tutto', bambini: false };
+export const PERSONALIZZAZIONE_BASE: Personalizzazione = { tempo: 'tutto', interessi: 'tutto', bambini: false, soloNuove: false };
 
 export type VenueInfo = {
   id: string | null;
@@ -124,11 +128,15 @@ export type MuseumVisit = {
   personalizzazione?: Personalizzazione;
   /** Le prime opere sono già state prescaricate all'ingresso: non si rifà. */
   prefetchFatto?: boolean;
+  /** «Sei già stato qui»: quando, quante viste, quante preferite. */
+  visitaPrecedente?: { quando: number; viste: number; preferite: number };
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
 
 const STORAGE_KEY = 'wip_museum_visit';
+/** L'archivio delle visite fatte (pacchettoMuseo.ts scrive, qui si legge). */
+export const ARCHIVIO_MUSEI_KEY = 'wip_museo_offline';
 const VISIT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const MUSEUM_VISIT_EVENT = 'wip-museum-visit-updated';
 export const OPEN_MUSEUM_VISIT_EVENT = 'wip-open-museum-visit';
@@ -309,12 +317,26 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
     saveVisit(v);
     return v;
   }
+  // SECONDA VISITA (12/09/2026): si torna in un museo già visitato. Dall'archivio
+  // si sa cosa si è visto e cosa si è messo fra le preferite: le tappe si
+  // marcano, e la scheda potrà proporre «solo le nuove, più le preferite».
+  const prec = leggiVisitaPrecedente(key, resp.guide.language);
   const v: MuseumVisit = {
     venueKey: key,
     venue: resp.venue,
-    guide: { ...resp.guide, tappe: resp.guide.tappe.map(t => ({ ...t, seenCardId: null, seenAt: null })) },
+    guide: {
+      ...resp.guide,
+      tappe: resp.guide.tappe.map(t => ({
+        ...t,
+        seenCardId: null,
+        seenAt: null,
+        ...(prec && prec.viste.has(normalize(t.nome)) ? { vistaInPassato: true } : {}),
+        ...(prec && prec.preferite.has(normalize(t.nome)) ? { preferita: true } : {}),
+      })),
+    },
     ...(resp.venuePhoto ? { venuePhoto: resp.venuePhoto } : {}),
     ...(resp.venuePhotoIcon ? { venuePhotoIcon: resp.venuePhotoIcon } : {}),
+    ...(prec && prec.viste.size > 0 ? { visitaPrecedente: { quando: prec.quando, viste: prec.viste.size, preferite: prec.preferite.size } } : {}),
     source: resp.source,
     startedAt: now,
     updatedAt: now,
@@ -322,6 +344,29 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
   };
   saveVisit(v);
   return v;
+}
+
+/**
+ * Cosa si era visto in questo museo l'altra volta, dall'archivio permanente
+ * (scritto da pacchettoMuseo.ts). Solo se la visita precedente è di almeno
+ * un giorno fa: la stessa giornata è la stessa visita, non una seconda.
+ */
+function leggiVisitaPrecedente(venueKey: string, lang: string): { quando: number; viste: Set<string>; preferite: Set<string> } | null {
+  try {
+    const tutto = JSON.parse(localStorage.getItem(ARCHIVIO_MUSEI_KEY) || '{}') || {};
+    const a = tutto[`${venueKey}::${String(lang).toUpperCase()}`];
+    const quando = Number(a?.visitatoIl || a?.scaricatoIl || 0);
+    if (!a?.guide?.tappe?.length || !quando || Date.now() - quando < 20 * 60 * 60 * 1000) return null;
+    const viste = new Set<string>();
+    const preferite = new Set<string>();
+    for (const t of a.guide.tappe) {
+      if (t?.seenCardId) viste.add(normalize(t.nome));
+      if (t?.preferita) preferite.add(normalize(t.nome));
+    }
+    return { quando, viste, preferite };
+  } catch {
+    return null;
+  }
 }
 
 /** Registra un'opera riconosciuta: entra in `seen` e spunta la tappa se c'è. */
@@ -588,6 +633,25 @@ export function togglePreferita(index: number): MuseumVisit | null {
   return v;
 }
 
+/**
+ * IL BIGLIETTO D'INGRESSO (12/09/2026): la sera prima, accanto agli orari.
+ * Non è un'esperienza a pagamento — è quello che serve a chiunque per
+ * entrare — quindi si mostra anche a chi il pass non l'ha.
+ */
+export type BigliettoIngresso = { titolo: string; prezzo: string; url: string; fonte: string };
+export async function fetchBigliettoIngresso(v: MuseumVisit, language: Language): Promise<BigliettoIngresso | null> {
+  try {
+    const p = new URLSearchParams({ language, venueName: v.venue.name });
+    if (v.venue.lat != null && v.venue.lon != null) { p.set('lat', String(v.venue.lat)); p.set('lon', String(v.venue.lon)); }
+    const res = await fetch(getApiUrl(`/api/museums/entrance-ticket?${p.toString()}`));
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d?.ok === true && d?.ticket?.url ? (d.ticket as BigliettoIngresso) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Segna che le prime opere sono state prescaricate: una volta per visita. */
 export function segnaPrefetchFatto(): void {
   const v = getVisit();
@@ -763,13 +827,21 @@ export function tappeAttive(v: MuseumVisit | null): Set<number> {
   const tappe = v?.guide?.tappe || [];
   const tutte = new Set(tappe.map((_, k) => k));
   const p = v?.personalizzazione || PERSONALIZZAZIONE_BASE;
-  const nessunaLeva = p.tempo === 'tutto' && p.interessi === 'tutto' && !p.bambini;
+  const nessunaLeva = p.tempo === 'tutto' && p.interessi === 'tutto' && !p.bambini && !p.soloNuove;
   if (nessunaLeva || tappe.length <= 3) return tutte;
+
+  // 0) SECONDA VISITA (12/09/2026): «l'ultima volta hai visto queste dodici;
+  //    oggi le otto che ti sei perso, più le tre che avevi messo fra le
+  //    preferite». Le viste in passato escono, le preferite restano sempre.
+  let candidati = tappe.map((t, k) => ({ k, t })).filter(x => !x.t.soloCollezione);
+  if (p.soloNuove) {
+    const nuove = candidati.filter(x => !x.t.vistaInPassato || x.t.preferita);
+    if (nuove.length >= 3) candidati = nuove;
+  }
 
   // 1) INTERESSI: si scartano le opere del tipo sbagliato. Le opere senza
   //    tipo restano: non sapere che cos'è non è una ragione per toglierla.
   const tipoVoluto = p.interessi === 'dipinti' ? 'dipinto' : p.interessi === 'sculture' ? 'scultura' : p.interessi === 'altro' ? 'altro' : null;
-  let candidati = tappe.map((t, k) => ({ k, t })).filter(x => !x.t.soloCollezione);
   if (tipoVoluto) {
     const filtrati = candidati.filter(x => !x.t.tipo || x.t.tipo === tipoVoluto);
     // Se il filtro lascerebbe meno di tre opere, non si applica: un percorso
