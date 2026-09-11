@@ -23,7 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
 import { speakWithSystemVoice, speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -238,6 +238,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // esiste già, manda i primi novanta secondi dell'introduzione. Si ascolta
   // la voce PRIMA di pagare, come in ogni podcast.
   const [passSample, setPassSample] = useState<{ text: string; language: string } | null>(null);
+  // La scansione non ha riconosciuto l'opera: si sceglie con gli occhi fra
+  // quelle del percorso, la sala in cui si è per prima.
+  const [sceltaOpera, setSceltaOpera] = useState<{ cardId: string | null; image: string; refunded: boolean } | null>(null);
   const [samplePlaying, setSamplePlaying] = useState(false);
   const toggleSample = async () => {
     if (!passSample) return;
@@ -1041,6 +1044,16 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           onRecognize(enrichedData);
         }
       } else {
+        // NON RICONOSCIUTA, MA SIAMO DENTRO UN MUSEO CON UN PERCORSO
+        // (11/09/2026): vetro, riflessi, gente davanti — la foto non basta.
+        // Invece di «non so», si mostrano le foto delle opere di questa sala
+        // e la persona la riconosce con gli occhi in un secondo. Le foto e la
+        // sala ce le abbiamo già.
+        const visitaInCorso = getVisit();
+        if (visionTarget === 'artwork' && (visitaInCorso?.guide?.tappe?.length || 0) > 0) {
+          setSceltaOpera({ cardId: data.card_id || null, image: `data:image/jpeg;base64,${base64Image}`, refunded: !!data.refunded });
+          return;
+        }
         // Il server ha già (best-effort) rimborsato i crediti e salvato la
         // foto in My Vision: chiediamo all'utente perché quel posto è speciale
         // (il racconto aiuta la revisione WIP Community). `refunded` riflette
@@ -1280,6 +1293,62 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
        bianca attorno all'immagine. */
     <div className="flex-1 w-full h-full relative bg-background overflow-hidden flex flex-col font-sans">
       {quotaToast && <QuotaLimitToast feature={quotaToast} onClose={closeQuotaToast} />}
+
+      {/* NON RICONOSCIUTA: È UNA DI QUESTE? Le opere del percorso con la foto,
+          quelle della sala corrente per prime. Un tocco = opera spuntata e
+          audioguida che parte. «Nessuna di queste» = la strada di sempre. */}
+      {sceltaOpera && (() => {
+        const v = getVisit();
+        const tappe = v?.guide?.tappe || [];
+        const salaQui = String(v?.salaCorrente || (() => { for (let i = tappe.length - 1; i >= 0; i--) { if (tappe[i].seenCardId && tappe[i].dove) return tappe[i].dove; } return ''; })() || '').trim();
+        const ordinate = tappe.map((t, i) => ({ t, i })).filter(x => !x.t.soloCollezione)
+          .sort((a, b) => Number(String(b.t.dove || '').trim() === salaQui) - Number(String(a.t.dove || '').trim() === salaQui));
+        const scegli = (i: number) => {
+          const t = tappe[i];
+          markWorkSeen(t.nome, sceltaOpera.cardId);
+          setSceltaOpera(null);
+          const nuova = getVisit();
+          if (nuova) { setVisit(nuova); setVisitOpen(true); }
+          setTimeout(() => window.dispatchEvent(new CustomEvent('wip-museum-play-index', { detail: { index: i } })), 350);
+        };
+        return (
+          <div className="fixed inset-0 z-[2650] bg-black/60 backdrop-blur-sm flex items-end sm:items-center sm:justify-center" onClick={() => setSceltaOpera(null)}>
+            <div onClick={(e) => e.stopPropagation()} className="bg-[#fdfbf7] w-full sm:max-w-md max-h-[86vh] rounded-t-[2rem] sm:rounded-[2rem] overflow-hidden flex flex-col shadow-2xl">
+              <div className="px-5 pt-5 pb-3 shrink-0">
+                <p className="text-lg font-black text-slate-900 leading-tight">{tr('mv_pick_work')}</p>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">{tr('mv_pick_work_hint')}{salaQui ? ` · ${salaQui}` : ''}</p>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 pb-3">
+                <div className="grid grid-cols-3 gap-2">
+                  {ordinate.map(({ t, i }) => (
+                    <button
+                      key={`pick-${i}`}
+                      onClick={() => scegli(i)}
+                      className={`flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-white border active:scale-95 transition-transform ${String(t.dove || '').trim() === salaQui && salaQui ? 'border-primary' : 'border-slate-200'}`}
+                    >
+                      {t.fotoIcona ? (
+                        <img src={t.foto || t.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                      ) : (
+                        <div className="w-full aspect-square rounded-xl bg-blue-50 flex items-center justify-center"><Landmark className="w-6 h-6 text-primary" /></div>
+                      )}
+                      <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{t.nome}</span>
+                      {t.dove && <span className="text-[9px] font-bold text-slate-500 truncate max-w-full">{t.dove}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="px-5 pb-5 pt-2 shrink-0">
+                <button
+                  onClick={() => { const s = sceltaOpera; setSceltaOpera(null); setCommentCard({ cardId: s.cardId, image: s.image, refunded: s.refunded }); }}
+                  className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-[13px] active:scale-[0.98] transition-transform"
+                >
+                  {tr('mv_pick_none')}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Prima card guidata: overlay una-tantum al primo ingresso in camera */}
       <AnimatePresence>

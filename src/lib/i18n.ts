@@ -156,6 +156,29 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // «Chiude fra 40 minuti», dentro la visita.
+  mv_closing_soon: {
+    IT: "Il museo chiude fra {m} minuti", EN: "The museum closes in {m} minutes", FR: "Le musée ferme dans {m} minutes",
+    ES: "El museo cierra en {m} minutos", DE: "Das Museum schließt in {m} Minuten", RU: "Музей закрывается через {m} мин.", ZH: "博物馆将在 {m} 分钟后闭馆",
+  },
+  mv_closing_missing: {
+    IT: "ti mancano {n} opere · le più vicine sono qui sotto", EN: "{n} works left · the closest ones are just below",
+    FR: "il te reste {n} œuvres · les plus proches sont juste en dessous", ES: "te faltan {n} obras · las más cercanas están justo debajo",
+    DE: "noch {n} Werke · die nächsten stehen direkt darunter", RU: "осталось {n} произведений · ближайшие — чуть ниже", ZH: "还有 {n} 件 · 最近的就在下方",
+  },
+  // «Il leader è in Sala 12».
+  mv_leader_room: { IT: "Il leader è in {s}", EN: "The leader is in {s}", FR: "Le leader est en {s}", ES: "El líder está en {s}", DE: "Der Leiter ist in {s}", RU: "Лидер в {s}", ZH: "领队在 {s}" },
+  // Il cuore: le preferite.
+  mv_favorites: { IT: "Le tue preferite", EN: "Your favourites", FR: "Tes préférées", ES: "Tus favoritas", DE: "Deine Favoriten", RU: "Ваши любимые", ZH: "我的最爱" },
+  mv_fav_add: { IT: "Aggiungi alle preferite", EN: "Add to favourites", FR: "Ajouter aux préférées", ES: "Añadir a favoritas", DE: "Zu Favoriten", RU: "В любимые", ZH: "加入最爱" },
+  mv_fav_remove: { IT: "Togli dalle preferite", EN: "Remove from favourites", FR: "Retirer des préférées", ES: "Quitar de favoritas", DE: "Aus Favoriten entfernen", RU: "Убрать из любимых", ZH: "移出最爱" },
+  // La scansione non riconosce: scegli con gli occhi.
+  mv_pick_work: {
+    IT: "Non l'ho riconosciuta. È una di queste?", EN: "I couldn't recognise it. Is it one of these?", FR: "Je ne l'ai pas reconnue. C'est l'une de celles-ci ?",
+    ES: "No la he reconocido. ¿Es una de estas?", DE: "Nicht erkannt. Ist es eines von diesen?", RU: "Не удалось распознать. Это одно из этих?", ZH: "没能识别。是下面这些中的一件吗？",
+  },
+  mv_pick_work_hint: { IT: "Tocca l'opera che hai davanti", EN: "Tap the work in front of you", FR: "Touche l'œuvre devant toi", ES: "Toca la obra que tienes delante", DE: "Tippe auf das Werk vor dir", RU: "Нажмите на произведение перед вами", ZH: "点击你面前的作品" },
+  mv_pick_none: { IT: "Nessuna di queste", EN: "None of these", FR: "Aucune de celles-ci", ES: "Ninguna de estas", DE: "Keines davon", RU: "Ни одно из них", ZH: "都不是" },
   // Le prime opere si scaricano da sole all'ingresso.
   mv_prefetch_progress: {
     IT: "Scarico le prime {t} opere per quando manca la rete · {n}/{t}", EN: "Downloading the first {t} works for when there's no signal · {n}/{t}",

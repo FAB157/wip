@@ -9275,7 +9275,10 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
         // non è detto sia quella giusta.
         const tokNome = tokenSignificativi(venueName || '');
         const documenti = testi.map((t, i) => {
-          const dove = normalizzaTesto(`${pagine[i]} ${t.slice(0, 400)}`);
+          // Solo l'INDIRIZZO: l'intestazione del sito («Gallerie degli
+          // Uffizi») sta su ogni pagina, Pitti e Boboli compresi, e dava il
+          // bonus a tutte. «/gli-uffizi» lo contiene, «/palazzo-pitti» no.
+          const dove = normalizzaTesto(String(pagine[i] || '').replace(/^https?:\/\/[^/]+/i, ''));
           const parlaDiNoi = tokNome.length > 0 && tokNome.some(x => dove.includes(x));
           return {
             t, u: pagine[i],
@@ -9340,6 +9343,16 @@ Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, most
         : mOra
           ? { chiuso: false, apre: mOra[1].replace('.', ':'), chiude: mOra[2].replace('.', ':') }
           : null;
+      // OGGI, per «chiude fra 40 minuti» dentro la visita: stessa tabella,
+      // chiave di oggi.
+      const kOggi = chiaviGiorno[new Date().getDay()];
+      const gOggi = String(dati?.[kOggi] ?? dati?.settimana?.[kOggi] ?? '').trim().toLowerCase();
+      const mOggi = gOggi.match(/^(\d{1,2}[:.]\d{2})\s*[-–—]\s*(\d{1,2}[:.]\d{2})$/);
+      const esitoOggi = /^(chiuso|closed|fermé|ferme|cerrado|geschlossen)$/.test(gOggi)
+        ? { chiuso: true }
+        : mOggi
+          ? { chiuso: false, apre: mOggi[1].replace('.', ':'), chiude: mOggi[2].replace('.', ':') }
+          : null;
 
       // La fila: consiglio dichiarato, solo dove ha senso.
       let consiglio = '';
@@ -9355,6 +9368,7 @@ Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, most
       res.json({
         ok: true,
         domani: esitoDomani,
+        oggi: esitoOggi,
         giorno: k,
         ultimoIngresso: orarioValido(String(dati?.ultimoIngresso || '').replace('.', ':')) ? String(dati.ultimoIngresso).replace('.', ':') : '',
         chiusure: String(dati?.chiusure || '').slice(0, 200),

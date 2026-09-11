@@ -40,6 +40,7 @@ let leaderAudioListener: ((e: any) => void) | null = null;
 // già pagata il leader. Due messaggi in più sullo stesso canale realtime.
 let leaderMuseumVisitListener: ((e: any) => void) | null = null;
 let leaderMuseumStopListener: ((e: any) => void) | null = null;
+let leaderMuseumRoomListener: ((e: any) => void) | null = null;
 let restoreAttempted = false;
 // Ultimo audio annunciato dal leader: serve al pulsante «Ascolta ora» del
 // follower quando la partenza automatica non è andata a buon fine.
@@ -64,6 +65,10 @@ function teardownModuleChannel() {
   if (leaderMuseumStopListener) {
     window.removeEventListener('wip-leader-museum-stop', leaderMuseumStopListener);
     leaderMuseumStopListener = null;
+  }
+  if (leaderMuseumRoomListener) {
+    window.removeEventListener('wip-leader-museum-room', leaderMuseumRoomListener);
+    leaderMuseumRoomListener = null;
   }
   if (moduleChannel) {
     supabase.removeChannel(moduleChannel);
@@ -217,6 +222,13 @@ function subscribeModuleChannel(pin: string, leader: boolean, nome: string) {
       if (moduleIsLeader) return;
       window.dispatchEvent(new CustomEvent('wip-museum-stop-from-leader', { detail: payload?.payload || {} }));
     })
+    // MUSEO: «il leader è in Sala 12». Chi segue si perde e chi guida non lo
+    // sa: la sala del leader (dal cartello letto o dall'opera in ascolto)
+    // arriva a tutti, e la scheda dice dove raggiungerlo.
+    .on('broadcast', { event: 'museum-room' }, (payload: any) => {
+      if (moduleIsLeader) return;
+      window.dispatchEvent(new CustomEvent('wip-museum-room-from-leader', { detail: payload?.payload || {} }));
+    })
     .on('broadcast', { event: 'session-ended' }, () => {
       // Il leader ha terminato: i follower escono subito invece di restare
       // in ascolto di un canale morto.
@@ -297,6 +309,12 @@ function subscribeModuleChannel(pin: string, leader: boolean, nome: string) {
     };
     window.addEventListener('wip-leader-museum-visit', leaderMuseumVisitListener);
     window.addEventListener('wip-leader-museum-stop', leaderMuseumStopListener);
+    leaderMuseumRoomListener = (e: any) => {
+      if (!moduleChannel || !moduleIsLeader || !e?.detail?.sala) return;
+      moduleChannel.send({ type: 'broadcast', event: 'museum-room', payload: { sala: String(e.detail.sala) } })
+        .catch((err: any) => console.warn('[LiveTour] Sala non inoltrata:', err));
+    };
+    window.addEventListener('wip-leader-museum-room', leaderMuseumRoomListener);
   }
 }
 

@@ -57,6 +57,9 @@ export type VenueTappa = {
   skippedAt?: number | null;
   /** Rimandata in fondo perché affollata: si vede dopo, non si perde. */
   rimandata?: boolean;
+  /** Il cuore: l'opera che ha colpito. Le preferite sono un ricordo, le
+   *  viste un elenco — ed è il ricordo che si condivide. */
+  preferita?: boolean;
   /** id della scheda Vision con cui l'utente l'ha spuntata, se l'ha inquadrata. */
   seenCardId?: string | null;
   seenAt?: number | null;
@@ -531,6 +534,8 @@ export function riceviVisitaDalLeader(payload: any): MuseumVisit | null {
  */
 export type Domani = {
   domani: { chiuso: true } | { chiuso: false; apre: string; chiude: string } | null;
+  /** Gli orari di OGGI, per «chiude fra 40 minuti» dentro la visita. */
+  oggi?: { chiuso: true } | { chiuso: false; apre: string; chiude: string } | null;
   ultimoIngresso: string;
   chiusure: string;
   biglietto: { intero: string; ridotto: string; gratis: string };
@@ -549,6 +554,18 @@ export async function fetchDomani(v: MuseumVisit, language: Language): Promise<D
   } catch {
     return null;
   }
+}
+
+/** IL CUORE (11/09/2026): un tocco e l'opera entra fra le preferite. Vive
+ *  nella guida, quindi finisce nell'archivio e nella stampa da solo. */
+export function togglePreferita(index: number): MuseumVisit | null {
+  const v = getVisit();
+  if (!v?.guide?.tappe?.[index]) return null;
+  const t = v.guide.tappe[index];
+  v.guide.tappe[index] = { ...t, preferita: !t.preferita };
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
 }
 
 /** Segna che le prime opere sono state prescaricate: una volta per visita. */

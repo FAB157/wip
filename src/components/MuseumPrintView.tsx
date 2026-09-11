@@ -213,7 +213,7 @@ export default function MuseumPrintView({
             {primaSenzaSala && <div className="mp-room">{t('mv_also_in_collection')}</div>}
             <div className="mp-stop">
               <p className="mp-stop-name">
-                {tappa.soloCollezione ? '' : `${numero}. `}{tappa.nome}
+                {tappa.soloCollezione ? '' : `${numero}. `}{tappa.nome}{tappa.preferita ? ' ♥' : ''}
               </p>
               {tappa.nomeFonte && <p className="mp-stop-label">{tappa.nomeFonte}</p>}
               {tappa.nomeOriginale && (

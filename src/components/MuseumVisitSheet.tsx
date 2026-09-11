@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita } from '../lib/museumVisit';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
@@ -72,9 +72,41 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // non si ascolta, non si inquadra e non si legge un cartello, il telefono
   // vibra una volta e propone di inquadrare il numero della sala. Un
   // promemoria, non un'imposizione: si chiude con un tocco.
+  // «IL LEADER È IN SALA 12» (11/09/2026): chi guida manda la sua sala —
+  // dal cartello letto o dall'opera in ascolto — e chi segue sa dove
+  // raggiungerlo.
+  const [salaLeader, setSalaLeader] = useState<string>('');
+  useEffect(() => {
+    if (sonoLeader) return;
+    const onRoom = (e: any) => { const s = String(e?.detail?.sala || ''); if (s) setSalaLeader(s); };
+    window.addEventListener('wip-museum-room-from-leader', onRoom);
+    return () => window.removeEventListener('wip-museum-room-from-leader', onRoom);
+  }, [sonoLeader]);
+  useEffect(() => {
+    if (sonoLeader && visit.salaCorrente) {
+      window.dispatchEvent(new CustomEvent('wip-leader-museum-room', { detail: { sala: visit.salaCorrente } }));
+    }
+  }, [sonoLeader, visit.salaCorrente]);
+
   // DOMANI: orari, chiusure, biglietto dal sito ufficiale. Si chiede una
   // volta per visita; in cache sul server una settimana.
   const [domani, setDomani] = useState<Domani | null>(null);
+  // «CHIUDE FRA 40 MINUTI» (11/09/2026): con gli orari di oggi si sa quanto
+  // manca alla chiusura. Sotto l'ora, la scheda lo dice e mette davanti le
+  // opere mancanti più vicine — quelle della sala in cui si è — invece di
+  // lasciarlo scoprire dalla guardia che spegne le luci. Si ricalcola ogni
+  // minuto.
+  const [adesso, setAdesso] = useState(() => Date.now());
+  useEffect(() => { const id = setInterval(() => setAdesso(Date.now()), 60_000); return () => clearInterval(id); }, []);
+  const minutiAllaChiusura = (() => {
+    const o = domani?.oggi;
+    if (!o || o.chiuso) return null;
+    const m = String(o.chiude).match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const chiusura = new Date(adesso); chiusura.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    const diff = Math.round((chiusura.getTime() - adesso) / 60_000);
+    return diff > 0 && diff <= 60 ? diff : null;
+  })();
   useEffect(() => {
     if (!online) return;
     let vivo = true;
@@ -139,6 +171,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       .catch(() => { if (vivo) setPrefetch(null); });
     return () => { vivo = false; };
   }, [visit.venueKey, online]);
+
+  // Dalla griglia «è una di queste?» della fotocamera: si apre e parte
+  // l'opera scelta con gli occhi.
+  useEffect(() => {
+    const onPlay = (e: any) => { const i = Number(e?.detail?.index); if (Number.isFinite(i) && visit.guide.tappe[i]) void handleOpera(i); };
+    window.addEventListener('wip-museum-play-index', onPlay);
+    return () => window.removeEventListener('wip-museum-play-index', onPlay);
+  });
 
   // Follower: il leader ha scelto un'opera. Si apre la stessa tappa col
   // testo, così si legge mentre la voce (che arriva da 'audio-start') parla.
@@ -423,6 +463,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (sonoLeader) {
       window.dispatchEvent(new CustomEvent('wip-leader-museum-stop', { detail: { index: i, nome: tappa.nome, guide: guida } }));
       window.dispatchEvent(new CustomEvent('wip-leader-audio-start', { detail: { textToSpeak: guida.testo, poiName: tappa.nome, character: getGuideCharacter(), language: String(guida.language || language).toLowerCase() } }));
+      // La sala dell'opera in ascolto è dove il leader sta: si dice al gruppo.
+      if (tappa.dove) window.dispatchEvent(new CustomEvent('wip-leader-museum-room', { detail: { sala: tappa.dove } }));
     }
     try {
       const lingua = String(guida.language || language).toLowerCase();
@@ -663,6 +705,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                 <Users className="w-3 h-3" />{sonoLeader ? t('mv_group_leader') : t('mv_group_follower')}
               </p>
             )}
+            {inGruppo && !sonoLeader && salaLeader && (
+              <p className="text-[11px] font-black text-primary flex items-center gap-1 mt-0.5">
+                <MapPin className="w-3 h-3" />{t('mv_leader_room').replace('{s}', salaLeader)}
+              </p>
+            )}
             {prefetch && prefetch.fatte < prefetch.totali && (
               <p className="text-[10px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
                 <Download className="w-3 h-3 shrink-0" />{t('mv_prefetch_progress').replace('{t}', String(prefetch.totali)).replace('{n}', String(prefetch.fatte))}
@@ -719,6 +766,33 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               )}
             </div>
           )}
+
+          {/* CHIUDE FRA N MINUTI: le mancanti più vicine per prime */}
+          {minutiAllaChiusura !== null && mancanti.length > 0 && (() => {
+            const salaQui = String(visit.salaCorrente || (() => { for (let i = visit.guide.tappe.length - 1; i >= 0; i--) { if (visit.guide.tappe[i].seenCardId && visit.guide.tappe[i].dove) return visit.guide.tappe[i].dove; } return ''; })() || '').trim();
+            const vicine = [...mancanti].sort((a, b) => Number(String(b.dove || '').trim() === salaQui) - Number(String(a.dove || '').trim() === salaQui)).slice(0, 3);
+            return (
+              <div className="px-3.5 py-3 rounded-2xl border-2 border-amber-400 bg-amber-50 mb-3">
+                <p className="text-[13px] font-black text-amber-900 flex items-center gap-1.5">
+                  <Clock className="w-4 h-4" />{t('mv_closing_soon').replace('{m}', String(minutiAllaChiusura))}
+                </p>
+                <p className="text-[11px] font-bold text-amber-800 mt-0.5">{t('mv_closing_missing').replace('{n}', String(mancanti.length))}</p>
+                <div className="flex gap-2 mt-2">
+                  {vicine.map((x, k) => (
+                    <button
+                      key={`${k}-${x.nome}`}
+                      onClick={() => { const i = visit.guide.tappe.indexOf(x); if (i >= 0) void handleOpera(i); }}
+                      className="flex-1 min-w-0 flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl bg-white border border-amber-200 active:scale-95 transition-transform"
+                    >
+                      {x.fotoIcona ? <img src={x.fotoIcona} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} /> : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center"><Landmark className="w-4 h-4 text-primary" /></div>}
+                      <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
+                      {x.dove && <span className="text-[9px] font-bold text-slate-500 truncate max-w-full">{x.dove}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Pass Museo, se attivo */}
           {passActive && passExpiresAt !== null && (
@@ -1096,6 +1170,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         o c'è la fila. Il percorso prosegue invece di fermarsi
                         qui — e se in tanti saltano la stessa opera, quella
                         tappa è sbagliata e ce lo stanno dicendo dal posto. */}
+                    {/* IL CUORE: l'opera che ha colpito. Le viste sono un
+                        elenco, le preferite un ricordo — quello che si
+                        condivide. */}
+                    <button
+                      onClick={() => togglePreferita(i)}
+                      aria-label={tappa.preferita ? t('mv_fav_remove') : t('mv_fav_add')}
+                      aria-pressed={!!tappa.preferita}
+                      className={`mt-2 ml-2 inline-flex items-center justify-center w-8 h-8 rounded-full border active:scale-90 transition-transform ${tappa.preferita ? 'bg-rose-50 border-rose-300 text-rose-600' : 'bg-white border-slate-200 text-slate-400'}`}
+                    >
+                      <Heart className={`w-4 h-4 ${tappa.preferita ? 'fill-current' : ''}`} />
+                    </button>
                     {!done && (
                       <button
                         onClick={() => { if (tappa.skipped) unskipStop(i); else skipStop(i); }}
@@ -1183,6 +1268,32 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               );
             })}
           </ol>
+
+          {/* LE PREFERITE: con le foto, si toccano per riascoltare. Vivono
+              nella guida, quindi restano nell'archivio e vanno in stampa. */}
+          {visit.guide.tappe.some(x => x.preferita) && (
+            <div className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 flex items-center gap-1.5">
+                <Heart className="w-3.5 h-3.5 text-rose-500 fill-current" />{t('mv_favorites')}
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {visit.guide.tappe.map((x, i) => x.preferita ? (
+                  <button
+                    key={`fav-${i}`}
+                    onClick={() => void handleOpera(i)}
+                    className="flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-white border border-rose-200 active:scale-95 transition-transform"
+                  >
+                    {x.fotoIcona ? (
+                      <img src={x.foto || x.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                    ) : (
+                      <div className="w-full aspect-square rounded-xl bg-blue-50 flex items-center justify-center"><Landmark className="w-6 h-6 text-primary" /></div>
+                    )}
+                    <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
+                  </button>
+                ) : null)}
+              </div>
+            </div>
+          )}
 
           {/* I SERVIZI (11/09/2026): bagni, guardaroba, caffetteria, bookshop,
               uscita, accessibilità — solo le voci che il sito dichiara. Dopo
