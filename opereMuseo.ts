@@ -96,7 +96,7 @@ export type OpzioniOpereMuseo = {
   candidate?: number;
   /** Tetto complessivo di tempo in ms (default 25.000). */
   budgetMs?: number;
-  /** Lunghezza massima del testo di fonte per opera (default 2.500). */
+  /** Lunghezza massima del testo di fonte per opera (default 4.000). */
   maxTesto?: number;
   /** Scaricare le schede ufficiali (default true). */
   schede?: boolean;
@@ -156,7 +156,9 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
   const N = opzioni.n ?? 25;
   const CANDIDATE = opzioni.candidate ?? Math.max(N * 2, 40);
   const BUDGET = opzioni.budgetMs ?? 25000;
-  const MAX_TESTO = opzioni.maxTesto ?? 2500;
+  // 4.000 caratteri (~650 parole di fonte): servono per spiegazioni di 150-250
+  // parole senza riempitivo (committente 12/09: «non sono poche?»).
+  const MAX_TESTO = opzioni.maxTesto ?? 4000;
   const UA = opzioni.userAgent || UA_DEFAULT;
   const lang = String(lingua || 'it').toLowerCase().slice(0, 2);
   const restante = () => BUDGET - (Date.now() - inizio);
