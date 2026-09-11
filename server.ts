@@ -8796,14 +8796,21 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         for (let k = 0; k < ordinate.length; k += LOTTO) {
           const lotto = ordinate.slice(k, k + LOTTO).filter(o => o.testoFonte);
           if (!lotto.length) continue;
+          // Lunghezza legata alla RICCHEZZA della fonte, non a un numero fisso
+          // (12/09/2026, il committente trovava 80-150 parole poche): una
+          // voce Wikipedia vera regge un racconto lungo, i soli fatti
+          // Wikidata no — allungarli sarebbe riempitivo, non specificità.
           const corpo = lotto.map((o, i) => {
-            const lunghezza = (o.fonteTesto === 'wikidata') ? '40-60 parole, fatti asciutti, NIENTE riempitivo' : '80-150 parole';
+            const lunghezza = o.fonteTesto === 'wikidata' ? '60-100 parole, fatti asciutti, NIENTE riempitivo'
+              : o.testoFonte.length >= 2500 ? '150-250 parole'
+              : '100-150 parole';
             return `OPERA ${i + 1} — "${o.titolo}"${o.autore ? ` di ${o.autore}` : ''}${o.anno ? ` (${o.anno})` : ''} — lunghezza attesa: ${lunghezza}\n${o.testoFonte}`;
           }).join('\n\n---\n\n');
           const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto).\n\n${corpo}\n${regolaSpecificita(venue.name)}\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
           try {
             const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-              temperature: 0.3, max_tokens: 1800, response_format: { type: 'json_object' },
+              // Fino a 250 parole per 5 opere: 1800 token troncava a metà lotto.
+              temperature: 0.3, max_tokens: 3200, response_format: { type: 'json_object' },
               excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
             }, 'venue_guide_opera', supabaseUrl, supabaseServiceKey, groq, userId);
             const raw = String(ai?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -9055,7 +9062,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
    * come le audioguide dei musei»).
    *
    * Il percorso della visita elenca le opere; qui si ascolta la singola opera
-   * come davanti al quadro: 250-350 parole che guidano l'occhio su ciò che si
+   * come davanti al quadro: 300-500 parole (12/09/2026, alzate dal
+   * committente da 250-350) che guidano l'occhio su ciò che si
    * VEDE e lo intrecciano con la storia documentata.
    *
    * Le fonti sono le stesse della visita, ma puntate sull'opera: la voce
@@ -9268,7 +9276,7 @@ ${materiale}
 
 ${stile === 'bambini'
   ? `SCRIVI il testo dell'audioguida di QUESTA opera PER UN BAMBINO DI OTTO ANNI, in ${langCfg.name}, 120-180 parole (un minuto di ascolto). Frasi corte. Niente date astratte e niente termini tecnici: se serve una data, dilla come "più di cinquecento anni fa". Racconta cosa succede nell'immagine come una storia, e fagli cercare con gli occhi almeno DUE cose precise ("riesci a trovare il cane in basso a sinistra?"). Chiudi con una domanda che lo faccia guardare ancora. Tono caldo, mai infantile: un bambino sente subito quando lo si tratta da stupido. E TUTTO deve venire dal materiale: le storie per bambini non sono un permesso di inventare.`
-  : `SCRIVI il testo dell'audioguida di QUESTA opera, in ${langCfg.name}, 250-350 parole, da leggere ad alta voce (due o tre minuti di ascolto). Struttura, senza titoli né elenchi, come un discorso continuo:`}
+  : `SCRIVI il testo dell'audioguida di QUESTA opera, in ${langCfg.name}, 300-500 parole, da leggere ad alta voce (tre o quattro minuti di ascolto). Struttura, senza titoli né elenchi, come un discorso continuo:`}
 1. UNA frase che porta lo sguardo sull'opera e dice che cosa si sta guardando.
 2. DESCRIZIONE DI CIÒ CHE SI VEDE, guidando l'occhio con precisione: la composizione, i personaggi e cosa fanno, i gesti, gli sguardi, i colori, la luce, i dettagli che sfuggono a chi passa. Usa "osserva", "guarda in basso a destra", "nota come". Questa è la parte più lunga e importante: un'audioguida serve a FAR VEDERE.
 3. La tecnica e i materiali con i dati della scheda: supporto, misure reali, tecnica, stato di conservazione se il materiale lo dice.
@@ -9286,7 +9294,7 @@ ${regolaSpecificita(opera)}
 
 Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
 {
-  "testo": "il testo dell'audioguida, 250-350 parole",
+  "testo": "il testo dell'audioguida, 300-500 parole",
   "titolo": "titolo dell'opera come compare nel materiale",
   "autore": "autore secondo il materiale, oppure ''",
   "anno": "datazione secondo il materiale, oppure ''",
