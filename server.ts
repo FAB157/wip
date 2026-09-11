@@ -7235,9 +7235,10 @@ ORDER BY DESC(?fama) LIMIT 80`;
           // purché sia un file, o una pagina dello stesso sito.
           if (RE_PIANTA.test(u.pathname)) {
             if (!pianta && /\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) pianta = u.href;
-            else if (!paginaPianta && u.hostname === base.hostname && !/\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) paginaPianta = u.href;
+            else if (!paginaPianta && u.hostname.replace(/^www\./, '') === base.hostname.replace(/^www\./, '') && !/\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) paginaPianta = u.href;
           }
-          if (u.hostname !== base.hostname) continue;
+          // Con o senza «www» è lo stesso sito (vedi la rotta degli orari).
+          if (u.hostname.replace(/^www\./, '') !== base.hostname.replace(/^www\./, '')) continue;
           if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|ics)$/i.test(u.pathname)) continue;
           if (u.href === base.href || candidati.some(c => c.href === u.href)) continue;
           const peso = promessaLink(u.pathname);
@@ -9326,7 +9327,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       // nella lingua dell'utente, quindi la cache è per lingua. v3: sale
       // chiuse solo di QUESTO museo (uffizi.it dava quelle di Pitti). v4:
       // sito letto nella sua lingua (in cache v3 c'erano orari sbagliati in FR).
-      const chiave = `museum_hours:v4:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      // v5: «www.uffizi.it» e «uffizi.it» sono lo stesso sito (in FR la base
+      // arrivava senza www e tutti i link col www venivano scartati).
+      const chiave = `museum_hours:v5:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       let dati: any = null;
       const inCache = await getFromCache(chiave, 'museum_hours', 7 * 24 * 60 * 60 * 1000);
       if (inCache) { try { dati = JSON.parse(inCache); } catch { dati = null; } }
@@ -9347,6 +9350,10 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
         // 2) Le pagine giuste: home + fino a 3 fra orari, biglietti, visita.
         let base: URL;
         try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return res.json({ ok: false, reason: 'sito_non_valido' }); }
+        // «www.uffizi.it» e «uffizi.it» sono lo stesso sito. In francese la
+        // base arrivava senza www, i link della home (tutti col www) venivano
+        // scartati come esterni e restava solo il Corridoio Vasariano.
+        const stessoSito = (a: string, b: string) => String(a || '').toLowerCase().replace(/^www\./, '') === String(b || '').toLowerCase().replace(/^www\./, '');
         // Un User-Agent da browser: il Prado risponde 403 a chi si presenta
         // come un programma, e non è l'unico. Ci si presenta comunque
         // (header From), ma con l'aspetto di un visitatore.
@@ -9367,6 +9374,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
         const pagine: string[] = [];
         try {
           const home = await axios.get(base.href, UA);
+          // Se la home ha rediretto (uffizi.it → www.uffizi.it), da qui in poi
+          // la base è quella vera: i link relativi si risolvono giusti.
+          try { const finale = home.request?.res?.responseUrl; if (finale) base = new URL(finale); } catch { /* si tiene la base dichiarata */ }
           const html = String(home.data || '');
           testi.push(testoPaginaMuseo(html).slice(0, 5000));
           pagine.push(base.href);
@@ -9395,7 +9405,7 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
           for (const l of link) {
             try {
               const u = new URL(l.href, base.href);
-              if (u.hostname !== base.hostname || u.href === base.href) continue;
+              if (!stessoSito(u.hostname, base.hostname) || u.href === base.href) continue;
               if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
               // Il testo del link vale come l'indirizzo, ma un testo da
               // eventi («Visite speciali», «Mostre») azzera anche un
@@ -9439,7 +9449,7 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
                 try {
                   const u = new URL(m[1], base.href);
                   const testo = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
-                  if (u.hostname !== base.hostname || pagine.includes(u.href) || u.href === base.href) continue;
+                  if (!stessoSito(u.hostname, base.hostname) || pagine.includes(u.href) || u.href === base.href) continue;
                   if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
                   if (/(eventi|event|mostr|exhibit|attivit|activit|visite-speciali|visite speciali|avvis|news|notiz|blog|serale|evening|night|sconto|promo)/i.test(`${u.pathname} ${testo}`)) continue;
                   const w = Math.max(peso(u.pathname), peso(testo));
@@ -9501,7 +9511,7 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
             try {
               const u = new URL(m[1], base.href);
               const testo = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-              if (u.hostname !== base.hostname) continue;
+              if (!stessoSito(u.hostname, base.hostname)) continue;
               if (RE_AVVISI.test(u.pathname) || RE_AVVISI.test(testo) || RE_CHIUSO.test(testo)) {
                 if (!daLeggere.includes(u.href)) daLeggere.push(u.href);
               }
