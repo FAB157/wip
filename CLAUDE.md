@@ -128,6 +128,46 @@ places that were not La Spezia (22/08/2026).
 - The same rule governs text: a stop that does not exist, or exists in another
   city, blocks the itinerary — see `verifyItineraryAntiHallucination`, run by
   both the on-the-fly generator and the library pipeline.
+- **A name from OUR database beats the model's, but only if it came from a
+  source.** Measured 11/09/2026 on 106 confirmed hallucinated stops: the
+  "esiste? e dove?" double question (below) only catches 20% — a real place
+  named but put in the wrong city. The other 80% are a distorted or invented
+  name **inside the right city** ("Basilica di San Nicola Pellegrini" instead
+  of "Basilica di San Nicola", "Trg od Brasna" instead of "Trg od Oružja") —
+  no atlas prompt catches those because the city answer is already correct.
+  `agganciaTappeAlDatabase` (`server.ts`) now overwrites `titolo_tappa` with
+  the DB name whenever a stop matches a `shared_pois` row well enough to link
+  (`poi_id` set) but the AI's wording diverges (word-overlap jaccard < 0.7) —
+  previously this rewrite only ran for meal stops. The DB row must come from
+  a **source**, never from a user: rows with `category='community'` or an id
+  starting `vision-` are excluded from the match — a community pin winning
+  on proximity to a name is the same failure as the 210-photo incident of
+  07/09/2026 (a script that wrote wrong photos by matching "closest file").
+
+## Audioguide text: every sentence about THIS place, never filler
+
+Fundamental rule, set 10/09/2026 after the Museo del Marmo di Carrara guide
+came out generic in all three voices (Nicky, Dante, duet).
+
+- **Every sentence must reference the POI or a concrete element of it** taken
+  from the source material — a work, a room, a date, a material, a person, an
+  architectural detail, a measurement. A sentence that would fit any other
+  museum/monument/place ("a place rich in history", "an unforgettable
+  experience", "worth a visit", "a unique atmosphere") is forbidden, not
+  merely discouraged. No ceremonial openings or closings.
+- **Minimum length 30-40 s of speech (≥ 80-100 words)**, more when the
+  material allows. Length is earned with more facts from the material,
+  never with padding. If there is nothing specific to say, use another fact —
+  never a filler sentence.
+- The rule lives in ONE place per pipeline and is injected into every
+  character/register prompt: `REGOLA_SPECIFICITA` in
+  `regenerateAudioguideText` (`server.ts`, covers Nicky, Dante, duet, breve,
+  bambini and "Chiedi di più") and the matching block in
+  `supabase/functions/manager-poi/index.ts` (audio_script_short/long). When
+  adding a new voice, register or generation path, inject it there — don't
+  paste a copy.
+- Cached guides in `poi_audioguides` predate the rule: they only change when
+  purged and regenerated.
 
 ## Print rules (itinerary PDF and Premium Guide)
 

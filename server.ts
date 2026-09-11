@@ -976,7 +976,7 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       const parola = paroleNome(nome)[0];
       const url = pasto
         ? `${supabaseUrl}/rest/v1/locali_pois?select=id,name,lat,lon,address,city,phone,website,osm_opening_hours,operating_status&name=ilike.*${encodeURIComponent(parola)}*${bbox}&limit=40`
-        : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem&name=ilike.*${encodeURIComponent(parola)}*&is_hidden=not.is.true${bbox}&limit=40`;
+        : `${supabaseUrl}/rest/v1/shared_pois?select=id,name,lat,lon,address,city,contact_phone,contact_website,entrance_lat,entrance_lon,arrival_lat,arrival_lon,is_gem,category&name=ilike.*${encodeURIComponent(parola)}*&is_hidden=not.is.true${bbox}&limit=40`;
       const r = await axios.get(url, { headers: intestazioni, timeout: 10000 }).catch((e: any) => { console.warn('[Itinerario] query aggancio fallita per', nome, e?.response?.status || e?.message); return null; });
       const righe: any[] = Array.isArray(r?.data) ? r.data : [];
       let migliore: any = null, punteggio = 0, migliorQualita = -1, distMigliore = Infinity;
@@ -992,6 +992,13 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
         // il Castello di São Jorge a un ristorante Overture omonimo.
         if (/^(viator-|tq-|gyg-|tm-|tiqets-)/i.test(String(riga.id || ''))) continue;
         if (!pasto && /^ov-/.test(String(riga.id || ''))) continue;
+        // REGOLA DEL DATO DICHIARATO, NON MESSO DA UN UTENTE (10/09/2026): una
+        // riga inserita dalla community o da Vision non è una fonte, è
+        // un'opinione di un utente come un altro — la panca scultorea
+        // pubblicata dalla community aveva vinto sul Duomo di Carrara perché
+        // più vicina. Qui il DB deve valere più del giudizio dell'AI: se la
+        // riga non viene da una fonte, non vale come prova che il luogo esista.
+        if (!pasto && (riga.category === 'community' || /^vision-/i.test(String(riga.id || '')))) continue;
         const s = somiglianzaNomi(nome, riga.name);
         const d = getHaversineDistance(la, lo, Number(riga.lat), Number(riga.lon));
         // A parita' di nome vince la riga con piu' dati (indirizzo, gemma,
@@ -1024,17 +1031,24 @@ async function agganciaTappeAlDatabase(itineraryObj: any, centro: { lat: number;
       if (tel) t.telefono = String(tel);
       const sito = migliore.contact_website || migliore.website;
       if (sito && !t.link_info) t.link_info = String(sito);
-      if (pasto) {
-        // Il nome del locale e' quello del DB quando l'AI l'ha «abbellito»:
-        // «Ristorante La Cantina del Glicine» era in realta' «Ristorante
-        // Pizzeria La Cantina» (Piazza Trento 3). Somiglianza minima (una
-        // parola in comune) basta per l'aggancio, non per tenere il nome.
+      // Il nome della tappa e' quello del DB quando l'AI l'ha storpiato o
+      // «abbellito»: misurato l'11/09 su 106 errori confermati, l'80% erano
+      // proprio nomi distorti/inventati DENTRO la citta' giusta («Basilica di
+      // San Nicola Pellegrini» invece di «Basilica di San Nicola», «Trg od
+      // Brasna» invece di «Trg od Oružja») — casi che il filtro «esiste? e
+      // dove?» non prende perche' la citta' e' quella giusta. Qui il nome
+      // vince perche' viene da una riga con FONTE (non community/vision-,
+      // vedi sopra), non da un'inferenza del modello. Somiglianza minima (una
+      // parola in comune) basta per l'aggancio, non per tenere il nome
+      // dell'AI se e' cambiato troppo. Solo con cittaCombacia: altrimenti si
+      // rinominerebbe una tappa vera col nome di un omonimo altrove.
+      if (cittaCombacia && migliore.name) {
         const A = new Set(paroleNome(nome)), B = new Set(paroleNome(migliore.name));
         let comuni = 0; for (const x of A) if (B.has(x)) comuni++;
         const jaccard = comuni / Math.max(1, new Set([...A, ...B]).size);
-        if (jaccard < 0.7 && migliore.name) {
-          t.titolo_tappa = String(migliore.name);
-        }
+        if (jaccard < 0.7) t.titolo_tappa = String(migliore.name);
+      }
+      if (pasto) {
         const copre = orariCopronoPasto(migliore.osm_opening_hours, String(t.tipo));
         if (copre === false) {
           esito.pasti_fuori_orario++;
