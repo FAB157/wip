@@ -194,15 +194,23 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
 
   // ── 1. IL MUSEO E LE SUE PARTI ──────────────────────────────────────────
   let t0 = Date.now();
-  const righeMuseo = await sparql(`SELECT ?parte ?sito ?nome WHERE {
+  const righeMuseo = await sparql(`SELECT ?parte ?sito ?nome ?ente WHERE {
     { ?parte wdt:P361+ wd:${qidMuseo} . } UNION { wd:${qidMuseo} wdt:P856 ?sito . }
     UNION { wd:${qidMuseo} rdfs:label ?nome . FILTER(LANG(?nome) IN ("${lang}", "en")) }
+    UNION { wd:${qidMuseo} wdt:P361|wdt:P749 ?ente . }
   } LIMIT 400`, 12000) || [];
   const parti = new Set<string>([qidMuseo]);
+  // L'ENTE DI CUI IL MUSEO FA PARTE (12/09/2026): alla Tate Modern le opere
+  // esposte appartengono a «Tate», l'ente che possiede anche Tate Britain, e
+  // venivano scartate come «di un altro museo» — la guida restava senza una
+  // sola opera. Un'opera dell'ente si tiene SOLO se è esposta QUI (P276), così
+  // non entrano quelle delle altre sedi.
+  const antenati = new Set<string>();
   let sito = '';
   const nomiLuogo: string[] = [];
   for (const r of righeMuseo) {
     if (r.parte) parti.add(ultimo(r.parte.value));
+    if (r.ente) antenati.add(ultimo(r.ente.value));
     if (r.sito && !sito) sito = r.sito.value;
     if (r.nome?.value) nomiLuogo.push(r.nome.value);
   }
@@ -372,7 +380,9 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     const titolo = g.lab || g.labEn;
     if (!titolo || /^Q\d+$/.test(titolo)) continue;
     if (g.nonOpera) { escluse.push({ qid: q, titolo, motivo: 'non è un\'opera (movimento, mostra…)' }); continue; }
-    const inCollezione = [...g.coll].some(c => parti.has(c));
+    const espostaQui = [...g.luoghi.keys()].some(l => parti.has(l));
+    const inCollezione = [...g.coll].some(c => parti.has(c))
+      || (espostaQui && [...g.coll].some(c => antenati.has(c)));
     if (g.coll.size && !inCollezione) { escluse.push({ qid: q, titolo, motivo: 'collezione di un altro museo (qui solo come luogo)' }); continue; }
     // IN COLLEZIONE = OGGETTO. Un evento non sta nella collezione di un museo.
     // La domanda di classe «è un'occorrenza / un'organizzazione?» NON si usa
