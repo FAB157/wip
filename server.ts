@@ -9135,7 +9135,7 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // `withTimeout` della rotta Vision è locale a quella rotta: qui non
       // esisteva, Gemini lanciava «withTimeout is not defined» e leggeva
       // sempre la riserva a pagamento (visto nei log il 12/09/2026).
-      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 25000): Promise<T> =>
+      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 12000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
       // Con la rotazione delle chiavi: il client di default (GOOGLE_API_KEY)
       // su Vercel risponde «API key not valid», le altre chiavi Gemini vanno.
@@ -9250,7 +9250,10 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
       // Gratuito per primo, come per il cartello della sala. (Il primo
       // collaudo in produzione era andato tutto sulla riserva a pagamento:
       // `withTimeout` qui non esisteva.)
-      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 30000): Promise<T> =>
+      // 12 s: quando risponde, Gemini ci mette 4-8 s; due volte su tre in
+      // produzione (12/09/2026) è rimasto appeso fino ai 30 s e la persona
+      // davanti al quadro ha aspettato 35 s. Oltre i 12 s parla la riserva.
+      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 12000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
       // Con la ROTAZIONE delle chiavi (come callUniversalAi): il client di
       // default usa GOOGLE_API_KEY, che su Vercel risponde «API key not
