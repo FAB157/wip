@@ -156,6 +156,37 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // Audiodescrizione: l'opera raccontata a chi non la vede.
+  mv_describe: { IT: "Descrivimi l'opera", EN: "Describe the work to me", FR: "Décris-moi l'œuvre", ES: "Descríbeme la obra", DE: "Beschreib mir das Werk", RU: "Опиши мне произведение", ZH: "为我描述这件作品" },
+  mv_describe_title: { IT: "Audiodescrizione", EN: "Audio description", FR: "Audiodescription", ES: "Audiodescripción", DE: "Audiodeskription", RU: "Аудиодескрипция", ZH: "音频描述" },
+  mv_describe_auto: {
+    IT: "Descrizione prima di ogni opera (accessibilità)", EN: "Description before every work (accessibility)", FR: "Description avant chaque œuvre (accessibilité)",
+    ES: "Descripción antes de cada obra (accesibilidad)", DE: "Beschreibung vor jedem Werk (Barrierefreiheit)", RU: "Описание перед каждым произведением (доступность)", ZH: "每件作品前先描述（无障碍）",
+  },
+  mv_describe_no_photo: {
+    IT: "Senza una foto dell'opera non posso descriverla", EN: "Without a photo of the work I can't describe it", FR: "Sans photo de l'œuvre, je ne peux pas la décrire",
+    ES: "Sin una foto de la obra no puedo describirla", DE: "Ohne ein Foto des Werks kann ich es nicht beschreiben", RU: "Без фото произведения я не могу его описать", ZH: "没有作品照片，无法描述",
+  },
+  mv_describe_failed: { IT: "Descrizione non disponibile", EN: "Description not available", FR: "Description indisponible", ES: "Descripción no disponible", DE: "Beschreibung nicht verfügbar", RU: "Описание недоступно", ZH: "描述不可用" },
+  // Comandi vocali: «prossima», «ripeti», «dov'è».
+  mv_voice: { IT: "Comandi vocali", EN: "Voice commands", FR: "Commandes vocales", ES: "Comandos de voz", DE: "Sprachbefehle", RU: "Голосовые команды", ZH: "语音指令" },
+  mv_voice_on: {
+    IT: "In ascolto: «prossima», «ripeti», «dov'è», «pausa», «continua», «basta»", EN: "Listening: “next”, “repeat”, “where”, “pause”, “continue”, “stop”",
+    FR: "À l'écoute : « suivante », « répète », « où », « pause », « continue », « stop »", ES: "Escuchando: «siguiente», «repite», «dónde», «pausa», «continúa», «para»",
+    DE: "Ich höre: „weiter“, „nochmal“, „wo“, „Pause“, „fortsetzen“, „Stopp“", RU: "Слушаю: «дальше», «повтори», «где», «пауза», «продолжай», «стоп»", ZH: "聆听中：“下一个”“重复”“在哪”“暂停”“继续”“停止”",
+  },
+  mv_voice_off: { IT: "Microfono spento", EN: "Microphone off", FR: "Micro éteint", ES: "Micrófono apagado", DE: "Mikrofon aus", RU: "Микрофон выключен", ZH: "麦克风已关闭" },
+  mv_voice_denied: { IT: "Microfono non consentito", EN: "Microphone not allowed", FR: "Micro non autorisé", ES: "Micrófono no permitido", DE: "Mikrofon nicht erlaubt", RU: "Микрофон не разрешён", ZH: "麦克风未授权" },
+  mv_voice_where: { IT: "È in {s}", EN: "It's in {s}", FR: "C'est en {s}", ES: "Está en {s}", DE: "Es ist in {s}", RU: "Это в {s}", ZH: "在{s}" },
+  mv_voice_nothing: { IT: "Nessuna opera in ascolto", EN: "No work playing", FR: "Aucune œuvre en cours", ES: "Ninguna obra en reproducción", DE: "Kein Werk läuft", RU: "Ничего не воспроизводится", ZH: "没有正在播放的作品" },
+  // Le mostre in corso, dal sito ufficiale.
+  mv_exhibitions: { IT: "Mostre in corso", EN: "Current exhibitions", FR: "Expositions en cours", ES: "Exposiciones en curso", DE: "Aktuelle Ausstellungen", RU: "Текущие выставки", ZH: "当前展览" },
+  mv_exhibition_until: { IT: "fino al {d}", EN: "until {d}", FR: "jusqu'au {d}", ES: "hasta el {d}", DE: "bis {d}", RU: "до {d}", ZH: "至 {d}" },
+  mv_exhibition_from: { IT: "dal {d}", EN: "from {d}", FR: "à partir du {d}", ES: "desde el {d}", DE: "ab {d}", RU: "с {d}", ZH: "自 {d}" },
+  mv_exhibition_included: { IT: "compresa nel biglietto", EN: "included in the ticket", FR: "comprise dans le billet", ES: "incluida en la entrada", DE: "im Ticket enthalten", RU: "включена в билет", ZH: "含在门票内" },
+  mv_exhibition_separate: { IT: "biglietto a parte", EN: "separate ticket", FR: "billet séparé", ES: "entrada aparte", DE: "separates Ticket", RU: "отдельный билет", ZH: "需另购票" },
+  mv_exhibition_rooms: { IT: "Dove: {s}", EN: "Where: {s}", FR: "Où : {s}", ES: "Dónde: {s}", DE: "Wo: {s}", RU: "Где: {s}", ZH: "地点：{s}" },
+  mv_exhibition_source: { IT: "dal sito ufficiale", EN: "from the official website", FR: "depuis le site officiel", ES: "del sitio oficial", DE: "von der offiziellen Website", RU: "с официального сайта", ZH: "来自官方网站" },
   // Le sale chiuse oggi, incrociate col percorso.
   mv_closed_rooms_today: {
     IT: "Oggi chiuse: {s}", EN: "Closed today: {s}", FR: "Fermées aujourd'hui : {s}", ES: "Hoy cerradas: {s}",

@@ -9171,6 +9171,115 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
   });
 
   /**
+   * AUDIODESCRIZIONE (12/09/2026, richiesta del committente): l'opera
+   * raccontata a chi non la vede — e a chi vuole imparare a guardarla.
+   *
+   * Le audiodescrizioni ufficiali esistono per pochissime opere al mondo.
+   * Qui il motore GUARDA la foto vera dell'opera (Wikidata P18 → Commons,
+   * la stessa della scheda) e dice solo ciò che c'è: formato, composizione,
+   * figure e dove stanno, colori, luce, sguardi. Niente storia, niente
+   * interpretazione — quelle le dà l'audioguida. Senza foto non c'è
+   * descrizione: mai da un testo. Fa parte del Pass Museo come l'ascolto
+   * delle opere; generata una volta, resta per tutti (cache per sempre).
+   */
+  app.post("/api/museums/audio-description", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const opera = String(req.body?.artwork || '').trim().slice(0, 160);
+      const museo = String(req.body?.venueName || '').trim().slice(0, 160);
+      const foto = String(req.body?.photo || '').trim().slice(0, 600);
+      const langKey = String(req.body?.language || 'IT').toUpperCase().slice(0, 2);
+      const outLang = GUIDA_LINGUE[langKey] ? langKey : 'IT';
+      if (!opera || !museo) return res.status(400).json({ error: 'artwork e venueName richiesti' });
+      // Solo la foto DELL'OPERA da Commons: è quella legata al soggetto, e
+      // il server non scarica da indirizzi arbitrari.
+      let urlFoto: URL;
+      try { urlFoto = new URL(foto); } catch { return res.json({ ok: false, reason: 'no_photo' }); }
+      if (!/^(upload\.wikimedia\.org|commons\.wikimedia\.org)$/i.test(urlFoto.hostname)) return res.json({ ok: false, reason: 'no_photo' });
+
+      const pass = await getActiveMuseumPass(userId);
+      if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
+      const usate = await countMuseumPassScans(userId, pass.expiresAt);
+
+      const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
+      const cacheKey = `museum_ad:v1:${chiaveOpera}:${outLang}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const p = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
+          // Già descritta: non consuma il pass, come il riascolto.
+          if (p?.testo) return res.json({ ok: true, testo: p.testo, parole: p.parole, language: outLang, cached: true });
+        } catch { /* si rigenera */ }
+      }
+      if (usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+
+      // La foto, scaricata qui: il motore la vede in base64.
+      let b64 = '';
+      let mime = 'image/jpeg';
+      try {
+        const img = await axios.get(urlFoto.href, { responseType: 'arraybuffer', timeout: 12000, maxContentLength: 4 * 1024 * 1024, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } });
+        b64 = Buffer.from(img.data).toString('base64');
+        mime = String(img.headers?.['content-type'] || 'image/jpeg').split(';')[0].trim() || 'image/jpeg';
+        if (!/^image\//.test(mime) || b64.length < 1000) return res.json({ ok: false, reason: 'no_photo' });
+      } catch { return res.json({ ok: false, reason: 'no_photo' }); }
+
+      const prompt = `Sei un audiodescrittore professionista per persone cieche e ipovedenti. Guarda l'immagine: è l'opera "${opera}" (${museo}). Descrivi SOLO ciò che si vede nell'immagine, come lo diresti a voce a chi ti sta accanto e non può vederla.
+
+Struttura, in prosa continua senza titoli né elenchi:
+1) Il colpo d'occhio: formato (orizzontale o verticale), tipo (dipinto, scultura, oggetto), colori dominanti, luce, atmosfera visiva.
+2) Le figure e gli oggetti principali con la POSIZIONE nell'immagine (a sinistra, al centro, in alto a destra, in primo piano, sullo sfondo): posture, gesti, direzione degli sguardi, abiti, materiali, espressioni.
+3) Lo sfondo e i dettagli piccoli che vale la pena notare.
+
+REGOLE: frasi brevi e concrete; 150-220 parole; niente storia, date, biografia, tecnica o interpretazione (quelle le dà l'audioguida); puoi usare il titolo per nominare i soggetti evidenti, ma non aggiungere nulla che nell'immagine non c'è. Se è la foto di una scultura o di un oggetto, di' anche da che punto di vista è ripresa. Scrivi in ${nomeLingua(outLang)}.
+Rispondi SOLO con JSON: {"testo": "..."}`;
+
+      let testo = '';
+      // Gratuito per primo, come per il cartello della sala.
+      if (ai) {
+        try {
+          const g = await withTimeout(ai.models.generateContent({
+            model: "gemini-3.5-flash-lite",
+            contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64 } }] }],
+            config: { responseMimeType: "application/json" }
+          }), 'Gemini (audiodescrizione)');
+          testo = String(JSON.parse(String(g.text || '{}'))?.testo || '').trim();
+        } catch (e: any) {
+          console.warn('[Audiodescrizione] Gemini:', e?.message);
+        }
+      }
+      const abbastanza = (s: string) => s.split(/\s+/).filter(Boolean).length >= 60 || s.length >= 220;
+      if (!abbastanza(testo)) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (key) {
+          try {
+            const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o-mini',
+              messages: [{ role: 'user', content: [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}`, detail: 'auto' } },
+              ] }],
+              temperature: 0.3, max_tokens: 700, response_format: { type: 'json_object' },
+            }, { timeout: 30000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+            testo = String(JSON.parse(String(r.data?.choices?.[0]?.message?.content || '{}'))?.testo || '').trim();
+          } catch (e: any) {
+            console.warn('[Audiodescrizione] riserva fallita:', e?.message);
+          }
+        }
+      }
+      if (!abbastanza(testo)) return res.json({ ok: false, reason: 'no_description' });
+      const parole = testo.split(/\s+/).filter(Boolean).length;
+      await saveToCache(cacheKey, 'museum_ad', JSON.stringify({ testo, parole, language: outLang }));
+      // Una descrizione generata davvero è una voce del pass, come un'audioguida.
+      await recordMuseumPassScan(userId, pass.expiresAt, `ad-${chiaveOpera}`.slice(0, 90));
+      res.json({ ok: true, testo, parole, language: outLang, cached: false, scansUsed: usate + 1, scansLimit: MUSEUM_PASS_MAX_SCANS });
+    } catch (e: any) {
+      console.error('[Audiodescrizione] Errore:', e?.message);
+      res.status(500).json({ error: 'descrizione_fallita' });
+    }
+  });
+
+  /**
    * «NON LA TROVO»: il visitatore salta una tappa (10/09/2026).
    *
    * È il solo segnale sulla qualità di una guida che arriva da qualcuno che
@@ -9291,6 +9400,132 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
     } catch (e: any) {
       console.error('[ChiediGuida] Errore:', e?.message);
       res.status(500).json({ error: 'ask_failed' });
+    }
+  });
+
+  /**
+   * LE MOSTRE IN CORSO (12/09/2026, richiesta del committente).
+   *
+   * Agli Uffizi c'è una mostra e il visitatore non lo sa: le pagine
+   * «mostre/eventi» del sito si escludono apposta dalla lettura degli orari,
+   * perché hanno orari loro. Qui si leggono A PARTE, per dire titolo, date,
+   * dove si tiene, se è compresa nel biglietto e le opere elencate —
+   * ricopiate dal sito, nella lingua dell'utente. Motori gratuiti, cache 3
+   * giorni. Nessuna mostra = elenco vuoto, e l'app non mostra niente.
+   */
+  app.get("/api/museums/exhibitions", rateLimiter, async (req, res) => {
+    try {
+      const poiId = String(req.query.poiId || '').trim().slice(0, 120);
+      const venueName = String(req.query.venueName || '').trim().slice(0, 120);
+      const langKey = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
+      const wl = ({ IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' } as Record<string, string>)[langKey] || 'it';
+      if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
+      const chiave = `museum_exhib:v1:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      const inCache = await getFromCache(chiave, 'museum_exhib', 3 * 24 * 60 * 60 * 1000);
+      if (inCache) { try { return res.json(JSON.parse(inCache)); } catch { /* si rilegge */ } }
+
+      const vuoto = { ok: true, mostre: [], fonte: null };
+      let sito = '';
+      if (poiId) {
+        try {
+          const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=contact_website&limit=1`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 });
+          sito = String(r.data?.[0]?.contact_website || '');
+        } catch { /* si cerca per nome */ }
+      }
+      if (!sito && venueName) sito = await trovaSitoUfficiale(venueName, wl);
+      if (!sito) return res.json(vuoto);
+      let base: URL;
+      try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return res.json(vuoto); }
+      const stessoSito = (a: string, b: string) => String(a || '').toLowerCase().replace(/^www\./, '') === String(b || '').toLowerCase().replace(/^www\./, '');
+      const UA = {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'From': 'support@wip.guide',
+        },
+        timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400,
+      };
+      const RE_MOSTRE = /(mostr|exhibit|exposi|ausstellung|выстав|展览|特展)/i;
+      const RE_NO = /(archiv|passat|past|precedent|anterior|vergangen|прошл|往期|\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$)/i;
+      const testi: { u: string; t: string }[] = [];
+      try {
+        const home = await axios.get(base.href, UA);
+        try { const finale = home.request?.res?.responseUrl; if (finale) base = new URL(finale); } catch { /* base dichiarata */ }
+        const html = String(home.data || '');
+        const candidati: { href: string; peso: number }[] = [];
+        for (const m of html.matchAll(/<a\b[^>]*href=["']([^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+          try {
+            const u = new URL(m[1], base.href);
+            const testo = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+            if (!stessoSito(u.hostname, base.hostname) || u.href === base.href) continue;
+            const s = `${u.pathname} ${testo}`;
+            if (!RE_MOSTRE.test(s) || RE_NO.test(s)) continue;
+            // La pagina indice («Mostre») vale più della singola mostra: le
+            // elenca tutte, con le date.
+            const peso = (RE_MOSTRE.test(u.pathname) ? 2 : 1) + (u.pathname.split('/').filter(Boolean).length <= 2 ? 1 : 0);
+            const gia = candidati.find(c => c.href === u.href);
+            if (gia) gia.peso = Math.max(gia.peso, peso); else candidati.push({ href: u.href, peso });
+          } catch { /* link non valido */ }
+        }
+        candidati.sort((a, b) => b.peso - a.peso);
+        for (const c of candidati.slice(0, 3)) {
+          try {
+            const r = await axios.get(c.href, { ...UA, timeout: 7000 });
+            const t = testoPaginaMuseo(String(r.data || ''));
+            if (t.length > 200) testi.push({ u: c.href, t: t.slice(0, 6000) });
+          } catch { /* pagina saltata */ }
+        }
+        // Anche la home: la mostra in corso spesso sta lì, in evidenza.
+        const th = testoPaginaMuseo(html);
+        if (RE_MOSTRE.test(th)) testi.push({ u: base.href, t: th.slice(0, 4000) });
+      } catch { return res.json(vuoto); }
+      if (!testi.length) { await saveToCache(chiave, 'museum_exhib', JSON.stringify(vuoto)); return res.json(vuoto); }
+
+      const oggi = new Date().toISOString().slice(0, 10);
+      const nomeMuseo = venueName || poiId;
+      const prompt = `Dal testo qui sotto, preso dal sito ufficiale di "${nomeMuseo}", RICOPIA le MOSTRE TEMPORANEE in corso oggi (${oggi}) o che aprono entro 30 giorni, SOLO quelle che si tengono dentro "${nomeMuseo}" (non in altre sedi dello stesso ente). Non inventare: se un dato non c'è, lascia la stringa vuota. Ignora eventi, concerti, laboratori, visite guidate e mostre già concluse.
+
+TESTO:
+"""
+${testi.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 14000)}
+"""
+
+Rispondi SOLO con JSON: {"mostre": [ { "titolo": "", "dal": "YYYY-MM-DD o vuoto", "al": "YYYY-MM-DD o vuoto", "sale": "dove si tiene dentro il museo, come lo scrive il sito, o vuoto", "biglietto": "compresa oppure separato oppure vuoto", "opere": "fino a 8 opere o artisti citati, separati da ; oppure vuoto", "riga": "una frase dal sito che dice di cosa parla la mostra", "url": "la pagina da cui l'hai presa" } ] }
+Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se serve); i titoli restano come li scrive il sito.`;
+      let dati: any = null;
+      try {
+        const ai2 = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0, max_tokens: 900, response_format: { type: 'json_object' },
+          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+        }, 'museum_exhibitions', supabaseUrl, supabaseServiceKey, groq);
+        const raw = String(ai2?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        dati = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+      } catch (e: any) {
+        console.warn('[museum_exhibitions] AI fallita:', e?.message);
+        return res.json({ ok: false, reason: 'ai_non_disponibile' });
+      }
+      const dataOk = (s: any) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s) : '');
+      const urlDelSito = (s: any) => { try { const u = new URL(String(s || '')); return stessoSito(u.hostname, base.hostname) ? u.href : ''; } catch { return ''; } };
+      const mostre = (Array.isArray(dati?.mostre) ? dati.mostre : [])
+        .map((m: any) => ({
+          titolo: String(m?.titolo || '').trim().slice(0, 160),
+          dal: dataOk(m?.dal),
+          al: dataOk(m?.al),
+          sale: String(m?.sale || '').trim().slice(0, 120),
+          biglietto: /compres|inclu|包含|включ/i.test(String(m?.biglietto || '')) ? 'compresa' : /separat|part|extra|supplement|отдель|另/i.test(String(m?.biglietto || '')) ? 'separato' : '',
+          opere: String(m?.opere || '').split(/\s*;\s*/).map((x: string) => x.trim()).filter(Boolean).slice(0, 8),
+          riga: String(m?.riga || '').trim().slice(0, 240),
+          url: urlDelSito(m?.url) || testi[0]?.u || base.href,
+        }))
+        .filter((m: any) => m.titolo && (!m.al || m.al >= oggi))
+        .slice(0, 3);
+      const out = { ok: true, mostre, fonte: { url: testi[0]?.u || base.href, lettoIl: new Date().toISOString() } };
+      await saveToCache(chiave, 'museum_exhib', JSON.stringify(out));
+      res.json(out);
+    } catch (e: any) {
+      console.error('[museum_exhibitions] errore:', e?.message);
+      res.status(500).json({ ok: false, reason: 'errore' });
     }
   });
 

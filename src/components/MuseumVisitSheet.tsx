@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints, Mic, MicOff, Eye } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto } from '../lib/museumVisit';
+import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -206,6 +207,27 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // LEGGI CON CALMA: preferenza della persona, non della visita.
   const [calma, setCalma] = useState<boolean>(() => getLeggiConCalma());
   useEffect(() => { setSpeechSpeed(calma ? 0.85 : 1); }, [calma]);
+  const fmtData = (s: string) => { try { return new Date(s).toLocaleDateString(String(language).toLowerCase(), { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return s; } };
+  // AUDIODESCRIZIONE (12/09/2026): il testo per tappa, chi sta descrivendo,
+  // e la preferenza «prima di ogni opera» (accessibilità).
+  const [descrizioni, setDescrizioni] = useState<Record<number, string>>({});
+  const [descrivendo, setDescrivendo] = useState<number | null>(null);
+  const [descrizioneAuto, setDescrizioneAuto] = useState<boolean>(() => getAudiodescrizioneAuto());
+  // LE MOSTRE IN CORSO: una lettura per visita, solo online.
+  const [mostre, setMostre] = useState<Mostra[]>([]);
+  useEffect(() => {
+    if (!online) return;
+    let vivo = true;
+    fetchMostre(visit, language).then(m => { if (vivo) setMostre(m); });
+    return () => { vivo = false; };
+  }, [visit.venueKey, online]);
+  // COMANDI VOCALI: microfono acceso/spento. Le azioni si leggono da un ref
+  // aggiornato a ogni render, così il riconoscitore (avviato una volta) non
+  // resta legato a una vecchia chiusura con stati vecchi.
+  const [ascolto, setAscolto] = useState(false);
+  const fermaAscoltoRef = useRef<(() => void) | null>(null);
+  const azioniRef = useRef<Partial<Record<ComandoVocale, () => void>>>({});
+  useEffect(() => () => { fermaAscoltoRef.current?.(); fermaAscoltoRef.current = null; }, []);
   const [promemoria, setPromemoria] = useState(false);
   const promemoriaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const azzeraPromemoria = () => {
@@ -576,13 +598,56 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
    * prima volta (poi resta in cache lato server per tutti) e la legge con la
    * voce della guida. Un secondo tocco la ferma.
    */
-  const handleOpera = async (i: number) => {
+  /** La descrizione di una tappa: dalla memoria, dall'archivio, dal server. */
+  const ottieniDescrizione = async (i: number): Promise<string | null> => {
+    const tappa = visit.guide.tappe[i];
+    if (!tappa) return null;
+    if (descrizioni[i]) return descrizioni[i];
+    const locale = descrizioneDallArchivio(visit.venueKey, language, tappa.nome);
+    if (locale) { setDescrizioni(prev => ({ ...prev, [i]: locale })); return locale; }
+    const foto = tappa.foto || operaGuide[i]?.foto || '';
+    if (!foto) { notify(t('mv_describe_no_photo')); return null; }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return null; }
+    setDescrivendo(i);
+    const r = await fetchAudioDescription({ artwork: tappa.nomeFonte || tappa.nome, venueName: visit.venue.name, photo: foto, language });
+    setDescrivendo(null);
+    if (r.ok === false) {
+      const motivo = r.reason;
+      notify(motivo === 'needs_pass' ? t('mv_art_needs_pass') : motivo === 'pass_exhausted' ? t('mv_art_exhausted') : motivo === 'no_photo' ? t('mv_describe_no_photo') : t('mv_describe_failed'));
+      return null;
+    }
+    // Resta sul telefono: la prossima volta, anche senza rete, non si richiede.
+    conservaDescrizione(visit.venueKey, language, tappa.nome, r.testo);
+    setDescrizioni(prev => ({ ...prev, [i]: r.testo }));
+    return r.testo;
+  };
+
+  /** «Descrivimi l'opera»: voce lenta, poi si torna alla velocità scelta. */
+  const handleDescrivi = async (i: number) => {
+    stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+    const testo = await ottieniDescrizione(i);
+    if (!testo) return;
+    setOperaAperta(i);
+    setSpeechSpeed(0.85);
+    try {
+      await speakAudioguide(testo, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); setOperaParla(null); });
+      setOperaParla(i);
+    } catch {
+      setSpeechSpeed(calma ? 0.85 : 1);
+      setOperaParla(null);
+    }
+  };
+
+  const handleOpera = async (i: number, opzioni?: { daCapo?: boolean }) => {
     const tappa = visit.guide.tappe[i];
     if (!tappa) return;
     // Pausa vera anche qui — anzi, soprattutto qui: è il tasto che si preme
     // stando in piedi davanti al quadro, con qualcuno che ti passa davanti.
-    if (operaParla === i) { pauseSpeech(); setOperaParla(null); setOperaInPausa(i); return; }
-    if (operaInPausa === i && operaGuide[i]) { resumeSpeech(); setOperaInPausa(null); setOperaParla(i); return; }
+    // «daCapo» (comando vocale «ripeti») salta pausa e ripresa: riparte.
+    if (!opzioni?.daCapo) {
+      if (operaParla === i) { pauseSpeech(); setOperaParla(null); setOperaInPausa(i); return; }
+      if (operaInPausa === i && operaGuide[i]) { resumeSpeech(); setOperaInPausa(null); setOperaParla(i); return; }
+    }
     stopSpeech();
     setOperaParla(null);
     setOperaInPausa(null);
@@ -648,7 +713,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     }
     try {
       const lingua = String(guida.language || language).toLowerCase();
-      await speakAudioguide(guida.testo, lingua, getGuideCharacter(), () => {
+      const fineOpera = () => {
         setOperaParla(null);
         setOperaInPausa(null);
         // IL TEASER (11/09/2026, richiesta del committente): finita l'opera,
@@ -665,15 +730,76 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         if (!p || p.indice === i) return;
         const frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
         void speakWithSystemVoice(frase, lingua, getGuideCharacter());
-      });
-      setOperaParla(i);
+      };
+      const parlaGuida = async () => {
+        await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera);
+        setOperaParla(i);
+      };
+      // ACCESSIBILITÀ (12/09/2026): con la preferenza accesa, prima si dice
+      // cosa si vede — lentamente — e poi parte il racconto.
+      const descr = descrizioneAuto && (tappa.foto || guida.foto) ? await ottieniDescrizione(i) : null;
+      if (descr) {
+        setSpeechSpeed(0.85);
+        await speakAudioguide(descr, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); void parlaGuida(); });
+        setOperaParla(i);
+      } else {
+        await parlaGuida();
+      }
     } catch {
+      setSpeechSpeed(calma ? 0.85 : 1);
       setOperaParla(null);
     }
   };
 
   /** Lo stato più recente della visita, per chi arriva da una callback. */
   const getVisitSnapshot = (): MuseumVisit => visit;
+
+  // LE AZIONI DEI COMANDI VOCALI (12/09/2026), riscritte a ogni render così
+  // vedono gli stati di adesso. «prossima» e «ripeti» ripartono da capo;
+  // «dov'è» dice sala e punto preciso dell'opera in ascolto (o della
+  // prossima) con la voce di sistema, gratis.
+  azioniRef.current = {
+    prossima: () => {
+      const p = prossimaTappa(visit);
+      if (p) void handleOpera(p.indice, { daCapo: true }); else notify(t('mv_voice_nothing'));
+    },
+    ripeti: () => {
+      const i = operaParla ?? operaInPausa ?? operaAperta;
+      if (i === null || i === undefined) { notify(t('mv_voice_nothing')); return; }
+      void handleOpera(i, { daCapo: true });
+    },
+    dove: () => {
+      const i = operaParla ?? operaInPausa ?? operaAperta ?? prossimaTappa(visit)?.indice ?? null;
+      const tp = i === null ? null : visit.guide.tappe[i];
+      if (!tp) { notify(t('mv_voice_nothing')); return; }
+      const frase = `${tp.nome}. ${tp.dove ? t('mv_voice_where').replace('{s}', tp.dove) : t('mv_room_unknown')}${tp.puntoPreciso ? `. ${tp.puntoPreciso}` : ''}`;
+      void speakWithSystemVoice(frase, String(language).toLowerCase(), getGuideCharacter());
+    },
+    pausa: () => {
+      if (operaParla !== null) { pauseSpeech(); setOperaInPausa(operaParla); setOperaParla(null); }
+      else if (audioPlaying) { pauseSpeech(); setAudioPlaying(false); setAudioInPausa(true); }
+    },
+    riprendi: () => {
+      if (operaInPausa !== null) { resumeSpeech(); setOperaParla(operaInPausa); setOperaInPausa(null); }
+      else if (audioInPausa) { resumeSpeech(); setAudioInPausa(false); setAudioPlaying(true); }
+    },
+    stop: () => { stopSpeech(); setOperaParla(null); setOperaInPausa(null); setAudioPlaying(false); setAudioInPausa(false); },
+  };
+  const toggleAscolto = () => {
+    if (fermaAscoltoRef.current) { fermaAscoltoRef.current(); fermaAscoltoRef.current = null; setAscolto(false); return; }
+    let acceso = false;
+    fermaAscoltoRef.current = avviaAscolto(
+      String(language).toLowerCase(),
+      (c) => { try { void Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); } catch { /* web */ } azioniRef.current[c]?.(); },
+      (attivo) => {
+        if (attivo) { acceso = true; setAscolto(true); notify(t('mv_voice_on')); return; }
+        // Spento senza che sia mai partito: permesso negato.
+        if (!acceso && fermaAscoltoRef.current) notify(t('mv_voice_denied'));
+        setAscolto(false);
+        fermaAscoltoRef.current = null;
+      },
+    );
+  };
 
   return (
     <>
@@ -1248,7 +1374,30 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               <Glasses className={`w-4 h-4 ${calma ? 'text-white' : 'text-primary'}`} />
               {t('mv_calma')}
             </button>
+            {/* COMANDI VOCALI (12/09/2026): il telefono in tasca, si parla.
+                Solo dove il riconoscimento sul dispositivo esiste. */}
+            {comandiVocaliDisponibili() && (
+              <button
+                onClick={toggleAscolto}
+                aria-pressed={ascolto}
+                aria-label={t('mv_voice')}
+                title={ascolto ? t('mv_voice_on') : t('mv_voice')}
+                className={`w-12 flex items-center justify-center rounded-2xl border active:scale-95 transition-all ${ascolto ? 'bg-rose-600 border-rose-600 text-white animate-pulse' : 'bg-white border-slate-200 text-primary'}`}
+              >
+                {ascolto ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+              </button>
+            )}
           </div>
+          {/* ACCESSIBILITÀ: la descrizione di ciò che si vede prima di ogni opera */}
+          <button
+            onClick={() => { const on = !descrizioneAuto; setDescrizioneAuto(on); setAudiodescrizioneAuto(on); }}
+            aria-pressed={descrizioneAuto}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded-2xl border text-[11px] font-black mb-3 text-left active:scale-[0.99] transition-all ${descrizioneAuto ? 'bg-primary border-primary text-white' : 'bg-white border-slate-200 text-slate-700'}`}
+          >
+            <Eye className={`w-4 h-4 shrink-0 ${descrizioneAuto ? 'text-white' : 'text-primary'}`} />
+            <span className="flex-1">{t('mv_describe_auto')}</span>
+            {descrizioneAuto && <Check className="w-4 h-4 shrink-0" />}
+          </button>
 
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
@@ -1435,6 +1584,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     )}
                     {done && <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700 mt-1">{t('mv_seen')}</p>}
 
+                    {/* La descrizione, scritta: si legge mentre la voce la dice */}
+                    {descrizioni[i] && operaAperta === i && (
+                      <div className="mt-2 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1"><Eye className="w-3 h-3" />{t('mv_describe_title')}</p>
+                        <p className={`${calma ? 'text-[16px] leading-[1.65]' : 'text-[12px] leading-relaxed'} text-slate-800`}>{descrizioni[i]}</p>
+                      </div>
+                    )}
+
                     {/* Audioguida dettagliata dell'opera: il testo si apre
                         sotto la tappa e viene letto ad alta voce. */}
                     <button
@@ -1448,6 +1605,21 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         : <Volume2 className="w-3.5 h-3.5" />}
                       {operaParla === i ? t('vis_pause') : operaInPausa === i ? t('mv_art_resume') : t('mv_art_listen')}
                     </button>
+
+                    {/* AUDIODESCRIZIONE: cosa si vede, per chi non vede (e per
+                        chi vuole imparare a guardare). Solo con la foto vera. */}
+                    {(tappa.foto || operaGuide[i]?.foto) && (
+                      <button
+                        onClick={() => void handleDescrivi(i)}
+                        disabled={descrivendo !== null || operaLoading !== null}
+                        aria-label={t('mv_describe')}
+                        title={t('mv_describe')}
+                        className="mt-2 ml-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-slate-200 text-[11px] font-black text-slate-700 active:scale-95 transition-transform disabled:opacity-50"
+                      >
+                        {descrivendo === i ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
+                        {t('mv_describe')}
+                      </button>
+                    )}
 
                     {/* «Non la trovo»: la sala è chiusa, l'opera è in prestito
                         o c'è la fila. Il percorso prosegue invece di fermarsi
@@ -1626,6 +1798,43 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
                   </button>
                 ) : null)}
+              </div>
+            </div>
+          )}
+
+          {/* LE MOSTRE IN CORSO (12/09/2026): dal sito ufficiale, ricopiate.
+              La mostra c'è e il visitatore non lo sa: qui lo sa. */}
+          {mostre.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_exhibitions')}</p>
+              <div className="space-y-2">
+                {mostre.map((m, k) => (
+                  <div key={`${m.titolo}-${k}`} className="px-3.5 py-3 rounded-2xl bg-white border border-slate-200">
+                    <p className="text-[13px] font-black text-slate-900 leading-tight">{m.titolo}</p>
+                    {(m.dal || m.al) && (
+                      <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                        {[m.dal ? t('mv_exhibition_from').replace('{d}', fmtData(m.dal)) : '', m.al ? t('mv_exhibition_until').replace('{d}', fmtData(m.al)) : ''].filter(Boolean).join(' · ')}
+                      </p>
+                    )}
+                    {m.sale && (
+                      <p className="text-[11px] font-black text-primary mt-0.5 flex items-center gap-1"><MapPin className="w-3 h-3 shrink-0" />{t('mv_exhibition_rooms').replace('{s}', m.sale)}</p>
+                    )}
+                    {m.biglietto && (
+                      <p className={`text-[10px] font-black uppercase tracking-wider mt-1 ${m.biglietto === 'compresa' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {m.biglietto === 'compresa' ? t('mv_exhibition_included') : t('mv_exhibition_separate')}
+                      </p>
+                    )}
+                    {m.riga && <p className={`${calma ? 'text-[15px]' : 'text-[12px]'} text-slate-700 mt-1 leading-snug`}>{m.riga}</p>}
+                    {m.opere.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {m.opere.map((o, j) => <span key={j} className="px-2 py-0.5 rounded-full bg-blue-50 text-primary text-[10px] font-bold">{o}</span>)}
+                      </div>
+                    )}
+                    <a href={m.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-400 mt-1.5 underline-offset-2 hover:underline">
+                      <ExternalLink className="w-3 h-3" />{t('mv_exhibition_source')}
+                    </a>
+                  </div>
+                ))}
               </div>
             </div>
           )}

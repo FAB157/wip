@@ -682,6 +682,75 @@ export async function askGuide(args: { artwork: string; venueName: string; quest
   }
 }
 
+/** LE MOSTRE IN CORSO (12/09/2026): dal sito ufficiale, cache 3 giorni. */
+export type Mostra = {
+  titolo: string;
+  dal: string;
+  al: string;
+  sale: string;
+  biglietto: 'compresa' | 'separato' | '';
+  opere: string[];
+  riga: string;
+  url: string;
+};
+export async function fetchMostre(v: MuseumVisit, language: Language): Promise<Mostra[]> {
+  try {
+    const p = new URLSearchParams({ language, venueName: v.venue.name });
+    if (v.venue.id) p.set('poiId', v.venue.id);
+    const res = await fetch(getApiUrl(`/api/museums/exhibitions?${p.toString()}`));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d?.ok === true && Array.isArray(d.mostre) ? d.mostre : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AUDIODESCRIZIONE (12/09/2026): l'opera raccontata a chi non la vede, dalla
+ * foto vera. Serve il pass; una volta generata resta (cache server + archivio
+ * qui sotto, così vale anche senza rete).
+ */
+export async function fetchAudioDescription(args: { artwork: string; venueName: string; photo: string; language: Language }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
+  const headers = await authHeaders();
+  if (!headers) return { ok: false, reason: 'login' };
+  try {
+    const res = await fetch(getApiUrl('/api/museums/audio-description'), { method: 'POST', headers, body: JSON.stringify(args) });
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` };
+    const d = await res.json();
+    return d?.ok === true && d.testo ? { ok: true, testo: String(d.testo), cached: !!d.cached } : { ok: false, reason: String(d?.reason || 'no_description') };
+  } catch {
+    return { ok: false, reason: 'rete' };
+  }
+}
+const AUDIODESCR_KEY = 'wip_museo_audiodescrizioni';
+const chiaveDescr = (venueKey: string, language: Language, nome: string) => `${venueKey}|${String(language).toUpperCase()}|${normalize(nome)}`;
+export function descrizioneDallArchivio(venueKey: string, language: Language, nome: string): string | null {
+  try {
+    const tutte = JSON.parse(localStorage.getItem(AUDIODESCR_KEY) || '{}');
+    const t = tutte?.[chiaveDescr(venueKey, language, nome)];
+    return typeof t === 'string' && t ? t : null;
+  } catch { return null; }
+}
+export function conservaDescrizione(venueKey: string, language: Language, nome: string, testo: string): void {
+  try {
+    const tutte = JSON.parse(localStorage.getItem(AUDIODESCR_KEY) || '{}');
+    tutte[chiaveDescr(venueKey, language, nome)] = testo;
+    // Tetto: le 300 più recenti (sono testi da 200 parole, non foto).
+    const chiavi = Object.keys(tutte);
+    if (chiavi.length > 300) for (const k of chiavi.slice(0, chiavi.length - 300)) delete tutte[k];
+    localStorage.setItem(AUDIODESCR_KEY, JSON.stringify(tutte));
+  } catch { /* spazio finito: si perde solo la copia locale */ }
+}
+/** Preferenza «descrizione prima di ogni opera» (accessibilità). */
+const AUTO_AD_KEY = 'wip_audiodescrizione';
+export function getAudiodescrizioneAuto(): boolean {
+  try { return localStorage.getItem(AUTO_AD_KEY) === '1'; } catch { return false; }
+}
+export function setAudiodescrizioneAuto(on: boolean): void {
+  try { localStorage.setItem(AUTO_AD_KEY, on ? '1' : '0'); } catch { /* ok */ }
+}
+
 /** IL CUORE (11/09/2026): un tocco e l'opera entra fra le preferite. Vive
  *  nella guida, quindi finisce nell'archivio e nella stampa da solo. */
 export function togglePreferita(index: number): MuseumVisit | null {
