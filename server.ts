@@ -9324,8 +9324,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
 
       // v2 (12/09/2026): i testi liberi (chiusure, sale chiuse, nota) escono
       // nella lingua dell'utente, quindi la cache è per lingua. v3: sale
-      // chiuse solo di QUESTO museo (uffizi.it dava quelle di Pitti).
-      const chiave = `museum_hours:v3:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      // chiuse solo di QUESTO museo (uffizi.it dava quelle di Pitti). v4:
+      // sito letto nella sua lingua (in cache v3 c'erano orari sbagliati in FR).
+      const chiave = `museum_hours:v4:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       let dati: any = null;
       const inCache = await getFromCache(chiave, 'museum_hours', 7 * 24 * 60 * 60 * 1000);
       if (inCache) { try { dati = JSON.parse(inCache); } catch { dati = null; } }
@@ -9353,7 +9354,11 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': `${wl},en;q=0.8`,
+            // NIENTE Accept-Language (12/09/2026): si legge il sito nella SUA
+            // lingua, la versione completa. Con «fr» uffizi.it serviva altre
+            // pagine e la più densa di orari era il Corridoio Vasariano
+            // (10:15-16:35 invece di 08:15-18:30). Stesse pagine per tutte
+            // le lingue: cambia solo la traduzione dei testi liberi.
             'From': 'support@wip.guide',
           },
           timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400,
@@ -9549,6 +9554,7 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           }, 'museum_hours', supabaseUrl, supabaseServiceKey, groq);
           raw = String(ai?.data || '');
         } catch (e: any) {
+          console.warn('[museum_hours] AI fallita:', e?.message, '| materiale', materiale.length, 'car.');
           return res.json({ ok: false, reason: 'ai_non_disponibile' });
         }
         try {
