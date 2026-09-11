@@ -8029,7 +8029,16 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // aveva l'etichetta italiana; tradurli e basta avrebbe fatto sparire
           // l'unica forma con cui l'opera si ritrova in rete. Ora si tengono
           // TUTTI E DUE: «nome» nella lingua dell'utente, «nomeFonte» com'era.
-          nomeFonte: campoOpzionale(t?.nomeFonte, 140),
+          // Ripulito: il modello a volte copia la riga intera di Wikidata
+          // («Statua — Autore (1901) [inv. …]») o una frase descrittiva del
+          // materiale invece del titolo. Si tiene solo la parte prima del
+          // trattino e delle parentesi quadre, e si scarta se sembra una
+          // frase (troppo lunga o con più di una virgola).
+          nomeFonte: (() => {
+            const grezzo = campoOpzionale(t?.nomeFonte, 200).split(' — ')[0].replace(/\s*\[.*$/, '').trim();
+            if (grezzo.length > 90 || (grezzo.match(/,/g) || []).length > 1) return '';
+            return grezzo;
+          })(),
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
