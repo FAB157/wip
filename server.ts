@@ -6837,8 +6837,19 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   // Le sezioni che descrivono sale, piani e collezioni valgono più
   // dell'introduzione per costruire un itinerario nello spazio: si portano in
   // cima così sopravvivono al taglio dei caratteri.
-  const SEZIONI_VISITA = /^(collezion|opere|sale|sala|percorso|itinerar|piano|piani|ala |ali |galler|dipartiment|reparti|allestiment|esposizion|museo|patrimonio|interno|interni|architettur|descrizion|cappell|navat|collection|works|rooms|floor|wing|department|highlights|visit|layout|interior|salle|collezioni|collections)/i;
-  function ordinaSezioniPerVisita(testo: string, maxChars = 24000): string {
+  // «Sezioni» e «Capolavori» aggiunte il 12/09/2026: sul British Museum la
+  // voce Wikipedia in italiano ha proprio «Opere principali» (già coperta da
+  // "opere") seguita da «Sezioni» e dai «Dipartimento…» (già coperta da
+  // "dipartiment") — mancava solo "sezion", e "capolavor" per le voci che
+  // usano quella parola invece di "opere principali".
+  const SEZIONI_VISITA = /^(collezion|opere|capolavor|sale|sala|percorso|itinerar|piano|piani|ala |ali |galler|dipartiment|sezion|reparti|allestiment|esposizion|museo|patrimonio|interno|interni|architettur|descrizion|cappell|navat|collection|works|rooms|floor|wing|department|section|highlights|visit|layout|interior|salle|collezioni|collections)/i;
+  // Il tetto sale da 24.000 a 42.000 (12/09/2026): la voce italiana del
+  // British Museum, tutta intera, è 39.560 caratteri — col vecchio tetto
+  // "Opere principali" e i Dipartimenti restavano fuori anche dopo essere
+  // stati messi in testa, perché il resto (la Storia del museo) da solo
+  // occupava già i 24.000. Le guide si generano una volta e restano per
+  // sempre: vale la pena mandare tutto il materiale che c'è.
+  function ordinaSezioniPerVisita(testo: string, maxChars = 42000): string {
     const righe = String(testo || '').split('\n');
     // Un titolo di sezione: riga corta, senza punto finale, seguita da testo.
     const blocchi: { titolo: string; corpo: string[] }[] = [{ titolo: '', corpo: [] }];
@@ -6922,6 +6933,50 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   }
 
   /**
+   * FOTO PER TITOLO, RIPIEGO (12/09/2026, trovato dalla semina: British
+   * Museum, Metropolitan, Ermitage, Neuschwanstein — tutti a zero foto).
+   *
+   * La query d'insieme di `opereDaWikidata` aggrega e ordina per fama TUTTE
+   * le opere di un museo prima di tagliare a 80: nei musei enormi (milioni
+   * di oggetti) questo è troppo lavoro per l'endpoint pubblico anche a 25 s,
+   * e la guida esce cieca su tutte le opere — anche quando ognuna, presa da
+   * sola, ha una foto certificata (P18). Qui si cerca UN'OPERA ALLA VOLTA,
+   * per titolo: una query molto più leggera. Si usa solo come ripiego,
+   * quando la query d'insieme non ha dato NESSUNA riga (il segnale del
+   * timeout, non "il museo non ha foto").
+   */
+  async function fotoOperaPerTitolo(titolo: string, autore: string, lang: string): Promise<string> {
+    if (!titolo) return '';
+    const chiave = `wd_foto_titolo:${normalizzaTesto(titolo).slice(0, 60)}:${normalizzaTesto(autore || '').slice(0, 40)}:${lang}`;
+    const conservata = await getFromCache(chiave, 'wikidata_foto_opera', 30 * 24 * 60 * 60 * 1000);
+    if (conservata) {
+      try {
+        const d = JSON.parse(conservata);
+        // Solo i NO scadono presto (3 giorni): un'opera senza foto oggi può
+        // averne una domani, appena qualcuno la carica su Commons.
+        if (d.foto) return d.foto;
+        const eta = Date.now() - Date.parse(d.negativoDel || 0);
+        if (Number.isFinite(eta) && eta < 3 * 24 * 60 * 60 * 1000) return '';
+      } catch { /* cache illeggibile: si richiede */ }
+    }
+    const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 5000 };
+    let foto = '';
+    try {
+      const s = await axios.get(`https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(titolo)}&language=${lang}&uselang=${lang}&type=item&limit=3&format=json`, ua);
+      const candidati = (s.data?.search || []).filter((c: any) =>
+        Math.max(sovrapposizioneNomi(titolo, c.label || ''), sovrapposizioneNomi(c.label || '', titolo)) >= 0.7
+      );
+      for (const c of candidati.slice(0, 2)) {
+        const r = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P18&format=json`, ua);
+        const nomeFile = r.data?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+        if (nomeFile) { foto = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nomeFile)}`; break; }
+      }
+    } catch { /* niente foto per questa opera: si riprova al prossimo giro */ }
+    await saveToCache(chiave, 'wikidata_foto_opera', JSON.stringify(foto ? { foto } : { foto: '', negativoDel: new Date().toISOString() }));
+    return foto;
+  }
+
+  /**
    * OPERE VERE del museo da Wikidata (P195 "collezione"), ordinate per
    * notorietà (numero di lingue in cui esiste la voce): è l'elenco più
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
@@ -6975,17 +7030,29 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // ?tipo = P31 «istanza di»: dipinto, scultura, affresco… Serve al
     // percorso su misura per interessi («solo sculture»). Un'opera con più
     // tipi produce più righe: si tiene il primo che si sa classificare.
-    const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
+    //
+    // LA FAMA SI LEGGE, NON SI CONTA (12/09/2026, corretto dopo la semina:
+    // British Museum, Metropolitan, Ermitage — sempre a zero, mai un timeout
+    // passeggero). La versione di prima calcolava la fama con
+    // `COUNT(DISTINCT ?sitelink)` + GROUP BY su un join `schema:about`: nei
+    // musei enormi (il British ha quasi mille opere censite con P195) il
+    // motore deve materializzare e raggruppare TUTTO prima di ordinare e
+    // tagliare a 80, e non regge nemmeno a 25 s. Wikidata Query Service tiene
+    // già pronto il conteggio dei sitelink in un predicato apposta,
+    // `wikibase:sitelinks` — leggerlo costa quasi nulla. Stesso segnale
+    // (quante Wikipedia parlano dell'opera), cento volte più veloce:
+    // verificato sul British (995 opere collegate), 0,9 s, foto su 40/40.
+    const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo ?fama WHERE {
   ${dovePrende}
+  ?opera wikibase:sitelinks ?fama .
   OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
   OPTIONAL { ?opera wdt:P31 ?tipo . }
   OPTIONAL { ?opera wdt:P170 ?autore . }
   OPTIONAL { ?opera wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
   OPTIONAL { ?opera wdt:P217 ?inv . }
   OPTIONAL { ?opera wdt:P18 ?immagine . }
-  OPTIONAL { ?sitelink schema:about ?opera . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},it,en". }
-} GROUP BY ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo
+}
 ORDER BY DESC(?fama) LIMIT 80`;
     try {
       // Due tentativi: il primo corto, il secondo più paziente. La maggior
@@ -8443,7 +8510,23 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           ? { ...base, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) }
           : base;
       });
-      const conFoto = tappeConFoto.filter((t: any) => t.foto).length;
+      let conFoto = tappeConFoto.filter((t: any) => t.foto).length;
+      // RIPIEGO PER I MUSEI ENORMI (12/09/2026): la query d'insieme non ha
+      // dato NESSUNA riga — è il segnale del timeout, non "niente foto qui".
+      // Si cerca opera per opera, per le prime 15 tappe (un museo grande ne
+      // ha 12-20): costa qualche secondo in più, ma capita una volta sola,
+      // la guida buona non scade mai.
+      if (!isSito && wikidataId && opereWd.righe.length === 0 && conFoto === 0) {
+        const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 15);
+        const trovate = await Promise.all(daProvare.map((t: any) => fotoOperaPerTitolo(t.nomeFonte || t.nome, t.autore || '', langCfg.wiki)));
+        daProvare.forEach((t: any, i: number) => {
+          if (!trovate[i]) return;
+          const idx = tappeConFoto.indexOf(t);
+          tappeConFoto[idx] = { ...t, foto: fotoCommons(trovate[i], 800), fotoIcona: fotoCommons(trovate[i], 160) };
+        });
+        conFoto = tappeConFoto.filter((t: any) => t.foto).length;
+        if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} foto trovate opera per opera (la query d'insieme era vuota)`);
+      }
       if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappeOrdinate.length} con la foto`);
 
       const guide = {
