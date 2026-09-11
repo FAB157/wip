@@ -7022,8 +7022,10 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
    * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
    */
-  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[]; tipi: Record<string, 'dipinto' | 'scultura' | 'altro'> }> {
-    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {} };
+  /** Un'opera censita, dati separati — per le tappe «d'ufficio» (vedi sotto). */
+  type OperaCensita = { titolo: string; autore: string; anno: string; inv: string; foto: string; tipo: 'dipinto' | 'scultura' | 'altro' };
+  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[]; tipi: Record<string, 'dipinto' | 'scultura' | 'altro'>; top: OperaCensita[] }> {
+    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {}, top: [] };
 
     // QUESTA RISPOSTA SI CONSERVA (11/09/2026).
     //
@@ -7042,7 +7044,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     if (conservata) {
       try {
         const d = JSON.parse(conservata);
-        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {}, famose: d.famose || [], tipi: d.tipi || {} };
+        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {}, famose: d.famose || [], tipi: d.tipi || {}, top: d.top || [] };
       } catch { /* conservata illeggibile: si richiede */ }
     }
     // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
@@ -7184,6 +7186,13 @@ ORDER BY DESC(?fama) LIMIT 80`;
         Q3305213: 'dipinto', Q134194: 'dipinto', Q1229071: 'dipinto', Q219423: 'dipinto',
         Q860861: 'scultura', Q179700: 'scultura',
       };
+      // LE TAPPE D'UFFICIO (12/09/2026, richiesta del committente dopo la
+      // controprova: al British e al Kunsthistorisches Wien l'AI si fermava
+      // sotto la copertura anche con l'elenco davanti). Le prime opere per
+      // fama CON FOTO entrano nel percorso senza passare dalla scelta del
+      // modello: sono dati, non un suggerimento. Qui si accumulano man mano
+      // (i risultati arrivano già ordinati per fama), non serve altro.
+      const top: OperaCensita[] = [];
       for (const b of (r.data?.results?.bindings || [])) {
         const qidOpera = String(b?.opera?.value || '').split('/').pop() || '';
         if (qidVietati.has(qidOpera)) continue;
@@ -7200,7 +7209,8 @@ ORDER BY DESC(?fama) LIMIT 80`;
         const giaVista = titoli.has(chiave);
         titoli.add(chiave);
         if (!giaVista && famose.length < 3) famose.push(chiave);
-        if (!tipi[chiave] || tipi[chiave] === 'altro') tipi[chiave] = TIPO_DA_QID[qidTipo] || 'altro';
+        const tipo = TIPO_DA_QID[qidTipo] || 'altro';
+        if (!tipi[chiave] || tipi[chiave] === 'altro') tipi[chiave] = tipo;
         if (conRipiego && conRipiego !== titolo) originali[chiave] = conRipiego;
         const autore = String(b?.autoreLabel?.value || '').trim();
         const anno = String(b?.anno?.value || '').trim();
@@ -7212,17 +7222,18 @@ ORDER BY DESC(?fama) LIMIT 80`;
         // Anche col titolo originale come chiave: il modello può ripetere
         // quello, e la foto deve trovarsi lo stesso.
         if (img && originali[chiave] && !foto[normalizzaTesto(conRipiego)]) foto[normalizzaTesto(conRipiego)] = img;
+        if (img && !giaVista && top.length < 12) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
       }
       // Si conserva solo una risposta VERA: un elenco vuoto potrebbe essere
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
       // significherebbe fissare l'errore invece del dato.
       if (righe.length) {
-        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali, famose, tipi }));
+        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali, famose, tipi, top }));
       }
-      return { righe, foto, titoli, originali, famose, tipi };
+      return { righe, foto, titoli, originali, famose, tipi, top };
     } catch (e: any) {
       console.warn('[VenueGuide] Wikidata opere non disponibili:', e?.message);
-      return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {} };
+      return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {}, top: [] };
     }
   }
 
@@ -8393,7 +8404,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // Un sito archeologico non "possiede" opere via P195 (quella query è
         // per collezioni museali) — si salta, niente da guadagnare e una
         // chiamata lenta in meno (opereDaWikidata va spesso in timeout).
-        (wikidataId && !isSito) ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[], tipi: {} as Record<string, 'dipinto' | 'scultura' | 'altro'> }),
+        (wikidataId && !isSito) ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[], tipi: {} as Record<string, 'dipinto' | 'scultura' | 'altro'>, top: [] as OperaCensita[] }),
         (async () => {
           let sito = '';
           if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
@@ -8423,9 +8434,12 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // Gallery)"). Si usa solo se il sito è muto (il sito resta la fonte
       // migliore quando risponde) e solo le FRASI che nominano davvero una
       // sala numerata — mai l'intera voce, per non aggiungere altro.
+      // Allargato dal solo sito-403 a QUALUNQUE materiale povero di sale
+      // (12/09/2026, dalla controprova: il sito del Rijksmuseum risponde ma
+      // non nomina sale, mentre la voce inglese ha «Gallery of Honour»).
       let saleDaEnglish = '';
-      if (!sitoOut.testo && wikidataId && wikiSource && wikiSource.lang !== 'en') {
-        const segnaliSala = (wikiText.match(/\b(room|sala|salle|saal|zaal|galería|galeria|wing|gallery)\s*\d/gi) || []).length;
+      if (wikidataId && wikiSource && wikiSource.lang !== 'en') {
+        const segnaliSala = (`${sitoOut.testo} ${wikiText}`.match(/\b(room|sala|salle|saal|zaal|galería|galeria|wing|gallery)\s*\d/gi) || []).length;
         if (segnaliSala < 3) {
           const ingl = await paginaDaWikidataQid(wikidataId, 'en', ua);
           if (ingl?.lang === 'en') {
@@ -8477,6 +8491,7 @@ ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadr
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
+- SALE CHIUSE: se il materiale dice che una sala, un piano o una sezione sono CHIUSI, IN RESTAURO o TEMPORANEAMENTE INACCESSIBILI (parole come "chiuso", "chiusura", "in restauro", "closed", "temporarily closed", "under restoration" vicino al nome di un luogo), NON scrivere quel nome in "dove" per nessuna tappa — un percorso non deve mandare nessuno davanti a una porta chiusa. Se un'opera importante sta lì, tienila come tappa ma con "dove" vuoto, e cita la chiusura in "consiglio" con la data se il materiale la dà.
 - "servizi": DOVE SONO bagni, guardaroba, caffetteria o ristorante, bookshop, uscita, ascensori e accessibilità — SOLO se il materiale del sito ufficiale dice DOVE STA QUEL servizio, con una frase che parla di lui. Ogni voce una riga breve col piano o la posizione. Se per un servizio il materiale non dice dove sta, la voce resta VUOTA: non dedurlo dagli altri, non ripetere la stessa frase per più servizi, non scrivere «piano terra» perché è probabile. Dopo un'ora e mezza dentro un museo la cosa che serve è il bagno, e mandare qualcuno al piano sbagliato è peggio che non dirlo.
 ${regolaSpecificita(venue.name)}
 
@@ -8562,6 +8577,10 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
 
       // ── 5. Verifica: ogni tappa deve stare nel materiale ──
       const materialeNorm = normalizzaTesto(materiale);
+      // PERCHÉ UNA TAPPA NON C'È PIÙ (12/09/2026, richiesta della sessione
+      // libreria durante la controprova: senza questo non si sa se un'opera
+      // sparita è stata scartata dai controlli o non scelta dal modello).
+      const motiviScarto: { nome: string; motivo: string }[] = [];
       const tappeIn = Array.isArray(parsed?.tappe) ? parsed.tappe : [];
       const tappe = tappeIn
         .map((t: any) => ({
@@ -8603,7 +8622,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           const tok = tokenSignificativi(t.nomeFonte || t.nome);
           if (!tok.length) return false;
           const presenti = tok.filter(x => materialeNorm.includes(x)).length;
-          return presenti / tok.length >= 0.6;
+          const passa = presenti / tok.length >= 0.6;
+          if (!passa && t.nome) motiviScarto.push({ nome: t.nome, motivo: 'non trovata nel materiale' });
+          return passa;
         })
         // Se la fonte e la traduzione coincidono, la seconda riga in scheda
         // sarebbe una ripetizione: si tiene solo «nome».
@@ -8636,6 +8657,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           }
           if (fuori.size) {
             tappeVere = tappe.filter((_: any, i: number) => !fuori.has(i));
+            for (const i of fuori) motiviScarto.push({ nome: tappe[i].nome, motivo: 'opera di un altro museo' });
             console.warn(`[VenueGuide] ${venue.name}: ${fuori.size} opere risultano di altri musei, tolte dal percorso`);
           }
         }
@@ -8651,6 +8673,36 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         return orig && orig !== t.nome && orig !== t.nomeFonte ? { ...t, nomeOriginale: orig } : t;
       });
       tappeVere = conCartellino;
+
+      // ── 5-quinques. LE TAPPE D'UFFICIO (12/09/2026) ──
+      // Al British Museum e al Kunsthistorisches Wien il modello si fermava
+      // sotto la copertura (9-14 tappe) anche con l'elenco delle opere più
+      // famose davanti, scartando pezzi come il Vaso Portland o l'Infanta
+      // Margherita. Se restano posti fino a 20 e la lista delle opere per
+      // fama (opereWd.top, quelle CON FOTO) ne ha di non ancora scelte, le
+      // si aggiunge — sono dati di Wikidata, non un suggerimento del
+      // modello: entrano comunque, anche se il testo non le spiega.
+      if (!isSito && opereWd.top?.length) {
+        const chiaviPresenti = new Set(tappeVere.map((t: any) => normalizzaTesto(t.nomeFonte || t.nome)));
+        const materialeUnito = `${sitoOut.testo} ${wikiText}`;
+        const daAggiungere = opereWd.top.filter(o => !chiaviPresenti.has(normalizzaTesto(o.titolo))).slice(0, Math.max(0, 20 - tappeVere.length));
+        if (daAggiungere.length) {
+          const dufficio = daAggiungere.map(o => {
+            // Se il testo la nomina davvero, la frase che la circonda vale
+            // più di un fatto asciutto: si cerca prima lì.
+            const rx = new RegExp(`[^.!?]*\\b${o.titolo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').split(' ').slice(0, 4).join('\\s+')}\\b[^.!?]*[.!?]`, 'i');
+            const inTesto = materialeUnito.match(rx)?.[0]?.trim();
+            const fatti = [o.autore ? `di ${o.autore}` : '', o.anno ? `(${o.anno})` : '', o.inv ? `n. inventario ${o.inv}` : ''].filter(Boolean).join(' ');
+            return {
+              nome: o.titolo, nomeFonte: '', autore: o.autore, anno: o.anno, dove: '', puntoPreciso: '',
+              perche: inTesto && inTesto.length < 400 ? inTesto : (fatti ? `Opera ${fatti}, fra le più note della collezione.` : 'Fra le opere più note della collezione, per numero di edizioni linguistiche su Wikipedia.'),
+              tipo: o.tipo, foto: fotoCommons(o.foto, 800), fotoIcona: fotoCommons(o.foto, 160), daListaOpere: true,
+            };
+          });
+          console.log(`[VenueGuide] ${venue.name}: +${dufficio.length} tappe d'ufficio dalla lista opere (copertura ${tappeVere.length}→${tappeVere.length + dufficio.length})`);
+          tappeVere = [...tappeVere, ...dufficio];
+        }
+      }
 
       // ── 5-ter. Proprietà non è allestimento ──
       // «Il museo la possiede» e «oggi la vedi» sono due promesse diverse.
@@ -8825,6 +8877,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null,
         venuePhoto: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 900) : fotoLuogoRaw) : '',
         venuePhotoIcon: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 160) : fotoLuogoRaw) : '',
+        // Le tappe uscite e perché — per non dover indovinare, collaudando,
+        // se è stata la scelta del modello o un controllo a toglierle.
+        ...(motiviScarto.length ? { scartate: motiviScarto.slice(0, 30) } : {}),
       };
       await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payload));
       // LIBRERIA: la guida entra anche in museum_guides, così è elencabile,
