@@ -7068,17 +7068,21 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // MA P276 (location) NON DISTINGUE UN PRESTITO DA UNA COLLEZIONE
     // (12/09/2026, segnalato dalla semina: la guida del British Museum
     // includeva l'«Arazzo di Bayeux» con tanto di "inclusa tra le opere
-    // censite" — falso, l'arazzo appartiene al museo di Bayeux (P195), ma un
+    // censite" — falso, l'arazzo appartiene al museo di Bayeux, ma un
     // SECONDO item Wikidata dello stesso oggetto (Q187483, verosimilmente
-    // per una mostra/prestito) ha P276 = British Museum. La query lo
-    // prendeva come se fosse in collezione. Un'opera con un P195 dichiarato
-    // verso UN ALTRO museo non entra: la sua vera casa è quella, qualunque
-    // cosa dica un P276 di passaggio.
+    // per una mostra/prestito) ha P276 = British Museum. Un primo tentativo
+    // di correzione — escludere dalla query chiunque avesse un P195 verso UN
+    // ALTRO museo — si è rivelato TROPPO severo: la Grande Onda di Kanagawa,
+    // gli Scacchi di Lewis, i Bronzi del Benin sono TUTTI multi-collezione
+    // (esistono più copie/stampe nel mondo, ognuna con la sua P195), e stanno
+    // comunque anche al British — quel filtro li buttava via insieme a
+    // Bayeux. Ed era pure lento: NOT EXISTS non legato su un museo enorme.
+    // La disambiguazione si fa DOPO, su al massimo 80 opere già scelte (vedi
+    // più sotto, dopo la query): qui la domanda resta quella semplice e
+    // veloce di sempre.
     const dovePrende = tipoLuogo === 'chiesa'
-      ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }
-  FILTER NOT EXISTS { ?opera wdt:P195 ?altrove . FILTER(?altrove != wd:${qid}) }`
-      : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }
-  FILTER NOT EXISTS { ?opera wdt:P195 ?altrove . FILTER(?altrove != wd:${qid}) }`;
+      ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }`
+      : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }`;
     // ?tipo = P31 «istanza di»: dipinto, scultura, affresco… Serve al
     // percorso su misura per interessi («solo sculture»). Un'opera con più
     // tipi produce più righe: si tiene il primo che si sa classificare.
@@ -7123,6 +7127,38 @@ ORDER BY DESC(?fama) LIMIT 80`;
           await new Promise(s => setTimeout(s, 1200));
         }
       }
+      // LA DISAMBIGUAZIONE P195/P276, MIRATA (12/09/2026): al massimo 80
+      // opere, quelle già scelte sopra — una query con VALUES su QID precisi
+      // è quasi istantanea qualunque sia la dimensione del museo, a
+      // differenza di un NOT EXISTS libero sull'intera collezione. Un'opera
+      // "vince" se il suo P195 include QUESTO museo (anche fra più
+      // collezioni: una stampa può stare in dieci musei, e sta comunque
+      // anche qui) oppure se non ha nessun P195 dichiarato (allora conta
+      // P276, come per le chiese). Un P195 SOLO verso un altro museo — il
+      // caso dell'Arazzo di Bayeux — esclude la riga.
+      const qidVietati = new Set<string>();
+      try {
+        const qidOpere = [...new Set((r?.data?.results?.bindings || []).map((b: any) => String(b?.opera?.value || '').split('/').pop()).filter((x: string) => /^Q\d+$/.test(x)))];
+        if (qidOpere.length) {
+          const sparqlColl = `SELECT ?opera (GROUP_CONCAT(DISTINCT ?collez; separator="|") AS ?collezioni) WHERE {
+  VALUES ?opera { ${qidOpere.map(q => `wd:${q}`).join(' ')} }
+  OPTIONAL { ?opera wdt:P195 ?collez . }
+} GROUP BY ?opera`;
+          const rc = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparqlColl)}`, {
+            headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' },
+            timeout: 10000,
+          });
+          for (const b of (rc.data?.results?.bindings || [])) {
+            const q2 = String(b?.opera?.value || '').split('/').pop() || '';
+            const collezioni = String(b?.collezioni?.value || '');
+            if (collezioni && !collezioni.includes(qid)) qidVietati.add(q2);
+          }
+        }
+      } catch (e: any) {
+        // Senza risposta, meglio tenere tutte le righe (comportamento di
+        // prima) che perdere l'intero museo per un controllo in più.
+        console.warn('[VenueGuide] disambiguazione P195/P276 saltata:', e?.message);
+      }
       const righe: string[] = [];
       const foto: Record<string, string> = {};
       // I titoli certificati da P195: sono le opere che Wikidata dichiara di
@@ -7149,6 +7185,8 @@ ORDER BY DESC(?fama) LIMIT 80`;
         Q860861: 'scultura', Q179700: 'scultura',
       };
       for (const b of (r.data?.results?.bindings || [])) {
+        const qidOpera = String(b?.opera?.value || '').split('/').pop() || '';
+        if (qidVietati.has(qidOpera)) continue;
         const qidTipo = String(b?.tipo?.value || '').split('/').pop() || '';
         const conRipiego = String(b?.operaLabel?.value || '').trim();
         const inLinguaUtente = String(b?.labUser?.value || '').trim();
@@ -8026,17 +8064,28 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // «Galleria degli Uffizi». Ora si cerca dentro il nome; le
           // virgolette proteggono i nomi con la virgola («National Gallery,
           // London») dalla sintassi dell'or.
-          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${String(venue.name).replace(/["*]/g, '')}*"`)})&select=guide,source,official_site,venue_name,language,stops_count&order=stops_count.desc&limit=8`,
+          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${String(venue.name).replace(/["*]/g, '')}*"`)})&select=guide,source,official_site,venue_name,language,stops_count,venue_photo&order=stops_count.desc&limit=8`,
           { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
         );
         const righe = (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
+        // La foto del museo, dalla riga di libreria: mancava del tutto in
+        // entrambe le risposte da libreria (12/09/2026, segnalato dalla
+        // semina sulla traduzione Prado/Rijksmuseum) — non solo nella
+        // traduzione. Il valore salvato è grezzo (vedi salvaInLibreriaMusei
+        // più sotto): si trasforma qui, come ovunque nel file.
+        const fotoDaRiga = (r: any) => {
+          const f = String(r?.venue_photo || '');
+          if (!f) return { venuePhoto: '', venuePhotoIcon: '' };
+          const daCommons = /commons\.wikimedia\.org/i.test(f);
+          return { venuePhoto: daCommons ? fotoCommons(f, 900) : f, venuePhotoIcon: daCommons ? fotoCommons(f, 160) : f };
+        };
 
         // 1) LINGUA DELL'UTENTE, sempre per prima: è già pronta, costo zero.
         const riga = righe.find((r: any) => String(r?.language) === outLang);
         if (riga) {
           const gate = await chiediPass(assaggioDa(riga.guide?.intro));
           if (gate) return res.json(gate);
-          const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null };
+          const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null, ...fotoDaRiga(riga) };
           await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
           // Contatore d'uso: dice quali musei della libreria servono davvero.
           axios.post(`${supabaseUrl}/rest/v1/rpc/increment_museum_guide_hits`, { p_venue_key: chiaveLuogo, p_language: outLang },
@@ -8050,8 +8099,25 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // soprattutto tiene lo stesso percorso in tutte le lingue dell'app —
         // stesse opere, stesse sale, stessi fatti. È così che i musei del
         // mondo diventano disponibili in sette lingue senza sette semine.
-        // Si parte dalla guida più ricca (order=stops_count.desc).
-        const sorgente = righe[0];
+        // Si parte dalla guida più ricca (order=stops_count.desc) — ma solo
+        // se è abbastanza buona da meritare sette lingue (12/09/2026,
+        // segnalato dalla semina: Prado ed Ermitage avevano solo la guida
+        // vecchia — 13 e 10 tappe, 0 sale, 0 foto — e la traduzione la
+        // portava tale e quale in ogni lingua, foto del museo compresa
+        // perduta per strada. Sotto soglia si passa oltre e si rigenera con
+        // la rotta di oggi: la traduzione DEVE essere di una guida buona,
+        // mai il modo per spargere una guida debole in sette lingue.
+        // Il tipo si legge dalla riga stessa (guide.tipo): qui isChurch non
+        // esiste ancora, si calcola più sotto solo se serve rigenerare.
+        const abbastanzaBuona = (r: any) => {
+          const tipo = r?.guide?.tipo;
+          if ((r?.stops_count || 0) < (tipo === 'chiesa' ? 6 : 8)) return false;
+          // I siti archeologici sono fatti di settori e strutture, non di
+          // opere con P18: zero foto è la norma, non un segno di debolezza.
+          if (tipo === 'sito') return true;
+          return Array.isArray(r?.guide?.tappe) ? r.guide.tappe.some((t: any) => t?.foto) : false;
+        };
+        const sorgente = righe.find(abbastanzaBuona);
         if (sorgente) {
           // La traduzione costa una chiamata AI: si fa solo per chi ha il pass.
           const gate = await chiediPass();
@@ -8064,12 +8130,16 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
               guide: tradotta,
               source: sorgente.source || null,
               officialSite: sorgente.official_site || null,
+              ...fotoDaRiga(sorgente),
             };
             await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadTr));
             await salvaInLibreriaMusei({
               venueKey: chiaveLuogo, venue: { ...venue, name: sorgente.venue_name || venue.name },
               guide: tradotta, source: sorgente.source || null,
               officialSite: sorgente.official_site || null, language: outLang, origin: 'auto',
+              // Il grezzo, non il trasformato: fotoDaRiga fa lo stesso lavoro
+              // di fotoCommons quando la riga viene riletta (vedi sopra).
+              venuePhoto: sorgente.venue_photo || null,
             });
             console.log(`[VenueGuide] ${venue.name}: guida tradotta da ${sorgente.language} a ${outLang}`);
             return res.json({ ...payloadTr, cached: true, fromLibrary: true, translated: true });
