@@ -594,6 +594,34 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   vr_a_ar_nearest: {
     IT: "I più vicini", EN: "Closest to you", FR: "Les plus proches", ES: "Los más cercanos", DE: "Am nächsten", RU: "Ближайшие", ZH: "距离最近",
   },
+  // La vista «lista + radar 2D» come opzione, anche con la fotocamera accesa (12/09/2026).
+  vr_a_ar_view_radar: {
+    IT: "Lista e radar 2D", EN: "List and 2D radar", FR: "Liste et radar 2D", ES: "Lista y radar 2D", DE: "Liste und 2D-Radar", RU: "Список и 2D-радар", ZH: "列表与 2D 雷达",
+  },
+  vr_a_ar_view_camera: {
+    IT: "Passa alla vista con fotocamera", EN: "Switch to the camera view", FR: "Passer à la vue caméra", ES: "Pasar a la vista con cámara", DE: "Zur Kameraansicht wechseln", RU: "Перейти к виду с камерой", ZH: "切换到相机视图",
+  },
+  vr_a_ar_camera_waiting: {
+    IT: "Fotocamera in attesa del permesso. Il radar funziona lo stesso.", EN: "Camera waiting for permission. The radar works anyway.",
+    FR: "Caméra en attente d'autorisation. Le radar fonctionne quand même.", ES: "Cámara a la espera del permiso. El radar funciona igual.",
+    DE: "Kamera wartet auf die Berechtigung. Das Radar funktioniert trotzdem.", RU: "Камера ждёт разрешения. Радар работает и так.", ZH: "相机等待权限中。雷达照常工作。",
+  },
+  vr_a_ar_retry: { IT: "Riprova", EN: "Retry", FR: "Réessayer", ES: "Reintentar", DE: "Erneut versuchen", RU: "Повторить", ZH: "重试" },
+  vr_a_ar_camera_waiting_short: { IT: "Fotocamera in attesa", EN: "Camera waiting", FR: "Caméra en attente", ES: "Cámara en espera", DE: "Kamera wartet", RU: "Камера ожидает", ZH: "相机等待中" },
+  vr_a_ar_radar_2d: { IT: "Radar 2D", EN: "2D radar", FR: "Radar 2D", ES: "Radar 2D", DE: "2D-Radar", RU: "2D-радар", ZH: "2D 雷达" },
+  vr_a_ar_compass_on: { IT: "bussola attiva", EN: "compass on", FR: "boussole active", ES: "brújula activa", DE: "Kompass aktiv", RU: "компас включён", ZH: "指南针已开启" },
+  vr_a_ar_compass_off: { IT: "bussola assente", EN: "no compass", FR: "pas de boussole", ES: "sin brújula", DE: "kein Kompass", RU: "нет компаса", ZH: "无指南针" },
+  vr_a_ar_within: { IT: "{n} luoghi entro 5 km", EN: "{n} places within 5 km", FR: "{n} lieux à moins de 5 km", ES: "{n} lugares en 5 km", DE: "{n} Orte im Umkreis von 5 km", RU: "{n} мест в радиусе 5 км", ZH: "5 公里内 {n} 个地点" },
+  vr_a_ar_audio_ready: { IT: "audioguida pronta", EN: "audio guide ready", FR: "audioguide prêt", ES: "audioguía lista", DE: "Audioguide bereit", RU: "аудиогид готов", ZH: "语音导览已就绪" },
+  // Gli otto punti cardinali, in minuscolo: «Chiesa · nord-est».
+  vr_a_dir_n: { IT: "nord", EN: "north", FR: "nord", ES: "norte", DE: "Norden", RU: "север", ZH: "北" },
+  vr_a_dir_ne: { IT: "nord-est", EN: "north-east", FR: "nord-est", ES: "noreste", DE: "Nordosten", RU: "северо-восток", ZH: "东北" },
+  vr_a_dir_e: { IT: "est", EN: "east", FR: "est", ES: "este", DE: "Osten", RU: "восток", ZH: "东" },
+  vr_a_dir_se: { IT: "sud-est", EN: "south-east", FR: "sud-est", ES: "sureste", DE: "Südosten", RU: "юго-восток", ZH: "东南" },
+  vr_a_dir_s: { IT: "sud", EN: "south", FR: "sud", ES: "sur", DE: "Süden", RU: "юг", ZH: "南" },
+  vr_a_dir_sw: { IT: "sud-ovest", EN: "south-west", FR: "sud-ouest", ES: "suroeste", DE: "Südwesten", RU: "юго-запад", ZH: "西南" },
+  vr_a_dir_w: { IT: "ovest", EN: "west", FR: "ouest", ES: "oeste", DE: "Westen", RU: "запад", ZH: "西" },
+  vr_a_dir_nw: { IT: "nord-ovest", EN: "north-west", FR: "nord-ouest", ES: "noroeste", DE: "Nordwesten", RU: "северо-запад", ZH: "西北" },
 
   // ── LiveTourPanel ──────────────────────────────────────────────────────────
   vr_a_lt_leader_title: {

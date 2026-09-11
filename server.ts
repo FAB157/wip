@@ -9322,7 +9322,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       const wl = ({ IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' } as Record<string, string>)[langKey] || 'it';
       if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
 
-      const chiave = `museum_hours:v1:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}`;
+      // v2 (12/09/2026): i testi liberi (chiusure, sale chiuse, nota) escono
+      // nella lingua dell'utente, quindi la cache è per lingua.
+      const chiave = `museum_hours:v2:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       let dati: any = null;
       const inCache = await getFromCache(chiave, 'museum_hours', 7 * 24 * 60 * 60 * 1000);
       if (inCache) { try { dati = JSON.parse(inCache); } catch { dati = null; } }
@@ -9478,7 +9480,41 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
         }).sort((a, b) => b.densita - a.densita);
         const utili = documenti.filter(d => d.densita > 0);
         const scelti2 = (utili.length ? utili : documenti).slice(0, 3);
-        const materiale = scelti2.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 15000);
+        // LE SALE CHIUSE OGGI (12/09/2026). La delusione peggiore: fare tutto il
+        // percorso per arrivare all'Annunciazione e trovare la sala chiusa per
+        // restauro da tre mesi. I siti lo scrivono negli avvisi — pagine che
+        // per gli ORARI si escludono apposta. Qui si leggono a parte, solo le
+        // frasi che parlano di chiusure, e finiscono in una sezione propria.
+        let avvisi = '';
+        try {
+          const RE_AVVISI = /(avvis|notice|alert|closure|chiusur|informazioni-visita|visitor-information|travaux|obras|bauarbeiten)/i;
+          const RE_CHIUSO = /(chius|closed|clos|ferm[ée]|cerrad|geschlossen|restaur|inaccessib|non visitabil|not accessible)/i;
+          const homeHtml = String((await axios.get(base.href, UA)).data || '');
+          const daLeggere: string[] = [];
+          for (const m of homeHtml.matchAll(/<a\b[^>]*href=["']([^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+            try {
+              const u = new URL(m[1], base.href);
+              const testo = String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (u.hostname !== base.hostname) continue;
+              if (RE_AVVISI.test(u.pathname) || RE_AVVISI.test(testo) || RE_CHIUSO.test(testo)) {
+                if (!daLeggere.includes(u.href)) daLeggere.push(u.href);
+              }
+              if (daLeggere.length >= 2) break;
+            } catch { /* link non valido */ }
+          }
+          const frasi: string[] = [];
+          for (const u of daLeggere) {
+            try {
+              const r = await axios.get(u, { ...UA, timeout: 7000 });
+              const t = testoPaginaMuseo(String(r.data || ''));
+              for (const f of t.split(/(?<=[.;!?])\s+/)) if (RE_CHIUSO.test(f) && f.length < 400) frasi.push(f.trim());
+            } catch { /* pagina saltata */ }
+          }
+          // Anche nelle pagine già lette (orari, visita) può esserci l'avviso.
+          for (const d of scelti2) for (const f of d.t.split(/(?<=[.;!?])\s+/)) if (RE_CHIUSO.test(f) && /(sal[ae]|rooms?|salles?|saal|säle|salas?|galler|piano|floor|ala|wing)/i.test(f) && f.length < 400) frasi.push(f.trim());
+          avvisi = [...new Set(frasi)].slice(0, 12).join(' ');
+        } catch { /* niente avvisi: si va avanti */ }
+        const materiale = (scelti2.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 14000)) + (avvisi ? `\n\nAVVISI E CHIUSURE (dal sito):\n${avvisi.slice(0, 2500)}` : '');
         const fonteUrl = scelti2[0]?.u || base.href;
         if (materiale.length < 300) return res.json({ ok: false, reason: 'sito_senza_testo' });
 
@@ -9499,9 +9535,11 @@ Rispondi SOLO con un oggetto JSON con questi campi, tutti STRINGHE:
   "biglietto": "SOLO il biglietto intero ordinario del museo principale, un valore (es. 25 €); vuoto se non c'è",
   "ridotto": "il ridotto ordinario, un valore, oppure vuoto",
   "gratis": "chi entra gratis, oppure vuoto",
-  "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure vuoto"
+  "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure vuoto",
+  "saleChiuse": "sale, sezioni o piani CHIUSI in questi giorni come li scrive il sito, con i numeri delle sale se ci sono (es. 'sale 25-30 chiuse fino al 30 ottobre'), oppure vuoto"
 }
-Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, mostre, giardini o aperture serali straordinarie. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).`;
+Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, mostre, giardini o aperture serali straordinarie. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).
+I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(langKey)} (traduci dal sito se serve), lasciando invariati i numeri delle sale, le date e gli orari.`;
         let raw = '';
         try {
           const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
@@ -9569,6 +9607,7 @@ Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, most
           gratis: String(dati?.gratis || dati?.biglietto?.gratis || '').slice(0, 120),
         },
         nota: String(dati?.nota || '').slice(0, 200),
+        saleChiuse: String(dati?.saleChiuse || '').slice(0, 240),
         consiglio,
         fonte: dati?.fonte || null,
       });

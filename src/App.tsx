@@ -2064,6 +2064,7 @@ export default function App() {
             tasto «Sei a…» non faceva nulla fuori dalla tab fotocamera. */}
         {visitaAperta && visitaCorrente && (
           <MuseumVisitSheet
+            key={visitaCorrente.venueKey}
             visit={visitaCorrente}
             language={language}
             passExpiresAt={getLocalMuseumPassExpiry()}

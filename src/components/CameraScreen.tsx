@@ -2033,6 +2033,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       {/* Visita guidata: dove sei e percorso consigliato */}
       {visitOpen && visit && (
         <MuseumVisitSheet
+          key={visit.venueKey}
           visit={visit}
           language={language}
           passExpiresAt={passExpiresAt}

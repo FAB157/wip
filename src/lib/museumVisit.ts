@@ -62,6 +62,8 @@ export type VenueTappa = {
   preferita?: boolean;
   /** Vista in una visita PRECEDENTE di questo museo (dall'archivio). */
   vistaInPassato?: boolean;
+  /** La sua sala è chiusa in questi giorni, secondo gli avvisi del sito. */
+  chiusaOggi?: boolean;
   /** id della scheda Vision con cui l'utente l'ha spuntata, se l'ha inquadrata. */
   seenCardId?: string | null;
   seenAt?: number | null;
@@ -130,6 +132,8 @@ export type MuseumVisit = {
   prefetchFatto?: boolean;
   /** «Sei già stato qui»: quando, quante viste, quante preferite. */
   visitaPrecedente?: { quando: number; viste: number; preferite: number };
+  /** Gli avvisi di chiusura letti dal sito, com'erano scritti. */
+  saleChiuse?: { testo: string; quando: number };
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
@@ -587,13 +591,70 @@ export type Domani = {
   chiusure: string;
   biglietto: { intero: string; ridotto: string; gratis: string };
   nota: string;
+  /** Sale o sezioni chiuse in questi giorni, come le scrive il sito. */
+  saleChiuse?: string;
   consiglio: '' | 'fila_ore_centrali';
   fonte: { url: string; lettoIl: string } | null;
 };
+
+/**
+ * LE SALE CHIUSE OGGI, INCROCIATE COL PERCORSO (12/09/2026). Dal testo del
+ * sito («sale 25-30 chiuse fino al 30 ottobre») si estraggono i numeri e
+ * gli intervalli; le tappe la cui sala li contiene si marcano «chiusaOggi»
+ * e escono dal percorso attivo — prima di partire, non davanti alla porta
+ * chiusa. Si salva sulla visita, così vale anche senza rete.
+ */
+export function applicaSaleChiuse(testo: string): { segnate: number } {
+  const v = getVisit();
+  if (!v?.guide?.tappe?.length) return { segnate: 0 };
+  const numeri = new Set<number>();
+  const t = String(testo || '');
+  // Gruppi «sala/room/salle… + numeri», con intervalli 25-30 / 3 a 7 / 1 to 5.
+  for (const m of t.matchAll(/(?:sal[ae]|rooms?|salles?|saal|säle|salas?|galler(?:ie|ia|y|ies))\s*([\d][\d\s,.;\-–—aàtoy]{0,40})/gi)) {
+    const seg = m[1];
+    for (const r of seg.matchAll(/(\d{1,3})\s*(?:[-–—]|\ba\b|\bà\b|\bto\b|\bbis\b|\by\b)\s*(\d{1,3})/g)) {
+      const a = parseInt(r[1], 10), b = parseInt(r[2], 10);
+      if (b >= a && b - a <= 60) for (let n = a; n <= b; n++) numeri.add(n);
+    }
+    for (const s of seg.matchAll(/\b(\d{1,3})\b/g)) numeri.add(parseInt(s[1], 10));
+  }
+  if (!numeri.size) return { segnate: 0 };
+  let segnate = 0;
+  v.guide.tappe = v.guide.tappe.map(tp => {
+    const dove = String(tp.dove || '');
+    const n = dove.match(/\b(\d{1,3})\b/);
+    const chiusa = !!n && numeri.has(parseInt(n[1], 10));
+    if (chiusa) segnate++;
+    return chiusa ? { ...tp, chiusaOggi: true } : (tp.chiusaOggi ? { ...tp, chiusaOggi: false } : tp);
+  });
+  v.saleChiuse = { testo: t.slice(0, 240), quando: Date.now() };
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return { segnate };
+}
+
+/**
+ * «E POI?» (12/09/2026): i musei con la visita pronta a piedi da qui, per
+ * la seconda visita della giornata — la più facile da vendere.
+ */
+export async function museiAPiediDaQui(v: MuseumVisit, language: Language, quanti = 3): Promise<MuseumLibraryItem[]> {
+  if (v.venue.lat == null || v.venue.lon == null) return [];
+  const elenco = await fetchMuseumLibrary({ lat: v.venue.lat, lon: v.venue.lon, language, radiusKm: 2.5, limit: 12 });
+  return elenco
+    .filter(m => m.venue_key !== v.venueKey && normalize(m.venue_name) !== normalize(v.venue.name))
+    .filter(m => (m.distance_m ?? 99999) <= 2500)
+    .sort((a, b) => (a.distance_m ?? 99999) - (b.distance_m ?? 99999))
+    .slice(0, quanti);
+}
 export async function fetchDomani(v: MuseumVisit, language: Language): Promise<Domani | null> {
+  return fetchOrariDi(v.venue.name, v.venue.id, language);
+}
+
+/** Gli stessi orari per un museo QUALSIASI: serve a «E poi?». */
+export async function fetchOrariDi(venueName: string, poiId: string | null | undefined, language: Language): Promise<Domani | null> {
   try {
-    const p = new URLSearchParams({ language, venueName: v.venue.name });
-    if (v.venue.id) p.set('poiId', v.venue.id);
+    const p = new URLSearchParams({ language, venueName });
+    if (poiId) p.set('poiId', poiId);
     const res = await fetch(getApiUrl(`/api/museums/tomorrow?${p.toString()}`));
     if (!res.ok) return null;
     const d = await res.json();
@@ -827,13 +888,19 @@ export function tappeAttive(v: MuseumVisit | null): Set<number> {
   const tappe = v?.guide?.tappe || [];
   const tutte = new Set(tappe.map((_, k) => k));
   const p = v?.personalizzazione || PERSONALIZZAZIONE_BASE;
+  // LE SALE CHIUSE escono sempre, qualunque leva sia impostata: non c'è
+  // niente da vedere dietro una porta chiusa. Se restassero meno di tre
+  // opere, si tiene tutto e ci pensa la scheda a dirlo.
+  const chiuse = new Set(tappe.map((t, k) => (t.chiusaOggi ? k : -1)).filter(k => k >= 0));
+  const senzaChiuse = new Set([...tutte].filter(k => !chiuse.has(k)));
+  const basePartenza = senzaChiuse.size >= 3 ? senzaChiuse : tutte;
   const nessunaLeva = p.tempo === 'tutto' && p.interessi === 'tutto' && !p.bambini && !p.soloNuove;
-  if (nessunaLeva || tappe.length <= 3) return tutte;
+  if (nessunaLeva || tappe.length <= 3) return basePartenza;
 
   // 0) SECONDA VISITA (12/09/2026): «l'ultima volta hai visto queste dodici;
   //    oggi le otto che ti sei perso, più le tre che avevi messo fra le
   //    preferite». Le viste in passato escono, le preferite restano sempre.
-  let candidati = tappe.map((t, k) => ({ k, t })).filter(x => !x.t.soloCollezione);
+  let candidati = tappe.map((t, k) => ({ k, t })).filter(x => !x.t.soloCollezione && basePartenza.has(x.k));
   if (p.soloNuove) {
     const nuove = candidati.filter(x => !x.t.vistaInPassato || x.t.preferita);
     if (nuove.length >= 3) candidati = nuove;

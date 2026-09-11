@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi } from '../lib/museumVisit';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
@@ -16,6 +16,8 @@ import { getGuideCharacter } from '../lib/guideSettings';
 import { formatPassRemaining } from '../lib/museumPass';
 
 interface MuseumVisitSheetProps {
+  /** Cambia col museo: la scheda si rimonta quando «E poi?» apre la visita successiva. */
+  key?: React.Key;
   visit: MuseumVisit;
   language: Language;
   passExpiresAt: number | null;
@@ -122,9 +124,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   useEffect(() => {
     if (!online) return;
     let vivo = true;
-    fetchDomani(visit, language).then(d => { if (vivo) setDomani(d); });
+    fetchDomani(visit, language).then(d => {
+      if (!vivo) return;
+      setDomani(d);
+      // LE SALE CHIUSE OGGI (12/09/2026): gli avvisi del sito incrociati
+      // col percorso, prima di partire. Il testo resta sulla visita.
+      if (d?.saleChiuse) applicaSaleChiuse(d.saleChiuse);
+    });
     return () => { vivo = false; };
   }, [visit.venueKey, online]);
+  const testoSaleChiuse = visit.saleChiuse?.testo || domani?.saleChiuse || '';
+  const chiuseOggi = visit.guide.tappe.filter(tp => tp.chiusaOggi).length;
   // «CHIEDI ALLA GUIDA» (12/09/2026): la domanda che resta quando la voce
   // ha finito. Risposta dal materiale di quell'opera, un credito, letta a
   // voce e scritta sotto la tappa.
@@ -470,6 +480,98 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   };
 
   /**
+   * «E POI?» (12/09/2026). Si esce dagli Uffizi alle 12 con mezza giornata
+   * davanti: i musei della libreria a piedi da qui, con distanza, orario di
+   * chiusura di oggi, opere e durata stimata. Si chiede una volta, quando
+   * la visita è finita o si apre «prima di uscire»; un tocco e la visita
+   * successiva parte, con quella di adesso messa in archivio.
+   */
+  const visitaCompleta = total > 0 && seen > 0 && mancanti.length === 0;
+  const [prossimi, setProssimi] = useState<MuseumLibraryItem[] | null>(null);
+  const [orariProssimi, setOrariProssimi] = useState<Record<string, Domani | null>>({});
+  const [avviandoProssimo, setAvviandoProssimo] = useState<string | null>(null);
+  const prossimiChiesti = useRef(false);
+  useEffect(() => {
+    if (!online || prossimiChiesti.current) return;
+    if (!primaDiUscire && !visitaCompleta) return;
+    prossimiChiesti.current = true;
+    museiAPiediDaQui(visit, language, 3).then(async (m) => {
+      setProssimi(m);
+      const orari: Record<string, Domani | null> = {};
+      await Promise.all(m.map(async x => { orari[x.venue_key] = await fetchOrariDi(x.venue_name, x.poi_id, language); }));
+      setOrariProssimi(orari);
+    });
+  }, [primaDiUscire, visitaCompleta, online]);
+
+  const vaiAlProssimo = async (m: MuseumLibraryItem) => {
+    if (avviandoProssimo) return;
+    setAvviandoProssimo(m.venue_key);
+    try {
+      stopSpeech();
+      conservaVisita(visit, language);
+      const out = m.poi_id
+        ? await startVisitByPoi(m.poi_id, language, { lat: m.lat, lon: m.lon })
+        : await startVisitByName(m.venue_name, { lat: m.lat, lon: m.lon }, language);
+      if (out.ok && out.visit) {
+        setPrimaDiUscire(false);
+        window.dispatchEvent(new CustomEvent(OPEN_MUSEUM_VISIT_EVENT));
+      } else {
+        notify(out.reason === 'needs_tour_pass' ? t('mv_locked_title') : out.reason === 'network' ? t('vis_generic_error') : t('mv_not_found'));
+      }
+    } finally {
+      setAvviandoProssimo(null);
+    }
+  };
+
+  const renderEPoi = () => {
+    if (!prossimi || prossimi.length === 0) return null;
+    return (
+      <div className="mt-3">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5 flex items-center gap-1.5">
+          <Footprints className="w-3.5 h-3.5" />{t('mv_next_museum')}
+        </p>
+        <div className="space-y-1.5">
+          {prossimi.map(m => {
+            const o = orariProssimi[m.venue_key]?.oggi;
+            const d = m.distance_m ?? 0;
+            const dist = d >= 1000 ? `${(d / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(d)} m`;
+            // 80 m al minuto a piedi; tre minuti e mezzo per opera, arrotondati ai 5.
+            const camminata = Math.max(1, Math.round(d / 80));
+            const durata = Math.max(15, Math.round((m.stops_count * 3.5) / 5) * 5);
+            return (
+              <button
+                key={m.venue_key}
+                onClick={() => void vaiAlProssimo(m)}
+                disabled={!!avviandoProssimo}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-slate-200 text-left active:scale-[0.98] transition-transform disabled:opacity-60"
+              >
+                {m.venue_photo_icon ? (
+                  <img src={m.venue_photo_icon} alt="" loading="lazy" className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
+                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                ) : (
+                  <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-black text-slate-900 truncate">{m.venue_name}</p>
+                  <p className="text-[11px] font-bold text-slate-500 truncate">
+                    {t('mv_next_museum_line').replace('{d}', `${dist} (${camminata} min)`).replace('{n}', String(m.stops_count)).replace('{m}', String(durata))}
+                  </p>
+                  {o && (
+                    <p className={`text-[11px] font-black truncate ${o.chiuso ? 'text-amber-700' : 'text-emerald-700'}`}>
+                      {o.chiuso ? t('mv_closed_now') : t('mv_open_until').replace('{h}', o.chiude)}
+                    </p>
+                  )}
+                </div>
+                {avviandoProssimo === m.venue_key ? <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" /> : <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  /**
    * Ascolta l'audioguida dettagliata di UNA tappa: la chiede al server la
    * prima volta (poi resta in cache lato server per tutti) e la legge con la
    * voce della guida. Un secondo tocco la ferma.
@@ -699,6 +801,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                 </div>
               </div>
             ))}
+            {/* E POI? I musei a piedi da qui, per chi ha ancora mezza giornata */}
+            {renderEPoi()}
           </div>
           <div className="px-5 pb-5 pt-2 flex gap-2 shrink-0">
             <button
@@ -816,6 +920,28 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 pb-4">
+          {/* LE SALE CHIUSE OGGI (12/09/2026): l'avviso del sito, e quante
+              opere del percorso non si vedono — detto qui, non davanti alla
+              porta chiusa. */}
+          {testoSaleChiuse && (
+            <div className="px-3.5 py-3 rounded-2xl border-2 border-amber-400 bg-amber-50 mb-3">
+              <p className="text-[12px] font-black text-amber-900 flex items-start gap-1.5 leading-snug">
+                <DoorOpen className="w-4 h-4 shrink-0 mt-px" />
+                <span>{t('mv_closed_rooms_today').replace('{s}', testoSaleChiuse)}</span>
+              </p>
+              {chiuseOggi > 0 && (
+                <p className="text-[11px] font-bold text-amber-800 mt-1">{t('mv_closed_rooms_hit').replace('{n}', String(chiuseOggi))}</p>
+              )}
+            </div>
+          )}
+
+          {/* E POI? A visita finita, i musei a piedi da qui */}
+          {visitaCompleta && prossimi && prossimi.length > 0 && (
+            <div className="px-3.5 py-3 rounded-2xl bg-white border border-slate-200 mb-3 -mt-0.5">
+              {renderEPoi()}
+            </div>
+          )}
+
           {/* DOMANI (11/09/2026): la sera prima in hotel, una riga sola che
               risponde alla domanda vera — è aperto? a che ora? quanto costa?
               Solo quello che il sito ufficiale dice, con la data in cui lo
@@ -1295,6 +1421,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         è esposta — e potrebbe essere in deposito o in prestito. */}
                     {tappa.vistaInPassato && !done && (
                       <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-1 flex items-center gap-1"><Check className="w-3 h-3" />{t('mv_seen_before')}</p>
+                    )}
+                    {tappa.chiusaOggi && !done && (
+                      <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1 flex items-center gap-1"><DoorOpen className="w-3 h-3" />{t('mv_room_closed_badge')}</p>
                     )}
                     {tappa.affollata && !done && (
                       <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1 flex items-center gap-1">

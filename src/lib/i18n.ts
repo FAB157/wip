@@ -156,6 +156,22 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // Le sale chiuse oggi, incrociate col percorso.
+  mv_closed_rooms_today: {
+    IT: "Oggi chiuse: {s}", EN: "Closed today: {s}", FR: "Fermées aujourd'hui : {s}", ES: "Hoy cerradas: {s}",
+    DE: "Heute geschlossen: {s}", RU: "Сегодня закрыто: {s}", ZH: "今日关闭：{s}",
+  },
+  mv_closed_rooms_hit: {
+    IT: "{n} opere del percorso non si vedono: le ho tolte", EN: "{n} works on the route can't be seen: I've taken them out",
+    FR: "{n} œuvres du parcours ne se voient pas : je les ai retirées", ES: "{n} obras del recorrido no se ven: las he quitado",
+    DE: "{n} Werke des Rundgangs sind nicht zu sehen: herausgenommen", RU: "{n} произведений маршрута недоступны: убрал их", ZH: "路线中有 {n} 件看不到：已移除",
+  },
+  mv_room_closed_badge: { IT: "Sala chiusa oggi", EN: "Room closed today", FR: "Salle fermée aujourd'hui", ES: "Sala cerrada hoy", DE: "Saal heute geschlossen", RU: "Зал сегодня закрыт", ZH: "今日展厅关闭" },
+  // «E poi?»: i musei a piedi da qui.
+  mv_next_museum: { IT: "E poi? A piedi da qui", EN: "What next? On foot from here", FR: "Et après ? À pied d'ici", ES: "¿Y luego? A pie desde aquí", DE: "Und dann? Zu Fuß von hier", RU: "А дальше? Пешком отсюда", ZH: "接下来？从这里步行" },
+  mv_next_museum_line: { IT: "{d} · {n} opere · {m} min", EN: "{d} · {n} works · {m} min", FR: "{d} · {n} œuvres · {m} min", ES: "{d} · {n} obras · {m} min", DE: "{d} · {n} Werke · {m} Min", RU: "{d} · {n} произведений · {m} мин", ZH: "{d} · {n} 件 · {m} 分钟" },
+  mv_open_until: { IT: "aperto fino alle {h}", EN: "open until {h}", FR: "ouvert jusqu'à {h}", ES: "abierto hasta las {h}", DE: "geöffnet bis {h}", RU: "открыто до {h}", ZH: "开放至 {h}" },
+  mv_closed_now: { IT: "oggi chiuso", EN: "closed today", FR: "fermé aujourd'hui", ES: "hoy cerrado", DE: "heute geschlossen", RU: "сегодня закрыто", ZH: "今日闭馆" },
   // Seconda visita: sei già stato qui.
   mv_been_here: {
     IT: "Sei già stato qui il {d}: avevi visto {n} opere", EN: "You were here on {d}: you saw {n} works", FR: "Tu es déjà venu le {d} : tu avais vu {n} œuvres",

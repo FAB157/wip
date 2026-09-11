@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Compass, X, MapPin, CameraOff, Loader2 } from 'lucide-react';
+import { Compass, X, MapPin, CameraOff, Loader2, List, Camera } from 'lucide-react';
 import { calculateDistance, calculateBearing, lowPassFilter } from '../lib/arMath';
 import { supabase } from '../lib/supabase';
 import { locationService } from '../services/locationService';
@@ -29,6 +29,15 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
   // reali. Se manca (sensore assente, permesso negato, tap su "Salta") l'AR
   // deve passare a 360° e mostrare TUTTI i POI attorno, non solo ±45° da Nord.
   const [compassAvailable, setCompassAvailable] = useState(false);
+  // LISTA E RADAR 2D COME OPZIONE (12/09/2026). La vista dall'alto con
+  // l'elenco dei più vicini era solo il ripiego senza fotocamera; il
+  // committente la vuole anche con la fotocamera accesa: in piazza, col sole
+  // sullo schermo, si legge meglio di un'etichetta sopra il video. Un tasto
+  // in testata la accende, un tasto in fondo riporta alla fotocamera. Senza
+  // fotocamera resta obbligata, con «Riprova» per chiedere di nuovo il
+  // permesso.
+  const [vistaRadar, setVistaRadar] = useState(false);
+  const [tentativoCamera, setTentativoCamera] = useState(0);
 
   const headingRef = useRef(0);
   const lastRenderedHeadingRef = useRef(0);
@@ -168,11 +177,11 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
     }
   }, []);
 
+  // 1. Avvia la fotocamera. Effetto a sé: «Riprova» la richiede di nuovo
+  //    senza rifare GPS e bussola.
   useEffect(() => {
     let activeStream: MediaStream | null = null;
-    let cleanupOrientation: (() => void) | null = null;
-    
-    // 1. Avvia la fotocamera
+    let vivo = true;
     async function startCamera() {
       setIsLoading(true);
       setCameraError(null);
@@ -186,6 +195,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
         };
 
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (!vivo) { stream.getTracks().forEach(track => track.stop()); return; }
         activeStream = stream;
 
         if (videoRef.current) {
@@ -204,6 +214,16 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
       }
     }
     startCamera();
+    return () => {
+      vivo = false;
+      if (activeStream) {
+        activeStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [tentativoCamera]);
+
+  useEffect(() => {
+    let cleanupOrientation: (() => void) | null = null;
 
     // 2. Ottieni posizione GPS e carica POI vicini
     async function initLocation() {
@@ -251,9 +271,6 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
     }
 
     return () => {
-      if (activeStream) {
-        activeStream.getTracks().forEach(track => track.stop());
-      }
       if (cleanupOrientation) {
         cleanupOrientation();
       }
@@ -316,6 +333,15 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
   // Bussola disponibile → FOV ristretto (punta il telefono). Bussola assente,
   // permesso negato o "Salta" → 360° (tutti i POI attorno).
   const effectiveFOV = compassAvailable ? FOV : 360;
+  // Senza fotocamera la vista dall'alto è obbligata; con la fotocamera è
+  // una scelta.
+  const mostraRadar = !!cameraError || vistaRadar;
+  // «nord-est», nella lingua dell'app: l'elenco dice da che parte andare
+  // anche a chi non guarda il disegno.
+  const puntoCardinale = (bearing: number) => {
+    const k = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'][Math.round((((bearing % 360) + 360) % 360) / 45) % 8];
+    return t(`vr_a_dir_${k}`);
+  };
 
   return (
     /* Radar AR nella grafica delle tavole (10/09/2026). Qui sotto scorre il
@@ -327,7 +353,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
     <div className="absolute inset-0 bg-background z-50 overflow-hidden flex flex-col">
       {/* Video Stream Container */}
       <div className="absolute inset-0 z-0">
-        {!cameraError ? (
+        {!cameraError && (
           <video
             ref={videoRef}
             autoPlay
@@ -335,7 +361,8 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             muted
             className="w-full h-full object-cover"
           />
-        ) : (
+        )}
+        {mostraRadar && (
           /* SENZA FOTOCAMERA IL RADAR FUNZIONA LO STESSO (10/09/2026).
              Prima qui c'era un vicolo cieco: icona rossa, «errore» e un tasto
              per tornare indietro — con il GPS acceso, la bussola attiva e i
@@ -345,13 +372,24 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
              attesa · il radar funziona lo stesso»), e questo è quel disegno:
              radar dall'alto, nord in cima, i luoghi alla loro distanza vera,
              e sotto l'elenco dei più vicini che si tocca per aprire la scheda.
-             L'avviso resta, ma come nota in cima e non come muro. */
-          <div className="w-full h-full flex flex-col bg-background overflow-y-auto">
-            {/* Avviso, non bloccante */}
-            <div className="mx-6 mt-4 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 flex items-center gap-2.5 shrink-0">
-              <CameraOff className="w-[18px] h-[18px] text-slate-500 shrink-0" />
-              <p className="flex-1 text-[11px] font-bold text-slate-600 leading-snug">{t('vr_a_ar_camera_error_desc')}</p>
-            </div>
+             L'avviso resta, ma come nota in cima e non come muro.
+             Dal 12/09/2026 è anche una MODALITÀ a scelta (tasto in testata):
+             sta sopra il video, che continua a scorrere sotto per tornarci
+             senza richiedere la fotocamera. */
+          <div className="absolute inset-0 flex flex-col bg-background overflow-y-auto pt-[92px]">
+            {/* Avviso, non bloccante, con «Riprova»: solo quando la fotocamera manca davvero */}
+            {cameraError && (
+              <div className="mx-6 px-3 py-2.5 rounded-2xl bg-white border border-gray-200 flex items-center gap-2.5 shrink-0">
+                <CameraOff className="w-[18px] h-[18px] text-slate-500 shrink-0" />
+                <p className="flex-1 text-[11px] font-bold text-slate-600 leading-snug">{t('vr_a_ar_camera_waiting')}</p>
+                <button
+                  onClick={() => setTentativoCamera(n => n + 1)}
+                  className="text-[11px] font-black text-primary shrink-0 px-1 py-1 active:scale-95 transition-transform"
+                >
+                  {t('vr_a_ar_retry')}
+                </button>
+              </div>
+            )}
 
             {/* Radar dall'alto: 2 km di raggio, nord in cima */}
             {(() => {
@@ -397,18 +435,26 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
               );
             })()}
 
-            {/* I più vicini: si tocca e si apre la scheda, come nella tavola */}
+            {/* I più vicini: si tocca e si apre la scheda, come nella tavola.
+                Sotto il nome: categoria · punto cardinale · audioguida pronta. */}
             <div className="px-6 pb-8 pt-3 flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-[0.08em] text-slate-500">{t('vr_a_ar_nearest')}</span>
-                <span className="text-[10px] font-black text-slate-500">{pois.length}</span>
+                <span className="text-[10px] font-black text-slate-500">{t('vr_a_ar_within').replace('{n}', String(pois.length))}</span>
               </div>
               {(pois || [])
-                .map((p: any) => ({ p, d: gps ? calculateDistance(gps.lat, gps.lon, Number(p.lat), Number(p.lon)) : Infinity }))
+                .map((p: any) => ({ p, d: gps ? calculateDistance(gps.lat, gps.lon, Number(p.lat), Number(p.lon)) : Infinity, b: gps ? calculateBearing(gps.lat, gps.lon, Number(p.lat), Number(p.lon)) : 0 }))
                 .filter((x: any) => Number.isFinite(x.d))
                 .sort((a: any, b: any) => a.d - b.d)
                 .slice(0, 12)
-                .map(({ p, d }: any) => (
+                .map(({ p, d, b }: any) => {
+                  const categoria = String(p.category || p.categoria || '').replace(/_/g, ' ');
+                  const sotto = [
+                    categoria ? categoria.charAt(0).toUpperCase() + categoria.slice(1) : '',
+                    puntoCardinale(b),
+                    (p.audioguide_text || p.summary || p.description_long || p.has_audioguide) ? t('vr_a_ar_audio_ready') : '',
+                  ].filter(Boolean).join(' · ');
+                  return (
                   <button
                     key={p.id}
                     onClick={() => onPoiClick(p)}
@@ -417,26 +463,37 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
                     {p.photo_url || p.image_url ? (
                       <img src={p.photo_url || p.image_url} alt="" loading="lazy" className="w-10 h-10 rounded-full object-cover border border-gray-200 shrink-0" />
                     ) : (
-                      <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-                        <MapPin className="w-[18px] h-[18px] text-primary" />
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${p.is_gem ? 'bg-amber-50' : 'bg-blue-50'}`}>
+                        <MapPin className={`w-[18px] h-[18px] ${p.is_gem ? 'text-amber-600' : 'text-primary'}`} />
                       </div>
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-[13px] font-black text-slate-900 truncate">{p.nome || p.name || 'POI'}</p>
-                      <p className="text-[11px] font-bold text-slate-500 truncate">{p.category || p.categoria || ''}</p>
+                      <p className={`text-[11px] font-bold truncate ${p.is_gem ? 'text-amber-700' : 'text-slate-500'}`}>{sotto}</p>
                     </div>
-                    <span className="px-2.5 py-1.5 rounded-full bg-primary text-white text-[11px] font-black shrink-0">
-                      {d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`}
+                    <span className={`px-2.5 py-1.5 rounded-full text-[11px] font-black shrink-0 ${d < 300 ? 'bg-primary text-white' : d < 1000 ? 'bg-blue-50 text-primary' : 'bg-amber-50 text-amber-700'}`}>
+                      {d >= 1000 ? `${(d / 1000).toFixed(1).replace('.', ',')} km` : `${Math.round(d)} m`}
                     </span>
                   </button>
-                ))}
+                  );
+                })}
+
+              {/* Con la fotocamera disponibile si torna al video da qui */}
+              {!cameraError && (
+                <button
+                  onClick={() => setVistaRadar(false)}
+                  className="mt-3 w-full py-3.5 rounded-2xl bg-white border border-primary/40 text-primary text-[13px] font-black flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+                >
+                  <Camera className="w-4 h-4" />{t('vr_a_ar_view_camera')}
+                </button>
+              )}
             </div>
           </div>
         )}
       </div>
 
       {/* Loading State */}
-      {isLoading && !cameraError && (
+      {isLoading && !cameraError && !vistaRadar && (
         <div className="absolute inset-0 z-40 bg-background flex flex-col items-center justify-center">
           <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
           <p className="text-slate-500 text-xs font-black uppercase tracking-widest">{t('vr_a_ar_init')}</p>
@@ -453,12 +510,28 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
             Radar AR
           </h2>
           <p className="text-[11px] text-slate-500 font-bold">
-            {t('vr_a_ar_compass')}: {Math.round(heading)}° | POI: {pois.length}
+            {mostraRadar
+              ? `${cameraError ? t('vr_a_ar_camera_waiting_short') : t('vr_a_ar_radar_2d')} · ${compassAvailable ? t('vr_a_ar_compass_on') : t('vr_a_ar_compass_off')}`
+              : `${t('vr_a_ar_compass')}: ${Math.round(heading)}° | POI: ${pois.length}`}
           </p>
         </div>
-        <button onClick={onClose} className="w-10 h-10 bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-full flex items-center justify-center text-slate-900 shrink-0">
-          <X className="w-6 h-6" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Lista e radar 2D ↔ fotocamera: solo quando la fotocamera c'è
+              (senza, la lista è l'unica vista e il tasto non serve). */}
+          {!cameraError && (
+            <button
+              onClick={() => setVistaRadar(v => !v)}
+              aria-label={vistaRadar ? t('vr_a_ar_view_camera') : t('vr_a_ar_view_radar')}
+              aria-pressed={vistaRadar}
+              className={`w-10 h-10 border shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-full flex items-center justify-center ${vistaRadar ? 'bg-primary border-primary text-white' : 'bg-white border-gray-200 text-slate-900'}`}
+            >
+              {vistaRadar ? <Camera className="w-5 h-5" /> : <List className="w-5 h-5" />}
+            </button>
+          )}
+          <button onClick={onClose} aria-label="close" className="w-10 h-10 bg-white border border-gray-200 shadow-[0_1px_3px_rgba(15,23,42,0.08)] rounded-full flex items-center justify-center text-slate-900">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
       </div>
 
       {/* Modal consenso iOS bussola */}
@@ -529,7 +602,7 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
 
       {/* ─── Rendering dei POI (Pin fluttuanti) ─────────────────────────────── */}
       {/* Mostriamo i POI appena GPS disponibile, indipendentemente dalla bussola */}
-      {gps && pois.length > 0 && (() => {
+      {gps && pois.length > 0 && !mostraRadar && (() => {
         const currentFOV = effectiveFOV;
 
         // 1. Proietta i POI nel campo visivo corrente
