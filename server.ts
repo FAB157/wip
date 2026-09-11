@@ -6855,6 +6855,30 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   }
 
   /**
+   * P31 SU WIKIPEDIA/WIKIDATA: MUSEO O EDIFICIO? (12/09/2026, trovato dalla
+   * semina: "Palazzo del Louvre" batteva "Musée du Louvre" nella ricerca
+   * Wikipedia — nomi quasi identici, ma una voce parla dell'edificio e
+   * l'altra della collezione. Si usa SOLO per spareggiare candidati vicini
+   * in punteggio: quando l'etichetta inglese della classe (P31) contiene
+   * "museum"/"gallery" il candidato sale, quando contiene "palace"/
+   * "building"/"castle" scende. Nessuna chiamata se non serve.
+   */
+  async function classeWikidata(qid: string): Promise<{ museo: boolean; edificio: boolean }> {
+    if (!/^Q\d+$/.test(qid)) return { museo: false, edificio: false };
+    try {
+      const c = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`, { timeout: 5000 });
+      const ids: string[] = (c.data?.claims?.P31 || []).map((x: any) => x.mainsnak?.datavalue?.value?.id).filter(Boolean);
+      if (!ids.length) return { museo: false, edificio: false };
+      const e = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${ids.slice(0, 10).join('|')}&props=labels&languages=en&format=json`, { timeout: 5000 });
+      const labels: string[] = Object.values(e.data?.entities || {}).map((x: any) => String(x?.labels?.en?.value || '').toLowerCase());
+      return {
+        museo: labels.some(l => /museum|art gallery|art collection/.test(l)),
+        edificio: labels.some(l => /\b(palace|building|château|chateau|castle|manor|villa|residence)\b/.test(l)),
+      };
+    } catch { return { museo: false, edificio: false }; }
+  }
+
+  /**
    * OPERE VERE del museo da Wikidata (P195 "collezione"), ordinate per
    * notorietà (numero di lingue in cui esiste la voce): è l'elenco più
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
@@ -7920,6 +7944,16 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           }
           if (!candidati.length) continue;
           candidati.sort((a, b) => (b.punteggio - a.punteggio) || (a.dist - b.dist));
+          // SPAREGGIO MUSEO vs EDIFICIO (12/09/2026): quando i primi due sono
+          // vicini in punteggio ("Museo del Louvre" e "Palazzo del Louvre"
+          // hanno quasi lo stesso nome), si chiede a Wikidata di cosa parla
+          // davvero ciascuna voce prima di scegliere.
+          if (candidati.length > 1 && (candidati[0].punteggio - candidati[1].punteggio) < 20) {
+            const primi = candidati.slice(0, 3);
+            const classi = await Promise.all(primi.map(c => classeWikidata(String(c.page?.pageprops?.wikibase_item || ''))));
+            primi.forEach((c, i) => { c.punteggio += (classi[i].museo ? 15 : 0) - (classi[i].edificio && !classi[i].museo ? 15 : 0); });
+            candidati.sort((a, b) => (b.punteggio - a.punteggio) || (a.dist - b.dist));
+          }
           const vinto = candidati[0];
           if (candidati.length > 1) {
             console.log(`[VenueGuide] "${venue.name}" → scelto "${vinto.h.title}" fra ${candidati.length} candidati (scartati: ${candidati.slice(1).map(c => c.h.title).join(', ')})`);
@@ -7953,10 +7987,20 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // sua pala d'altare, ce l'ha dentro). Il nostro dato vale più della
       // risposta del modello — il Duomo di Firenze usciva classificato museo.
       const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
+      // SITO ARCHEOLOGICO O MONUMENTO (12/09/2026, trovato dalla semina):
+      // il Colosseo e Santa Sofia non hanno "opere in sale" — la guida li
+      // scartava per insufficienza di tappe mentre il vero problema era il
+      // prompt, tarato solo su museo/chiesa. Non è un museo (niente "opere
+      // censite" da Wikidata) né una chiesa; è un percorso fatto di settori,
+      // ambienti ed elementi architettonici.
+      const isSito = !isChurch && /anfiteatr|amphitheat|colosseo|colosseum|arena romana|rovine|ruins|sito archeologic|archaeological site|\bforo\b|\bforum\b|acropoli|acropolis|terme di|thermae|baths of|necropoli|necropolis|scavi di|excavations of|piramid|pyramid|mura di|city walls|ipogeo|catacomb/i.test(`${venue.category} ${venue.name}`);
       const [opereWd, sitoOut] = await Promise.all([
         // Senza QID la forma resta completa: più sotto si legge `.titoli`,
         // `.originali` e `.famose`, e un oggetto a metà farebbe cadere tutto.
-        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[], tipi: {} as Record<string, 'dipinto' | 'scultura' | 'altro'> }),
+        // Un sito archeologico non "possiede" opere via P195 (quella query è
+        // per collezioni museali) — si salta, niente da guadagnare e una
+        // chiamata lenta in meno (opereDaWikidata va spesso in timeout).
+        (wikidataId && !isSito) ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[], tipi: {} as Record<string, 'dipinto' | 'scultura' | 'altro'> }),
         (async () => {
           let sito = '';
           if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
@@ -8008,14 +8052,14 @@ MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):
 ${materiale}
 """
 
-COMPITO: scegli le ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani o navate se il materiale la descrive; altrimenti l'ordine cronologico delle opere. Se l'opera "${currentWork || ''}" è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
+COMPITO: scegli ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : isSito ? '6-15 PUNTI DI INTERESSE del percorso di visita — settori, ambienti, strutture ed elementi architettonici del sito (arena, ipogei, cavea, gradinate, porte, templi, terme, mosaici, are, iscrizioni, reperti visibili in loco), mai opere da museo con sale numerate' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani, navate${isSito ? ', settori o il percorso di visita consigliato' : ''} se il materiale la descrive; altrimenti l'ordine cronologico${isSito ? ' o quello logico del percorso (dall\'ingresso verso l\'uscita)' : ' delle opere'}. Se l'opera "${currentWork || ''}" è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
 REGOLE TASSATIVE:
-- SOLO OPERE PRINCIPALI E FAMOSE: il percorso è fatto dei capolavori per cui questo luogo è conosciuto, mai di pezzi minori messi lì per allungare l'elenco. Se le opere famose citate dal materiale sono meno di quante ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 20 di cui 14 dimenticabili.
-- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione.
-- Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (sala, piano, ala, navata, cappella). È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota. Se il materiale dà il piano ma non la sala, scrivi il piano.
-- Il campo "puntoPreciso": DOVE DENTRO LA SALA, se il materiale lo dice — "parete di fondo", "prima campata a destra", "sopra l'altare", "in fondo alla galleria, dopo la scalinata", "vetrina centrale". In una sala del Louvre con ottanta quadri il numero della sala non fa trovare niente: è questo che porta il visitatore davanti all'opera. Solo se il materiale lo dichiara, altrimenti "". Non dedurlo e non inventarlo mai.
-- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
-- Ogni tappa deve essere un'opera, una sala o un elemento NOMINATO ESPLICITAMENTE nel materiale. Niente opere che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
+- SOLO ${isSito ? 'I PUNTI PRINCIPALI PER CUI QUESTO SITO È CONOSCIUTO' : 'OPERE PRINCIPALI E FAMOSE'}: il percorso è fatto dei ${isSito ? 'luoghi' : 'capolavori'} per cui questo luogo è conosciuto, mai di dettagli minori messi lì per allungare l'elenco. Se quelli citati dal materiale sono meno di quanti ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 15 di cui 9 dimenticabili.
+${isSito ? '' : `- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione.
+`}- Il campo "dove" si compila SOLO con quello che dicono il sito ufficiale o Wikipedia (${isSito ? 'settore, livello, area' : 'sala, piano, ala, navata, cappella'}). È la cosa più preziosa per chi cammina: cercala nel materiale prima di lasciarla vuota. Se il materiale dà il piano ma non la sala, scrivi il piano.
+- Il campo "puntoPreciso": DOVE DENTRO ${isSito ? 'IL SETTORE' : 'LA SALA'}, se il materiale lo dice — "parete di fondo", "prima campata a destra", "sopra l'altare", "in fondo alla galleria, dopo la scalinata", "vetrina centrale"${isSito ? ', "livello inferiore dell\'arena", "lato nord della cavea"' : ''}. In una sala del Louvre con ottanta quadri il numero della sala non fa trovare niente: è questo che porta il visitatore davanti all'opera. Solo se il materiale lo dichiara, altrimenti "". Non dedurlo e non inventarlo mai.
+${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
+`}- Ogni tappa deve essere ${isSito ? 'un elemento, una struttura o un\'area' : 'un\'opera, una sala o un elemento'} NOMINATO ESPLICITAMENTE nel materiale. Niente ${isSito ? 'elementi' : 'opere'} che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
 - "nomeFonte": il titolo dell'opera ESATTAMENTE come compare nel materiale, carattere per carattere, in qualunque lingua sia. È il titolo con cui l'opera si ritrova in rete e sul cartellino: non si tocca mai.
 - "nome": il titolo nella lingua di uscita (${langCfg.name}). Se l'opera ha un titolo consolidato in quella lingua, usa quello. Se nel materiale il titolo è in un'altra lingua ed è DESCRITTIVO ("stained-glass windows of the cathedral", "portrait of a young man"), traducilo. Se è un titolo proprio senza equivalente noto, lascialo identico a "nomeFonte". Mai inventare titoli.
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
@@ -8026,7 +8070,7 @@ ${regolaSpecificita(venue.name)}
 
 LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo attorno:
 {
-  "tipo": "${isChurch ? 'chiesa' : 'museo'}" oppure "sito",
+  "tipo": "${isChurch ? 'chiesa' : isSito ? 'sito' : 'museo'}",
   "intro": "...",
   "consiglio": "...",
   "servizi": { "bagni": "... o ''", "guardaroba": "... o ''", "caffetteria": "... o ''", "bookshop": "... o ''", "uscita": "... o ''", "accessibilita": "... o ''" },
@@ -8335,10 +8379,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           for (const k of Object.keys(voci)) if (conteggio[normalizzaTesto(voci[k])] > 1) delete voci[k];
           return Object.keys(voci).length ? { servizi: voci } : {};
         })(),
-        // Se il luogo È una chiesa lo sappiamo noi dalla categoria e dal nome,
-        // e vale più della risposta del modello: il Duomo di Firenze usciva
-        // classificato «museo» e la scheda mostrava l'icona sbagliata.
-        tipo: isChurch ? 'chiesa' : (['museo', 'chiesa', 'sito'].includes(String(parsed?.tipo)) ? String(parsed.tipo) : 'museo'),
+        // Se il luogo È una chiesa o un sito lo sappiamo noi dalla categoria
+        // e dal nome, e vale più della risposta del modello: il Duomo di
+        // Firenze usciva classificato «museo» e la scheda mostrava l'icona
+        // sbagliata.
+        tipo: isChurch ? 'chiesa' : isSito ? 'sito' : (['museo', 'chiesa', 'sito'].includes(String(parsed?.tipo)) ? String(parsed.tipo) : 'museo'),
         intro: String(parsed?.intro || '').trim().slice(0, 900),
         consiglio: String(parsed?.consiglio || '').trim().slice(0, 400),
         tappe: tappeConFoto,
