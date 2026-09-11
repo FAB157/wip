@@ -192,15 +192,31 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
 
   // ── 1. IL MUSEO E LE SUE PARTI ──────────────────────────────────────────
   let t0 = Date.now();
-  const righeMuseo = await sparql(`SELECT ?parte ?sito WHERE {
+  const righeMuseo = await sparql(`SELECT ?parte ?sito ?nome WHERE {
     { ?parte wdt:P361+ wd:${qidMuseo} . } UNION { wd:${qidMuseo} wdt:P856 ?sito . }
+    UNION { wd:${qidMuseo} rdfs:label ?nome . FILTER(LANG(?nome) IN ("${lang}", "en")) }
   } LIMIT 400`, 12000) || [];
   const parti = new Set<string>([qidMuseo]);
   let sito = '';
+  const nomiLuogo: string[] = [];
   for (const r of righeMuseo) {
     if (r.parte) parti.add(ultimo(r.parte.value));
     if (r.sito && !sito) sito = r.sito.value;
+    if (r.nome?.value) nomiLuogo.push(r.nome.value);
   }
+  // «Passion Facade of the Sagrada Família» → «Passion Facade»; «Grandi organi
+  // della cattedrale di Notre-Dame a Parigi» → «Grandi organi»: dentro la
+  // guida di quel luogo il suo nome in coda è rumore.
+  const senzaNomeLuogo = (t: string): string => {
+    const basso = t.toLowerCase();
+    for (const n of nomiLuogo) {
+      const i = basso.indexOf(n.toLowerCase());
+      if (i <= 0) continue;
+      const prima = t.slice(0, i).replace(/\s+(of the|of|de la|de l'|du|des|de|della|dello|dell'|del|dei|degli|delle|di|der|des|von|van)\s*$/i, '').trim();
+      if (prima.length >= 4 && prima.length < t.length) return prima.charAt(0).toUpperCase() + prima.slice(1);
+    }
+    return t;
+  };
   const dominio = sito ? dominioBase(sito) : '';
   ms.museo = Date.now() - t0;
   const valoriParti = [...parti].slice(0, 300).map(q => `wd:${q}`).join(' ');
@@ -347,7 +363,11 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     if (eventi.has(q)) { escluse.push({ qid: q, titolo, motivo: 'evento, organizzazione o gruppo di persone, non un oggetto da vedere' }); continue; }
     const inCollezione = [...g.coll].some(c => parti.has(c));
     if (g.coll.size && !inCollezione) { escluse.push({ qid: q, titolo, motivo: 'collezione di un altro museo (qui solo come luogo)' }); continue; }
-    if (!inCollezione && fisici && !fisici.has(q)) { escluse.push({ qid: q, titolo, motivo: 'non è un oggetto fisico (concetto, testo, avvenimento)' }); continue; }
+    // Un oggetto con materiale, misure o numero d'inventario è fisico anche se
+    // la sua classe su Wikidata non risale a «oggetto fisico» (a Chartres il
+    // labirinto e l'orologio astronomico restavano fuori per questo).
+    const fisicoPerDati = g.materiali.size > 0 || !!g.alt || !!g.larg || !!g.inv;
+    if (!inCollezione && fisici && !fisici.has(q) && !fisicoPerDati) { escluse.push({ qid: q, titolo, motivo: 'non è un oggetto fisico (concetto, testo, avvenimento)' }); continue; }
     scelte.push(g);
     // Qualche opera in più del necessario: quelle che la fonte ufficiale
     // dirà «non esposte ora» (all'Art Institute 8 su 20: stampe e foto
@@ -364,7 +384,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
       if (luogo !== qidMuseo && parti.has(luogo) && etichetta && !/^Q\d+$/.test(etichetta)) { sala = etichetta; fonteSala = 'wikidata'; break; }
     }
     return {
-      qid: g.qid, titolo: titoloBreve(g.lab || g.labEn, g.voce || g.voceEn), titoloEn: titoloBreve(g.labEn || g.lab, g.voceEn), autore: autori.slice(0, 2).join(', '), anno: g.anno, inv: g.inv,
+      qid: g.qid, titolo: senzaNomeLuogo(titoloBreve(g.lab || g.labEn, g.voce || g.voceEn)), titoloEn: titoloBreve(g.labEn || g.lab, g.voceEn), autore: autori.slice(0, 2).join(', '), anno: g.anno, inv: g.inv,
       tipo: g.tipo, materiale: [...g.materiali].slice(0, 3).join(', '), dimensioni, fama: fama[g.qid] || 0,
       foto: g.img, fonteFoto: g.img ? 'P18' : '',
       voce: g.voce ? { lingua: lang, titolo: g.voce, url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(g.voce.replace(/ /g, '_'))}` }
