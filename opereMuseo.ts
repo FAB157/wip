@@ -198,6 +198,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     { ?parte wdt:P361+ wd:${qidMuseo} . } UNION { wd:${qidMuseo} wdt:P856 ?sito . }
     UNION { wd:${qidMuseo} rdfs:label ?nome . FILTER(LANG(?nome) IN ("${lang}", "en")) }
     UNION { wd:${qidMuseo} wdt:P361|wdt:P749 ?ente . }
+    UNION { ?ospite wdt:P276|wdt:P361 wd:${qidMuseo} . }
   } LIMIT 400`, 12000) || [];
   const parti = new Set<string>([qidMuseo]);
   // L'ENTE DI CUI IL MUSEO FA PARTE (12/09/2026): alla Tate Modern le opere
@@ -210,6 +211,13 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
   const nomiLuogo: string[] = [];
   for (const r of righeMuseo) {
     if (r.parte) parti.add(ultimo(r.parte.value));
+    // LA COLLEZIONE OSPITATA DENTRO IL LUOGO (12/09/2026): al Centre Pompidou
+    // 274 delle 322 opere esposte appartengono al «Musée National d'Art
+    // Moderne», che ha sede lì dentro; senza questo il Pompidou usciva senza
+    // una sola opera e l'AI riempiva con tappe generiche («Opere di Picasso»).
+    // Diverso dal prestito (Arazzo di Bayeux): lì il proprietario ha sede
+    // altrove, qui la collezione È di casa.
+    if (r.ospite) parti.add(ultimo(r.ospite.value));
     if (r.ente) antenati.add(ultimo(r.ente.value));
     if (r.sito && !sito) sito = r.sito.value;
     if (r.nome?.value) nomiLuogo.push(r.nome.value);
