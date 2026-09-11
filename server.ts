@@ -9019,10 +9019,51 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
       if (!museo) return res.status(400).json({ ok: false, reason: 'venueName richiesto' });
 
-      const cacheKey = `museum_ticket:v1:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      // LE FASCE ORARIE (12/09/2026, richiesta del committente): per un
+      // biglietto Tiqets si chiede la disponibilità di domani — «alle 8:15
+      // ci sono posti, alle 11 è esaurito». Il biglietto scelto resta in
+      // cache 24 h; le fasce si chiedono ogni volta (cambiano di ora in ora)
+      // e non bloccano mai la risposta: senza, resta il tasto di prima.
+      const tiqetsKey = process.env.TIQETS_API_KEY || process.env.VITE_TIQETS_API_KEY;
+      const fasceDi = async (productId: string): Promise<{ data: string; fasce: { ora: string; posti: boolean }[] } | null> => {
+        if (!tiqetsKey || !productId || !/^[\w-]{1,40}$/.test(productId)) return null;
+        const domani = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        try {
+          const r = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(productId)}/availability`, {
+            params: { start_date: domani, end_date: domani, lang },
+            headers: { Authorization: `Token ${tiqetsKey}`, Accept: 'application/json' },
+            timeout: 6000,
+          });
+          // Forma difensiva: la prima volta si scrive nel log com'è fatta.
+          const d = r.data;
+          console.log('[BigliettoIngresso] disponibilità Tiqets:', JSON.stringify(d).slice(0, 600));
+          const giorni: any[] = d?.availability || d?.data?.availability || d?.dates || d?.data || (Array.isArray(d) ? d : []);
+          const giorno = (Array.isArray(giorni) ? giorni : []).find((g: any) => String(g?.date || g?.day || '').slice(0, 10) === domani) || (Array.isArray(giorni) ? giorni[0] : null);
+          const slot: any[] = giorno?.timeslots || giorno?.slots || giorno?.times || giorno?.time_slots || [];
+          const fasce = (Array.isArray(slot) ? slot : [])
+            .map((s: any) => {
+              const ora = String(s?.start_time || s?.time || s?.start || s?.label || '').match(/\d{1,2}:\d{2}/)?.[0] || '';
+              const posti = s?.available !== false && s?.is_available !== false && s?.sold_out !== true && (s?.remaining === undefined || Number(s.remaining) > 0);
+              return ora ? { ora, posti } : null;
+            })
+            .filter(Boolean)
+            .slice(0, 16) as { ora: string; posti: boolean }[];
+          if (!fasce.length && giorno && (giorno.available === false || giorno.sold_out === true)) return { data: domani, fasce: [] };
+          return fasce.length ? { data: domani, fasce } : null;
+        } catch (e: any) {
+          console.warn('[BigliettoIngresso] disponibilità non letta:', e?.response?.status || e?.message);
+          return null;
+        }
+      };
+
+      const cacheKey = `museum_ticket:v2:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
       const inCache = await getFromCache(cacheKey, 'museum_ticket', 24 * 60 * 60 * 1000);
       if (inCache) {
-        try { const p = JSON.parse(inCache); return res.json({ ok: true, cached: true, ticket: p.ticket || null }); } catch { /* si rigenera */ }
+        try {
+          const p = JSON.parse(inCache);
+          const disponibilita = p?.ticket?.fonte === 'tiqets' && p?.ticket?.id ? await fasceDi(String(p.ticket.id)) : null;
+          return res.json({ ok: true, cached: true, ticket: p.ticket ? { ...p.ticket, disponibilita } : null });
+        } catch { /* si rigenera */ }
       }
 
       const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([
@@ -9051,7 +9092,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const prezzoNum = (s: string): number => { const m = String(s || '').replace(',', '.').match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : Number.POSITIVE_INFINITY; };
 
       const candidati = [
-        ...tiqets.map((p: any) => ({ fonte: 'tiqets', titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
+        ...tiqets.map((p: any) => ({ fonte: 'tiqets', id: String(p.id || ''), titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
         ...viator.map((p: any) => ({ fonte: 'viator', titolo: String(p.title || p.name || ''), descrizione: String(p.description || p.shortDescription || '').slice(0, 240), prezzo: String(p.price || p.fromPrice || ''), url: String(p.url || p.productUrl || p.webURL || '') })),
         ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), descrizione: '', prezzo: '', url: String(p.url || '') })),
       ]
@@ -9061,11 +9102,12 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         // Il più economico con un prezzo; a parità Tiqets, che vende ingressi.
         .sort((a, b) => (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)) || (a.fonte === 'tiqets' ? -1 : 1));
 
-      const scelto = candidati[0] || null;
+      const scelto: any = candidati[0] || null;
       const ticket = scelto ? { ...scelto, descrizione: undefined, url: `/api/out?src=${encodeURIComponent(scelto.fonte)}&url=${encodeURIComponent(scelto.url)}` } : null;
       await saveToCache(cacheKey, 'museum_ticket', JSON.stringify({ ticket }));
+      const disponibilita = ticket?.fonte === 'tiqets' && ticket?.id ? await fasceDi(String(ticket.id)) : null;
       res.set('Cache-Control', 'private, max-age=600');
-      res.json({ ok: true, ticket });
+      res.json({ ok: true, ticket: ticket ? { ...ticket, disponibilita } : null });
     } catch (e: any) {
       console.warn('[BigliettoIngresso] Errore:', e?.message);
       res.json({ ok: true, ticket: null });
@@ -9080,6 +9122,99 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
    * nessuna generazione: chi non trova nulla qui chiede /venue-guide, che la
    * crea al volo e la deposita in libreria per chi verrà dopo.
    */
+  /**
+   * INQUADRA IL CARTELLINO (12/09/2026, richiesta del committente).
+   *
+   * Nei musei le didascalie sono quasi sempre solo nella lingua del posto.
+   * Si inquadra il cartellino dell'opera: si legge quello che c'è scritto,
+   * si traduce nella lingua dell'utente, e con titolo e autore l'app
+   * aggancia l'audioguida (percorso o /artwork-guide). Funziona in
+   * QUALUNQUE museo, anche dove non abbiamo la guida. Come la targa della
+   * sala: si legge e basta, non si racconta, non si consuma il pass.
+   * Motori gratuiti con visione per primi, riserva pagante se tacciono.
+   */
+  app.post("/api/museums/read-label", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const imageBase64 = String(req.body?.imageBase64 || '');
+      if (!imageBase64 || imageBase64.length < 100) return res.status(400).json({ error: 'immagine_mancante' });
+      const langKey = String(req.body?.language || 'IT').toUpperCase().slice(0, 2);
+      const outLang = GUIDA_LINGUE[langKey] ? langKey : 'IT';
+      const museo = String(req.body?.venueName || '').trim().slice(0, 160);
+
+      const prompt = `Guarda questa foto scattata in un museo${museo ? ` (${museo})` : ''}. Cerca il CARTELLINO DELL'OPERA: la didascalia accanto a un quadro, una scultura o un oggetto — titolo, autore, data, tecnica, provenienza, e spesso qualche riga di testo.
+
+REGOLE:
+- Riporta SOLO ciò che è scritto davvero nel cartellino. Non aggiungere quello che sai dell'opera: qui si legge, non si racconta.
+- "titolo", "autore", "anno", "tecnica": come scritti sul cartellino, nella lingua originale. Vuoti se non ci sono.
+- "testoOriginale": tutto il testo leggibile del cartellino nella lingua in cui è scritto, senza ritorni a capo.
+- "traduzione": lo stesso testo tradotto in ${nomeLingua(outLang)}. Se è già in ${nomeLingua(outLang)}, ricopialo.
+- "lingua": codice della lingua del cartellino (it, en, fr, es, de, ja…).
+- "confidenza": 0-100, quanto sei sicuro di aver letto un cartellino d'opera e non un cartello di sala, un pannello di sezione o un divieto.
+
+Rispondi SOLO con JSON: {"trovato": true/false, "titolo": "", "autore": "", "anno": "", "tecnica": "", "testoOriginale": "", "traduzione": "", "lingua": "", "confidenza": 0}`;
+
+      const pulito = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 12000): Promise<T> =>
+        Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
+      let esito: any = null;
+      if (ai?.clients?.length) {
+        try {
+          const g = await conScadenza(tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
+            model: "gemini-3.5-flash-lite",
+            contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: pulito } }] }],
+            config: { responseMimeType: "application/json" }
+          })), 'Gemini (cartellino)');
+          esito = JSON.parse(String(g.text || '{}'));
+        } catch (e: any) {
+          console.warn('[Cartellino] Gemini:', e?.message);
+        }
+      }
+      if (!esito) {
+        const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
+        if (key) {
+          try {
+            const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+              model: 'gpt-4o-mini',
+              messages: [{ role: 'user', content: [
+                { type: 'text', text: prompt },
+                // Testo piccolo: qui serve la risoluzione piena.
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pulito}`, detail: 'high' } },
+              ] }],
+              temperature: 0, max_tokens: 900, response_format: { type: 'json_object' },
+            }, { timeout: 25000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+            esito = JSON.parse(String(r.data?.choices?.[0]?.message?.content || '{}'));
+          } catch (e: any) {
+            console.warn('[Cartellino] riserva fallita:', e?.message);
+          }
+        }
+      }
+      if (!esito || esito.trovato !== true || Number(esito.confidenza || 0) < 50) {
+        return res.json({ ok: false, reason: 'nessun_cartellino' });
+      }
+      const s = (x: any, n: number) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, n);
+      const titolo = s(esito.titolo, 200);
+      const testoOriginale = s(esito.testoOriginale, 1500);
+      if (!titolo && testoOriginale.length < 8) return res.json({ ok: false, reason: 'nessun_cartellino' });
+      res.json({
+        ok: true,
+        titolo,
+        autore: s(esito.autore, 120),
+        anno: s(esito.anno, 40),
+        tecnica: s(esito.tecnica, 120),
+        testoOriginale,
+        traduzione: s(esito.traduzione, 1500),
+        lingua: s(esito.lingua, 5).toLowerCase(),
+        confidenza: Number(esito.confidenza) || 0,
+        language: outLang,
+      });
+    } catch (e: any) {
+      console.error('[Cartellino] Errore:', e?.message);
+      res.status(500).json({ error: 'lettura_fallita' });
+    }
+  });
+
   /**
    * DOVE SONO: IL CARTELLO DELLA SALA (11/09/2026).
    *
@@ -9300,6 +9435,127 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
     } catch (e: any) {
       console.error('[Audiodescrizione] Errore:', e?.message);
       res.status(500).json({ error: 'descrizione_fallita' });
+    }
+  });
+
+  /**
+   * IL CONFRONTO: DUE OPERE, UNA ACCANTO ALL'ALTRA (12/09/2026, richiesta
+   * del committente).
+   *
+   * Una guida vera lo fa di continuo: «la Venere di Botticelli e quella di
+   * Tiziano, cinquant'anni dopo: guarda lo sguardo, il corpo, lo sfondo».
+   * Le coppie le sceglie l'app (stesso autore, stesso soggetto, stessa
+   * epoca); qui si scrive il confronto SOLO dal materiale delle due opere —
+   * l'audioguida già scritta se c'è, altrimenti la voce enciclopedica.
+   * Fa parte del pass come un'opera; scritto una volta, resta per tutti.
+   */
+  app.post("/api/museums/compare", rateLimiter, async (req, res) => {
+    try {
+      const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+      const userId = daScript ? 'background-script' : await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const inDiretta = !daScript;
+      const museo = String(req.body?.venueName || '').trim().slice(0, 160);
+      const leggi = (o: any) => ({
+        nome: String(o?.nome || '').trim().slice(0, 160),
+        nomeFonte: String(o?.nomeFonte || o?.nome || '').trim().slice(0, 160),
+        autore: String(o?.autore || '').trim().slice(0, 120),
+        anno: String(o?.anno || '').trim().slice(0, 40),
+      });
+      const A = leggi(req.body?.a);
+      const B = leggi(req.body?.b);
+      if (!museo || !A.nome || !B.nome) return res.status(400).json({ error: 'dati_mancanti' });
+      const langKey = String(req.body?.language || 'IT').toUpperCase().slice(0, 2);
+      const outLang = GUIDA_LINGUE[langKey] ? langKey : 'IT';
+      const WIKI: Record<string, string> = { IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' };
+
+      let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
+      let usate = 0;
+      if (inDiretta) {
+        pass = await getActiveMuseumPass(userId);
+        if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
+        usate = await countMuseumPassScans(userId, pass.expiresAt);
+      }
+      const chiaveDi = (nome: string) => normalizzaTesto(nome).replace(/ /g, '_').slice(0, 50);
+      const coppia = [chiaveDi(A.nomeFonte), chiaveDi(B.nomeFonte)].sort().join('__');
+      const cacheKey = `museum_compare:v1:${chiaveDi(museo).slice(0, 40)}:${coppia}:${outLang}`;
+      const cached = await getFromCache(cacheKey);
+      if (cached?.text_content) {
+        try {
+          const p = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
+          if (p?.testo) return res.json({ ok: true, ...p, cached: true });
+        } catch { /* si rigenera */ }
+      }
+      if (inDiretta && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+
+      // Il materiale di ciascuna opera: prima l'audioguida già scritta (in
+      // qualunque lingua), poi la voce Wikipedia. Senza materiale per
+      // entrambe non c'è confronto: non si inventa.
+      const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000 };
+      const materialeDi = async (o: { nomeFonte: string; autore: string }): Promise<string> => {
+        const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(o.nomeFonte).replace(/ /g, '_').slice(0, 60)}`;
+        for (const L of [outLang, ...Object.keys(GUIDA_LINGUE).filter(l => l !== outLang)]) {
+          const c = await getFromCache(`artwork_guide:v1:${chiaveOpera}:${L}`);
+          if (!c?.text_content) continue;
+          try {
+            const p = typeof c.text_content === 'string' ? JSON.parse(c.text_content) : c.text_content;
+            if (p?.ok === true && p?.guide?.testo) return String(p.guide.testo).slice(0, 4000);
+          } catch { /* prossima lingua */ }
+        }
+        for (const wl of [...new Set([WIKI[outLang] || 'it', 'en', 'it'])]) {
+          try {
+            const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${o.nomeFonte} ${o.autore || museo}`)}`, ua);
+            for (const h of (s.data?.query?.search || [])) {
+              const sim = Math.max(sovrapposizioneNomi(o.nomeFonte, h.title), sovrapposizioneNomi(h.title, o.nomeFonte));
+              if (sim < 0.6) continue;
+              const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(h.title)}`, ua);
+              const page: any = Object.values(ext.data?.query?.pages || {})[0];
+              const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+              if (testo.length >= 300) return testo.slice(0, 4000);
+            }
+          } catch { /* prossima lingua */ }
+        }
+        return '';
+      };
+      const [mA, mB] = await Promise.all([materialeDi(A), materialeDi(B)]);
+      if (!mA || !mB) return res.json({ ok: false, reason: 'no_source' });
+
+      const prompt = `Sei una guida di museo davanti a due opere di "${museo}", una accanto all'altra:
+A) "${A.nome}"${A.autore ? `, ${A.autore}` : ''}${A.anno ? ` (${A.anno})` : ''}
+B) "${B.nome}"${B.autore ? `, ${B.autore}` : ''}${B.anno ? ` (${B.anno})` : ''}
+
+MATERIALE SU A:
+"""
+${mA}
+"""
+MATERIALE SU B:
+"""
+${mB}
+"""
+
+Scrivi il CONFRONTO che una guida farebbe a voce: 140-190 parole in ${nomeLingua(outLang)}, prosa continua, che dice al visitatore DOVE guardare per vedere la differenza (composizione, sguardi, luce, colore, materia, gesto) e COSA la spiega (anni, committenti, scuola, tecnica). Ogni affermazione deve venire dal materiale: se il materiale non dice una cosa, non dirla. Niente frasi di cerimonia, niente «entrambe sono capolavori». Comincia con l'invito a guardare.
+Rispondi SOLO con JSON: {"testo": "..."}`;
+      let testo = '';
+      try {
+        const ai2 = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.4, max_tokens: 700, response_format: { type: 'json_object' },
+          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: inDiretta,
+        }, 'museum_compare', supabaseUrl, supabaseServiceKey, groq, inDiretta ? userId : undefined);
+        const raw = String(ai2?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        testo = String(JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1))?.testo || '').trim();
+      } catch (e: any) {
+        console.warn('[Confronto] AI fallita:', e?.message);
+        return res.json({ ok: false, reason: 'ai_non_disponibile' });
+      }
+      const parole = testo.split(/\s+/).filter(Boolean).length;
+      if (parole < 60 && testo.length < 220) return res.json({ ok: false, reason: 'no_source' });
+      const payload = { testo, parole, language: outLang, a: A.nome, b: B.nome };
+      await saveToCache(cacheKey, 'museum_compare', JSON.stringify(payload));
+      if (inDiretta && pass) await recordMuseumPassScan(userId, pass.expiresAt, `cmp-${coppia}`.slice(0, 90));
+      res.json({ ok: true, ...payload, cached: false });
+    } catch (e: any) {
+      console.error('[Confronto] Errore:', e?.message);
+      res.status(500).json({ error: 'confronto_fallito' });
     }
   });
 
@@ -9562,6 +9818,9 @@ Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se
           url: urlDelSito(m?.url) || testi[0]?.u || base.href,
         }))
         .filter((m: any) => m.titolo && (!m.al || m.al >= oggi))
+        // Una mostra dura settimane: con inizio e fine a meno di 7 giorni è
+        // un evento (agli Uffizi passava un convegno di tre giorni).
+        .filter((m: any) => !(m.dal && m.al) || (Date.parse(m.al) - Date.parse(m.dal)) >= 7 * 24 * 60 * 60 * 1000)
         .slice(0, 3);
       const out = { ok: true, mostre, fonte: { url: testi[0]?.u || base.href, lettoIl: new Date().toISOString() } };
       await saveToCache(chiave, 'museum_exhib', JSON.stringify(out));

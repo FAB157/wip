@@ -156,6 +156,31 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // Il cartellino dell'opera: letto e tradotto.
+  mv_label_scan: { IT: "Inquadra il cartellino", EN: "Scan the label", FR: "Cadrer le cartel", ES: "Enfoca la cartela", DE: "Schild fotografieren", RU: "Сфотографировать табличку", ZH: "拍摄说明牌" },
+  mv_label_hint: {
+    IT: "La didascalia accanto all'opera: la leggo, la traduco e cerco l'audioguida", EN: "The caption next to the work: I read it, translate it and look for the audio guide",
+    FR: "Le cartel à côté de l'œuvre : je le lis, le traduis et cherche l'audioguide", ES: "La cartela junto a la obra: la leo, la traduzco y busco la audioguía",
+    DE: "Das Schild neben dem Werk: ich lese es, übersetze es und suche den Audioguide", RU: "Табличка рядом с произведением: прочитаю, переведу и найду аудиогид", ZH: "作品旁的说明牌：我来读、翻译并查找语音导览",
+  },
+  mv_label_title: { IT: "Cartellino", EN: "Label", FR: "Cartel", ES: "Cartela", DE: "Schild", RU: "Табличка", ZH: "说明牌" },
+  mv_label_original: { IT: "Sul cartellino", EN: "On the label", FR: "Sur le cartel", ES: "En la cartela", DE: "Auf dem Schild", RU: "На табличке", ZH: "说明牌原文" },
+  mv_label_translation: { IT: "Traduzione", EN: "Translation", FR: "Traduction", ES: "Traducción", DE: "Übersetzung", RU: "Перевод", ZH: "翻译" },
+  mv_label_not_read: { IT: "Non riesco a leggere il cartellino: avvicinati e inquadralo dritto", EN: "I can't read the label: get closer and frame it straight", FR: "Je n'arrive pas à lire le cartel : rapprochez-vous et cadrez-le droit", ES: "No consigo leer la cartela: acércate y enfócala recta", DE: "Ich kann das Schild nicht lesen: näher ran und gerade fotografieren", RU: "Не могу прочитать табличку: подойдите ближе и снимите прямо", ZH: "无法读取说明牌：请靠近并正对拍摄" },
+  mv_label_in_route: { IT: "È nel percorso: tappa {n}", EN: "It's on the route: stop {n}", FR: "C'est dans le parcours : étape {n}", ES: "Está en el recorrido: parada {n}", DE: "Ist auf der Route: Station {n}", RU: "Есть в маршруте: остановка {n}", ZH: "在路线中：第 {n} 站" },
+  mv_label_listen: { IT: "Ascolta questa opera", EN: "Listen to this work", FR: "Écouter cette œuvre", ES: "Escuchar esta obra", DE: "Dieses Werk anhören", RU: "Послушать это произведение", ZH: "收听这件作品" },
+  // Il confronto fra due opere.
+  mv_compare: { IT: "Confronti", EN: "Side by side", FR: "Face à face", ES: "Comparaciones", DE: "Im Vergleich", RU: "Сравнения", ZH: "对比欣赏" },
+  mv_compare_hint: { IT: "Due opere una accanto all'altra: dove guardare per vedere la differenza", EN: "Two works side by side: where to look to see the difference", FR: "Deux œuvres côte à côte : où regarder pour voir la différence", ES: "Dos obras una junto a otra: dónde mirar para ver la diferencia", DE: "Zwei Werke nebeneinander: wo man hinschaut, um den Unterschied zu sehen", RU: "Два произведения рядом: куда смотреть, чтобы увидеть разницу", ZH: "两件作品并列：看哪里能发现差异" },
+  mv_compare_listen: { IT: "Ascolta il confronto", EN: "Listen to the comparison", FR: "Écouter la comparaison", ES: "Escuchar la comparación", DE: "Vergleich anhören", RU: "Послушать сравнение", ZH: "收听对比讲解" },
+  mv_compare_same_author: { IT: "stesso autore", EN: "same artist", FR: "même artiste", ES: "mismo autor", DE: "gleicher Künstler", RU: "тот же автор", ZH: "同一作者" },
+  mv_compare_same_subject: { IT: "stesso soggetto", EN: "same subject", FR: "même sujet", ES: "mismo tema", DE: "gleiches Motiv", RU: "тот же сюжет", ZH: "同一题材" },
+  mv_compare_same_era: { IT: "stessa epoca", EN: "same period", FR: "même époque", ES: "misma época", DE: "gleiche Epoche", RU: "та же эпоха", ZH: "同一时期" },
+  mv_compare_failed: { IT: "Confronto non disponibile per queste due opere", EN: "Comparison not available for these two works", FR: "Comparaison indisponible pour ces deux œuvres", ES: "Comparación no disponible para estas dos obras", DE: "Vergleich für diese beiden Werke nicht verfügbar", RU: "Сравнение недоступно для этих двух произведений", ZH: "这两件作品暂无对比讲解" },
+  // Le fasce orarie del biglietto.
+  mv_ticket_slots: { IT: "Domani, posti disponibili", EN: "Tomorrow, available slots", FR: "Demain, créneaux disponibles", ES: "Mañana, plazas disponibles", DE: "Morgen, freie Zeitfenster", RU: "Завтра, свободные слоты", ZH: "明日可预约时段" },
+  mv_ticket_sold_out: { IT: "esaurito", EN: "sold out", FR: "complet", ES: "agotado", DE: "ausverkauft", RU: "распродано", ZH: "已售罄" },
+  mv_ticket_all_sold_out: { IT: "Domani è tutto esaurito", EN: "Tomorrow is sold out", FR: "Demain, c'est complet", ES: "Mañana está todo agotado", DE: "Morgen ist alles ausverkauft", RU: "На завтра всё распродано", ZH: "明日已全部售罄" },
   // Audiodescrizione: l'opera raccontata a chi non la vede.
   mv_describe: { IT: "Descrivimi l'opera", EN: "Describe the work to me", FR: "Décris-moi l'œuvre", ES: "Descríbeme la obra", DE: "Beschreib mir das Werk", RU: "Опиши мне произведение", ZH: "为我描述这件作品" },
   mv_describe_title: { IT: "Audiodescrizione", EN: "Audio description", FR: "Audiodescription", ES: "Audiodescripción", DE: "Audiodeskription", RU: "Аудиодескрипция", ZH: "音频描述" },

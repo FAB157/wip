@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -228,6 +228,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const fermaAscoltoRef = useRef<(() => void) | null>(null);
   const azioniRef = useRef<Partial<Record<ComandoVocale, () => void>>>({});
   useEffect(() => () => { fermaAscoltoRef.current?.(); fermaAscoltoRef.current = null; }, []);
+  // INQUADRA IL CARTELLINO (12/09/2026): la didascalia letta e tradotta,
+  // agganciata alla tappa del percorso se c'è, altrimenti audioguida al volo.
+  const [cartellino, setCartellino] = useState<(Cartellino & { tappa: number | null }) | null>(null);
+  const [leggendoCartellino, setLeggendoCartellino] = useState(false);
+  const [guidaCartellino, setGuidaCartellino] = useState<ArtworkGuide | null>(null);
+  const [caricandoGuidaCartellino, setCaricandoGuidaCartellino] = useState(false);
+  const cartellinoRef = useRef<HTMLInputElement>(null);
+  // IL CONFRONTO: le coppie del percorso e i testi già ascoltati.
+  const [confronti, setConfronti] = useState<Record<string, string>>({});
+  const [confrontando, setConfrontando] = useState<string | null>(null);
+  const [confrontoParla, setConfrontoParla] = useState<string | null>(null);
   const [promemoria, setPromemoria] = useState(false);
   const promemoriaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const azzeraPromemoria = () => {
@@ -754,6 +765,82 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   /** Lo stato più recente della visita, per chi arriva da una callback. */
   const getVisitSnapshot = (): MuseumVisit => visit;
 
+  /** Il cartellino: foto → lettura → traduzione → aggancio al percorso. */
+  const handleCartellino = async (file: File | null) => {
+    if (!file) return;
+    setLeggendoCartellino(true);
+    try {
+      const b64 = await new Promise<string>((risolvi, rifiuta) => {
+        const fr = new FileReader();
+        fr.onload = () => risolvi(String(fr.result || ''));
+        fr.onerror = () => rifiuta(new Error('lettura fallita'));
+        fr.readAsDataURL(file);
+      });
+      const r = await leggiCartellino(b64, visit.venue.name, language);
+      if (r.ok === false) { notify(r.reason === 'nessun_cartellino' ? t('mv_label_not_read') : t('vis_generic_error')); return; }
+      const c = r.cartellino;
+      const i = c.titolo ? matchTappa(visit.guide, c.titolo) : -1;
+      setGuidaCartellino(null);
+      setCartellino({ ...c, tappa: i >= 0 ? i : null });
+      if (i >= 0) setOperaAperta(i);
+    } catch {
+      notify(t('vis_generic_error'));
+    } finally {
+      setLeggendoCartellino(false);
+      if (cartellinoRef.current) cartellinoRef.current.value = '';
+    }
+  };
+  /** Dal cartellino all'audioguida: la tappa se c'è, altrimenti al volo dal titolo letto. */
+  const ascoltaDalCartellino = async () => {
+    if (!cartellino) return;
+    if (cartellino.tappa !== null) { void handleOpera(cartellino.tappa, { daCapo: true }); return; }
+    if (guidaCartellino) {
+      stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+      try { await speakAudioguide(guidaCartellino.testo, String(guidaCartellino.language || language).toLowerCase(), getGuideCharacter()); } catch { /* voce assente */ }
+      return;
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return; }
+    setCaricandoGuidaCartellino(true);
+    const resp = await fetchArtworkGuide({ artwork: cartellino.titolo, venueName: visit.venue.name, artist: cartellino.autore || null, language });
+    setCaricandoGuidaCartellino(false);
+    if (!resp) { notify(t('vis_generic_error')); return; }
+    if (resp.ok !== true) {
+      notify(resp.reason === 'needs_pass' ? t('mv_art_needs_pass') : resp.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_art_no_source'));
+      return;
+    }
+    setGuidaCartellino(resp.guide);
+    stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+    try { await speakAudioguide(resp.guide.testo, String(resp.guide.language || language).toLowerCase(), getGuideCharacter()); } catch { /* voce assente */ }
+  };
+
+  /** Il confronto fra due opere: dal server la prima volta, poi in memoria. */
+  const coppie = coppieDaConfrontare(visit, attivi, 3);
+  const chiaveCoppia = (c: Coppia) => `${c.a}-${c.b}`;
+  const handleConfronto = async (c: Coppia) => {
+    const k = chiaveCoppia(c);
+    if (confrontoParla === k) { stopSpeech(); setConfrontoParla(null); return; }
+    stopSpeech(); setOperaParla(null); setOperaInPausa(null); setConfrontoParla(null);
+    let testo: string | undefined = confronti[k];
+    if (!testo) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return; }
+      setConfrontando(k);
+      const r = await fetchConfronto({ a: visit.guide.tappe[c.a], b: visit.guide.tappe[c.b], venueName: visit.venue.name, language });
+      setConfrontando(null);
+      if (r.ok === false) {
+        notify(r.reason === 'needs_pass' ? t('mv_art_needs_pass') : r.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_compare_failed'));
+        return;
+      }
+      testo = r.testo;
+      setConfronti(prev => ({ ...prev, [k]: r.testo }));
+    }
+    try {
+      await speakAudioguide(testo, String(language).toLowerCase(), getGuideCharacter(), () => setConfrontoParla(null));
+      setConfrontoParla(k);
+    } catch {
+      setConfrontoParla(null);
+    }
+  };
+
   // LE AZIONI DEI COMANDI VOCALI (12/09/2026), riscritte a ogni render così
   // vedono gli stati di adesso. «prossima» e «ripeti» ripartono da capo;
   // «dov'è» dice sala e punto preciso dell'opera in ascolto (o della
@@ -1126,6 +1213,29 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </a>
           )}
 
+          {/* LE FASCE ORARIE DI DOMANI (12/09/2026): «alle 8:15 ci sono posti,
+              alle 11 è esaurito» — dati del fornitore, non un'opinione. */}
+          {biglietto?.disponibilita && (
+            <div className="-mt-1 mb-3 px-1">
+              {biglietto.disponibilita.fasce.length === 0 ? (
+                <p className="text-[11px] font-black text-amber-800">{t('mv_ticket_all_sold_out')}</p>
+              ) : (
+                <>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">{t('mv_ticket_slots')}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {biglietto.disponibilita.fasce.map(f => (
+                      f.posti ? (
+                        <a key={f.ora} href={biglietto.url} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 rounded-full text-[11px] font-black border bg-white border-primary/40 text-primary active:scale-95 transition-transform">{f.ora}</a>
+                      ) : (
+                        <span key={f.ora} className="px-2.5 py-1 rounded-full text-[11px] font-black border bg-slate-100 border-slate-200 text-slate-400 line-through" title={t('mv_ticket_sold_out')}>{f.ora}</span>
+                      )
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* SEI GIÀ STATO QUI (12/09/2026): la seconda visita non ripete la
               prima. Un tocco e restano solo le opere non viste, più le
               preferite dell'altra volta. */}
@@ -1254,6 +1364,86 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </span>
             <Camera className="w-4 h-4 text-slate-400 shrink-0" />
           </button>
+
+          {/* INQUADRA IL CARTELLINO (12/09/2026): la didascalia accanto
+              all'opera, quasi sempre solo nella lingua del posto. Si legge,
+              si traduce, e se l'opera è nel percorso si apre la sua tappa;
+              altrimenti l'audioguida arriva al volo dal titolo letto. */}
+          <input
+            ref={cartellinoRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => void handleCartellino(e.target.files?.[0] || null)}
+          />
+          <button
+            onClick={() => cartellinoRef.current?.click()}
+            disabled={leggendoCartellino}
+            className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white border border-slate-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] mb-3 text-left active:scale-[0.99] transition-transform disabled:opacity-60"
+          >
+            {/* Il cartellino disegnato: tre righe di testo su una targhetta,
+                accanto all'opera — non sopra la porta. */}
+            {leggendoCartellino ? <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" /> : (
+              <span className="w-11 h-11 rounded-lg bg-slate-50 border border-slate-300 flex flex-col items-start justify-center gap-1 px-2 shrink-0" aria-hidden="true">
+                <span className="block w-6 h-[3px] bg-slate-700 rounded" />
+                <span className="block w-4 h-[2px] bg-slate-400 rounded" />
+                <span className="block w-5 h-[2px] bg-slate-400 rounded" />
+              </span>
+            )}
+            <span className="flex-1 min-w-0">
+              <span className="block text-[12px] font-black text-slate-900">{t('mv_label_scan')}</span>
+              <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_label_hint')}</span>
+            </span>
+            <Camera className="w-4 h-4 text-slate-400 shrink-0" />
+          </button>
+          {cartellino && (
+            <div className="px-3.5 py-3 rounded-2xl bg-white border-2 border-primary/40 mb-3">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  {t('mv_label_title')}{cartellino.lingua ? ` · ${cartellino.lingua.toUpperCase()}` : ''}
+                </p>
+                <button onClick={() => { setCartellino(null); setGuidaCartellino(null); }} aria-label={t('vis_close')} className="w-7 h-7 shrink-0 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 active:scale-90 transition-transform">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {cartellino.titolo && <p className="text-[14px] font-black text-slate-900 leading-tight mt-1">{cartellino.titolo}</p>}
+              {(cartellino.autore || cartellino.anno || cartellino.tecnica) && (
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">{[cartellino.autore, cartellino.anno, cartellino.tecnica].filter(Boolean).join(' · ')}</p>
+              )}
+              {cartellino.traduzione && cartellino.traduzione !== cartellino.testoOriginale && (
+                <>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-2">{t('mv_label_translation')}</p>
+                  <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-relaxed'} text-slate-800`}>{cartellino.traduzione}</p>
+                </>
+              )}
+              {cartellino.testoOriginale && (
+                <>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mt-2">{t('mv_label_original')}</p>
+                  <p className="text-[11px] text-slate-500 leading-relaxed italic">{cartellino.testoOriginale}</p>
+                </>
+              )}
+              {cartellino.tappa !== null && (
+                <p className="text-[11px] font-black text-primary mt-2 flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" />
+                  {t('mv_label_in_route').replace('{n}', String((ordineAttivo.indexOf(cartellino.tappa) >= 0 ? ordineAttivo.indexOf(cartellino.tappa) : cartellino.tappa) + 1))}
+                </p>
+              )}
+              {guidaCartellino && (
+                <p className={`${calma ? 'text-[16px] leading-[1.65]' : 'text-[12px] leading-relaxed'} text-slate-800 mt-2 whitespace-pre-line`}>{guidaCartellino.testo}</p>
+              )}
+              {cartellino.titolo && (
+                <button
+                  onClick={() => void ascoltaDalCartellino()}
+                  disabled={caricandoGuidaCartellino || operaLoading !== null}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-white text-[11px] font-black active:scale-95 transition-transform disabled:opacity-60"
+                >
+                  {caricandoGuidaCartellino ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Volume2 className="w-3.5 h-3.5" />}
+                  {t('mv_label_listen')}
+                </button>
+              )}
+            </div>
+          )}
           {/* Lo scatto della foto ricordo passa da qui */}
           <input
             ref={fotoRicordoRef}
@@ -1798,6 +1988,58 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
                   </button>
                 ) : null)}
+              </div>
+            </div>
+          )}
+
+          {/* IL CONFRONTO (12/09/2026): due opere una accanto all'altra —
+              stesso autore, stesso soggetto, stessa epoca — e la voce che
+              dice dove guardare per vedere la differenza. */}
+          {coppie.length > 0 && (
+            <div className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_compare')}</p>
+              <p className="text-[10px] font-bold text-slate-400 mb-2">{t('mv_compare_hint')}</p>
+              <div className="space-y-2">
+                {coppie.map(c => {
+                  const k = chiaveCoppia(c);
+                  const A = visit.guide.tappe[c.a];
+                  const B = visit.guide.tappe[c.b];
+                  return (
+                    <div key={k} className="px-3.5 py-3 rounded-2xl bg-white border border-slate-200">
+                      <div className="flex items-center gap-2">
+                        {[A, B].map((x, n) => (
+                          <div key={n} className="flex-1 min-w-0 flex items-center gap-2">
+                            {(x.fotoIcona || x.foto) ? (
+                              <img src={x.fotoIcona || x.foto} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-black text-slate-900 leading-tight line-clamp-2">{x.nome}</p>
+                              <p className="text-[10px] font-bold text-slate-500 truncate">{[x.autore, x.anno].filter(Boolean).join(' · ')}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2 mt-2">
+                        <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">
+                          {c.motivo === 'autore' ? t('mv_compare_same_author') : c.motivo === 'soggetto' ? t('mv_compare_same_subject') : t('mv_compare_same_era')}
+                        </span>
+                        <button
+                          onClick={() => void handleConfronto(c)}
+                          disabled={confrontando !== null}
+                          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/30 text-[11px] font-black text-primary active:scale-95 transition-transform disabled:opacity-50"
+                        >
+                          {confrontando === k ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : confrontoParla === k ? <Pause className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          {confrontoParla === k ? t('vis_pause') : t('mv_compare_listen')}
+                        </button>
+                      </div>
+                      {confronti[k] && (
+                        <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-relaxed'} text-slate-800 mt-2`}>{confronti[k]}</p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

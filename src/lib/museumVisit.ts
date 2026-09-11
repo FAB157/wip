@@ -682,6 +682,85 @@ export async function askGuide(args: { artwork: string; venueName: string; quest
   }
 }
 
+/**
+ * INQUADRA IL CARTELLINO (12/09/2026): si legge la didascalia dell'opera,
+ * tradotta nella lingua dell'utente. Non consuma il pass.
+ */
+export type Cartellino = {
+  titolo: string;
+  autore: string;
+  anno: string;
+  tecnica: string;
+  testoOriginale: string;
+  traduzione: string;
+  lingua: string;
+  confidenza: number;
+};
+export async function leggiCartellino(imageBase64: string, venueName: string, language: Language): Promise<{ ok: true; cartellino: Cartellino } | { ok: false; reason: string }> {
+  const headers = await authHeaders();
+  if (!headers) return { ok: false, reason: 'login' };
+  try {
+    const res = await fetch(getApiUrl('/api/museums/read-label'), { method: 'POST', headers, body: JSON.stringify({ imageBase64, venueName, language }) });
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` };
+    const d = await res.json();
+    return d?.ok === true ? { ok: true, cartellino: d as Cartellino } : { ok: false, reason: String(d?.reason || 'nessun_cartellino') };
+  } catch {
+    return { ok: false, reason: 'rete' };
+  }
+}
+
+/**
+ * IL CONFRONTO (12/09/2026): due opere del percorso, una accanto all'altra.
+ * Le coppie si scelgono qui — stesso autore, stesso soggetto, stessa
+ * epoca — fra le opere con la foto; il testo lo scrive il server dal
+ * materiale delle due (pass, come un'opera; scritto una volta, resta).
+ */
+export type Coppia = { a: number; b: number; motivo: 'autore' | 'soggetto' | 'epoca' };
+const SOGGETTI = ['venere', 'venus', 'madonna', 'annunciazione', 'annunciation', 'adorazione', 'adoration', 'crocifissione', 'crucifixion', 'ritratto', 'portrait', 'battaglia', 'battle', 'san giovanni', 'saint john', 'giuditta', 'judith', 'bacco', 'bacchus', 'sacra famiglia', 'holy family', 'natività', 'nativity', 'deposizione', 'pietà', 'pieta', 'autoritratto', 'self-portrait', 'david', 'davide', 'medusa', 'apollo', 'diana', 'santa', 'saint'];
+export function coppieDaConfrontare(v: MuseumVisit, attivi?: Set<number>, quante = 3): Coppia[] {
+  const tappe = v.guide.tappe;
+  const idx = tappe.map((_, k) => k).filter(k => (!attivi || attivi.has(k)) && !tappe[k].soloCollezione && (tappe[k].foto || tappe[k].fotoIcona));
+  const annoDi = (s: any): number | null => { const m = String(s || '').match(/\b(1[0-9]{3}|20[0-2][0-9])\b/); return m ? Number(m[1]) : null; };
+  const soggettoDi = (t: VenueTappa): string => {
+    const n = normalize(`${t.nome} ${t.nomeFonte || ''} ${t.nomeOriginale || ''}`);
+    return SOGGETTI.find(s => n.includes(normalize(s))) || '';
+  };
+  const usate = new Set<number>();
+  const out: Coppia[] = [];
+  const prova = (motivo: Coppia['motivo'], stessa: (a: VenueTappa, b: VenueTappa) => boolean) => {
+    for (let i = 0; i < idx.length && out.length < quante; i++) {
+      for (let j = i + 1; j < idx.length && out.length < quante; j++) {
+        const a = idx[i], b = idx[j];
+        if (usate.has(a) || usate.has(b)) continue;
+        if (!stessa(tappe[a], tappe[b])) continue;
+        out.push({ a, b, motivo });
+        usate.add(a);
+        usate.add(b);
+      }
+    }
+  };
+  // 1) Stesso autore (due Botticelli): la coppia più ricca di differenze.
+  prova('autore', (a, b) => !!a.autore && !!b.autore && normalize(a.autore) === normalize(b.autore));
+  // 2) Stesso soggetto (due Annunciazioni, due Veneri) di autori diversi.
+  prova('soggetto', (a, b) => { const s = soggettoDi(a); return !!s && s === soggettoDi(b); });
+  // 3) Stessa epoca (entro 40 anni) e stesso tipo, autori diversi.
+  prova('epoca', (a, b) => { const ya = annoDi(a.anno), yb = annoDi(b.anno); return ya !== null && yb !== null && Math.abs(ya - yb) <= 40 && (a.tipo || '') === (b.tipo || '') && normalize(a.autore || '') !== normalize(b.autore || ''); });
+  return out;
+}
+export async function fetchConfronto(args: { a: VenueTappa; b: VenueTappa; venueName: string; language: Language }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
+  const headers = await authHeaders();
+  if (!headers) return { ok: false, reason: 'login' };
+  const opera = (t: VenueTappa) => ({ nome: t.nome, nomeFonte: t.nomeFonte || t.nome, autore: t.autore || '', anno: t.anno || '' });
+  try {
+    const res = await fetch(getApiUrl('/api/museums/compare'), { method: 'POST', headers, body: JSON.stringify({ a: opera(args.a), b: opera(args.b), venueName: args.venueName, language: args.language }) });
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` };
+    const d = await res.json();
+    return d?.ok === true && d.testo ? { ok: true, testo: String(d.testo), cached: !!d.cached } : { ok: false, reason: String(d?.reason || 'no_source') };
+  } catch {
+    return { ok: false, reason: 'rete' };
+  }
+}
+
 /** LE MOSTRE IN CORSO (12/09/2026): dal sito ufficiale, cache 3 giorni. */
 export type Mostra = {
   titolo: string;
@@ -768,7 +847,14 @@ export function togglePreferita(index: number): MuseumVisit | null {
  * Non è un'esperienza a pagamento — è quello che serve a chiunque per
  * entrare — quindi si mostra anche a chi il pass non l'ha.
  */
-export type BigliettoIngresso = { titolo: string; prezzo: string; url: string; fonte: string };
+export type BigliettoIngresso = {
+  titolo: string;
+  prezzo: string;
+  url: string;
+  fonte: string;
+  /** Le fasce orarie di domani (solo Tiqets): «alle 8:15 ci sono posti». */
+  disponibilita?: { data: string; fasce: { ora: string; posti: boolean }[] } | null;
+};
 export async function fetchBigliettoIngresso(v: MuseumVisit, language: Language): Promise<BigliettoIngresso | null> {
   try {
     const p = new URLSearchParams({ language, venueName: v.venue.name });
