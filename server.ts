@@ -9323,8 +9323,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
 
       // v2 (12/09/2026): i testi liberi (chiusure, sale chiuse, nota) escono
-      // nella lingua dell'utente, quindi la cache è per lingua.
-      const chiave = `museum_hours:v2:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      // nella lingua dell'utente, quindi la cache è per lingua. v3: sale
+      // chiuse solo di QUESTO museo (uffizi.it dava quelle di Pitti).
+      const chiave = `museum_hours:v3:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       let dati: any = null;
       const inCache = await getFromCache(chiave, 'museum_hours', 7 * 24 * 60 * 60 * 1000);
       if (inCache) { try { dati = JSON.parse(inCache); } catch { dati = null; } }
@@ -9536,7 +9537,7 @@ Rispondi SOLO con un oggetto JSON con questi campi, tutti STRINGHE:
   "ridotto": "il ridotto ordinario, un valore, oppure vuoto",
   "gratis": "chi entra gratis, oppure vuoto",
   "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure vuoto",
-  "saleChiuse": "sale, sezioni o piani CHIUSI in questi giorni come li scrive il sito, con i numeri delle sale se ci sono (es. 'sale 25-30 chiuse fino al 30 ottobre'), oppure vuoto"
+  "saleChiuse": "SOLO le sale, sezioni o piani di \\"${venueName || poiId}\\" chiusi in questi giorni, in forma breve con i numeri delle sale se ci sono (es. 'Sale 25-30 fino al 30/10/2026; Sala 12'); vuoto se il sito non lo dice. Se un avviso riguarda un'ALTRA sede dello stesso ente (un altro palazzo, giardino o museo), NON includerlo."
 }
 Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, mostre, giardini o aperture serali straordinarie. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).
 I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(langKey)} (traduci dal sito se serve), lasciando invariati i numeri delle sale, le date e gli orari.`;
@@ -9607,7 +9608,14 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           gratis: String(dati?.gratis || dati?.biglietto?.gratis || '').slice(0, 120),
         },
         nota: String(dati?.nota || '').slice(0, 200),
-        saleChiuse: String(dati?.saleChiuse || '').slice(0, 240),
+        // Taglio a una frase intera, mai a metà parola («…Sala dell'»).
+        saleChiuse: (() => {
+          const s = String(dati?.saleChiuse || '').trim();
+          if (s.length <= 240) return s;
+          const corto = s.slice(0, 240);
+          const fine = Math.max(corto.lastIndexOf('; '), corto.lastIndexOf('. '), corto.lastIndexOf(', '));
+          return (fine > 120 ? corto.slice(0, fine) : corto).trim();
+        })(),
         consiglio,
         fonte: dati?.fonte || null,
       });
