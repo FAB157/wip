@@ -4,7 +4,9 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE } from '../lib/museumVisit';
+import TargaSala from './TargaSala';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice } from '../services/ttsService';
 import { printScoped } from '../lib/printScoped';
@@ -56,6 +58,37 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // a chi guida che il gruppo lo segue e a chi segue che sta seguendo.
   const sonoLeader = isLiveLeader();
   const inGruppo = hasLiveSession();
+  // IL PERCORSO SU MISURA: quali tappe sono attive col filtro scelto, e il
+  // loro ordine. Gli indici restano quelli originali, così le audioguide
+  // già aperte (operaGuide[i]) non si spostano quando si cambia filtro.
+  const attivi = tappeAttive(visit);
+  const ordineAttivo = visit.guide.tappe.map((_, k) => k).filter(k => attivi.has(k));
+  const pers = visit.personalizzazione || PERSONALIZZAZIONE_BASE;
+  const personalizzato = pers.tempo !== 'tutto' || pers.interessi !== 'tutto' || pers.bambini;
+  // Ci sono tipi noti? Se nessuna opera ha un tipo, il filtro per interessi
+  // non avrebbe su cosa lavorare e non si mostra.
+  const tipiNoti = visit.guide.tappe.some(x => x.tipo === 'dipinto' || x.tipo === 'scultura');
+  // IL PROMEMORIA (11/09/2026): finita un'opera, se per un minuto e mezzo
+  // non si ascolta, non si inquadra e non si legge un cartello, il telefono
+  // vibra una volta e propone di inquadrare il numero della sala. Un
+  // promemoria, non un'imposizione: si chiude con un tocco.
+  const [promemoria, setPromemoria] = useState(false);
+  const promemoriaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const azzeraPromemoria = () => {
+    if (promemoriaTimer.current) { clearTimeout(promemoriaTimer.current); promemoriaTimer.current = null; }
+    setPromemoria(false);
+  };
+  const armaPromemoria = () => {
+    if (promemoriaTimer.current) clearTimeout(promemoriaTimer.current);
+    promemoriaTimer.current = setTimeout(() => {
+      setPromemoria(true);
+      // Una vibrazione sola: nativo dove c'è, altrimenti il browser.
+      Haptics.impact({ style: ImpactStyle.Medium }).catch(() => {
+        try { (navigator as any).vibrate?.(200); } catch { /* niente */ }
+      });
+    }, 90_000);
+  };
+  useEffect(() => () => { if (promemoriaTimer.current) clearTimeout(promemoriaTimer.current); }, []);
 
   useEffect(() => () => { stopSpeech(); }, []);
 
@@ -260,6 +293,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       const esito = await leggiCartelloSala(b64, [...new Set(sale)]);
       if (esito.ok && esito.sala) {
         impostaSalaCorrente(esito.sala);
+        azzeraPromemoria();
         notify(t('mv_room_found').replace('{s}', esito.sala));
       } else {
         notify(t('mv_room_not_read'));
@@ -272,7 +306,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     }
   };
 
-  const mancanti = visit.guide.tappe.filter(t => !t.seenCardId);
+  const mancanti = visit.guide.tappe.filter((t, k) => attivi.has(k) && !t.seenCardId);
   const mancantiPerSala = (() => {
     const m = new Map<string, typeof mancanti>();
     for (const t of mancanti) {
@@ -305,11 +339,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     stopSpeech();
     setOperaParla(null);
     setOperaInPausa(null);
+    azzeraPromemoria();
 
     let guida = operaGuide[i];
     // ARCHIVIO: se il museo è stato scaricato, il testo è già nostro. Non si
     // chiama il server e NON si ripaga: quello che hai scaricato è tuo.
-    if (!guida) {
+    // Coi bambini l'archivio non serve: dentro ci sono i racconti per adulti.
+    if (!guida && !pers.bambini) {
       const dallArchivio = operaDallArchivio(visit.venueKey, language, tappa.nome);
       if (dallArchivio) {
         guida = dallArchivio;
@@ -330,6 +366,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         artist: tappa.autore || null,
         room: tappa.dove || null,
         language,
+        stile: pers.bambini ? 'bambini' : '',
       });
       setOperaLoading(null);
       if (!resp) { notify(t('vis_generic_error')); return; }
@@ -346,7 +383,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       // TUTTO QUELLO CHE ASCOLTI RESTA: l'audioguida appena pagata entra
       // subito nell'archivio. Da adesso in poi il riascolto — stasera, fra
       // un mese, senza rete — non chiama più il server e non costa più nulla.
-      conservaOpera(visit.venueKey, language, tappa.nome, guida);
+      // Nell'archivio va solo il racconto per adulti: è quello che si
+      // riascolta e si stampa.
+      if (!pers.bambini) conservaOpera(visit.venueKey, language, tappa.nome, guida);
     }
     setOperaAperta(i);
     // TOUR DI GRUPPO: chi guida manda l'opera al gruppo PRIMA di ascoltarla,
@@ -370,6 +409,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // tirarlo fuori. I follower del gruppo non lo sentono: a loro parla
         // il leader.
         if (visit.dalLeader) return;
+        // Da qui parte il conto del promemoria: se fra un minuto e mezzo non
+        // è successo niente, si propone di inquadrare la targa della sala.
+        armaPromemoria();
         const p = prossimaTappa(getVisitSnapshot());
         if (!p || p.indice === i) return;
         const frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
@@ -388,13 +430,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     <>
     {/* Il documento da stampare: invisibile a schermo, acceso solo da
         printScoped('museum'). */}
-    <MuseumPrintView visit={visit} language={language} opere={operaGuide} />
+    <MuseumPrintView
+      visit={{ ...visit, guide: { ...visit.guide, tappe: ordineAttivo.map(k => visit.guide.tappe[k]) } }}
+      language={language}
+      opere={Object.fromEntries(ordineAttivo.map((k, n) => [n, operaGuide[k]]).filter(([, g]) => !!g))}
+    />
 
     {/* UNA ALLA VOLTA: il lettore a schermo pieno. Foto grande, sala, play,
         frecce e scorrimento laterale. Le tappe «della collezione» restano
         nell'elenco ma non nel lettore: non hanno un posto dove andare. */}
     {lettore !== null && (() => {
-      const indici = visit.guide.tappe.map((x, k) => k).filter(k => !visit.guide.tappe[k].soloCollezione);
+      const indici = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione);
       if (!indici.length) return null;
       const pos = Math.max(0, indici.indexOf(lettore));
       const i = indici[pos] ?? indici[0];
@@ -648,17 +694,41 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             className="hidden"
             onChange={(e) => void handleCartello(e.target.files?.[0] || null)}
           />
+          {/* IL PROMEMORIA: vibrazione fatta, ora la proposta, con la targa
+              disegnata così si capisce cosa cercare sopra la porta. */}
+          {promemoria && (
+            <div className="flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-blue-50 border-2 border-primary mb-3">
+              <TargaSala size={56} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-bold text-slate-800 leading-snug">{t('mv_reminder_room')}</p>
+                <div className="flex gap-2 mt-1.5">
+                  <button
+                    onClick={() => { setPromemoria(false); cartelloRef.current?.click(); }}
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-primary text-white text-[11px] font-black active:scale-95 transition-transform"
+                  >
+                    <Camera className="w-3.5 h-3.5" />{t('mv_reminder_cta')}
+                  </button>
+                  <button onClick={azzeraPromemoria} aria-label={t('vis_close')} className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-500 active:scale-90 transition-transform">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <button
             onClick={() => cartelloRef.current?.click()}
             disabled={leggendoSala}
             className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white border border-slate-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] mb-3 text-left active:scale-[0.99] transition-transform disabled:opacity-60"
           >
-            {leggendoSala ? <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" /> : <MapPin className="w-4 h-4 text-primary shrink-0" />}
+            {/* La targa disegnata al posto dell'icona: dice da sola COSA
+                inquadrare — il numero sopra la porta, non la targhetta
+                dell'opera. */}
+            {leggendoSala ? <Loader2 className="w-4 h-4 text-primary animate-spin shrink-0" /> : <TargaSala size={44} />}
             <span className="flex-1 min-w-0">
               <span className="block text-[12px] font-black text-slate-900">
                 {visit.salaCorrente ? t('mv_you_are_in_room').replace('{s}', visit.salaCorrente) : t('mv_where_am_i')}
               </span>
-              <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_where_am_i_desc')}</span>
+              <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_room_sign_hint')}</span>
             </span>
             <Camera className="w-4 h-4 text-slate-400 shrink-0" />
           </button>
@@ -746,6 +816,68 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
 
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
+          {/* IL MIO PERCORSO, NON IL VOSTRO: tre scelte secche. Le opere non
+              scelte non spariscono, si mettono da parte — e la riga sotto
+              dice quante sono. Solo nei percorsi lunghi abbastanza. */}
+          {visit.guide.tappe.filter(x => !x.soloCollezione).length > 6 && (
+            <div className="mb-3 p-3 rounded-2xl bg-white border border-slate-200 space-y-2.5">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_pers_title')}</p>
+              {/* TEMPO */}
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 mb-1">{t('mv_pers_time')}</p>
+                <div className="w-full flex bg-[#fdfbf7] rounded-xl p-0.5 border border-slate-200 gap-0.5">
+                  {([['tutto', t('mv_filter_all')], ['30', t('mv_filter_short')], ['60', t('mv_filter_60')]] as const).map(([v, etichetta]) => (
+                    <button
+                      key={v}
+                      onClick={() => impostaPersonalizzazione({ tempo: v })}
+                      aria-pressed={pers.tempo === v}
+                      disabled={pers.bambini}
+                      className={`flex-1 py-1.5 text-[11px] font-black rounded-lg transition-all disabled:opacity-40 ${pers.tempo === v ? 'bg-primary text-white' : 'text-slate-500'}`}
+                    >
+                      {etichetta}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* INTERESSI: solo se Wikidata sa di che tipo sono le opere */}
+              {tipiNoti && (
+                <div>
+                  <p className="text-[10px] font-bold text-slate-400 mb-1">{t('mv_pers_interest')}</p>
+                  <div className="w-full flex bg-[#fdfbf7] rounded-xl p-0.5 border border-slate-200 gap-0.5">
+                    {([['tutto', t('mv_filter_all')], ['dipinti', t('mv_int_paintings')], ['sculture', t('mv_int_sculptures')], ['altro', t('mv_int_other')]] as const).map(([v, etichetta]) => (
+                      <button
+                        key={v}
+                        onClick={() => impostaPersonalizzazione({ interessi: v })}
+                        aria-pressed={pers.interessi === v}
+                        className={`flex-1 py-1.5 text-[11px] font-black rounded-lg transition-all ${pers.interessi === v ? 'bg-primary text-white' : 'text-slate-500'}`}
+                      >
+                        {etichetta}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* CON BAMBINI: sei opere, e le audioguide raccontate a un bambino.
+                  Le audioguide già aperte si scaricano di nuovo nel registro
+                  giusto: quelle per adulti non vanno bene a un bambino. */}
+              <button
+                onClick={() => { const b = !pers.bambini; impostaPersonalizzazione({ bambini: b }); setOperaGuide({}); setOperaAperta(null); stopSpeech(); setOperaParla(null); setOperaInPausa(null); }}
+                aria-pressed={pers.bambini}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl border text-left transition-all ${pers.bambini ? 'bg-amber-50 border-amber-300' : 'bg-[#fdfbf7] border-slate-200'}`}
+              >
+                <span className={`w-9 h-5 rounded-full relative shrink-0 transition-colors ${pers.bambini ? 'bg-primary' : 'bg-slate-300'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${pers.bambini ? 'left-[18px]' : 'left-0.5'}`} />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-[12px] font-black text-slate-900">{t('mv_kids')}</span>
+                  <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_kids_hint')}</span>
+                </span>
+              </button>
+              {personalizzato && visit.guide.tappe.length - ordineAttivo.length > 0 && (
+                <p className="text-[10px] font-bold text-slate-400 px-1">{t('mv_filter_hidden').replace('{n}', String(visit.guide.tappe.length - ordineAttivo.length))}</p>
+              )}
+            </div>
+          )}
           {/* Se il museo non pubblica le sale lo si dice qui, una volta: senza
               questa riga venti tappe numerate promettono un itinerario che il
               museo non ha mai dichiarato. */}
@@ -755,20 +887,22 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </p>
           )}
           <ol className="space-y-2">
-            {visit.guide.tappe.map((tappa, i) => {
+            {ordineAttivo.map((i, posizione) => {
+              const tappa = visit.guide.tappe[i];
               const done = !!tappa.seenCardId;
               // Il numero conta solo le tappe con una sala dichiarata: quelle
               // «della collezione» non hanno un posto nel percorso, quindi non
-              // hanno un numero.
-              const numero = visit.guide.tappe.slice(0, i + 1).filter(x => !x.soloCollezione).length;
+              // hanno un numero. E conta solo le tappe ATTIVE col filtro.
+              const numero = ordineAttivo.slice(0, posizione + 1).filter(k => !visit.guide.tappe[k].soloCollezione).length;
               // Si visita per stanze: quando cambia la sala si apre un gruppo,
               // così si vede a colpo d'occhio quante opere ci sono in questa
               // stanza prima di spostarsi. Il server le ha già raggruppate.
+              const prec = posizione === 0 ? null : visit.guide.tappe[ordineAttivo[posizione - 1]];
               const salaQui = tappa.soloCollezione ? '' : String(tappa.dove || '').trim();
-              const salaPrima = i === 0 ? null : (visit.guide.tappe[i - 1].soloCollezione ? '' : String(visit.guide.tappe[i - 1].dove || '').trim());
+              const salaPrima = prec === null ? null : (prec.soloCollezione ? '' : String(prec.dove || '').trim());
               const apreSala = !!salaQui && salaQui !== salaPrima;
-              const quanteQui = apreSala ? visit.guide.tappe.filter(x => !x.soloCollezione && String(x.dove || '').trim() === salaQui).length : 0;
-              const primaSenzaSala = !!tappa.soloCollezione && (i === 0 || !visit.guide.tappe[i - 1].soloCollezione);
+              const quanteQui = apreSala ? ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && String(visit.guide.tappe[k].dove || '').trim() === salaQui).length : 0;
+              const primaSenzaSala = !!tappa.soloCollezione && (prec === null || !prec.soloCollezione);
               return (
               <div key={`g-${i}-${tappa.nome}`}>
                 {apreSala && (

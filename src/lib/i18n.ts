@@ -95,6 +95,47 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     DE: "Die Gruppe folgt dir: Was du abspielst, hören alle", RU: "Группа следует за вами: что слушаете вы, слышат все", ZH: "团员跟随你：你播放的内容，所有人都能听到",
   },
   mv_group_follower: { IT: "Stai seguendo il leader del gruppo", EN: "You're following the group leader", FR: "Tu suis le leader du groupe", ES: "Sigues al líder del grupo", DE: "Du folgst dem Gruppenleiter", RU: "Вы следуете за лидером группы", ZH: "你正在跟随领队" },
+  // Il promemoria: in cammino da un po', inquadra il numero della sala.
+  mv_reminder_room: {
+    IT: "Sei in cammino da un po'? Inquadra il numero della sala sopra la porta e il percorso riparte da lì.",
+    EN: "Been walking a while? Frame the room number above the door and the route picks up from there.",
+    FR: "Tu marches depuis un moment ? Cadre le numéro de la salle au-dessus de la porte : le parcours repart de là.",
+    ES: "¿Llevas un rato caminando? Enfoca el número de la sala sobre la puerta y el recorrido sigue desde ahí.",
+    DE: "Schon eine Weile unterwegs? Nimm die Saalnummer über der Tür auf – der Rundgang geht von dort weiter.",
+    RU: "Давно идёте? Наведите камеру на номер зала над дверью — маршрут продолжится оттуда.",
+    ZH: "走了一会儿了？对准门上方的展厅编号，路线从这里继续。",
+  },
+  mv_reminder_cta: { IT: "Inquadra ora", EN: "Frame it now", FR: "Cadrer maintenant", ES: "Enfocar ahora", DE: "Jetzt aufnehmen", RU: "Навести сейчас", ZH: "立即对准" },
+  mv_room_sign_hint: {
+    IT: "È la targa sopra la porta, come questa", EN: "It's the plaque above the door, like this one",
+    FR: "C'est la plaque au-dessus de la porte, comme celle-ci", ES: "Es la placa sobre la puerta, como esta",
+    DE: "Das Schild über der Tür, wie dieses hier", RU: "Табличка над дверью, как эта", ZH: "就是门上方的这种标牌",
+  },
+  // Il percorso su misura: tutto, i capolavori, mezz'ora.
+  mv_filter_all: { IT: "Tutto", EN: "Everything", FR: "Tout", ES: "Todo", DE: "Alles", RU: "Всё", ZH: "全部" },
+  mv_filter_top: { IT: "Capolavori", EN: "Masterpieces", FR: "Chefs-d'œuvre", ES: "Obras maestras", DE: "Meisterwerke", RU: "Шедевры", ZH: "杰作" },
+  mv_filter_short: { IT: "30 minuti", EN: "30 minutes", FR: "30 minutes", ES: "30 minutos", DE: "30 Minuten", RU: "30 минут", ZH: "30 分钟" },
+  mv_filter_hidden: {
+    IT: "{n} opere messe da parte: torna a «Tutto» per vederle", EN: "{n} works set aside: switch to “Everything” to see them",
+    FR: "{n} œuvres mises de côté : reviens à « Tout » pour les voir", ES: "{n} obras apartadas: vuelve a «Todo» para verlas",
+    DE: "{n} Werke zurückgestellt: auf „Alles“ wechseln, um sie zu sehen", RU: "{n} произведений отложено: выберите «Всё», чтобы увидеть их", ZH: "已收起 {n} 件作品：切换到“全部”查看",
+  },
+  mv_pers_title: { IT: "Il tuo percorso", EN: "Your route", FR: "Ton parcours", ES: "Tu recorrido", DE: "Dein Rundgang", RU: "Ваш маршрут", ZH: "你的路线" },
+  mv_pers_time: { IT: "Tempo", EN: "Time", FR: "Temps", ES: "Tiempo", DE: "Zeit", RU: "Время", ZH: "时间" },
+  mv_pers_interest: { IT: "Interessi", EN: "Interests", FR: "Intérêts", ES: "Intereses", DE: "Interessen", RU: "Интересы", ZH: "兴趣" },
+  mv_filter_60: { IT: "1 ora", EN: "1 hour", FR: "1 heure", ES: "1 hora", DE: "1 Stunde", RU: "1 час", ZH: "1 小时" },
+  mv_int_paintings: { IT: "Dipinti", EN: "Paintings", FR: "Peintures", ES: "Pinturas", DE: "Gemälde", RU: "Живопись", ZH: "绘画" },
+  mv_int_sculptures: { IT: "Sculture", EN: "Sculptures", FR: "Sculptures", ES: "Esculturas", DE: "Skulpturen", RU: "Скульптура", ZH: "雕塑" },
+  mv_int_other: { IT: "Altro", EN: "Other", FR: "Autre", ES: "Otro", DE: "Anderes", RU: "Другое", ZH: "其他" },
+  mv_kids: { IT: "Con bambini", EN: "With kids", FR: "Avec des enfants", ES: "Con niños", DE: "Mit Kindern", RU: "С детьми", ZH: "带孩子" },
+  mv_kids_hint: {
+    IT: "Sei opere, raccontate a un bambino di otto anni", EN: "Six works, told for an eight-year-old",
+    FR: "Six œuvres, racontées pour un enfant de huit ans", ES: "Seis obras, contadas para un niño de ocho años",
+    DE: "Sechs Werke, erzählt für ein achtjähriges Kind", RU: "Шесть произведений, рассказанных для восьмилетнего ребёнка", ZH: "六件作品，讲给八岁孩子听",
+  },
+  // L'assaggio gratis prima della cassa.
+  mv_sample_listen: { IT: "Ascolta 30 secondi gratis", EN: "Listen to 30 seconds for free", FR: "Écouter 30 secondes gratuitement", ES: "Escucha 30 segundos gratis", DE: "30 Sekunden kostenlos anhören", RU: "Послушать 30 секунд бесплатно", ZH: "免费试听 30 秒" },
+  mv_sample_stop: { IT: "Ferma l'assaggio", EN: "Stop the preview", FR: "Arrêter l'extrait", ES: "Parar la muestra", DE: "Vorschau stoppen", RU: "Остановить", ZH: "停止试听" },
   // Pausa vera: si riprende da dove si era, non dalla prima parola.
   mv_art_resume: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续播放" },
   mv_art_paused: { IT: "In pausa", EN: "Paused", FR: "En pause", ES: "En pausa", DE: "Pausiert", RU: "На паузе", ZH: "已暂停" },

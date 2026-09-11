@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Camera, X, ImageIcon, Loader2, Search, Ticket } from 'lucide-react';
+import { Camera, X, ImageIcon, Loader2, Search, Ticket, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { Language, getTranslation } from '../lib/i18n';
@@ -25,7 +25,7 @@ import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
-import { speakWithSystemVoice } from '../services/ttsService';
+import { speakWithSystemVoice, speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { Landmark } from 'lucide-react';
 
@@ -234,6 +234,19 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // DOVE SONO, dal GPS, prima di toccare qualsiasi cosa: nome e foto del
   // museo entro 200 m. Niente AI, un secondo. Il primo minuto non è più muto.
   const [seiQui, setSeiQui] = useState<DoveSono | null>(null);
+  // L'ASSAGGIO (11/09/2026): quando il server dice «serve il pass» e la guida
+  // esiste già, manda i primi novanta secondi dell'introduzione. Si ascolta
+  // la voce PRIMA di pagare, come in ogni podcast.
+  const [passSample, setPassSample] = useState<{ text: string; language: string } | null>(null);
+  const [samplePlaying, setSamplePlaying] = useState(false);
+  const toggleSample = async () => {
+    if (!passSample) return;
+    if (samplePlaying) { stopSpeech(); setSamplePlaying(false); return; }
+    try {
+      await speakAudioguide(passSample.text, String(passSample.language || language).toLowerCase(), getGuideCharacter(), () => setSamplePlaying(false));
+      setSamplePlaying(true);
+    } catch { setSamplePlaying(false); }
+  };
   // Quiz durante l'attesa (10/09/2026, richiesta del committente: «come negli
   // itinerari»). Costruire il percorso di un museo richiede 20-35 secondi:
   // invece di far guardare una rotellina, si gioca e si vincono crediti — un
@@ -344,7 +357,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
-        else if (out.reason === 'needs_tour_pass') setNeedsTourPass(true);
+        else if (out.reason === 'needs_tour_pass') { setNeedsTourPass(true); setPassSample(out.sample || null); }
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
       }
@@ -358,6 +371,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         // La visita guidata è del pass con itinerario: si propone lo sblocco,
         // senza generare nulla (nessun costo AI per chi non ha pagato).
         setNeedsTourPass(true);
+        setPassSample(resp.sample || null);
       } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
         // Nessun museo/chiesa entro 200 m nel nostro archivio: si chiede il nome.
         setVisitNameFallback('');
@@ -1385,8 +1399,19 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                     <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
                   </div>
                 </div>
+                {/* Prima la voce, poi la cassa: trenta secondi dell'introduzione
+                    di QUESTO museo, gratis. */}
+                {passSample && (
+                  <button
+                    onClick={() => void toggleSample()}
+                    className="w-full py-2.5 rounded-xl bg-white border border-primary/40 text-primary text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
+                  >
+                    {samplePlaying ? <X className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    {samplePlaying ? tr('mv_sample_stop') : tr('mv_sample_listen')}
+                  </button>
+                )}
                 <button
-                  onClick={() => void handleBuyPass('tour')}
+                  onClick={() => { if (samplePlaying) { stopSpeech(); setSamplePlaying(false); } void handleBuyPass('tour'); }}
                   disabled={buyingPass}
                   className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform disabled:opacity-50"
                 >

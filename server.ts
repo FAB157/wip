@@ -6853,8 +6853,8 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
    * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
    */
-  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[] }> {
-    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [] };
+  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[]; tipi: Record<string, 'dipinto' | 'scultura' | 'altro'> }> {
+    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {} };
 
     // QUESTA RISPOSTA SI CONSERVA (11/09/2026).
     //
@@ -6873,7 +6873,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     if (conservata) {
       try {
         const d = JSON.parse(conservata);
-        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {}, famose: d.famose || [] };
+        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {}, famose: d.famose || [], tipi: d.tipi || {} };
       } catch { /* conservata illeggibile: si richiede */ }
     }
     // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
@@ -6898,17 +6898,21 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     const dovePrende = tipoLuogo === 'chiesa'
       ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }`
       : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }`;
-    const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
+    // ?tipo = P31 «istanza di»: dipinto, scultura, affresco… Serve al
+    // percorso su misura per interessi («solo sculture»). Un'opera con più
+    // tipi produce più righe: si tiene il primo che si sa classificare.
+    const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
   ${dovePrende}
   OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
+  OPTIONAL { ?opera wdt:P31 ?tipo . }
   OPTIONAL { ?opera wdt:P170 ?autore . }
   OPTIONAL { ?opera wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
   OPTIONAL { ?opera wdt:P217 ?inv . }
   OPTIONAL { ?opera wdt:P18 ?immagine . }
   OPTIONAL { ?sitelink schema:about ?opera . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},it,en". }
-} GROUP BY ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine
-ORDER BY DESC(?fama) LIMIT 60`;
+} GROUP BY ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo
+ORDER BY DESC(?fama) LIMIT 80`;
     try {
       // Due tentativi: il primo corto, il secondo più paziente. La maggior
       // parte delle cadute è un timeout passeggero del servizio pubblico, e
@@ -6943,7 +6947,16 @@ ORDER BY DESC(?fama) LIMIT 60`;
       // Ronda di notte, la Nascita di Venere. Il segnale «affollata» nasce
       // da qui: un dato, non un'opinione.
       const famose: string[] = [];
+      // Il TIPO dell'opera, per il percorso su misura: dipinto, scultura o
+      // altro. Solo classi note di Wikidata; tutto il resto è «altro», che è
+      // una risposta onesta, non un errore.
+      const tipi: Record<string, 'dipinto' | 'scultura' | 'altro'> = {};
+      const TIPO_DA_QID: Record<string, 'dipinto' | 'scultura'> = {
+        Q3305213: 'dipinto', Q134194: 'dipinto', Q1229071: 'dipinto', Q219423: 'dipinto',
+        Q860861: 'scultura', Q179700: 'scultura',
+      };
       for (const b of (r.data?.results?.bindings || [])) {
+        const qidTipo = String(b?.tipo?.value || '').split('/').pop() || '';
         const conRipiego = String(b?.operaLabel?.value || '').trim();
         const inLinguaUtente = String(b?.labUser?.value || '').trim();
         // Il titolo che si mostra è quello nella lingua dell'utente se esiste;
@@ -6951,8 +6964,12 @@ ORDER BY DESC(?fama) LIMIT 60`;
         const titolo = inLinguaUtente || conRipiego;
         if (!titolo || /^Q\d+$/.test(titolo)) continue;
         const chiave = normalizzaTesto(titolo);
+        // Stessa opera su più righe (più tipi, più immagini): chi arriva
+        // dopo non ripete il conto della fama né il titolo.
+        const giaVista = titoli.has(chiave);
         titoli.add(chiave);
-        if (famose.length < 3) famose.push(chiave);
+        if (!giaVista && famose.length < 3) famose.push(chiave);
+        if (!tipi[chiave] || tipi[chiave] === 'altro') tipi[chiave] = TIPO_DA_QID[qidTipo] || 'altro';
         if (conRipiego && conRipiego !== titolo) originali[chiave] = conRipiego;
         const autore = String(b?.autoreLabel?.value || '').trim();
         const anno = String(b?.anno?.value || '').trim();
@@ -6969,12 +6986,12 @@ ORDER BY DESC(?fama) LIMIT 60`;
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
       // significherebbe fissare l'errore invece del dato.
       if (righe.length) {
-        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali, famose }));
+        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali, famose, tipi }));
       }
-      return { righe, foto, titoli, originali, famose };
+      return { righe, foto, titoli, originali, famose, tipi };
     } catch (e: any) {
       console.warn('[VenueGuide] Wikidata opere non disponibili:', e?.message);
-      return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [] };
+      return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [], tipi: {} };
     }
   }
 
@@ -7560,7 +7577,19 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // c'è qualcosa da dare: davanti a una guida già pronta, o dopo che le
       // fonti sono state raccolte e bastano. Un «non ho fonti» si risponde
       // gratis, a chiunque, prima di qualsiasi cassa.
-      const chiediPass = async () => {
+      // L'ASSAGGIO (11/09/2026, richiesta del committente: «fammi sentire la
+      // voce prima di pagare»). Quando la guida esiste già, la risposta
+      // «serve il pass» porta con sé i primi ~90 secondi parlati
+      // dell'introduzione: la voce, il tono, il livello. È quello che fa
+      // ogni podcast, ed è il modo onesto di vendere una cosa che si ascolta.
+      // Solo dalla guida vera, mai da un testo generico: l'assaggio deve
+      // essere di QUESTO museo.
+      const assaggioDa = (intro: any): string => {
+        const parole = String(intro || '').trim().split(/\s+/).filter(Boolean);
+        if (parole.length < 25) return '';
+        return parole.slice(0, 90).join(' ');
+      };
+      const chiediPass = async (assaggio = '') => {
         if (!inDiretta) return null;
         const pass = await getActiveMuseumPass(userId);
         if (pass?.tier === 'tour') return null;
@@ -7574,6 +7603,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // Dice al client che la guida ESISTE o si può fare: dopo l'acquisto
           // non ci saranno sorprese.
           sourcesOk: true,
+          sample: assaggio ? { text: assaggio, language: outLang } : null,
         };
       };
 
@@ -7722,7 +7752,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             // una chiamata AI per ogni visitatore senza migliorare nulla.
             // Nessun TTL qui, e non aggiungetene: se una guida va rifatta si
             // svuota la sua riga di cache a mano o si aggiorna dalla libreria.
-            const gate = await chiediPass();
+            const gate = await chiediPass(assaggioDa(parsed.guide?.intro));
             if (gate) return res.json(gate);
             return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source, venuePhoto: parsed.venuePhoto || '', venuePhotoIcon: parsed.venuePhotoIcon || '' });
           }
@@ -7748,7 +7778,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // 1) LINGUA DELL'UTENTE, sempre per prima: è già pronta, costo zero.
         const riga = righe.find((r: any) => String(r?.language) === outLang);
         if (riga) {
-          const gate = await chiediPass();
+          const gate = await chiediPass(assaggioDa(riga.guide?.intro));
           if (gate) return res.json(gate);
           const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null };
           await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
@@ -7888,7 +7918,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       const [opereWd, sitoOut] = await Promise.all([
         // Senza QID la forma resta completa: più sotto si legge `.titoli`,
         // `.originali` e `.famose`, e un oggetto a metà farebbe cadere tutto.
-        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[] }),
+        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[], tipi: {} as Record<string, 'dipinto' | 'scultura' | 'altro'> }),
         (async () => {
           let sito = '';
           if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
@@ -8207,7 +8237,16 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // opere non c'è dove andare nel frattempo).
         const chiaveFonte = t.nomeFonte ? normalizzaTesto(t.nomeFonte) : '';
         const affollata = tappeOrdinate.length >= 8 && (opereWd.famose.includes(chiave) || (!!chiaveFonte && opereWd.famose.includes(chiaveFonte)));
-        const base = affollata ? { ...t, affollata: true } : t;
+        // IL RANGO DI FAMA (11/09/2026): la posizione dell'opera nell'ordine
+        // di Wikidata (numero di lingue con una voce). Serve al percorso su
+        // misura — «i capolavori», «30 minuti» — per scegliere cosa tenere
+        // senza chiedere a nessuno: un dato, non un giudizio.
+        const ordineFama = [...opereWd.titoli];
+        const r1 = ordineFama.indexOf(chiave);
+        const r2 = chiaveFonte ? ordineFama.indexOf(chiaveFonte) : -1;
+        const rango = r1 >= 0 ? r1 : r2;
+        const tipoOpera = opereWd.tipi[chiave] || (chiaveFonte ? opereWd.tipi[chiaveFonte] : undefined);
+        const base = { ...t, ...(affollata ? { affollata: true } : {}), ...(rango >= 0 ? { famaRank: rango + 1 } : {}), ...(tipoOpera ? { tipo: tipoOpera } : {}) };
         return img
           ? { ...base, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) }
           : base;
@@ -8313,6 +8352,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       };
       const langCfg = LANGS[langKey] || LANGS.IT;
       const outLang = LANGS[langKey] ? langKey : 'IT';
+      // CON BAMBINI (11/09/2026): la stessa opera raccontata a un bambino di
+      // otto anni è un altro prodotto — più corto, con una cosa da cercare
+      // con gli occhi — e ha la sua cache. Stesso materiale, stessi fatti
+      // veri: cambia il registro, non la verità.
+      const stile: '' | 'bambini' = String(req.body?.stile || '') === 'bambini' ? 'bambini' : '';
 
       // Il Pass Museo (qualunque livello) comprende l'ascolto delle opere del
       // percorso: sono le stesse 40 audioguide, ascoltate senza inquadrare.
@@ -8331,7 +8375,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       }
 
       const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
-      const cacheKey = `artwork_guide:v1:${chiaveOpera}:${outLang}`;
+      const cacheKey = `artwork_guide:v1:${chiaveOpera}:${outLang}${stile ? ':bambini' : ''}`;
       const cached = await getFromCache(cacheKey);
       if (cached?.text_content) {
         try {
@@ -8482,7 +8526,9 @@ MATERIALE (unica fonte ammessa — ogni fatto che scrivi deve venire da qui):
 ${materiale}
 """
 
-SCRIVI il testo dell'audioguida di QUESTA opera, in ${langCfg.name}, 250-350 parole, da leggere ad alta voce (due o tre minuti di ascolto). Struttura, senza titoli né elenchi, come un discorso continuo:
+${stile === 'bambini'
+  ? `SCRIVI il testo dell'audioguida di QUESTA opera PER UN BAMBINO DI OTTO ANNI, in ${langCfg.name}, 120-180 parole (un minuto di ascolto). Frasi corte. Niente date astratte e niente termini tecnici: se serve una data, dilla come "più di cinquecento anni fa". Racconta cosa succede nell'immagine come una storia, e fagli cercare con gli occhi almeno DUE cose precise ("riesci a trovare il cane in basso a sinistra?"). Chiudi con una domanda che lo faccia guardare ancora. Tono caldo, mai infantile: un bambino sente subito quando lo si tratta da stupido. E TUTTO deve venire dal materiale: le storie per bambini non sono un permesso di inventare.`
+  : `SCRIVI il testo dell'audioguida di QUESTA opera, in ${langCfg.name}, 250-350 parole, da leggere ad alta voce (due o tre minuti di ascolto). Struttura, senza titoli né elenchi, come un discorso continuo:`}
 1. UNA frase che porta lo sguardo sull'opera e dice che cosa si sta guardando.
 2. DESCRIZIONE DI CIÒ CHE SI VEDE, guidando l'occhio con precisione: la composizione, i personaggi e cosa fanno, i gesti, gli sguardi, i colori, la luce, i dettagli che sfuggono a chi passa. Usa "osserva", "guarda in basso a destra", "nota come". Questa è la parte più lunga e importante: un'audioguida serve a FAR VEDERE.
 3. La tecnica e i materiali con i dati della scheda: supporto, misure reali, tecnica, stato di conservazione se il materiale lo dice.
@@ -8545,7 +8591,8 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
       const parole = testo.split(/\s+/).filter(Boolean).length;
       // Un'audioguida di tre righe non è un'audioguida: sotto le 120 parole
       // si rifiuta invece di servire un testo povero.
-      if (parole < 120) {
+      // Per un bambino il racconto è corto per scelta: la soglia scende.
+      if (parole < (stile === 'bambini' ? 80 : 120)) {
         console.warn(`[ArtworkGuide] "${opera}": solo ${parole} parole, scartata`);
         return res.json({ ok: false, reason: 'too_short', artwork: opera, parole });
       }

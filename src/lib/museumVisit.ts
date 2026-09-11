@@ -41,6 +41,13 @@ export type VenueTappa = {
   /** Opera della collezione di cui il museo NON dichiara la sala: si mostra
    *  senza numero, in fondo, perché «la possiede» non è «oggi la vedi». */
   soloCollezione?: boolean;
+  /** Il tipo secondo Wikidata (P31): serve al filtro per interessi. Assente
+   *  se non censita; «altro» è una risposta onesta, non un errore. */
+  tipo?: 'dipinto' | 'scultura' | 'altro';
+  /** Posizione nell'ordine di fama di Wikidata (1 = la più nota): serve al
+   *  percorso su misura per scegliere cosa tenere in «capolavori» e «30
+   *  minuti». Assente se l'opera non è censita. */
+  famaRank?: number;
   /** Fra le tre opere più famose del museo: nelle ore centrali c'è la fila.
    *  Il segnale è da Wikidata (numero di lingue in cui l'opera ha una voce),
    *  non un'opinione: chi lo vede può decidere di rimandarla. */
@@ -67,6 +74,19 @@ export type VenueGuide = {
   language: string;
 };
 
+/**
+ * IL PERCORSO SU MISURA (11/09/2026): tre leve indipendenti.
+ *  - tempo: tutto, mezz'ora (8 opere), un'ora (15);
+ *  - interessi: tutto, solo dipinti, solo sculture, il resto;
+ *  - bambini: sei opere, e l'audioguida raccontata a un bambino di otto anni.
+ */
+export type Personalizzazione = {
+  tempo: 'tutto' | '30' | '60';
+  interessi: 'tutto' | 'dipinti' | 'sculture' | 'altro';
+  bambini: boolean;
+};
+export const PERSONALIZZAZIONE_BASE: Personalizzazione = { tempo: 'tutto', interessi: 'tutto', bambini: false };
+
 export type VenueInfo = {
   id: string | null;
   name: string;
@@ -91,6 +111,8 @@ export type MuseumVisit = {
   salaCorrente?: string;
   /** Visita ricevuta dal leader di un tour di gruppo: si segue, non si guida. */
   dalLeader?: boolean;
+  /** Il percorso su misura scelto: tempo, interessi, bambini. */
+  personalizzazione?: Personalizzazione;
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
@@ -159,7 +181,7 @@ export function matchTappa(guide: VenueGuide, workName: string): number {
 type VenueGuideResponse =
   | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null; venuePhoto?: string; venuePhotoIcon?: string }
   // 'needs_tour_pass': la visita guidata è del Pass Museo con itinerario.
-  | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number };
+  | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number; sourcesOk?: boolean; sample?: { text: string; language: string } | null };
 
 async function authHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
@@ -384,8 +406,10 @@ export type ProssimaTappa = {
 export function prossimaTappa(v: MuseumVisit | null): ProssimaTappa | null {
   if (!v?.guide?.tappe?.length) return null;
   const tappe = v.guide.tappe;
-  // La prossima è la prima non vista e non saltata, nell'ordine del percorso.
-  const idx = tappe.findIndex(t => !t.seenCardId && !t.skipped);
+  // La prossima è la prima non vista e non saltata, nell'ordine del percorso,
+  // fra quelle del percorso su misura scelto.
+  const attive = tappeAttive(v);
+  const idx = tappe.findIndex((t, k) => attive.has(k) && !t.seenCardId && !t.skipped);
   if (idx < 0) return null;
 
   // Da dove si parte, in ordine di certezza:
@@ -606,10 +630,12 @@ export async function onArtworkRecognized(card: any, coords: { lat: number | nul
 }
 
 /** L'utente scrive il nome del museo all'inizio: la guida parte da lì. */
-export async function startVisitByName(name: string, coords: { lat: number | null; lon: number | null }, language: Language): Promise<{ ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean }> {
+export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null };
+
+export async function startVisitByName(name: string, coords: { lat: number | null; lon: number | null }, language: Language): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: coords.lat, lon: coords.lon, venueHint: name, venueHintSource: 'user', language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null };
   return { ok: true, visit: startVisitFromGuide(resp) };
 }
 
@@ -619,11 +645,73 @@ export async function startVisitByName(name: string, coords: { lat: number | nul
  * o voce Wikipedia può avere la sua guida, generata al volo se non è già in
  * libreria.
  */
-export async function startVisitByPoi(poiId: string, language: Language, fallbackCoords?: { lat: number | null; lon: number | null }): Promise<{ ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean }> {
+export async function startVisitByPoi(poiId: string, language: Language, fallbackCoords?: { lat: number | null; lon: number | null }): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: fallbackCoords?.lat ?? null, lon: fallbackCoords?.lon ?? null, poiId, language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null };
   return { ok: true, visit: startVisitFromGuide(resp) };
+}
+
+/**
+ * IL MIO PERCORSO, NON IL VOSTRO (11/09/2026). Tre scelte secche — tutto,
+ * i capolavori, mezz'ora — e il percorso si accorcia da solo. Non si tocca
+ * la guida: si decide quali tappe sono ATTIVE, e il resto (prossima tappa,
+ * lettore, «prima di uscire», stampa) segue. Chi cambia idea a metà museo
+ * ritrova tutto: le opere non scelte non spariscono, si mettono da parte.
+ *
+ * Come si sceglie: col rango di fama di Wikidata quando c'è (un dato), e
+ * con l'ordine del percorso quando non c'è. Mai meno di tre opere, mai le
+ * «della collezione» (senza sala non hanno un posto dove andare).
+ *  - capolavori: le 6 più famose;
+ *  - breve: 8 opere ≈ 30 minuti (tre minuti l'una fra ascolto e spostamento).
+ */
+export function tappeAttive(v: MuseumVisit | null): Set<number> {
+  const tappe = v?.guide?.tappe || [];
+  const tutte = new Set(tappe.map((_, k) => k));
+  const p = v?.personalizzazione || PERSONALIZZAZIONE_BASE;
+  const nessunaLeva = p.tempo === 'tutto' && p.interessi === 'tutto' && !p.bambini;
+  if (nessunaLeva || tappe.length <= 3) return tutte;
+
+  // 1) INTERESSI: si scartano le opere del tipo sbagliato. Le opere senza
+  //    tipo restano: non sapere che cos'è non è una ragione per toglierla.
+  const tipoVoluto = p.interessi === 'dipinti' ? 'dipinto' : p.interessi === 'sculture' ? 'scultura' : p.interessi === 'altro' ? 'altro' : null;
+  let candidati = tappe.map((t, k) => ({ k, t })).filter(x => !x.t.soloCollezione);
+  if (tipoVoluto) {
+    const filtrati = candidati.filter(x => !x.t.tipo || x.t.tipo === tipoVoluto);
+    // Se il filtro lascerebbe meno di tre opere, non si applica: un percorso
+    // da due tappe non è un percorso.
+    if (filtrati.length >= 3) candidati = filtrati;
+  }
+
+  // 2) TEMPO e BAMBINI: quante opere tenere. Tre minuti l'una fra ascolto e
+  //    spostamento; coi bambini sei opere e non di più — reggono venti
+  //    minuti, e la settima è quella che rovina le prime sei.
+  const quante = p.bambini ? 6 : p.tempo === '30' ? 8 : p.tempo === '60' ? 15 : Number.POSITIVE_INFINITY;
+  const scelte = new Set<number>();
+  if (candidati.length <= quante) {
+    for (const x of candidati) scelte.add(x.k);
+  } else {
+    // Prima per fama (rango basso = più famosa), poi per posizione nel percorso.
+    const ordinati = [...candidati].sort((a, b) => {
+      const fa = a.t.famaRank ?? Number.POSITIVE_INFINITY;
+      const fb = b.t.famaRank ?? Number.POSITIVE_INFINITY;
+      return fa !== fb ? fa - fb : a.k - b.k;
+    });
+    // Le opere già viste restano sempre: un percorso su misura non cancella
+    // quello che si è fatto.
+    for (const x of candidati) if (x.t.seenCardId) scelte.add(x.k);
+    for (const x of ordinati) { if (scelte.size >= Math.max(quante, 3)) break; scelte.add(x.k); }
+  }
+  return scelte;
+}
+
+export function impostaPersonalizzazione(p: Partial<Personalizzazione>): MuseumVisit | null {
+  const v = getVisit();
+  if (!v) return null;
+  v.personalizzazione = { ...(v.personalizzazione || PERSONALIZZAZIONE_BASE), ...p };
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
 }
 
 export function countSeen(v: MuseumVisit): number {
@@ -741,6 +829,8 @@ export async function fetchArtworkGuide(args: {
   room?: string | null;
   officialSite?: string | null;
   language: Language;
+  /** «bambini»: la stessa opera raccontata a un bambino di otto anni. */
+  stile?: 'bambini' | '';
 }): Promise<ArtworkGuideResponse | null> {
   const headers = await authHeaders();
   if (!headers) return null;
@@ -754,6 +844,7 @@ export async function fetchArtworkGuide(args: {
         ...(args.artist ? { artist: args.artist } : {}),
         ...(args.room ? { room: args.room } : {}),
         ...(args.officialSite ? { officialSite: args.officialSite } : {}),
+        ...(args.stile ? { stile: args.stile } : {}),
         language: args.language,
       }),
     });
