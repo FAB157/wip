@@ -7974,6 +7974,18 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           wikiText = ordinaSezioniPerVisita(diretta.extract);
           wikidataId = qidDelPoi;
           wikiSource = { lang: diretta.lang, title: diretta.title, url: `https://${diretta.lang}.wikipedia.org/wiki/${encodeURIComponent(diretta.title.replace(/ /g, '_'))}` };
+          // IL NOME MOSTRATO (12/09/2026, segnalato dalla semina): i POI
+          // importati da Wikidata a volte hanno il nome in un'altra lingua
+          // finito lì per sbaglio (il Louvre si chiamava «Louvren», etichetta
+          // svedese). Quando il sitelink risolto è PROPRIO nella lingua della
+          // guida e il nome del POI gli somiglia poco, il titolo Wikipedia —
+          // corretto e già nella lingua giusta — vince su quello salvato.
+          // Un nome che somiglia (anche solo "Uffizi" vs "Galleria degli
+          // Uffizi") resta quello curato: qui si cambia solo l'evidente errore.
+          if (diretta.lang === langCfg.wiki) {
+            const somiglia = Math.max(sovrapposizioneNomi(venue.name, diretta.title), sovrapposizioneNomi(diretta.title, venue.name));
+            if (somiglia < 0.5) venue.name = diretta.title;
+          }
         }
       }
       for (const wl of [...new Set([langCfg.wiki, 'it', 'en'])]) {
