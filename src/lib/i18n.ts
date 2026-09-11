@@ -43,6 +43,9 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Sala non indicata", EN: "Room not stated", FR: "Salle non indiquée", ES: "Sala no indicada",
     DE: "Saal nicht angegeben", RU: "Зал не указан", ZH: "未标明展厅",
   },
+  // Pausa vera: si riprende da dove si era, non dalla prima parola.
+  mv_art_resume: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续播放" },
+  mv_art_paused: { IT: "In pausa", EN: "Paused", FR: "En pause", ES: "En pausa", DE: "Pausiert", RU: "На паузе", ZH: "已暂停" },
   // La guida su carta: si piega in quattro e non ha batteria.
   mv_stampa_guida: {
     IT: "Stampa la guida", EN: "Print the guide", FR: "Imprimer le guide", ES: "Imprimir la guía",

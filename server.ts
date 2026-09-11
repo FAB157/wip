@@ -6839,8 +6839,29 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
    * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
    */
-  async function opereDaWikidata(qid: string, lang: string): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string> }> {
+  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string> }> {
     if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {} };
+
+    // QUESTA RISPOSTA SI CONSERVA (11/09/2026).
+    //
+    // Misurato oggi, tre tentativi per museo: al Metropolitan la query va in
+    // timeout 3 volte su 3, agli Uffizi 1 su 3. Non si rompe niente di
+    // visibile — la guida esce lo stesso — ma esce CIECA: zero foto su venti
+    // tappe, e costruita solo sulla prosa dell'enciclopedia, che è il canale
+    // da cui passano le opere di altri musei. E siccome le guide buone non
+    // scadono mai, quella guida resta cieca per sempre.
+    // Con la semina di massa alle porte, un capriccio di dodici secondi
+    // diventerebbe patrimonio: si conserva la risposta per 30 giorni (le
+    // opere di un museo non cambiano in un mese) e si ritenta una volta
+    // prima di arrendersi.
+    const chiaveOpere = `wd_opere_${qid}_${lang}_${tipoLuogo}`;
+    const conservata = await getFromCache(chiaveOpere, 'wikidata_opere', 30 * 24 * 60 * 60 * 1000);
+    if (conservata) {
+      try {
+        const d = JSON.parse(conservata);
+        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {} };
+      } catch { /* conservata illeggibile: si richiede */ }
+    }
     // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
     // QUELL'opera: il legame è con l'opera, non con una parola chiave — la
     // regola del progetto sulle foto vere vale anche qui.
@@ -6849,8 +6870,22 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // lingua di casa dell'opera. Averle entrambe è ciò che permette di dire
     // «Campo di iris — sul cartellino: Veld met irissen bij Arles» invece di
     // far uscire l'olandese dentro una guida in inglese (Van Gogh Museum).
+    // IN UNA CHIESA LA DOMANDA È UN'ALTRA (11/09/2026).
+    //
+    // P195 chiede «chi POSSIEDE quest'opera»: è la domanda di un museo, che
+    // ha un inventario. Una chiesa non possiede la sua pala d'altare nel
+    // senso di Wikidata — l'opera si TROVA lì, ed è P276 a dirlo. Chiedendo
+    // la cosa sbagliata perdevamo la maggior parte di quello che c'è dentro.
+    // Misurato coi QID veri: San Pietro passa da 11 opere a 57, Santa Croce
+    // da 20 a 60, Santa Maria del Fiore da 28 a 60. È la differenza fra una
+    // lista grigia di numeretti e una fila di opere riconoscibili.
+    // Nei musei P276 si aggiunge lo stesso: dice dove una cosa sta esposta,
+    // che è esattamente ciò che un percorso deve sapere.
+    const dovePrende = tipoLuogo === 'chiesa'
+      ? `{ ?opera wdt:P276 wd:${qid} } UNION { ?opera wdt:P195 wd:${qid} }`
+      : `{ ?opera wdt:P195 wd:${qid} } UNION { ?opera wdt:P276 wd:${qid} }`;
     const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine (COUNT(DISTINCT ?sitelink) AS ?fama) WHERE {
-  ?opera wdt:P195 wd:${qid} .
+  ${dovePrende}
   OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
   OPTIONAL { ?opera wdt:P170 ?autore . }
   OPTIONAL { ?opera wdt:P571 ?data . BIND(YEAR(?data) AS ?anno) }
@@ -6861,10 +6896,22 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
 } GROUP BY ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine
 ORDER BY DESC(?fama) LIMIT 60`;
     try {
-      const r = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
-        headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' },
-        timeout: 12000,
-      });
+      // Due tentativi: il primo corto, il secondo più paziente. La maggior
+      // parte delle cadute è un timeout passeggero del servizio pubblico, e
+      // arrendersi al primo significa condannare quel museo per sempre.
+      let r: any = null;
+      for (let tentativo = 0; tentativo < 2 && !r; tentativo++) {
+        try {
+          r = await axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`, {
+            headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)', Accept: 'application/sparql-results+json' },
+            timeout: tentativo === 0 ? 12000 : 25000,
+          });
+        } catch (e1: any) {
+          if (tentativo === 1) throw e1;
+          console.warn(`[VenueGuide] Wikidata caduta al primo tentativo (${e1?.message}), riprovo con più tempo`);
+          await new Promise(s => setTimeout(s, 1200));
+        }
+      }
       const righe: string[] = [];
       const foto: Record<string, string> = {};
       // I titoli certificati da P195: sono le opere che Wikidata dichiara di
@@ -6896,6 +6943,12 @@ ORDER BY DESC(?fama) LIMIT 60`;
         // Anche col titolo originale come chiave: il modello può ripetere
         // quello, e la foto deve trovarsi lo stesso.
         if (img && originali[chiave] && !foto[normalizzaTesto(conRipiego)]) foto[normalizzaTesto(conRipiego)] = img;
+      }
+      // Si conserva solo una risposta VERA: un elenco vuoto potrebbe essere
+      // il sintomo di un QID sbagliato, e metterlo in cache per un mese
+      // significherebbe fissare l'errore invece del dato.
+      if (righe.length) {
+        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali }));
       }
       return { righe, foto, titoli, originali };
     } catch (e: any) {
@@ -7787,8 +7840,13 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // opere ci sono (Wikidata le elenca una per una) e quasi nulla su DOVE
       // stanno (lo dichiara il sito del museo, che pubblica sale e piani).
       // Entrambe sono best-effort e in parallelo: se cadono, resta Wikipedia.
+      // Chiesa o museo si decide QUI, prima di chiedere le opere: la domanda
+      // da fare a Wikidata dipende da questo (una chiesa non «possiede» la
+      // sua pala d'altare, ce l'ha dentro). Il nostro dato vale più della
+      // risposta del modello — il Duomo di Firenze usciva classificato museo.
+      const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
       const [opereWd, sitoOut] = await Promise.all([
-        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki) : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string> }),
+        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string> }),
         (async () => {
           let sito = '';
           if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
@@ -7826,7 +7884,6 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       }
 
       // ── 4. Il percorso, SOLO dal materiale ──
-      const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
       const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}" per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork || 'sconosciuta'}".
 
 MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):

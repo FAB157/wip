@@ -5,7 +5,7 @@ import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente } from '../lib/museumVisit';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
-import { speakAudioguide, stopSpeech } from '../services/ttsService';
+import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech } from '../services/ttsService';
 import { printScoped } from '../lib/printScoped';
 import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -35,6 +35,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [operaGuide, setOperaGuide] = useState<Record<number, ArtworkGuide>>({});
   const [operaLoading, setOperaLoading] = useState<number | null>(null);
   const [operaParla, setOperaParla] = useState<number | null>(null);
+  /** Quale opera è in PAUSA: riprende da dove era, non da capo. */
+  const [operaInPausa, setOperaInPausa] = useState<number | null>(null);
   // Scaricamento per l'uso senza rete e ampliamento del percorso.
   const [scaricando, setScaricando] = useState<{ fatte: number; totali: number } | null>(null);
   const [scaricato, setScaricato] = useState(() => !!museoScaricato(visit.venueKey, language));
@@ -121,13 +123,30 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     return parts.filter(Boolean).join('\n');
   };
 
+  /**
+   * PAUSA VERA, NON SPEGNIMENTO (11/09/2026).
+   *
+   * Il tasto diceva «Pausa» e chiamava `stopSpeech()`: al tocco successivo
+   * il racconto ripartiva dalla prima parola. In un museo si viene
+   * interrotti di continuo — un custode, una sala piena, qualcuno che ti
+   * chiama — e ogni interruzione costava tre minuti di riascolto. È il
+   * gesto più frequente di tutta la visita, ed era l'unico che non
+   * funzionava.
+   * `pauseSpeech`/`resumeSpeech` esistevano già e coprono tutti i casi
+   * (audio registrato, riproduzione nativa in background, voce di sistema):
+   * semplicemente qui non erano mai state collegate.
+   */
+  const [audioInPausa, setAudioInPausa] = useState(false);
+
   const handleAudio = async () => {
     if (audioLoading) return;
-    if (audioPlaying) { stopSpeech(); setAudioPlaying(false); return; }
+    if (audioPlaying) { pauseSpeech(); setAudioPlaying(false); setAudioInPausa(true); return; }
+    if (audioInPausa) { resumeSpeech(); setAudioInPausa(false); setAudioPlaying(true); return; }
     setAudioLoading(true);
     try {
-      await speakAudioguide(audioText(), String(visit.guide.language || language).toLowerCase(), getGuideCharacter(), () => setAudioPlaying(false));
+      await speakAudioguide(audioText(), String(visit.guide.language || language).toLowerCase(), getGuideCharacter(), () => { setAudioPlaying(false); setAudioInPausa(false); });
       setAudioPlaying(true);
+      setAudioInPausa(false);
     } catch {
       setAudioPlaying(false);
     } finally {
@@ -219,9 +238,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const handleOpera = async (i: number) => {
     const tappa = visit.guide.tappe[i];
     if (!tappa) return;
-    if (operaParla === i) { stopSpeech(); setOperaParla(null); return; }
+    // Pausa vera anche qui — anzi, soprattutto qui: è il tasto che si preme
+    // stando in piedi davanti al quadro, con qualcuno che ti passa davanti.
+    if (operaParla === i) { pauseSpeech(); setOperaParla(null); setOperaInPausa(i); return; }
+    if (operaInPausa === i && operaGuide[i]) { resumeSpeech(); setOperaInPausa(null); setOperaParla(i); return; }
     stopSpeech();
     setOperaParla(null);
+    setOperaInPausa(null);
 
     let guida = operaGuide[i];
     // ARCHIVIO: se il museo è stato scaricato, il testo è già nostro. Non si
@@ -622,8 +645,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     >
                       {operaLoading === i ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         : operaParla === i ? <Pause className="w-3.5 h-3.5" />
+                        : operaInPausa === i ? <Play className="w-3.5 h-3.5" />
                         : <Volume2 className="w-3.5 h-3.5" />}
-                      {operaParla === i ? t('vis_pause') : t('mv_art_listen')}
+                      {operaParla === i ? t('vis_pause') : operaInPausa === i ? t('mv_art_resume') : t('mv_art_listen')}
                     </button>
 
                     {/* «Non la trovo»: la sala è chiusa, l'opera è in prestito
@@ -661,7 +685,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                           <div className="flex-1 min-w-0">
                             <p className="text-[11px] font-black text-slate-900 truncate">{operaGuide[i].titolo || tappa.nome}</p>
                             <p className="text-[10px] font-bold text-slate-500">
-                              {operaParla === i ? t('mv_art_playing') : t('mv_art_ready')}
+                              {operaParla === i ? t('mv_art_playing') : operaInPausa === i ? t('mv_art_paused') : t('mv_art_ready')}
                               {' · '}
                               {Math.max(1, Math.round((operaGuide[i].parole || 0) / 150))} min
                             </p>
