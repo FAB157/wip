@@ -222,7 +222,8 @@ function valeLaPenaAltraChiave(err: any): boolean {
   if (isErroreQuota(err)) return true;
   // Una chiave NON VALIDA è il caso in cui un'altra chiave serve di più:
   // Gemini risponde 400 «API key not valid» e la rotazione si fermava lì
-  // (visto su Vercel il 12/09/2026: GOOGLE_API_KEY morta, le altre vive).
+  // (visto su Vercel il 12/09/2026: una delle chiavi GEMINI_API_KEY* morta,
+  // l'altra viva).
   const msg = String(err?.message || err?.response?.data?.error?.message || '');
   if (/API key not valid|API_KEY_INVALID|invalid api key|incorrect api key/i.test(msg)) return true;
   const status = Number(err?.status || err?.response?.status || 0);
@@ -9137,8 +9138,9 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // sempre la riserva a pagamento (visto nei log il 12/09/2026).
       const conScadenza = <T,>(p: Promise<T>, label: string, ms = 12000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
-      // Con la rotazione delle chiavi: il client di default (GOOGLE_API_KEY)
-      // su Vercel risponde «API key not valid», le altre chiavi Gemini vanno.
+      // Con la rotazione delle chiavi: `ai.models` pesca UNA chiave a caso e
+      // su Vercel una delle GEMINI_API_KEY* risponde «API key not valid»;
+      // la rotazione prova le altre.
       if (ai?.clients?.length) {
         try {
           const g = await conScadenza(tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
@@ -9255,9 +9257,9 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
       // davanti al quadro ha aspettato 35 s. Oltre i 12 s parla la riserva.
       const conScadenza = <T,>(p: Promise<T>, label: string, ms = 12000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
-      // Con la ROTAZIONE delle chiavi (come callUniversalAi): il client di
-      // default usa GOOGLE_API_KEY, che su Vercel risponde «API key not
-      // valid»; le altre chiavi Gemini vanno.
+      // Con la ROTAZIONE delle chiavi (come callUniversalAi): `ai.models`
+      // pesca una chiave a caso, e su Vercel una delle GEMINI_API_KEY*
+      // risponde «API key not valid»; la rotazione prova le altre.
       if (ai?.clients?.length) {
         try {
           const g = await conScadenza(tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
@@ -9529,11 +9531,14 @@ Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se
       let dati: any = null;
       // Due tentativi: in produzione la PRIMA chiamata di una serie è uscita
       // «ai_non_disponibile» e la seconda, identica, è andata.
+      // DeepSeek in coda ai gratuiti SOLO con la persona davanti (regola del
+      // committente): gli script di sfondo restano sui motori gratuiti.
+      const daScriptMostre = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
       for (let tentativo = 0; tentativo < 2 && !dati; tentativo++) {
         try {
           const ai2 = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
             temperature: 0, max_tokens: 900, response_format: { type: 'json_object' },
-            excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+            excludeEngines: ['agnes'], ultimaSpiaggiaPagante: !daScriptMostre,
           }, 'museum_exhibitions', supabaseUrl, supabaseServiceKey, groq);
           const raw = String(ai2?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
           dati = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
@@ -9832,11 +9837,16 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         let raw = '';
         // Due tentativi: in produzione la PRIMA chiamata è uscita due volte
         // «ai_non_disponibile» e quella dopo, identica, è andata.
+        // DeepSeek in coda ai gratuiti SOLO con la persona davanti (regola
+        // del committente, 12/09/2026): quando Groq ha finito i token del
+        // giorno, chi sta chiedendo gli orari dal museo li riceve lo stesso;
+        // gli script di sfondo (x-script-secret) restano sui gratuiti.
+        const daScriptOrari = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
         for (let tentativo = 0; tentativo < 2 && !raw; tentativo++) {
           try {
             const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
               temperature: 0, max_tokens: 700, response_format: { type: 'json_object' },
-              excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+              excludeEngines: ['agnes'], ultimaSpiaggiaPagante: !daScriptOrari,
             }, 'museum_hours', supabaseUrl, supabaseServiceKey, groq);
             raw = String(ai?.data || '');
           } catch (e: any) {
