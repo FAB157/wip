@@ -7715,6 +7715,31 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           console.warn('[VenueGuide] POI richiesto non leggibile:', e?.message);
         }
       }
+      // Il museo scelto dall'elenco "qui vicino" (fetchMuseumLibrary) porta
+      // spesso un id sintetico da Wikidata ("wd-Q..."), MAI importato in
+      // shared_pois: la lettura sopra non trova nulla, `venue` resta null, e
+      // si finiva a tentare la sorte col geosearch di Wikipedia — che su
+      // "Palazzo delle Logge" mancava, mentre la guida era già pronta in
+      // libreria con QUESTO id (11/09/2026, segnalazione utente: "ho cliccato
+      // e non è successo nulla" su un museo che aveva già 8 tappe salvate).
+      // Si cerca direttamente in museum_guides: se il poi_id combacia, il
+      // nome/coordinate del venue derivano da lì, e la chiave della libreria
+      // (poi_<id>) torna a combaciare ESATTAMENTE con la riga già presente.
+      if (!venue && poiIdRichiesto && !poiIdRichiesto.startsWith('vision-')) {
+        try {
+          const r = await axios.get(
+            `${supabaseUrl}/rest/v1/museum_guides?poi_id=eq.${encodeURIComponent(poiIdRichiesto)}&select=venue_name,lat,lon&limit=1`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 7000 }
+          );
+          const m = r.data?.[0];
+          if (m?.venue_name) {
+            venue = { id: poiIdRichiesto, name: String(m.venue_name), lat: m.lat ?? null, lon: m.lon ?? null, category: '', description: '' };
+            if (!hasGps && Number.isFinite(m.lat) && Number.isFinite(m.lon)) { lat = m.lat; lon = m.lon; hasGps = true; }
+          }
+        } catch (e: any) {
+          console.warn('[VenueGuide] Museo richiesto non leggibile da museum_guides:', e?.message);
+        }
+      }
 
       if (!venue && hasGps) {
         try {
@@ -7936,6 +7961,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // o in un'altra lingua salvato in shared_pois (caso Louvre/"Louvren").
       if (qidDelPoi) {
         const diretta = await paginaDaWikidataQid(qidDelPoi, langCfg.wiki, ua);
+        console.log(`[VenueGuide][DIAG] qidDelPoi=${qidDelPoi} diretta=${diretta ? `${diretta.lang}:"${diretta.title}" (${diretta.extract.length} car.)` : 'null'}`);
         if (diretta) {
           if (diretta.coord && (venue.lat == null || venue.lon == null)) { venue.lat = diretta.coord.lat; venue.lon = diretta.coord.lon; }
           wikiText = ordinaSezioniPerVisita(diretta.extract);
