@@ -11926,12 +11926,6 @@ ${manuale}`;
     const token = process.env.MAPILLARY_TOKEN || process.env.VITE_MAPILLARY_TOKEN || '';
     if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
     try {
-      // pbf v5 e vector-tile v3 sono ESM e NON hanno export default: si
-      // importano per nome (`PbfReader`, non `Pbf`). Import dinamico perché
-      // servono solo qui, cioè di rado: nessun costo all'avvio a freddo.
-      const { VectorTile } = await import('@mapbox/vector-tile');
-      const { PbfReader } = await import('pbf');
-
       const rad = (g: number) => g * Math.PI / 180;
       const gradi = (r: number) => r * 180 / Math.PI;
       const distanzaM = (la1: number, lo1: number, la2: number, lo2: number) => {
@@ -11948,40 +11942,41 @@ ${manuale}`;
         return (gradi(Math.atan2(y, x)) + 360) % 360;
       };
       const scarto = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
-      const tileX = (lo: number, z: number) => Math.floor((lo + 180) / 360 * 2 ** z);
-      const tileY = (la: number, z: number) =>
-        Math.floor((1 - Math.log(Math.tan(rad(la)) + 1 / Math.cos(rad(la))) / Math.PI) / 2 * 2 ** z);
 
-      // Il POI può cadere vicino al bordo di una tile: si guardano anche le
-      // otto adiacenti, altrimenti uno scatto a dieci metri ma "di là dal
-      // confine" verrebbe perso.
-      const x0 = tileX(lon, MAPILLARY_Z), y0 = tileY(lat, MAPILLARY_Z);
-      const tiles: Array<[number, number]> = [];
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) tiles.push([x0 + dx, y0 + dy]);
+      // LA RICERCA PER TILE VETTORIALI È MORTA — sostituita con la Graph API
+      // a bbox l'11/09/2026. `tiles.mapillary.com/maps/vtp/...` ha smesso di
+      // rispondere con dati per accesso via query string: reindirizza alla
+      // pagina di login ANCHE SENZA NESSUN TOKEN (verificato su più token,
+      // incluso uno che il giorno prima funzionava). Da quel momento questa
+      // funzione restituiva sempre zero candidati Mapillary, in silenzio.
+      //
+      // La Graph API v4 (`/images?bbox=...`) resta aperta e restituisce id,
+      // geometria, bussola e qualità in una sola chiamata. Ha un limite non
+      // documentato sul VOLUME di dati per richiesta (non sulla sola area:
+      // dipende dalla densità di scatti), quindi il riquadro deve restare
+      // piccolo: misurato che un lato di 0,008° fallisce sempre, 0,006°
+      // funziona sempre anche nel centro storico denso di Carrara.
+      // TRAPPOLA: il campo `creator` qui fa fallire la richiesta IN SILENZIO
+      // (torna `data:[]` senza errore) — va chiesto solo nella risoluzione
+      // per singolo id più sotto, mai in questa ricerca per area.
+      const LATO_BBOX = 0.006;
+      const minLat = lat - LATO_BBOX / 2, maxLat = lat + LATO_BBOX / 2;
+      const minLon = lon - LATO_BBOX / 2, maxLon = lon + LATO_BBOX / 2;
 
       type Scatto = { id: string; lat: number; lon: number; bussola: number; pano: boolean; quando: number; qualita: number };
       const scatti: Scatto[] = [];
-      for (const [tx, ty] of (token ? tiles : [])) {
-        const url = `https://tiles.mapillary.com/maps/vtp/mly1_public/2/${MAPILLARY_Z}/${tx}/${ty}?access_token=${encodeURIComponent(token)}`;
+      if (token) {
+        const campi = 'id,computed_geometry,computed_compass_angle,is_pano,quality_score';
+        const url = `https://graph.mapillary.com/images?access_token=${encodeURIComponent(token)}&fields=${campi}&bbox=${minLon},${minLat},${maxLon},${maxLat}&limit=200`;
         const res = await fetch(url, { signal: AbortSignal.timeout(8000) }).catch(() => null);
-        if (!res?.ok) continue;
-        const buf = new Uint8Array(await res.arrayBuffer());
-        if (!buf.length) continue;
-        const tile = new VectorTile(new PbfReader(buf));
-        const livello = (tile.layers as any)?.image;
-        if (!livello) continue;
-        for (let i = 0; i < livello.length; i++) {
-          const f = livello.feature(i);
-          const g = f.toGeoJSON(tx, ty, MAPILLARY_Z);
-          const c = (g as any)?.geometry?.coordinates;
-          if (!Array.isArray(c) || c.length < 2) continue;
-          const p: any = f.properties || {};
-          const bussola = Number(p.computed_compass_angle ?? p.compass_angle);
-          if (!Number.isFinite(bussola)) continue;
+        const j: any = res?.ok ? await res.json().catch(() => null) : null;
+        for (const im of (j?.data || [])) {
+          const c = im?.computed_geometry?.coordinates;
+          const bussola = Number(im?.computed_compass_angle);
+          if (!Array.isArray(c) || c.length < 2 || !Number.isFinite(bussola)) continue;
           scatti.push({
-            id: String(p.id ?? ''), lon: Number(c[0]), lat: Number(c[1]), bussola,
-            pano: p.is_pano === true || p.is_pano === 1, quando: Number(p.captured_at || 0),
-            qualita: Number(p.quality_score ?? 0),
+            id: String(im.id ?? ''), lon: Number(c[0]), lat: Number(c[1]), bussola,
+            pano: im.is_pano === true, quando: 0, qualita: Number(im.quality_score ?? 0),
           });
         }
       }
