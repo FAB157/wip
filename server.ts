@@ -9127,9 +9127,14 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
 
       // Gratuito per primo: leggere una scritta grande non vale una chiamata
       // a pagamento.
+      // `withTimeout` della rotta Vision è locale a quella rotta: qui non
+      // esisteva, Gemini lanciava «withTimeout is not defined» e leggeva
+      // sempre la riserva a pagamento (visto nei log il 12/09/2026).
+      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 25000): Promise<T> =>
+        Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
       if (ai) {
         try {
-          const g = await withTimeout(ai.models.generateContent({
+          const g = await conScadenza(ai.models.generateContent({
             model: "gemini-3.5-flash-lite",
             contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: pulito } }] }],
             config: { responseMimeType: "application/json" }
@@ -9235,10 +9240,14 @@ REGOLE: frasi brevi e concrete; 150-220 parole; niente storia, date, biografia, 
 Rispondi SOLO con JSON: {"testo": "..."}`;
 
       let testo = '';
-      // Gratuito per primo, come per il cartello della sala.
+      // Gratuito per primo, come per il cartello della sala. (Il primo
+      // collaudo in produzione era andato tutto sulla riserva a pagamento:
+      // `withTimeout` qui non esisteva.)
+      const conScadenza = <T,>(p: Promise<T>, label: string, ms = 30000): Promise<T> =>
+        Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
       if (ai) {
         try {
-          const g = await withTimeout(ai.models.generateContent({
+          const g = await conScadenza(ai.models.generateContent({
             model: "gemini-3.5-flash-lite",
             contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64 } }] }],
             config: { responseMimeType: "application/json" }
@@ -9420,7 +9429,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       const langKey = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
       const wl = ({ IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' } as Record<string, string>)[langKey] || 'it';
       if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
-      const chiave = `museum_exhib:v1:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      // v2: pagine virtuali/online escluse, convegni esclusi (in v1 gli Uffizi
+      // in inglese avevano in cache un convegno di tre giorni).
+      const chiave = `museum_exhib:v2:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       const inCache = await getFromCache(chiave, 'museum_exhib', 3 * 24 * 60 * 60 * 1000);
       if (inCache) { try { return res.json(JSON.parse(inCache)); } catch { /* si rilegge */ } }
 
@@ -9447,7 +9458,9 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
         timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400,
       };
       const RE_MOSTRE = /(mostr|exhibit|exposi|ausstellung|выстав|展览|特展)/i;
-      const RE_NO = /(archiv|passat|past|precedent|anterior|vergangen|прошл|往期|\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$)/i;
+      // Fuori: le mostre passate e quelle VIRTUALI/online (agli Uffizi
+      // «/mostre-virtuali» batteva «/mostre» e portava un convegno).
+      const RE_NO = /(archiv|passat|past|precedent|anterior|vergangen|прошл|往期|virtual|virtuali|online|digital|\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$)/i;
       const testi: { u: string; t: string }[] = [];
       try {
         const home = await axios.get(base.href, UA);
@@ -9484,7 +9497,7 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
 
       const oggi = new Date().toISOString().slice(0, 10);
       const nomeMuseo = venueName || poiId;
-      const prompt = `Dal testo qui sotto, preso dal sito ufficiale di "${nomeMuseo}", RICOPIA le MOSTRE TEMPORANEE in corso oggi (${oggi}) o che aprono entro 30 giorni, SOLO quelle che si tengono dentro "${nomeMuseo}" (non in altre sedi dello stesso ente). Non inventare: se un dato non c'è, lascia la stringa vuota. Ignora eventi, concerti, laboratori, visite guidate e mostre già concluse.
+      const prompt = `Dal testo qui sotto, preso dal sito ufficiale di "${nomeMuseo}", RICOPIA le MOSTRE TEMPORANEE (esposizioni di opere, aperte al pubblico per settimane o mesi) in corso oggi (${oggi}) o che aprono entro 30 giorni, SOLO quelle che si tengono dentro "${nomeMuseo}" (non in altre sedi dello stesso ente). Non inventare: se un dato non c'è, lascia la stringa vuota. Ignora eventi, convegni, giornate di studio, conferenze, presentazioni, concerti, laboratori, visite guidate, mostre virtuali o online e mostre già concluse.
 
 TESTO:
 """
@@ -9494,17 +9507,22 @@ ${testi.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 14000)}
 Rispondi SOLO con JSON: {"mostre": [ { "titolo": "", "dal": "YYYY-MM-DD o vuoto", "al": "YYYY-MM-DD o vuoto", "sale": "dove si tiene dentro il museo, come lo scrive il sito, o vuoto", "biglietto": "compresa oppure separato oppure vuoto", "opere": "fino a 8 opere o artisti citati, separati da ; oppure vuoto", "riga": "una frase dal sito che dice di cosa parla la mostra", "url": "la pagina da cui l'hai presa" } ] }
 Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se serve); i titoli restano come li scrive il sito.`;
       let dati: any = null;
-      try {
-        const ai2 = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-          temperature: 0, max_tokens: 900, response_format: { type: 'json_object' },
-          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
-        }, 'museum_exhibitions', supabaseUrl, supabaseServiceKey, groq);
-        const raw = String(ai2?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-        dati = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-      } catch (e: any) {
-        console.warn('[museum_exhibitions] AI fallita:', e?.message);
-        return res.json({ ok: false, reason: 'ai_non_disponibile' });
+      // Due tentativi: in produzione la PRIMA chiamata di una serie è uscita
+      // «ai_non_disponibile» e la seconda, identica, è andata.
+      for (let tentativo = 0; tentativo < 2 && !dati; tentativo++) {
+        try {
+          const ai2 = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+            temperature: 0, max_tokens: 900, response_format: { type: 'json_object' },
+            excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+          }, 'museum_exhibitions', supabaseUrl, supabaseServiceKey, groq);
+          const raw = String(ai2?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+          dati = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+        } catch (e: any) {
+          console.warn(`[museum_exhibitions] AI fallita (tentativo ${tentativo + 1}):`, e?.message);
+          if (tentativo === 0) await new Promise(r => setTimeout(r, 1500));
+        }
       }
+      if (!dati) return res.json({ ok: false, reason: 'ai_non_disponibile' });
       const dataOk = (s: any) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s) : '');
       const urlDelSito = (s: any) => { try { const u = new URL(String(s || '')); return stessoSito(u.hostname, base.hostname) ? u.href : ''; } catch { return ''; } };
       const mostre = (Array.isArray(dati?.mostre) ? dati.mostre : [])
@@ -9792,16 +9810,21 @@ Rispondi SOLO con un oggetto JSON con questi campi, tutti STRINGHE:
 Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, mostre, giardini o aperture serali straordinarie. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).
 I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(langKey)} (traduci dal sito se serve), lasciando invariati i numeri delle sale, le date e gli orari.`;
         let raw = '';
-        try {
-          const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-            temperature: 0, max_tokens: 700, response_format: { type: 'json_object' },
-            excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
-          }, 'museum_hours', supabaseUrl, supabaseServiceKey, groq);
-          raw = String(ai?.data || '');
-        } catch (e: any) {
-          console.warn('[museum_hours] AI fallita:', e?.message, '| materiale', materiale.length, 'car.');
-          return res.json({ ok: false, reason: 'ai_non_disponibile' });
+        // Due tentativi: in produzione la PRIMA chiamata è uscita due volte
+        // «ai_non_disponibile» e quella dopo, identica, è andata.
+        for (let tentativo = 0; tentativo < 2 && !raw; tentativo++) {
+          try {
+            const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+              temperature: 0, max_tokens: 700, response_format: { type: 'json_object' },
+              excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+            }, 'museum_hours', supabaseUrl, supabaseServiceKey, groq);
+            raw = String(ai?.data || '');
+          } catch (e: any) {
+            console.warn(`[museum_hours] AI fallita (tentativo ${tentativo + 1}):`, e?.message, '| materiale', materiale.length, 'car.');
+            if (tentativo === 0) await new Promise(r => setTimeout(r, 1500));
+          }
         }
+        if (!raw) return res.json({ ok: false, reason: 'ai_non_disponibile' });
         try {
           const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
           dati = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
