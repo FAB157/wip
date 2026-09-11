@@ -3851,7 +3851,8 @@ function parseSafeJSON(text: string) {
     process.env.GROQ_API_KEY,
     process.env.VITE_GROQ_API_KEY,
     process.env.GROQ_API_KEY_2,
-    process.env.GROQ_API_KEY_3
+    process.env.GROQ_API_KEY_3,
+    process.env.GROQ_API_KEY_4
   ].filter(Boolean))]; // Set rimuove duplicati
 
   let groqClients: any[] = [];
@@ -9087,8 +9088,19 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
               const posti = s?.available !== false && s?.is_available !== false && s?.sold_out !== true && (s?.remaining === undefined || Number(s.remaining) > 0);
               return ora ? { ora, posti } : null;
             })
-            .filter(Boolean)
-            .slice(0, 16) as { ora: string; posti: boolean }[];
+            .filter(Boolean) as { ora: string; posti: boolean }[];
+          // Gli Uffizi hanno una fascia ogni 5 minuti: si mostrano al massimo
+          // 16 orari distribuiti sull'intera giornata (non i primi 16, che
+          // finivano alle 10:15), tenendo sempre le fasce esaurite vicine.
+          const campione = (() => {
+            if (fasce.length <= 16) return fasce;
+            const passo = fasce.length / 16;
+            const out: { ora: string; posti: boolean }[] = [];
+            for (let i = 0; i < 16; i++) out.push(fasce[Math.min(fasce.length - 1, Math.floor(i * passo))]);
+            return out;
+          })();
+          fasce.length = 0;
+          fasce.push(...campione);
           if (!fasce.length && giorno && (giorno.available === false || giorno.sold_out === true)) return { data: domani, fasce: [] };
           return fasce.length ? { data: domani, fasce } : null;
         } catch (e: any) {
