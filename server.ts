@@ -30111,20 +30111,38 @@ out center tags;`;
   // mai contato nulla in produzione. Fail-open: se il contatore non si legge
   // si usa Azure lo stesso.
   const AZURE_LIMIT = 500000;
-  const ttsUsageKey = () => `tts_usage_${new Date().toISOString().slice(0, 7)}`;
+  // Tetti mensili per motore (12/09/2026, richiesta del committente: "metti
+  // i limiti a tutti i tre motori, superata la soglia ferma") — superata la
+  // soglia quel motore si SALTA (come già faceva Azure), mai un costo non
+  // previsto. Polly ed ElevenLabs sono personalizzabili via env perché la
+  // loro fascia gratuita dipende dal piano/account, non è fissa come Azure.
+  const TTS_LIMITI_MENSILI: Record<string, number> = {
+    azure: AZURE_LIMIT,
+    // 1 milione = fascia gratuita neurale dei primi 12 mesi di un account
+    // AWS nuovo; da abbassare via env quando quella finestra si chiude.
+    polly: Number(process.env.POLLY_MONTHLY_LIMIT) || 1000000,
+    // 10.000 = piano gratuito ElevenLabs; alzare via env se il piano attivo
+    // sulla chiave in uso ne concede di più.
+    elevenlabs: Number(process.env.ELEVENLABS_MONTHLY_LIMIT) || 10000,
+  };
+  // "azure" mantiene la chiave storica (tts_usage_YYYY-MM) per non perdere
+  // il contatore già in produzione; gli altri motori ne hanno una propria.
+  const ttsUsageKey = (motore: string = 'azure') => motore === 'azure'
+    ? `tts_usage_${new Date().toISOString().slice(0, 7)}`
+    : `tts_usage_${motore}_${new Date().toISOString().slice(0, 7)}`;
 
-  async function getTtsUsage(): Promise<number> {
+  async function getTtsUsage(motore: string = 'azure'): Promise<number> {
     try {
-      const row = await getFromCache(ttsUsageKey());
+      const row = await getFromCache(ttsUsageKey(motore));
       return Number(row?.text_content) || 0;
     } catch { return 0; }
   }
 
-  async function updateTtsUsage(chars: number): Promise<void> {
+  async function updateTtsUsage(motore: string, chars: number): Promise<void> {
     try {
-      const current = await getTtsUsage();
-      await saveToCache(ttsUsageKey(), 'counter', String(current + Math.max(0, Math.floor(chars))));
-    } catch (e: any) { console.error("[TTS] contatore mensile non aggiornato:", e?.message); }
+      const current = await getTtsUsage(motore);
+      await saveToCache(ttsUsageKey(motore), 'counter', String(current + Math.max(0, Math.floor(chars))));
+    } catch (e: any) { console.error(`[TTS] contatore mensile ${motore} non aggiornato:`, e?.message); }
   }
 
   // Voci ammesse (stessa mappa di ttsService.azureVoiceName nel client e
@@ -30292,7 +30310,7 @@ out center tags;`;
             timeout: 60000
           }
         );
-        await updateTtsUsage(charCount);
+        await updateTtsUsage('azure', charCount);
         const audioBuffer = Buffer.from(response.data);
         // Un MP3 "vuoto" (risposta 200 anomala) non va né in cache né al client
         if (audioBuffer.length < 500) throw new Error(`Azure returned ${audioBuffer.length} bytes`);
@@ -30303,24 +30321,36 @@ out center tags;`;
       }
     }
 
-    // Fallback su Polly (inerte finché non arrivano le chiavi AWS).
-    try {
-      const audioBuffer = await synthesizePolly(text, voiceName);
-      if (audioBuffer.length < 500) throw new Error(`Polly returned ${audioBuffer.length} bytes`);
-      insertApiUsageLog({ api_name: 'polly', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0004, tokens_used: 0, success: true }).catch(() => {});
-      return { buffer: audioBuffer, provider: 'Polly' };
-    } catch (e: any) {
-      console.warn("Polly TTS non disponibile, provo ElevenLabs... Error:", e.message);
+    // Fallback su Polly (inerte finché non arrivano le chiavi AWS), sotto il
+    // suo tetto mensile — superata la soglia si salta, mai un costo a
+    // sorpresa (richiesta del committente).
+    if ((await getTtsUsage('polly')) < TTS_LIMITI_MENSILI.polly) {
+      try {
+        const audioBuffer = await synthesizePolly(text, voiceName);
+        if (audioBuffer.length < 500) throw new Error(`Polly returned ${audioBuffer.length} bytes`);
+        await updateTtsUsage('polly', charCount);
+        insertApiUsageLog({ api_name: 'polly', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0004, tokens_used: 0, success: true }).catch(() => {});
+        return { buffer: audioBuffer, provider: 'Polly' };
+      } catch (e: any) {
+        console.warn("Polly TTS non disponibile, provo ElevenLabs... Error:", e.message);
+      }
+    } else {
+      console.warn(`[TTS] Polly oltre il tetto mensile (${TTS_LIMITI_MENSILI.polly} caratteri), salto a ElevenLabs`);
     }
 
-    // Fallback su ElevenLabs.
-    try {
-      const audioBuffer = await synthesizeElevenLabs(text, voiceName);
-      if (audioBuffer.length < 500) throw new Error(`ElevenLabs returned ${audioBuffer.length} bytes`);
-      insertApiUsageLog({ api_name: 'elevenlabs', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.02, tokens_used: 0, success: true }).catch(() => {});
-      return { buffer: audioBuffer, provider: 'ElevenLabs' };
-    } catch (e: any) {
-      console.warn("ElevenLabs TTS non disponibile, ripiego su Google... Error:", e.message);
+    // Fallback su ElevenLabs, stesso principio: tetto mensile, poi si salta.
+    if ((await getTtsUsage('elevenlabs')) < TTS_LIMITI_MENSILI.elevenlabs) {
+      try {
+        const audioBuffer = await synthesizeElevenLabs(text, voiceName);
+        if (audioBuffer.length < 500) throw new Error(`ElevenLabs returned ${audioBuffer.length} bytes`);
+        await updateTtsUsage('elevenlabs', charCount);
+        insertApiUsageLog({ api_name: 'elevenlabs', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.02, tokens_used: 0, success: true }).catch(() => {});
+        return { buffer: audioBuffer, provider: 'ElevenLabs' };
+      } catch (e: any) {
+        console.warn("ElevenLabs TTS non disponibile, ripiego su Google... Error:", e.message);
+      }
+    } else {
+      console.warn(`[TTS] ElevenLabs oltre il tetto mensile (${TTS_LIMITI_MENSILI.elevenlabs} caratteri), salto a Google`);
     }
 
     // Ultimo ripiego: Google TTS.
