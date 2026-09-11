@@ -9041,14 +9041,29 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         if (!tiqetsKey || !productId || !/^[\w-]{1,40}$/.test(productId)) return null;
         const domani = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
         try {
-          const r = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(productId)}/availability`, {
-            params: { start_date: domani, end_date: domani, lang },
-            headers: { Authorization: `Token ${tiqetsKey}`, Accept: 'application/json' },
-            timeout: 6000,
-          });
-          // Forma difensiva: la prima volta si scrive nel log com'è fatta.
-          const d = r.data;
-          console.log('[BigliettoIngresso] disponibilità Tiqets:', JSON.stringify(d).slice(0, 600));
+          // Non abbiamo la documentazione dell'endpoint sotto mano (la chiave
+          // sta solo su Vercel): si provano le forme plausibili in ordine e
+          // ogni rifiuto finisce nel log con il corpo, così la forma giusta
+          // si legge da lì e le altre si tolgono.
+          const H = { Authorization: `Token ${tiqetsKey}`, Accept: 'application/json' };
+          const prove = [
+            { path: 'availability', params: { start_date: domani, end_date: domani } },
+            { path: 'availability', params: { date: domani } },
+            { path: 'availabilities', params: { start_date: domani, end_date: domani } },
+            { path: 'timeslots', params: { date: domani } },
+          ];
+          let d: any = null;
+          for (const p of prove) {
+            try {
+              const r = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(productId)}/${p.path}`, { params: p.params, headers: H, timeout: 6000 });
+              d = r.data;
+              console.log(`[BigliettoIngresso] disponibilità Tiqets (${p.path} ${JSON.stringify(p.params)}):`, JSON.stringify(d).slice(0, 600));
+              break;
+            } catch (e: any) {
+              console.warn(`[BigliettoIngresso] ${p.path} ${JSON.stringify(p.params)} → ${e?.response?.status || e?.message}:`, JSON.stringify(e?.response?.data || '').slice(0, 300));
+            }
+          }
+          if (!d) return null;
           const giorni: any[] = d?.availability || d?.data?.availability || d?.dates || d?.data || (Array.isArray(d) ? d : []);
           const giorno = (Array.isArray(giorni) ? giorni : []).find((g: any) => String(g?.date || g?.day || '').slice(0, 10) === domani) || (Array.isArray(giorni) ? giorni[0] : null);
           const slot: any[] = giorno?.timeslots || giorno?.slots || giorno?.times || giorno?.time_slots || [];
