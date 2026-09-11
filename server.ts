@@ -8045,9 +8045,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026).
           max_tokens: 5000,
           response_format: { type: 'json_object' },
-          // Agnes fuori: risponde in 2-4 minuti e qui c'è qualcuno fermo
-          // davanti all'ingresso del museo.
-          excludeEngines: ['agnes'],
+          // Agnes fuori SOLO con qualcuno fermo davanti all'ingresso del
+          // museo (risponde in 2-4 minuti). Per la semina di sfondo nessuno
+          // aspetta: è un motore gratuito in più quando Groq è saturo
+          // (proposta della sessione della libreria, 12/09/2026).
+          excludeEngines: inDiretta ? ['agnes'] : [],
           // DeepSeek dopo i gratuiti, MAI nei lavori di sfondo (regola del
           // committente, stessa logica degli itinerari): il flag non è una
           // dichiarazione ma il riflesso di un fatto verificabile — chi entra
@@ -8626,7 +8628,8 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
       let rawAi = '';
       try {
         const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-          temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' }, excludeEngines: ['agnes'],
+          // Agnes solo per la semina di sfondo (nessuno aspetta); dal vivo è troppo lenta.
+          temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' }, excludeEngines: inDiretta ? ['agnes'] : [],
           // DeepSeek dopo i gratuiti solo per chi è davanti all'opera.
           ultimaSpiaggiaPagante: inDiretta,
         }, 'artwork_guide', supabaseUrl, supabaseServiceKey, groq, userId);
@@ -8800,7 +8803,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       try {
         const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
           temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' },
-          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: inDiretta,
+          excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
         }, 'museum_more_artworks', supabaseUrl, supabaseServiceKey, groq, userId);
         rawAi = String(ai?.data || '');
       } catch { /* si prova OpenAI */ }
