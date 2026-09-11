@@ -212,6 +212,11 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     for (const n of nomiLuogo) {
       const i = basso.indexOf(n.toLowerCase());
       if (i <= 0) continue;
+      // Solo se il nome sta IN CODA (al più una città dopo, «a Parigi»): nel
+      // titolo di Canaletto «London: Westminster Abbey, with a Procession…»
+      // il nome è a metà e tagliarlo lasciava «London:».
+      const dopo = t.slice(i + n.length).trim();
+      if (dopo.length > 15 || /[,:;]/.test(dopo)) continue;
       const prima = t.slice(0, i).replace(/\s+(of the|of|de la|de l'|du|des|de|della|dello|dell'|del|dei|degli|delle|di|der|des|von|van)\s*$/i, '').trim();
       if (prima.length >= 4 && prima.length < t.length) return prima.charAt(0).toUpperCase() + prima.slice(1);
     }
@@ -268,6 +273,11 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
   const classe = (radice: string) => sparqlUnaVolta(`SELECT DISTINCT ?o WHERE { VALUES ?o { ${valoriCand} } ?o wdt:P31/wdt:P279* wd:${radice} . hint:Prior hint:gearing "forward" . }`, 8000);
   const [rOccorrenze, rOrganizzazioni, rGruppi, rFisici] = await Promise.all([classe('Q1190554'), classe('Q43229'), classe('Q16334295'), classe('Q223557')]);
   const eventi = new Set([...(rOccorrenze || []), ...(rOrganizzazioni || []), ...(rGruppi || [])].map(r => ultimo(r.o?.value)));
+  // Istituzioni e gruppi (organizzazione, gruppo di persone) valgono più
+  // dell'essere «fisico»: la «scuola di Chartres» risale anche a edificio,
+  // ma non è una cosa da guardare. «Occorrenza» invece è ambigua in Wikidata
+  // (l'orologio astronomico di Chartres ci risale): lì vince l'oggetto fisico.
+  const istituzioni = new Set([...(rOrganizzazioni || []), ...(rGruppi || [])].map(r => ultimo(r.o?.value)));
   // Se la domanda sugli oggetti fisici non risponde, non si esclude nessuno
   // per quel motivo (null): meglio una tappa in più che un museo vuoto.
   const fisici: Set<string> | null = rFisici ? new Set(rFisici.map(r => ultimo(r.o?.value))) : null;
@@ -360,14 +370,26 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     const titolo = g.lab || g.labEn;
     if (!titolo || /^Q\d+$/.test(titolo)) continue;
     if (g.nonOpera) { escluse.push({ qid: q, titolo, motivo: 'non è un\'opera (movimento, mostra…)' }); continue; }
-    if (eventi.has(q)) { escluse.push({ qid: q, titolo, motivo: 'evento, organizzazione o gruppo di persone, non un oggetto da vedere' }); continue; }
     const inCollezione = [...g.coll].some(c => parti.has(c));
     if (g.coll.size && !inCollezione) { escluse.push({ qid: q, titolo, motivo: 'collezione di un altro museo (qui solo come luogo)' }); continue; }
-    // Un oggetto con materiale, misure o numero d'inventario è fisico anche se
-    // la sua classe su Wikidata non risale a «oggetto fisico» (a Chartres il
-    // labirinto e l'orologio astronomico restavano fuori per questo).
+    // IN COLLEZIONE = OGGETTO. Un evento non sta nella collezione di un museo.
+    // La domanda di classe «è un'occorrenza / un'organizzazione?» NON si usa
+    // per chi è in collezione: nella gerarchia di Wikidata anche stele, stampe,
+    // tesori e biblioteche risalgono lì (11/09: al British erano finiti fuori
+    // la Stele di Rosetta, la Grande Onda, il Tesoro dell'Oxus).
+    // Per chi sta nel luogo SENZA collezione (chiese, parti dell'edificio)
+    // decide l'oggetto fisico: un oggetto fisico si tiene anche se la sua
+    // classe risale a «occorrenza» (l'orologio astronomico di Chartres); ciò
+    // che non è fisico esce (incoronazioni, incendi, funerali, scuole).
+    // Materiale, misure o numero d'inventario valgono come prova di fisicità.
     const fisicoPerDati = g.materiali.size > 0 || !!g.alt || !!g.larg || !!g.inv;
-    if (!inCollezione && fisici && !fisici.has(q) && !fisicoPerDati) { escluse.push({ qid: q, titolo, motivo: 'non è un oggetto fisico (concetto, testo, avvenimento)' }); continue; }
+    if (!inCollezione) {
+      const fisico = fisicoPerDati || (!istituzioni.has(q) && (fisici ? fisici.has(q) : !eventi.has(q)));
+      if (!fisico) {
+        escluse.push({ qid: q, titolo, motivo: eventi.has(q) ? 'evento, organizzazione o gruppo di persone, non un oggetto da vedere' : 'non è un oggetto fisico (concetto, testo, avvenimento)' });
+        continue;
+      }
+    }
     scelte.push(g);
     // Qualche opera in più del necessario: quelle che la fonte ufficiale
     // dirà «non esposte ora» (all'Art Institute 8 su 20: stampe e foto
