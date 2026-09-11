@@ -9143,19 +9143,46 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
           const html = String(home.data || '');
           testi.push(testoPaginaMuseo(html).slice(0, 5000));
           pagine.push(base.href);
-          const RE_UTILI = /(orar|hour|horaire|horario|öffnungszeit|opening|biglietti|ticket|tarif|precio|preis|eintritt|visit|visita|besuch|prices|admission)/i;
-          const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
-          const scelti: string[] = [];
+          // LE PAGINE GIUSTE, IN ORDINE DI FIDUCIA (11/09/2026). La prima
+          // lettura degli Uffizi aveva preso una pagina di attività estive e
+          // ne aveva ricopiato l'orario — 8:00-19:00 invece di 8:15-18:30. Un
+          // orario sbagliato manda qualcuno davanti a un cancello chiuso:
+          // prima la pagina degli ORARI, poi quella dei biglietti, e solo
+          // se mancano le pagine generiche di visita. Le pagine di eventi,
+          // mostre, attività e notizie non entrano mai: hanno orari loro.
+          const peso = (p: string): number => {
+            const s = p.toLowerCase();
+            if (/(eventi|event|mostr|exhibit|attivit|activit|news|notiz|blog|visite-speciali|special)/.test(s)) return 0;
+            if (/(orar|hour|horaire|horario|öffnungszeit|opening|apertur)/.test(s)) return 3;
+            if (/(biglietti|ticket|tarif|precio|preis|eintritt|prices|admission)/.test(s)) return 2;
+            if (/(visit|visita|besuch|info)/.test(s)) return 1;
+            return 0;
+          };
+          // Si pesa ANCHE IL TESTO DEL LINK, non solo l'indirizzo: agli Uffizi
+          // gli orari stanno in «/gli-uffizi», raggiunta dal link «Prezzi e
+          // Orari». Guardando solo l'indirizzo quella pagina non si apriva
+          // mai, e il modello ricopiava l'orario di una pagina qualsiasi.
+          const link = [...html.matchAll(/<a\b[^>]*href=["']([^"'#?]+)["'][^>]*>([\s\S]*?)<\/a>/gi)]
+            .map(m => ({ href: m[1], testo: String(m[2] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) }));
+          const candidati: { href: string; peso: number }[] = [];
           for (const l of link) {
             try {
-              const u = new URL(l, base.href);
+              const u = new URL(l.href, base.href);
               if (u.hostname !== base.hostname || u.href === base.href) continue;
               if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
-              if (!RE_UTILI.test(u.pathname)) continue;
-              if (!scelti.includes(u.href)) scelti.push(u.href);
-              if (scelti.length >= 3) break;
+              // Il testo del link vale come l'indirizzo, ma un testo da
+              // eventi («Visite speciali», «Mostre») azzera anche un
+              // indirizzo buono.
+              const wTesto = peso(l.testo);
+              const wPath = peso(u.pathname);
+              const w = /(eventi|event|mostr|exhibit|attivit|activit|visite speciali|avvis)/i.test(l.testo) ? 0 : Math.max(wPath, wTesto);
+              if (w <= 0) continue;
+              const gia = candidati.find(c => c.href === u.href);
+              if (gia) gia.peso = Math.max(gia.peso, w); else candidati.push({ href: u.href, peso: w });
             } catch { /* link non valido */ }
           }
+          candidati.sort((a, b) => b.peso - a.peso);
+          const scelti = candidati.slice(0, 3).map(c => c.href);
           for (const u of scelti) {
             try {
               const r = await axios.get(u, { ...UA, timeout: 7000 });
