@@ -156,6 +156,28 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
     ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
   },
+  // «Chiedi alla guida»: una domanda sull'opera, un credito.
+  mv_ask: { IT: "Chiedi alla guida", EN: "Ask the guide", FR: "Demande au guide", ES: "Pregunta a la guía", DE: "Frag den Guide", RU: "Спросить гида", ZH: "问导览员" },
+  mv_ask_placeholder: { IT: "La tua domanda su quest'opera…", EN: "Your question about this work…", FR: "Ta question sur cette œuvre…", ES: "Tu pregunta sobre esta obra…", DE: "Deine Frage zu diesem Werk…", RU: "Ваш вопрос об этом произведении…", ZH: "关于这件作品的问题…" },
+  mv_ask_q1: { IT: "Perché è così famosa?", EN: "Why is it so famous?", FR: "Pourquoi est-elle si célèbre ?", ES: "¿Por qué es tan famosa?", DE: "Warum ist es so berühmt?", RU: "Почему это так известно?", ZH: "为什么这么有名？" },
+  mv_ask_q2: { IT: "Cosa devo guardare per capirla?", EN: "What should I look at to get it?", FR: "Que regarder pour la comprendre ?", ES: "¿Qué debo mirar para entenderla?", DE: "Worauf soll ich achten?", RU: "На что смотреть, чтобы понять?", ZH: "该看哪里才能读懂它？" },
+  mv_ask_q3: { IT: "Com'è arrivata qui?", EN: "How did it get here?", FR: "Comment est-elle arrivée ici ?", ES: "¿Cómo llegó aquí?", DE: "Wie kam es hierher?", RU: "Как оно сюда попало?", ZH: "它是怎么来到这里的？" },
+  mv_ask_send: { IT: "Chiedi · 1 credito", EN: "Ask · 1 credit", FR: "Demander · 1 crédit", ES: "Preguntar · 1 crédito", DE: "Fragen · 1 Credit", RU: "Спросить · 1 кредит", ZH: "提问 · 1 积分" },
+  mv_ask_no_credits: { IT: "Crediti finiti: ricarica per chiedere", EN: "Out of credits: top up to ask", FR: "Plus de crédits : recharge pour demander", ES: "Sin créditos: recarga para preguntar", DE: "Keine Credits: aufladen, um zu fragen", RU: "Кредиты закончились: пополните, чтобы спросить", ZH: "积分不足：充值后提问" },
+  mv_ask_failed: { IT: "Non ho trovato materiale per rispondere", EN: "I found no material to answer with", FR: "Je n'ai pas trouvé de matière pour répondre", ES: "No he encontrado material para responder", DE: "Kein Material für eine Antwort gefunden", RU: "Не нашёл материала для ответа", ZH: "没有找到可作答的资料" },
+  // La pianta ufficiale.
+  mv_map: { IT: "Pianta del museo", EN: "Museum map", FR: "Plan du musée", ES: "Plano del museo", DE: "Museumsplan", RU: "План музея", ZH: "博物馆平面图" },
+  mv_map_hint: { IT: "Quella ufficiale, dal sito del museo", EN: "The official one, from the museum's site", FR: "L'officiel, depuis le site du musée", ES: "El oficial, del sitio del museo", DE: "Der offizielle, von der Museumswebsite", RU: "Официальный, с сайта музея", ZH: "官方版本，来自博物馆网站" },
+  // La foto ricordo con la didascalia.
+  mv_photo_memory: { IT: "Foto ricordo", EN: "Souvenir photo", FR: "Photo souvenir", ES: "Foto recuerdo", DE: "Erinnerungsfoto", RU: "Фото на память", ZH: "留念照" },
+  mv_photo_memory_hint: { IT: "Scatta: in basso metto nome, autore, museo e data", EN: "Shoot: I'll add name, artist, museum and date below", FR: "Prends la photo : j'ajoute nom, artiste, musée et date", ES: "Dispara: abajo pongo nombre, autor, museo y fecha", DE: "Fotografieren: unten kommen Name, Künstler, Museum und Datum", RU: "Снимите: внизу добавлю название, автора, музей и дату", ZH: "拍照：底部加上名称、作者、博物馆和日期" },
+  mv_photo_saved: { IT: "Foto ricordo pronta", EN: "Souvenir photo ready", FR: "Photo souvenir prête", ES: "Foto recuerdo lista", DE: "Erinnerungsfoto fertig", RU: "Фото на память готово", ZH: "留念照已生成" },
+  // La cartolina della giornata.
+  mv_share_day: { IT: "Condividi la giornata", EN: "Share your day", FR: "Partage ta journée", ES: "Comparte tu día", DE: "Deinen Tag teilen", RU: "Поделиться днём", ZH: "分享今天" },
+  mv_postcard_title: { IT: "Oggi a {s}", EN: "Today at {s}", FR: "Aujourd'hui à {s}", ES: "Hoy en {s}", DE: "Heute im {s}", RU: "Сегодня в {s}", ZH: "今天在 {s}" },
+  mv_postcard_seen: { IT: "{n} opere · {m} minuti di racconto", EN: "{n} works · {m} minutes of stories", FR: "{n} œuvres · {m} minutes de récit", ES: "{n} obras · {m} minutos de relato", DE: "{n} Werke · {m} Minuten Erzählung", RU: "{n} произведений · {m} минут рассказа", ZH: "{n} 件作品 · {m} 分钟讲解" },
+  mv_postcard_fav: { IT: "La mia preferita", EN: "My favourite", FR: "Ma préférée", ES: "Mi favorita", DE: "Mein Favorit", RU: "Моё любимое", ZH: "我的最爱" },
+  mv_postcard_text: { IT: "La mia visita con WIP · wip.guide", EN: "My visit with WIP · wip.guide", FR: "Ma visite avec WIP · wip.guide", ES: "Mi visita con WIP · wip.guide", DE: "Mein Besuch mit WIP · wip.guide", RU: "Мой визит с WIP · wip.guide", ZH: "我的 WIP 参观 · wip.guide" },
   // «Chiude fra 40 minuti», dentro la visita.
   mv_closing_soon: {
     IT: "Il museo chiude fra {m} minuti", EN: "The museum closes in {m} minutes", FR: "Le musée ferme dans {m} minutes",

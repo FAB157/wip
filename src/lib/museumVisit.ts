@@ -78,6 +78,8 @@ export type VenueGuide = {
    *  solo le voci che il sito ufficiale dichiara. Dopo un'ora e mezza dentro
    *  un museo è la cosa che serve davvero. */
   servizi?: Partial<Record<'bagni' | 'guardaroba' | 'caffetteria' | 'bookshop' | 'uscita' | 'accessibilita', string>>;
+  /** La pianta ufficiale del museo (PDF o immagine dal sito), se pubblicata. */
+  pianta?: string;
   language: string;
 };
 
@@ -553,6 +555,24 @@ export async function fetchDomani(v: MuseumVisit, language: Language): Promise<D
     return d?.ok === true ? (d as Domani) : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * «CHIEDI ALLA GUIDA» (12/09/2026): una domanda sull'opera, risposta dal
+ * materiale di quell'opera, un credito. 402 = crediti finiti.
+ */
+export async function askGuide(args: { artwork: string; venueName: string; question: string; language: Language }): Promise<{ ok: boolean; risposta?: string; reason?: string }> {
+  const headers = await authHeaders();
+  if (!headers) return { ok: false, reason: 'login' };
+  try {
+    const res = await fetch(getApiUrl('/api/museums/ask'), { method: 'POST', headers, body: JSON.stringify(args) });
+    if (res.status === 402) return { ok: false, reason: 'credits' };
+    if (!res.ok) return { ok: false, reason: `http_${res.status}` };
+    const d = await res.json();
+    return d?.ok === true ? { ok: true, risposta: String(d.risposta) } : { ok: false, reason: String(d?.reason || 'no_answer') };
+  } catch {
+    return { ok: false, reason: 'rete' };
   }
 }
 

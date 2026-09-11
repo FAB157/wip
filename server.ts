@@ -7205,11 +7205,17 @@ ORDER BY DESC(?fama) LIMIT 80`;
       .replace(/\s+/g, ' ')
       .trim();
   }
-  async function testoDalSitoUfficiale(sito: string, maxChars = 9000): Promise<{ testo: string; pagine: string[] }> {
+  async function testoDalSitoUfficiale(sito: string, maxChars = 9000): Promise<{ testo: string; pagine: string[]; pianta: string }> {
     const out: string[] = [];
     const visitate: string[] = [];
+    // LA PIANTA DEL MUSEO (12/09/2026): «Sala 12» non serve se non si sa dove
+    // sia. Quasi ogni museo pubblica la propria pianta, in PDF o immagine:
+    // si tiene il primo link che la promette. La LORO pianta, mai un disegno
+    // nostro.
+    let pianta = '';
+    let paginaPianta = '';
     let base: URL;
-    try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return { testo: '', pagine: [] }; }
+    try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return { testo: '', pagine: [], pianta: '' }; }
     // La home prima: da lì si scoprono i link veri alle sezioni di visita.
     const daProvare: string[] = [base.href];
     try {
@@ -7221,9 +7227,16 @@ ORDER BY DESC(?fama) LIMIT 80`;
       // si tengono i più promettenti, mappa delle sale per prima.
       const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
       const candidati: { href: string; peso: number }[] = [];
+      const RE_PIANTA = /(mappa|map\b|maps\b|plan\b|pianta|plano|planta|karte|plattegrond|floor)/i;
       for (const l of link) {
         try {
           const u = new URL(l, base.href);
+          // La pianta può stare anche su un CDN: si accetta qualunque host
+          // purché sia un file, o una pagina dello stesso sito.
+          if (RE_PIANTA.test(u.pathname)) {
+            if (!pianta && /\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) pianta = u.href;
+            else if (!paginaPianta && u.hostname === base.hostname && !/\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) paginaPianta = u.href;
+          }
           if (u.hostname !== base.hostname) continue;
           if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|ics)$/i.test(u.pathname)) continue;
           if (u.href === base.href || candidati.some(c => c.href === u.href)) continue;
@@ -7237,7 +7250,7 @@ ORDER BY DESC(?fama) LIMIT 80`;
       for (const c of candidati.slice(0, 5)) daProvare.push(c.href);
     } catch (e: any) {
       console.warn('[VenueGuide] sito ufficiale non raggiungibile:', e?.message);
-      return { testo: '', pagine: [] };
+      return { testo: '', pagine: [], pianta: '' };
     }
     for (const u of daProvare.slice(1)) {
       try {
@@ -7248,7 +7261,7 @@ ORDER BY DESC(?fama) LIMIT 80`;
     }
     // Anche nella home le righe con le sale vanno davanti al resto.
     if (out.length) out[0] = primaLeSale(out[0]);
-    return { testo: out.join('\n\n').slice(0, maxChars), pagine: visitate };
+    return { testo: out.join('\n\n').slice(0, maxChars), pagine: visitate, pianta: pianta || paginaPianta };
   }
 
   /**
@@ -7953,7 +7966,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // ricerca web). Senza sito il percorso resta senza sale, quindi
           // vale la pena insistere per ogni museo.
           if (!sito) sito = await trovaSitoUfficiale(venue!.name, langCfg.wiki);
-          if (!sito) return { testo: '', pagine: [] as string[] };
+          if (!sito) return { testo: '', pagine: [] as string[], pianta: '' };
           return testoDalSitoUfficiale(sito);
         })(),
       ]);
@@ -8279,6 +8292,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // le opere. L'app lo scrive in testata invece di numerare tappe che
         // il visitatore non saprebbe dove cercare.
         saleDichiarate,
+        // La pianta ufficiale del museo, se il sito la pubblica.
+        ...(sitoOut.pianta ? { pianta: String(sitoOut.pianta) } : {}),
         // I SERVIZI (11/09/2026): bagni, guardaroba, caffetteria, bookshop,
         // uscita, accessibilità — solo le voci che il sito dichiara. Un
         // oggetto vuoto non si salva: la scheda non mostra una riga «Servizi»
@@ -9099,6 +9114,101 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // in faccia a chi sta visitando per un contatore.
       console.warn('[MuseumSkip] non registrato:', e?.response?.data?.message || e?.message);
       res.json({ ok: true, recorded: false });
+    }
+  });
+
+  /**
+   * «CHIEDI ALLA GUIDA» (12/09/2026, richiesta del committente).
+   *
+   * La voce ha finito e resta la domanda vera: perché è così famoso? chi è
+   * quella donna in fondo? è vero che l'hanno rubato? Un'audioguida non
+   * risponde; una guida umana sì. Qui si risponde SOLO da quello che
+   * sappiamo di quell'opera — il racconto già scritto (in cache) più la
+   * sua voce enciclopedica — e se il materiale non lo dice, lo si dice.
+   * Un credito a domanda, addebitato prima di chiamare il motore; i motori
+   * gratuiti per primi e, con la persona davanti al quadro, DeepSeek in coda.
+   */
+  app.post("/api/museums/ask", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const opera = String(req.body?.artwork || '').trim().slice(0, 160);
+      const museo = String(req.body?.venueName || '').trim().slice(0, 120);
+      const domanda = String(req.body?.question || '').trim().slice(0, 300);
+      const langKey = String(req.body?.language || 'IT').toUpperCase().slice(0, 2);
+      const LANGS: Record<string, { name: string; wiki: string }> = {
+        IT: { name: 'italiano', wiki: 'it' }, EN: { name: 'inglese', wiki: 'en' }, FR: { name: 'francese', wiki: 'fr' },
+        ES: { name: 'spagnolo', wiki: 'es' }, DE: { name: 'tedesco', wiki: 'de' }, RU: { name: 'russo', wiki: 'ru' }, ZH: { name: 'cinese semplificato', wiki: 'zh' }
+      };
+      const langCfg = LANGS[langKey] || LANGS.IT;
+      const outLang = LANGS[langKey] ? langKey : 'IT';
+      if (!opera || !museo || domanda.length < 3) return res.status(400).json({ error: 'dati_mancanti' });
+
+      // 1) Il materiale: il racconto già scritto per quest'opera (se c'è)…
+      const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
+      const pezzi: string[] = [];
+      for (const suffisso of ['', ':bambini']) {
+        const c = await getFromCache(`artwork_guide:v1:${chiaveOpera}:${outLang}${suffisso}`);
+        if (c?.text_content) {
+          try {
+            const g = JSON.parse(String(c.text_content))?.guide;
+            if (g?.testo) {
+              pezzi.push(`RACCONTO GIÀ SCRITTO PER QUEST'OPERA:\n${g.testo}\n${(g.daGuardare || []).map((d: string) => `- ${d}`).join('\n')}\n${g.curiosita || ''}\n${[g.tecnica, g.misure, g.autore, g.anno].filter(Boolean).join(' · ')}`);
+              break;
+            }
+          } catch { /* cache illeggibile */ }
+        }
+      }
+      // …più la voce enciclopedica dell'opera, cercata col titolo.
+      const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000 };
+      for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
+        try {
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${opera} ${museo}`)}`, ua);
+          const hit = (s.data?.query?.search || []).find((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6);
+          if (!hit) continue;
+          const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
+          const page: any = Object.values(ext.data?.query?.pages || {})[0];
+          const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+          if (testo.length > 300) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); break; }
+        } catch { /* lingua successiva */ }
+      }
+      const materiale = pezzi.join('\n\n');
+      if (materiale.length < 300) return res.json({ ok: false, reason: 'no_source' });
+
+      // 2) La cassa, prima del motore.
+      const esito = await consumeCreditsServer(userId, 1, `Chiedi alla guida: ${opera}`.slice(0, 80));
+      if (esito === 'insufficient') return res.status(402).json({ error: 'insufficient_credits', cost: 1 });
+      if (esito === 'error') return res.status(500).json({ error: 'charge_failed' });
+
+      const prompt = `Sei la guida del museo "${museo}". Un visitatore è davanti all'opera "${opera}" e ti chiede: «${domanda}».
+
+MATERIALE (unica fonte ammessa):
+"""
+${materiale}
+"""
+
+Rispondi in ${langCfg.name}, in 40-90 parole, come parlando a voce, con i fatti del materiale. Se il materiale NON contiene la risposta, di' onestamente che di questo il materiale non parla, e offri in una frase il fatto del materiale più vicino alla domanda. Mai inventare nomi, date o vicende. Niente formule di cortesia, niente markdown.
+Rispondi SOLO con JSON: {"risposta": "..."}`;
+      let raw = '';
+      try {
+        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.2, max_tokens: 400, response_format: { type: 'json_object' },
+          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: true,
+        }, 'museum_ask', supabaseUrl, supabaseServiceKey, groq, userId);
+        raw = String(ai?.data || '');
+      } catch (e: any) {
+        return res.json({ ok: false, reason: 'ai_non_disponibile' });
+      }
+      let risposta = '';
+      try {
+        const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        risposta = String(JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1))?.risposta || '').trim();
+      } catch { risposta = raw.replace(/[{}"]/g, '').replace(/^\s*risposta\s*:\s*/i, '').trim(); }
+      if (!risposta) return res.json({ ok: false, reason: 'ai_parse_failed' });
+      res.json({ ok: true, risposta: risposta.slice(0, 900), language: outLang });
+    } catch (e: any) {
+      console.error('[ChiediGuida] Errore:', e?.message);
+      res.status(500).json({ error: 'ask_failed' });
     }
   });
 

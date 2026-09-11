@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide } from '../lib/museumVisit';
+import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
@@ -113,6 +114,72 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     fetchDomani(visit, language).then(d => { if (vivo) setDomani(d); });
     return () => { vivo = false; };
   }, [visit.venueKey, online]);
+  // «CHIEDI ALLA GUIDA» (12/09/2026): la domanda che resta quando la voce
+  // ha finito. Risposta dal materiale di quell'opera, un credito, letta a
+  // voce e scritta sotto la tappa.
+  const [domanda, setDomanda] = useState('');
+  const [risposte, setRisposte] = useState<Record<number, { q: string; a: string }[]>>({});
+  const [chiedendo, setChiedendo] = useState(false);
+  const chiedi = async (i: number, q: string) => {
+    const tappa = visit.guide.tappe[i];
+    const testoQ = q.trim();
+    if (!tappa || testoQ.length < 3 || chiedendo) return;
+    setChiedendo(true);
+    const r = await askGuide({ artwork: tappa.nomeFonte || tappa.nome, venueName: visit.venue.name, question: testoQ, language });
+    setChiedendo(false);
+    if (!r.ok) { notify(r.reason === 'credits' ? t('mv_ask_no_credits') : t('mv_ask_failed')); return; }
+    setRisposte(prev => ({ ...prev, [i]: [...(prev[i] || []), { q: testoQ, a: r.risposta || '' }] }));
+    setDomanda('');
+    stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+    void speakWithSystemVoice(r.risposta || '', String(language).toLowerCase(), getGuideCharacter());
+  };
+
+  // FOTO RICORDO (12/09/2026): lo scatto della persona davanti all'opera,
+  // con in basso nome, autore, museo e data. La foto è sua, la didascalia
+  // è nostra.
+  const fotoRicordoRef = useRef<HTMLInputElement>(null);
+  const [fotoRicordoPer, setFotoRicordoPer] = useState<number | null>(null);
+  const handleFotoRicordo = async (file: File | null) => {
+    const i = fotoRicordoPer;
+    setFotoRicordoPer(null);
+    if (fotoRicordoRef.current) fotoRicordoRef.current.value = '';
+    if (!file || i === null) return;
+    const tappa = visit.guide.tappe[i];
+    if (!tappa) return;
+    const data = new Date().toLocaleDateString(String(language).toLowerCase(), { day: 'numeric', month: 'long', year: 'numeric' });
+    const blob = await componiFotoRicordo(file, [tappa.nome, [tappa.autore, visit.venue.name, data].filter(Boolean).join(' · ')]);
+    if (!blob) { notify(t('vis_generic_error')); return; }
+    const nomeFile = `wip-${tappa.nome.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 40)}.jpg`;
+    const esito = await condividiImmagine(blob, nomeFile, `${tappa.nome} · ${visit.venue.name} · wip.guide`);
+    if (esito !== 'fallita') notify(t('mv_photo_saved'));
+  };
+
+  // LA CARTOLINA DELLA GIORNATA (12/09/2026): «Oggi agli Uffizi», le opere
+  // viste, i minuti di racconto, la preferita in grande. Da mandare la
+  // sera stessa. Nasce sul telefono: nessun server.
+  const [condividendo, setCondividendo] = useState(false);
+  const condividiGiornata = async () => {
+    if (condividendo) return;
+    setCondividendo(true);
+    try {
+      const viste = visit.guide.tappe.filter(x => x.seenCardId);
+      const pref = visit.guide.tappe.find(x => x.preferita) || viste[0] || null;
+      const minutiAperti = (Object.values(operaGuide) as ArtworkGuide[]).reduce((s: number, g) => s + Math.max(1, Math.round((g?.parole || 0) / 150)), 0);
+      const blob = await componiCartolina({
+        titolo: t('mv_postcard_title').replace('{s}', visit.venue.name),
+        sottotitolo: t('mv_postcard_seen').replace('{n}', String(viste.length)).replace('{m}', String(Math.max(minutiAperti, viste.length * 3))),
+        data: new Date().toLocaleDateString(String(language).toLowerCase(), { day: 'numeric', month: 'long', year: 'numeric' }),
+        preferita: pref ? { nome: pref.nome, foto: pref.foto || pref.fotoIcona } : null,
+        miniature: viste.filter(x => x !== pref).slice(0, 6).map(x => ({ nome: x.nome, foto: x.fotoIcona || x.foto })),
+        etichettaPreferita: t('mv_postcard_fav'),
+      });
+      if (!blob) { notify(t('vis_generic_error')); return; }
+      await condividiImmagine(blob, 'wip-oggi-al-museo.jpg', t('mv_postcard_text'));
+    } finally {
+      setCondividendo(false);
+    }
+  };
+
   // PRESCARICAMENTO all'ingresso: le prime otto opere, mentre c'è segnale.
   const [prefetch, setPrefetch] = useState<{ fatte: number; totali: number } | null>(null);
   // LEGGI CON CALMA: preferenza della persona, non della visita.
@@ -629,6 +696,16 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             >
               {t('mv_keep_visiting')}
             </button>
+            {countSeen(visit) > 0 && (
+              <button
+                onClick={() => void condividiGiornata()}
+                disabled={condividendo}
+                aria-label={t('mv_share_day')}
+                className="w-12 py-3 rounded-2xl bg-white border border-primary/40 text-primary flex items-center justify-center active:scale-[0.98] transition-transform disabled:opacity-60"
+              >
+                {condividendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+              </button>
+            )}
             <button
               onClick={() => { stopSpeech(); endVisit(); onClose(); }}
               className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-[13px] active:scale-[0.98] transition-transform"
@@ -877,6 +954,32 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </span>
             <Camera className="w-4 h-4 text-slate-400 shrink-0" />
           </button>
+          {/* Lo scatto della foto ricordo passa da qui */}
+          <input
+            ref={fotoRicordoRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => void handleFotoRicordo(e.target.files?.[0] || null)}
+          />
+
+          {/* LA PIANTA UFFICIALE: quella del sito del museo, con un tocco */}
+          {visit.guide.pianta && (
+            <a
+              href={visit.guide.pianta}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white border border-slate-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] mb-3 text-left active:scale-[0.99] transition-transform"
+            >
+              <MapIcon className="w-4 h-4 text-primary shrink-0" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-[12px] font-black text-slate-900">{t('mv_map')}</span>
+                <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_map_hint')}</span>
+              </span>
+              <ExternalLink className="w-4 h-4 text-slate-400 shrink-0" />
+            </a>
+          )}
 
           {/* E ADESSO DOVE VADO. La domanda che uno si fa ogni volta che
               finisce di ascoltare, e a cui il percorso non rispondeva mai.
@@ -1259,6 +1362,58 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                               <p className="text-[11px] text-amber-900 leading-snug">{operaGuide[i].curiosita}</p>
                             </div>
                           )}
+
+                          {/* CHIEDI ALLA GUIDA: tre domande pronte e una libera */}
+                          <div className="mt-3 p-2.5 rounded-xl bg-white border border-slate-200">
+                            <p className="text-[10px] font-black uppercase tracking-wider text-primary mb-1.5 flex items-center gap-1">
+                              <HelpCircle className="w-3.5 h-3.5" />{t('mv_ask')}
+                            </p>
+                            {(risposte[i] || []).map((r, k) => (
+                              <div key={k} className="mb-2">
+                                <p className="text-[11px] font-black text-slate-700">{r.q}</p>
+                                <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-800 mt-0.5`}>{r.a}</p>
+                              </div>
+                            ))}
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {[t('mv_ask_q1'), t('mv_ask_q2'), t('mv_ask_q3')].map(q => (
+                                <button
+                                  key={q}
+                                  onClick={() => void chiedi(i, q)}
+                                  disabled={chiedendo}
+                                  className="px-2.5 py-1 rounded-full bg-blue-50 border border-[#dbe4f5] text-[11px] font-bold text-primary active:scale-95 transition-transform disabled:opacity-50"
+                                >
+                                  {q}
+                                </button>
+                              ))}
+                            </div>
+                            <form onSubmit={(e) => { e.preventDefault(); void chiedi(i, domanda); }} className="flex gap-1.5">
+                              <input
+                                value={domanda}
+                                onChange={(e) => setDomanda(e.target.value)}
+                                placeholder={t('mv_ask_placeholder')}
+                                className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-[#fdfbf7] border border-slate-200 text-[12px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
+                              />
+                              <button
+                                type="submit"
+                                disabled={chiedendo || domanda.trim().length < 3}
+                                className="px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-black disabled:opacity-40 whitespace-nowrap"
+                              >
+                                {chiedendo ? <Loader2 className="w-4 h-4 animate-spin" /> : t('mv_ask_send')}
+                              </button>
+                            </form>
+                          </div>
+
+                          {/* FOTO RICORDO: scatta, e in basso c'è la didascalia */}
+                          <button
+                            onClick={() => { setFotoRicordoPer(i); fotoRicordoRef.current?.click(); }}
+                            className="mt-2 w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl bg-white border border-slate-200 text-left active:scale-[0.99] transition-transform"
+                          >
+                            <ImagePlus className="w-4 h-4 text-primary shrink-0" />
+                            <span className="min-w-0">
+                              <span className="block text-[12px] font-black text-slate-900">{t('mv_photo_memory')}</span>
+                              <span className="block text-[10px] font-bold text-slate-500 leading-snug">{t('mv_photo_memory_hint')}</span>
+                            </span>
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1410,13 +1565,26 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
 
           {/* La guida su carta: si piega in quattro e sta in tasca anche col
               telefono spento, e si manda agli amici prima di partire. */}
-          <button
-            onClick={handleStampa}
-            className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
-          >
-            <Printer className="w-4 h-4" />
-            {t('mv_stampa_guida')}
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleStampa}
+              className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
+            >
+              <Printer className="w-4 h-4" />
+              {t('mv_stampa_guida')}
+            </button>
+            {/* LA CARTOLINA: solo quando c'è qualcosa da raccontare */}
+            {countSeen(visit) > 0 && (
+              <button
+                onClick={() => void condividiGiornata()}
+                disabled={condividendo}
+                className="flex-1 py-3 rounded-2xl bg-white border border-primary/40 text-primary font-black text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
+              >
+                {condividendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+                {t('mv_share_day')}
+              </button>
+            )}
+          </div>
 
           <button onClick={handleEnd} className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2">
             <MapPin className="w-4 h-4" />
