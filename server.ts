@@ -9045,25 +9045,39 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
           // sta solo su Vercel): si provano le forme plausibili in ordine e
           // ogni rifiuto finisce nel log con il corpo, così la forma giusta
           // si legge da lì e le altre si tolgono.
+          // Dai log del 12/09/2026: l'endpoint giusto è
+          // /v2/products/{id}/availability?start_date&end_date; ma il
+          // prodotto «Uffizi ingresso riservato» è un GRUPPO («doesn't have
+          // detailed availability. Use the included product IDs»): si
+          // legge il prodotto, si prendono gli id inclusi e si chiede a loro.
           const H = { Authorization: `Token ${tiqetsKey}`, Accept: 'application/json' };
-          const prove = [
-            { path: 'availability', params: { start_date: domani, end_date: domani } },
-            { path: 'availability', params: { date: domani } },
-            { path: 'availabilities', params: { start_date: domani, end_date: domani } },
-            { path: 'timeslots', params: { date: domani } },
-          ];
+          const disponibilitaDi = async (id: string): Promise<any> => {
+            const r = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(id)}/availability`, { params: { start_date: domani, end_date: domani }, headers: H, timeout: 6000 });
+            return r.data;
+          };
           let d: any = null;
-          for (const p of prove) {
-            try {
-              const r = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(productId)}/${p.path}`, { params: p.params, headers: H, timeout: 6000 });
-              d = r.data;
-              console.log(`[BigliettoIngresso] disponibilità Tiqets (${p.path} ${JSON.stringify(p.params)}):`, JSON.stringify(d).slice(0, 600));
-              break;
-            } catch (e: any) {
-              console.warn(`[BigliettoIngresso] ${p.path} ${JSON.stringify(p.params)} → ${e?.response?.status || e?.message}:`, JSON.stringify(e?.response?.data || '').slice(0, 300));
+          try {
+            d = await disponibilitaDi(productId);
+          } catch (e: any) {
+            const msg = String(e?.response?.data?.message || '');
+            if (e?.response?.status === 422 && /group|included product/i.test(msg)) {
+              const pr = await axios.get(`https://api.tiqets.com/v2/products/${encodeURIComponent(productId)}`, { headers: H, timeout: 6000 });
+              const testoProdotto = JSON.stringify(pr.data || {});
+              console.log('[BigliettoIngresso] prodotto gruppo:', testoProdotto.slice(0, 700));
+              // Gli id inclusi, comunque siano chiamati nel JSON.
+              const ids = [...new Set([
+                ...(testoProdotto.match(/"included_product_ids?"\s*:\s*\[([^\]]*)\]/i)?.[1] || '').split(',').map(s => s.replace(/[^\w-]/g, '')).filter(Boolean),
+                ...[...testoProdotto.matchAll(/"(?:product_id|id)"\s*:\s*"?(\d{4,})"?/g)].map(m => m[1]),
+              ])].filter(x => x !== String(productId)).slice(0, 4);
+              for (const id of ids) {
+                try { d = await disponibilitaDi(id); if (d) break; } catch (e2: any) { console.warn(`[BigliettoIngresso] incluso ${id} → ${e2?.response?.status || e2?.message}`); }
+              }
+            } else {
+              console.warn(`[BigliettoIngresso] availability → ${e?.response?.status || e?.message}:`, JSON.stringify(e?.response?.data || '').slice(0, 300));
             }
           }
           if (!d) return null;
+          console.log('[BigliettoIngresso] disponibilità Tiqets:', JSON.stringify(d).slice(0, 700));
           const giorni: any[] = d?.availability || d?.data?.availability || d?.dates || d?.data || (Array.isArray(d) ? d : []);
           const giorno = (Array.isArray(giorni) ? giorni : []).find((g: any) => String(g?.date || g?.day || '').slice(0, 10) === domani) || (Array.isArray(giorni) ? giorni[0] : null);
           const slot: any[] = giorno?.timeslots || giorno?.slots || giorno?.times || giorno?.time_slots || [];
