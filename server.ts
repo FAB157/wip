@@ -30124,6 +30124,14 @@ out center tags;`;
     // 10.000 = piano gratuito ElevenLabs; alzare via env se il piano attivo
     // sulla chiave in uso ne concede di più.
     elevenlabs: Number(process.env.ELEVENLABS_MONTHLY_LIMIT) || 10000,
+    // GOOGLE ERA L'UNICO SENZA TETTO (12/09/2026, richiesta del committente
+    // «metti tetto anche a google»): essendo l'ultimo ripiego, quando gli
+    // altri tre sono esauriti prende TUTTO il traffico, e oltre la fascia
+    // gratuita (1 M caratteri/mese sulle voci WaveNet) avrebbe generato
+    // spesa senza che nessuno se ne accorgesse. Superata la soglia Google si
+    // salta come gli altri: la rotta risponde errore e il client legge con la
+    // voce nativa del telefono (regola «audioguida mai muta»).
+    google: Number(process.env.GOOGLE_TTS_MONTHLY_LIMIT) || 1000000,
   };
   // "azure" mantiene la chiave storica (tts_usage_YYYY-MM) per non perdere
   // il contatore già in produzione; gli altri motori ne hanno una propria.
@@ -30353,9 +30361,14 @@ out center tags;`;
       console.warn(`[TTS] ElevenLabs oltre il tetto mensile (${TTS_LIMITI_MENSILI.elevenlabs} caratteri), salto a Google`);
     }
 
-    // Ultimo ripiego: Google TTS.
+    // Ultimo ripiego: Google TTS, anche lui sotto tetto mensile.
     const key = process.env.GOOGLE_TTS_API_KEY;
     if (!key) throw new Error("Google TTS Key missing");
+    const usoGoogle = await getTtsUsage('google');
+    if (usoGoogle >= TTS_LIMITI_MENSILI.google) {
+      console.warn(`[TTS] Google oltre il tetto mensile (${usoGoogle}/${TTS_LIMITI_MENSILI.google} caratteri): nessuna sintesi, il client userà la voce nativa`);
+      throw new Error('Google TTS monthly limit reached');
+    }
 
     let googleVoiceName = "it-IT-Wavenet-A"; // Default female
     let googleLangCode = "it-IT";
@@ -30416,6 +30429,8 @@ out center tags;`;
     }
     const audioBuffer = Buffer.concat(buffers);
     if (audioBuffer.length < 500) throw new Error(`Google TTS returned ${audioBuffer.length} bytes`);
+    await updateTtsUsage('google', charCount);
+    insertApiUsageLog({ api_name: 'google_tts', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0002, tokens_used: 0, success: true }).catch(() => {});
     return { buffer: audioBuffer, provider: 'Google' };
   }
 
