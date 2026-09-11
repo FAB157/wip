@@ -10,6 +10,9 @@ import dns from "node:dns";
 import axios from "axios";
 import Groq from "groq-sdk";
 import * as agentTools from "./agentTools.js";
+// Opere di un museo/chiesa opera per opera (12/09/2026): funzione pura,
+// nessuna dipendenza da server.ts — vedi la sua intestazione per il perché.
+import { opereDelMuseo, type OperaDelMuseo, type OpereDelMuseoRisultato } from "./opereMuseo.js";
 // Feed eventi/mostre/stagionali aggiunti il 07/09/2026 (Klook, Trip.com,
 // festival Wikidata, stagioni, JSON-LD dei musei, città in tre nomi).
 import * as eventiFeed from "./eventiFeed.js";
@@ -6784,7 +6787,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   /** "''", '""', 'N/D', '-', 'sconosciuto' → stringa vuota. */
   const campoOpzionale = (v: any, max: number): string => {
     const s = String(v ?? '').trim().replace(/^['"`]+|['"`]+$/g, '').trim();
-    if (!s || /^(n\/?d|n\/?a|null|undefined|sconosciut[oa]|unknown|ignoto|-{1,2})$/i.test(s)) return '';
+    if (!s || /^(n\/?d|n\/?a|null|undefined|sconosciut[oa]|unknown|ignoto|non\s+(noto|identificat[oa]|disponibile|specificat[oa])|not\s+(known|available|specified)|-{1,2})$/i.test(s)) return '';
     return s.slice(0, max);
   };
   // Parole di TIPOLOGIA: non identificano nulla da sole. Senza toglierle,
@@ -7100,9 +7103,19 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     // `wikibase:sitelinks` — leggerlo costa quasi nulla. Stesso segnale
     // (quante Wikipedia parlano dell'opera), cento volte più veloce:
     // verificato sul British (995 opere collegate), 0,9 s, foto su 40/40.
+    // IL TAGLIO A 80 DEVE CADERE SULLE OPERE, NON SULLE RIGHE (12/09/2026,
+    // trovato dalla semina misurando la query vera: al British 80 RIGHE
+    // erano solo 9-16 opere distinte, perché ogni OPTIONAL in più — più
+    // tipi, più immagini, più autori, più numeri d'inventario — moltiplica
+    // le righe della stessa opera. La sottoquery sceglie le 80 opere per
+    // fama PRIMA di aprire gli OPTIONAL: stessa velocità (la fase costosa,
+    // wikibase:sitelinks, resta lì), ma il taglio è quello giusto —
+    // verificato: British 80/80 opere invece di 9-16, 2,6 s.
     const sparql = `SELECT ?opera ?operaLabel ?labUser ?autoreLabel ?anno ?inv ?immagine ?tipo ?fama WHERE {
-  ${dovePrende}
-  ?opera wikibase:sitelinks ?fama .
+  { SELECT DISTINCT ?opera ?fama WHERE {
+      ${dovePrende}
+      ?opera wikibase:sitelinks ?fama .
+    } ORDER BY DESC(?fama) LIMIT 80 }
   OPTIONAL { ?opera rdfs:label ?labUser . FILTER(LANG(?labUser) = "${lang}") }
   OPTIONAL { ?opera wdt:P31 ?tipo . }
   OPTIONAL { ?opera wdt:P170 ?autore . }
@@ -7111,7 +7124,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   OPTIONAL { ?opera wdt:P18 ?immagine . }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},it,en". }
 }
-ORDER BY DESC(?fama) LIMIT 80`;
+ORDER BY DESC(?fama)`;
     try {
       // Due tentativi: il primo corto, il secondo più paziente. La maggior
       // parte delle cadute è un timeout passeggero del servizio pubblico, e
@@ -7152,8 +7165,12 @@ ORDER BY DESC(?fama) LIMIT 80`;
           });
           for (const b of (rc.data?.results?.bindings || [])) {
             const q2 = String(b?.opera?.value || '').split('/').pop() || '';
-            const collezioni = String(b?.collezioni?.value || '');
-            if (collezioni && !collezioni.includes(qid)) qidVietati.add(q2);
+            // Confronto per URI intero, non sottostringa: "Q6373" è
+            // contenuto in "Q63731…", "Q1601" in "Q160112" — trovato dalla
+            // semina, rischiava di dichiarare "vietate" opere di musei con
+            // un QID che comincia allo stesso modo del nostro.
+            const listaCollezioni = String(b?.collezioni?.value || '').split('|').filter(Boolean);
+            if (listaCollezioni.length && !listaCollezioni.some(u => u.endsWith(`/${qid}`))) qidVietati.add(q2);
           }
         }
       } catch (e: any) {
@@ -7222,7 +7239,11 @@ ORDER BY DESC(?fama) LIMIT 80`;
         // Anche col titolo originale come chiave: il modello può ripetere
         // quello, e la foto deve trovarsi lo stesso.
         if (img && originali[chiave] && !foto[normalizzaTesto(conRipiego)]) foto[normalizzaTesto(conRipiego)] = img;
-        if (img && !giaVista && top.length < 12) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
+        // Fino a 25, non 12 (12/09/2026): il modello spesso ha già scelto da
+        // solo le prime 12 per fama, e le "d'ufficio" servono a riempire
+        // FINO A 20 tappe con quelle che NON aveva preso — con un tetto
+        // troppo basso non restava nessuna candidata da aggiungere.
+        if (img && !giaVista && top.length < 25) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
       }
       // Si conserva solo una risposta VERA: un elenco vuoto potrebbe essere
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
@@ -8398,7 +8419,41 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // censite" da Wikidata) né una chiesa; è un percorso fatto di settori,
       // ambienti ed elementi architettonici.
       const isSito = !isChurch && /anfiteatr|amphitheat|colosseo|colosseum|arena romana|rovine|ruins|sito archeologic|archaeological site|\bforo\b|\bforum\b|acropoli|acropolis|terme di|thermae|baths of|necropoli|necropolis|scavi di|excavations of|piramid|pyramid|mura di|city walls|ipogeo|catacomb/i.test(`${venue.category} ${venue.name}`);
-      const [opereWd, sitoOut] = await Promise.all([
+      // OPERA PER OPERA (12/09/2026, modulo puro opereMuseo.ts): quando
+      // Wikidata offre abbastanza opere con QID proprio, sostituisce
+      // l'estrazione dal prompt libero — niente più "altrove" per
+      // costruzione, foto sempre dalla stessa opera, testo dalla sua voce.
+      // Cache 30 giorni SOLO se ha trovato qualcosa: un risultato vuoto è
+      // quasi sempre un timeout di Wikidata, non un dato su quel museo.
+      const OPERE_MUSEO_CACHE_TTL_MS = 30 * 86_400_000;
+      const opereMuseoKey = wikidataId ? `opere_museo:v1:${wikidataId}:${langCfg.wiki}` : '';
+      const opereMuseoPromise = (async (): Promise<OpereDelMuseoRisultato | null> => {
+        if (!wikidataId || isSito) return null;
+        if (opereMuseoKey) {
+          const riga = await getFromCache(opereMuseoKey);
+          const eta = riga ? Date.now() - Date.parse(riga.created_at || '') : Infinity;
+          if (riga && Number.isFinite(eta) && eta < OPERE_MUSEO_CACHE_TTL_MS) {
+            try { return JSON.parse(riga.text_content); } catch { /* cache corrotta: si rigenera */ }
+          }
+        }
+        try {
+          // Chiese (12/09/2026): opere Wikidata scarse (5 alla Sagrada
+          // Família) — `luogo: 'chiesa'` porta in gara anche le PARTI
+          // dell'edificio (facciate, cappelle, cripta, vetrate), e la stessa
+          // opzione fa escludere eventi/organizzazioni/gruppi di persone che
+          // altrimenti entravano come "opere" (l'incendio di Notre-Dame, i
+          // funerali a Westminster, la morte di un pontefice).
+          const r = await opereDelMuseo(wikidataId, langCfg.wiki, isChurch
+            ? { n: 12, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
+            : { n: 20, budgetMs: inDiretta ? 20000 : 45000 });
+          if (r.opere.length && opereMuseoKey) saveToCache(opereMuseoKey, 'opere_museo', JSON.stringify(r));
+          return r;
+        } catch (e: any) {
+          console.warn(`[VenueGuide] opereDelMuseo fallita per ${venue.name}:`, e?.message);
+          return null;
+        }
+      })();
+      const [opereWd, sitoOut, opereMuseoResult] = await Promise.all([
         // Senza QID la forma resta completa: più sotto si legge `.titoli`,
         // `.originali` e `.famose`, e un oggetto a metà farebbe cadere tutto.
         // Un sito archeologico non "possiede" opere via P195 (quella query è
@@ -8425,6 +8480,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           if (!sito) return { testo: '', pagine: [] as string[], pianta: '' };
           return testoDalSitoUfficiale(sito);
         })(),
+        opereMuseoPromise,
       ]);
 
       // LE SALE DALLA VOCE INGLESE, QUANDO IL SITO È BLOCCATO (12/09/2026,
@@ -8471,7 +8527,18 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       }
 
       // ── 4. Il percorso, SOLO dal materiale ──
-      const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}" per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork || 'sconosciuta'}".
+      // SENZA UN'OPERA VERA RICONOSCIUTA, NON SE NE PARLA (12/09/2026,
+      // trovato dalla semina): quando nessuno ha inquadrato nulla —
+      // generazione al volo dalla lista musei, o semina di sfondo —
+      // scrivere `l'opera "sconosciuta"` nel prompt faceva sì che il
+      // modello trattasse "Opera sconosciuta (riconosciuta con fotocamera)"
+      // come un titolo vero, e finiva fra le tappe scartate come se fosse
+      // un'opera reale mai trovata nel materiale. La frase si scrive solo
+      // quando c'è davvero un'opera riconosciuta.
+      const frasePrimaOpera = currentWork
+        ? ` per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork}"`
+        : ' per un visitatore che sta per entrare';
+      const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}"${frasePrimaOpera}.
 
 MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):
 """
@@ -8541,14 +8608,22 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           if (tentativo < tentativi - 1) await new Promise(r => setTimeout(r, tentativo === 0 ? 20000 : 60000));
         }
       }
-      if (!rawAi.includes('{')) {
+      // La riserva a pagamento (gpt-4o-mini) è SOLO per chi aspetta davvero
+      // davanti al luogo: la semina di sfondo (12/09/2026, principio del
+      // committente) resta sui motori gratuiti (Groq→Agnes) e basta — se
+      // sono entrambi saturi risponde ai_unavailable e lo script che gira
+      // in sfondo dorme e riprova lo stesso museo, invece di far pagare
+      // una chiamata per ogni museo del mondo senza nessuno che aspetti.
+      if (!rawAi.includes('{') && inDiretta) {
         const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
-        if (!key) return res.json({ ok: false, reason: 'ai_unavailable', venue });
-        const r = await axios.post('https://api.openai.com/v1/chat/completions', {
-          model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 5000, response_format: { type: 'json_object' }
-        }, { timeout: 60000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
-        rawAi = String(r.data?.choices?.[0]?.message?.content || '');
+        if (key) {
+          const r = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: 'gpt-4o-mini', messages: [{ role: 'user', content: prompt }], temperature: 0.2, max_tokens: 5000, response_format: { type: 'json_object' }
+          }, { timeout: 60000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
+          rawAi = String(r.data?.choices?.[0]?.message?.content || '');
+        }
       }
+      if (!rawAi.includes('{')) return res.json({ ok: false, reason: 'ai_unavailable', venue });
       let parsed: any = null;
       try {
         const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -8662,8 +8737,6 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           }
         }
       }
-      const tappe2 = tappeVere;
-
       // ── 5-quater. Il titolo com'è scritto sul cartellino ──
       // Chi cerca l'opera con gli occhi legge il muro, non la nostra
       // traduzione. Quando Wikidata ha entrambi, la tappa li porta tutti e
@@ -8703,6 +8776,67 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           tappeVere = [...tappeVere, ...dufficio];
         }
       }
+      const tappe2 = tappeVere;
+
+      // ── 5-sexies. OPERA PER OPERA (12/09/2026, opereMuseo.ts) ──
+      // Quando Wikidata offre abbastanza opere con QID proprio (misurato:
+      // foto e testo dalla voce dell'opera stessa su musei di ogni taglia),
+      // sostituiscono l'intero percorso pescato dal prompt libero: ogni
+      // tappa ha già il suo QID, quindi "altrove" è impossibile per
+      // costruzione, e la foto/il testo sono sempre di QUELL'opera. Sotto
+      // 12 opere (musei piccoli, o Wikidata lento) resta il percorso sopra.
+      // Il "perche" si scrive A LOTTI DI 5 opere, ognuna SOLO dal proprio
+      // testoFonte (mai dalla prosa del museo): prompt corti, un motore
+      // gratuito regge anche Agnes in diretta. 80-150 parole quando la fonte
+      // è una voce vera o una scheda ufficiale, 40-60 asciutte quando è
+      // solo Wikidata (niente riempitivo per allungare fatti che non ci sono).
+      async function tappeOperaPerOpera(opere: OperaDelMuseo[]): Promise<any[]> {
+        const ordinate = [...opere.filter(o => o.esposta !== false), ...opere.filter(o => o.esposta === false)];
+        const LOTTO = 5;
+        for (let k = 0; k < ordinate.length; k += LOTTO) {
+          const lotto = ordinate.slice(k, k + LOTTO).filter(o => o.testoFonte);
+          if (!lotto.length) continue;
+          const corpo = lotto.map((o, i) => {
+            const lunghezza = (o.fonteTesto === 'wikidata') ? '40-60 parole, fatti asciutti, NIENTE riempitivo' : '80-150 parole';
+            return `OPERA ${i + 1} — "${o.titolo}"${o.autore ? ` di ${o.autore}` : ''}${o.anno ? ` (${o.anno})` : ''} — lunghezza attesa: ${lunghezza}\n${o.testoFonte}`;
+          }).join('\n\n---\n\n');
+          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto).\n\n${corpo}\n${regolaSpecificita(venue.name)}\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
+          try {
+            const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+              temperature: 0.3, max_tokens: 1800, response_format: { type: 'json_object' },
+              excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
+            }, 'venue_guide_opera', supabaseUrl, supabaseServiceKey, groq, userId);
+            const raw = String(ai?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+            const parsedLotto = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+            const elenco = Array.isArray(parsedLotto?.opere) ? parsedLotto.opere : [];
+            lotto.forEach((o, i) => { const p = campoOpzionale(elenco[i]?.perche, 700); if (p) (o as any)._perche = p; });
+          } catch (e: any) {
+            console.warn(`[VenueGuide] ${venue.name}: lotto "perche" opera-per-opera fallito, ripiego sui fatti:`, e?.message);
+          }
+        }
+        return ordinate.map(o => {
+          const fatti = [o.autore ? `di ${o.autore}` : '', o.anno ? `(${o.anno})` : '', o.inv ? `n. inventario ${o.inv}` : ''].filter(Boolean).join(' ');
+          const percheBase = (o as any)._perche || (fatti ? `Opera ${fatti}.` : '');
+          return {
+            nome: o.titolo, nomeFonte: o.titoloEn && o.titoloEn !== o.titolo ? o.titoloEn : '', autore: o.autore, anno: o.anno,
+            dove: o.sala || '', puntoPreciso: '',
+            perche: o.esposta === false ? `Attualmente non esposta. ${percheBase}`.trim() : percheBase,
+            tipo: o.tipo, foto: o.foto ? fotoCommons(o.foto, 800) : '', fotoIcona: o.foto ? fotoCommons(o.foto, 160) : '',
+            daListaOpere: true, qid: o.qid,
+            ...(o.urlScheda ? { schedaUfficiale: o.urlScheda } : {}),
+          };
+        });
+      }
+
+      // Soglia più bassa per le chiese (6, come altrove nel file): chieste
+      // solo 12 candidate contro le 20 di un museo, e alla Sagrada Família
+      // erano appena 5 opere censite + le parti dell'edificio.
+      let tappe2Finale = tappe2;
+      if (!isSito && opereMuseoResult && opereMuseoResult.opere.length >= (isChurch ? 6 : 12)) {
+        for (const e of opereMuseoResult.diagnostica.escluse) motiviScarto.push({ nome: e.titolo, motivo: e.motivo });
+        tappe2Finale = await tappeOperaPerOpera(opereMuseoResult.opere);
+        console.log(`[VenueGuide] ${venue.name}: percorso OPERA PER OPERA (${tappe2Finale.length} opere da Wikidata, bypassata l'estrazione dal prompt libero)`);
+      }
 
       // ── 5-ter. Proprietà non è allestimento ──
       // «Il museo la possiede» e «oggi la vedi» sono due promesse diverse.
@@ -8711,8 +8845,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // un ordine e un orario. Se invece NESSUNA sala è dichiarata — capita,
       // il Van Gogh Museum non le pubblica — non si finge un itinerario:
       // l'ordine consigliato resta, ma la guida lo dichiara.
-      const conSala = tappe2.filter((t: any) => String(t.dove || '').trim());
-      const senzaSala = tappe2.filter((t: any) => !String(t.dove || '').trim());
+      const conSala = tappe2Finale.filter((t: any) => String(t.dove || '').trim());
+      const senzaSala = tappe2Finale.filter((t: any) => !String(t.dove || '').trim());
       const saleDichiarate = conSala.length > 0;
 
       // ── 5-quinquies. SI VISITA PER STANZE, NON A ZIGZAG ──
@@ -8766,7 +8900,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
 
       const tappeOrdinate = saleDichiarate
         ? [...raggruppaPerSala(conSala), ...senzaSala.map((t: any) => ({ ...t, soloCollezione: true }))]
-        : tappe2;
+        : tappe2Finale;
 
       if (tappeOrdinate.length < 3) {
         const out = { ok: false, reason: 'insufficient', venue, negativoDel: new Date().toISOString() };
@@ -8880,6 +9014,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // Le tappe uscite e perché — per non dover indovinare, collaudando,
         // se è stata la scelta del modello o un controllo a toglierle.
         ...(motiviScarto.length ? { scartate: motiviScarto.slice(0, 30) } : {}),
+        // Attribuzione (12/09/2026): il testo delle tappe "opera per opera"
+        // nasce dalla voce Wikipedia dell'opera (CC BY-SA) o da Wikidata.
+        ...(guide?.tappe?.some((t: any) => t.daListaOpere) ? { fonti: ['Wikipedia', 'Wikidata'] } : {}),
       };
       await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payload));
       // LIBRERIA: la guida entra anche in museum_guides, così è elencabile,
@@ -9175,7 +9312,9 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
       } catch (e: any) {
         console.warn('[ArtworkGuide] motori universali saturi, provo OpenAI:', e?.message);
       }
-      if (!rawAi.includes('{')) {
+      // Riserva a pagamento solo dal vivo (12/09/2026, principio del
+      // committente): la semina resta sui gratuiti, ai_unavailable altrimenti.
+      if (!rawAi.includes('{') && inDiretta) {
         const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
         if (!key) return res.json({ ok: false, reason: 'ai_unavailable', artwork: opera });
         const r = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -9183,6 +9322,7 @@ Rispondi ESCLUSIVAMENTE con un oggetto JSON valido:
         }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
         rawAi = String(r.data?.choices?.[0]?.message?.content || '');
       }
+      if (!rawAi.includes('{')) return res.json({ ok: false, reason: 'ai_unavailable', artwork: opera });
       let parsed: any = null;
       try {
         const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
@@ -9345,7 +9485,9 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         }, 'museum_more_artworks', supabaseUrl, supabaseServiceKey, groq, userId);
         rawAi = String(ai?.data || '');
       } catch { /* si prova OpenAI */ }
-      if (!rawAi.includes('{')) {
+      // Riserva a pagamento solo dal vivo (12/09/2026, principio del
+      // committente): la semina resta sui gratuiti, ai_unavailable altrimenti.
+      if (!rawAi.includes('{') && inDiretta) {
         const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
         if (!key) return res.json({ ok: false, reason: 'ai_unavailable', added: [] });
         const r = await axios.post('https://api.openai.com/v1/chat/completions', {
@@ -9353,6 +9495,7 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         }, { timeout: 45000, headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' } });
         rawAi = String(r.data?.choices?.[0]?.message?.content || '');
       }
+      if (!rawAi.includes('{')) return res.json({ ok: false, reason: 'ai_unavailable', added: [] });
       let parsed: any = null;
       try {
         const raw = rawAi.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
