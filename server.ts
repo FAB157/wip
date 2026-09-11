@@ -9,6 +9,11 @@ import dotenv from "dotenv";
 import dns from "node:dns";
 import axios from "axios";
 import Groq from "groq-sdk";
+// TTS catena vocale (12/09/2026, richiesta del committente): Azure -> Polly
+// -> ElevenLabs -> Google. Il client legge le chiavi da AWS_ACCESS_KEY_ID/
+// AWS_SECRET_ACCESS_KEY (nessuna chiave configurata ancora: Polly resta
+// inerte finché non arrivano, la catena scavalca al motore successivo).
+import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
 import * as agentTools from "./agentTools.js";
 // Opere di un museo/chiesa opera per opera (12/09/2026): funzione pura,
 // nessuna dipendenza da server.ts — vedi la sua intestazione per il perché.
@@ -30166,8 +30171,90 @@ out center tags;`;
     return null;
   }
 
-  /** Sintesi vera: Azure finché sotto il tetto mensile, poi Google (a blocchi). */
-  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Google' }> {
+  // VOCE MASCHILE (Dante) riconosciuta dal nome Azure: stesso identificatore
+  // in tutta la catena (Polly ed ElevenLabs non condividono i nomi voce di
+  // Azure, ma il personaggio scelto dall'utente è lo stesso).
+  const E_VOCE_DANTE = /Diego|Guy|Henri|Conrad|Alvaro|Dmitry|Yunxi/;
+
+  // Russo e cinese non hanno una coppia maschile/femminile neurale su Polly
+  // (Tatyana/Maxim sono solo "standard", Zhiyu è l'unica voce mandarino):
+  // si usa quella che c'è comunque, meglio di saltare Polly del tutto.
+  const POLLY_VOCI: Record<string, { nicky: string; dante: string; engine: 'neural' | 'standard'; lang: string }> = {
+    'it-IT': { nicky: 'Bianca', dante: 'Adriano', engine: 'neural', lang: 'it-IT' },
+    'en-US': { nicky: 'Joanna', dante: 'Matthew', engine: 'neural', lang: 'en-US' },
+    'fr-FR': { nicky: 'Lea', dante: 'Remi', engine: 'neural', lang: 'fr-FR' },
+    'es-ES': { nicky: 'Lucia', dante: 'Sergio', engine: 'neural', lang: 'es-ES' },
+    'de-DE': { nicky: 'Vicki', dante: 'Daniel', engine: 'neural', lang: 'de-DE' },
+    'ru-RU': { nicky: 'Tatyana', dante: 'Maxim', engine: 'standard', lang: 'ru-RU' },
+    'zh-CN': { nicky: 'Zhiyu', dante: 'Zhiyu', engine: 'neural', lang: 'cmn-CN' },
+  };
+  let pollyClient: PollyClient | null | undefined;
+  function getPollyClient(): PollyClient | null {
+    if (pollyClient !== undefined) return pollyClient;
+    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) { pollyClient = null; return null; }
+    pollyClient = new PollyClient({ region: process.env.AWS_REGION || 'eu-west-1' });
+    return pollyClient;
+  }
+  /** A blocchi come Google: Polly rifiuta oltre ~3000 caratteri a chiamata. */
+  function aBlocchi(text: string, maxChars: number): string[] {
+    const blocchi: string[] = [];
+    let corrente = '';
+    for (const frase of String(text).split(/(?<=[.!?…])\s+/)) {
+      const candidato = corrente ? `${corrente} ${frase}` : frase;
+      if (candidato.length > maxChars && corrente) { blocchi.push(corrente); corrente = frase; }
+      else corrente = candidato;
+    }
+    if (corrente) blocchi.push(corrente);
+    return blocchi;
+  }
+  async function synthesizePolly(text: string, voiceName: string): Promise<Buffer> {
+    const client = getPollyClient();
+    if (!client) throw new Error('Polly non configurato (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY assenti)');
+    let voiceLocale = 'it-IT';
+    if (voiceName.includes('-')) {
+      const parts = voiceName.split('-');
+      if (parts.length >= 2) voiceLocale = `${parts[0]}-${parts[1]}`;
+    }
+    const voci = POLLY_VOCI[voiceLocale];
+    if (!voci) throw new Error(`Polly: nessuna voce per ${voiceLocale}`);
+    const voiceId = E_VOCE_DANTE.test(voiceName) ? voci.dante : voci.nicky;
+    const buffers: Buffer[] = [];
+    for (const chunk of aBlocchi(text, 2800)) {
+      const risposta = await client.send(new SynthesizeSpeechCommand({
+        Text: chunk, OutputFormat: 'mp3', VoiceId: voiceId as any, Engine: voci.engine as any, LanguageCode: voci.lang as any,
+      }));
+      const bytes = await risposta.AudioStream?.transformToByteArray();
+      if (!bytes) throw new Error('Polly: AudioStream vuoto');
+      buffers.push(Buffer.from(bytes));
+    }
+    return Buffer.concat(buffers);
+  }
+  // Voci pubbliche stabili di ElevenLabs (Adam/Rachel) col modello
+  // multilingue: a differenza di Azure/Polly una voce sola copre tutte le
+  // lingue del progetto. Personalizzabile con ELEVENLABS_VOICE_ID_NICKY/
+  // _DANTE se si preferiscono voci diverse o clonate.
+  async function synthesizeElevenLabs(text: string, voiceName: string): Promise<Buffer> {
+    const key = process.env.ELEVENLABS_API_KEY;
+    if (!key) throw new Error('ElevenLabs non configurato (ELEVENLABS_API_KEY assente)');
+    const voiceId = E_VOCE_DANTE.test(voiceName)
+      ? (process.env.ELEVENLABS_VOICE_ID_DANTE || 'pNInz6obpgDQGcFmaJgB')
+      : (process.env.ELEVENLABS_VOICE_ID_NICKY || '21m00Tcm4TlvDq8ikWAM');
+    const buffers: Buffer[] = [];
+    for (const chunk of aBlocchi(text, 4500)) {
+      const risposta = await axios.post(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        text: chunk, model_id: 'eleven_multilingual_v2', voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      }, { headers: { 'xi-api-key': key, 'Content-Type': 'application/json', Accept: 'audio/mpeg' }, responseType: 'arraybuffer', timeout: 60000 });
+      buffers.push(Buffer.from(risposta.data));
+    }
+    return Buffer.concat(buffers);
+  }
+
+  /** Sintesi vera: Azure finché sotto il tetto mensile, poi Polly, poi
+   *  ElevenLabs, infine Google (a blocchi) — ordine scelto dal committente
+   *  (12/09/2026). Polly ed ElevenLabs restano inerti finché non arrivano le
+   *  rispettive chiavi: passano oltre in pochi millisecondi, non rallentano
+   *  chi già funziona con Azure/Google. */
+  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' }> {
     const charCount = text.length;
     const currentUsage = await getTtsUsage();
 
@@ -30212,11 +30299,31 @@ out center tags;`;
         insertApiUsageLog({ api_name: 'azure', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.001, tokens_used: 0, success: true }).catch(() => {});
         return { buffer: audioBuffer, provider: 'Azure' };
       } catch (e: any) {
-        console.warn("Azure TTS Failed or Limit Reached, falling back to Google... Error message:", e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
+        console.warn("Azure TTS Failed or Limit Reached, falling back to Polly... Error message:", e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
       }
     }
 
-    // Fallback su Google TTS
+    // Fallback su Polly (inerte finché non arrivano le chiavi AWS).
+    try {
+      const audioBuffer = await synthesizePolly(text, voiceName);
+      if (audioBuffer.length < 500) throw new Error(`Polly returned ${audioBuffer.length} bytes`);
+      insertApiUsageLog({ api_name: 'polly', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0004, tokens_used: 0, success: true }).catch(() => {});
+      return { buffer: audioBuffer, provider: 'Polly' };
+    } catch (e: any) {
+      console.warn("Polly TTS non disponibile, provo ElevenLabs... Error:", e.message);
+    }
+
+    // Fallback su ElevenLabs.
+    try {
+      const audioBuffer = await synthesizeElevenLabs(text, voiceName);
+      if (audioBuffer.length < 500) throw new Error(`ElevenLabs returned ${audioBuffer.length} bytes`);
+      insertApiUsageLog({ api_name: 'elevenlabs', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.02, tokens_used: 0, success: true }).catch(() => {});
+      return { buffer: audioBuffer, provider: 'ElevenLabs' };
+    } catch (e: any) {
+      console.warn("ElevenLabs TTS non disponibile, ripiego su Google... Error:", e.message);
+    }
+
+    // Ultimo ripiego: Google TTS.
     const key = process.env.GOOGLE_TTS_API_KEY;
     if (!key) throw new Error("Google TTS Key missing");
 
