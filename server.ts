@@ -9154,7 +9154,7 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
             const s = p.toLowerCase();
             if (/(eventi|event|mostr|exhibit|attivit|activit|news|notiz|blog|visite-speciali|special)/.test(s)) return 0;
             if (/(orar|hour|horaire|horario|öffnungszeit|opening|apertur)/.test(s)) return 3;
-            if (/(biglietti|ticket|tarif|precio|preis|eintritt|prices|admission)/.test(s)) return 2;
+            if (/(biglietti|ticket|tarif|precio|preis|eintritt|prices|prezz|admission)/.test(s)) return 2;
             if (/(visit|visita|besuch|info)/.test(s)) return 1;
             return 0;
           };
@@ -9182,21 +9182,33 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
             } catch { /* link non valido */ }
           }
           candidati.sort((a, b) => b.peso - a.peso);
-          const scelti = candidati.slice(0, 3).map(c => c.href);
+          const scelti = candidati.slice(0, 4).map(c => c.href);
           for (const u of scelti) {
             try {
               const r = await axios.get(u, { ...UA, timeout: 7000 });
               const t = testoPaginaMuseo(String(r.data || ''));
-              if (t.length > 200) { testi.push(t.slice(0, 5000)); pagine.push(u); }
+              if (t.length > 200) { testi.push(t.slice(0, 6000)); pagine.push(u); }
             } catch { /* pagina saltata */ }
           }
         } catch (e: any) {
           return res.json({ ok: false, reason: 'sito_non_raggiungibile' });
         }
-        // In cima le frasi con un orario o un prezzo: sono quelle che contano.
-        const materiale = testi.join('\n\n').split(/(?<=[.;!?])\s+/)
-          .sort((a, b) => Number(/\d{1,2}[:.]\d{2}|€|\$|£/.test(b)) - Number(/\d{1,2}[:.]\d{2}|€|\$|£/.test(a)))
-          .join(' ').slice(0, 14000);
+        // LA PAGINA CHE PARLA DAVVERO DI ORARI VA PER PRIMA. Non ci si fida
+        // dei link: si conta, pagina per pagina, quante volte compaiono un
+        // orario («8.15», «18:30») e un giorno della settimana. La più densa
+        // apre il materiale ed è la fonte che si cita; quelle a zero non
+        // entrano, così una pagina di eventi non può più prestare il suo
+        // orario al museo.
+        const RE_ORA = /\b\d{1,2}[:.]\d{2}\b/g;
+        const RE_GIORNO = /\b(luned|marted|mercoled|gioved|venerd|sabato|domenica|monday|tuesday|wednesday|thursday|friday|saturday|sunday|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|lunes|martes|miércoles|jueves|viernes|sábado|domingo|montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)\b/gi;
+        const documenti = testi.map((t, i) => ({
+          t, u: pagine[i],
+          densita: (t.match(RE_ORA) || []).length + (t.match(RE_GIORNO) || []).length,
+        })).sort((a, b) => b.densita - a.densita);
+        const utili = documenti.filter(d => d.densita > 0);
+        const scelti2 = (utili.length ? utili : documenti).slice(0, 3);
+        const materiale = scelti2.map(d => `[PAGINA ${d.u}]\n${d.t}`).join('\n\n').slice(0, 15000);
+        const fonteUrl = scelti2[0]?.u || base.href;
         if (materiale.length < 300) return res.json({ ok: false, reason: 'sito_senza_testo' });
 
         // 3) Ricopiare, non inventare. Giorni con chiavi fisse mon..sun.
@@ -9207,15 +9219,18 @@ TESTO:
 ${materiale}
 """
 
-Rispondi SOLO con JSON:
+Rispondi SOLO con un oggetto JSON con questi campi, tutti STRINGHE:
 {
-  "settimana": { "mon": {"apre":"HH:MM","chiude":"HH:MM"} oppure null se chiuso oppure "?" se il testo non lo dice, "tue": ..., "wed": ..., "thu": ..., "fri": ..., "sat": ..., "sun": ... },
-  "ultimoIngresso": "HH:MM o ''",
-  "chiusure": "giorni o periodi di chiusura come li scrive il sito, oppure ''",
-  "biglietto": { "intero": "es. 25 €, oppure ''", "ridotto": "... o ''", "gratis": "chi entra gratis, o ''" },
-  "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure ''"
+  "mon": "08:15-18:30 oppure chiuso oppure vuoto se il testo non lo dice",
+  "tue": "", "wed": "", "thu": "", "fri": "", "sat": "", "sun": "",
+  "ultimoIngresso": "HH:MM oppure vuoto",
+  "chiusure": "giorni o periodi di chiusura come li scrive il sito, oppure vuoto",
+  "biglietto": "SOLO il biglietto intero ordinario del museo principale, un valore (es. 25 €); vuoto se non c'è",
+  "ridotto": "il ridotto ordinario, un valore, oppure vuoto",
+  "gratis": "chi entra gratis, oppure vuoto",
+  "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure vuoto"
 }
-Usa le chiavi mon..sun ESATTAMENTE così. Orari nel formato HH:MM a 24 ore. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).`;
+Orari a 24 ore nel formato HH:MM-HH:MM. Gli orari del MUSEO, non di eventi, mostre, giardini o aperture serali straordinarie. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).`;
         let raw = '';
         try {
           const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
@@ -9230,20 +9245,23 @@ Usa le chiavi mon..sun ESATTAMENTE così. Orari nel formato HH:MM a 24 ore. Se i
           const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
           dati = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
         } catch { return res.json({ ok: false, reason: 'ai_parse_failed' }); }
-        dati.fonte = { url: pagine[pagine.length - 1] || base.href, lettoIl: new Date().toISOString() };
+        dati.fonte = { url: fonteUrl, lettoIl: new Date().toISOString() };
         await saveToCache(chiave, 'museum_hours', JSON.stringify(dati));
       }
 
       // 4) «Domani» calcolato qui, così l'app non deve capire i giorni.
+      // Il modello risponde con stringhe semplici («08:15-18:30», «chiuso»,
+      // vuoto): tre forme, nessuna ambiguità, e Groq non le rifiuta più.
       const domani = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const chiaviGiorno = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
       const k = chiaviGiorno[domani.getDay()];
-      const g = dati?.settimana?.[k];
+      const g = String(dati?.[k] ?? dati?.settimana?.[k] ?? '').trim().toLowerCase();
       const orarioValido = (s: any) => /^\d{1,2}:\d{2}$/.test(String(s || ''));
-      const esitoDomani = g === null
+      const mOra = g.match(/^(\d{1,2}[:.]\d{2})\s*[-–—]\s*(\d{1,2}[:.]\d{2})$/);
+      const esitoDomani = /^(chiuso|closed|fermé|ferme|cerrado|geschlossen)$/.test(g)
         ? { chiuso: true }
-        : (g && typeof g === 'object' && orarioValido(g.apre) && orarioValido(g.chiude))
-          ? { chiuso: false, apre: String(g.apre), chiude: String(g.chiude) }
+        : mOra
+          ? { chiuso: false, apre: mOra[1].replace('.', ':'), chiude: mOra[2].replace('.', ':') }
           : null;
 
       // La fila: consiglio dichiarato, solo dove ha senso.
@@ -9261,12 +9279,12 @@ Usa le chiavi mon..sun ESATTAMENTE così. Orari nel formato HH:MM a 24 ore. Se i
         ok: true,
         domani: esitoDomani,
         giorno: k,
-        ultimoIngresso: orarioValido(dati?.ultimoIngresso) ? String(dati.ultimoIngresso) : '',
+        ultimoIngresso: orarioValido(String(dati?.ultimoIngresso || '').replace('.', ':')) ? String(dati.ultimoIngresso).replace('.', ':') : '',
         chiusure: String(dati?.chiusure || '').slice(0, 200),
         biglietto: {
-          intero: String(dati?.biglietto?.intero || '').slice(0, 60),
-          ridotto: String(dati?.biglietto?.ridotto || '').slice(0, 60),
-          gratis: String(dati?.biglietto?.gratis || '').slice(0, 120),
+          intero: String((typeof dati?.biglietto === 'string' ? dati.biglietto : dati?.biglietto?.intero) || '').slice(0, 60),
+          ridotto: String(dati?.ridotto || dati?.biglietto?.ridotto || '').slice(0, 60),
+          gratis: String(dati?.gratis || dati?.biglietto?.gratis || '').slice(0, 120),
         },
         nota: String(dati?.nota || '').slice(0, 200),
         consiglio,
