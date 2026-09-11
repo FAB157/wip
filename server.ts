@@ -7983,6 +7983,7 @@ REGOLE TASSATIVE:
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
+- "servizi": DOVE SONO bagni, guardaroba, caffetteria o ristorante, bookshop, uscita, ascensori e accessibilità — SOLO se il materiale del sito ufficiale lo dice. Ogni voce una riga breve col piano o la posizione ("piano terra, dopo la biglietteria"). Voce vuota se il materiale non lo dice: dopo un'ora e mezza dentro un museo la cosa che serve è il bagno, e mandare qualcuno al piano sbagliato è peggio che non dirlo.
 ${regolaSpecificita(venue.name)}
 
 LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo attorno:
@@ -7990,6 +7991,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "tipo": "${isChurch ? 'chiesa' : 'museo'}" oppure "sito",
   "intro": "...",
   "consiglio": "...",
+  "servizi": { "bagni": "... o ''", "guardaroba": "... o ''", "caffetteria": "... o ''", "bookshop": "... o ''", "uscita": "... o ''", "accessibilita": "... o ''" },
   "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "..." } ]
 }`;
 
@@ -8260,6 +8262,20 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // le opere. L'app lo scrive in testata invece di numerare tappe che
         // il visitatore non saprebbe dove cercare.
         saleDichiarate,
+        // I SERVIZI (11/09/2026): bagni, guardaroba, caffetteria, bookshop,
+        // uscita, accessibilità — solo le voci che il sito dichiara. Un
+        // oggetto vuoto non si salva: la scheda non mostra una riga «Servizi»
+        // senza servizi.
+        ...((): Record<string, unknown> => {
+          const s = parsed?.servizi;
+          if (!s || typeof s !== 'object') return {};
+          const voci: Record<string, string> = {};
+          for (const k of ['bagni', 'guardaroba', 'caffetteria', 'bookshop', 'uscita', 'accessibilita']) {
+            const v = campoOpzionale((s as any)[k], 160);
+            if (v) voci[k] = v;
+          }
+          return Object.keys(voci).length ? { servizi: voci } : {};
+        })(),
         // Se il luogo È una chiesa lo sappiamo noi dalla categoria e dal nome,
         // e vale più della risposta del modello: il Duomo di Firenze usciva
         // classificato «museo» e la scheda mostrava l'icona sbagliata.
@@ -9066,6 +9082,172 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // in faccia a chi sta visitando per un contatore.
       console.warn('[MuseumSkip] non registrato:', e?.response?.data?.message || e?.message);
       res.json({ ok: true, recorded: false });
+    }
+  });
+
+  /**
+   * DOMANI (11/09/2026, richiesta del committente): «Domani: apre alle 8:15,
+   * chiude alle 18:30, chiuso il lunedì, biglietto 25 €».
+   *
+   * Ogni giorno qualcuno arriva davanti a un cancello chiuso. Il nostro
+   * archivio ha gli orari solo come testo libero («Mar-Dom 11:00–19:00»), e
+   * per gli Uffizi non ne ha nessuno: l'unica fonte affidabile è il SITO
+   * UFFICIALE, che è anche l'unica che vale la pena citare. Si leggono la
+   * home e le pagine «orari / biglietti / visita», e si chiede a un motore
+   * gratuito di ricopiare — non inventare — gli orari per giorno della
+   * settimana, i giorni di chiusura, l'ultimo ingresso e il prezzo del
+   * biglietto. Risposta in cache per 7 giorni: una chiamata a museo a
+   * settimana, nessun motore a pagamento (gli orari non valgono un centesimo
+   * di DeepSeek). Se il sito non lo dice, la voce resta vuota e l'app non
+   * la mostra: un orario sbagliato manda qualcuno davanti a un cancello
+   * chiuso, ed è peggio di nessun orario.
+   *
+   * La FILA non ha una fonte onesta (i «popular times» non sono
+   * disponibili per uso lecito): si dà un consiglio dichiarato come tale,
+   * solo per i musei con opere famose.
+   */
+  app.get("/api/museums/tomorrow", rateLimiter, async (req, res) => {
+    try {
+      const poiId = String(req.query.poiId || '').trim().slice(0, 120);
+      const venueName = String(req.query.venueName || '').trim().slice(0, 120);
+      const langKey = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
+      const wl = ({ IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' } as Record<string, string>)[langKey] || 'it';
+      if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
+
+      const chiave = `museum_hours:v1:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}`;
+      let dati: any = null;
+      const inCache = await getFromCache(chiave, 'museum_hours', 7 * 24 * 60 * 60 * 1000);
+      if (inCache) { try { dati = JSON.parse(inCache); } catch { dati = null; } }
+
+      if (!dati) {
+        // 1) Il sito: dal POI, altrimenti cercato per nome.
+        let sito = '';
+        if (poiId) {
+          try {
+            const r = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=contact_website,name&limit=1`,
+              { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 });
+            sito = String(r.data?.[0]?.contact_website || '');
+          } catch { /* si cerca per nome */ }
+        }
+        if (!sito && venueName) sito = await trovaSitoUfficiale(venueName, wl);
+        if (!sito) return res.json({ ok: false, reason: 'nessun_sito' });
+
+        // 2) Le pagine giuste: home + fino a 3 fra orari, biglietti, visita.
+        let base: URL;
+        try { base = new URL(/^https?:\/\//i.test(sito) ? sito : `https://${sito}`); } catch { return res.json({ ok: false, reason: 'sito_non_valido' }); }
+        const UA = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000, maxRedirects: 3, validateStatus: (s: number) => s < 400 };
+        const testi: string[] = [];
+        const pagine: string[] = [];
+        try {
+          const home = await axios.get(base.href, UA);
+          const html = String(home.data || '');
+          testi.push(testoPaginaMuseo(html).slice(0, 5000));
+          pagine.push(base.href);
+          const RE_UTILI = /(orar|hour|horaire|horario|öffnungszeit|opening|biglietti|ticket|tarif|precio|preis|eintritt|visit|visita|besuch|prices|admission)/i;
+          const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
+          const scelti: string[] = [];
+          for (const l of link) {
+            try {
+              const u = new URL(l, base.href);
+              if (u.hostname !== base.hostname || u.href === base.href) continue;
+              if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
+              if (!RE_UTILI.test(u.pathname)) continue;
+              if (!scelti.includes(u.href)) scelti.push(u.href);
+              if (scelti.length >= 3) break;
+            } catch { /* link non valido */ }
+          }
+          for (const u of scelti) {
+            try {
+              const r = await axios.get(u, { ...UA, timeout: 7000 });
+              const t = testoPaginaMuseo(String(r.data || ''));
+              if (t.length > 200) { testi.push(t.slice(0, 5000)); pagine.push(u); }
+            } catch { /* pagina saltata */ }
+          }
+        } catch (e: any) {
+          return res.json({ ok: false, reason: 'sito_non_raggiungibile' });
+        }
+        // In cima le frasi con un orario o un prezzo: sono quelle che contano.
+        const materiale = testi.join('\n\n').split(/(?<=[.;!?])\s+/)
+          .sort((a, b) => Number(/\d{1,2}[:.]\d{2}|€|\$|£/.test(b)) - Number(/\d{1,2}[:.]\d{2}|€|\$|£/.test(a)))
+          .join(' ').slice(0, 14000);
+        if (materiale.length < 300) return res.json({ ok: false, reason: 'sito_senza_testo' });
+
+        // 3) Ricopiare, non inventare. Giorni con chiavi fisse mon..sun.
+        const prompt = `Dal testo qui sotto, preso dal sito ufficiale di "${venueName || poiId}", RICOPIA gli orari di apertura e il prezzo del biglietto. Non dedurre e non inventare: se un dato non c'è, lascia null o "".
+
+TESTO:
+"""
+${materiale}
+"""
+
+Rispondi SOLO con JSON:
+{
+  "settimana": { "mon": {"apre":"HH:MM","chiude":"HH:MM"} oppure null se chiuso oppure "?" se il testo non lo dice, "tue": ..., "wed": ..., "thu": ..., "fri": ..., "sat": ..., "sun": ... },
+  "ultimoIngresso": "HH:MM o ''",
+  "chiusure": "giorni o periodi di chiusura come li scrive il sito, oppure ''",
+  "biglietto": { "intero": "es. 25 €, oppure ''", "ridotto": "... o ''", "gratis": "chi entra gratis, o ''" },
+  "nota": "una riga utile per chi va domani (prenotazione obbligatoria, ingresso da…), oppure ''"
+}
+Usa le chiavi mon..sun ESATTAMENTE così. Orari nel formato HH:MM a 24 ore. Se il sito dà orari stagionali, usa quelli in vigore adesso (siamo il ${new Date().toISOString().slice(0, 10)}).`;
+        let raw = '';
+        try {
+          const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+            temperature: 0, max_tokens: 700, response_format: { type: 'json_object' },
+            excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+          }, 'museum_hours', supabaseUrl, supabaseServiceKey, groq);
+          raw = String(ai?.data || '');
+        } catch (e: any) {
+          return res.json({ ok: false, reason: 'ai_non_disponibile' });
+        }
+        try {
+          const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+          dati = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
+        } catch { return res.json({ ok: false, reason: 'ai_parse_failed' }); }
+        dati.fonte = { url: pagine[pagine.length - 1] || base.href, lettoIl: new Date().toISOString() };
+        await saveToCache(chiave, 'museum_hours', JSON.stringify(dati));
+      }
+
+      // 4) «Domani» calcolato qui, così l'app non deve capire i giorni.
+      const domani = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const chiaviGiorno = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      const k = chiaviGiorno[domani.getDay()];
+      const g = dati?.settimana?.[k];
+      const orarioValido = (s: any) => /^\d{1,2}:\d{2}$/.test(String(s || ''));
+      const esitoDomani = g === null
+        ? { chiuso: true }
+        : (g && typeof g === 'object' && orarioValido(g.apre) && orarioValido(g.chiude))
+          ? { chiuso: false, apre: String(g.apre), chiude: String(g.chiude) }
+          : null;
+
+      // La fila: consiglio dichiarato, solo dove ha senso.
+      let consiglio = '';
+      try {
+        const lib = await axios.get(
+          `${supabaseUrl}/rest/v1/museum_guides?${poiId ? `venue_key=eq.${encodeURIComponent(`poi_${poiId}`)}` : `venue_name=ilike.${encodeURIComponent(venueName)}`}&select=stops_count&limit=1`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 4000 }
+        );
+        if ((lib.data?.[0]?.stops_count || 0) >= 8) consiglio = 'fila_ore_centrali';
+      } catch { /* niente consiglio */ }
+
+      res.set('Cache-Control', 'private, max-age=3600');
+      res.json({
+        ok: true,
+        domani: esitoDomani,
+        giorno: k,
+        ultimoIngresso: orarioValido(dati?.ultimoIngresso) ? String(dati.ultimoIngresso) : '',
+        chiusure: String(dati?.chiusure || '').slice(0, 200),
+        biglietto: {
+          intero: String(dati?.biglietto?.intero || '').slice(0, 60),
+          ridotto: String(dati?.biglietto?.ridotto || '').slice(0, 60),
+          gratis: String(dati?.biglietto?.gratis || '').slice(0, 120),
+        },
+        nota: String(dati?.nota || '').slice(0, 200),
+        consiglio,
+        fonte: dati?.fonte || null,
+      });
+    } catch (e: any) {
+      console.warn('[Domani] errore:', e?.message);
+      res.json({ ok: false, reason: 'errore' });
     }
   });
 

@@ -104,7 +104,6 @@ function emitAudioState(isPlaying: boolean, isVisible: boolean) {
  */
 function ensureNativeListeners() {
   if (nativeListenersReady || !Capacitor.isNativePlatform()) return;
-  nativeListenersReady = true;
   try {
     const finish = () => {
       if (!nativePlaybackActive) return;
@@ -119,6 +118,9 @@ function ensureNativeListeners() {
     WipBackgroundAudio.addListener('playbackStatus', ({ isPlaying }) => {
       if (nativePlaybackActive) emitAudioState(isPlaying, true);
     });
+    // Solo qui, DOPO che addListener e' davvero riuscito: se lancia,
+    // il flag resta false e un prossimo giro puo' riprovare.
+    nativeListenersReady = true;
   } catch {
     /* ignore */
   }
@@ -247,12 +249,14 @@ import { locationService } from './locationService';
 
 /** Legge una frase breve con la voce nativa del browser (gratis). */
 export function speakInstruction(text: string, lang = 'it', character: GuideCharacter = 'nicky'): void {
-  if (locationService.getIsGuideMuted()) return;
-
-  // Notifica il banner ApproachBanner dell'istruzione corrente
+  // Notifica il banner ApproachBanner dell'istruzione corrente: deve arrivare
+  // SEMPRE, anche col muto attivo (il muto silenzia solo la sintesi vocale,
+  // non il testo della svolta a schermo).
   try {
     window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } }));
   } catch { /* ignore */ }
+
+  if (locationService.getIsGuideMuted()) return;
 
   const hasWebSpeech = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
@@ -408,6 +412,7 @@ export async function speakWithSystemVoice(
     try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
     const u = new SpeechSynthesisUtterance(text);
     u.lang = bcp47(lang);
+    u.rate = velocitaVoce;
     const v = pickVoice(lang, character);
     if (v) u.voice = v;
     const finish = () => {
@@ -545,6 +550,20 @@ async function speakInstructionNative(text: string, lang: string, character: Gui
   }
 }
 
+/**
+ * VELOCITÀ DELLA VOCE (11/09/2026, per «Leggi con calma»). Vale per tutto
+ * ciò che parte da qui: l'MP3 nel browser (playbackRate), il lettore nativo
+ * in background (setSpeed) e la voce di sistema (rate). Si applica subito a
+ * ciò che sta parlando e resta per le voci successive. 1 = normale.
+ */
+let velocitaVoce = 1;
+export function setSpeechSpeed(rate: number): void {
+  const r = Math.min(1.5, Math.max(0.6, Number(rate) || 1));
+  velocitaVoce = r;
+  try { if (activeAudio) activeAudio.playbackRate = r; } catch { /* ok */ }
+  if (nativePlaybackActive) WipBackgroundAudio.setSpeed({ speed: r }).catch(() => {});
+}
+
 /** Ferma qualsiasi audioguida/istruzione in corso (anche quella di locationService). */
 export function stopSpeech(): void {
   // L'etichetta appartiene alla voce che si sta fermando: se restasse, la
@@ -631,7 +650,19 @@ export async function speakAudioguide(
    */
   etichetta?: string,
 ): Promise<void> {
-  if (locationService.getIsGuideMuted()) return;
+  if (locationService.getIsGuideMuted()) {
+    // onEnd DEVE arrivare: i chiamanti fanno "await speakAudioguide(...)"
+    // seguito da "setAudioPlaying(true)". Chiamarlo qui in modo sincrono
+    // finirebbe PRIMA che l'await si risolva, e la sequenza risulterebbe
+    // setAudioPlaying(false) [da onEnd] poi setAudioPlaying(true) [dal
+    // chiamante]: stato bloccato su "in riproduzione" per sempre. Si rimanda
+    // con setTimeout perché arrivi DOPO che il chiamante ha reagito.
+    setTimeout(() => {
+      emitAudioState(false, false);
+      if (onEnd) onEnd();
+    }, 0);
+    return;
+  }
   stopSpeech();
   // Dopo stopSpeech, che azzera entrambi.
   ultimaBattuta = { testo: text, lingua: lang, personaggio: character };
@@ -665,12 +696,14 @@ export async function speakAudioguide(
             title: text.length > 40 ? text.slice(0, 40) + '...' : text,
             subtitle: 'Audioguida'
           });
+          if (velocitaVoce !== 1) WipBackgroundAudio.setSpeed({ speed: velocitaVoce }).catch(() => {});
           emitAudioState(true, true);
           return;
         }
 
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
+        audio.playbackRate = velocitaVoce;
         activeAudio = audio;
 
         const finish = () => {
@@ -713,8 +746,13 @@ export async function speakAudioguide(
   // schermo (wip-nav-instruction).
   console.warn('[ttsService] nessuna voce disponibile: audioguida non letta');
   try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
-  emitAudioState(false, false);
-  if (onEnd) onEnd();
+  // Stesso motivo del ramo muto sopra: onEnd deve arrivare DOPO che il
+  // chiamante ha gia' reagito all'await, altrimenti lo stato finale resta
+  // "in riproduzione" invece di "non in riproduzione".
+  setTimeout(() => {
+    emitAudioState(false, false);
+    if (onEnd) onEnd();
+  }, 0);
 }
 
 // Pre-carica le voci (alcuni browser le popolano in modo asincrono)

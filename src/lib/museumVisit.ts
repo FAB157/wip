@@ -71,6 +71,10 @@ export type VenueGuide = {
    *  non un percorso: si dice, invece di numerare tappe che il visitatore
    *  non saprebbe dove cercare. */
   saleDichiarate?: boolean;
+  /** Dove sono bagni, guardaroba, caffetteria, bookshop, uscita, accessibilità:
+   *  solo le voci che il sito ufficiale dichiara. Dopo un'ora e mezza dentro
+   *  un museo è la cosa che serve davvero. */
+  servizi?: Partial<Record<'bagni' | 'guardaroba' | 'caffetteria' | 'bookshop' | 'uscita' | 'accessibilita', string>>;
   language: string;
 };
 
@@ -113,6 +117,8 @@ export type MuseumVisit = {
   dalLeader?: boolean;
   /** Il percorso su misura scelto: tempo, interessi, bambini. */
   personalizzazione?: Personalizzazione;
+  /** Le prime opere sono già state prescaricate all'ingresso: non si rifà. */
+  prefetchFatto?: boolean;
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
@@ -517,6 +523,57 @@ export function riceviVisitaDalLeader(payload: any): MuseumVisit | null {
   saveVisit(v);
   try { window.dispatchEvent(new CustomEvent(OPEN_MUSEUM_VISIT_EVENT)); } catch { /* ok */ }
   return v;
+}
+
+/**
+ * DOMANI (11/09/2026): orari, chiusure, biglietto — dal sito ufficiale,
+ * ricopiati e messi in cache una settimana. Niente se il sito non lo dice.
+ */
+export type Domani = {
+  domani: { chiuso: true } | { chiuso: false; apre: string; chiude: string } | null;
+  ultimoIngresso: string;
+  chiusure: string;
+  biglietto: { intero: string; ridotto: string; gratis: string };
+  nota: string;
+  consiglio: '' | 'fila_ore_centrali';
+  fonte: { url: string; lettoIl: string } | null;
+};
+export async function fetchDomani(v: MuseumVisit, language: Language): Promise<Domani | null> {
+  try {
+    const p = new URLSearchParams({ language, venueName: v.venue.name });
+    if (v.venue.id) p.set('poiId', v.venue.id);
+    const res = await fetch(getApiUrl(`/api/museums/tomorrow?${p.toString()}`));
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d?.ok === true ? (d as Domani) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Segna che le prime opere sono state prescaricate: una volta per visita. */
+export function segnaPrefetchFatto(): void {
+  const v = getVisit();
+  if (!v || v.prefetchFatto) return;
+  v.prefetchFatto = true;
+  saveVisit(v);
+}
+
+/**
+ * LEGGI CON CALMA (11/09/2026): caratteri grandi, voce più lenta, testo
+ * sempre visibile mentre parla. Chi visita i musei ha in media più di
+ * cinquant'anni: qui non è accessibilità, è la funzione principale. È una
+ * preferenza della persona, non della visita: si ricorda fra un museo e
+ * l'altro.
+ */
+const CALMA_KEY = 'wip_leggi_con_calma';
+export const LEGGI_CON_CALMA_EVENT = 'wip-leggi-con-calma';
+export function getLeggiConCalma(): boolean {
+  try { return localStorage.getItem(CALMA_KEY) === '1'; } catch { return false; }
+}
+export function setLeggiConCalma(on: boolean): void {
+  try { localStorage.setItem(CALMA_KEY, on ? '1' : '0'); } catch { /* ok */ }
+  try { window.dispatchEvent(new CustomEvent(LEGGI_CON_CALMA_EVENT, { detail: { on } })); } catch { /* ok */ }
 }
 
 /**

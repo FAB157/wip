@@ -15,7 +15,7 @@
  */
 import { db } from './db';
 import { registraDownload, rimuoviDownload, leggiDownload } from './downloadsRegistry';
-import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide } from './museumVisit';
+import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, tappeAttive } from './museumVisit';
 import { Language } from './i18n';
 
 /** Le audioguide scaricate, per (museo, opera, lingua). Vivono in Dexie. */
@@ -138,6 +138,63 @@ export function visiteConservate(language?: Language): ArchivioMuseo[] {
 export function opereInArchivio(venueKey: string, language: Language): number {
   const a = museoScaricato(venueKey, language);
   return a ? Object.keys(a.opere || {}).length : 0;
+}
+
+/**
+ * LE PRIME OPERE, SCARICATE DA SOLE ALL'INGRESSO (11/09/2026, richiesta del
+ * committente). All'ingresso il segnale c'è; alla seconda sala no — muri
+ * spessi, niente Wi-Fi. Il tasto «scarica tutto» esiste ma nessuno lo preme
+ * prima di entrare. Quindi, appena la visita si apre con la rete, si
+ * scaricano da sole le prime opere del percorso (testo e foto), nell'ordine
+ * in cui si visiteranno, senza chiedere niente.
+ *
+ * Costa al visitatore solo quello che avrebbe speso comunque: il pass conta
+ * una generazione VERA, non un riascolto, e queste sono le opere che
+ * ascolterà per prime. Otto e non venti: la coda del percorso la scarica
+ * «scarica tutto», che salta quelle già in archivio.
+ * Si ferma subito se il pass manca o è esaurito: non insiste e non annoia.
+ */
+export async function prescaricaPrimeOpere(
+  visit: MuseumVisit,
+  language: Language,
+  quante = 8,
+  onProgress?: (fatte: number, totali: number) => void,
+  stile: '' | 'bambini' = '',
+): Promise<number> {
+  const attive = tappeAttive(visit);
+  const tappe: VenueTappa[] = (visit.guide?.tappe || []).filter((t, k) => attive.has(k) && !t.soloCollezione).slice(0, quante);
+  if (!tappe.length) return 0;
+  // La visita deve essere in archivio prima delle sue opere.
+  if (!museoScaricato(visit.venueKey, language)) conservaVisita(visit, language);
+  let fatte = 0;
+  for (let i = 0; i < tappe.length; i++) {
+    const t = tappe[i];
+    onProgress?.(i, tappe.length);
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) break;
+    // Già in archivio: gratis, e niente da fare.
+    if (!stile && operaDallArchivio(visit.venueKey, language, t.nome)) { fatte++; continue; }
+    const resp = await fetchArtworkGuide({
+      artwork: t.nomeFonte || t.nome,
+      venueName: visit.venue.name,
+      artist: t.autore || null,
+      room: t.dove || null,
+      language,
+      ...(stile ? { stile } : {}),
+    });
+    if (resp && resp.ok === true) {
+      if (!stile) conservaOpera(visit.venueKey, language, t.nome, resp.guide);
+      fatte++;
+    } else if (resp && resp.ok === false && (resp.reason === 'pass_exhausted' || resp.reason === 'needs_pass')) {
+      break;
+    }
+    // Le foto entrano nella cache del browser: si vedono anche senza rete.
+    for (const url of [t.fotoIcona, t.foto]) {
+      if (!url) continue;
+      try { await fetch(url, { mode: 'cors' }); } catch { /* foto saltata */ }
+    }
+  }
+  onProgress?.(tappe.length, tappe.length);
+  return fatte;
 }
 
 export type EsitoPacchettoMuseo = {

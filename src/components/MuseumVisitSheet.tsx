@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani } from '../lib/museumVisit';
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
-import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
-import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice } from '../services/ttsService';
+import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
+import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
 import { printScoped } from '../lib/printScoped';
 import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -72,6 +72,20 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // non si ascolta, non si inquadra e non si legge un cartello, il telefono
   // vibra una volta e propone di inquadrare il numero della sala. Un
   // promemoria, non un'imposizione: si chiude con un tocco.
+  // DOMANI: orari, chiusure, biglietto dal sito ufficiale. Si chiede una
+  // volta per visita; in cache sul server una settimana.
+  const [domani, setDomani] = useState<Domani | null>(null);
+  useEffect(() => {
+    if (!online) return;
+    let vivo = true;
+    fetchDomani(visit, language).then(d => { if (vivo) setDomani(d); });
+    return () => { vivo = false; };
+  }, [visit.venueKey, online]);
+  // PRESCARICAMENTO all'ingresso: le prime otto opere, mentre c'è segnale.
+  const [prefetch, setPrefetch] = useState<{ fatte: number; totali: number } | null>(null);
+  // LEGGI CON CALMA: preferenza della persona, non della visita.
+  const [calma, setCalma] = useState<boolean>(() => getLeggiConCalma());
+  useEffect(() => { setSpeechSpeed(calma ? 0.85 : 1); }, [calma]);
   const [promemoria, setPromemoria] = useState(false);
   const promemoriaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const azzeraPromemoria = () => {
@@ -112,6 +126,19 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       },
     }));
   }, [sonoLeader, visit.venueKey, visit.guide?.tappe?.length]);
+
+  // LE PRIME OPERE SI SCARICANO DA SOLE ALL'INGRESSO (11/09/2026). Una volta
+  // per visita, solo con la rete, non per chi segue un leader (a lui arriva
+  // tutto dal leader). Si ferma da solo se il pass manca. Il conteggio in
+  // testata dice cosa sta succedendo; se si cambia museo a metà, si smette.
+  useEffect(() => {
+    if (!online || visit.dalLeader || visit.prefetchFatto) return;
+    let vivo = true;
+    prescaricaPrimeOpere(visit, language, 8, (f, t) => { if (vivo) setPrefetch({ fatte: f, totali: t }); }, pers.bambini ? 'bambini' : '')
+      .then(() => { if (vivo) { setPrefetch(null); segnaPrefetchFatto(); } })
+      .catch(() => { if (vivo) setPrefetch(null); });
+    return () => { vivo = false; };
+  }, [visit.venueKey, online]);
 
   // Follower: il leader ha scelto un'opera. Si apre la stessa tappa col
   // testo, così si legge mentre la voce (che arriva da 'audio-start') parla.
@@ -491,8 +518,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               {(tp.autore || tp.anno) && <p className="text-[12px] font-bold text-slate-500 mt-0.5">{[tp.autore, tp.anno].filter(Boolean).join(' · ')}</p>}
               {tp.affollata && <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1.5 inline-flex items-center gap-1"><Clock className="w-3 h-3" />{t('mv_crowded_badge')}</p>}
               {tp.seenCardId && <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700 mt-1.5">{t('mv_seen')}</p>}
-              {g?.testo && operaAperta === i && (
-                <p className="text-[12px] text-slate-700 leading-relaxed mt-3 max-h-[16vh] overflow-y-auto text-left px-1">{g.testo}</p>
+              {g?.testo && (operaAperta === i || calma) && (
+                <p className={`${calma ? 'text-[17px] leading-[1.65] max-h-[26vh]' : 'text-[12px] leading-relaxed max-h-[16vh]'} text-slate-700 mt-3 overflow-y-auto text-left px-1`}>{g.testo}</p>
               )}
             </div>
           </div>
@@ -636,6 +663,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                 <Users className="w-3 h-3" />{sonoLeader ? t('mv_group_leader') : t('mv_group_follower')}
               </p>
             )}
+            {prefetch && prefetch.fatte < prefetch.totali && (
+              <p className="text-[10px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
+                <Download className="w-3 h-3 shrink-0" />{t('mv_prefetch_progress').replace('{t}', String(prefetch.totali)).replace('{n}', String(prefetch.fatte))}
+              </p>
+            )}
             <p className="text-[11px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
               <TypeIcon className="w-3.5 h-3.5" />
               {isChurch ? t('mv_type_church') : visit.guide.tipo === 'sito' ? t('mv_type_site') : t('mv_type_museum')}
@@ -649,6 +681,45 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 pb-4">
+          {/* DOMANI (11/09/2026): la sera prima in hotel, una riga sola che
+              risponde alla domanda vera — è aperto? a che ora? quanto costa?
+              Solo quello che il sito ufficiale dice, con la data in cui lo
+              abbiamo letto: un orario sbagliato manda qualcuno davanti a un
+              cancello chiuso. */}
+          {domani && (domani.domani || domani.biglietto.intero || domani.chiusure) && (
+            <div className={`px-3.5 py-3 rounded-2xl border mb-3 ${domani.domani?.chiuso ? 'bg-amber-50 border-amber-300' : 'bg-white border-slate-200'}`}>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />{t('mv_tomorrow')}
+              </p>
+              {domani.domani?.chiuso && (
+                <p className="text-[14px] font-black text-amber-900">{t('mv_closed_tomorrow')}</p>
+              )}
+              {domani.domani && !domani.domani.chiuso && (
+                <p className={`${calma ? 'text-[16px]' : 'text-[13px]'} font-black text-slate-900`}>
+                  {t('mv_open_tomorrow').replace('{a}', domani.domani.apre).replace('{c}', domani.domani.chiude)}
+                  {domani.ultimoIngresso ? ` · ${t('mv_last_entry').replace('{t}', domani.ultimoIngresso)}` : ''}
+                </p>
+              )}
+              {domani.biglietto.intero && (
+                <p className={`${calma ? 'text-[14px]' : 'text-[12px]'} font-bold text-slate-700 mt-0.5`}>
+                  {t('mv_ticket')}: {domani.biglietto.intero}
+                  {domani.biglietto.ridotto ? ` · ${t('mv_ticket_reduced')} ${domani.biglietto.ridotto}` : ''}
+                  {domani.biglietto.gratis ? ` · ${t('mv_ticket_free')}: ${domani.biglietto.gratis}` : ''}
+                </p>
+              )}
+              {domani.chiusure && <p className="text-[11px] font-bold text-slate-500 mt-0.5">{t('mv_closures')}: {domani.chiusure}</p>}
+              {domani.nota && <p className="text-[11px] font-bold text-slate-600 mt-0.5">{domani.nota}</p>}
+              {domani.consiglio === 'fila_ore_centrali' && (
+                <p className="text-[11px] font-bold text-amber-800 mt-1.5 leading-snug">{t('mv_queue_advice')}</p>
+              )}
+              {domani.fonte && (
+                <a href={domani.fonte.url} target="_blank" rel="noopener noreferrer" className="block text-[10px] font-bold text-slate-400 mt-1.5 underline-offset-2 hover:underline">
+                  {t('mv_hours_source').replace('{d}', new Date(domani.fonte.lettoIl).toLocaleDateString(String(language).toLowerCase()))}
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Pass Museo, se attivo */}
           {passActive && passExpiresAt !== null && (
             <div className="flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-amber-50 border border-amber-300 mb-3">
@@ -667,7 +738,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">{t('mv_you_are_at')}</p>
-                <p className="text-sm text-slate-800 leading-relaxed">{visit.guide.intro}</p>
+                <p className={`${calma ? 'text-[17px] leading-[1.65]' : 'text-sm leading-relaxed'} text-slate-800`}>{visit.guide.intro}</p>
                 {visit.guide.consiglio && (
                   <p className="text-[12px] font-bold text-primary mt-2 leading-snug">{visit.guide.consiglio}</p>
                 )}
@@ -805,14 +876,28 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             );
           })()}
 
-          {/* Una alla volta / Elenco */}
-          <button
-            onClick={() => { const p = prossimaTappa(visit); setLettore(p ? p.indice : 0); }}
-            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl bg-white border border-slate-200 text-[12px] font-black text-slate-700 mb-3 active:scale-[0.99] transition-transform"
-          >
-            <ListMusic className="w-4 h-4 text-primary" />
-            {t('mv_player_mode')}
-          </button>
+          {/* Una alla volta · Leggi con calma */}
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => { const p = prossimaTappa(visit); setLettore(p ? p.indice : 0); }}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl bg-white border border-slate-200 text-[12px] font-black text-slate-700 active:scale-[0.99] transition-transform"
+            >
+              <ListMusic className="w-4 h-4 text-primary" />
+              {t('mv_player_mode')}
+            </button>
+            {/* LEGGI CON CALMA (11/09/2026): caratteri grandi, voce più lenta,
+                testo sempre visibile. Chi visita i musei ha in media più di
+                cinquant'anni: questa non è accessibilità, è la funzione. */}
+            <button
+              onClick={() => { const on = !calma; setCalma(on); setLeggiConCalma(on); }}
+              aria-pressed={calma}
+              title={t('mv_calma_hint')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl border text-[12px] font-black active:scale-[0.99] transition-all ${calma ? 'bg-primary border-primary text-white' : 'bg-white border-slate-200 text-slate-700'}`}
+            >
+              <Glasses className={`w-4 h-4 ${calma ? 'text-white' : 'text-primary'}`} />
+              {t('mv_calma')}
+            </button>
+          </div>
 
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
@@ -952,7 +1037,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-black text-slate-900 leading-tight">{tappa.nome}</p>
+                    <p className={`${calma ? 'text-[17px]' : 'text-sm'} font-black text-slate-900 leading-tight`}>{tappa.nome}</p>
                     {/* Il titolo com'è scritto sul muro: è quello che il
                         visitatore legge davvero mentre cerca l'opera. */}
                     {/* Il titolo com'è nella fonte (di solito inglese): la
@@ -980,7 +1065,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         {tappa.puntoPreciso}
                       </p>
                     )}
-                    {tappa.perche && <p className="text-[12px] text-slate-700 leading-snug mt-1">{tappa.perche}</p>}
+                    {tappa.perche && <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-700 mt-1`}>{tappa.perche}</p>}
                     {/* Promessa onesta: il museo la possiede, ma non dice dove
                         è esposta — e potrebbe essere in deposito o in prestito. */}
                     {tappa.affollata && !done && (
@@ -1072,7 +1157,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                               {[operaGuide[i].tecnica, operaGuide[i].misure].filter(Boolean).join(' · ')}
                             </p>
                           )}
-                          <p className="text-[12px] text-slate-800 leading-relaxed whitespace-pre-line">{operaGuide[i].testo}</p>
+                          <p className={`${calma ? 'text-[17px] leading-[1.65]' : 'text-[12px] leading-relaxed'} text-slate-800 whitespace-pre-line`}>{operaGuide[i].testo}</p>
                           {operaGuide[i].daGuardare.length > 0 && (
                             <div className="mt-2.5 p-2.5 rounded-xl bg-white border border-slate-200">
                               <p className="text-[10px] font-black uppercase tracking-wider text-primary mb-1">{t('mv_art_look_for')}</p>
@@ -1098,6 +1183,37 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               );
             })}
           </ol>
+
+          {/* I SERVIZI (11/09/2026): bagni, guardaroba, caffetteria, bookshop,
+              uscita, accessibilità — solo le voci che il sito dichiara. Dopo
+              un'ora e mezza dentro un museo è la cosa che serve davvero. */}
+          {visit.guide.servizi && Object.keys(visit.guide.servizi).length > 0 && (
+            <div className="mt-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_servizi')}</p>
+              <div className="bg-white border border-slate-200 rounded-2xl divide-y divide-slate-100">
+                {([
+                  ['bagni', Bath, t('mv_serv_bagni')],
+                  ['guardaroba', Shirt, t('mv_serv_guardaroba')],
+                  ['caffetteria', Coffee, t('mv_serv_caffetteria')],
+                  ['bookshop', ShoppingBag, t('mv_serv_bookshop')],
+                  ['uscita', DoorOpen, t('mv_serv_uscita')],
+                  ['accessibilita', Accessibility, t('mv_serv_accessibilita')],
+                ] as const).map(([k, Icona, etichetta]) => {
+                  const v = visit.guide.servizi?.[k];
+                  if (!v) return null;
+                  return (
+                    <div key={k} className="flex items-start gap-3 px-3.5 py-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Icona className="w-4 h-4 text-primary" /></div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-slate-500">{etichetta}</p>
+                        <p className={`${calma ? 'text-[15px]' : 'text-[12px]'} font-bold text-slate-800 leading-snug`}>{v}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Esperienze prenotabili: biglietti e visite guidate col prezzo.
               Compaiono solo a chi ha il pass, e solo se ce ne sono davvero. */}

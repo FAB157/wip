@@ -133,6 +133,50 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     FR: "Six œuvres, racontées pour un enfant de huit ans", ES: "Seis obras, contadas para un niño de ocho años",
     DE: "Sechs Werke, erzählt für ein achtjähriges Kind", RU: "Шесть произведений, рассказанных для восьмилетнего ребёнка", ZH: "六件作品，讲给八岁孩子听",
   },
+  // Domani: orari, chiusure, biglietto, dal sito ufficiale.
+  mv_tomorrow: { IT: "Domani", EN: "Tomorrow", FR: "Demain", ES: "Mañana", DE: "Morgen", RU: "Завтра", ZH: "明天" },
+  mv_closed_tomorrow: { IT: "Domani è chiuso", EN: "Closed tomorrow", FR: "Fermé demain", ES: "Mañana está cerrado", DE: "Morgen geschlossen", RU: "Завтра закрыто", ZH: "明天闭馆" },
+  mv_open_tomorrow: { IT: "Domani apre alle {a} e chiude alle {c}", EN: "Tomorrow opens at {a}, closes at {c}", FR: "Demain ouvre à {a}, ferme à {c}", ES: "Mañana abre a las {a} y cierra a las {c}", DE: "Morgen öffnet um {a}, schließt um {c}", RU: "Завтра открыто с {a} до {c}", ZH: "明天 {a} 开馆，{c} 闭馆" },
+  mv_last_entry: { IT: "ultimo ingresso {t}", EN: "last entry {t}", FR: "dernière entrée {t}", ES: "última entrada {t}", DE: "letzter Einlass {t}", RU: "последний вход {t}", ZH: "最后入场 {t}" },
+  mv_ticket: { IT: "Biglietto", EN: "Ticket", FR: "Billet", ES: "Entrada", DE: "Eintritt", RU: "Билет", ZH: "门票" },
+  mv_ticket_reduced: { IT: "ridotto", EN: "reduced", FR: "réduit", ES: "reducida", DE: "ermäßigt", RU: "льготный", ZH: "优惠票" },
+  mv_ticket_free: { IT: "gratis", EN: "free", FR: "gratuit", ES: "gratis", DE: "frei", RU: "бесплатно", ZH: "免费" },
+  mv_closures: { IT: "Chiusure", EN: "Closures", FR: "Fermetures", ES: "Cierres", DE: "Schließtage", RU: "Выходные", ZH: "闭馆日" },
+  mv_hours_source: {
+    IT: "Dal sito ufficiale, letto il {d}. Verifica prima di partire.", EN: "From the official site, read on {d}. Check before you go.",
+    FR: "Du site officiel, lu le {d}. Vérifie avant de partir.", ES: "Del sitio oficial, leído el {d}. Comprueba antes de ir.",
+    DE: "Von der offiziellen Website, gelesen am {d}. Vor dem Besuch prüfen.", RU: "С официального сайта, прочитано {d}. Проверьте перед визитом.", ZH: "来自官网，读取于 {d}。出发前请核实。",
+  },
+  mv_queue_advice: {
+    IT: "Consiglio: davanti alle opere più famose c'è la fila dalle 11 alle 15. Entra all'apertura o dopo le 16.",
+    EN: "Tip: the most famous works have queues from 11 to 3. Come at opening time or after 4.",
+    FR: "Conseil : devant les œuvres les plus célèbres, il y a la queue de 11 h à 15 h. Viens à l'ouverture ou après 16 h.",
+    ES: "Consejo: delante de las obras más famosas hay cola de 11 a 15. Ven a la apertura o después de las 16.",
+    DE: "Tipp: Vor den berühmtesten Werken ist von 11 bis 15 Uhr Schlange. Komm zur Öffnung oder nach 16 Uhr.",
+    RU: "Совет: у самых известных произведений очередь с 11 до 15. Приходите к открытию или после 16.",
+    ZH: "建议：最著名的作品前 11 点到 15 点会排队。开馆时来或 16 点后来。",
+  },
+  // Le prime opere si scaricano da sole all'ingresso.
+  mv_prefetch_progress: {
+    IT: "Scarico le prime {t} opere per quando manca la rete · {n}/{t}", EN: "Downloading the first {t} works for when there's no signal · {n}/{t}",
+    FR: "Je télécharge les {t} premières œuvres pour quand il n'y a pas de réseau · {n}/{t}", ES: "Descargo las primeras {t} obras para cuando no haya red · {n}/{t}",
+    DE: "Lade die ersten {t} Werke für den Fall ohne Netz · {n}/{t}", RU: "Загружаю первые {t} произведений на случай отсутствия сети · {n}/{t}", ZH: "正在下载前 {t} 件作品以备无信号时使用 · {n}/{t}",
+  },
+  // I servizi: bagni, guardaroba, caffetteria, bookshop, uscita, accessibilità.
+  mv_servizi: { IT: "Servizi", EN: "Facilities", FR: "Services", ES: "Servicios", DE: "Einrichtungen", RU: "Удобства", ZH: "设施" },
+  mv_serv_bagni: { IT: "Bagni", EN: "Toilets", FR: "Toilettes", ES: "Baños", DE: "Toiletten", RU: "Туалеты", ZH: "洗手间" },
+  mv_serv_guardaroba: { IT: "Guardaroba", EN: "Cloakroom", FR: "Vestiaire", ES: "Guardarropa", DE: "Garderobe", RU: "Гардероб", ZH: "寄存处" },
+  mv_serv_caffetteria: { IT: "Caffetteria", EN: "Café", FR: "Café", ES: "Cafetería", DE: "Café", RU: "Кафе", ZH: "咖啡厅" },
+  mv_serv_bookshop: { IT: "Bookshop", EN: "Shop", FR: "Boutique", ES: "Tienda", DE: "Shop", RU: "Магазин", ZH: "商店" },
+  mv_serv_uscita: { IT: "Uscita", EN: "Exit", FR: "Sortie", ES: "Salida", DE: "Ausgang", RU: "Выход", ZH: "出口" },
+  mv_serv_accessibilita: { IT: "Accessibilità", EN: "Accessibility", FR: "Accessibilité", ES: "Accesibilidad", DE: "Barrierefreiheit", RU: "Доступность", ZH: "无障碍" },
+  // Leggi con calma: caratteri grandi, voce più lenta, testo sempre visibile.
+  mv_calma: { IT: "Leggi con calma", EN: "Take it slow", FR: "Lire tranquillement", ES: "Leer con calma", DE: "In Ruhe lesen", RU: "Не спеша", ZH: "慢慢看" },
+  mv_calma_hint: {
+    IT: "Caratteri grandi, voce più lenta, testo sempre visibile", EN: "Large text, slower voice, transcript always shown",
+    FR: "Gros caractères, voix plus lente, texte toujours visible", ES: "Letra grande, voz más lenta, texto siempre visible",
+    DE: "Große Schrift, langsamere Stimme, Text immer sichtbar", RU: "Крупный шрифт, медленнее голос, текст всегда виден", ZH: "大字体、慢语速、始终显示文字",
+  },
   // L'assaggio gratis prima della cassa.
   mv_sample_listen: { IT: "Ascolta 30 secondi gratis", EN: "Listen to 30 seconds for free", FR: "Écouter 30 secondes gratuitement", ES: "Escucha 30 segundos gratis", DE: "30 Sekunden kostenlos anhören", RU: "Послушать 30 секунд бесплатно", ZH: "免费试听 30 秒" },
   mv_sample_stop: { IT: "Ferma l'assaggio", EN: "Stop the preview", FR: "Arrêter l'extrait", ES: "Parar la muestra", DE: "Vorschau stoppen", RU: "Остановить", ZH: "停止试听" },
