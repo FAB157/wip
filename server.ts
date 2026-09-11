@@ -8037,28 +8037,37 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // stesso ordine di /api/vision/choose. Il materiale è lungo (fino a
       // 16k caratteri): con gpt-4o-mini costa meno di un centesimo a luogo.
       let rawAi = '';
-      try {
-        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-          temperature: 0.2,
-          // 12-20 tappe con autore, anno, sala e motivo non stanno in 2500
-          // token: la risposta veniva troncata a metà e il JSON non si
-          // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026).
-          max_tokens: 5000,
-          response_format: { type: 'json_object' },
-          // Agnes fuori SOLO con qualcuno fermo davanti all'ingresso del
-          // museo (risponde in 2-4 minuti). Per la semina di sfondo nessuno
-          // aspetta: è un motore gratuito in più quando Groq è saturo
-          // (proposta della sessione della libreria, 12/09/2026).
-          excludeEngines: inDiretta ? ['agnes'] : [],
-          // DeepSeek dopo i gratuiti, MAI nei lavori di sfondo (regola del
-          // committente, stessa logica degli itinerari): il flag non è una
-          // dichiarazione ma il riflesso di un fatto verificabile — chi entra
-          // col segreto di infrastruttura è la semina, e resta sui gratuiti.
-          ultimaSpiaggiaPagante: inDiretta,
-        }, 'venue_guide', supabaseUrl, supabaseServiceKey, groq, userId);
-        rawAi = String(ai?.data || '');
-      } catch (e: any) {
-        console.warn('[VenueGuide] motori universali saturi, provo OpenAI:', e?.message);
+      // LA LOGICA DELLA SEMINA È DIVERSA DA QUELLA IN DIRETTA (principio del
+      // committente, 12/09/2026). Dal vivo: un tentativo, si fallisce in
+      // fretta e si dice chiaro. In semina nessuno guarda uno spinner: tre
+      // tentativi con attesa crescente (20 s, 60 s) quando i motori sono
+      // saturi, prima di arrivare alla riserva a pagamento.
+      const tentativi = inDiretta ? 1 : 3;
+      for (let tentativo = 0; tentativo < tentativi && !rawAi.includes('{'); tentativo++) {
+        try {
+          const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+            temperature: 0.2,
+            // 12-20 tappe con autore, anno, sala e motivo non stanno in 2500
+            // token: la risposta veniva troncata a metà e il JSON non si
+            // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026).
+            max_tokens: 5000,
+            response_format: { type: 'json_object' },
+            // Agnes fuori SOLO con qualcuno fermo davanti all'ingresso del
+            // museo (risponde in 2-4 minuti). Per la semina di sfondo nessuno
+            // aspetta: è un motore gratuito in più quando Groq è saturo
+            // (proposta della sessione della libreria, 12/09/2026).
+            excludeEngines: inDiretta ? ['agnes'] : [],
+            // DeepSeek dopo i gratuiti, MAI nei lavori di sfondo (regola del
+            // committente, stessa logica degli itinerari): il flag non è una
+            // dichiarazione ma il riflesso di un fatto verificabile — chi entra
+            // col segreto di infrastruttura è la semina, e resta sui gratuiti.
+            ultimaSpiaggiaPagante: inDiretta,
+          }, 'venue_guide', supabaseUrl, supabaseServiceKey, groq, userId);
+          rawAi = String(ai?.data || '');
+        } catch (e: any) {
+          console.warn(`[VenueGuide] motori universali saturi (tentativo ${tentativo + 1}/${tentativi}):`, e?.message);
+          if (tentativo < tentativi - 1) await new Promise(r => setTimeout(r, tentativo === 0 ? 20000 : 60000));
+        }
       }
       if (!rawAi.includes('{')) {
         const key = process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY;
