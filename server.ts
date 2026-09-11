@@ -7249,61 +7249,143 @@ ORDER BY DESC(?fama) LIMIT 80`;
    * La terza è la regola che tiene: un archivio che tace non autorizza a
    * cancellare, esattamente come non autorizza a confermare.
    */
+  /**
+   * RISCRITTA IL 12/09/2026 su specifica del committente ("dev'essere
+   * perfetto"), dopo che la vecchia versione (ricerca globale, primo
+   * candidato, soglia 0,75) sbagliava sistematicamente sugli omonimi: al
+   * Kunsthistorisches Wien dava «altrove» a 5 opere che erano davvero lì
+   * (l'Estate di Arcimboldo, confusa con un'altra «Estate»), al Rijksmuseum
+   * scartava «La lattaia» di Vermeer perché la ricerca con l'articolo
+   * trovava solo l'omonima di Goya. Stessa funzione per il canale dal vivo
+   * e per la semina — è la funzione che entrambi chiamano.
+   *
+   * Tre domande in ordine, ognuna chiude se risponde (la funzione esce alla
+   * prima che decide):
+   *  1) C'È un'opera con QUESTO TITOLO ESATTO (con e senza l'articolo
+   *     iniziale, «La lattaia»/«Lattaia») già in QUESTO museo (P195, o P276
+   *     quando P195 è vuota)? Una domanda sola, mirata, quasi istantanea:
+   *     se sì, la tappa è confermata e la ricerca finisce qui.
+   *  2) Nessun titolo esatto: c'è un'opera di QUESTO autore già in QUESTO
+   *     museo il cui titolo somiglia? È il caso dei soggetti ricorrenti
+   *     («Estate» di un pittore, in dieci musei con dieci quadri diversi):
+   *     quella del NOSTRO museo è la nostra, anche se il titolo esatto non
+   *     combacia parola per parola.
+   *  3) Nessuna delle due: si allarga alla ricerca libera per titolo (come
+   *     prima, ma fino a 10 candidati, mai fermandosi al primo). Fra tutti
+   *     quelli che passano la soglia di somiglianza, vince chi ha QUESTO
+   *     museo in P195 (anche fra altre collezioni: resta) o in P276 con
+   *     P195 vuota; solo se NESSUNO sta qui e ALMENO UNO ha un P195 verso
+   *     un altro museo, la tappa è "altrove" — un candidato con solo P276
+   *     altrove non prova niente (prestiti, mostre). Nessun candidato con
+   *     una collezione dichiarata → non si sa, si tiene (Museo Egizio di
+   *     Torino: oggetti veri senza una voce Wikidata propria).
+   */
   async function operaDiAltroMuseo(titolo: string, autore: string, nomeMuseo: string, qidMuseo: string, lang: string): Promise<boolean> {
+    const ua = { timeout: 8000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } };
+    const wd = (query: string, ms = 8000) => axios.get(`https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(query)}`,
+      { ...ua, timeout: ms, headers: { ...ua.headers, Accept: 'application/sparql-results+json' } });
+    // «Qui» per un museo è P195 (o P276 quando P195 manca); per una chiesa è
+    // il contrario — stessa regola della lista opere, applicata anche qui.
+    const quiVive = qidMuseo
+      ? `{ ?o wdt:P195 wd:${qidMuseo} } UNION { ?o wdt:P276 wd:${qidMuseo} . FILTER NOT EXISTS { ?o wdt:P195 ?c } }`
+      : '';
+    if (!qidMuseo || !titolo) return false; // senza QID del museo non c'è nulla da confrontare: si tiene.
+
     try {
+      // ── 1) TITOLO ESATTO, con e senza l'articolo, in QUESTO museo ──
+      const ARTICOLI = /^(la|il|lo|le|gli|l'|the|der|die|das|les|el|los|las)\s+/i;
+      const senzaArticolo = titolo.replace(ARTICOLI, '').trim();
+      // L'altra iniziale (maiuscola se era minuscola, e viceversa): Wikidata
+      // a volte etichetta un'opera con l'iniziale minuscola («lattaia»).
+      const altraIniziale = (s: string) => !s ? s : (s[0] === s[0].toUpperCase() ? s[0].toLowerCase() : s[0].toUpperCase()) + s.slice(1);
+      const varianti = [...new Set([titolo, senzaArticolo, altraIniziale(titolo), altraIniziale(senzaArticolo)].filter(Boolean))].slice(0, 4);
+      const valori = varianti.flatMap(v => [`"${v.replace(/"/g, '\\"')}"@${lang}`, `"${v.replace(/"/g, '\\"')}"@en`]).join(' ');
+      const q1 = `SELECT ?o WHERE { VALUES ?l { ${valori} } ?o rdfs:label|skos:altLabel ?l . ${quiVive} } LIMIT 1`;
+      const r1 = await wd(q1, 10000).catch(() => null);
+      if (r1?.data?.results?.bindings?.length) return false; // trovata qui col titolo esatto: confermata.
+
+      // ── 2) STESSO AUTORE, in QUESTO museo, titolo che somiglia ──
+      if (autore) {
+        const EPITETI = new Set(['vecchio', 'giovane', 'elder', 'younger', 'detto', 'bottega', 'scuola', 'cerchia', 'attribuito', 'attributed', 'workshop', 'school', 'circle', 'follower']);
+        const paroleAutore = tokenSignificativi(autore).filter(t => t.length > 3 && !EPITETI.has(t)).slice(0, 4);
+        if (paroleAutore.length) {
+          // Solo P195 qui (non il quiVive con P276 usato sopra): filtrare
+          // prima per autore e SOLO DOPO controllare il museo con un
+          // semplice `wdt:P195 wd:QID` è quasi istantaneo; con l'aggiunta di
+          // P276 e del suo FILTER NOT EXISTS la stessa domanda è arrivata a
+          // un 502 di Wikidata anche oltre i 30 s (misurato sul
+          // Kunsthistorisches Wien). Un'opera con lo stesso autore trovata
+          // solo per P276 in un museo senza P195 dichiarato è un caso raro:
+          // la tappa resta comunque "non verificata" (si tiene) invece di
+          // rischiare di non rispondere affatto.
+          const filtroAutore = paroleAutore.map(p => `CONTAINS(LCASE(?al), "${p.replace(/"/g, '')}")`).join(' || ');
+          const q2 = `SELECT ?o ?oLabel WHERE {
+  ?o wdt:P170 ?a . ?a rdfs:label ?al . FILTER(LANG(?al) IN ("${lang}","en"))
+  FILTER(${filtroAutore})
+  ?o wdt:P195 wd:${qidMuseo} .
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "${lang},en". }
+} LIMIT 300`;
+          const r2 = await wd(q2, 10000).catch(() => null);
+          const candidatiAutore = (r2?.data?.results?.bindings || []) as any[];
+          if (candidatiAutore.some(b => {
+            const et = String(b?.oLabel?.value || '');
+            const nostre = tokenSignificativi(titolo);
+            const loro = new Set(tokenSignificativi(et));
+            if (!nostre.length || !loro.size) return false;
+            const comuni = nostre.filter(t => loro.has(t)).length;
+            return comuni / Math.min(nostre.length, loro.size) >= 0.5;
+          })) return false; // stesso autore, titolo che somiglia, già qui: confermata.
+        }
+      }
+
+      // ── 3) RICERCA LIBERA, senza fermarsi al primo candidato ──
       const cerca = await axios.get(
-        `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(titolo)}&language=${lang}&uselang=${lang}&type=item&limit=3&format=json&origin=*`,
-        { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+        `https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(titolo)}&language=${lang}&uselang=${lang}&type=item&limit=10&format=json&origin=*`,
+        ua
       );
       const candidati = (cerca.data?.search || []).filter((s: any) => {
-        // Il titolo deve corrispondere davvero: «Notte stellata» non deve
-        // finire su «Notte stellata sul Rodano», che è un altro quadro.
         const et = String(s?.label || '');
         return Math.max(sovrapposizioneNomi(titolo, et), sovrapposizioneNomi(et, titolo)) >= 0.75;
       });
       if (!candidati.length) return false;
 
-      for (const c of candidati.slice(0, 2)) {
+      let trovataAltrove: { etichetta: string } | null = null;
+      for (const c of candidati) {
         const claims = await axios.get(
-          `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P195|P170&format=json&origin=*`,
-          { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
+          `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P195|P276|P170&format=json&origin=*`,
+          ua
         );
-        const collezioni = (claims.data?.claims?.P195 || [])
-          .map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || ''))
-          .filter(Boolean);
-        if (!collezioni.length) continue;
-        // Il nostro museo è fra le collezioni dichiarate? Allora va bene.
-        if (qidMuseo && collezioni.includes(qidMuseo)) return false;
-
-        // Se l'autore è noto e NON corrisponde, abbiamo trovato un omonimo:
-        // non è l'opera di cui parliamo, e non prova niente su di essa.
-        if (autore) {
-          const autori = (claims.data?.claims?.P170 || []).map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || '')).filter(Boolean);
-          if (autori.length) {
-            const et = await axios.get(
-              `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${autori.slice(0, 3).join('|')}&props=labels&languages=${lang}|it|en&format=json&origin=*`,
-              { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
-            );
-            const nomi = Object.values(et.data?.entities || {}).flatMap((e: any) => Object.values(e?.labels || {}).map((l: any) => String(l?.value || '')));
-            const combacia = nomi.some(n => Math.max(sovrapposizioneNomi(autore, n), sovrapposizioneNomi(n, autore)) >= 0.6);
-            if (!combacia) continue;
-          }
+        const collezioni = (claims.data?.claims?.P195 || []).map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || '')).filter(Boolean);
+        const luoghi = (claims.data?.claims?.P276 || []).map((x: any) => String(x?.mainsnak?.datavalue?.value?.id || '')).filter(Boolean);
+        // P195 comanda: se include il nostro museo (anche fra altre
+        // collezioni — le stampe stanno in più posti), la tappa è confermata
+        // subito, qualunque altro candidato dica il contrario.
+        if (collezioni.includes(qidMuseo)) return false;
+        // Nessun P195 ma P276 è il nostro: come per la lista opere, conta
+        // solo se non c'è nessun P195 dichiarato.
+        if (!collezioni.length && luoghi.includes(qidMuseo)) return false;
+        // Un P195 dichiarato verso un ALTRO museo prova qualcosa; un P276
+        // altrove da solo no (prestiti, mostre) — si continua a cercare fra
+        // gli altri candidati prima di concludere.
+        if (collezioni.length && !trovataAltrove) {
+          const nomiColl = await axios.get(
+            `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${collezioni.slice(0, 3).join('|')}&props=labels&languages=${lang}|it|en&format=json&origin=*`,
+            ua
+          ).catch(() => null);
+          const etichette = Object.values(nomiColl?.data?.entities || {}).flatMap((e: any) => Object.values(e?.labels || {}).map((l: any) => String(l?.value || '')));
+          // Il nome della collezione potrebbe essere una variante del nostro
+          // museo scritta diversa da Wikidata (Uffizi / Gallerie degli
+          // Uffizi): in quel caso non prova che è altrove.
+          const eNostro = etichette.some(n => Math.max(sovrapposizioneNomi(nomeMuseo, n), sovrapposizioneNomi(n, nomeMuseo)) >= 0.6);
+          if (!eNostro) trovataAltrove = { etichetta: etichette[0] || collezioni[0] };
         }
-
-        // Collezione dichiarata, e non è la nostra: l'opera sta altrove.
-        const nomiColl = await axios.get(
-          `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${collezioni.slice(0, 3).join('|')}&props=labels&languages=${lang}|it|en&format=json&origin=*`,
-          { timeout: 6000, headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' } }
-        );
-        const etichette = Object.values(nomiColl.data?.entities || {}).flatMap((e: any) => Object.values(e?.labels || {}).map((l: any) => String(l?.value || '')));
-        // Ultimo controllo prima di scartare: il nome della collezione
-        // potrebbe essere una variante del nostro (Uffizi / Gallerie degli
-        // Uffizi). Nel dubbio la tappa resta.
-        const eNostro = etichette.some(n => Math.max(sovrapposizioneNomi(nomeMuseo, n), sovrapposizioneNomi(n, nomeMuseo)) >= 0.6);
-        if (eNostro) return false;
-        console.warn(`[VenueGuide] "${titolo}" è di ${etichette[0] || collezioni[0]}, non di ${nomeMuseo}: tappa scartata`);
+      }
+      if (trovataAltrove) {
+        console.warn(`[VenueGuide] "${titolo}" è di ${trovataAltrove.etichetta}, non di ${nomeMuseo}: tappa scartata`);
         return true;
       }
+      // Candidati trovati ma nessuno con una collezione dichiarata verso
+      // nessun museo: non si sa, e non sapere non è una prova.
       return false;
     } catch {
       // Wikidata non risponde: non si sa, quindi non si tocca nulla.
