@@ -43,6 +43,58 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Sala non indicata", EN: "Room not stated", FR: "Salle non indiquée", ES: "Sala no indicada",
     DE: "Saal nicht angegeben", RU: "Зал не указан", ZH: "未标明展厅",
   },
+  // «Sei a …» dal GPS, prima di toccare qualsiasi cosa.
+  mv_you_are_at_place: { IT: "Sei a {s}", EN: "You're at {s}", FR: "Tu es à {s}", ES: "Estás en {s}", DE: "Du bist im {s}", RU: "Вы в {s}", ZH: "你在 {s}" },
+  mv_start_here: { IT: "Inizia la visita guidata", EN: "Start the guided visit", FR: "Commencer la visite guidée", ES: "Empezar la visita guiada", DE: "Geführten Rundgang starten", RU: "Начать экскурсию", ZH: "开始导览" },
+  mv_preparing: {
+    IT: "Sei a {s}. Sto preparando il percorso.", EN: "You're at {s}. I'm preparing the route.",
+    FR: "Tu es à {s}. Je prépare le parcours.", ES: "Estás en {s}. Estoy preparando el recorrido.",
+    DE: "Du bist im {s}. Ich bereite den Rundgang vor.", RU: "Вы в {s}. Готовлю маршрут.", ZH: "你在 {s}。正在准备路线。",
+  },
+  // Il teaser dopo ogni opera: dice qual è la prossima e dove.
+  mv_teaser_next: {
+    IT: "La prossima è {n}, {s}. Quando sei davanti, premi play.",
+    EN: "Next is {n}, {s}. When you're in front of it, press play.",
+    FR: "La prochaine est {n}, {s}. Quand tu es devant, appuie sur lecture.",
+    ES: "La siguiente es {n}, {s}. Cuando estés delante, pulsa play.",
+    DE: "Als Nächstes: {n}, {s}. Wenn du davor stehst, drück auf Play.",
+    RU: "Следующее — {n}, {s}. Когда будете перед ним, нажмите воспроизведение.",
+    ZH: "下一件是{n}，{s}。走到作品前，按播放。",
+  },
+  mv_teaser_next_noroom: {
+    IT: "La prossima è {n}. Quando sei davanti, premi play.",
+    EN: "Next is {n}. When you're in front of it, press play.",
+    FR: "La prochaine est {n}. Quand tu es devant, appuie sur lecture.",
+    ES: "La siguiente es {n}. Cuando estés delante, pulsa play.",
+    DE: "Als Nächstes: {n}. Wenn du davor stehst, drück auf Play.",
+    RU: "Следующее — {n}. Когда будете перед ним, нажмите воспроизведение.",
+    ZH: "下一件是{n}。走到作品前，按播放。",
+  },
+  mv_listen_next: { IT: "Ascolta la prossima", EN: "Play the next one", FR: "Écouter la suivante", ES: "Escuchar la siguiente", DE: "Nächstes anhören", RU: "Слушать следующее", ZH: "播放下一件" },
+  // Modalità lettore: una tappa alla volta, a schermo pieno.
+  mv_player_mode: { IT: "Una alla volta", EN: "One at a time", FR: "Une à la fois", ES: "Una a la vez", DE: "Eins nach dem anderen", RU: "По одному", ZH: "逐件浏览" },
+  mv_player_list: { IT: "Elenco", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
+  mv_player_of: { IT: "{i} di {t}", EN: "{i} of {t}", FR: "{i} sur {t}", ES: "{i} de {t}", DE: "{i} von {t}", RU: "{i} из {t}", ZH: "第 {i}/{t} 件" },
+  // Consigli: affollamento e rinvio.
+  mv_crowded_badge: { IT: "Di solito affollata", EN: "Usually crowded", FR: "Souvent bondée", ES: "Suele estar llena", DE: "Meist voll", RU: "Обычно многолюдно", ZH: "通常拥挤" },
+  mv_crowded_now: {
+    IT: "A quest'ora davanti a quest'opera c'è di solito la fila. Vuoi rimandarla a fine visita?",
+    EN: "At this hour there's usually a queue for this work. Leave it for the end of the visit?",
+    FR: "À cette heure il y a souvent la queue devant cette œuvre. La garder pour la fin ?",
+    ES: "A esta hora suele haber cola delante de esta obra. ¿La dejamos para el final?",
+    DE: "Um diese Zeit ist vor diesem Werk meist Schlange. Für den Schluss aufheben?",
+    RU: "В это время у этого произведения обычно очередь. Отложить на конец визита?",
+    ZH: "这个时段这件作品前通常要排队。放到参观最后再看？",
+  },
+  mv_postpone: { IT: "Rimandala", EN: "Leave it for later", FR: "Plus tard", ES: "Déjala para luego", DE: "Später", RU: "Отложить", ZH: "稍后再看" },
+  mv_postponed: { IT: "Rimandata in fondo", EN: "Moved to the end", FR: "Reportée à la fin", ES: "Movida al final", DE: "Ans Ende verschoben", RU: "Перенесено в конец", ZH: "已移至最后" },
+  // Tour di gruppo dentro il museo.
+  mv_group_leader: {
+    IT: "Il gruppo ti segue: quello che ascolti tu, lo sentono tutti", EN: "The group follows you: what you play, everyone hears",
+    FR: "Le groupe te suit : ce que tu écoutes, tout le monde l'entend", ES: "El grupo te sigue: lo que escuchas tú, lo oyen todos",
+    DE: "Die Gruppe folgt dir: Was du abspielst, hören alle", RU: "Группа следует за вами: что слушаете вы, слышат все", ZH: "团员跟随你：你播放的内容，所有人都能听到",
+  },
+  mv_group_follower: { IT: "Stai seguendo il leader del gruppo", EN: "You're following the group leader", FR: "Tu suis le leader du groupe", ES: "Sigues al líder del grupo", DE: "Du folgst dem Gruppenleiter", RU: "Вы следуете за лидером группы", ZH: "你正在跟随领队" },
   // Pausa vera: si riprende da dove si era, non dalla prima parola.
   mv_art_resume: { IT: "Riprendi", EN: "Resume", FR: "Reprendre", ES: "Reanudar", DE: "Fortsetzen", RU: "Продолжить", ZH: "继续播放" },
   mv_art_paused: { IT: "In pausa", EN: "Paused", FR: "En pause", ES: "En pausa", DE: "Pausiert", RU: "На паузе", ZH: "已暂停" },

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users } from 'lucide-react';
+import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa } from '../lib/museumVisit';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera } from '../lib/pacchettoMuseo';
-import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech } from '../services/ttsService';
+import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice } from '../services/ttsService';
 import { printScoped } from '../lib/printScoped';
 import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -45,6 +46,16 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // La foto dell'opera a tutto schermo: si tiene in mano e si confronta con
   // quello che si ha davanti. È il modo più veloce per trovare un quadro.
   const [fotoGrande, setFotoGrande] = useState<{ url: string; nome: string; dove: string } | null>(null);
+  // UNA ALLA VOLTA (11/09/2026): schermo pieno sull'opera corrente — foto
+  // grande, sala, play — e si scorre di lato per passare alla prossima. È la
+  // differenza fra una playlist e il lettore: con una mano sola, senza
+  // cercare nella lista.
+  const [lettore, setLettore] = useState<number | null>(null);
+  const swipeX = useRef<number | null>(null);
+  // Il tour di gruppo: si legge una volta per render, così la scheda mostra
+  // a chi guida che il gruppo lo segue e a chi segue che sta seguendo.
+  const sonoLeader = isLiveLeader();
+  const inGruppo = hasLiveSession();
 
   useEffect(() => () => { stopSpeech(); }, []);
 
@@ -55,6 +66,55 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   useEffect(() => {
     conservaVisita(visit, language);
   }, [visit.venueKey, visit.guide?.tappe?.length, visit.updatedAt, language]);
+
+  // TOUR DI GRUPPO: il leader apre una visita e il gruppo riceve lo stesso
+  // percorso. Si manda quando cambia il luogo o si allunga il percorso (opere
+  // aggiunte). Il modulo del tour ignora l'evento se non si è leader.
+  useEffect(() => {
+    if (!sonoLeader || visit.dalLeader) return;
+    window.dispatchEvent(new CustomEvent('wip-leader-museum-visit', {
+      detail: {
+        venueKey: visit.venueKey, venue: visit.venue, guide: visit.guide, source: visit.source,
+        venuePhoto: visit.venuePhoto || '', venuePhotoIcon: visit.venuePhotoIcon || '',
+      },
+    }));
+  }, [sonoLeader, visit.venueKey, visit.guide?.tappe?.length]);
+
+  // Follower: il leader ha scelto un'opera. Si apre la stessa tappa col
+  // testo, così si legge mentre la voce (che arriva da 'audio-start') parla.
+  useEffect(() => {
+    if (sonoLeader) return;
+    const onStop = (e: any) => {
+      const d = e?.detail || {};
+      const i = Number(d.index);
+      if (!Number.isFinite(i) || !d.guide?.testo) return;
+      setOperaGuide(prev => ({ ...prev, [i]: d.guide }));
+      setOperaAperta(i);
+      setLettore(prev => (prev === null ? prev : i));
+    };
+    window.addEventListener('wip-museum-stop-from-leader', onStop);
+    return () => window.removeEventListener('wip-museum-stop-from-leader', onStop);
+  }, [sonoLeader]);
+
+  // DAL TASTO DELLE CUFFIE (11/09/2026): sul web e nella PWA i comandi
+  // «traccia successiva» e «play» della schermata di blocco e delle cuffie
+  // passano da qui. «Successiva» = ascolta la prossima opera non vista;
+  // «play» a voce ferma = idem. Sull'app nativa il lettore di sistema
+  // gestisce già play/pausa; il «successiva» nativo richiede un aggiornamento
+  // del plugin Kotlin/Swift, annotato a parte.
+  useEffect(() => {
+    const ms = (typeof navigator !== 'undefined' && (navigator as any).mediaSession) || null;
+    if (!ms) return;
+    const prossima = () => { const p = prossimaTappa(visit); if (p) void handleOpera(p.indice); };
+    try {
+      ms.setActionHandler('nexttrack', prossima);
+      ms.setActionHandler('play', () => { if (operaInPausa !== null) void handleOpera(operaInPausa); else prossima(); });
+      ms.setActionHandler('pause', () => { if (operaParla !== null) void handleOpera(operaParla); });
+    } catch { /* browser senza mediaSession completa */ }
+    return () => {
+      try { ms.setActionHandler('nexttrack', null); ms.setActionHandler('play', null); ms.setActionHandler('pause', null); } catch { /* ok */ }
+    };
+  });
 
   useEffect(() => {
     const su = () => setOnline(true);
@@ -289,19 +349,127 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       conservaOpera(visit.venueKey, language, tappa.nome, guida);
     }
     setOperaAperta(i);
+    // TOUR DI GRUPPO: chi guida manda l'opera al gruppo PRIMA di ascoltarla,
+    // così le voci partono insieme. Il modulo ignora l'evento se non si è
+    // leader. Due messaggi: la scheda (testo sotto la tappa giusta) e la voce
+    // (stesso testo, stessa lingua, stesso personaggio = stesso MP3 dal
+    // server, già pagato dal leader).
+    if (sonoLeader) {
+      window.dispatchEvent(new CustomEvent('wip-leader-museum-stop', { detail: { index: i, nome: tappa.nome, guide: guida } }));
+      window.dispatchEvent(new CustomEvent('wip-leader-audio-start', { detail: { textToSpeak: guida.testo, poiName: tappa.nome, character: getGuideCharacter(), language: String(guida.language || language).toLowerCase() } }));
+    }
     try {
-      await speakAudioguide(guida.testo, String(guida.language || language).toLowerCase(), getGuideCharacter(), () => setOperaParla(null));
+      const lingua = String(guida.language || language).toLowerCase();
+      await speakAudioguide(guida.testo, lingua, getGuideCharacter(), () => {
+        setOperaParla(null);
+        setOperaInPausa(null);
+        // IL TEASER (11/09/2026, richiesta del committente): finita l'opera,
+        // una frase sola dice qual è la prossima e in che sala — «quando sei
+        // davanti, premi play». Voce di sistema: gratis, immediata, e non
+        // consuma nulla. Chi tiene il telefono in tasca sa dove andare senza
+        // tirarlo fuori. I follower del gruppo non lo sentono: a loro parla
+        // il leader.
+        if (visit.dalLeader) return;
+        const p = prossimaTappa(getVisitSnapshot());
+        if (!p || p.indice === i) return;
+        const frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
+        void speakWithSystemVoice(frase, lingua, getGuideCharacter());
+      });
       setOperaParla(i);
     } catch {
       setOperaParla(null);
     }
   };
 
+  /** Lo stato più recente della visita, per chi arriva da una callback. */
+  const getVisitSnapshot = (): MuseumVisit => visit;
+
   return (
     <>
     {/* Il documento da stampare: invisibile a schermo, acceso solo da
         printScoped('museum'). */}
     <MuseumPrintView visit={visit} language={language} opere={operaGuide} />
+
+    {/* UNA ALLA VOLTA: il lettore a schermo pieno. Foto grande, sala, play,
+        frecce e scorrimento laterale. Le tappe «della collezione» restano
+        nell'elenco ma non nel lettore: non hanno un posto dove andare. */}
+    {lettore !== null && (() => {
+      const indici = visit.guide.tappe.map((x, k) => k).filter(k => !visit.guide.tappe[k].soloCollezione);
+      if (!indici.length) return null;
+      const pos = Math.max(0, indici.indexOf(lettore));
+      const i = indici[pos] ?? indici[0];
+      const tp = visit.guide.tappe[i];
+      const vaiA = (delta: number) => { const n = indici[pos + delta]; if (n !== undefined) setLettore(n); };
+      const g = operaGuide[i];
+      return (
+        <div
+          className="fixed inset-0 z-[2700] bg-[#fdfbf7] flex flex-col"
+          onTouchStart={(e) => { swipeX.current = e.touches[0]?.clientX ?? null; }}
+          onTouchEnd={(e) => {
+            const x0 = swipeX.current; swipeX.current = null;
+            const x1 = e.changedTouches[0]?.clientX;
+            if (x0 == null || x1 == null) return;
+            if (x1 - x0 > 60) vaiA(-1); else if (x0 - x1 > 60) vaiA(1);
+          }}
+        >
+          <div className="px-5 pt-5 pb-2 flex items-center justify-between shrink-0">
+            <button onClick={() => setLettore(null)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-white border border-slate-200 text-[11px] font-black text-slate-700 active:scale-95 transition-transform">
+              <ListMusic className="w-3.5 h-3.5" />{t('mv_player_list')}
+            </button>
+            <span className="text-[11px] font-black text-slate-500">{t('mv_player_of').replace('{i}', String(pos + 1)).replace('{t}', String(indici.length))}</span>
+            <button onClick={onClose} aria-label={t('vis_close')} className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-900 active:scale-90 transition-transform">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-6">
+            {(tp.foto || tp.fotoIcona) ? (
+              <img
+                src={tp.foto || tp.fotoIcona}
+                alt={tp.nome}
+                onClick={() => setFotoGrande({ url: tp.foto || tp.fotoIcona || '', nome: tp.nome, dove: tp.dove || '' })}
+                className="max-h-[42vh] max-w-full object-contain rounded-3xl border border-slate-200 bg-white cursor-pointer"
+                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              />
+            ) : (
+              <div className="w-40 h-40 rounded-3xl bg-blue-50 flex items-center justify-center"><Landmark className="w-12 h-12 text-primary" /></div>
+            )}
+            <div className="w-full mt-5 text-center">
+              {tp.dove && (
+                <p className="text-[11px] font-black text-primary flex items-center justify-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5" />{tp.dove}{tp.puntoPreciso ? ` · ${tp.puntoPreciso}` : ''}
+                </p>
+              )}
+              <h3 className="text-xl font-black text-slate-900 leading-tight mt-1">{tp.nome}</h3>
+              {tp.nomeFonte && <p className="text-[12px] font-bold text-slate-400 mt-0.5">{tp.nomeFonte}</p>}
+              {(tp.autore || tp.anno) && <p className="text-[12px] font-bold text-slate-500 mt-0.5">{[tp.autore, tp.anno].filter(Boolean).join(' · ')}</p>}
+              {tp.affollata && <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1.5 inline-flex items-center gap-1"><Clock className="w-3 h-3" />{t('mv_crowded_badge')}</p>}
+              {tp.seenCardId && <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700 mt-1.5">{t('mv_seen')}</p>}
+              {g?.testo && operaAperta === i && (
+                <p className="text-[12px] text-slate-700 leading-relaxed mt-3 max-h-[16vh] overflow-y-auto text-left px-1">{g.testo}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="px-6 pb-8 pt-3 shrink-0 flex items-center justify-center gap-6">
+            <button onClick={() => vaiA(-1)} disabled={pos === 0} aria-label={t('mv_player_list')} className="w-12 h-12 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-700 active:scale-90 transition-transform disabled:opacity-30">
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <button
+              onClick={() => void handleOpera(i)}
+              disabled={operaLoading !== null}
+              aria-label={operaParla === i ? t('vis_pause') : t('mv_art_listen')}
+              className="w-20 h-20 rounded-full bg-primary text-white flex items-center justify-center shadow-[0_12px_28px_rgba(30,58,138,0.3)] active:scale-95 transition-transform disabled:opacity-60"
+            >
+              {operaLoading === i ? <Loader2 className="w-8 h-8 animate-spin" /> : operaParla === i ? <Pause className="w-8 h-8" /> : <Play className="w-8 h-8 ml-1" />}
+            </button>
+            <button onClick={() => vaiA(1)} disabled={pos >= indici.length - 1} aria-label={t('mv_next_stop')} className="w-12 h-12 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-700 active:scale-90 transition-transform disabled:opacity-30">
+              <ChevronRight className="w-6 h-6" />
+            </button>
+          </div>
+        </div>
+      );
+    })()}
 
     {/* PRIMA DI USCIRE: cosa ti manca, raggruppato per sala */}
     {primaDiUscire && (
@@ -417,6 +585,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_title')}</p>
             <h2 className="text-lg font-black text-primary leading-tight truncate">{visit.venue.name}</h2>
+            {inGruppo && (
+              <p className="text-[10px] font-black text-emerald-700 flex items-center gap-1 mt-0.5">
+                <Users className="w-3 h-3" />{sonoLeader ? t('mv_group_leader') : t('mv_group_follower')}
+              </p>
+            )}
             <p className="text-[11px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
               <TypeIcon className="w-3.5 h-3.5" />
               {isChurch ? t('mv_type_church') : visit.guide.tipo === 'sito' ? t('mv_type_site') : t('mv_type_museum')}
@@ -528,10 +701,48 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     {p.tappa.puntoPreciso ? ` · ${p.tappa.puntoPreciso}` : (p.saleDiDistanza != null && p.tappa.dove ? ` · ${p.tappa.dove}` : '')}
                   </p>
                 </div>
-                <Volume2 className="w-5 h-5 text-primary shrink-0" />
+                <span className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-primary text-white text-[11px] font-black">
+                  <Play className="w-3.5 h-3.5" />
+                  {t('mv_listen_next')}
+                </span>
               </button>
             );
           })()}
+
+          {/* AFFOLLATA A QUEST'ORA (11/09/2026): se la prossima è una delle tre
+              opere più famose del museo e sono le ore centrali, lo si dice
+              prima che la persona si metta in fila, e si offre di rimandarla.
+              La regola parte semplice — le tre più famose, dalle 11 alle 15 —
+              e i salti raccolti col tempo la affineranno. */}
+          {(() => {
+            const p = prossimaTappa(visit);
+            if (!p?.tappa.affollata || p.tappa.rimandata) return null;
+            const ora = new Date().getHours();
+            if (ora < 11 || ora >= 15) return null;
+            return (
+              <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 mb-3">
+                <Clock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-bold text-amber-900 leading-snug">{t('mv_crowded_now')}</p>
+                  <button
+                    onClick={() => { if (rimandaTappa(p.indice)) notify(t('mv_postponed')); }}
+                    className="mt-1.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-white border border-amber-300 text-[11px] font-black text-amber-900 active:scale-95 transition-transform"
+                  >
+                    {t('mv_postpone')}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Una alla volta / Elenco */}
+          <button
+            onClick={() => { const p = prossimaTappa(visit); setLettore(p ? p.indice : 0); }}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl bg-white border border-slate-200 text-[12px] font-black text-slate-700 mb-3 active:scale-[0.99] transition-transform"
+          >
+            <ListMusic className="w-4 h-4 text-primary" />
+            {t('mv_player_mode')}
+          </button>
 
           {/* Percorso */}
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_route')}</p>
@@ -638,6 +849,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     {tappa.perche && <p className="text-[12px] text-slate-700 leading-snug mt-1">{tappa.perche}</p>}
                     {/* Promessa onesta: il museo la possiede, ma non dice dove
                         è esposta — e potrebbe essere in deposito o in prestito. */}
+                    {tappa.affollata && !done && (
+                      <p className="text-[10px] font-black uppercase tracking-wider text-amber-700 mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />{t('mv_crowded_badge')}{tappa.rimandata ? ` · ${t('mv_postponed')}` : ''}
+                      </p>
+                    )}
                     {tappa.soloCollezione && !done && (
                       <p className="text-[10px] font-black uppercase tracking-wider text-slate-500 mt-1">{t('mv_only_collection')}</p>
                     )}

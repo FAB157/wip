@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { locationService } from '../services/locationService';
 
+import { riceviVisitaDalLeader } from '../lib/museumVisit';
+
 export interface LiveSession {
   id: string;
   pin: string;
@@ -32,6 +34,12 @@ let moduleParticipants = 0;
 let moduleMembers: LiveMember[] = [];
 let modulePresenceKey = '';
 let leaderAudioListener: ((e: any) => void) | null = null;
+// TOUR DI GRUPPO DENTRO IL MUSEO (11/09/2026, richiesta del committente).
+// Il leader apre la visita di un museo e sceglie un'opera: i follower vedono
+// lo stesso percorso e sentono la stessa audioguida, senza pagare — l'ha
+// già pagata il leader. Due messaggi in più sullo stesso canale realtime.
+let leaderMuseumVisitListener: ((e: any) => void) | null = null;
+let leaderMuseumStopListener: ((e: any) => void) | null = null;
 let restoreAttempted = false;
 // Ultimo audio annunciato dal leader: serve al pulsante «Ascolta ora» del
 // follower quando la partenza automatica non è andata a buon fine.
@@ -48,6 +56,14 @@ function teardownModuleChannel() {
   if (leaderAudioListener) {
     window.removeEventListener('wip-leader-audio-start', leaderAudioListener);
     leaderAudioListener = null;
+  }
+  if (leaderMuseumVisitListener) {
+    window.removeEventListener('wip-leader-museum-visit', leaderMuseumVisitListener);
+    leaderMuseumVisitListener = null;
+  }
+  if (leaderMuseumStopListener) {
+    window.removeEventListener('wip-leader-museum-stop', leaderMuseumStopListener);
+    leaderMuseumStopListener = null;
   }
   if (moduleChannel) {
     supabase.removeChannel(moduleChannel);
@@ -188,6 +204,19 @@ function subscribeModuleChannel(pin: string, leader: boolean, nome: string) {
         riproduciDalLeader(payload?.payload || {});
       }
     })
+    // MUSEO: il leader ha aperto una visita guidata. Il follower riceve il
+    // percorso intero (opere, sale, foto) e gli si apre la stessa scheda.
+    .on('broadcast', { event: 'museum-visit' }, (payload: any) => {
+      if (moduleIsLeader) return;
+      try { riceviVisitaDalLeader(payload?.payload || {}); } catch (e) { console.warn('[LiveTour] visita museo dal leader non aperta:', e); }
+    })
+    // MUSEO: il leader ha scelto un'opera. Qui si allinea solo la SCHEDA
+    // (testo aperto sotto la tappa giusta): la voce arriva da 'audio-start',
+    // che il leader manda subito dopo, così l'audio non parte due volte.
+    .on('broadcast', { event: 'museum-stop' }, (payload: any) => {
+      if (moduleIsLeader) return;
+      window.dispatchEvent(new CustomEvent('wip-museum-stop-from-leader', { detail: payload?.payload || {} }));
+    })
     .on('broadcast', { event: 'session-ended' }, () => {
       // Il leader ha terminato: i follower escono subito invece di restare
       // in ascolto di un canale morto.
@@ -251,7 +280,33 @@ function subscribeModuleChannel(pin: string, leader: boolean, nome: string) {
         .catch((err: any) => console.warn('[LiveTour] Broadcast fallito:', err));
     };
     window.addEventListener('wip-leader-audio-start', leaderAudioListener);
+
+    // Il leader apre un museo o sceglie un'opera: si inoltra al gruppo.
+    // Il percorso pesa qualche decina di KB con le foto (solo URL): sta
+    // comodamente dentro un messaggio di broadcast.
+    leaderMuseumVisitListener = (e: any) => {
+      if (!moduleChannel || !moduleIsLeader || !e?.detail?.guide) return;
+      moduleChannel.send({ type: 'broadcast', event: 'museum-visit', payload: e.detail })
+        .then((esito: any) => console.log('[LiveTour] Visita museo al gruppo:', esito))
+        .catch((err: any) => console.warn('[LiveTour] Visita museo non inoltrata:', err));
+    };
+    leaderMuseumStopListener = (e: any) => {
+      if (!moduleChannel || !moduleIsLeader) return;
+      moduleChannel.send({ type: 'broadcast', event: 'museum-stop', payload: e.detail || {} })
+        .catch((err: any) => console.warn('[LiveTour] Opera non inoltrata:', err));
+    };
+    window.addEventListener('wip-leader-museum-visit', leaderMuseumVisitListener);
+    window.addEventListener('wip-leader-museum-stop', leaderMuseumStopListener);
   }
+}
+
+/** Vero se questo telefono è il LEADER di un tour di gruppo in corso. */
+export function isLiveLeader(): boolean {
+  return !!moduleSession && moduleIsLeader;
+}
+/** Vero se questo telefono partecipa (da leader o da follower) a un tour. */
+export function hasLiveSession(): boolean {
+  return !!moduleSession;
 }
 
 async function joinByPin(pin: string): Promise<void> {

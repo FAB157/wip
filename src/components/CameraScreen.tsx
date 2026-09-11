@@ -23,8 +23,10 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
+import { speakWithSystemVoice } from '../services/ttsService';
+import { getGuideCharacter } from '../lib/guideSettings';
 import { Landmark } from 'lucide-react';
 
 // ── Provenienza della foto (Vision v2) ──────────────────────────────────────
@@ -229,6 +231,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // LE TUE VISITE: quelle già fatte, conservate per sempre. Sono roba già
   // pagata e si riaprono senza chiamare il server — anche in aereo.
   const [visiteSalvate, setVisiteSalvate] = useState<ArchivioMuseo[]>([]);
+  // DOVE SONO, dal GPS, prima di toccare qualsiasi cosa: nome e foto del
+  // museo entro 200 m. Niente AI, un secondo. Il primo minuto non è più muto.
+  const [seiQui, setSeiQui] = useState<DoveSono | null>(null);
   // Quiz durante l'attesa (10/09/2026, richiesta del committente: «come negli
   // itinerari»). Costruire il percorso di un museo richiede 20-35 secondi:
   // invece di far guardare una rotellina, si gioca e si vincono crediti — un
@@ -257,9 +262,12 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     // dell'utente.
     setVisiteSalvate(visiteConservate(language));
     const coords = await resolveVisitCoords();
-    const elenco = await fetchMuseumLibrary({
-      lat: coords.lat, lon: coords.lon, language, radiusKm: 30, limit: 20,
-    });
+    // In parallelo: «dove sono» (istantaneo) e l'elenco dei vicini.
+    const [qui, elenco] = await Promise.all([
+      whereAmI(coords, language),
+      fetchMuseumLibrary({ lat: coords.lat, lon: coords.lon, language, radiusKm: 30, limit: 20 }),
+    ]);
+    setSeiQui(qui);
     setMuseiVicini(elenco);
   };
 
@@ -329,6 +337,10 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     void apriQuizAttesa(typedName || '');
     try {
       const coords = await resolveVisitCoords();
+      // La voce parte SUBITO: «Sei agli Uffizi, sto preparando il percorso».
+      // Voce di sistema, gratis e immediata; il percorso arriva dietro.
+      const nomeQui = (typedName && typedName.trim()) || seiQui?.name;
+      if (nomeQui) void speakWithSystemVoice(tr('mv_preparing').replace('{s}', nomeQui), String(language).toLowerCase(), getGuideCharacter());
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
@@ -1544,12 +1556,28 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 disabled={visitStarting}
                 className="w-full flex items-center gap-3 px-4 py-4 rounded-3xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left active:scale-95 transition-all disabled:opacity-50"
               >
-                <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-                  {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
-                </div>
+                {/* La foto del luogo riconosciuto dal GPS, nel cerchio; il
+                    simbolo se non c'è ancora (o non c'è nessun museo vicino). */}
+                {seiQui?.photoIcon && !visitStarting ? (
+                  <img src={seiQui.photoIcon} alt="" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} className="w-10 h-10 rounded-full object-cover shrink-0 border border-gray-200" />
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    {visitStarting ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-black text-slate-900">{tr('mv_start')}</p>
-                  <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
+                  {seiQui ? (
+                    <>
+                      <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary">{tr('mv_you_are_at')}</p>
+                      <p className="text-[17px] leading-tight font-black text-slate-900 truncate">{seiQui.name}</p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_here')}{seiQui.inLibrary ? ` · ${tr('mv_con_sale')}` : ''}</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-black text-slate-900">{tr('mv_start')}</p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_start_desc')}</p>
+                    </>
+                  )}
                 </div>
               </button>
             )}

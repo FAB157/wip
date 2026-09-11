@@ -41,9 +41,15 @@ export type VenueTappa = {
   /** Opera della collezione di cui il museo NON dichiara la sala: si mostra
    *  senza numero, in fondo, perché «la possiede» non è «oggi la vedi». */
   soloCollezione?: boolean;
+  /** Fra le tre opere più famose del museo: nelle ore centrali c'è la fila.
+   *  Il segnale è da Wikidata (numero di lingue in cui l'opera ha una voce),
+   *  non un'opinione: chi lo vede può decidere di rimandarla. */
+  affollata?: boolean;
   /** Saltata da chi sta visitando: sala chiusa, opera in prestito, fila. */
   skipped?: boolean;
   skippedAt?: number | null;
+  /** Rimandata in fondo perché affollata: si vede dopo, non si perde. */
+  rimandata?: boolean;
   /** id della scheda Vision con cui l'utente l'ha spuntata, se l'ha inquadrata. */
   seenCardId?: string | null;
   seenAt?: number | null;
@@ -83,6 +89,8 @@ export type MuseumVisit = {
   updatedAt: number;
   /** La sala in cui ci si trova, letta dal cartello sul muro. */
   salaCorrente?: string;
+  /** Visita ricevuta dal leader di un tour di gruppo: si segue, non si guida. */
+  dalLeader?: boolean;
   /** Opere riconosciute in ordine di scatto (anche quelle fuori percorso). */
   seen: { name: string; cardId: string | null; ts: number }[];
 };
@@ -416,6 +424,75 @@ export function prossimaTappa(v: MuseumVisit | null): ProssimaTappa | null {
     }
   }
   return { indice: idx, tappa: tappe[idx], daSala, saleDiDistanza };
+}
+
+/**
+ * DOVE SONO, SUBITO (11/09/2026, richiesta del committente: «non può
+ * calcolare in base alla posizione GPS?»). Appena si apre la sezione Visite
+ * si chiede al server SOLO il nome del luogo entro 200 m — niente guida,
+ * niente AI, una query sull'archivio — e la scheda dice «Sei agli Uffizi»
+ * con la foto, prima ancora di toccare «Inizia». Il primo minuto non è più
+ * muto: la persona sa che l'app ha capito dov'è.
+ */
+export type DoveSono = { name: string; id: string | null; photoIcon?: string; inLibrary: boolean; distance_m: number };
+export async function whereAmI(coords: { lat: number | null; lon: number | null }, language: Language): Promise<DoveSono | null> {
+  if (coords.lat == null || coords.lon == null) return null;
+  try {
+    const res = await fetch(getApiUrl(`/api/museums/where-am-i?lat=${coords.lat}&lon=${coords.lon}&language=${language}`));
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d?.ok === true && d?.venue?.name ? {
+      name: String(d.venue.name), id: d.venue.id ? String(d.venue.id) : null,
+      photoIcon: d.photoIcon ? String(d.photoIcon) : undefined,
+      inLibrary: !!d.inLibrary, distance_m: Number(d.distance_m || 0),
+    } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * RIMANDA UN'OPERA AFFOLLATA (11/09/2026): la tappa va in fondo al percorso,
+ * senza perdere nulla — si tornerà a vederla quando la fila sarà più corta.
+ * Non è un salto: resta nel conto delle opere da vedere.
+ */
+export function rimandaTappa(index: number): MuseumVisit | null {
+  const v = getVisit();
+  if (!v?.guide?.tappe?.[index]) return null;
+  const tappe = [...v.guide.tappe];
+  const [t] = tappe.splice(index, 1);
+  tappe.push({ ...t, rimandata: true });
+  v.guide = { ...v.guide, tappe };
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
+}
+
+/**
+ * VISITA RICEVUTA DAL LEADER del tour di gruppo (11/09/2026). Il percorso
+ * arriva intero via broadcast: si salva come visita in corso e si apre la
+ * scheda. Il follower non chiama il server e non paga — la guida l'ha pagata
+ * il leader, esattamente come per le audioguide dei POI.
+ */
+export function riceviVisitaDalLeader(payload: any): MuseumVisit | null {
+  const guide = payload?.guide;
+  if (!guide?.tappe?.length || !payload?.venue?.name) return null;
+  const now = Date.now();
+  const v: MuseumVisit = {
+    venueKey: String(payload.venueKey || venueKeyOf(payload.venue)),
+    venue: { id: payload.venue.id ?? null, name: String(payload.venue.name), lat: payload.venue.lat ?? null, lon: payload.venue.lon ?? null, category: String(payload.venue.category || 'museo') },
+    guide: { ...guide, tappe: guide.tappe.map((t: any) => ({ ...t, seenCardId: null, seenAt: null })) },
+    ...(payload.venuePhoto ? { venuePhoto: String(payload.venuePhoto) } : {}),
+    ...(payload.venuePhotoIcon ? { venuePhotoIcon: String(payload.venuePhotoIcon) } : {}),
+    source: payload.source || null,
+    startedAt: now,
+    updatedAt: now,
+    seen: [],
+    dalLeader: true,
+  };
+  saveVisit(v);
+  try { window.dispatchEvent(new CustomEvent(OPEN_MUSEUM_VISIT_EVENT)); } catch { /* ok */ }
+  return v;
 }
 
 /**

@@ -6853,8 +6853,8 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * affidabile di "cosa c'è dentro", perché ogni riga è un'opera censita, non
    * una frase generata. Restituisce righe "Titolo — Autore (anno) [inventario]".
    */
-  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string> }> {
-    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {} };
+  async function opereDaWikidata(qid: string, lang: string, tipoLuogo: 'museo' | 'chiesa' = 'museo'): Promise<{ righe: string[]; foto: Record<string, string>; titoli: Set<string>; originali: Record<string, string>; famose: string[] }> {
+    if (!/^Q\d+$/.test(qid)) return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [] };
 
     // QUESTA RISPOSTA SI CONSERVA (11/09/2026).
     //
@@ -6873,7 +6873,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     if (conservata) {
       try {
         const d = JSON.parse(conservata);
-        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {} };
+        return { righe: d.righe || [], foto: d.foto || {}, titoli: new Set(d.titoli || []), originali: d.originali || {}, famose: d.famose || [] };
       } catch { /* conservata illeggibile: si richiede */ }
     }
     // P18 = immagine su Wikimedia Commons. È l'immagine che Wikidata associa a
@@ -6937,6 +6937,12 @@ ORDER BY DESC(?fama) LIMIT 60`;
       // Louvre trova «La Joconde», non «La Gioconda». Si conserva quando è
       // diverso dal titolo nella lingua dell'utente, e non si traduce mai.
       const originali: Record<string, string> = {};
+      // LE TRE PIÙ FAMOSE (11/09/2026): i risultati arrivano ordinati per
+      // numero di lingue in cui l'opera ha una voce. Le prime tre sono quelle
+      // davanti a cui, nelle ore centrali, si fa la fila — la Gioconda, la
+      // Ronda di notte, la Nascita di Venere. Il segnale «affollata» nasce
+      // da qui: un dato, non un'opinione.
+      const famose: string[] = [];
       for (const b of (r.data?.results?.bindings || [])) {
         const conRipiego = String(b?.operaLabel?.value || '').trim();
         const inLinguaUtente = String(b?.labUser?.value || '').trim();
@@ -6946,6 +6952,7 @@ ORDER BY DESC(?fama) LIMIT 60`;
         if (!titolo || /^Q\d+$/.test(titolo)) continue;
         const chiave = normalizzaTesto(titolo);
         titoli.add(chiave);
+        if (famose.length < 3) famose.push(chiave);
         if (conRipiego && conRipiego !== titolo) originali[chiave] = conRipiego;
         const autore = String(b?.autoreLabel?.value || '').trim();
         const anno = String(b?.anno?.value || '').trim();
@@ -6962,12 +6969,12 @@ ORDER BY DESC(?fama) LIMIT 60`;
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
       // significherebbe fissare l'errore invece del dato.
       if (righe.length) {
-        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali }));
+        await saveToCache(chiaveOpere, 'wikidata_opere', JSON.stringify({ righe, foto, titoli: [...titoli], originali, famose }));
       }
-      return { righe, foto, titoli, originali };
+      return { righe, foto, titoli, originali, famose };
     } catch (e: any) {
       console.warn('[VenueGuide] Wikidata opere non disponibili:', e?.message);
-      return { righe: [], foto: {}, titoli: new Set(), originali: {} };
+      return { righe: [], foto: {}, titoli: new Set(), originali: {}, famose: [] };
     }
   }
 
@@ -7879,7 +7886,9 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // risposta del modello — il Duomo di Firenze usciva classificato museo.
       const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
       const [opereWd, sitoOut] = await Promise.all([
-        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string> }),
+        // Senza QID la forma resta completa: più sotto si legge `.titoli`,
+        // `.originali` e `.famose`, e un oggetto a metà farebbe cadere tutto.
+        wikidataId ? opereDaWikidata(wikidataId, langCfg.wiki, isChurch ? 'chiesa' : 'museo') : Promise.resolve({ righe: [] as string[], foto: {} as Record<string, string>, titoli: new Set<string>(), originali: {} as Record<string, string>, famose: [] as string[] }),
         (async () => {
           let sito = '';
           if (wikidataId) sito = await sitoUfficialeDaWikidata(wikidataId);
@@ -8193,9 +8202,15 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           );
           if (vicino) img = opereWd.foto[vicino];
         }
+        // AFFOLLATA: fra le tre più famose del museo, e il museo è grande
+        // abbastanza perché abbia senso rimandarla (in una chiesa con sei
+        // opere non c'è dove andare nel frattempo).
+        const chiaveFonte = t.nomeFonte ? normalizzaTesto(t.nomeFonte) : '';
+        const affollata = tappeOrdinate.length >= 8 && (opereWd.famose.includes(chiave) || (!!chiaveFonte && opereWd.famose.includes(chiaveFonte)));
+        const base = affollata ? { ...t, affollata: true } : t;
         return img
-          ? { ...t, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) }
-          : t;
+          ? { ...base, foto: fotoCommons(img, 800), fotoIcona: fotoCommons(img, 160) }
+          : base;
       });
       const conFoto = tappeConFoto.filter((t: any) => t.foto).length;
       if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappeOrdinate.length} con la foto`);
@@ -9004,6 +9019,81 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // in faccia a chi sta visitando per un contatore.
       console.warn('[MuseumSkip] non registrato:', e?.response?.data?.message || e?.message);
       res.json({ ok: true, recorded: false });
+    }
+  });
+
+  /**
+   * DOVE SONO, SUBITO (11/09/2026, richiesta del committente: «non può
+   * calcolare in base alla posizione GPS?»).
+   *
+   * Il primo minuto della visita era muto: si toccava «Inizia» e per trenta
+   * secondi non si sapeva nemmeno se l'app avesse capito dove si era. Questa
+   * rotta fa UNA cosa, in meno di un secondo e senza AI: dal GPS trova il
+   * museo o la chiesa entro 200 m nel nostro archivio (stesse regole della
+   * visita: fuori la community, fuori le schede Vision, dentro solo i luoghi
+   * con un interno da visitare) e risponde col nome e la foto. La scheda può
+   * dire «Sei agli Uffizi» prima ancora che qualcuno tocchi qualcosa.
+   * Gratis e senza login: è orientamento, non contenuto.
+   */
+  app.get("/api/museums/where-am-i", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ ok: false, reason: 'no_gps' });
+      const svcH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      let righe: any[] = [];
+      try {
+        const r = await axios.post(`${supabaseUrl}/rest/v1/rpc/nearby_pois`, { p_lat: lat, p_lon: lon, radius_m: 200, limit_num: 60 }, { headers: svcH, timeout: 6000 });
+        righe = Array.isArray(r.data) ? r.data : [];
+      } catch { /* si prova la bbox */ }
+      if (!righe.length) {
+        const d = 0.002;
+        try {
+          const r2 = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - d).toFixed(5)}&lat=lte.${(lat + d).toFixed(5)}&lon=gte.${(lon - d).toFixed(5)}&lon=lte.${(lon + d).toFixed(5)}&select=id,name,lat,lon,category,poi_type,status,image_url&limit=60`,
+            { headers: svcH, timeout: 6000 }
+          );
+          righe = Array.isArray(r2.data) ? r2.data : [];
+        } catch { /* archivio giù: si risponde «non so» */ }
+      }
+      const cands = righe
+        .map((p: any) => ({ ...p, name: p?.name ?? p?.nome }))
+        .filter((p: any) => p?.name && p.status !== 'rejected' && String(p.category || '') !== 'community' && !String(p.id || '').startsWith('vision-'))
+        .filter((p: any) => VENUE_CATEGORIES.has(String(p.category || '').toLowerCase()) || VENUE_CATEGORIES.has(String(p.poi_type || '').toLowerCase()))
+        .map((p: any) => ({
+          ...p,
+          _dist: getHaversineDistance(lat, lon, p.lat, p.lon),
+          _rank: (MUSEI_TYPES_VENUE.has(String(p.category || '').toLowerCase()) || MUSEI_TYPES_VENUE.has(String(p.poi_type || '').toLowerCase())) ? 0 : 1,
+        }))
+        .filter((p: any) => p._dist <= 200)
+        .sort((a: any, b: any) => (a._rank - b._rank) || (a._dist - b._dist));
+      const best = cands[0];
+      if (!best) return res.json({ ok: false, reason: 'nessuno_vicino' });
+
+      // La foto: prima quella della libreria (già scelta per la visita), poi
+      // quella del POI. Senza, il simbolo: mai la foto di un altro posto.
+      let foto = '';
+      let inLibrary = false;
+      try {
+        const lib = await axios.get(
+          `${supabaseUrl}/rest/v1/museum_guides?venue_key=eq.${encodeURIComponent(`poi_${best.id}`)}&select=venue_photo&limit=1`,
+          { headers: svcH, timeout: 4000 }
+        );
+        if (lib.data?.[0]) { inLibrary = true; foto = String(lib.data[0].venue_photo || ''); }
+      } catch { /* la libreria è un di più */ }
+      if (!foto && best.image_url && /^https?:\/\//i.test(String(best.image_url))) foto = String(best.image_url);
+      const daCommons = /commons\.wikimedia\.org/i.test(foto);
+      res.set('Cache-Control', 'private, max-age=60');
+      res.json({
+        ok: true,
+        venue: { id: String(best.id), name: String(best.name), lat: best.lat, lon: best.lon, category: String(best.category || best.poi_type || '') },
+        distance_m: Math.round(best._dist),
+        inLibrary,
+        photoIcon: foto ? (daCommons ? fotoCommons(foto, 160) : foto) : '',
+      });
+    } catch (e: any) {
+      console.warn('[DoveSono] errore:', e?.message);
+      res.json({ ok: false, reason: 'errore' });
     }
   });
 
