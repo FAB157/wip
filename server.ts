@@ -9132,13 +9132,15 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       // sempre la riserva a pagamento (visto nei log il 12/09/2026).
       const conScadenza = <T,>(p: Promise<T>, label: string, ms = 25000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
-      if (ai) {
+      // Con la rotazione delle chiavi: il client di default (GOOGLE_API_KEY)
+      // su Vercel risponde «API key not valid», le altre chiavi Gemini vanno.
+      if (ai?.clients?.length) {
         try {
-          const g = await conScadenza(ai.models.generateContent({
+          const g = await conScadenza(tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
             model: "gemini-3.5-flash-lite",
             contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: pulito } }] }],
             config: { responseMimeType: "application/json" }
-          }), 'Gemini (cartello sala)');
+          })), 'Gemini (cartello sala)');
           esito = JSON.parse(String(g.text || '{}'));
         } catch (e: any) {
           console.warn('[CartelloSala] Gemini non ha letto:', e?.message);
@@ -9245,13 +9247,16 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
       // `withTimeout` qui non esisteva.)
       const conScadenza = <T,>(p: Promise<T>, label: string, ms = 30000): Promise<T> =>
         Promise.race([p, new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timeout dopo ${ms}ms`)), ms))]);
-      if (ai) {
+      // Con la ROTAZIONE delle chiavi (come callUniversalAi): il client di
+      // default usa GOOGLE_API_KEY, che su Vercel risponde «API key not
+      // valid»; le altre chiavi Gemini vanno.
+      if (ai?.clients?.length) {
         try {
-          const g = await conScadenza(ai.models.generateContent({
+          const g = await conScadenza(tentaConRotazione(ai.clients, (client: any) => client.models.generateContent({
             model: "gemini-3.5-flash-lite",
             contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64 } }] }],
             config: { responseMimeType: "application/json" }
-          }), 'Gemini (audiodescrizione)');
+          })), 'Gemini (audiodescrizione)');
           testo = String(JSON.parse(String(g.text || '{}'))?.testo || '').trim();
         } catch (e: any) {
           console.warn('[Audiodescrizione] Gemini:', e?.message);
@@ -9431,7 +9436,7 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
       if (!poiId && venueName.length < 3) return res.status(400).json({ ok: false, reason: 'dati_mancanti' });
       // v2: pagine virtuali/online escluse, convegni esclusi (in v1 gli Uffizi
       // in inglese avevano in cache un convegno di tre giorni).
-      const chiave = `museum_exhib:v2:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
+      const chiave = `museum_exhib:v3:${poiId ? `poi_${poiId}` : `nome_${normalizzaTesto(venueName).replace(/ /g, '_').slice(0, 60)}`}:${langKey}`;
       const inCache = await getFromCache(chiave, 'museum_exhib', 3 * 24 * 60 * 60 * 1000);
       if (inCache) { try { return res.json(JSON.parse(inCache)); } catch { /* si rilegge */ } }
 
@@ -9475,8 +9480,15 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
             const s = `${u.pathname} ${testo}`;
             if (!RE_MOSTRE.test(s) || RE_NO.test(s)) continue;
             // La pagina indice («Mostre») vale più della singola mostra: le
-            // elenca tutte, con le date.
-            const peso = (RE_MOSTRE.test(u.pathname) ? 2 : 1) + (u.pathname.split('/').filter(Boolean).length <= 2 ? 1 : 0);
+            // elenca tutte, con le date. Un indirizzo che COMINCIA con
+            // «mostre/» vale più di un evento che nel titolo dice «mostra»
+            // (agli Uffizi «/eventi/…-nuova-mostra-al-museo-del-costume»
+            // batteva le pagine delle mostre vere).
+            const segmenti = u.pathname.split('/').filter(Boolean);
+            const peso = (RE_MOSTRE.test(u.pathname) ? 2 : 1)
+              + (segmenti.length <= 2 ? 1 : 0)
+              + (segmenti[0] && RE_MOSTRE.test(segmenti[0]) ? 1 : 0)
+              - (segmenti[0] && /^(eventi|events|evenements|eventos|veranstaltungen|agenda|calendar|calendario)$/i.test(segmenti[0]) ? 1 : 0);
             const gia = candidati.find(c => c.href === u.href);
             if (gia) gia.peso = Math.max(gia.peso, peso); else candidati.push({ href: u.href, peso });
           } catch { /* link non valido */ }
