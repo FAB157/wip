@@ -215,6 +215,7 @@ export default function MuseumPrintView({
               <p className="mp-stop-name">
                 {tappa.soloCollezione ? '' : `${numero}. `}{tappa.nome}
               </p>
+              {tappa.nomeFonte && <p className="mp-stop-label">{tappa.nomeFonte}</p>}
               {tappa.nomeOriginale && (
                 <p className="mp-stop-label">{t('mv_on_the_label')}: {tappa.nomeOriginale}</p>
               )}

@@ -26,6 +26,10 @@ export type VenueTappa = {
   foto?: string;
   /** La stessa foto a 160 px, per il cerchio accanto al nome. */
   fotoIcona?: string;
+  /** Il titolo com'è nella FONTE (spesso in inglese, da Wikidata), quando
+   *  «nome» è la traduzione: si mostrano tutti e due, perché è con questo
+   *  che l'opera si ritrova in rete. Vuoto se coincide con «nome». */
+  nomeFonte?: string;
   /** Dove DENTRO la sala: «parete di fondo», «prima campata a destra»,
    *  «sopra l'altare». È il dato che porta davvero davanti all'opera —
    *  in una sala con ottanta quadri il numero della sala non basta. */

@@ -173,7 +173,7 @@ export async function scaricaPacchettoMuseo(
     // Già in archivio: non si riscarica e NON si ripaga.
     if (opere[k]) { esito.opere++; continue; }
     const resp = await fetchArtworkGuide({
-      artwork: t.nome,
+      artwork: t.nomeFonte || t.nome,
       venueName: visit.venue.name,
       artist: t.autore || null,
       room: t.dove || null,

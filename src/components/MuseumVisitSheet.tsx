@@ -263,7 +263,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       }
       setOperaLoading(i);
       const resp = await fetchArtworkGuide({
-        artwork: tappa.nome,
+        // Si cerca col titolo della FONTE: è quello che Wikipedia e Wikidata
+        // conoscono; la traduzione, spesso, no.
+        artwork: tappa.nomeFonte || tappa.nome,
         venueName: visit.venue.name,
         artist: tappa.autore || null,
         room: tappa.dove || null,
@@ -608,6 +610,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     <p className="text-sm font-black text-slate-900 leading-tight">{tappa.nome}</p>
                     {/* Il titolo com'è scritto sul muro: è quello che il
                         visitatore legge davvero mentre cerca l'opera. */}
+                    {/* Il titolo com'è nella fonte (di solito inglese): la
+                        traduzione sopra, l'originale qui, tutti e due. */}
+                    {tappa.nomeFonte && (
+                      <p className="text-[11px] font-bold text-slate-400 leading-tight mt-0.5">{tappa.nomeFonte}</p>
+                    )}
                     {tappa.nomeOriginale && (
                       <p className="text-[11px] font-bold text-slate-400 italic leading-tight mt-0.5">
                         {t('mv_on_the_label')}: {tappa.nomeOriginale}

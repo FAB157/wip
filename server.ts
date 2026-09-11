@@ -7544,19 +7544,31 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // non si spende AI per chi non ha pagato).
       // La semina di sfondo non ha (né deve avere) un pass: sta riempiendo la
       // libreria per tutti, non consumando il pass di qualcuno.
-      if (inDiretta) {
+      //
+      // PRIMA LE FONTI, POI LA CASSA (11/09/2026). Il controllo del pass stava
+      // qui, in cima, PRIMA di sapere se il luogo ha una guida: si comprava
+      // il pass da 150 crediti e poi il server rispondeva «di questo luogo
+      // non ho fonti». Sulle chiese piccole succedeva due volte su sei, e i
+      // crediti restavano spesi. Ora il pass si chiede SOLO nel momento in cui
+      // c'è qualcosa da dare: davanti a una guida già pronta, o dopo che le
+      // fonti sono state raccolte e bastano. Un «non ho fonti» si risponde
+      // gratis, a chiunque, prima di qualsiasi cassa.
+      const chiediPass = async () => {
+        if (!inDiretta) return null;
         const pass = await getActiveMuseumPass(userId);
-        if (pass?.tier !== 'tour') {
-          return res.json({
-            ok: false,
-            reason: 'needs_tour_pass',
-            hasBasePass: pass?.tier === 'base',
-            priceCredits: await prezzoDi('museum_pass_tour'),
-            upgradeCredits: Math.max(0, (await prezzoDi('museum_pass_tour')) - (await prezzoDi('museum_pass'))),
-            hours: MUSEUM_PASS_HOURS,
-          });
-        }
-      }
+        if (pass?.tier === 'tour') return null;
+        return {
+          ok: false,
+          reason: 'needs_tour_pass',
+          hasBasePass: pass?.tier === 'base',
+          priceCredits: await prezzoDi('museum_pass_tour'),
+          upgradeCredits: Math.max(0, (await prezzoDi('museum_pass_tour')) - (await prezzoDi('museum_pass'))),
+          hours: MUSEUM_PASS_HOURS,
+          // Dice al client che la guida ESISTE o si può fare: dopo l'acquisto
+          // non ci saranno sorprese.
+          sourcesOk: true,
+        };
+      };
 
       // ── 1. Dove sei: POI del DB entro 200 m (categorie "luogo visitabile") ──
       let venue: { id: string | null; name: string; lat: number | null; lon: number | null; category: string; description: string } | null = null;
@@ -7703,7 +7715,9 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             // una chiamata AI per ogni visitatore senza migliorare nulla.
             // Nessun TTL qui, e non aggiungetene: se una guida va rifatta si
             // svuota la sua riga di cache a mano o si aggiorna dalla libreria.
-            return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source });
+            const gate = await chiediPass();
+            if (gate) return res.json(gate);
+            return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source, venuePhoto: parsed.venuePhoto || '', venuePhotoIcon: parsed.venuePhotoIcon || '' });
           }
         } catch { /* cache illeggibile: si rigenera */ }
       }
@@ -7727,6 +7741,8 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // 1) LINGUA DELL'UTENTE, sempre per prima: è già pronta, costo zero.
         const riga = righe.find((r: any) => String(r?.language) === outLang);
         if (riga) {
+          const gate = await chiediPass();
+          if (gate) return res.json(gate);
           const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null };
           await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
           // Contatore d'uso: dice quali musei della libreria servono davvero.
@@ -7744,6 +7760,9 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // Si parte dalla guida più ricca (order=stops_count.desc).
         const sorgente = righe[0];
         if (sorgente) {
+          // La traduzione costa una chiamata AI: si fa solo per chi ha il pass.
+          const gate = await chiediPass();
+          if (gate) return res.json(gate);
           const tradotta = await traduciGuidaMuseo(sorgente.guide, sorgente.language, outLang, sorgente.venue_name || venue.name, inDiretta);
           if (tradotta) {
             const payloadTr = {
@@ -7896,6 +7915,13 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
         return res.json(out);
       }
+      // Le fonti ci sono e bastano: SOLO ADESSO ha senso chiedere il pass.
+      // Chi non ce l'ha ha aspettato qualche secondo per una risposta onesta
+      // — «questo luogo ha una guida, costa 150» — invece di pagare al buio.
+      {
+        const gate = await chiediPass();
+        if (gate) return res.json(gate);
+      }
 
       // ── 4. Il percorso, SOLO dal materiale ──
       const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}" per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork || 'sconosciuta'}".
@@ -7913,7 +7939,8 @@ REGOLE TASSATIVE:
 - Il campo "puntoPreciso": DOVE DENTRO LA SALA, se il materiale lo dice — "parete di fondo", "prima campata a destra", "sopra l'altare", "in fondo alla galleria, dopo la scalinata", "vetrina centrale". In una sala del Louvre con ottanta quadri il numero della sala non fa trovare niente: è questo che porta il visitatore davanti all'opera. Solo se il materiale lo dichiara, altrimenti "". Non dedurlo e non inventarlo mai.
 - Preferisci sempre OPERE SINGOLE con un nome proprio (un quadro, una statua, una cappella, un affresco). Un intero dipartimento o una collezione ("Pittura", "Arte islamica", "Arti decorative") vale come tappa SOLO se nel materiale non trovi abbastanza opere singole: in quel caso mettilo per ultimo e spiega in "perche" quali capolavori vi si trovano secondo il materiale.
 - Ogni tappa deve essere un'opera, una sala o un elemento NOMINATO ESPLICITAMENTE nel materiale. Niente opere che sai essere lì ma che il materiale non cita. Niente sale o numeri di sala inventati: "dove" resta "" se il materiale non lo dice.
-- Copia i nomi delle opere come compaiono nel materiale (nella lingua di uscita, se il materiale li dà tradotti).
+- "nomeFonte": il titolo dell'opera ESATTAMENTE come compare nel materiale, carattere per carattere, in qualunque lingua sia. È il titolo con cui l'opera si ritrova in rete e sul cartellino: non si tocca mai.
+- "nome": il titolo nella lingua di uscita (${langCfg.name}). Se l'opera ha un titolo consolidato in quella lingua, usa quello. Se nel materiale il titolo è in un'altra lingua ed è DESCRITTIVO ("stained-glass windows of the cathedral", "portrait of a young man"), traducilo. Se è un titolo proprio senza equivalente noto, lascialo identico a "nomeFonte". Mai inventare titoli.
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
@@ -7924,7 +7951,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "tipo": "${isChurch ? 'chiesa' : 'museo'}" oppure "sito",
   "intro": "...",
   "consiglio": "...",
-  "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "..." } ]
+  "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "..." } ]
 }`;
 
       // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
@@ -7995,6 +8022,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // I modelli scrivono a volte il letterale "''" dove il prompt
           // chiedeva stringa vuota: in scheda diventava «Venere — '' ('')».
           nome: campoOpzionale(t?.nome, 140),
+          // IL TITOLO COME STA NELLA FONTE (11/09/2026, richiesta del
+          // committente: «i titoli in inglese non possono essere tradotti —
+          // inserire sia l'inglese che la traduzione»). A Chartres i titoli
+          // uscivano in inglese dentro una guida italiana perché Wikidata non
+          // aveva l'etichetta italiana; tradurli e basta avrebbe fatto sparire
+          // l'unica forma con cui l'opera si ritrova in rete. Ora si tengono
+          // TUTTI E DUE: «nome» nella lingua dell'utente, «nomeFonte» com'era.
+          nomeFonte: campoOpzionale(t?.nomeFonte, 140),
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
@@ -8008,11 +8043,16 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // Una tappa che è il luogo stesso non è una tappa (il Palazzo delle
           // Logge proponeva come tappa "Palazzo Diana", il suo vecchio nome).
           if (sovrapposizioneNomi(t.nome, venue!.name) >= 0.8 && sovrapposizioneNomi(venue!.name, t.nome) >= 0.8) return false;
-          const tok = tokenSignificativi(t.nome);
+          // Il controllo «sta nel materiale» si fa sul titolo COM'È NELLA
+          // FONTE: quello tradotto, per definizione, nel materiale non c'è.
+          const tok = tokenSignificativi(t.nomeFonte || t.nome);
           if (!tok.length) return false;
           const presenti = tok.filter(x => materialeNorm.includes(x)).length;
           return presenti / tok.length >= 0.6;
         })
+        // Se la fonte e la traduzione coincidono, la seconda riga in scheda
+        // sarebbe una ripetizione: si tiene solo «nome».
+        .map((t: any) => (t.nomeFonte && normalizzaTesto(t.nomeFonte) === normalizzaTesto(t.nome)) ? { ...t, nomeFonte: '' } : t)
         .slice(0, 20);
       const scartate = tappeIn.length - tappe.length;
       if (scartate > 0) console.warn(`[VenueGuide] ${venue.name}: scartate ${scartate} tappe non presenti nel materiale`);
@@ -8028,14 +8068,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       if (tappe.length) {
         const daVerificare = tappe
           .map((t: any, i: number) => ({ t, i }))
-          .filter(({ t }: any) => !opereWd.titoli.has(normalizzaTesto(t.nome)))
+          .filter(({ t }: any) => !opereWd.titoli.has(normalizzaTesto(t.nome)) && !(t.nomeFonte && opereWd.titoli.has(normalizzaTesto(t.nomeFonte))))
           .slice(0, 12);
         if (daVerificare.length) {
           const fuori = new Set<number>();
           for (let k = 0; k < daVerificare.length; k += 4) {
             const gruppo = daVerificare.slice(k, k + 4);
             const esiti = await Promise.all(gruppo.map(({ t }: any) =>
-              operaDiAltroMuseo(t.nome, t.autore || '', venue!.name, wikidataId, langCfg.wiki)
+              operaDiAltroMuseo(t.nomeFonte || t.nome, t.autore || '', venue!.name, wikidataId, langCfg.wiki)
             ));
             esiti.forEach((altrove, j) => { if (altrove) fuori.add(gruppo[j].i); });
           }
@@ -8052,8 +8092,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // traduzione. Quando Wikidata ha entrambi, la tappa li porta tutti e
       // due: il nome nella lingua dell'utente e quello che troverà davanti.
       const conCartellino = tappeVere.map((t: any) => {
-        const orig = opereWd.originali[normalizzaTesto(t.nome)];
-        return orig && orig !== t.nome ? { ...t, nomeOriginale: orig } : t;
+        const orig = opereWd.originali[normalizzaTesto(t.nome)] || (t.nomeFonte ? opereWd.originali[normalizzaTesto(t.nomeFonte)] : '');
+        return orig && orig !== t.nome && orig !== t.nomeFonte ? { ...t, nomeOriginale: orig } : t;
       });
       tappeVere = conCartellino;
 
@@ -8133,7 +8173,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // immagine restano senza: meglio un cerchio vuoto di una foto altrui.
       const tappeConFoto = tappeOrdinate.map((t: any) => {
         const chiave = normalizzaTesto(t.nome);
-        let img = opereWd.foto[chiave] || '';
+        // La foto è indicizzata col titolo di Wikidata: quello della FONTE
+        // combacia, quello tradotto quasi mai.
+        let img = opereWd.foto[chiave] || (t.nomeFonte ? opereWd.foto[normalizzaTesto(t.nomeFonte)] : '') || '';
         if (!img) {
           // Il modello può aver scritto il titolo in modo un po' diverso da
           // Wikidata: si cerca la corrispondenza più vicina fra i titoli noti.
