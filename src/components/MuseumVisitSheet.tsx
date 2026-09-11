@@ -1756,6 +1756,15 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       </p>
                     )}
                     {tappa.perche && <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-700 mt-1`}>{tappa.perche}</p>}
+                    {/* Sotto ogni spiegazione, sempre una curiosità o un
+                        consiglio specifico di QUESTA tappa (richiesta del
+                        committente, 12/09/2026): mai la spiegazione da sola. */}
+                    {tappa.curiosita && (
+                      <div className="mt-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-amber-800 mb-1">{t('mv_art_curiosity')}</p>
+                        <p className={`${calma ? 'text-[13px]' : 'text-[11px]'} text-amber-900 leading-snug`}>{tappa.curiosita}</p>
+                      </div>
+                    )}
                     {/* Promessa onesta: il museo la possiede, ma non dice dove
                         è esposta — e potrebbe essere in deposito o in prestito. */}
                     {tappa.vistaInPassato && !done && (

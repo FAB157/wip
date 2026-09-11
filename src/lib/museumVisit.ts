@@ -22,6 +22,12 @@ export type VenueTappa = {
   anno: string;
   dove: string;
   perche: string;
+  /** Sotto la spiegazione, SEMPRE (richiesta del committente, 12/09/2026):
+   *  un fatto sorprendente su questa tappa, o in mancanza un consiglio
+   *  pratico per guardarla meglio. Mai generico, mai vuoto quando arriva
+   *  dalla generazione nuova — assente solo sulle guide più vecchie in
+   *  libreria, generate prima di questa regola. */
+  curiosita?: string;
   /** Foto dell'opera da Wikimedia Commons (via Wikidata P18), se esiste. */
   foto?: string;
   /** La stessa foto a 160 px, per il cerchio accanto al nome. */

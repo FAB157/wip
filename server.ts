@@ -8556,6 +8556,7 @@ ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadr
 - "nomeFonte": il titolo dell'opera ESATTAMENTE come compare nel materiale, carattere per carattere, in qualunque lingua sia. È il titolo con cui l'opera si ritrova in rete e sul cartellino: non si tocca mai.
 - "nome": il titolo nella lingua di uscita (${langCfg.name}). Se l'opera ha un titolo consolidato in quella lingua, usa quello. Se nel materiale il titolo è in un'altra lingua ed è DESCRITTIVO ("stained-glass windows of the cathedral", "portrait of a young man"), traducilo. Se è un titolo proprio senza equivalente noto, lascialo identico a "nomeFonte". Mai inventare titoli.
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
+- "curiosita": OBBLIGATORIO per OGNI tappa, senza eccezioni, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELLA tappa (un furto, un restauro, un aneddoto, un dettaglio nascosto, un errore dell'artista) raccontato con un minimo di contesto, oppure — se il materiale non contiene nulla di sorprendente su di essa — un consiglio pratico articolato per guardarla meglio (un dettaglio preciso da cercare e perché conta, il punto migliore da cui osservarla, l'ora meno affollata). Sempre specifico di QUELLA tappa, mai generico, mai ripetuto identico su più tappe, sempre dal materiale: mai un'invenzione.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
 - SALE CHIUSE: se il materiale dice che una sala, un piano o una sezione sono CHIUSI, IN RESTAURO o TEMPORANEAMENTE INACCESSIBILI (parole come "chiuso", "chiusura", "in restauro", "closed", "temporarily closed", "under restoration" vicino al nome di un luogo), NON scrivere quel nome in "dove" per nessuna tappa — un percorso non deve mandare nessuno davanti a una porta chiusa. Se un'opera importante sta lì, tienila come tappa ma con "dove" vuoto, e cita la chiusura in "consiglio" con la data se il materiale la dà.
@@ -8568,7 +8569,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "intro": "...",
   "consiglio": "...",
   "servizi": { "bagni": "... o ''", "guardaroba": "... o ''", "caffetteria": "... o ''", "bookshop": "... o ''", "uscita": "... o ''", "accessibilita": "... o ''" },
-  "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "..." } ]
+  "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "...", "curiosita": "curiosità o consiglio di QUESTA tappa, MAI vuoto" } ]
 }`;
 
       // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
@@ -8588,8 +8589,10 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             temperature: 0.2,
             // 12-20 tappe con autore, anno, sala e motivo non stanno in 2500
             // token: la risposta veniva troncata a metà e il JSON non si
-            // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026).
-            max_tokens: 5000,
+            // apriva più («ai_parse_failed» sugli Uffizi, 10/09/2026). Alzato
+            // ancora (12/09) per la "curiosita" obbligatoria di 2-3 frasi su
+            // ogni tappa, richiesta dal committente.
+            max_tokens: 7000,
             response_format: { type: 'json_object' },
             // Agnes fuori SOLO con qualcuno fermo davanti all'ingresso del
             // museo (risponde in 2-4 minuti). Per la semina di sfondo nessuno
@@ -8686,6 +8689,16 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // sala del Louvre con ottanta quadri «Sala 711» non fa trovare nulla.
           puntoPreciso: campoOpzionale(t?.puntoPreciso, 120),
           perche: campoOpzionale(t?.perche, 500),
+          // Se il modello lascia "curiosita" vuota (capita), un consiglio
+          // pratico costruito dai dati che ci sono davvero — mai un'invenzione,
+          // ma il committente vuole SEMPRE qualcosa sotto la spiegazione.
+          curiosita: campoOpzionale(t?.curiosita, 400) || (() => {
+            const puntoPreciso = campoOpzionale(t?.puntoPreciso, 120);
+            const dove = campoOpzionale(t?.dove, 100);
+            if (puntoPreciso) return `Cercala: ${puntoPreciso}.`;
+            if (dove) return `Si trova in ${dove}: prenditi un minuto per osservarla da vicino.`;
+            return '';
+          })(),
         }))
         .filter((t: any) => {
           if (!t.nome) return false;
@@ -8806,17 +8819,24 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
               : '100-150 parole';
             return `OPERA ${i + 1} — "${o.titolo}"${o.autore ? ` di ${o.autore}` : ''}${o.anno ? ` (${o.anno})` : ''} — lunghezza attesa: ${lunghezza}\n${o.testoFonte}`;
           }).join('\n\n---\n\n');
-          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto).\n\n${corpo}\n${regolaSpecificita(venue.name)}\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
+          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto).\n\n${corpo}\n${regolaSpecificita(venue.name)}\n\nPer ogni opera scrivi anche "curiosita": OBBLIGATORIA, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELL'opera (un furto, un restauro, un aneddoto, un errore dell'artista, un dettaglio nascosto), oppure — se il materiale non ne contiene uno — un consiglio pratico articolato per guardarla meglio. Sempre specifica, mai generica, mai identica fra due opere, sempre dal materiale: mai un'invenzione.\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "...", "curiosita": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
           try {
             const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-              // Fino a 250 parole per 5 opere: 1800 token troncava a metà lotto.
-              temperature: 0.3, max_tokens: 3200, response_format: { type: 'json_object' },
+              // Fino a 250 parole per "perche" + 2-3 frasi di "curiosita" per
+              // 5 opere: 1800 token troncava a metà lotto anche prima di
+              // aggiungere la curiosità.
+              temperature: 0.3, max_tokens: 4000, response_format: { type: 'json_object' },
               excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
             }, 'venue_guide_opera', supabaseUrl, supabaseServiceKey, groq, userId);
             const raw = String(ai?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
             const parsedLotto = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
             const elenco = Array.isArray(parsedLotto?.opere) ? parsedLotto.opere : [];
-            lotto.forEach((o, i) => { const p = campoOpzionale(elenco[i]?.perche, 700); if (p) (o as any)._perche = p; });
+            lotto.forEach((o, i) => {
+              const p = campoOpzionale(elenco[i]?.perche, 700);
+              if (p) (o as any)._perche = p;
+              const c = campoOpzionale(elenco[i]?.curiosita, 500);
+              if (c) (o as any)._curiosita = c;
+            });
           } catch (e: any) {
             console.warn(`[VenueGuide] ${venue.name}: lotto "perche" opera-per-opera fallito, ripiego sui fatti:`, e?.message);
           }
@@ -8824,10 +8844,17 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         return ordinate.map(o => {
           const fatti = [o.autore ? `di ${o.autore}` : '', o.anno ? `(${o.anno})` : '', o.inv ? `n. inventario ${o.inv}` : ''].filter(Boolean).join(' ');
           const percheBase = (o as any)._perche || (fatti ? `Opera ${fatti}.` : '');
+          // Sotto la spiegazione ci vuole SEMPRE qualcosa (richiesta del
+          // committente): se il lotto non l'ha scritta, un consiglio
+          // costruito dai dati veri che abbiamo — mai un'invenzione.
+          const curiositaBase = (o as any)._curiosita || (o.dimensioni
+            ? `Osservala da vicino: misura ${o.dimensioni}${o.materiale ? ` ed è realizzata in ${o.materiale}` : ''}.`
+            : o.materiale ? `È realizzata in ${o.materiale}: guardala da vicino per coglierne la tecnica.` : '');
           return {
             nome: o.titolo, nomeFonte: o.titoloEn && o.titoloEn !== o.titolo ? o.titoloEn : '', autore: o.autore, anno: o.anno,
             dove: o.sala || '', puntoPreciso: '',
             perche: o.esposta === false ? `Attualmente non esposta. ${percheBase}`.trim() : percheBase,
+            curiosita: curiositaBase,
             tipo: o.tipo, foto: o.foto ? fotoCommons(o.foto, 800) : '', fotoIcona: o.foto ? fotoCommons(o.foto, 160) : '',
             daListaOpere: true, qid: o.qid,
             ...(o.urlScheda ? { schedaUfficiale: o.urlScheda } : {}),
@@ -9480,15 +9507,16 @@ REGOLE TASSATIVE:
 - Ogni opera deve essere NOMINATA nel materiale. Niente opere che sai essere lì ma che il materiale non cita.
 - "dove" si compila solo se il materiale dice dove sta; altrimenti "".
 - "perche": una o due frasi con un fatto preciso del materiale, e il motivo per cui merita la sosta pur non essendo famosa.
+- "curiosita": OBBLIGATORIA, 2-3 frasi — un fatto sorprendente e documentato su QUESTA opera, oppure un consiglio pratico articolato per guardarla meglio. Mai vuota, mai generica, sempre dal materiale.
 ${regolaSpecificita(museo)}
 
 LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
-{ "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "... o ''", "perche": "..." } ] }`;
+{ "tappe": [ { "nome": "...", "autore": "... o ''", "anno": "... o ''", "dove": "... o ''", "perche": "...", "curiosita": "..." } ] }`;
 
       let rawAi = '';
       try {
         const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
-          temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' },
+          temperature: 0.3, max_tokens: 3000, response_format: { type: 'json_object' },
           excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
         }, 'museum_more_artworks', supabaseUrl, supabaseServiceKey, groq, userId);
         rawAi = String(ai?.data || '');
@@ -9522,6 +9550,9 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
           perche: campoOpzionale(t?.perche, 500),
+          curiosita: campoOpzionale(t?.curiosita, 400) || (campoOpzionale(t?.dove, 100)
+            ? `Si trova in ${campoOpzionale(t?.dove, 100)}: prenditi un minuto per osservarla da vicino.`
+            : ''),
         }))
         .filter((t: any) => {
           if (!t.nome) return false;
