@@ -8246,6 +8246,14 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
   }
 
   app.post("/api/vision/venue-guide", rateLimiter, async (req, res) => {
+    // TEMPO A DISPOSIZIONE (12/09/2026 sera): Vercel chiude a 300 s. Topkapı
+    // e MASP superavano il tetto (molto materiale: opere, schede, revisore
+    // con 150k di testo) e uscivano con un timeout, cioè NIENTE guida. I
+    // passi facoltativi (foto opera per opera, categoria Commons, revisore e
+    // riscrittura) si saltano quando resta poco: una guida senza revisore è
+    // meglio di nessuna guida, e il giro dopo la rifà completa.
+    const avvioRotta = Date.now();
+    const msRimasti = () => 285_000 - (Date.now() - avvioRotta);
     try {
       // Chi sta chiamando: un visitatore fermo davanti al museo, oppure la
       // semina di sfondo (che entra col segreto di infrastruttura, mai mandato
@@ -9627,7 +9635,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // la query d'insieme era vuota; ora per ogni tappa senza foto, fino a
       // 12, si prova per titolo e autore. Mai una foto «a tema»: la ricerca
       // combacia per titolo/autore o non dà nulla.
-      if (!isSito && tappeConFoto.some((t: any) => !t.foto)) {
+      if (!isSito && tappeConFoto.some((t: any) => !t.foto) && msRimasti() < 45_000) {
+        console.warn(`[VenueGuide] ${venue.name}: tempo quasi finito (${Math.round((Date.now() - avvioRotta) / 1000)} s), salto le foto opera per opera`);
+      } else if (!isSito && tappeConFoto.some((t: any) => !t.foto)) {
         const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 12);
         // Se il museo in archivio non ha coordinate (riga di museum_guides
         // nata senza, es. CARMI da un POI Overture), per il SOLO filtro delle
@@ -9662,7 +9672,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // epigrafe, vagone. Senza categoria si cerca per nome e si tengono
       // SOLO i file il cui titolo/descrizione contiene il nome del museo
       // (la sigla se c'è, altrimenti almeno due parole proprie del nome).
-      if (tappeConFoto.some((t: any) => !t.foto)) {
+      if (tappeConFoto.some((t: any) => !t.foto) && msRimasti() >= 40_000) {
         try {
           const UA = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 10000 };
           let categoria = '';
@@ -9811,7 +9821,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // nella spiegazione → spiegazione tolta (meglio niente che sbagliato).
       // Fail-open: revisore muto o parziale = si lascia com'è, con un log.
       let tappeVerificate: any[] = tappeConFoto;
-      if (tappeConFoto.length >= 3) {
+      if (tappeConFoto.length >= 3 && msRimasti() < 70_000) {
+        console.warn(`[VenueGuide] ${venue.name}: tempo quasi finito (${Math.round((Date.now() - avvioRotta) / 1000)} s), salto revisore e riscrittura`);
+      } else if (tappeConFoto.length >= 3) {
         try {
           const elenco = tappeConFoto.map((t: any, i: number) => ({ n: i + 1, opera: t.nomeFonte || t.nome, autore: t.autore || '', anno: t.anno || '', sala: t.salaCodice || t.dove || '', spiegazione: String(t.perche || '').slice(0, 600), curiosita: String(t.curiosita || '').slice(0, 400) }));
           const promptVerifica = `Sei un revisore severo di guide museali. Hai il MATERIALE (unica fonte ammessa) e un elenco di tappe scritte da un altro modello. Per OGNI tappa rispondi:
