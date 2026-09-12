@@ -48,7 +48,10 @@ async function guidaBuona(qid, lingua) {
   for (const r of (Array.isArray(g) ? g : [])) {
     const tappe = Array.isArray(r.tappe) ? r.tappe : [];
     const conSala = tappe.filter(t => t?.dove || t?.salaCodice).length;
-    if (tappe.length >= 8 && conSala >= 1) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length };
+    // Anche le spiegazioni contano: una guida con le tappe ma senza «perché»
+    // (revisore troppo severo del 12/09 pomeriggio) è da rifare.
+    const conPerche = tappe.filter(t => String(t?.perche || '').trim().length > 20).length;
+    if (tappe.length >= 8 && conSala >= 1 && conPerche >= tappe.length * 0.6) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length, conPerche };
   }
   return null;
 }
@@ -59,7 +62,7 @@ for (const m of lista) {
     const t0 = Date.now();
     try {
       const gia = await guidaBuona(m.qid, lingua);
-      if (gia) { stat.giaBuone++; console.log(`  = ${m.rango}. ${m.nome} [${lingua}] già buona: ${gia.tappe} tappe, ${gia.conSala} con sala, ${gia.conCodice} con codice`); continue; }
+      if (gia) { stat.giaBuone++; console.log(`  = ${m.rango}. ${m.nome} [${lingua}] già buona: ${gia.tappe} tappe, ${gia.conSala} con sala, ${gia.conCodice} con codice, ${gia.conPerche} spiegazioni`); continue; }
       stat.musei++;
       const r = await fetch(`${API}/api/vision/venue-guide`, {
         method: 'POST',

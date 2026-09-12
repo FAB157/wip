@@ -9192,7 +9192,7 @@ Rispondi SOLO con JSON: {"tappe":[{"n":1,"esiste":true,"spiegazioneOk":true,"pro
 
 MATERIALE:
 """
-${materiale.slice(0, 40000)}
+${materiale.slice(0, 150000)}
 """
 
 TAPPE:
@@ -9212,10 +9212,16 @@ ${JSON.stringify(elenco)}`;
               // Le tappe d'ufficio dalla lista opere sono dati di Wikidata,
               // non un suggerimento del modello: il revisore non le toglie.
               if (g.esiste === false && !t.daListaOpere) { tolte++; motiviScarto.push({ nome: t.nome, motivo: `revisore: ${String(g.problema || 'non nel materiale').slice(0, 80)}` }); return; }
-              if (g.spiegazioneOk === false) { ripulite++; tenute.push({ ...t, perche: '', curiosita: t.puntoPreciso ? `Cercala: ${t.puntoPreciso}.` : '', revisione: String(g.problema || 'spiegazione non sostenuta dal materiale').slice(0, 120) }); return; }
+              // SEGNALA, NON CANCELLA (12/09/2026 pomeriggio): con il
+              // materiale tagliato a 40k il revisore bollava come inventati
+              // fatti veri e le guide uscivano con ZERO spiegazioni (Cairo,
+              // Albertina, Orsay). Ora legge tutto il materiale, e un dubbio
+              // sulla spiegazione resta scritto in `revisione` per l'admin —
+              // la spiegazione, nata dal materiale, resta al visitatore.
+              if (g.spiegazioneOk === false) { ripulite++; tenute.push({ ...t, revisione: String(g.problema || 'spiegazione da verificare').slice(0, 120) }); return; }
               tenute.push(t);
             });
-            if (tolte || ripulite) console.warn(`[VenueGuide] ${venue.name}: revisore — ${tolte} tappe tolte, ${ripulite} spiegazioni tolte`);
+            if (tolte || ripulite) console.warn(`[VenueGuide] ${venue.name}: revisore — ${tolte} tappe tolte, ${ripulite} spiegazioni segnalate`);
             tappeVerificate = tenute;
           } else {
             console.warn(`[VenueGuide] ${venue.name}: revisore muto o parziale (${giudizi.size}/${tappeConFoto.length}), tappe lasciate come sono`);
