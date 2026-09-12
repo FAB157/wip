@@ -203,13 +203,55 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
       else if (a && b) console.log(`     «${s}»: tre pareri diversi (${a.x.toFixed(2)},${a.y.toFixed(2)}) (${b.x.toFixed(2)},${b.y.toFixed(2)})${c ? ` (${c.x.toFixed(2)},${c.y.toFixed(2)})` : ''} → fuori`);
       else if (a || b) pins.push({ ...(b || a), origine: 'ai', concordi: false, incerto: true });
     }
+    // LA MAPPA DELLE ETICHETTE (12/09/2026 sera, Uffizi: pianta isometrica
+    // con «10-14», «15», «25-30», «90»… e i modelli, interrogati sala per
+    // sala, mettevano tutto nello stesso punto → 0/16). Se il giro per sale
+    // ha reso poco, si chiede una cosa più semplice e verificabile: TUTTE le
+    // etichette scritte sulla pianta con la loro posizione, a entrambi i
+    // modelli; vale un'etichetta che tutti e due leggono nello stesso punto
+    // (entro 8%). Poi l'abbinamento sala→etichetta lo fa il codice qui, per
+    // numero, intervallo o sigla — deterministico, non a fantasia.
+    // Si conta DOPO aver tolto i pin identici (sette sale nello stesso punto
+    // non sono sette pin).
+    const chiaveXY0 = (p) => `${Math.round(p.x * 100)}:${Math.round(p.y * 100)}`;
+    const distinti = new Set(pins.map(chiaveXY0)).size;
+    const troppoPochi = distinti < Math.max(1, Math.ceil(sale.size * 0.3));
+    if (troppoPochi && [...sale].some(s => codiciDi(s).length)) {
+      const promptE = `Leggi TUTTE le etichette (numeri, intervalli come «10-14», sigle come «A», «C1», nomi brevi) scritte sulle sale di questa pianta del museo «${nome}» e dai la posizione del CENTRO di ogni etichetta in frazione della larghezza e dell'altezza (0-1, origine in alto a sinistra). Ignora legende, titoli e testi fuori dalla pianta. Rispondi SOLO con JSON: {"etichette":[{"testo":"10-14","x":0.00,"y":0.00}]}`;
+      const [eg, eo] = await Promise.all([chiediGemini(promptE, mime, b64), chiediOpenai(promptE, mime, b64)]);
+      const leggi = (p) => (Array.isArray(p?.etichette) ? p.etichette : []).map(e => ({ testo: String(e?.testo || '').trim().replace(/\s*[-–]\s*/, '-').toUpperCase(), x: Number(e?.x), y: Number(e?.y) })).filter(e => e.testo && Number.isFinite(e.x) && Number.isFinite(e.y) && !sulBordo(e));
+      const lg = leggi(eg), lo = leggi(eo);
+      const etichette = [];
+      for (const a of lg) { const b = lo.find(q => q.testo === a.testo && Math.hypot(a.x - q.x, a.y - q.y) <= 0.08); if (b) etichette.push({ testo: a.testo, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }); }
+      console.log(`     etichette lette: gemini ${lg.length}, openai ${lo.length}, concordi ${etichette.length}`);
+      const dentro = (codice, etichetta) => {
+        const c = codice.toUpperCase();
+        if (etichetta === c) return true;
+        const m = /^(\d{1,3})-(\d{1,3})$/.exec(etichetta), n = /^(\d{1,3})$/.exec(c);
+        if (m && n) { const v = +n[1]; return v >= +m[1] && v <= +m[2]; }
+        // «A.35» → «35», «Sala A» → «A»
+        const solo = c.replace(/^[A-Z]{1,2}\./, '');
+        return solo !== c && etichetta === solo;
+      };
+      let aggiunti = 0;
+      for (const s of sale) {
+        if (pins.some(p => p.sala === s)) continue;
+        const cod = codiciDi(s);
+        const hit = etichette.find(e => cod.some(c => dentro(c, e.testo)));
+        if (hit) { pins.push({ sala: s, x: hit.x, y: hit.y, origine: 'ai', concordi: true, etichetta: hit.testo, daEtichette: true }); aggiunti++; }
+      }
+      if (aggiunti) console.log(`     ${aggiunti} pin dalla mappa delle etichette`);
+    }
     // SALE DIVERSE NELLO STESSO PUNTO = risposta a caso (Neuschwanstein:
     // quattro sale tutte a 0,50/0,50). Si tolgono i gruppi con coordinate
     // identiche (entro 1%), e il punto esatto (0,5, 0,5) da solo non vale.
+    // Due sale nello stesso intervallo («sale 10-14» e «sala 12») possono
+    // legittimamente stare sullo stesso punto: i pin dalle etichette non
+    // passano da questo filtro.
     const chiaveXY = (p) => `${Math.round(p.x * 100)}:${Math.round(p.y * 100)}`;
     const conteggio = {}; for (const p of pins) conteggio[chiaveXY(p)] = (conteggio[chiaveXY(p)] || 0) + 1;
     const prima = pins.length;
-    pins = pins.filter(p => conteggio[chiaveXY(p)] === 1 && !(Math.abs(p.x - 0.5) < 0.01 && Math.abs(p.y - 0.5) < 0.01));
+    pins = pins.filter(p => p.daEtichette || (conteggio[chiaveXY(p)] === 1 && !(Math.abs(p.x - 0.5) < 0.01 && Math.abs(p.y - 0.5) < 0.01)));
     if (pins.length < prima) console.log(`     ${prima - pins.length} pin scartati: stesso punto per sale diverse`);
     const upd = await fetch(`${SB}/rest/v1/mappe_museo?poi_id=eq.${encodeURIComponent(poiId)}&indice=eq.${indice}`, { method: 'PATCH', headers: H, body: JSON.stringify({ pins, pins_origine: pins.length ? 'ai' : null, aggiornato_at: new Date().toISOString() }) });
     if (!upd.ok) { stat.errori++; console.log(`  ✗ ${nome}: salvataggio pin (${upd.status})`); continue; }
