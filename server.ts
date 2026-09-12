@@ -7938,6 +7938,12 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       const userId = daScript ? 'background-script' : await verifyUserToken(req);
       if (!userId) return res.status(401).json({ error: 'login_required' });
       const inDiretta = !daScript;
+      // RIGENERA (12/09/2026, solo per gli script): «la guida buona non scade
+      // mai» vale per l'utente, ma le guide nate PRIMA dell'archivio fonti
+      // (Orsay, British: 20 tappe e zero sale) vanno rifatte con la guida PDF
+      // ufficiale e i codici di sala. Con rigenera=true si saltano cache e
+      // libreria e la nuova guida sovrascrive la vecchia.
+      const rigenera = daScript && req.body?.rigenera === true;
 
       let { lat, lon } = req.body || {};
       if (typeof lat === 'string') lat = parseFloat(lat);
@@ -8218,7 +8224,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // ── 2. Cache per (luogo, lingua): una generazione sola, per sempre ──
       const chiaveLuogo = venue.id ? `poi_${venue.id}` : `nome_${normalizzaTesto(venue.name).replace(/ /g, '_').slice(0, 60)}`;
       const cacheKey = `venue_guide:v1:${chiaveLuogo}:${outLang}`;
-      const cached = await getFromCache(cacheKey);
+      const cached = rigenera ? null : await getFromCache(cacheKey);
       if (cached?.text_content) {
         try {
           const parsed = typeof cached.text_content === 'string' ? JSON.parse(cached.text_content) : cached.text_content;
@@ -8267,7 +8273,8 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${(String(venue.name).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/["*]/g, '').trim() || String(venue.name).replace(/["*]/g, ''))}*"`)})&select=guide,source,official_site,venue_name,language,stops_count,venue_photo&order=stops_count.desc&limit=8`,
           { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
         );
-        const righe = (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
+        // Con rigenera=true la libreria non conta: si va alle fonti.
+        const righe = rigenera ? [] : (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
         // La foto del museo, dalla riga di libreria: mancava del tutto in
         // entrambe le risposte da libreria (12/09/2026, segnalato dalla
         // semina sulla traduzione Prado/Rijksmuseum) — non solo nella
@@ -8704,9 +8711,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // tentativi con attesa crescente (20 s, 60 s) quando i motori sono
       // saturi, prima di arrivare alla riserva a pagamento.
       const tentativi = inDiretta ? 1 : 3;
+      // DAL VIVO SCRIVE DEEPSEEK (12/09/2026, committente: «la generazione on
+      // the fly da parte di DeepSeek»): chi aspetta davanti al museo ha il
+      // motore più forte come primario (poi i gratuiti se cade); la semina
+      // di sfondo resta sui gratuiti (groq → gemini → …), mai DeepSeek.
+      const motoreGuida = inDiretta ? 'deepseek' : 'groq';
       for (let tentativo = 0; tentativo < tentativi && !rawAi.includes('{'); tentativo++) {
         try {
-          const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          const ai = await callUniversalAi(motoreGuida, [{ role: 'user', content: prompt }], {
             temperature: 0.2,
             // 12-20 tappe con autore, anno, sala e motivo non stanno in 2500
             // token: la risposta veniva troncata a metà e il JSON non si
@@ -9160,6 +9172,57 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       }
       if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappeOrdinate.length} con la foto`);
 
+      // ── 5-septies. VERIDICITÀ CON UN MOTORE DIVERSO (12/09/2026) ──
+      // Committente: «attento alle allucinazioni», «controllo veridicità
+      // delle opere e della spiegazione». Regola del progetto: un «sì» va
+      // firmato da un motore DIVERSO da chi ha scritto. Un revisore (gemini,
+      // mai lo stesso motore della generazione) rilegge ogni tappa contro il
+      // materiale: opera non nominata → tappa tolta; fatti non sostenuti
+      // nella spiegazione → spiegazione tolta (meglio niente che sbagliato).
+      // Fail-open: revisore muto o parziale = si lascia com'è, con un log.
+      let tappeVerificate: any[] = tappeConFoto;
+      if (tappeConFoto.length >= 3) {
+        try {
+          const elenco = tappeConFoto.map((t: any, i: number) => ({ n: i + 1, opera: t.nomeFonte || t.nome, autore: t.autore || '', anno: t.anno || '', sala: t.salaCodice || t.dove || '', spiegazione: String(t.perche || '').slice(0, 600), curiosita: String(t.curiosita || '').slice(0, 400) }));
+          const promptVerifica = `Sei un revisore severo di guide museali. Hai il MATERIALE (unica fonte ammessa) e un elenco di tappe scritte da un altro modello. Per OGNI tappa rispondi:
+- "esiste": l'opera è nominata nel materiale (col titolo, anche in un'altra lingua, o con una descrizione inequivocabile)? true/false
+- "spiegazioneOk": ogni fatto della spiegazione e della curiosità (date, autori, misure, sale, aneddoti, restauri) è sostenuto dal materiale? true/false. Un fatto NON presente nel materiale è un'invenzione anche se plausibile.
+- "problema": in 10 parole cosa non torna, oppure "".
+Rispondi SOLO con JSON: {"tappe":[{"n":1,"esiste":true,"spiegazioneOk":true,"problema":""}]}
+
+MATERIALE:
+"""
+${materiale.slice(0, 40000)}
+"""
+
+TAPPE:
+${JSON.stringify(elenco)}`;
+          const ver = await callUniversalAi('gemini', [{ role: 'user', content: promptVerifica }], {
+            temperature: 0, max_tokens: 3000, response_format: { type: 'json_object' },
+            excludeEngines: [motoreGuida, 'agnes'], ultimaSpiaggiaPagante: false,
+          }, 'venue_guide_verifica', supabaseUrl, supabaseServiceKey, groq, userId);
+          const rawV = String(ver?.data || '');
+          const esito = JSON.parse(rawV.slice(rawV.indexOf('{'), rawV.lastIndexOf('}') + 1));
+          const giudizi = new Map<number, any>((Array.isArray(esito?.tappe) ? esito.tappe : []).map((g: any) => [Number(g.n), g]));
+          if (giudizi.size >= Math.ceil(tappeConFoto.length * 0.6)) {
+            const tenute: any[] = []; let tolte = 0, ripulite = 0;
+            tappeConFoto.forEach((t: any, i: number) => {
+              const g = giudizi.get(i + 1);
+              if (!g) { tenute.push(t); return; }
+              // Le tappe d'ufficio dalla lista opere sono dati di Wikidata,
+              // non un suggerimento del modello: il revisore non le toglie.
+              if (g.esiste === false && !t.daListaOpere) { tolte++; motiviScarto.push({ nome: t.nome, motivo: `revisore: ${String(g.problema || 'non nel materiale').slice(0, 80)}` }); return; }
+              if (g.spiegazioneOk === false) { ripulite++; tenute.push({ ...t, perche: '', curiosita: t.puntoPreciso ? `Cercala: ${t.puntoPreciso}.` : '', revisione: String(g.problema || 'spiegazione non sostenuta dal materiale').slice(0, 120) }); return; }
+              tenute.push(t);
+            });
+            if (tolte || ripulite) console.warn(`[VenueGuide] ${venue.name}: revisore — ${tolte} tappe tolte, ${ripulite} spiegazioni tolte`);
+            tappeVerificate = tenute;
+          } else {
+            console.warn(`[VenueGuide] ${venue.name}: revisore muto o parziale (${giudizi.size}/${tappeConFoto.length}), tappe lasciate come sono`);
+          }
+        } catch (e: any) { console.warn('[VenueGuide] revisore non riuscito:', e?.message); }
+      }
+
       const guide = {
         // Le sale le dichiara il museo o non le dichiara nessuno: dirlo
         // apertamente vale più di un percorso che finge di sapere dove sono
@@ -9197,7 +9260,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         tipo: isChurch ? 'chiesa' : isSito ? 'sito' : (['museo', 'chiesa', 'sito'].includes(String(parsed?.tipo)) ? String(parsed.tipo) : 'museo'),
         intro: togliFrasiGeneriche(String(parsed?.intro || '').trim()).slice(0, 900),
         consiglio: togliFrasiGeneriche(String(parsed?.consiglio || '').trim()).slice(0, 400),
-        tappe: tappeConFoto,
+        tappe: tappeVerificate,
         language: outLang,
       };
       // La foto del luogo si cerca PRIMA di mettere in cache, così la testata
