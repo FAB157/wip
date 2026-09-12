@@ -12433,15 +12433,22 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
       const daScript = !!(process.env.SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === process.env.SCRIPT_SHARED_SECRET);
       const adminId = daScript ? 'background-script' : await verifyAdminToken(req);
       if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
-      if (!eventiFeed.fornitoreRicerca()) return res.json({ ok: false, reason: 'ricerca_spenta' });
+      // FORNITORE DEDICATO AI MUSEI (12/09/2026 sera): la ricerca sale/piante
+      // a raffica ha quasi azzerato il credito Brave condiviso con gli
+      // Eventi. Se esiste BRAVE_SEARCH_API_KEY_MUSEI usa quella; con
+      // `provider: 'google'` usa Google CSE (100/giorno gratis) se le chiavi
+      // ci sono; altrimenti il fornitore di default.
+      const braveMusei = process.env.BRAVE_SEARCH_API_KEY_MUSEI || '';
+      const provider = String(req.body?.provider || '') === 'google' ? 'google' : (braveMusei ? 'brave' : undefined);
+      if (!eventiFeed.fornitoreRicerca() && !braveMusei) return res.json({ ok: false, reason: 'ricerca_spenta' });
       const queries: string[] = (Array.isArray(req.body?.queries) ? req.body.queries : []).map((q: any) => String(q || '').trim().slice(0, 200)).filter(Boolean).slice(0, 30);
       const lang = String(req.body?.lang || 'en').slice(0, 2).toLowerCase();
       const count = Math.min(10, Math.max(3, parseInt(String(req.body?.count || '8'), 10) || 8));
       const out: Record<string, any[]> = {};
       for (const q of queries) {
-        out[q] = await eventiFeed.ricercaWeb(q, { lang, count });
+        out[q] = await eventiFeed.ricercaWeb(q, { lang, count, ...(provider ? { provider } : {}), ...(braveMusei ? { braveKey: braveMusei } : {}) });
       }
-      res.json({ ok: true, fornitore: eventiFeed.fornitoreRicerca(), risultati: out });
+      res.json({ ok: true, fornitore: provider || eventiFeed.fornitoreRicerca(), dedicata: !!braveMusei, risultati: out });
     } catch (e: any) {
       console.warn('[WebSearch] errore:', e?.message);
       res.status(500).json({ error: e?.message || 'errore' });
@@ -18206,9 +18213,196 @@ ${description}
       'Disallow: /api/',
       'Disallow: /auth/',
       '',
+      // Bot delle AI (12/09/2026): già coperti dal wildcard sopra, ma
+      // elencarli per nome è il modo in cui questi crawler (e chi controlla
+      // il sito) verificano che l'accesso sia esplicitamente voluto, non un
+      // caso del "*". Nessuno di questi va bloccato: sono il modo in cui WIP
+      // finisce citato quando qualcuno chiede a un'AI "audioguida per X".
+      'User-agent: GPTBot',
+      'Allow: /',
+      'User-agent: ChatGPT-User',
+      'Allow: /',
+      'User-agent: OAI-SearchBot',
+      'Allow: /',
+      'User-agent: ClaudeBot',
+      'Allow: /',
+      'User-agent: Claude-Web',
+      'Allow: /',
+      'User-agent: anthropic-ai',
+      'Allow: /',
+      'User-agent: PerplexityBot',
+      'Allow: /',
+      'User-agent: Google-Extended',
+      'Allow: /',
+      'User-agent: Bingbot',
+      'Allow: /',
+      'User-agent: CCBot',
+      'Allow: /',
+      '',
       `Sitemap: ${SEO_SITO}/sitemap.xml`,
+      `Sitemap: ${SEO_SITO}/sitemap-pagine.xml`,
       '',
     ].join('\n'));
+  });
+
+  // Sitemap delle pagine "fisse" (home + /scopri nelle 7 lingue): finora
+  // SOLO le schede /luogo avevano una sitemap (i milioni generati dagli
+  // script), la home e /scopri non comparivano in nessuna — Google le aveva
+  // trovate lo stesso seguendo i link, ma senza dichiararle non si segnala
+  // né la priorità né, per /scopri, il cluster hreflang.
+  app.get("/sitemap-pagine.xml", (req, res) => {
+    const oggi = new Date().toISOString().slice(0, 10);
+    const scopriUrl = (lang?: string) => `${SEO_SITO}/scopri${lang ? '/' + lang : ''}`;
+    const alternates = (lang?: string) => [
+      `<xhtml:link rel="alternate" hreflang="it" href="${scopriUrl()}"/>`,
+      ...['en', 'fr', 'es', 'de', 'ru', 'zh'].map(l => `<xhtml:link rel="alternate" hreflang="${l}" href="${scopriUrl(l)}"/>`),
+      `<xhtml:link rel="alternate" hreflang="x-default" href="${scopriUrl()}"/>`,
+    ].join('');
+    const righe = [
+      `<url><loc>${SEO_SITO}/</loc><lastmod>${oggi}</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>`,
+      `<url><loc>${scopriUrl()}</loc><lastmod>${oggi}</lastmod><priority>0.8</priority>${alternates()}</url>`,
+      ...['en', 'fr', 'es', 'de', 'ru', 'zh'].map(l =>
+        `<url><loc>${scopriUrl(l)}</loc><lastmod>${oggi}</lastmod><priority>0.8</priority>${alternates(l)}</url>`),
+    ];
+    res.type('application/xml').send(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${righe.join('\n')}\n</urlset>`,
+    );
+  });
+
+  // /llms.txt (12/09/2026): lo standard informale che riassume un sito per
+  // le AI che rispondono citando fonti (ChatGPT, Claude, Perplexity...) —
+  // lo stesso ruolo di robots.txt/sitemap.xml ma per un lettore che LEGGE
+  // invece di scansionare link. Testo semplice, niente HTML: è pensato per
+  // finire dentro il contesto di un modello, non per essere reso a schermo.
+  app.get("/llms.txt", (req, res) => {
+    res.type('text/plain').send([
+      '# WIP · World in Pocket',
+      '',
+      '> Audioguida geolocalizzata di oltre 9 milioni di luoghi in 196 paesi: parte da sola quando arrivi, a piedi o in auto, anche offline. Gratis per iniziare, in 7 lingue (italiano, inglese, francese, spagnolo, tedesco, russo, cinese).',
+      '',
+      'WIP è un\'app (web, Android, iOS) che accompagna chi visita un luogo — monumenti, musei, chiese, panorami, natura — con una audioguida che si attiva da sola in base alla posizione, senza bisogno di cercare nulla. Copre musei e chiese di tutto il mondo con percorsi guidati opera per opera, oltre alle audioguide dei singoli luoghi.',
+      '',
+      '## Pagine principali',
+      `- [Sito](${SEO_SITO}/): app web, funziona anche da browser senza installare nulla`,
+      `- [Scopri WIP](${SEO_SITO}/scopri): presentazione del prodotto, video e caratteristiche (anche in inglese, francese, spagnolo, tedesco, russo e cinese: ${SEO_SITO}/scopri/en, /fr, /es, /de, /ru, /zh)`,
+      `- [Schede dei luoghi](${SEO_SITO}/sitemap.xml): milioni di pagine pubbliche, una per luogo, con audioguida e descrizione`,
+      '- App Android: https://play.google.com/store/apps/details?id=com.itaintasca.app',
+      '',
+      '## Cosa NON è',
+      '- Non è un elenco di link affiliati o un blog di viaggi: ogni pagina luogo è generata da fonti verificate (Wikipedia, Wikidata, Wikimedia Commons) sul luogo specifico, mai testo generico.',
+      '- Non richiede account per ascoltare le prime audioguide.',
+      '',
+      `Contatto: support@wip.guide`,
+      '',
+    ].join('\n'));
+  });
+
+  // ── /scopri/{lingua}: la stessa landing in EN/FR/ES/DE/RU/ZH, per URL ──
+  // reali (12/09/2026). public/scopri/index.html ha già tutte e 7 le lingue
+  // scritte (var I18N), ma dietro un interruttore JavaScript su UN SOLO URL:
+  // per un motore o una AI che non esegue JS, solo l'italiano esisteva
+  // davvero — le altre sei erano stringhe invisibili dentro uno <script>.
+  // Qui si legge lo stesso file UNA volta (cache in memoria: è statico, non
+  // cambia a runtime) e si sostituisce, lato server, ogni stringa IT con la
+  // sua traduzione già scritta nel file stesso — stessa UI, stesso script
+  // client (che poi lascia comunque cambiare lingua a mano), ma con testo
+  // vero e proprio nell'HTML che il server manda, non generato da JS.
+  const SCOPRI_LINGUE = ['en', 'fr', 'es', 'de', 'ru', 'zh'] as const;
+  // Le chiavi in ORDINE di comparsa nel file, con l'esatta stringa italiana
+  // sorgente (quella dentro I18N.it, non l'HTML: identiche perché il body
+  // parte già in italiano). L'h1 ha un tag <em> annidato: si sostituisce
+  // l'HTML intero, non il testo semplice.
+  let scopriHtmlCache: string | null = null;
+  const scopriHtml = (): string => {
+    if (scopriHtmlCache !== null) return scopriHtmlCache;
+    try {
+      scopriHtmlCache = fs.readFileSync(path.join(__dirname, 'public', 'scopri', 'index.html'), 'utf8');
+    } catch {
+      scopriHtmlCache = '';
+    }
+    return scopriHtmlCache;
+  };
+  // I18N vive dentro un <script> del file statico: si estrae con una regex
+  // sui delimitatori (sono nostri, scritti a mano, non input esterno) e si
+  // valuta come oggetto letterale — niente eval su dati di un utente.
+  let scopriI18nCache: Record<string, Record<string, string>> | null = null;
+  const scopriI18n = (): Record<string, Record<string, string>> | null => {
+    if (scopriI18nCache !== null) return scopriI18nCache;
+    const html = scopriHtml();
+    const m = html.match(/var I18N = (\{[\s\S]*?\n\});/);
+    if (!m) return null;
+    try {
+      scopriI18nCache = new Function(`return (${m[1]})`)();
+    } catch {
+      scopriI18nCache = null;
+    }
+    return scopriI18nCache;
+  };
+  const SCOPRI_TITOLI: Record<string, string> = {
+    it: "WIP — l'audioguida che parte da sola",
+    en: 'WIP — the audio guide that starts by itself',
+    fr: "WIP — l'audioguide qui démarre tout seul",
+    es: 'WIP — la audioguía que arranca sola',
+    de: 'WIP — der Audioguide, der von selbst startet',
+    ru: 'WIP — аудиогид, который включается сам',
+    zh: 'WIP — 自动讲解的语音导览',
+  };
+  // Parole chiave per il marketing (richieste esplicitamente: audioguida,
+  // itinerari, guida turistica, navigatore...), una lista per lingua invece
+  // di tradurre parola per parola: sono i termini che si cercano davvero in
+  // quella lingua, non un calco dall'italiano.
+  const SCOPRI_KEYWORDS: Record<string, string> = {
+    en: 'audio guide, free audio guide, offline audio guide, tour guide app, travel itinerary, city guide, sat nav for tourists, what to see, travel app, WIP',
+    fr: "audioguide, audioguide gratuit, audioguide hors ligne, guide touristique, itinéraire de voyage, GPS touristique, que voir, application de voyage, WIP",
+    es: 'audioguía, audioguía gratis, audioguía offline, guía turística, itinerario de viaje, navegador turístico, qué ver, app de viaje, WIP',
+    de: 'Audioguide, kostenloser Audioguide, Offline-Audioguide, Reiseführer, Reiseroute, Navigationsgerät für Touristen, Sehenswürdigkeiten, Reise-App, WIP',
+    ru: 'аудиогид, бесплатный аудиогид, офлайн аудиогид, туристический гид, маршрут путешествия, навигатор для туристов, что посмотреть, приложение для путешествий, WIP',
+    zh: '语音导览, 免费语音导览, 离线语音导览, 旅游导览, 旅行行程, 旅游导航, 有什么好看的, 旅行应用, WIP',
+  };
+  const scopriPagina = (lang: string) => {
+    const base = scopriHtml();
+    const i18n = scopriI18n();
+    if (!base || !i18n || !i18n.it || !i18n[lang]) return null;
+    // Il testo IT ricompare anche DENTRO il <script> più sotto (è la var
+    // I18N da cui vengono queste stesse traduzioni): sostituirlo lì
+    // corromperebbe il selettore lingua lato client per un utente che, dalla
+    // pagina /scopri/en, prova a tornare all'italiano. Si taglia il file al
+    // primo <script> e si sostituisce SOLO nella parte visibile (head+body).
+    const taglio = base.indexOf('<script>');
+    const testa = taglio === -1 ? base : base.slice(0, taglio);
+    const coda = taglio === -1 ? '' : base.slice(taglio);
+    let html = testa;
+    // Testo del corpo pagina: ogni chiave IT → la stessa chiave nella lingua
+    // richiesta. replaceAll su stringa letterale, non regex: niente rischio
+    // di caratteri speciali nei testi tradotti (es. cinese, russo).
+    for (const chiave of Object.keys(i18n.it)) {
+      const daIt = i18n.it[chiave];
+      const versione = i18n[lang][chiave];
+      if (daIt && versione && html.includes(daIt)) html = html.split(daIt).join(versione);
+    }
+    html += coda;
+    const titolo = SCOPRI_TITOLI[lang] || SCOPRI_TITOLI.en;
+    const descrizione = i18n[lang].sub || i18n.en.sub;
+    // Meta tag nella lingua della pagina. Canonical e og:url puntano a SE
+    // STESSA (non all'italiano: sono pagine sorelle, non traduzioni "minori"),
+    // ma l'hreflang resta quello scritto nel file statico — sono URL fissi,
+    // non testo da tradurre, quindi identici e corretti su ogni lingua senza
+    // doverli ricostruire qui.
+    html = html
+      .replace('<html lang="it">', `<html lang="${lang}">`)
+      .replace(/<title>[\s\S]*?<\/title>/, `<title>${seoEscape(titolo)}</title>`)
+      .replace(/<meta name="description" content="[^"]*">/, `<meta name="description" content="${seoEscape(descrizione)}">`)
+      .replace(/<meta name="keywords" content="[^"]*">/, `<meta name="keywords" content="${seoEscape(SCOPRI_KEYWORDS[lang] || SCOPRI_KEYWORDS.en)}">`)
+      .replace('<link rel="canonical" href="https://www.wip.guide/scopri">', `<link rel="canonical" href="${SEO_SITO}/scopri/${lang}">`)
+      .replace('<meta property="og:url" content="https://wip.guide/scopri">', `<meta property="og:url" content="${SEO_SITO}/scopri/${lang}">`)
+      .replace(/<meta property="og:title" content="[^"]*">/, `<meta property="og:title" content="${seoEscape(titolo)}">`)
+      .replace(/<meta property="og:description" content="[^"]*">/, `<meta property="og:description" content="${seoEscape(descrizione)}">`);
+    return html;
+  };
+  app.get(`/scopri/:lang(${SCOPRI_LINGUE.join('|')})`, (req, res) => {
+    const html = scopriPagina(String((req.params as any).lang));
+    if (!html) { res.status(404).type('text/plain').send('not found'); return; }
+    res.set('Cache-Control', 'public, max-age=3600, s-maxage=86400').type('text/html').send(html);
   });
 
   // Indice delle sitemap. Il conteggio esatto costerebbe una scansione su

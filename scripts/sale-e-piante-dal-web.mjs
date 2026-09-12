@@ -32,13 +32,25 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'applic
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const DA = parseInt(arg('--da', '1'), 10), A = parseInt(arg('--a', '100'), 10), SOLO_QID = arg('--qid', ''), LINGUA = String(arg('--lingua', 'IT')).toUpperCase();
 const SOLO = arg('--solo', ''), MAX_MUSEI = parseInt(arg('--max-musei', '200'), 10);
+// TETTO DI RICERCHE (12/09/2026 sera): ~30 ricerche a museo hanno quasi
+// azzerato il credito Brave condiviso con gli Eventi. Per giro al massimo
+// --max-ricerche (default 80: sotto i 100/giorno gratis di Google CSE) e al
+// massimo 12 ricerche sale per museo. --provider google forza Google CSE.
+const MAX_RICERCHE = parseInt(arg('--max-ricerche', '80'), 10);
+const MAX_SALE_PER_MUSEO = parseInt(arg('--max-sale', '12'), 10);
+const PROVIDER = arg('--provider', '');
+let ricercheFatte = 0;
 const dormi = ms => new Promise(x => setTimeout(x, ms));
 const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 const UA = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36 WorldInPocket/1.0 (support@wip.guide)' };
 const MAX_FILE = 8 * 1024 * 1024;
 
 async function ricerca(queries, lang = 'en') {
-  const r = await fetch(`${API}/api/admin/museums/web-search`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-script-secret': env.SCRIPT_SHARED_SECRET }, body: JSON.stringify({ queries, lang, count: 8 }), signal: AbortSignal.timeout(120000) });
+  const spazio = Math.max(0, MAX_RICERCHE - ricercheFatte);
+  if (!spazio) { console.log('  tetto ricerche raggiunto per questo giro'); return {}; }
+  queries = queries.slice(0, spazio);
+  ricercheFatte += queries.length;
+  const r = await fetch(`${API}/api/admin/museums/web-search`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-script-secret': env.SCRIPT_SHARED_SECRET }, body: JSON.stringify({ queries, lang, count: 8, ...(PROVIDER ? { provider: PROVIDER } : {}) }), signal: AbortSignal.timeout(120000) });
   const j = await r.json().catch(() => ({}));
   if (!j.ok) { console.log('  ricerca web:', r.status, j.reason || j.error || ''); return {}; }
   return j.risultati || {};
@@ -111,7 +123,7 @@ for (const m of lista) {
     // ── SALE ──
     if (riga && SOLO !== 'piante') {
       const tappe = riga.guide?.tappe || [];
-      const senza = tappe.map((t, i) => ({ t, i })).filter(({ t }) => !t.soloCollezione && !String(t.salaCodice || '').trim() && !String(t.dove || '').trim()).slice(0, 30);
+      const senza = tappe.map((t, i) => ({ t, i })).filter(({ t }) => !t.soloCollezione && !String(t.salaCodice || '').trim() && !String(t.dove || '').trim()).slice(0, MAX_SALE_PER_MUSEO);
       if (senza.length) {
         const langRicerca = linguaPaese(m.paese);
         const queries = senza.map(({ t }) => `"${t.nomeFonte || t.nome}" ${nomeMuseo} ${langRicerca === 'it' ? 'sala' : langRicerca === 'fr' ? 'salle' : langRicerca === 'de' ? 'Saal' : langRicerca === 'es' ? 'sala' : 'room'}`);
@@ -172,4 +184,4 @@ for (const m of lista) {
   } catch (e) { stat.errori++; console.log(`  ✗ ${m.nome}: ${String(e?.message || e).slice(0, 140)}`); }
   await dormi(1500);
 }
-console.log('\nRIEPILOGO', JSON.stringify(stat));
+console.log('\nRIEPILOGO', JSON.stringify({ ...stat, ricercheFatte }));

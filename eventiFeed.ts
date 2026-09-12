@@ -610,8 +610,12 @@ export function fornitoreRicerca(): 'brave' | 'google' | null {
 
 const hashBreve = (s: string) => createHash('md5').update(s).digest('hex').slice(0, 12);
 
-export async function ricercaWeb(query: string, opts: { lang?: string; cc?: string; count?: number } = {}): Promise<RisultatoWeb[]> {
-  const fornitore = fornitoreRicerca();
+export async function ricercaWeb(query: string, opts: { lang?: string; cc?: string; count?: number;
+  /** 12/09/2026: fornitore e chiave dedicati (i musei non devono bruciare il credito degli Eventi). */
+  provider?: 'brave' | 'google'; braveKey?: string } = {}): Promise<RisultatoWeb[]> {
+  let fornitore: 'brave' | 'google' | null = opts.provider || fornitoreRicerca();
+  if (fornitore === 'google' && !(process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX)) fornitore = fornitoreRicerca();
+  if (fornitore === 'brave' && !(opts.braveKey || process.env.BRAVE_SEARCH_API_KEY)) fornitore = fornitoreRicerca();
   const q = String(query || '').trim();
   if (!fornitore || !q) return [];
   const lang = String(opts.lang || 'en').slice(0, 2).toLowerCase();
@@ -625,7 +629,7 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
     if (fornitore === 'brave') {
       const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
         params: { q, count, search_lang: lang, ...(cc ? { country: cc } : {}), safesearch: 'moderate', text_decorations: false },
-        headers: { 'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY, Accept: 'application/json' },
+        headers: { 'X-Subscription-Token': opts.braveKey || process.env.BRAVE_SEARCH_API_KEY, Accept: 'application/json' },
         timeout: 8000,
       });
       out = (r.data?.web?.results || []).map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.description || '') }));
