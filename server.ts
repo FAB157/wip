@@ -6667,6 +6667,21 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * conta come opera.
    */
   const MIN_OPERE_GUIDA_A_PAGAMENTO = 8;
+  /** Rango del museo fra i prioritari (1 = il più noto al mondo), o null. In memoria per un'ora. */
+  const rangoCache = new Map<string, { r: number | null; t: number }>();
+  async function rangoPrioritario(qid: string): Promise<number | null> {
+    if (!/^Q\d+$/.test(String(qid || ''))) return null;
+    const c = rangoCache.get(qid);
+    if (c && Date.now() - c.t < 3600_000) return c.r;
+    let r: number | null = null;
+    try {
+      const x = await axios.get(`${supabaseUrl}/rest/v1/musei_prioritari?qid=eq.${qid}&select=rango&limit=1`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 4000 });
+      const v = Number(x.data?.[0]?.rango);
+      r = Number.isFinite(v) && v > 0 ? v : null;
+    } catch { r = null; }
+    rangoCache.set(qid, { r, t: Date.now() });
+    return r;
+  }
   function guidaGratuita(guida: any): boolean {
     const tappe: any[] = Array.isArray(guida?.tappe) ? guida.tappe : [];
     if (!tappe.length) return false;
@@ -7349,7 +7364,7 @@ ORDER BY DESC(?fama)`;
         // solo le prime 12 per fama, e le "d'ufficio" servono a riempire
         // FINO A 20 tappe con quelle che NON aveva preso — con un tetto
         // troppo basso non restava nessuna candidata da aggiungere.
-        if (img && !giaVista && top.length < 30) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
+        if (img && !giaVista && top.length < 50) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
       }
       // Si conserva solo una risposta VERA: un elenco vuoto potrebbe essere
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
@@ -8618,12 +8633,20 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // opzione fa escludere eventi/organizzazioni/gruppi di persone che
           // altrimenti entravano come "opere" (l'incendio di Notre-Dame, i
           // funerali a Westminster, la morte di un pontefice).
+          // TETTO A SCALA DEL MUSEO (12/09/2026 sera, committente: «nelle
+          // guide più opere ci sono meglio è, che siano importanti», «se il
+          // museo è grande il limite deve essere più opere»): il rango nella
+          // lista dei musei prioritari (notorietà Wikidata) decide il tetto —
+          // primi 20 del mondo: 50 opere; primi 100: 40; gli altri: 30; per
+          // le chiese 20/16. L'ordine resta quello della notorietà, quindi
+          // le prime N sono sempre le più note.
+          const rangoMuseo = await rangoPrioritario(wikidataId);
+          const nOpere = isChurch
+            ? (rangoMuseo && rangoMuseo <= 100 ? 20 : 16)
+            : (rangoMuseo && rangoMuseo <= 20 ? 50 : rangoMuseo && rangoMuseo <= 100 ? 40 : 30);
           const r = await opereDelMuseo(wikidataId, langCfg.wiki, isChurch
-            // 30 e 16 (12/09/2026 sera, committente: «nelle guide più opere ci
-            // sono meglio è, che siano importanti»): l'ordine resta quello
-            // della notorietà Wikidata, quindi le prime 30 sono le più note.
-            ? { n: 16, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
-            : { n: 30, budgetMs: inDiretta ? 20000 : 45000 });
+            ? { n: nOpere, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
+            : { n: nOpere, budgetMs: inDiretta ? 20000 : 45000 });
           // Diagnostica temporanea (12/09/2026, richiesta android-c2): il
           // Louvre/Pompidou/Tate falliscono in produzione ma vanno sul
           // droplet — serve vedere se è un timeout di budget, un errore
@@ -8957,9 +8980,10 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // Se la fonte e la traduzione coincidono, la seconda riga in scheda
         // sarebbe una ripetizione: si tiene solo «nome».
         .map((t: any) => (t.nomeFonte && normalizzaTesto(t.nomeFonte) === normalizzaTesto(t.nome)) ? { ...t, nomeFonte: '' } : t)
-        // 30 (12/09/2026 sera, committente: «più opere ci sono meglio è, che
-        // siano importanti»): il tetto era 20.
-        .slice(0, 30);
+        // 50 (12/09/2026 sera, committente: «più opere ci sono meglio è, che
+        // siano importanti», «se il museo è grande il limite deve essere più
+        // opere»): il tetto era 20; il taglio vero lo fa nOpere (30/40/50).
+        .slice(0, 50);
       const scartate = tappeIn.length - tappe.length;
       if (scartate > 0) console.warn(`[VenueGuide] ${venue.name}: scartate ${scartate} tappe non presenti nel materiale`);
 
@@ -12281,6 +12305,31 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
   // sala), fonti in archivio (wikipedia, pdf, sito, wikivoyage, foto),
   // piante verificate e pin (concordi / incerti), sito raggiungibile.
   // Il QID in coda all'id è la chiave comune fra i prefissi (wd-/wv-/nome_).
+  // RICERCA WEB PER GLI SCRIPT (12/09/2026 sera, committente: «cerca su
+  // internet le info delle sale e la pianta»). La chiave Brave vive solo su
+  // Vercel: gli script (scripts/sale-e-piante-dal-web.mjs) passano da qui.
+  // Solo x-script-secret o admin; al massimo 30 ricerche per chiamata; la
+  // cache per query (7 giorni) è quella di ricercaWeb.
+  app.post("/api/admin/museums/web-search", rateLimiter, async (req, res) => {
+    try {
+      const daScript = !!(process.env.SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === process.env.SCRIPT_SHARED_SECRET);
+      const adminId = daScript ? 'background-script' : await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      if (!eventiFeed.fornitoreRicerca()) return res.json({ ok: false, reason: 'ricerca_spenta' });
+      const queries: string[] = (Array.isArray(req.body?.queries) ? req.body.queries : []).map((q: any) => String(q || '').trim().slice(0, 200)).filter(Boolean).slice(0, 30);
+      const lang = String(req.body?.lang || 'en').slice(0, 2).toLowerCase();
+      const count = Math.min(10, Math.max(3, parseInt(String(req.body?.count || '8'), 10) || 8));
+      const out: Record<string, any[]> = {};
+      for (const q of queries) {
+        out[q] = await eventiFeed.ricercaWeb(q, { lang, count });
+      }
+      res.json({ ok: true, fornitore: eventiFeed.fornitoreRicerca(), risultati: out });
+    } catch (e: any) {
+      console.warn('[WebSearch] errore:', e?.message);
+      res.status(500).json({ error: e?.message || 'errore' });
+    }
+  });
+
   app.get("/api/admin/museums/completeness", rateLimiter, async (req, res) => {
     try {
       const adminId = await verifyAdminToken(req);
