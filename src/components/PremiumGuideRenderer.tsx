@@ -11,11 +11,15 @@ interface PremiumGuideRendererProps {
 }
 
 // ─── Brand Palette ────────────────────────────────────────────────────────────
+// Allineata a PrintView/MuseumPrintView (12/09/2026, committente: «stesse
+// impostazioni, font e grafica degli itinerari»): stesso navy, stesso oro,
+// stesso ambra per le etichette — chi ha già stampato un itinerario riconosce
+// il documento senza doverlo studiare.
 const C = {
-  navy:    '#1a3a6c',
+  navy:    '#1e3a8a',
   blue:    '#2563a8',
-  gold:    '#f5a623',
-  orange:  '#e8611a',
+  gold:    '#d4af37',
+  orange:  '#b45309',
   dark:    '#1c1c1c',
   mid:     '#444444',
   light:   '#777777',
@@ -624,8 +628,10 @@ const PoiBlock: React.FC<{ poi: any; imgUrl?: string; t: T }> = ({ poi, imgUrl, 
           )}
         </div>
 
-        {/* Main description */}
+        {/* Main description — Georgia come nell'itinerario: è testo lungo da
+            leggere, non un'etichetta (12/09/2026). */}
         <div style={{
+          fontFamily: "Georgia, 'Times New Roman', serif",
           fontSize: '15px',
           color: C.dark,
           lineHeight: 1.90,
@@ -821,7 +827,10 @@ export default function PremiumGuideRenderer({
     <div
       id={containerId}
       style={{
-        fontFamily: "'Georgia', 'Times New Roman', serif",
+        // Sistema per titoli/etichette, Georgia solo sul testo lungo (vedi
+        // sotto): stessa impostazione di PrintView/MuseumPrintView, non tutto
+        // il documento in serif come prima (12/09/2026).
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         background: C.white,
         color: C.dark,
         maxWidth: '860px',

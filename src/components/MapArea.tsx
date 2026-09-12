@@ -553,17 +553,21 @@ function MapEventsHandler({
   onMoveEnd,
   onCenterChange,
   onDragStart,
+  onMapClick,
   isFollowing,
 }: {
   onMoveEnd: (bounds: L.LatLngBounds) => void;
   onCenterChange?: (center: [number, number]) => void;
   onDragStart?: () => void;
+  /** Tap sulla mappa (non su un marker, che ferma la propagazione da sé). */
+  onMapClick?: () => void;
   /** Follow-me attivo? Letto a ogni moveend (ref del genitore), mai in deps. */
   isFollowing?: () => boolean;
 }) {
   const onMoveEndRef = useRef(onMoveEnd);
   const onCenterChangeRef = useRef(onCenterChange);
   const onDragStartRef = useRef(onDragStart);
+  const onMapClickRef = useRef(onMapClick);
   const isFollowingRef = useRef(isFollowing);
   // MAP-12: in follow-me `panTo` a ogni fix GPS produceva un moveend ogni
   // 1-5 s, e ognuno scriveva localStorage, dispatchava l'evento (che fa
@@ -576,14 +580,20 @@ function MapEventsHandler({
     onMoveEndRef.current = onMoveEnd;
     onCenterChangeRef.current = onCenterChange;
     onDragStartRef.current = onDragStart;
+    onMapClickRef.current = onMapClick;
     isFollowingRef.current = isFollowing;
-  }, [onMoveEnd, onCenterChange, onDragStart, isFollowing]);
+  }, [onMoveEnd, onCenterChange, onDragStart, onMapClick, isFollowing]);
 
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
 
   const map = useMapEvents({
     dragstart: () => {
       onDragStartRef.current?.();
+    },
+    click: () => {
+      // Un tap su un marker ferma la propagazione da sé (comportamento
+      // Leaflet di default): questo scatta solo per un tap sulla mappa vuota.
+      onMapClickRef.current?.();
     },
     moveend: () => {
       try {
@@ -988,7 +998,15 @@ function MapArea({
       if (e.detail) focusPoiOnMap(e.detail);
     };
     window.addEventListener('focus-poi', handleFocusPoi);
-    return () => window.removeEventListener('focus-poi', handleFocusPoi);
+    // Chiusa la scheda POI, il popup del pin restava aperto sopra i tasti
+    // livelli/meteo in basso a sinistra finché non si toccava la sua X
+    // (12/09/2026, collaudo). App.tsx lo dice qui e il popup si chiude.
+    const handleClosePopup = () => { mapRef.current?.closePopup(); };
+    window.addEventListener('wip-close-popup', handleClosePopup);
+    return () => {
+      window.removeEventListener('focus-poi', handleFocusPoi);
+      window.removeEventListener('wip-close-popup', handleClosePopup);
+    };
   }, []); // Registrato una sola volta: handleFocusPoi non chiude più su pois/radarPois
 
   // "Apri sulla mappa" da Mappe Offline: centra sull'area scaricata senza
@@ -1025,6 +1043,10 @@ function MapArea({
   const [showEverythingPanel, setShowEverythingPanel] = useState(false);
   const [everythingRadius, setEverythingRadius] = useState(15000);
   const [everythingLoading, setEverythingLoading] = useState(false);
+  // Un errore di query (timeout, guasto) non e' la stessa cosa di una zona
+  // davvero vuota: senza questo flag i due casi mostravano lo stesso
+  // messaggio "niente qui vicino", che per un errore e' semplicemente falso.
+  const [everythingError, setEverythingError] = useState(false);
   const [everythingGroups, setEverythingGroups] = useState<{ key: string; count: number; items: EverythingItem[] }[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   // (28/08/2026) Il pannello deve "ricordare": chi tocca un luogo, lo vede
@@ -1051,6 +1073,7 @@ function MapArea({
       return;
     }
     setEverythingLoading(true);
+    setEverythingError(false);
     try {
       const { data, error } = await supabase.rpc('nearby_everything', {
         p_lat: centerPoint.lat,
@@ -1063,6 +1086,9 @@ function MapArea({
         // Una lista già a schermo non va cancellata da un errore del
         // "carica tutti" (timeout sul raggio grande): resta quella parziale.
         setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
+        // Errore di query, non zona vuota: il pannello deve dirlo, non
+        // mostrare "niente qui vicino" come se la ricerca fosse riuscita.
+        setEverythingError(true);
         return;
       }
       const rows = (data || []) as EverythingItem[];
@@ -1097,6 +1123,7 @@ function MapArea({
     } catch (e) {
       console.warn('[nearby_everything] fetch error', e);
       setEverythingGroups((prev) => (perGroup > 50 && prev.length ? prev : []));
+      setEverythingError(true);
     } finally {
       setEverythingLoading(false);
     }
@@ -1416,11 +1443,17 @@ function MapArea({
   // ── Layer servizi pratici (fontanelle 💧, bagni 🚻, panchine 🪑) ──────
   // Toggle 🚰 nei controlli mappa: layerGroup Leaflet separato dai POI,
   // alimentato da src/lib/servicesLayer.ts (Overpass, cache 24h).
-  const [servicesActive, setServicesActive] = useState(false);
+  const [servicesActive, setServicesActive] = useState(() => {
+    try { return localStorage.getItem('wip_servizi_enabled') === '1'; } catch { return false; }
+  });
   const [servicesLoading, setServicesLoading] = useState(false);
   const servicesLayerRef = useRef<L.LayerGroup | null>(null);
   // Centro dell'ultima query servizi: sopra 1,5 km di pan il layer si aggiorna
   const servicesCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  // Stato ATTUALE letto dentro loadServices dopo l'await: senza, un
+  // toggle-off durante il fetch non impediva al layer di riaccendersi da solo.
+  const servicesActiveRef = useRef(false);
+  useEffect(() => { servicesActiveRef.current = servicesActive; }, [servicesActive]);
   // Posizione utente letta al momento dell'apertura del popup (mai stantia)
   const userLocationRef = useRef<[number, number] | null>(null);
   useEffect(() => { userLocationRef.current = userLocation; }, [userLocation]);
@@ -1456,7 +1489,10 @@ function MapArea({
         group.addLayer(marker);
       }
 
-      if (!map.hasLayer(group)) group.addTo(map);
+      // Ricontrolla lo stato ATTUALE, non quello di quando il fetch è
+      // partito: se nel frattempo l'utente ha spento il livello, non va
+      // riacceso da sotto.
+      if (servicesActiveRef.current && !map.hasLayer(group)) group.addTo(map);
       servicesCenterRef.current = { lat, lon };
       return true;
     } catch (e) {
@@ -1476,14 +1512,19 @@ function MapArea({
     const map = mapRef.current;
     if (servicesActive) {
       setServicesActive(false);
+      try { localStorage.setItem('wip_servizi_enabled', '0'); } catch { /* storage pieno */ }
       if (map && servicesLayerRef.current) map.removeLayer(servicesLayerRef.current);
       return;
     }
     if (!map) return;
     setServicesActive(true);
+    try { localStorage.setItem('wip_servizi_enabled', '1'); } catch { /* storage pieno */ }
     const c = map.getCenter();
     const ok = await loadServices(c.lat, c.lng);
-    if (!ok) setServicesActive(false);
+    if (!ok) {
+      setServicesActive(false);
+      try { localStorage.setItem('wip_servizi_enabled', '0'); } catch { /* storage pieno */ }
+    }
   }, [servicesActive, loadServices]);
 
   // Aggiornamento del layer quando l'utente sposta la mappa di molto
@@ -1492,6 +1533,13 @@ function MapArea({
     if (!servicesActive) return;
     const map = mapRef.current;
     if (!map) return;
+    // Ripristino da localStorage al mount: se il livello non è ancora mai
+    // stato caricato in questa sessione, lo si carica ora al centro corrente
+    // (altrimenti resterebbe acceso ma invisibile finché non si sposta la mappa).
+    if (!servicesCenterRef.current) {
+      const c = map.getCenter();
+      void loadServices(c.lat, c.lng);
+    }
     const onMoveEnd = () => {
       const last = servicesCenterRef.current;
       if (!last) return;
@@ -2034,8 +2082,22 @@ function MapArea({
       void caricaSentieri(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL qui sopra: senza, ogni micro-fix GPS del
+    // follow-me durante una passeggiata rilancia la query dei sentieri.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [sentieriActive, caricaSentieri]);
 
   // ── BICI ──────────────────────────────────────────────────────────────
@@ -2407,8 +2469,22 @@ function MapArea({
       void caricaStradeGusto(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL: senza, ogni micro-fix GPS del follow-me
+    // rilancia la query delle strade del gusto.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [stradeGustoActive, caricaStradeGusto]);
 
   // ── Neve: località sciistiche e rifugi ────────────────────────────────
@@ -2579,8 +2655,22 @@ function MapArea({
       void caricaNeve(map.getBounds());
     };
     aggiorna();
-    map.on('moveend', aggiorna);
-    return () => { map.off('moveend', aggiorna); };
+    // Soglia come i servizi/ZTL: senza, ogni micro-fix GPS del follow-me
+    // rilancia la query neve.
+    let ultimoCentro = map.getCenter();
+    let ultimoZoom = map.getZoom();
+    const onMoveEnd = () => {
+      const c = map.getCenter();
+      const z = map.getZoom();
+      if (z === ultimoZoom && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lng, c.lat, c.lng) < 400) {
+        return;
+      }
+      ultimoCentro = c;
+      ultimoZoom = z;
+      aggiorna();
+    };
+    map.on('moveend', onMoveEnd);
+    return () => { map.off('moveend', onMoveEnd); };
   }, [neveActive, caricaNeve]);
 
   // ── Sole: UV e caldo percepito (src/lib/sunIndex.ts) ──────────────────
@@ -2611,10 +2701,12 @@ function MapArea({
   useEffect(() => {
     if (!soleActive) return;
     let vivo = true;
+    let ultimoCentro: { lat: number; lon: number } | null = null;
     const carica = async () => {
       const map = mapRef.current;
       if (!map) return;
       const c = map.getCenter();
+      ultimoCentro = { lat: c.lat, lon: c.lng };
       // Gli orari del Sole non passano dalla rete: si calcolano subito, così
       // la scheda ha già qualcosa da mostrare mentre arriva l'UV.
       setOreLuce(orariSole(c.lat, c.lng));
@@ -2624,9 +2716,19 @@ function MapArea({
       if (vivo) { setDatiSole(d); setSoleLoading(false); }
     };
     carica();
-    // Si aggiorna quando ci si sposta parecchio e comunque ogni mezz'ora.
+    // Si aggiorna quando ci si sposta parecchio (soglia come i servizi/ZTL:
+    // senza, ogni micro-fix GPS del follow-me rilancia la query UV) e
+    // comunque ogni mezz'ora.
     const map = mapRef.current;
-    const onMoveEnd = () => { void carica(); };
+    const onMoveEnd = () => {
+      const mp = mapRef.current;
+      if (!mp) return;
+      const c = mp.getCenter();
+      if (ultimoCentro && getDistanceFromLatLonInM(ultimoCentro.lat, ultimoCentro.lon, c.lat, c.lng) < 400) {
+        return;
+      }
+      void carica();
+    };
     map?.on('moveend', onMoveEnd);
     const timer = setInterval(carica, 30 * 60 * 1000);
     return () => {
@@ -5465,7 +5567,10 @@ function MapArea({
             console.warn('[GPS] Centering error:', err);
             setFetchErrors((prev) => ({
               ...prev,
-              location: getTranslation("geolocation_error_unsupported", language),
+              // Chiave giusta (07/09/2026): "unsupported" diceva "il tuo
+              // browser non supporta la geolocalizzazione" anche quando la
+              // vera causa era il permesso negato o il timeout del GPS.
+              location: getTranslation("geolocation_error_unavailable", language),
             }));
             setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
           });
@@ -5484,7 +5589,10 @@ function MapArea({
                   // non succedeva nulla. Ora almeno lo segnaliamo.
                   setFetchErrors((prev) => ({
                     ...prev,
-                    location: getTranslation("geolocation_error_unsupported", language),
+                    // Chiave giusta (07/09/2026): "unsupported" diceva "il tuo
+                    // browser non supporta la geolocalizzazione" anche quando
+                    // la vera causa era il permesso negato o il timeout GPS.
+                    location: getTranslation("geolocation_error_unavailable", language),
                   }));
                   setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
                }
@@ -5506,6 +5614,15 @@ function MapArea({
     // 1. Centra mappa immediatamente sulla posizione corrente se disponibile
     if (userLocation && mapRef.current) {
       mapRef.current.flyTo(userLocation, 18, { duration: 1.2 });
+    } else {
+      // Follow-me senza posizione: prima il badge "Follow ON" si accendeva
+      // e la mappa restava immobile senza nessun avviso. Ora si segnala,
+      // come per il tap breve qui sopra.
+      setFetchErrors((prev) => ({
+        ...prev,
+        location: getTranslation("geolocation_error_unavailable", language),
+      }));
+      setTimeout(() => setFetchErrors((prev) => { const n = {...prev}; delete n.location; return n; }), 6000);
     }
 
     // 2. Assicuriamoci che locationService stia guardando attivamente
@@ -6038,8 +6155,13 @@ function MapArea({
 
   const layerAccesi = useMemo(() => LIVELLI.filter((l) => l.on), [LIVELLI]);
 
-  const spegniTuttiILivelli = useCallback(() => {
-    for (const l of layerAccesi) l.onClick();
+  const spegniTuttiILivelli = useCallback(async () => {
+    // In serie e attesi: alcuni onClick (es. toggleServices) sono async, e
+    // chiamarli tutti insieme senza attendere lasciava lo stato finale
+    // indeterminato quando due toggle si accavallavano.
+    for (const l of layerAccesi) {
+      await l.onClick();
+    }
   }, [layerAccesi]);
 
   const focusPoiOnMap = (poi: Poi) => {
@@ -6125,7 +6247,21 @@ function MapArea({
             url={cartoUrl}
           />
           <MapController center={center} zoom={mapZoom} />
-          <MapEventsHandler onMoveEnd={fetchPois} onCenterChange={onCenterChange} onDragStart={() => stopFollowMode(true)} isFollowing={() => followModeRef.current} />
+          <MapEventsHandler
+            onMoveEnd={fetchPois}
+            onCenterChange={onCenterChange}
+            onDragStart={() => stopFollowMode(true)}
+            isFollowing={() => followModeRef.current}
+            // Un modo per chiudere la card di un POI oltre alla X interna:
+            // un tap sulla mappa (i marker fermano la propagazione da sé,
+            // quindi non si chiude riaprendo lo stesso pin).
+            onMapClick={() => {
+              if (activePoi) {
+                setActivePopupId(null);
+                setActivePoi(null);
+              }
+            }}
+          />
 
           {userLocation &&
             typeof userLocation[0] === "number" &&
@@ -6246,7 +6382,9 @@ function MapArea({
             // per la colonna meteo/livelli qui sopra — cancella esattamente la
             // barra "Trova vicino"/Tutto (1rem di margine + la sua altezza),
             // non un valore indovinato a occhio.
-            className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[1150] max-h-[50dvh] md:max-h-[65dvh]"
+            // z-[2150] e non z-[1150] (10/09/2026): sotto le chip categoria
+            // (z-[2000], CategoryChips.tsx) la card finiva coperta.
+            className="absolute bottom-[calc(5.25rem+env(safe-area-inset-bottom))] left-3 right-3 md:left-6 md:right-auto md:w-[360px] z-[2150] max-h-[50dvh] md:max-h-[65dvh]"
           >
             <PoiPopupContent
               poi={activePoi}
@@ -6782,7 +6920,9 @@ function MapArea({
         )}
       </AnimatePresence>
 
-      <div className={`absolute md:top-[60px] right-4 z-[1000] flex flex-col gap-2 max-w-[280px] pointer-events-none ${followMode ? 'top-[160px]' : 'top-[60px]'}`}>
+      {/* z-[2100] e non z-[1000] (10/09/2026): le chip categoria stanno a
+          z-[2000] (CategoryChips.tsx) e questo banner ci finiva sotto. */}
+      <div className={`absolute md:top-[60px] right-4 z-[2100] flex flex-col gap-2 max-w-[280px] pointer-events-none ${followMode ? 'top-[160px]' : 'top-[60px]'}`}>
         <AnimatePresence>
           {Object.entries(fetchErrors).map(([key, error]) => (
             <motion.div
@@ -6846,7 +6986,7 @@ function MapArea({
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setShowNearbyList(false)}
-              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[1001]"
+              className="absolute inset-0 bg-black/40 backdrop-blur-md z-[2100]"
             />
             <motion.div
               key="nearby-panel"
@@ -6854,7 +6994,9 @@ function MapArea({
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: "100%", opacity: 0, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[1002] flex flex-col overflow-hidden"
+              // z-[2101] e non z-[1002] (10/09/2026): sotto le chip categoria
+              // (z-[2000], CategoryChips.tsx).
+              className="absolute bottom-0 left-0 w-full md:left-6 md:bottom-6 md:w-[420px] max-h-[65dvh] md:max-h-[60dvh] bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-3xl shadow-[0_16px_64px_rgba(0,0,0,0.3)] border border-white/40 dark:border-white/10 rounded-t-[2.5rem] md:rounded-[2rem] z-[2101] flex flex-col overflow-hidden"
             >
               <div className="px-6 py-5 border-b border-black/5 dark:border-white/5 flex items-center justify-between sticky top-0 z-10">
                 <div>
@@ -7045,7 +7187,10 @@ function MapArea({
                   <div className="flex flex-col items-center justify-center py-20 text-center opacity-60">
                     <MapPin className="w-12 h-12 mb-4 text-[#1e3a8a]/50" />
                     <p className="font-bold text-sm px-10 text-[#1e3a8a]">
-                      {getTranslation('everything_nearby_empty', language)}
+                      {/* Un errore di query (timeout, guasto) non è una zona
+                          davvero vuota: messaggi diversi, non lo stesso
+                          "niente qui vicino" per entrambi i casi. */}
+                      {getTranslation(everythingError ? 'mp_luoghi_vicini_errore' : 'everything_nearby_empty', language)}
                     </p>
                   </div>
                 ) : (
@@ -7289,11 +7434,11 @@ function MapArea({
         </AnimatePresence>
 
         <div className="flex items-center gap-0.5 shrink-0">
-            {isSearching || isLoadingPois ? (
-              <div className="p-1">
-                <Loader2 className="w-4 h-4 text-primary animate-spin" />
-              </div>
-            ) : (
+            {/* Il mirino resta sempre presente e cliccabile: prima lo
+                spinner lo SOSTITUIVA durante ogni caricamento POI, e il
+                bottone spariva proprio mentre si camminava. Ora il
+                caricamento è solo un indicatore in più, non al posto del
+                bottone. */}
               <button
                 type="button"
                 onMouseDown={() => {
@@ -7335,8 +7480,12 @@ function MapArea({
                 {followMode && (
                   <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-green-400 rounded-full border border-white animate-pulse" />
                 )}
+                {(isSearching || isLoadingPois) && (
+                  <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-white dark:bg-[#1C1C1E] rounded-full flex items-center justify-center shadow">
+                    <Loader2 className="w-2.5 h-2.5 text-primary animate-spin" />
+                  </span>
+                )}
               </button>
-            )}
           </div>
 
           <AnimatePresence>

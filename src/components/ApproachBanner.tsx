@@ -425,6 +425,23 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
       style={{ bottom: `calc(${miniPlayerVisible ? '10rem' : '6rem'} + var(--wip-cruscotto-h, 0px) + env(safe-area-inset-bottom, 0px))` /* + il cruscotto del giro (TourBanner pubblica --wip-cruscotto-h): le due card non si sovrappongono */ }}
     >
       <AnimatePresence>
+        {/* Istruzione di navigazione (es. "gira a destra"): l'evento
+            wip-nav-instruction aggiornava lo stato ma non compariva mai a
+            schermo — il testo restava solo nel commento di ttsService.ts.
+            Stesso stile del banner riassuntivo qui sotto. */}
+        {navInstruction && (
+          <motion.div
+            key="nav-instruction"
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="pointer-events-none bg-stone-900/80 backdrop-blur-lg text-white rounded-xl px-4 py-2 flex items-center gap-2 shadow-lg border border-white/10"
+          >
+            <span aria-hidden="true">🧭</span>
+            <span className="text-[13px] font-black">{navInstruction}</span>
+          </motion.div>
+        )}
+
         {entries.slice(0, 2).map((entry, index) => {
           // Solo il flag (03/09/2026), come in poiTaxonomy: la categoria
           // 'gemme' e' il contenitore dell'import CSV, non un giudizio.

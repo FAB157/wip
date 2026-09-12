@@ -8,6 +8,8 @@ import { scaricaPacchettoOffline } from '../lib/pacchettoOffline';
 import { registraDownload } from '../lib/downloadsRegistry';
 import DownloadsScreen from './DownloadsScreen';
 import { tourService, MAX_TAPPE } from '../services/tourService';
+import { getDayPassState } from '../services/dayPassService';
+import { apriCassaDayPass } from '../lib/tour/passRichiesto';
 import NavChoiceSheet from './NavChoiceSheet';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
@@ -314,7 +316,18 @@ async function processItineraryStream(
       throw new PlanError('STREAM_TIMEOUT');
     }
 
-    const { done, value } = await reader.read();
+    // TIMEOUT SUL SINGOLO CHUNK (10/09/2026): il controllo sopra si rivaluta
+    // solo tra un giro e l'altro del while. Se lo stream si blocca DENTRO
+    // questa await senza mai chiudersi (né emettere byte, né errore), il
+    // guardiano di sopra non viene mai richiamato e la lettura resta appesa
+    // per sempre. 45s per il singolo chunk, non per l'intero streaming.
+    const { done, value } = await new Promise<{ done: boolean; value?: Uint8Array }>((resolve, reject) => {
+      const chunkTimer = setTimeout(() => {
+        reader.cancel().catch(() => {});
+        reject(new PlanError('STREAM_TIMEOUT'));
+      }, 45000);
+      reader.read().then((r) => { clearTimeout(chunkTimer); resolve(r); }, (e) => { clearTimeout(chunkTimer); reject(e); });
+    });
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
@@ -760,6 +773,23 @@ export default function PlanScreen({
     (text: string, tone: 'error' | 'info' | 'success' = 'error') => sharedNotify(text, tone),
     []
   );
+  // AVVISO GIORNI MANCANTI (10/09/2026): il server può consegnare un itinerario
+  // con meno giorni di quelli richiesti (blocco troncato, revisore
+  // anti-allucinazione che scarta un giorno intero...) e già ne conguaglia i
+  // crediti lato server — ma prima l'utente non ne aveva alcun segnale e si
+  // trovava semplicemente un itinerario più corto. Richiamata da ogni punto
+  // che riceve una risposta di generazione, col numero di giorni richiesti.
+  const warnIfFewerDays = useCallback((data: any, giorniRichiesti: number) => {
+    const ricevuti = Array.isArray(data?.giorni) ? data.giorni.length : 0;
+    if (ricevuti > 0 && ricevuti < giorniRichiesti) {
+      notify(
+        language === 'IT'
+          ? `Generati ${ricevuti} giorni su ${giorniRichiesti} richiesti (i crediti sono già stati conguagliati).`
+          : `Generated ${ricevuti} of ${giorniRichiesti} requested days (credits have already been adjusted).`,
+        'error'
+      );
+    }
+  }, [notify, language]);
   // Acquisizione GPS (Form C): può durare parecchi secondi e prima non dava
   // alcun segnale, il bottone sembrava semplicemente non funzionare.
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -2027,7 +2057,10 @@ export default function PlanScreen({
     if (generatedPlan && generatedPlan.giorni) {
       const allPoisToUpsert: any[] = [];
       generatedPlan.giorni.forEach(giorno => {
-        giorno.tappe.forEach(tappa => {
+        // (giorno.tappe || []): un giorno salvato prima del fix server che
+        // garantisce sempre l'array non deve poter far esplodere questo
+        // effetto in background (10/09/2026).
+        (giorno.tappe || []).forEach(tappa => {
           const lat = tappa.coordinate?.lat || 0;
           const lon = tappa.coordinate?.lng || (tappa.coordinate as any)?.lon || 0;
           // Ogni tappa nella sua categoria (30/08/2026): i pasti in 'locali',
@@ -2366,6 +2399,11 @@ export default function PlanScreen({
     metaDaRiprendere: navMetaDaRiprendere,
     riprendiMeta: navRiprendiMeta,
   } = useWalkingNavigation(language);
+  // Copia in ref di navState (10/09/2026): serve al cleanup dell'effetto di
+  // check-in qui sotto, registrato con deps [generatedPlan?.id] e quindi con
+  // una closure che vedrebbe solo lo stato al montaggio, non quello attuale.
+  const navStateRef = useRef(navState);
+  useEffect(() => { navStateRef.current = navState; }, [navState]);
 
   // Avvio WIP Nav dal modal "Rotta Intelligente" (bottone per tappa in
   // ItineraryStop → App → qui): destinazione, origine (GPS o indirizzo
@@ -2420,17 +2458,35 @@ export default function PlanScreen({
       while (giorno && nextIdx < giorno.tappe.length && !haCoordinateValide(giorno.tappe[nextIdx])) nextIdx += 1;
       if (giorno && nextIdx < giorno.tappe.length) {
          const nextStop = giorno.tappe[nextIdx];
-         setNavStopIndex(nextIdx);
-         startNavigation({
-           lat: nextStop.coordinate.lat,
-           lon: nextStop.coordinate.lng,
-           // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
-           // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
-           // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
-           poiId: nextStop.id_tappa || undefined,
-           poiName: nextStop.titolo_tappa,
-           dayIndex: navDayIndex,
-           stopIndex: nextIdx,
+         // IL CANCELLO DEL DAY PASS (10/09/2026, collaudo). Il tasto "Navigatore
+         // interno" e questo avanzo manuale non passano MAI da tourService.avvia()
+         // né dal cancello server passValido di /api/tour/foot (usano fetchWalkingRoute
+         // → /api/route/foot, la singola rotta libera): senza controllo qui, si
+         // avanzava di tappa in tappa all'infinito aggirando il Day Pass — esattamente
+         // l'aggiramento già chiuso per il tondo verde in App.tsx (righe ~1884-1889:
+         // mai visibile insieme ad «Avvia la navigazione», mai più di una tappa senza
+         // pass). Qui si replica lo stesso principio con l'equivalente client-side.
+         getDayPassState().then((pass) => {
+           if (!pass?.active) {
+             notify(getTranslation('gr_pass_richiesto', language));
+             apriCassaDayPass(undefined, getTranslation('gr_dp_gate_navigazione', language));
+             return;
+           }
+           setNavStopIndex(nextIdx);
+           startNavigation({
+             lat: nextStop.coordinate.lat,
+             lon: nextStop.coordinate.lng,
+             // L'id della tappa COM'E' (ITI-01): `parseInt(id.replace(/\D/g,''))`
+             // esplodeva se id_tappa mancava (lo schema AI non lo produce) e
+             // trasformava "lib_1_2_ab12cd" in 12, cioe' un POI a caso.
+             poiId: nextStop.id_tappa || undefined,
+             poiName: nextStop.titolo_tappa,
+             dayIndex: navDayIndex,
+             stopIndex: nextIdx,
+           });
+         }).catch(() => {
+           // In dubbio si nega, come passValido lato server.
+           apriCassaDayPass(undefined, getTranslation('gr_dp_gate_navigazione', language));
          });
       } else {
          // Fine itinerario per il giorno
@@ -2540,6 +2596,7 @@ export default function PlanScreen({
       });
       
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -2677,6 +2734,15 @@ export default function PlanScreen({
     // t1/t10/t11/t21 → una tappa raggiunta ne marcava mezzo itinerario.
     const handleCheckin = (e: any) => {
       const { poiId, poiName } = e.detail || {};
+      // SENTINELLA "reel to plan" (10/09/2026): questo stesso evento arriva
+      // anche da CameraScreen.tsx/ThematicSheet.tsx con poiId 'reel-to-plan'
+      // per aggiungere un POI all'itinerario (gestito altrove, vedi
+      // `onReelCheckin`/`consumeReelToPlan` sopra) — NON e' un vero check-in
+      // di navigazione. Senza questo ritorno, il fallback qui sotto sugli
+      // indici della navigazione corrente (navIdxRef) marcava "visited" la
+      // tappa che si stava navigando in quel momento, che con questo evento
+      // non ha nulla a che fare.
+      if (poiId === 'reel-to-plan') return;
       // MATCH PER INDICE quando c'e' (ITI-12): 'wip-nav-arrived' porta
       // dayIndex/stopIndex della tappa navigata; in mancanza si usano gli
       // indici correnti della navigazione. Il nome resta SOLO come ultima
@@ -2693,7 +2759,9 @@ export default function PlanScreen({
           ...prev,
           giorni: prev.giorni.map((g, gi) => ({
             ...g,
-            tappe: g.tappe.map((t, ti) => {
+            // (g.tappe || []): un giorno senza array tappe (itinerario vecchio,
+            // pre fix server) non deve far esplodere il check-in (10/09/2026).
+            tappe: (g.tappe || []).map((t, ti) => {
               let isMatch = false;
               if (dayIdx != null && stopIdx != null) {
                 isMatch = gi === dayIdx && ti === stopIdx;
@@ -2722,7 +2790,13 @@ export default function PlanScreen({
       window.removeEventListener('wip-nav-arrived', handleCheckin);
       // Issue 19: Interrompe qualsiasi podcast in corso quando si cambia tab
       // per evitare che la voce continui a parlare in background.
-      window.speechSynthesis?.cancel();
+      // ECCETTO durante una navigazione WIP Nav attiva (10/09/2026): questo
+      // effetto si ri-registra a ogni cambio di generatedPlan?.id (e allo
+      // smontaggio del componente), e cancel() azzerava anche un'istruzione
+      // di svolta a meta' frase. Se la navigazione e' in corso ('routing' |
+      // 'navigating' | 'arrived') si lascia che sia lei a gestire la propria
+      // sintesi vocale (stopNavigation la interrompe quando serve davvero).
+      if (navStateRef.current === 'idle') window.speechSynthesis?.cancel();
     };
   }, [generatedPlan?.id]); // Re-bind if plan changes to ensure correct closure scope
 
@@ -3271,6 +3345,7 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -3280,7 +3355,12 @@ export default function PlanScreen({
         // Salva in background l'itinerario appena generato nella cache condivisa
         // (senza l'id personale: la cache è condivisa tra utenti)
         if (cacheUsable) try {
-          const { id: _omit, ...cachePayload } = data;
+          // ESCLUSI ANCHE I CAMPI DI ADDEBITO (10/09/2026): oltre all'id,
+          // credits_paid/credits_paid_earned/credits_paid_ts (scritti sopra,
+          // righe ~427-431) sono personali di CHI ha generato il piano —
+          // salvarli nella cache condivisa li regalava a chiunque leggesse
+          // lo stesso cache-hit dopo di lui.
+          const { id: _omit, credits_paid: _cp, credits_paid_earned: _cpe, credits_paid_ts: _cpts, ...cachePayload } = data;
           await supabase.from("shared_itinerary_cache").upsert({
             id: cacheId,
             destination: destination.trim(),
@@ -3322,6 +3402,15 @@ export default function PlanScreen({
     // Coordinate della base già risolte nel passo precedente (handleGenerateRadius):
     // ancorano anche l'alternativa alla zona giusta.
     const coords = destCoords && destCoords.label === baseLocation ? destCoords : null;
+    // Guardia INCONDIZIONATA (10/09/2026): senza coordinate valide questo
+    // flusso arrivava fino all'addebito (fino a 300 crediti) senza mai
+    // ancorare l'alternativa a una zona geografica, come già evitato negli
+    // altri due percorsi di generazione (handleGenerateAutomatic, riga ~3101,
+    // e handleGenerateTinderItinerary, riga ~4180).
+    if (!coords) {
+      alertDestNotFound();
+      return;
+    }
 
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
@@ -3375,6 +3464,7 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         notifyCreditsChanged({ userId: currentUserId }); // addebito/conguaglio server-side: si riallinea il saldo
@@ -4271,6 +4361,7 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         // Reinnesta i link affiliato che il modello non riporta nel JSON:
         // il match è sul titolo della tappa, senza toccare il resto.
         const linkByName = new Map(
@@ -4416,6 +4507,7 @@ export default function PlanScreen({
       });
 
       if (data && data.giorni) {
+        warnIfFewerDays(data, numDaysForPricing);
         setGeneratedPlan(data);
         savePlanToSupabase(data);
         setPlannerMode('view');
@@ -4775,7 +4867,12 @@ export default function PlanScreen({
     setReplacingId(tappaId);
     try {
       const token = sessionData?.session?.access_token;
-      const res = await fetch(getApiUrl('/api/groq/replace'), {
+      // apiFetch, non fetch() nuda (10/09/2026): senza timeout, una risposta
+      // che non arriva mai lasciava setReplacingId(tappaId) impostato per
+      // sempre — rilasciato solo nel finally — con lo spinner sulla tappa
+      // bloccato a tempo indefinito. apiFetch ha un timeout di default
+      // (src/lib/api.ts).
+      const res = await apiFetch(getApiUrl('/api/groq/replace'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -7464,7 +7561,10 @@ export default function PlanScreen({
 
 
                     <div className="space-y-8 pl-5 relative border-l border-dashed border-primary/20">
-                      {giorno.tappe.map((tappa, tIdx) => (
+                      {/* (giorno.tappe || []): schermata bianca su un itinerario
+                          vecchio salvato prima del fix server, senza array
+                          tappe (10/09/2026). */}
+                      {(giorno.tappe || []).map((tappa, tIdx) => (
                         <div key={tappa.id_tappa} className="relative" aria-busy={replacingId === tappa.id_tappa}>
                         {/* Spinner locale della sostituzione: la card resta
                             al suo posto, niente overlay a tutto schermo. */}
@@ -7477,7 +7577,7 @@ export default function PlanScreen({
                           tappa={tappa}
                           tIdx={tIdx}
                           gIdx={gIdx}
-                          isLast={tIdx === giorno.tappe.length - 1}
+                          isLast={tIdx === (giorno.tappe || []).length - 1}
                           expanded={!!expandedStops[tappa.id_tappa]}
                           isLocked={!!lockedStops[tappa.id_tappa]}
                           language={language}

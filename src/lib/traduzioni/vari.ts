@@ -1468,6 +1468,7 @@ export const TRAD_VARI: Record<string, Partial<Record<Language, string>>> = {
   vr_b_unit_per_scan: { IT: "per scansione", EN: "per scan", FR: "par scan", ES: "por escaneo", DE: "pro Scan", RU: "за скан", ZH: "每次扫描" },
   vr_b_unit_per_day: { IT: "al giorno", EN: "per day", FR: "par jour", ES: "al día", DE: "pro Tag", RU: "в день", ZH: "每天" },
   vr_b_unit_24h: { IT: "24 ore", EN: "24 hours", FR: "24 heures", ES: "24 horas", DE: "24 Stunden", RU: "24 часа", ZH: "24 小时" },
+  vr_b_unit_4h: { IT: "4 ore, 40 audioguide", EN: "4 hours, 40 audio guides", FR: "4 heures, 40 audioguides", ES: "4 horas, 40 audioguías", DE: "4 Stunden, 40 Audioguides", RU: "4 часа, 40 аудиогидов", ZH: "4 小时，40 段语音导览" },
 
   // ── PriceList.tsx ──────────────────────────────────────────────────────
   vr_b_pl_title: { IT: "Listino Servizi", EN: "Service Prices", FR: "Tarifs des services", ES: "Lista de precios", DE: "Preisliste", RU: "Прайс услуг", ZH: "服务价目表" },

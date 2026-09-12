@@ -20,7 +20,7 @@ import {
 import { notify } from '../lib/toast';
 import { possiedePoi, possiedePoiSync, segnaPoiPosseduto } from '../services/dayPassService';
 import { speakAudioguide, unlockSpeech } from '../services/ttsService';
-import { resetPlayedOne } from '../lib/guideSettings';
+import { resetPlayedOne, markPlayed } from '../lib/guideSettings';
 import { CATEGORY_LABELS_IT, CATEGORY_EMOJI } from '../lib/poiCategories';
 import type { GuideCharacter, PoiCategory } from '../types/poi';
 
@@ -115,6 +115,7 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
         if (charge) segnaPoiPosseduto(poi.id);
         setGiaTua(true);
         heardRef.current = text;
+        markPlayed(poi.id); // ascoltato dalla scheda: il geofencing non lo riproponga da capo
         await speakAudioguide(text, lang, character);
       } else if (esito.status === 'credits_required') {
         setPaywall({ cost: esito.cost, preview: esito.preview });
@@ -123,6 +124,11 @@ export default function PoiCard({ poi, language, character, onClose }: PoiCardPr
         notify(getTranslation('sk_crediti_insufficienti_audio', uiLang));
       } else if (esito.status === 'auth_required') {
         notify(getTranslation('auth_richiesta', uiLang));
+      } else if (esito.status === 'error') {
+        // Generazione a pagamento fallita (server irraggiungibile o 5xx) senza
+        // testo di fallback: l'utente deve saperlo, non restare in silenzio.
+        // Stringa fissa (non da i18n.ts, file non toccato in questo intervento).
+        notify('Non è stato possibile generare l\'audioguida. Riprova.');
       }
     } finally {
       setPlaying(false);

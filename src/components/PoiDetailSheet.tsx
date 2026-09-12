@@ -122,7 +122,8 @@ const fetchWithTimeout = (url: string, opts: any = {}, ms = 12000): Promise<Resp
   apiFetch(url, opts, ms);
 
 import { apiFetch, bearerHeaders } from '../lib/api';
-import { mapItineraryCategoryToMapCategory, getAudioguide, upsertAudioguide, ensureSharedPoi } from "../services/poiRepository";
+import { mapItineraryCategoryToMapCategory, getAudioguide, ensureSharedPoi } from "../services/poiRepository";
+import { getAudioguideForPlayback } from "../services/audioguideService";
 import PoiAudioPlayer from "./poi/PoiAudioPlayer";
 import PoiExtraDetails from "./poi/PoiExtraDetails";
 import PoiBiodiversity from "./poi/PoiBiodiversity";
@@ -1579,7 +1580,17 @@ export default function PoiDetailSheet({
       if (alreadyUnlocked) {
         console.log("[PoiDetailSheet] POI già sbloccato, avvio riproduzione...");
         if (ownedUrl) {
-          await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name, poi?.photo_url || poi?.image_url);
+          const esitoUrl = await locationService.playAudioUrl(ownedUrl, poiIdStr, poi?.name, poi?.photo_url || poi?.image_url);
+          // TOUR DI GRUPPO: l'MP3 acquistato/offline vive solo su questo
+          // telefono, quindi playAudioUrl non trasmette nulla e il gruppo
+          // restava muto proprio sui POI gia' sbloccati dal leader. Si manda
+          // il TESTO: chi ascolta lo sente con la stessa voce, dal proprio
+          // apparecchio. (Per i non-leader l'evento non ha ascoltatori.)
+          if (esitoUrl === 'started' && textToSpeak) {
+            window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
+              detail: { textToSpeak, poiName: poi?.name, character: localGuideMode, language },
+            }));
+          }
           return;
         }
         if (language !== 'IT' && !generatedText) {
@@ -1710,6 +1721,13 @@ export default function PoiDetailSheet({
         // Prima assicuriamo che il POI stesso esista in shared_pois (fonti
         // terze OSM/FSQ/Google): crowdsourcing per i visitatori successivi.
         if (!isDeepDive) {
+          // NOTA (10/09/2026): qui si chiamava anche upsertAudioguide() per
+          // persistere il testo in poi_audioguides, ma la RLS ora blocca la
+          // scrittura client (vedi audioguideService.ts, righe 3-5): il
+          // .catch(() => {}) la faceva fallire sempre in silenzio, un falso
+          // senso di sicurezza. Rimossa: la persistenza resta server-side
+          // (via getOrCreateAudioguideText -> /api/poi/audioguide). Qui
+          // resta solo il crowdsourcing del POI per i prossimi visitatori.
           ensureSharedPoi({
             id: String(poi.id),
             name: poi.name || "",
@@ -1718,8 +1736,6 @@ export default function PoiDetailSheet({
             category: poi.category,
             description_short: poi.description_short || null,
             description_long: wikiData?.extract || null,
-          }).then(() => {
-            upsertAudioguide(String(poi.id), String(language), charKeyFor(modeToUse) as any, data.result).catch(() => {});
           }).catch(() => {});
         }
         if (autoPlay) {
@@ -3623,11 +3639,12 @@ export default function PoiDetailSheet({
         if (!pendingAudioTask) return;
         const task = pendingAudioTask;
         setPendingAudioTask(null);
-        // ADDEBITO CLIENT-SIDE alla conferma: consumeCredits scala i crediti
-        // SERVER-SIDE via token utente (POST /api/credits/consume, atomico). I
-        // rami sotto rimborsano con refundCredits se la generazione o la
-        // riproduzione falliscono. Le rotte di generazione/TTS NON scalano da
-        // sé → nessun doppio addebito.
+        // ADDEBITO ALLA CONFERMA, tramite getAudioguideForPlayback(charge:true)
+        // (10/09/2026): passa SEMPRE da /api/poi/audioguide, cosi' il possesso
+        // viene registrato in user_poi_purchases e il POI non si ripaga alla
+        // visita successiva (prima consumeCredits scalava lato client senza
+        // mai passare dal server). I rami sotto rimborsano con refundCredits
+        // solo quando il server ha scalato ora ma la riproduzione fallisce.
         const { data: sessionData } = await supabase.auth.getSession();
         const currentUserId = sessionData?.session?.user?.id || "mock-user-id";
         const creditiInsufficienti = () => {
@@ -3640,18 +3657,44 @@ export default function PoiDetailSheet({
         // Qui l'addebito resta PRIMA della generazione: e' la generazione la
         // cosa che costa.
         if (language !== 'IT' && !generatedText) {
-          const audioPaid = await consumeCredits(currentUserId, PRICING_LIST.audio_guide);
-          if (!audioPaid) { creditiInsufficienti(); return; }
-          // regenerateWithGemini ora ritorna l'esito reale (true = generata e
-          // riprodotta). Su fallimento rimborsiamo l'addebito appena fatto.
-          const regenOk = await regenerateWithGemini(true, localGuideMode);
-          if (regenOk) {
-            notifyCreditsChanged({ userId: currentUserId });
+          // ADDEBITO E GENERAZIONE ORA PASSANO DAL SERVER, come PoiCard.tsx
+          // (10/09/2026): consumeCredits qui addebitava lato client SENZA MAI
+          // chiamare /api/poi/audioguide, quindi il possesso non veniva mai
+          // scritto in user_poi_purchases e il POI si ripagava alla visita
+          // successiva. getAudioguideForPlayback con charge:true genera E
+          // addebita (se dovuto) in un solo giro dal server.
+          const esitoAudio = await getAudioguideForPlayback(
+            { id: String(poi?.id), name: poi?.name || '', lat: poi?.lat, lon: poi?.lon, category: poi?.category as any },
+            language,
+            localGuideMode,
+            { charge: true },
+          );
+          if (esitoAudio.status === 'insufficient_credits' || esitoAudio.status === 'credits_required') {
+            creditiInsufficienti();
+            return;
+          }
+          if (esitoAudio.status === 'auth_required') {
+            notify(getTranslation('auth_richiesta', language));
+            return;
+          }
+          if (esitoAudio.status === 'ok' || (esitoAudio.status === 'error' && esitoAudio.text)) {
+            const testo = esitoAudio.text as string;
+            setGeneratedText(testo);
+            const riprodotta = await locationService.playAudio(testo, poi?.name, poi?.category, String(poi?.id), localGuideMode, undefined, poi?.photo_url || poi?.image_url);
+            if (esitoAudio.status === 'ok' && esitoAudio.charged) notifyCreditsChanged({ userId: currentUserId });
+            if (!riprodotta) {
+              // Rimborsiamo solo se il server ha scalato crediti ORA: se il
+              // POI era gia' posseduto (o day pass) non c'e' nulla da
+              // rimborsare, e il testo resta comunque suo per sempre.
+              if (esitoAudio.status === 'ok' && esitoAudio.charged) {
+                const { data: sd } = await supabase.auth.getSession();
+                const uid = sd?.session?.user?.id || "mock-user-id";
+                await refundCredits(uid, PRICING_LIST.audio_guide)
+                  .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
+              }
+              notify(getTranslation('sk_audioguida_non_riprodotta', language));
+            }
           } else {
-            const { data: sd } = await supabase.auth.getSession();
-            const uid = sd?.session?.user?.id || "mock-user-id";
-            await refundCredits(uid, PRICING_LIST.audio_guide)
-              .catch(err => console.error('[Audioguida] Rimborso fallito:', err));
             notify(getTranslation('sk_audioguida_non_generata', language));
           }
           return;
@@ -3662,28 +3705,52 @@ export default function PoiDetailSheet({
           // un'altra. Prima si addebitava PRIMA di playAudio, e 'queued'
           // (truthy) passava per un avvio: una traccia accodata e poi fermata
           // restava pagata. Se l'addebito riesce ma il TTS fallisce, rimborso.
+          let autorizzato = false;
           let addebitato = false;
           let rifiutato = false;
           const esito = await locationService.playAudio(
             task.text, poi?.name, poi?.category, String(poi?.id), localGuideMode,
             async () => {
-              const ok = await consumeCredits(currentUserId, PRICING_LIST.audio_guide).catch(() => false);
-              if (ok) addebitato = true; else rifiutato = true;
+              // ADDEBITO DAL SERVER (10/09/2026), come PoiCard.tsx: consumeCredits
+              // qui addebitava lato client SENZA passare da /api/poi/audioguide,
+              // quindi il possesso non veniva scritto in user_poi_purchases e il
+              // POI si ripagava alla visita successiva.
+              const esitoAddebito = await getAudioguideForPlayback(
+                { id: String(poi?.id), name: poi?.name || '', lat: poi?.lat, lon: poi?.lon, category: poi?.category as any },
+                language,
+                localGuideMode,
+                { charge: true },
+              ).catch(() => ({ status: 'error', text: null } as const));
+              const ok = esitoAddebito.status === 'ok' || (esitoAddebito.status === 'error' && !!esitoAddebito.text);
+              if (ok) {
+                autorizzato = true;
+                // charged=true solo se il server ha scalato crediti ORA: se il
+                // POI era gia' posseduto (o day pass, o listino zero) non c'e'
+                // nulla da rimborsare ne' saldo da rinfrescare.
+                addebitato = esitoAddebito.status === 'ok' && esitoAddebito.charged === true;
+              } else {
+                rifiutato = true;
+              }
               return ok;
             },
             poi?.photo_url || poi?.image_url,
           );
           if (rifiutato) { creditiInsufficienti(); return; }
-          if (esito === 'started' && addebitato) {
-            // Saldo scalato lato server: aggiorna i widget crediti.
-            notifyCreditsChanged({ userId: currentUserId });
+          if (esito === 'started') {
+            // Saldo scalato lato server: aggiorna i widget crediti (solo se
+            // e' stato scalato ora: un POI gia' posseduto non lo tocca).
+            if (addebitato) notifyCreditsChanged({ userId: currentUserId });
           } else if (esito === 'queued') {
-            // Partira' (e si paghera') a fine traccia corrente: niente da fare ora.
+            // Partira' (e si paghera', se dovuto) a fine traccia corrente: niente da fare ora.
           } else if (addebitato) {
             const { data: sd } = await supabase.auth.getSession();
             const uid = sd?.session?.user?.id || "mock-user-id";
             await refundCredits(uid, PRICING_LIST.audio_guide)
               .catch(e => console.error('[Audioguida] Rimborso fallito:', e));
+            notify(getTranslation('sk_audioguida_non_riprodotta', language));
+          } else if (autorizzato) {
+            // Autorizzato gratis (posseduto/day pass) ma la riproduzione e'
+            // fallita per un motivo tecnico: nulla da rimborsare.
             notify(getTranslation('sk_audioguida_non_riprodotta', language));
           } else {
             notify(getTranslation('riproduzione_fallita', language));

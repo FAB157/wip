@@ -3259,6 +3259,31 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
   );
 }
 
+// Difetto dal vivo (10/09): il preferito salva uno snapshot CONGELATO del POI
+// (favorites.ts) e uno script di riparazione del catalogo (fix_legacy_json_pois.ts)
+// ha sistemato shared_pois ma non le copie già dentro saved_pois — la card
+// mostrava il JSON grezzo, es. {"status":"OK","descrizione_breve_it":"..."} ,
+// invece del testo. Correzione difensiva in lettura: se la stringa è JSON
+// proviamo a estrarne un campo di testo leggibile; se non c'è nulla di
+// utilizzabile torniamo stringa vuota (niente JSON a schermo).
+function estraiDescrizioneLeggibile(testo: any): string {
+  if (typeof testo !== 'string') return '';
+  const t = testo.trim();
+  if (!t) return '';
+  if (t[0] !== '{' && t[0] !== '[') return t;
+  try {
+    const parsed = JSON.parse(t);
+    const campiTesto = ['descrizione_breve_it', 'descrizione_breve', 'description_short', 'description'];
+    for (const campo of campiTesto) {
+      const val = parsed?.[campo];
+      if (typeof val === 'string' && val.trim()) return val.trim();
+    }
+  } catch {
+    // JSON malformato: nessun testo da estrarre
+  }
+  return '';
+}
+
 function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; onClick?: () => void; key?: any }) {
   // Componente senza prop language: la lingua UI arriva da localStorage
   const lingua = linguaCorrente();
@@ -3297,7 +3322,7 @@ function PoiCard({ poi, onRemove, onClick }: { poi: any; onRemove: () => void; o
         </div>
         <h4 className="font-black text-gray-900 text-lg leading-tight mb-2">{poi.name}</h4>
         <p className="text-xs text-gray-500 font-medium leading-relaxed line-clamp-2">
-          {poi.description || getTranslation('pf_no_desc', lingua)}
+          {estraiDescrizioneLeggibile(poi.description) || getTranslation('pf_no_desc', lingua)}
         </p>
       </div>
     </motion.div>

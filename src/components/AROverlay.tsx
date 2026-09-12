@@ -502,8 +502,13 @@ export default function AROverlay({ onClose, onPoiClick }: AROverlayProps) {
 
       {/* Testata: scheda bianca, come nella tavola. Sopra il video serviva un
           gradiente nero per leggere il testo bianco; una scheda con la sua
-          ombra si legge su qualunque sfondo e non annerisce l'immagine. */}
-      <div className="absolute top-0 left-0 right-0 p-4 z-10 flex justify-between items-start gap-3">
+          ombra si legge su qualunque sfondo e non annerisce l'immagine.
+          z-50, SOPRA lo stato di caricamento (z-40): se la fotocamera non
+          risponde mai (permesso mai concesso/negato, nessuna webcam) la X
+          restava dietro la scritta "Inizializzazione radar..." e non si
+          poteva chiudere Radar AR in nessun modo (11/09/2026, trovato in
+          collaudo). */}
+      <div className="absolute top-0 left-0 right-0 p-4 z-50 flex justify-between items-start gap-3">
         <div className="bg-white/95 backdrop-blur-sm border border-gray-200 rounded-2xl px-3.5 py-2.5 shadow-[0_1px_3px_rgba(15,23,42,0.08)]">
           <h2 className="font-black text-lg text-primary flex items-center gap-2">
             <Compass className={`w-5 h-5 ${compassAvailable ? 'text-emerald-700' : 'text-amber-700'}`} />

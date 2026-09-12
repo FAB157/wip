@@ -80,6 +80,21 @@ const SPEED_MAX_MS = 2;
 // di manovra premature/mancate. Stesso valore di MIN_GPS_ACCURACY in
 // SmartGeofenceManager.ts, per coerenza tra i due moduli di navigazione.
 const MAX_GPS_ACCURACY_M = 80;
+// FIX WIPNAV-1 (10/09/2026): oltre alla prossimita' (SPEAK_DISTANCE_M), lo
+// step avanza anche quando la PROGRESSIONE lungo il tracciato ha superato il
+// punto della manovra di questo margine — un salto GPS o un incrocio largo
+// possono far saltare del tutto i 30 m, e senza questo lo step resta
+// congelato per sempre sulla stessa manovra (mai piu' superata).
+const PROGRESS_SKIP_MARGIN_M = 18;
+// FIX WIPNAV-4 (10/09/2026): quante volte di fila un ricalcolo puo' RIUSCIRE
+// e lasciare comunque l'utente fuori rotta prima che scatti lo stesso backoff
+// crescente dei fallimenti — altrimenti "Percorso ricalcolato" si ripete ogni
+// RECALC_COOLDOWN_MS all'infinito quando la nuova rotta non basta.
+const RECALC_STILL_OFFROUTE_MAX = 3;
+// FIX WIPNAV-5 (10/09/2026): con origine personalizzata, se non arriva MAI un
+// fix GPS valido (permesso negato) il navigatore restava bloccato in
+// silenzio per sempre — dopo questa attesa si avvisa esplicitamente.
+const ORIGIN_OVERRIDE_NO_FIX_TIMEOUT_MS = 25000;
 
 const REROUTE_PHRASES: Record<string, string> = {
   it: 'Percorso ricalcolato',
@@ -325,6 +340,20 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const gemmeViste = useRef<Set<string>>(new Set());
   const gemmaInCorsoRef = useRef(false);
   const ripresaRef = useRef<NavTarget | null>(null);
+  // FIX WIPNAV-9: cercaGemmaVicina e' chiamata dentro la subscription GPS
+  // creata da startNavigation (useCallback con deps [language]), quindi la
+  // sua closure vede lo stato `gemmaVicina` del render in cui startNavigation
+  // e' stata (ri)creata, non quello corrente — restava sempre il valore
+  // d'avvio. Un ref aggiornato ad ogni render legge sempre il valore vero.
+  const gemmaVicinaRef = useRef<GemmaVicina | null>(null);
+  // FIX WIPNAV-8: POI scelti lungo il percorso ORIGINALE, salvati prima di
+  // deviare verso una gemma — altrimenti startNavigation(..., []) li perdeva
+  // per sempre, sia durante la deviazione sia dopo aver ripreso la meta.
+  const pendingPoisOriginaliRef = useRef<RoutePoi[]>([]);
+  // FIX WIPNAV-5: vero appena arriva il primo fix della subscription GPS di
+  // questa navigazione. Con originOverride e GPS negato, senza fix il
+  // navigatore restava bloccato in silenzio per sempre.
+  const primoFixRicevutoRef = useRef(false);
 
   const routeRef = useRef<WalkingRoute | null>(null);
   const targetRef = useRef<NavTarget | null>(null);
@@ -349,6 +378,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // Attesa corrente prima di ritentare un ricalcolo fallito (0 = nessun
   // fallimento pendente: vale RECALC_COOLDOWN_MS).
   const recalcBackoffRef = useRef(0);
+  // FIX WIPNAV-4: ricalcoli RIUSCITI di fila che hanno lasciato l'utente
+  // comunque fuori rotta (azzerato appena si torna dentro OFF_ROUTE_M).
+  const successiveOffRouteRecalcsRef = useRef(0);
   // Campioni di velocita' (m/s) degli ultimi fix + ultimo fix per il calcolo
   // distanza/Δt quando il GPS non fornisce speed.
   const speedSamplesRef = useRef<number[]>([]);
@@ -447,10 +479,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     const locale = linguaLocale(targetRef.current?.country);
     const utente = String(language || 'it').toLowerCase().slice(0, 2);
     if (step.name && locale && locale !== utente) {
-      // Frase SENZA il nome (la variante generica), poi il nome in lingua locale.
+      // Frase SENZA il nome (la variante generica) + nome via, in UNA sola
+      // chiamata (FIX WIPNAV-2): due chiamate separate si cancellavano a
+      // vicenda (speakInstruction fa cancel() prima di parlare), e si
+      // sentiva solo il nome della via, mai l'istruzione della manovra.
       const senzaNome = translateManeuver(step.maneuverType, step.maneuverModifier, language, targetRef.current?.poiName, undefined, undefined);
-      speakInstruction(senzaNome, language);
-      speakInstruction(step.name, locale);
+      speakInstruction(`${senzaNome} ${step.name}`, language);
       return;
     }
     speakInstruction(step.instruction, language);
@@ -467,6 +501,12 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       if (wl?.request) wakeLockRef.current = await wl.request('screen');
     } catch { /* non supportato o negato: si continua senza */ }
   };
+
+  // FIX WIPNAV-9: tiene gemmaVicinaRef sincronizzato con lo stato ad ogni
+  // render, cosi' cercaGemmaVicina (chiamata dalla subscription GPS di lunga
+  // vita creata da startNavigation) legge sempre il valore vero e non quello
+  // catturato quando startNavigation e' stata (ri)creata.
+  useEffect(() => { gemmaVicinaRef.current = gemmaVicina; }, [gemmaVicina]);
 
   // Precalcola, per ogni vertice della polilinea, i metri che restano da lì
   // alla destinazione: distanza residua = remaining[vertice più vicino].
@@ -601,7 +641,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // meta stessa ne' i POI gia' scelti lungo il percorso ne' quelle gia' viste).
   const cercaGemmaVicina = (here: LatLon) => {
     const ora = Date.now();
-    if (gemmaInCorsoRef.current || gemmaVicina || ora - gemmaUltimaRicercaRef.current < GEMMA_OGNI_MS) return;
+    if (gemmaInCorsoRef.current || gemmaVicinaRef.current || ora - gemmaUltimaRicercaRef.current < GEMMA_OGNI_MS) return;
     if (!joinedRouteRef.current) return;
     gemmaUltimaRicercaRef.current = ora;
     gemmaInCorsoRef.current = true;
@@ -635,7 +675,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   // Fuori rotta: dopo OFF_ROUTE_FIXES fix consecutivi oltre OFF_ROUTE_M dal
   // tracciato, si ricalcola il percorso dalla posizione corrente.
   const maybeRecalc = async (here: LatLon, distFromRoute: number) => {
-    if (distFromRoute <= OFF_ROUTE_M) { offRouteCountRef.current = 0; return; }
+    // FIX WIPNAV-4: tornati dentro il percorso, si azzera anche il contatore
+    // dei ricalcoli "riusciti ma ancora fuori rotta".
+    if (distFromRoute <= OFF_ROUTE_M) { offRouteCountRef.current = 0; successiveOffRouteRecalcsRef.current = 0; return; }
     offRouteCountRef.current += 1;
     if (offRouteCountRef.current < OFF_ROUTE_FIXES) return;
     // Dopo un fallimento vale il backoff (20 s → 120 s), altrimenti il
@@ -662,7 +704,15 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         route.steps.forEach((s, i) => { if (String(s.maneuverType || '').toLowerCase() === 'depart') spokenRef.current.add(i); });
         offRouteCountRef.current = 0;
         lastRecalcRef.current = Date.now();
-        recalcBackoffRef.current = 0;
+        // FIX WIPNAV-4: il ricalcolo e' riuscito, ma se resta comunque fuori
+        // rotta per RECALC_STILL_OFFROUTE_MAX volte di fila (il prossimo fix
+        // fara' risalire offRouteCountRef da capo), si applica lo stesso
+        // backoff crescente dei fallimenti — senza, "Percorso ricalcolato" si
+        // ripeteva ogni RECALC_COOLDOWN_MS all'infinito.
+        successiveOffRouteRecalcsRef.current += 1;
+        recalcBackoffRef.current = successiveOffRouteRecalcsRef.current >= RECALC_STILL_OFFROUTE_MAX
+          ? Math.min(RECALC_BACKOFF_MAX_MS, recalcBackoffRef.current > 0 ? recalcBackoffRef.current * 2 : RECALC_BACKOFF_MIN_MS)
+          : 0;
         const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
         setCurrentInstruction(phrase);
         setCurrentManeuver({ type: 'reroute' });
@@ -729,6 +779,8 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     lastRecalcRef.current = 0;
     recalcInFlightRef.current = false;
     recalcBackoffRef.current = 0;
+    successiveOffRouteRecalcsRef.current = 0;
+    pendingPoisOriginaliRef.current = [];
     speedSamplesRef.current = [];
     lastFixRef.current = null;
     // La notifica dell'ultima svolta non deve restare nel centro notifiche,
@@ -796,6 +848,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       offRouteCountRef.current = 0;
       lastRecalcRef.current = Date.now();
       recalcBackoffRef.current = 0;
+      successiveOffRouteRecalcsRef.current = 0;
       joinedRouteRef.current = true;
       nearbySinceRef.current = null;
       const phrase = REROUTE_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || REROUTE_PHRASES.en;
@@ -855,8 +908,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       stepIdxRef.current = 0;
       offRouteCountRef.current = 0;
       recalcBackoffRef.current = 0;
+      successiveOffRouteRecalcsRef.current = 0;
       speedSamplesRef.current = [];
       lastFixRef.current = null;
+      primoFixRicevutoRef.current = false;
       pendingPoisRef.current = (routePois || []).filter(p => p && typeof p.lat === 'number' && typeof p.lon === 'number');
       // Con origine personalizzata (indirizzo) l'utente è tipicamente LONTANO
       // dal tracciato: ricalcolo e arrivo restano sospesi finché non si
@@ -866,7 +921,23 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
       // Origine esplicita (es. "Indirizzo personalizzato" dal modal WIP Nav):
       // prima veniva sempre ignorata e si partiva comunque dal GPS.
-      const last = locationService.getLastLocation();
+      let last = locationService.getLastLocation();
+      // FIX WIPNAV-7: stessa soglia eta'/accuratezza di recalculateRoute —
+      // senza origine esplicita, un ultimo fix vecchio o impreciso e' peggio
+      // di chiederne uno fresco prima di partire (prima si usava
+      // getLastLocation() senza controllare eta' o accuratezza).
+      if (!originOverride && (!last || Date.now() - Number(last.timestamp) > 15_000 || !(Number(last.accuracy) <= MAX_GPS_ACCURACY_M))) {
+        last = await new Promise<typeof last>((res) => {
+          if (typeof navigator === 'undefined' || !navigator.geolocation) return res(last);
+          navigator.geolocation.getCurrentPosition(
+            (p) => res({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy, speed: null, heading: null, timestamp: p.timestamp } as any),
+            () => res(last),
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 3000 },
+          );
+        });
+      }
+      // L'utente può aver premuto STOP durante l'attesa del fix fresco.
+      if (targetRef.current !== target) return;
       // Senza origine esplicita E senza fix GPS non si può partire: prima si
       // ripiegava su target→target (percorso degenere di 0 m, "sei arrivato"
       // immediato). Meglio rifiutare con un messaggio chiaro.
@@ -919,6 +990,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
 
       // Sottoscrizione al flusso GPS condiviso
       unsubRef.current = locationService.subscribe((loc) => {
+        primoFixRicevutoRef.current = true; // FIX WIPNAV-5: vedi il setTimeout dopo la subscribe
         const t = targetRef.current;
         const r = routeRef.current;
         if (!t || !r) return;
@@ -938,7 +1010,13 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         // fra palazzi alti l'accuratezza resta sopra gli 80 m a lungo, e
         // scartare tutti i fix significava non arrivare mai.
         const dDestGrezza = haversineMeters(here.lat, here.lon, t.lat, t.lon);
-        const fixBuono = loc.accuracy <= MAX_GPS_ACCURACY_M;
+        // FIX WIPNAV-6: locationService assegna Infinity quando l'accuratezza
+        // non e' un numero finito — sentinella per "sconosciuta", non
+        // "pessima". Su una WebView che non la riporta, ogni fix vale
+        // Infinity: trattarlo come uno scarto automatico lasciava la
+        // navigazione cieca per sempre (anche per l'arrivo).
+        const accuracySconosciuta = !Number.isFinite(loc.accuracy as number);
+        const fixBuono = accuracySconosciuta || loc.accuracy <= MAX_GPS_ACCURACY_M;
         if (!fixBuono && !(loc.accuracy <= ARRIVE_ACCURACY_MAX_M && dDestGrezza <= ARRIVE_DISTANCE_M && joinedRouteRef.current)) return;
 
         // "GIRATI" (08/09/2026): nei primi fix con direzione di marcia valida
@@ -1047,8 +1125,27 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
         let idx = stepIdxRef.current;
         while (idx < r.steps.length) {
           const step = r.steps[idx];
+          // FIX WIPNAV-10: senza aggancio al percorso (origine personalizzata
+          // non ancora "sul" tracciato) non si annuncia qui l'arrivo — lo
+          // step 'arrive' poteva dirlo mentre lo stato restava 'navigating'
+          // (il gate joinedRouteRef e' solo sul ramo `arrivato` piu' sotto).
+          if (String(step.maneuverType || '').toLowerCase() === 'arrive' && !joinedRouteRef.current) break;
+          // FIX WIPNAV-1: oltre alla prossimita', avanza lo step anche quando
+          // la PROGRESSIONE lungo il tracciato (stessa proiezione di
+          // nearestOnRoute/stepRemainingRef) ha superato il punto della
+          // manovra di un margine ragionevole — un salto GPS o un incrocio
+          // largo possono far saltare del tutto il raggio dei 30 m, e senza
+          // questo lo step resta congelato per sempre sulla stessa manovra.
+          const remAllaManovraProgressione = stepRemainingRef.current[idx];
+          if (remAllaManovraProgressione != null && remaining <= remAllaManovraProgressione - PROGRESS_SKIP_MARGIN_M) {
+            spokenRef.current.add(idx); // non annunciare tardivamente una svolta gia' fatta
+            idx += 1;
+            stepIdxRef.current = idx;
+            continue;
+          }
           const dStep = haversineMeters(here.lat, here.lon, step.location.lat, step.location.lon);
           if (dStep <= SPEAK_DISTANCE_M) {
+            let appenaAnnunciata = false;
             if (!spokenRef.current.has(idx)) {
               spokenRef.current.add(idx);
               setCurrentInstruction(step.instruction);
@@ -1059,9 +1156,14 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
               // c'e' il cruscotto persistente: FGS Android / Live Activity
               // iOS, con la notifica locale come ripiego DENTRO updateNavBanner.
               aggiornaBannerNav(t, step.instruction, 0, metriResidui, etaSec, { type: step.maneuverType, modifier: step.maneuverModifier, street: step.name });
+              appenaAnnunciata = true;
             }
             idx += 1; // passa alla manovra successiva
             stepIdxRef.current = idx;
+            // FIX WIPNAV-3: due manovre vicine entrambe entro 30 m si
+            // valutavano nello stesso tick e la seconda cancellava la voce
+            // della prima (speakInstruction fa cancel() prima di parlare).
+            if (appenaAnnunciata) break;
           } else {
             // In avvicinamento: mostra la manovra CHE DEVE ANCORA ARRIVARE,
             // non l'ultima annunciata. Prima il banner diceva "gira a destra"
@@ -1105,6 +1207,18 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           }
         }
       });
+
+      // FIX WIPNAV-5: con origine personalizzata, se non arriva MAI un fix
+      // GPS valido (permesso negato) prima il navigatore restava bloccato in
+      // silenzio per sempre — dopo un'attesa ragionevole si avvisa
+      // esplicitamente invece di restare muto.
+      if (originOverride) {
+        setTimeout(() => {
+          if (targetRef.current === target && !primoFixRicevutoRef.current) {
+            notify(NO_GPS_PHRASES[(language || 'it').toLowerCase().slice(0, 2)] || NO_GPS_PHRASES.en);
+          }
+        }, ORIGIN_OVERRIDE_NO_FIX_TIMEOUT_MS);
+      }
     },
     [language],
   );
@@ -1119,6 +1233,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (!ripresaRef.current) {
       ripresaRef.current = t;
       setMetaDaRiprendere(t);
+      // FIX WIPNAV-8: si salva la lista POI ORIGINALE prima che startNavigation
+      // la sovrascriva per la deviazione, altrimenti si perdeva per sempre.
+      pendingPoisOriginaliRef.current = pendingPoisRef.current.slice();
     }
     setGemmaVicina(null);
     const arrivo = puntoArrivo(g.poi as any);
@@ -1126,7 +1243,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       lat: arrivo.lat, lon: arrivo.lon,
       poiId: g.poi.id, poiName: g.poi.name || g.poi.nome,
       country: (g.poi as any).country ?? t.country ?? null,
-    }, null, []);
+    }, null, pendingPoisOriginaliRef.current);
   }, [gemmaVicina, startNavigation]);
 
   const ignoraGemma = useCallback(() => {
@@ -1140,7 +1257,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     if (!meta) return;
     ripresaRef.current = null;
     setMetaDaRiprendere(null);
-    await startNavigation(meta, null, []);
+    // FIX WIPNAV-8: si riprendono anche i POI originali lungo il percorso,
+    // non un array vuoto — altrimenti le audioguide lungo la strada verso la
+    // meta originale non scattavano piu' dopo la deviazione.
+    await startNavigation(meta, null, pendingPoisOriginaliRef.current);
   }, [startNavigation]);
 
   // Cleanup su unmount

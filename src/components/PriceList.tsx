@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   Coins, MessageSquare, Info, Camera, Map,
   Headphones, Volume2, BookOpen, ShieldCheck, Zap,
-  Ticket, RefreshCw, Route
+  Ticket, RefreshCw, Route, Landmark
 } from 'lucide-react';
 import { Language, getTranslation } from '../lib/i18n';
 import { PRICING_LIST, DAY_PASS_GUIDE_CAP } from '../lib/pricing';
@@ -74,6 +74,22 @@ export default function PriceList({ language, onOpenShop }: PriceListProps) {
             price={String(PRICING_LIST.day_pass)}
             unit={t('vr_b_unit_24h')}
             desc={t('vr_b_pl_daypass_desc').replace('{cap}', String(DAY_PASS_GUIDE_CAP))}
+          />
+          {/* Pass Museo (12/09/2026, collaudo): i due livelli si compravano
+              dalla Fotocamera ma il Listino non li elencava. */}
+          <PriceItem
+            icon={<Ticket className="w-5 h-5" />}
+            name={t('museum_pass_title')}
+            price={String(PRICING_LIST.museum_pass)}
+            unit={t('vr_b_unit_4h')}
+            desc={t('museum_pass_desc')}
+          />
+          <PriceItem
+            icon={<Landmark className="w-5 h-5" />}
+            name={t('museum_pass_tour_title')}
+            price={String(PRICING_LIST.museum_pass_tour)}
+            unit={t('vr_b_unit_4h')}
+            desc={t('museum_pass_tour_desc')}
           />
           <PriceItem
             icon={<Route className="w-5 h-5" />}

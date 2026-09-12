@@ -25,6 +25,7 @@ import com.itaintasca.app.geofence.CategoryMap
 import com.itaintasca.app.geofence.Footprints
 import com.itaintasca.app.geofence.GeofenceBroadcastReceiver
 import com.itaintasca.app.geofence.GeofenceManager
+import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.geofence.PredictiveTrigger
 import com.itaintasca.app.geofence.RaggiFiducia
 import com.itaintasca.app.geofence.RoadSnap

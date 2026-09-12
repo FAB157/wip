@@ -94,6 +94,11 @@ const GLOBAL_THROTTLE_MS = 90_000;
 // 24 h per-POI, come il servizio nativo (era 6 h: lo stesso POI poteva
 // riparlare nel pomeriggio di chi l'aveva sentito al mattino).
 const POI_COOLDOWN_MS = PLAYED_COOLDOWN_MS;
+// 10/09/2026 — tempo massimo di attesa della conferma "audio partito" prima
+// di lasciare il POI di nuovo eleggibile (vedi markFired/pendingConfirmId più
+// sotto). Più largo del throttle globale: un utente puo' restare un po' sul
+// modale del paywall prima di decidere.
+const CONFIRM_TIMEOUT_MS = 120_000;
 const APPROACH_EPSILON_M = 0.5;     // isteresi minima per "in diminuzione"
 const GEM_BONUS_M = 30;             // arbitraggio: le gemme "valgono" 30 m
 const PREMIUM_BONUS_M = 20;
@@ -270,6 +275,31 @@ function markFired(poiId: string): void {
   writeHistory(h);
 }
 
+/**
+ * Conferma che l'audio e' REALMENTE partito (10/09/2026). markFired/st.passed
+ * segnavano il POI come "fatto" per 24 h al semplice DISPATCH di
+ * 'wip-poi-trigger' — non quando la voce inizia. Se a valle il paywall viene
+ * annullato, il TTS fallisce o la modalita' silenziosa lo zittisce, il POI
+ * restava marcato come ascoltato senza che una sola parola fosse stata detta.
+ * 'wip-audio-state-change' e' lo stesso evento che ttsService dispatcha per
+ * la barra del player quando una voce (audioguida, agente, fallback) parte
+ * davvero: qui non porta il poiId (non e' pensato per un feedback loop), ma
+ * il throttle globale (GLOBAL_THROTTLE_MS) garantisce al massimo un trigger
+ * "in volo" per volta, quindi il primo isPlaying:true dopo il dispatch e'
+ * quello del nostro POI.
+ */
+function onAudioStateChange(e: Event): void {
+  try {
+    const detail = (e as CustomEvent).detail;
+    if (!detail?.isPlaying || !pendingConfirmId) return;
+    markFired(pendingConfirmId);
+    const st = approachStates.get(pendingConfirmId);
+    if (st) st.passed = true; // già servito: niente ri-valutazioni nello stesso passaggio
+    if (pendingConfirmTimer) { clearTimeout(pendingConfirmTimer); pendingConfirmTimer = null; }
+    pendingConfirmId = null;
+  } catch { /* evento non disponibile: si resta in attesa, scade da solo */ }
+}
+
 // ── Stato del modulo ──────────────────────────────────────────────
 let started = false;
 let candidates: any[] = [];
@@ -277,6 +307,10 @@ let candidatesAt = 0;                 // ultimo aggiornamento lista (pois-update
 let lastOwnFetch: { ts: number; lat: number; lon: number } | null = null;
 let ownFetchInFlight = false;
 let lastGlobalFireTs = 0;
+// POI in attesa di conferma "audio partito" (vedi onAudioStateChange) e il
+// timer che, se la conferma non arriva, lo rilascia senza marcare il cooldown.
+let pendingConfirmId: string | null = null;
+let pendingConfirmTimer: ReturnType<typeof setTimeout> | null = null;
 const approachStates = new Map<string, PoiApproachState>();
 // Parsimonia telemetria: 'suppressed' al massimo una volta per POI a sessione.
 const suppressedReported = new Set<string>();
@@ -587,9 +621,16 @@ function onLocationUpdate(e: Event): void {
     const winner = davanti[0];
 
     lastGlobalFireTs = now;
-    markFired(winner.id);
-    const st = approachStates.get(winner.id);
-    if (st) st.passed = true; // già servito: niente ri-valutazioni nello stesso passaggio
+    // Il cooldown 24 h (markFired/st.passed) NON si marca qui: si aspetta la
+    // conferma "audio partito" in onAudioStateChange. Il dedupe condiviso a
+    // 60 s (__wipLastPoiTrigger, poco sotto) resta immediato: basta a evitare
+    // un doppio dispatch mentre si aspetta la conferma.
+    if (pendingConfirmTimer) clearTimeout(pendingConfirmTimer);
+    pendingConfirmId = winner.id;
+    pendingConfirmTimer = setTimeout(() => {
+      if (pendingConfirmId === winner.id) pendingConfirmId = null;
+      pendingConfirmTimer = null;
+    }, CONFIRM_TIMEOUT_MS);
 
     const activationMode = localStorage.getItem('wip_activation_mode') || 'automatic';
     const isAutomatic = activationMode !== 'semi-automatic';
@@ -647,6 +688,7 @@ export function startForegroundTriggers(): void {
   collegaGrafoStrade(roadSnap);
   window.addEventListener('pois-updated', onPoisUpdated);
   window.addEventListener('wip-location-update', boundOnLocationUpdate);
+  window.addEventListener('wip-audio-state-change', onAudioStateChange);
   console.log('[ForegroundTriggers] ✅ Trigger web foreground attivi (PWA/browser)');
 }
 
@@ -665,6 +707,9 @@ export function stopForegroundTriggers(): void {
   started = false;
   window.removeEventListener('pois-updated', onPoisUpdated);
   window.removeEventListener('wip-location-update', boundOnLocationUpdate);
+  window.removeEventListener('wip-audio-state-change', onAudioStateChange);
+  if (pendingConfirmTimer) { clearTimeout(pendingConfirmTimer); pendingConfirmTimer = null; }
+  pendingConfirmId = null;
   approachStates.clear();
   azzeraGate();   // niente rinvii ereditati dal giro precedente
   azzeraFiltro(); // ne' una traccia GPS: al riavvio si riparte dal primo fix grezzo

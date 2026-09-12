@@ -143,6 +143,8 @@ class LocationService {
   private lastWebPoiFetchPos: { lat: number; lon: number } | null = null;
   /** Permesso posizione negato dal browser: stato esposto a chi monta dopo. */
   private locationDenied = false;
+  /** Avviso "servizio nativo non partito" mostrato una sola volta a sessione: mai ad ogni retry. */
+  private avvisoServizioNativoMostrato = false;
 
   /** true quando la riproduzione corrente e' gestita dal player nativo (ExoPlayer). */
   private isNativePlayback = false;
@@ -199,6 +201,9 @@ class LocationService {
     index: number;
     nextBlob: Promise<Blob | null> | null;
     nextBlobIndex: number;
+    // Lingua dell'override (tour di gruppo, testo del leader): se assente si
+    // ricade su this.language al momento di ogni singola battuta.
+    language?: Language;
   } | null = null;
 
   // ── 🤫 Trigger geofencing: origine del play (per silenziosa + feedback) ──
@@ -546,6 +551,23 @@ class LocationService {
   }
 
   public getIsGuideMuted(): boolean { return this.isGuideMuted; }
+  /**
+   * Toglie (o rimette) il muto subito, senza aspettare il prossimo
+   * syncSettings di App.tsx. Serve al follower del tour di gruppo: se preme
+   * «Ascolta ora» col muto acceso, l'audio deve partire in quello stesso
+   * gesto — il giro dallo stato React arriverebbe troppo tardi e il browser
+   * rifiuterebbe la riproduzione senza gesto utente.
+   */
+  public setGuideMuted(muted: boolean): void {
+    if (this.isGuideMuted === muted) return;
+    this.isGuideMuted = muted;
+    if (muted) {
+      this.stopGuideAudio();
+      if (this.ambientPlayer) this.ambientPlayer.volume = 0;
+    } else if (this.ambientPlayer) {
+      this.ambientPlayer.volume = 0.15;
+    }
+  }
   public getIsTourActive(): boolean { return this.isTourActive; }
   public getLastLocation(): LocationUpdate | null { return this.lastLocation; }
   public getAudioState(): AudioState { return this.audioState; }
@@ -1302,14 +1324,34 @@ class LocationService {
         alertRadiusCar: radiiForTransport('car').alert,
         arrivalRadiusCar: radiiForTransport('car').trigger
       });
-    } catch (e) { }
+    } catch (e) {
+      // Prima questo catch era vuoto: permesso di sfondo negato,
+      // foreground-service rifiutato o plugin assente sparivano nel nulla,
+      // senza nessuna traccia (10/09/2026).
+      console.warn('[LocationService] avvio servizio nativo fallito', e);
+      // Un solo avviso a sessione: l'audioguida automatica in background
+      // potrebbe non funzionare, ma non si vuole un banner ad ogni retry
+      // (startNativeBackgroundService viene richiamata spesso: cambio modo,
+      // riavvii, sync impostazioni).
+      if (!this.avvisoServizioNativoMostrato) {
+        this.avvisoServizioNativoMostrato = true;
+        try {
+          window.dispatchEvent(new CustomEvent('audioguide-status', {
+            detail: '⚠️ Servizio in background non avviato: l\'audioguida automatica potrebbe non funzionare a schermo spento.'
+          }));
+        } catch { /* ignore */ }
+      }
+    }
   }
 
   private async stopNativeBackgroundService() {
     if (ItaintaBackgroundPoiPlugin) {
       try {
         await ItaintaBackgroundPoiPlugin.stopBackgroundPoiService();
-      } catch (e) { }
+      } catch (e) {
+        // Vuoto fino al 10/09/2026: nessuna traccia se lo stop falliva.
+        console.warn('[LocationService] arresto servizio nativo fallito', e);
+      }
     }
   }
 
@@ -1426,10 +1468,14 @@ class LocationService {
         // sempre una direzione → freccia sempre puntata a Nord anche da fermo.
         // Alcuni device usano -1/NaN per "assente": in quei casi → null (pallino).
         heading: (Number.isFinite(coords.heading) && coords.heading >= 0) ? coords.heading : null,
-        // accuracy: se manca NON si finge un ottimo fix da 10 m. Infinity
-        // fa scartare il fix a tutti i filtri (`accuracy <= soglia` → false),
-        // che e' il comportamento giusto per un fix di qualita' ignota.
-        accuracy: Number.isFinite(coords.accuracy) && coords.accuracy > 0 ? coords.accuracy : Number.POSITIVE_INFINITY,
+        // accuracy: se manca NON si finge un ottimo fix da 10 m — ma Infinity
+        // scartava il fix in OGNI filtro `accuracy <= soglia`, incluso
+        // l'arrivo a destinazione durante la navigazione: su una WebView che
+        // non riporta l'accuratezza ogni fix valeva Infinity e veniva sempre
+        // buttato. Ora un default "impreciso ma utilizzabile" (mai buono
+        // come un fix OTTIMO, ma non infinito) invece dello scarto automatico
+        // (10/09/2026).
+        accuracy: Number.isFinite(coords.accuracy) && coords.accuracy > 0 ? coords.accuracy : 50,
         timestamp: position?.timestamp || position?.time || now,
       };
       this.lastLocation = update;
@@ -1528,7 +1574,13 @@ class LocationService {
               console.warn('[LocationService] watchPosition error', err);
               // Permesso revocato a watch aperto (Impostazioni di sistema):
               // il callback lo segnala solo qui, e prima finiva in console.
-              if (/denied|permission|autorizz/i.test(String((err as any)?.message || err))) this.segnalaPosizioneNegata();
+              if (/denied|permission|autorizz/i.test(String((err as any)?.message || err))) {
+                this.segnalaPosizioneNegata();
+              } else {
+                // GPS irraggiungibile o timeout (motivo diverso dal permesso
+                // negato): stesso silenzio di prima, ora si avvisa.
+                this.segnalaPosizioneNonDisponibile();
+              }
               return;
             }
             this.locationDenied = false;
@@ -1553,7 +1605,13 @@ class LocationService {
         console.warn('[LocationService] watchPosition web error', e?.code, e?.message);
         // PERMISSION_DENIED (1): fino al 22/08/2026 finiva in console e basta,
         // e l'audioguida restava muta senza dire perche'. Ora si avvisa.
-        if (e?.code === 1) this.segnalaPosizioneNegata();
+        if (e?.code === 1) {
+          this.segnalaPosizioneNegata();
+        } else if (e?.code === 2 || e?.code === 3) {
+          // POSITION_UNAVAILABLE (2) / TIMEOUT (3): stesso problema per motivi
+          // diversi dal permesso negato — prima solo console, ora si avvisa (10/09/2026).
+          this.segnalaPosizioneNonDisponibile();
+        }
       },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     ) as any;
@@ -1566,6 +1624,20 @@ class LocationService {
     try {
       window.dispatchEvent(new CustomEvent('location-denied', { detail: { ts: Date.now() } }));
       window.dispatchEvent(new CustomEvent('audioguide-status', { detail: getTranslation('posizione_negata_stato', this.language) }));
+    } catch { /* ignore */ }
+  }
+
+  /**
+   * GPS irraggiungibile o in timeout (POSITION_UNAVAILABLE/TIMEOUT), NON
+   * permesso negato: prima finiva solo in console.warn e l'utente non
+   * sapeva perche' l'audioguida taceva (10/09/2026). Niente `locationDenied`
+   * qui: quel flag pilota il banner "permesso negato" (GeofenceAudioGuide),
+   * e questo non e' un permesso negato — solo un fix che non arriva.
+   */
+  private segnalaPosizioneNonDisponibile() {
+    if (typeof window === 'undefined') return;
+    try {
+      window.dispatchEvent(new CustomEvent('audioguide-status', { detail: getTranslation('geolocation_error_unavailable', this.language) }));
     } catch { /* ignore */ }
   }
 
@@ -1622,12 +1694,18 @@ class LocationService {
    *  - 'started': la traccia e' partita ADESSO (e' il momento in cui addebitare);
    *  - 'queued':  un'altra traccia suona, questa partira' dopo (o mai, se si
    *               ferma tutto prima) — NON va addebitata qui;
+   *  - 'resumed': stesso POI gia' in pausa, si e' solo ripreso l'ascolto —
+   *               NESSUN addebito, `authorize` non viene proprio chiamata
+   *               (10/09/2026: prima tornava 'started' anche qui, e un
+   *               chiamante che si aspettava un vero addebito per 'started'
+   *               poteva leggerlo come riproduzione fallita mentre l'audio
+   *               stava semplicemente ripartendo);
    *  - false:     niente audio (muto, silenziosa, errore).
-   * Chi testava `if (ok)` continua a funzionare: entrambe le stringhe sono
+   * Chi testava `if (ok)` continua a funzionare: tutte e tre le stringhe sono
    * truthy. Chi addebita deve guardare 'started' o passare `authorize`, che
    * viene chiamata solo al vero avvio anche per le tracce accodate.
    */
-  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string): Promise<'started' | 'queued' | false> {
+  public async playAudio(text: string, poiName?: string, poiCategory?: string, poiId?: string, character?: 'nicky' | 'dante', authorize?: () => Promise<boolean>, poiPhotoUrl?: string, languageOverride?: Language): Promise<'started' | 'queued' | 'resumed' | false> {
     if (this.isGuideMuted || !text) return false;
 
     // 🤫 «Solo vibrazione + testo»: se il play nasce da un trigger geofencing
@@ -1649,7 +1727,9 @@ class LocationService {
     // Ma qui la logica è "avvia riproduzione", quindi se è lo stesso e siamo in pausa, riprendiamo
     if (poiId && this.audioState.poiId === poiId && this.isGuidePlaybackActive()) {
        this.resumeGuideAudio();
-       return 'started';
+       // 'resumed', non 'started': nessun addebito qui, `authorize` non e'
+       // stata chiamata — vedi la nota sul tipo di ritorno qui sopra.
+       return 'resumed';
     }
 
     if (this.isGuidePlaybackActive()) {
@@ -1699,10 +1779,10 @@ class LocationService {
       // pre-caricando la successiva mentre suona la corrente.
       const duetLines = parseDuetLines(text);
       if (duetLines) {
-        const okDuet = await this.playDuet(duetLines);
+        const okDuet = await this.playDuet(duetLines, languageOverride);
         if (okDuet) {
           window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-            detail: { textToSpeak: text, poiName, character: character || this.guideMode }
+            detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
           }));
           return 'started';
         }
@@ -1713,11 +1793,16 @@ class LocationService {
       // maschile) ha priorità sullo stato globale: senza questo override la
       // voce restava quella di guideMode (default Nicky) anche selezionando
       // Dante, in tutte le lingue.
-      const voice = azureVoiceName(this.language, character || this.guideMode);
+      // languageOverride: nel tour di gruppo il testo arriva dal leader, ed è
+      // nella LINGUA DEL LEADER. Senza questo la voce veniva scelta con la
+      // lingua del follower: chiave di cache diversa da quella già pagata dal
+      // leader (quindi rigenerazione a carico del follower, o un 429 e il
+      // silenzio) e una voce inglese che legge un testo italiano.
+      const voice = azureVoiceName(languageOverride || this.language, character || this.guideMode);
       // postForAudioBlob: su nativo la fetch patchata da CapacitorHttp
       // corrompeva il corpo binario (MP3 → 0 byte, "click a vuoto" su iPhone).
       // Manda anche il Bearer di sessione: quota/addebito per utente sul server.
-      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice, poi_id: poiId });
+      const { ok, status, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text, voice });
       if (!ok || !blob) throw new Error(`TTS ${status}`);
       // Un blob vuoto o una risposta JSON scambiata per audio produceva un
       // player "fantasma" con durata 0:00: meglio fallire esplicitamente.
@@ -1735,7 +1820,7 @@ class LocationService {
         // voci diverse davanti allo stesso monumento — e, chiave di cache
         // diversa, ognuno faceva rigenerare l'audio a proprio carico.
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-          detail: { textToSpeak: text, poiName, character: character || this.guideMode }
+          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
         }));
       }
       return started ? 'started' : false;
@@ -1744,11 +1829,11 @@ class LocationService {
       // Degradazione: se c'è un testo da leggere non falliamo mai in silenzio.
       // Prima la voce di sistema NATIVA (app: parla anche a servizio spento e
       // senza speechSynthesis), poi Web Speech (browser).
-      const spoken = (await this.speakWithNativeVoice(text, character || this.guideMode))
-        || this.speakWithWebSpeech(text, character || this.guideMode);
+      const spoken = (await this.speakWithNativeVoice(text, character || this.guideMode, languageOverride))
+        || this.speakWithWebSpeech(text, character || this.guideMode, languageOverride);
       if (spoken) {
         window.dispatchEvent(new CustomEvent('wip-leader-audio-start', {
-          detail: { textToSpeak: text, poiName }
+          detail: { textToSpeak: text, poiName, character: character || this.guideMode, language: languageOverride || this.language }
         }));
         return 'started';
       }
@@ -1793,9 +1878,9 @@ class LocationService {
    * dall'evento nativo; la barra è stimata come per Web Speech.
    * Su web ritorna false e si passa a speakWithWebSpeech.
    */
-  private async speakWithNativeVoice(text: string, character?: 'nicky' | 'dante'): Promise<boolean> {
+  private async speakWithNativeVoice(text: string, character?: 'nicky' | 'dante', languageOverride?: Language): Promise<boolean> {
     if (!Capacitor.isNativePlatform() || !text) return false;
-    const ok = await speakNativeSystemVoice(text, this.language, character || this.guideMode, () => {
+    const ok = await speakNativeSystemVoice(text, languageOverride || this.language, character || this.guideMode, () => {
       if (!this.nativeVoiceActive) return; // stop esplicito nel frattempo
       this.nativeVoiceActive = false;
       if (this.fallbackProgressTimer) { clearInterval(this.fallbackProgressTimer); this.fallbackProgressTimer = null; }
@@ -1815,11 +1900,11 @@ class LocationService {
    * Fallback degradato quando /api/tts/smart è irraggiungibile (offline, TTS
    * server giù): Web Speech API con la lingua corrente dell'app.
    */
-  private speakWithWebSpeech(text: string, character?: 'nicky' | 'dante'): boolean {
+  private speakWithWebSpeech(text: string, character?: 'nicky' | 'dante', languageOverride?: Language): boolean {
     if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text) return false;
     try {
       const u = new SpeechSynthesisUtterance(text);
-      const prefix = (this.language || 'IT').toLowerCase().slice(0, 2);
+      const prefix = (languageOverride || this.language || 'IT').toLowerCase().slice(0, 2);
       const localeMap: Record<string, string> = {
         it: 'it-IT', en: 'en-US', fr: 'fr-FR', es: 'es-ES',
         de: 'de-DE', ru: 'ru-RU', zh: 'zh-CN',
@@ -1879,9 +1964,13 @@ class LocationService {
   // ── 🎭 Duetto Nicky & Dante ───────────────────────────────────────────
 
   /** Scarica l'MP3 di una singola battuta con la voce del suo personaggio. */
-  private async fetchDuetBlob(line: { speaker: 'nicky' | 'dante'; text: string }): Promise<Blob | null> {
+  private async fetchDuetBlob(line: { speaker: 'nicky' | 'dante'; text: string }, languageOverride?: Language): Promise<Blob | null> {
     try {
-      const voice = azureVoiceName(this.language, line.speaker);
+      // languageOverride: stessa ragione degli altri punti in playAudio — nel
+      // tour di gruppo il testo del duetto arriva dal leader, nella SUA
+      // lingua. Prima qui si cadeva sempre su this.language (lingua del
+      // follower): voce sbagliata e chiave di cache diversa da quella del leader.
+      const voice = azureVoiceName(languageOverride || this.language, line.speaker);
       const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: line.text, voice });
       if (!ok || !blob || blob.size < 500 || blob.type.includes('json')) return null;
       return blob;
@@ -1898,8 +1987,8 @@ class LocationService {
    * personaggio. Ritorna false se nemmeno la prima battuta parte (il
    * chiamante ricade sulla lettura mono-voce del testo intero).
    */
-  private async playDuet(lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>): Promise<boolean> {
-    this.duetState = { lines, index: 0, nextBlob: null, nextBlobIndex: -1 };
+  private async playDuet(lines: Array<{ speaker: 'nicky' | 'dante'; text: string }>, languageOverride?: Language): Promise<boolean> {
+    this.duetState = { lines, index: 0, nextBlob: null, nextBlobIndex: -1, language: languageOverride };
     const ok = await this.playDuetLine(0);
     if (!ok) this.clearDuetState();
     return ok;
@@ -1917,11 +2006,11 @@ class LocationService {
     st.index = i;
     const line = st.lines[i];
     // Blob della battuta: pre-caricato dalla precedente quando possibile
-    const blobPromise = (st.nextBlobIndex === i && st.nextBlob) ? st.nextBlob : this.fetchDuetBlob(line);
+    const blobPromise = (st.nextBlobIndex === i && st.nextBlob) ? st.nextBlob : this.fetchDuetBlob(line, st.language);
     // Pre-carica la battuta successiva MENTRE questa scarica/suona
     if (i + 1 < st.lines.length) {
       st.nextBlobIndex = i + 1;
-      st.nextBlob = this.fetchDuetBlob(st.lines[i + 1]);
+      st.nextBlob = this.fetchDuetBlob(st.lines[i + 1], st.language);
     } else {
       st.nextBlob = null;
       st.nextBlobIndex = -1;
@@ -2128,7 +2217,21 @@ class LocationService {
       await incrementUserQuota(currentUserId, "audio_guide");
       const { getPoiById } = await import('./poiRepository');
       const poi = await getPoiById(poiId);
-      if (poi) recordListening(poi, currentUserId);
+      if (poi) {
+        recordListening(poi, currentUserId);
+      } else {
+        // POI solo in memoria (OSM/Foursquare/Google, non ancora in
+        // shared_pois): getPoiById torna null e prima l'ascolto non veniva
+        // MAI registrato per questi POI. Si registra comunque con i dati
+        // minimi già in mano a questa chiamata (10/09/2026).
+        recordListening({
+          id: poiId,
+          name: this.audioState.poiName || undefined,
+          lat: this.currentPoiCoords?.lat,
+          lon: this.currentPoiCoords?.lon,
+          image_url: this.currentPoiPhotoUrl || undefined,
+        }, currentUserId);
+      }
     } catch (e) {
       console.warn("[LocationService] recordPlaybackStart failed", e);
     }
@@ -2174,7 +2277,34 @@ class LocationService {
     } catch { /* volume non regolabile su questo elemento */ }
   }
 
-  public unlockAudio() { this.audioUnlocked = true; this.initAudioContext(); }
+  /**
+   * Sblocca la riproduzione automatica. Va chiamata DENTRO un gesto
+   * dell'utente (tocco su "unisciti al gruppo", su ▶, ecc.): oltre ad
+   * agganciare il grafo WebAudio, riprende il contesto se sospeso e "scalda"
+   * l'elemento <audio> condiviso con un campione muto. Senza quest'ultimo
+   * passaggio il primo play() partito da un messaggio realtime (tour di
+   * gruppo, follower) veniva rifiutato dal browser e l'audioguida restava
+   * muta in silenzio (09/09/2026).
+   */
+  public unlockAudio() {
+    this.audioUnlocked = true;
+    if (!this.speechPlayer) this.speechPlayer = new Audio();
+    this.initAudioContext();
+    try { if (this.audioCtx?.state === 'suspended') this.audioCtx.resume(); } catch { /* niente contesto */ }
+    try {
+      const sp = this.speechPlayer;
+      // Solo se l'elemento e' vergine: una traccia gia' caricata (magari in
+      // pausa) non va sovrascritta con il campione muto.
+      if (sp && !sp.src) {
+        sp.src = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+        const p: any = sp.play();
+        if (p && typeof p.then === 'function') {
+          p.then(() => { try { sp.pause(); sp.currentTime = 0; } catch { /* niente */ } })
+           .catch(() => { /* nessun gesto valido: ci penserà il gate «Ascolta ora» */ });
+        }
+      }
+    } catch { /* elemento non pronto */ }
+  }
 
   public pauseGuideAudio() {
     if (this.activeGuideAudio) this.activeGuideAudio.pause();
