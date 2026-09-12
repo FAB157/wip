@@ -8818,6 +8818,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
+          // IL CODICE DELLA SALA («Room 32», «Salle 711»): chiesto al modello
+          // nel prompt e poi BUTTATO VIA qui (trovato dalla sessione libreria,
+          // 12/09/2026: salaCodice era 0 in tutte le guide). È la chiave dei
+          // pin sulla pianta.
+          salaCodice: campoOpzionale(t?.salaCodice, 40),
           // Dove DENTRO la sala: è questo che porta davanti all'opera. In una
           // sala del Louvre con ottanta quadri «Sala 711» non fa trovare nulla.
           puntoPreciso: campoOpzionale(t?.puntoPreciso, 120),
@@ -9159,8 +9164,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // Si cerca opera per opera, per le prime 15 tappe (un museo grande ne
       // ha 12-20): costa qualche secondo in più, ma capita una volta sola,
       // la guida buona non scade mai.
-      if (!isSito && wikidataId && opereWd.righe.length === 0 && conFoto === 0) {
-        const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 15);
+      // OPERA PER OPERA ANCHE QUANDO QUALCHE FOTO C'È GIÀ (12/09/2026,
+      // committente sul Palazzo delle Logge: «c'è solo la foto del museo ma
+      // non le foto delle opere»): prima si cercava una per una solo quando
+      // la query d'insieme era vuota; ora per ogni tappa senza foto, fino a
+      // 12, si prova per titolo e autore. Mai una foto «a tema»: la ricerca
+      // combacia per titolo/autore o non dà nulla.
+      if (!isSito && tappeConFoto.some((t: any) => !t.foto)) {
+        const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 12);
         const trovate = await Promise.all(daProvare.map((t: any) => fotoOperaPerTitolo(t.nomeFonte || t.nome, t.autore || '', langCfg.wiki)));
         daProvare.forEach((t: any, i: number) => {
           if (!trovate[i]) return;
@@ -9169,6 +9180,46 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         });
         conFoto = tappeConFoto.filter((t: any) => t.foto).length;
         if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} foto trovate opera per opera (la query d'insieme era vuota)`);
+      }
+      // FOTO DEGLI ELEMENTI DI UN EDIFICIO DALLA CATEGORIA COMMONS DEL LUOGO
+      // (12/09/2026, committente sul Palazzo delle Logge: «c'è solo la foto
+      // del museo ma non le foto delle opere»). In un palazzo o una chiesa le
+      // tappe sono il loggiato, il portale, il balcone: non hanno una voce
+      // propria, ma la categoria Commons dell'edificio (Wikidata P373) ha le
+      // loro foto. Si abbina SOLO per parola: il nome del file o la sua
+      // descrizione deve contenere una parola propria della tappa
+      // («loggia», «portale», «balcone», «colonne»…). Niente parola in
+      // comune = niente foto: mai una foto «a tema».
+      if (wikidataId && tappeConFoto.some((t: any) => !t.foto)) {
+        try {
+          const ent = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${wikidataId}&property=P373&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 6000 });
+          const categoria = ent.data?.claims?.P373?.[0]?.mainsnak?.datavalue?.value;
+          if (categoria) {
+            const cm = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=categorymembers&gcmtitle=Category:${encodeURIComponent(categoria)}&gcmtype=file&gcmlimit=60&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=800&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 10000 });
+            const file: any[] = Object.values(cm.data?.query?.pages || {}).map((p: any) => {
+              const ii = p?.imageinfo?.[0]; if (!ii || !/^image\/(jpeg|png|webp)$/.test(String(ii.mime || 'image/jpeg'))) return null;
+              const descr = String(ii?.extmetadata?.ImageDescription?.value || '').replace(/<[^>]+>/g, ' ');
+              return { titolo: String(p.title || '').replace(/^File:/, ''), testo: normalizzaTesto(`${p.title} ${descr}`), url: ii.url };
+            }).filter(Boolean);
+            const GENERICHE_EL = new Set(['palazzo', 'palace', 'chiesa', 'church', 'museo', 'museum', 'della', 'delle', 'degli', 'del', 'dei', 'di', 'the', 'of', 'and', 'con', 'vista', 'generale', 'lato', 'verso', 'grande', 'grandi', 'due', 'tre', 'principale']);
+            const SINONIMI: Record<string, string[]> = { loggiato: ['loggia', 'loggiato', 'logge', 'arcate', 'arcade'], loggetta: ['loggetta', 'loggia'], portale: ['portale', 'portal', 'porta', 'door', 'ingresso'], balconcino: ['balcone', 'balconcino', 'balcony'], colonne: ['colonne', 'colonna', 'column', 'columns'], facciata: ['facciata', 'facade', 'fronte'], cortile: ['cortile', 'courtyard'], scalone: ['scala', 'scalone', 'staircase', 'stairs'], affreschi: ['affresco', 'affreschi', 'fresco', 'frescoes'], soffitto: ['soffitto', 'ceiling', 'volta'], campanile: ['campanile', 'bell tower', 'torre'], cupola: ['cupola', 'dome'], altare: ['altare', 'altar'], cappella: ['cappella', 'chapel'], finestre: ['finestra', 'finestre', 'window', 'windows', 'bifora'], fregio: ['fregio', 'frieze'], stemma: ['stemma', 'scudo', 'coat of arms'] };
+            const usate = new Set<string>();
+            let assegnate = 0;
+            tappeConFoto.forEach((t: any, idx: number) => {
+              if (t.foto) return;
+              const parole = normalizzaTesto(`${t.nome} ${t.nomeFonte || ''}`).split(' ').filter(w => w.length >= 5 && !GENERICHE_EL.has(w));
+              const chiavi = new Set<string>(parole);
+              for (const p of parole) for (const [k, syn] of Object.entries(SINONIMI)) if (p.startsWith(k.slice(0, 5)) || syn.some(s => p.startsWith(s.slice(0, 5)))) syn.forEach(s => chiavi.add(s));
+              if (!chiavi.size) return;
+              const hit = file.find(f => !usate.has(f.url) && [...chiavi].some(k => f.testo.includes(normalizzaTesto(k))));
+              if (!hit) return;
+              usate.add(hit.url);
+              tappeConFoto[idx] = { ...t, foto: fotoCommons(hit.url, 800), fotoIcona: fotoCommons(hit.url, 160), fotoDaCategoria: hit.titolo };
+              assegnate++;
+            });
+            if (assegnate) { conFoto = tappeConFoto.filter((t: any) => t.foto).length; console.log(`[VenueGuide] ${venue.name}: ${assegnate} foto di elementi dalla categoria Commons «${categoria}»`); }
+          }
+        } catch (e: any) { console.warn('[VenueGuide] categoria Commons non letta:', e?.message); }
       }
       if (conFoto) console.log(`[VenueGuide] ${venue.name}: ${conFoto} tappe su ${tappeOrdinate.length} con la foto`);
 
@@ -9782,6 +9833,11 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
           autore: campoOpzionale(t?.autore, 100),
           anno: campoOpzionale(t?.anno, 40),
           dove: campoOpzionale(t?.dove, 100),
+          // IL CODICE DELLA SALA («Room 32», «Salle 711»): chiesto al modello
+          // nel prompt e poi BUTTATO VIA qui (trovato dalla sessione libreria,
+          // 12/09/2026: salaCodice era 0 in tutte le guide). È la chiave dei
+          // pin sulla pianta.
+          salaCodice: campoOpzionale(t?.salaCodice, 40),
           perche: togliFrasiGeneriche(campoOpzionale(t?.perche, 500)),
           curiosita: togliFrasiGeneriche(campoOpzionale(t?.curiosita, 400)) || (campoOpzionale(t?.dove, 100)
             ? `Si trova in ${campoOpzionale(t?.dove, 100)}: prenditi un minuto per osservarla da vicino.`
