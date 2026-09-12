@@ -1023,6 +1023,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       visit={{ ...visit, guide: { ...visit.guide, tappe: ordineAttivo.map(k => visit.guide.tappe[k]) } }}
       language={language}
       opere={Object.fromEntries(ordineAttivo.map((k, n) => [n, operaGuide[k]]).filter(([, g]) => !!g))}
+      mappe={mappe}
     />
 
     {/* UNA ALLA VOLTA: il lettore a schermo pieno. Foto grande, sala, play,

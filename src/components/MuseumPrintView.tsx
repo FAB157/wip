@@ -1,5 +1,5 @@
 import { Language, getTranslation } from '../lib/i18n';
-import { MuseumVisit, ArtworkGuide } from '../lib/museumVisit';
+import { MuseumVisit, ArtworkGuide, MuseumMap, normSalaMappa } from '../lib/museumVisit';
 
 /**
  * LA GUIDA DEL MUSEO SU CARTA (11/09/2026, richiesta del committente).
@@ -35,10 +35,26 @@ export default function MuseumPrintView({
   language: Language;
   /** Le audioguide già aperte: chi ha ascoltato, se le porta dietro scritte. */
   opere: Record<number, ArtworkGuide>;
+  /** Le piante del museo con i pin delle sale (12/09/2026, committente:
+   *  «ci metterei anche la mappa con i pin delle opere»): sul foglio ogni
+   *  pin porta i numeri delle tappe di quella sala. */
+  mappe?: MuseumMap[];
 }) {
   const t = (k: string) => getTranslation(k, language);
   const tappe = visit.guide?.tappe || [];
   const conSala = tappe.filter(x => String(x.dove || '').trim()).length;
+  // Numero di tappa (come nella lista) per ogni pin: la sala del pin
+  // combacia con salaCodice o «dove» della tappa.
+  const numeroDi = (i: number) => tappe.slice(0, i + 1).filter(x => !x.soloCollezione).length;
+  const pianteConPin = (mappe || []).map(m => ({
+    mappa: m,
+    pins: m.pins.map(p => {
+      const ns = normSalaMappa(p.sala);
+      const numeri = tappe.map((tp, i) => ({ tp: tp as any, i })).filter(({ tp }) => !tp.soloCollezione && !!ns && (normSalaMappa(tp.salaCodice || tp.dove) === ns || normSalaMappa(tp.dove) === ns)).map(({ i }) => numeroDi(i));
+      return { pin: p, numeri };
+    }).filter(x => x.numeri.length > 0),
+  })).filter(x => x.pins.length > 0);
+  const etichettaNumeri = (n: number[]) => n.length <= 2 ? n.join(',') : (n.every((v, k) => k === 0 || v === n[k - 1] + 1) ? `${n[0]}-${n[n.length - 1]}` : `${n[0]}…`);
 
   return (
     <div id="museum-print-view" style={{ display: 'none' }}>
@@ -67,6 +83,12 @@ export default function MuseumPrintView({
         #museum-print-view .mp-subtitle {
           font-size: 7.5pt; color: #b45309; font-weight: 800; text-transform: uppercase; letter-spacing: 0.14em; margin: 0;
         }
+        #museum-print-view .mp-map { break-inside: avoid; margin: 0 0 12px 0; }
+        #museum-print-view .mp-map-title { font-size: 7.5pt; color: #b45309; font-weight: 800; text-transform: uppercase; letter-spacing: 0.14em; margin: 0 0 4px 0; }
+        #museum-print-view .mp-map-box { position: relative; width: 100%; border: 1px solid #e7e5e4; border-radius: 6px; overflow: hidden; background: #fff; }
+        #museum-print-view .mp-map-img { display: block; width: 100%; height: auto; }
+        #museum-print-view .mp-pin { position: absolute; transform: translate(-50%, -50%); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 9px; background: #1e3a8a; color: #fff; font-size: 7pt; font-weight: 800; line-height: 16px; text-align: center; border: 1.5px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        #museum-print-view .mp-map-legend { font-size: 7.5pt; color: #57534e; margin: 4px 0 0 0; line-height: 1.4; }
         #museum-print-view .mp-intro-desc {
           font-size: 8pt; color: #57534e; line-height: 1.4; margin: 5px 0 0 0; font-style: italic; max-width: 92%;
           font-family: Georgia, "Times New Roman", serif;
@@ -216,6 +238,24 @@ export default function MuseumPrintView({
         </div>
       </div>
       {visit.guide?.consiglio && <div className="mp-advice">{visit.guide.consiglio}</div>}
+
+      {/* LA PIANTA CON I PIN (12/09/2026): ogni pin porta i numeri delle
+          tappe di quella sala; sotto, la legenda pin → opere. Coordinate in
+          frazione dell'immagine, come nella vista Mappa. */}
+      {pianteConPin.map(({ mappa, pins }) => (
+        <div key={mappa.indice} className="mp-map">
+          <p className="mp-map-title">{t('mv_vista_mappa')}{mappa.titolo ? ` · ${mappa.titolo}` : (pianteConPin.length > 1 ? ` ${mappa.indice}` : '')}</p>
+          <div className="mp-map-box">
+            <img src={mappa.url} alt="" className="mp-map-img" />
+            {pins.map(({ pin, numeri }, k) => (
+              <span key={k} className="mp-pin" style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}>{etichettaNumeri(numeri)}</span>
+            ))}
+          </div>
+          <p className="mp-map-legend">
+            {pins.map(({ pin, numeri }) => `${etichettaNumeri(numeri)} → ${pin.sala}`).join(' · ')}
+          </p>
+        </div>
+      ))}
 
       {/* Il museo non pubblica le sale: si dice anche su carta, dove non
           c'è modo di chiedere spiegazioni all'app. */}

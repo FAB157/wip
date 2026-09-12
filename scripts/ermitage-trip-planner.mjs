@@ -47,7 +47,9 @@ for (const f of ['1', '2', '3']) {
   const img = Buffer.from(await (await fetch(BASE + d.img, { headers: UA, signal: AbortSignal.timeout(30000) })).arrayBuffer());
   const dim = dimJpeg(img);
   const sale = [];
-  for (const m of String(d.points || '').matchAll(/<canvas[^>]*id="TP_B(\d+)_F(\d+)_H([A-Za-z0-9]+)"[^>]*>/g)) {
+  // Qualsiasi tag (canvas, div, a…): nel DOM del browser [id^="TP_"] dava
+  // 67/151/77 elementi, la regex sul solo <canvas> ne prendeva 2/7/0.
+  for (const m of String(d.points || '').matchAll(/<[a-zA-Z]+[^>]*\bid="TP_B(\d+)_F(\d+)_H([A-Za-z0-9]+)"[^>]*>/g)) {
     const tag = m[0];
     const g = k => { const mm = new RegExp(`${k}:\\s*(-?[\\d.]+)px`).exec(tag); return mm ? +mm[1] : null; };
     const titolo = (tag.match(/title="([^"]*)"/) || [])[1] || '';
