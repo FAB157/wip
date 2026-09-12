@@ -11617,6 +11617,46 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
     }
   });
 
+  // ── QUALI TAPPE HANNO LA GUIDA CON LE OPERE? ─────────────────────────────
+  // (12/09/2026, committente via sessione libreria: badge «Guida con
+  // audioguide delle opere · Pass Museo» sulle tappe-museo di itinerari e
+  // libreria, SOLO se il museo ha davvero una guida con opere.) Il client
+  // manda gli id e i nomi delle tappe; si risponde con le guide che
+  // combaciano per id (qualunque prefisso, stesso QID) o per nome esatto
+  // normalizzato. La libreria è piccola: si legge tutta e si tiene in
+  // memoria 5 minuti.
+  let cacheGuideLib: { at: number; righe: any[] } | null = null;
+  app.post("/api/museums/guides-for", rateLimiter, async (req, res) => {
+    try {
+      const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: any) => String(x || '').trim()).filter(Boolean).slice(0, 80);
+      const names = (Array.isArray(req.body?.names) ? req.body.names : []).map((x: any) => String(x || '').trim()).filter(Boolean).slice(0, 80);
+      if (!ids.length && !names.length) return res.json({ ok: true, guides: [] });
+      if (!cacheGuideLib || Date.now() - cacheGuideLib.at > 5 * 60 * 1000) {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/museum_guides?select=venue_key,venue_name,poi_id,language,stops_count,lat,lon&stops_count=gte.3&limit=3000`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 8000 });
+        cacheGuideLib = { at: Date.now(), righe: Array.isArray(r.data) ? r.data : [] };
+      }
+      const qidDi = (s: string) => String(s || '').match(/-(Q\d+)$/)?.[1] || '';
+      const idSet = new Set(ids), qidSet = new Set(ids.map(qidDi).filter(Boolean));
+      const nomeSet = new Set(names.map(n => normalizzaTesto(n).replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim()).filter(Boolean));
+      const trovate = new Map<string, any>();
+      for (const g of cacheGuideLib.righe) {
+        const chiave = g.venue_key; const pid = String(g.poi_id || '');
+        const perId = idSet.has(pid) || (qidDi(pid) && qidSet.has(qidDi(pid))) || (qidDi(chiave) && qidSet.has(qidDi(chiave)));
+        const nomeN = normalizzaTesto(g.venue_name).replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+        const perNome = nomeSet.has(nomeN);
+        if (!perId && !perNome) continue;
+        const prev = trovate.get(chiave);
+        if (!prev || (g.stops_count || 0) > (prev.stopsCount || 0)) trovate.set(chiave, { venueKey: chiave, venueName: g.venue_name, poiId: g.poi_id || null, stopsCount: g.stops_count || 0, lat: g.lat ?? null, lon: g.lon ?? null, lingue: [...new Set([...(prev?.lingue || []), g.language])], matchedId: perId ? pid : null, matchedName: perNome ? g.venue_name : null });
+        else prev.lingue = [...new Set([...prev.lingue, g.language])];
+      }
+      res.set('Cache-Control', 'public, max-age=120');
+      res.json({ ok: true, guides: [...trovate.values()] });
+    } catch (e: any) {
+      res.json({ ok: false, guides: [] });
+    }
+  });
+
   // ── MAPPA INTERATTIVA DEL MUSEO ──────────────────────────────────────────
   // Regola fissa del committente (12/09/2026): ogni museo con audioguide ha
   // la LISTA delle opere e la MAPPA con i pin delle opere che hanno la

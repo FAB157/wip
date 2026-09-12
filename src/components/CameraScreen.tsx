@@ -23,7 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -398,6 +398,23 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       setQuizAperto(false);
     }
   };
+
+  // Dal badge sulle tappe-museo (itinerari, libreria): Visite già su QUEL
+  // museo. La richiesta è in sospeso in museumVisit.ts perché la scheda
+  // può non essere ancora montata quando parte l'evento.
+  useEffect(() => {
+    const apri = () => {
+      const r = prendiRichiestaGuidaMuseo();
+      if (!r) return;
+      setMode('visite');
+      void caricaMuseiVicini();
+      void apriVisitaDiElenco({ venue_key: r.venueKey || (r.poiId ? `poi_${r.poiId}` : `nome_${r.venueName}`), venue_name: r.venueName, poi_id: r.poiId, venue_type: 'museo', city: null, lat: r.lat ?? null, lon: r.lon ?? null, stops_count: 0, stops_with_room: 0, official_site: null });
+    };
+    apri();
+    window.addEventListener(OPEN_MUSEUM_GUIDE_EVENT, apri);
+    return () => window.removeEventListener(OPEN_MUSEUM_GUIDE_EVENT, apri);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const onVisit = () => setVisit(getVisit());

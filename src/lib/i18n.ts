@@ -426,6 +426,10 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Cerca un museo o una chiesa", EN: "Search a museum or church", FR: "Chercher un musée ou une église",
     ES: "Busca un museo o una iglesia", DE: "Museum oder Kirche suchen", RU: "Найти музей или церковь", ZH: "搜索博物馆或教堂"
   },
+  mv_badge_guida: {
+    IT: "Guida con audioguide delle opere · Pass Museo", EN: "Guide with artwork audio guides · Museum Pass", FR: "Guide avec audioguides des œuvres · Pass Musée",
+    ES: "Guía con audioguías de las obras · Pase Museo", DE: "Guide mit Audioguides zu den Werken · Museumspass", RU: "Гид с аудиогидами по экспонатам · Музейный пасс", ZH: "含作品语音导览 · 博物馆通票"
+  },
   mv_poche_opere_title: {
     IT: "Qui il pass non conviene", EN: "The pass isn't worth it here", FR: "Ici le pass ne vaut pas la peine", ES: "Aquí el pase no compensa", DE: "Hier lohnt sich der Pass nicht", RU: "Здесь абонемент невыгоден", ZH: "此处不建议购买通票"
   },

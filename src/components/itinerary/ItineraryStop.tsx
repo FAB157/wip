@@ -9,6 +9,7 @@ import { getTranslation, Language } from '../../lib/i18n';
 import { ensureAffiliateUrl } from '../../lib/affiliates';
 import { locationService } from '../../services/locationService';
 import { gramsForLeg, formatCo2, extractKmFromText } from '../../lib/carbonFootprint';
+import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../../lib/museumVisit';
 
 interface ItineraryStopProps {
   key?: React.Key;
@@ -53,6 +54,24 @@ export default function ItineraryStop({
 }: ItineraryStopProps) {
   // Il pulsante deve dire in anticipo se la sostituzione è gratis o costa:
   // prima l'unico segnale era il modale crediti che compariva a sorpresa.
+  // GUIDA CON LE OPERE (12/09/2026, committente): sulle tappe-museo un
+  // piccolo pulsante «Guida con audioguide delle opere · Pass Museo» che
+  // apre Visite già su quel museo. SOLO se la guida esiste davvero in
+  // libreria, SOLO a tappa aperta, e senza toccare nient'altro della card:
+  // la logica e la grafica degli itinerari restano quelle di oggi.
+  const [guidaMuseo, setGuidaMuseo] = React.useState<GuidaPerTappa | null>(null);
+  React.useEffect(() => {
+    if (!expanded) return;
+    const id = String(tappa?.poi_id || '').trim();
+    const nome = String(tappa?.titolo_tappa || tappa?.nome || '').trim();
+    const sembraMuseo = /museo|museum|musée|museu|galleria|gallery|pinacoteca|palazzo|palace|castello|castle|basilica|cattedrale|cathedral|duomo/i.test(`${nome} ${tappa?.categoria || ''} ${tappa?.tipo || ''}`);
+    if (!id && !nome) return;
+    if (!id && !sembraMuseo) return;
+    let vivo = true;
+    guidePerTappe([{ id: id || null, nome }]).then(m => { if (!vivo) return; setGuidaMuseo((id && m.get(id)) || m.get(nome) || null); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [expanded, tappa?.poi_id, tappa?.titolo_tappa]);
+
   const replaceIsFree = (freeReplacementsLeft ?? 0) > 0;
   const replaceLabel = replaceIsFree
     ? `${getTranslation("replace_action", language)} — ${getTranslation("free_label", language)} (${freeReplacementsLeft})`
@@ -274,6 +293,16 @@ export default function ItineraryStop({
                       className="flex items-center gap-1.5 px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
                     >
                       <MapPin className="w-3.5 h-3.5" /> {getTranslation("details_offline", language)}
+                    </button>
+                  )}
+
+                  {guidaMuseo && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); apriGuidaMuseo({ poiId: guidaMuseo.poiId, venueKey: guidaMuseo.venueKey, venueName: guidaMuseo.venueName, lat: guidaMuseo.lat, lon: guidaMuseo.lon }); }}
+                      className="flex items-center gap-1.5 px-3 py-2 bg-primary/10 hover:bg-primary/20 text-primary rounded-xl text-[10px] font-black uppercase tracking-widest transition-all hover:scale-105 active:scale-95"
+                      title={`${guidaMuseo.venueName}: ${guidaMuseo.stopsCount} opere`}
+                    >
+                      🎧 {getTranslation("mv_badge_guida", language)}
                     </button>
                   )}
 

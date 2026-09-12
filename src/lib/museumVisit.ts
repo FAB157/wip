@@ -150,6 +150,47 @@ export const ARCHIVIO_MUSEI_KEY = 'wip_museo_offline';
 const VISIT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 export const MUSEUM_VISIT_EVENT = 'wip-museum-visit-updated';
 export const OPEN_MUSEUM_VISIT_EVENT = 'wip-open-museum-visit';
+/**
+ * «Apri la sezione Visite già su QUESTO museo» (12/09/2026): dal badge sulle
+ * tappe-museo di itinerari e libreria. App.tsx cambia scheda; CameraScreen,
+ * quando è montata, consuma la richiesta in sospeso e avvia la visita.
+ */
+export const OPEN_MUSEUM_GUIDE_EVENT = 'wip-open-museum-guide';
+export type RichiestaGuidaMuseo = { poiId: string | null; venueKey?: string | null; venueName: string; lat?: number | null; lon?: number | null };
+let richiestaGuidaInSospeso: RichiestaGuidaMuseo | null = null;
+export function apriGuidaMuseo(r: RichiestaGuidaMuseo): void {
+  richiestaGuidaInSospeso = r;
+  try { window.dispatchEvent(new CustomEvent(OPEN_MUSEUM_GUIDE_EVENT, { detail: r })); } catch { /* ok */ }
+}
+export function prendiRichiestaGuidaMuseo(): RichiestaGuidaMuseo | null {
+  const r = richiestaGuidaInSospeso; richiestaGuidaInSospeso = null; return r;
+}
+
+/** Le tappe (id e nomi) che hanno una guida con le opere in libreria. */
+export type GuidaPerTappa = { venueKey: string; venueName: string; poiId: string | null; stopsCount: number; lat: number | null; lon: number | null; lingue: string[]; matchedId: string | null; matchedName: string | null };
+const cacheGuidePer = new Map<string, GuidaPerTappa | null>();
+export async function guidePerTappe(tappe: { id?: string | null; nome?: string | null }[]): Promise<Map<string, GuidaPerTappa>> {
+  const out = new Map<string, GuidaPerTappa>();
+  const ids = [...new Set(tappe.map(t => String(t.id || '').trim()).filter(Boolean))];
+  const names = [...new Set(tappe.map(t => String(t.nome || '').trim()).filter(Boolean))];
+  const chiave = (x: string) => x.toLowerCase();
+  const daChiedere = { ids: ids.filter(i => !cacheGuidePer.has(chiave(i))), names: names.filter(n => !cacheGuidePer.has(chiave(n))) };
+  if (daChiedere.ids.length || daChiedere.names.length) {
+    try {
+      const res = await fetch(getApiUrl('/api/museums/guides-for'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(daChiedere) });
+      const data = res.ok ? await res.json() : { guides: [] };
+      for (const i of daChiedere.ids) cacheGuidePer.set(chiave(i), null);
+      for (const n of daChiedere.names) cacheGuidePer.set(chiave(n), null);
+      for (const g of (data?.guides || []) as GuidaPerTappa[]) {
+        if (g.matchedId) cacheGuidePer.set(chiave(g.matchedId), g);
+        if (g.matchedName) for (const n of daChiedere.names) if (normalize(n) === normalize(g.matchedName)) cacheGuidePer.set(chiave(n), g);
+      }
+    } catch { /* niente badge, nessun errore */ }
+  }
+  for (const i of ids) { const g = cacheGuidePer.get(chiave(i)); if (g) out.set(i, g); }
+  for (const n of names) { const g = cacheGuidePer.get(chiave(n)); if (g) out.set(n, g); }
+  return out;
+}
 
 const normalize = (s: any) =>
   String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9一-鿿Ѐ-ӿ ]/g, ' ').replace(/\s+/g, ' ').trim();

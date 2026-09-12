@@ -719,6 +719,15 @@ export default function App() {
     return () => window.removeEventListener('wip-open-chat', handleOpenChat);
   }, []);
 
+  // Badge «Guida con audioguide delle opere» sulle tappe-museo (12/09/2026):
+  // porta alla scheda Vision, dove CameraScreen prende la richiesta in
+  // sospeso e apre Visite già su quel museo.
+  useEffect(() => {
+    const handleOpenMuseumGuide = () => setActiveTab("camera");
+    window.addEventListener('wip-open-museum-guide', handleOpenMuseumGuide);
+    return () => window.removeEventListener('wip-open-museum-guide', handleOpenMuseumGuide);
+  }, []);
+
   useEffect(() => {
     const handleSmartNav = (e: any) => {
       setRouteModalConfig({
@@ -1988,7 +1997,7 @@ export default function App() {
 
           <CategoryChips selectedIds={selectedCategories} onToggle={(id) => setSelectedCategories(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])} onEventClick={() => setActiveTab("events")} subFilter={subFilters} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} language={language} />
 
-          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} autoPlayNonce={poiAutoPlayNonce} guideMode={guideMode} modalitaGiro={!!isRadarMode || isPercorsoMode} isAdmin={isAdmin} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
+          <PoiDetailSheet poi={selectedPoi} autoPlay={poiAutoPlay} autoPlayNonce={poiAutoPlayNonce} guideMode={guideMode} modalitaGiro={!!isRadarMode || isPercorsoMode} isAdmin={isAdmin} onClose={() => { setSelectedPoi(null); setPoiAutoPlay(false); window.dispatchEvent(new CustomEvent('wip-close-popup')); if (previousTab && previousTab !== "map") { setActiveTab(previousTab as any); setPreviousTab(null); } }} visionText={visionText} isSaved={!!selectedPoi && itinerary.some((p) => String(p.id) === String(selectedPoi.id))} onToggleSave={() => selectedPoi && toggleSavedPoi(selectedPoi)} onSetSubFilter={(f) => setSubFilters(prev => f === null ? [] : (prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]))} nearbyPois={nearbyPoisForSelected} onSelectNearby={(p) => handleSelectPoi(p, nearbyPoisForSelected.filter((n) => n.id !== p.id).concat([selectedPoi]))} language={language} />
         </div>
         
         {/* ALTRE TAB — i container restano montati (stato preservato), la
@@ -2046,9 +2055,13 @@ export default function App() {
                 setVisionCard(data);
                 return;
               }
-              // Percorso Radar AR: è un vero POI del DB, apre la scheda POI classica
+              // Percorso Radar AR: è un vero POI del DB, apre la scheda POI classica.
+              // La scheda vive solo dentro il tab "map": si ricorda il tab di
+              // provenienza (camera) perché alla chiusura di PoiDetailSheet si
+              // torni al radar invece di restare bloccati sulla mappa.
               setVisionText(data.spiegazione_audio || "");
               setSelectedPoi({ ...data, id: data.id || `vision-${Date.now()}` });
+              setPreviousTab("camera");
               setActiveTab("map");
             }} onClose={() => setActiveTab("map")} language={language} />
           </Suspense>

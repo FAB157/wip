@@ -22,6 +22,38 @@ import { Language, getTranslation } from '../lib/i18n';
 import TravelInfo from './itinerary/TravelInfo';
 import BudgetTable from './itinerary/BudgetTable';
 import LoadingQuiz from './LoadingQuiz';
+import { guidePerTappe, apriGuidaMuseo, GuidaPerTappa } from '../lib/museumVisit';
+
+/**
+ * Badge «Guida con audioguide delle opere · Pass Museo» sotto una tappa
+ * della libreria (12/09/2026, committente): compare SOLO se quel museo ha
+ * davvero una guida con opere in museum_guides; il tocco apre Visite già
+ * su quel museo. Stesso stile dei badge minuscoli che stanno sopra
+ * (consiglio, tempo): niente altro cambia nella card.
+ */
+function BadgeGuidaMuseo({ tappa, language }: { tappa: any; language: Language }) {
+  const [guida, setGuida] = useState<GuidaPerTappa | null>(null);
+  const id = String(tappa?.poi_id || '').trim();
+  const nome = String(tappa?.titolo_tappa || tappa?.nome || '').trim();
+  useEffect(() => {
+    const sembraMuseo = /museo|museum|musée|museu|galleria|gallery|pinacoteca|palazzo|palace|castello|castle|basilica|cattedrale|cathedral|duomo/i.test(`${nome} ${tappa?.tipo || ''}`);
+    if (!id && !sembraMuseo) return;
+    let vivo = true;
+    guidePerTappe([{ id: id || null, nome }]).then(m => { if (vivo) setGuida((id && m.get(id)) || m.get(nome) || null); }).catch(() => {});
+    return () => { vivo = false; };
+  }, [id, nome]);
+  if (!guida) return null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); apriGuidaMuseo({ poiId: guida.poiId, venueKey: guida.venueKey, venueName: guida.venueName, lat: guida.lat, lon: guida.lon }); }}
+      className="inline-flex items-center gap-1 text-[9px] font-black text-primary mt-1.5 ml-2 underline-offset-2 hover:underline"
+      title={`${guida.venueName}: ${guida.stopsCount} opere`}
+    >
+      🎧 {getTranslation('mv_badge_guida', language)}
+    </button>
+  );
+}
 
 // ── Tipi (locali: il contratto API è la fonte di verità) ───────────────
 
@@ -1184,6 +1216,10 @@ export default function ItineraryLibrarySheet({
                                     <Clock className="w-2.5 h-2.5" /> {t.tempo_necessario}
                                   </span>
                                 )}
+                                {/* Badge «Guida con audioguide delle opere · Pass
+                                    Museo» (12/09/2026): solo se il museo ha la
+                                    guida in libreria; apre Visite su quel museo. */}
+                                <BadgeGuidaMuseo tappa={t} language={language} />
                               </div>
                             </div>
                           </div>
