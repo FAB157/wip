@@ -160,8 +160,16 @@ for (const [poiId, piante] of perPoi) {
     // Gemini: dove stanno le sale?
     const img = await fetch(riga.url); const mime = (img.headers.get('content-type') || 'image/png').split(';')[0];
     const b64 = Buffer.from(await img.arrayBuffer()).toString('base64');
-    const prompt = `Questa è la pianta (mappa) del museo «${nome}». Trova sulla pianta DOVE stanno queste sale/aree, leggendo le etichette e i numeri scritti sulla pianta: ${JSON.stringify([...sale])}.
-Rispondi SOLO con JSON: {"pins":[{"sala":"<esattamente come nell'elenco>","x":0.00,"y":0.00,"trovata":true|false,"etichetta":"<testo letto sulla pianta>"}]}
+    // I CODICI DENTRO IL NOME (12/09/2026 sera, Uffizi: «Sala del Botticelli
+    // (sale 10-14)», «Sala 28» contro le etichette «10-14», «25-30» della
+    // pianta): si estraggono numeri, intervalli e sigle (A, C1, A.35) e si
+    // passano al modello come aiuto; un numero dentro un intervallo scritto
+    // sulla pianta («28» in «25-30») vale come trovato.
+    const codiciDi = (s) => [...new Set([...String(s).matchAll(/\b([A-Z]{1,2}\.?\d{1,3}|\d{1,3}(?:\s*[-–]\s*\d{1,3})?|[A-Z]\d?)\b/g)].map(m => m[1].replace(/\s*[-–]\s*/, '-')).filter(c => !/^[A-Z]$/.test(c) || /\b(ala|sala|area|zona|wing|room)\s+[A-Z]\b/i.test(s)))];
+    const elencoSale = [...sale].map(s => { const c = codiciDi(s); return c.length ? { sala: s, codici: c } : { sala: s }; });
+    const prompt = `Questa è la pianta (mappa) del museo «${nome}». Trova sulla pianta DOVE stanno queste sale/aree, leggendo le etichette e i numeri scritti sulla pianta: ${JSON.stringify(elencoSale)}.
+Quando una voce ha "codici", cerca sulla pianta PROPRIO quelle etichette (numero, intervallo o sigla): un numero compreso in un intervallo scritto sulla pianta (es. «28» dentro «25-30») vale come trovato in quell'intervallo. Il nome descrittivo serve solo se la pianta scrive i nomi delle sale.
+Rispondi SOLO con JSON: {"pins":[{"sala":"<esattamente come nell'elenco, il campo sala>","x":0.00,"y":0.00,"trovata":true|false,"etichetta":"<testo letto sulla pianta>"}]}
 x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell'altezza dell'immagine (0-1, origine in alto a sinistra). Se una sala non è sulla pianta metti trovata=false e x=y=0. Non inventare posizioni: meglio trovata=false di un punto sbagliato.`;
     // I PIN da due modelli: un pin vale se entrambi mettono la sala nello
     // stesso punto (entro l'8% dell'immagine); se solo uno la trova, il pin
@@ -182,7 +190,7 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
     for (const s of sale) { const a = pinG.find(q => q.sala === s), b = pinO.find(q => q.sala === s); if (a && b && Math.hypot(a.x - b.x, a.y - b.y) > 0.08) contese.push(s); }
     let pinT = [];
     if (contese.length) {
-      const promptT = prompt.replace(JSON.stringify([...sale]), JSON.stringify(contese));
+      const promptT = prompt.replace(JSON.stringify(elencoSale), JSON.stringify(elencoSale.filter(e => contese.includes(e.sala))));
       const pt = await chiediOpenai(promptT, mime, b64, 'gpt-4o');
       pinT = estrai(pt).filter(q => !sulBordo(q));
     }

@@ -35,6 +35,10 @@ const DA = parseInt(arg('--da', '1'), 10), A = parseInt(arg('--a', '100'), 10);
 const LINGUE = String(arg('--lingue', 'IT')).split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
 const SOLO_QID = arg('--qid', '');
 const PAUSA = parseInt(arg('--pausa', '4000'), 10);
+// --minTappe N (12/09/2026 sera, «più opere ci sono meglio è»): una guida
+// con meno di N tappe si rifà anche se «buona». Default 8 (soglia storica);
+// per la passata «come gli Uffizi» si usa 25.
+const MIN_TAPPE = parseInt(arg('--minTappe', '8'), 10);
 const dormi = ms => new Promise(x => setTimeout(x, ms));
 
 const musei = await (await fetch(`${SB}/rest/v1/musei_prioritari?select=qid,rango,nome,lat,lon,sito&rango=gte.${DA}&rango=lte.${A}&order=rango`, { headers: H })).json();
@@ -51,7 +55,7 @@ async function guidaBuona(qid, lingua) {
     // Anche le spiegazioni contano: una guida con le tappe ma senza «perché»
     // (revisore troppo severo del 12/09 pomeriggio) è da rifare.
     const conPerche = tappe.filter(t => String(t?.perche || '').trim().length > 20).length;
-    if (tappe.length >= 8 && conSala >= 1 && conPerche >= tappe.length * 0.6) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length, conPerche };
+    if (tappe.length >= MIN_TAPPE && conSala >= 1 && conPerche >= tappe.length * 0.6) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length, conPerche };
   }
   return null;
 }

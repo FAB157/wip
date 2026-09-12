@@ -7349,7 +7349,7 @@ ORDER BY DESC(?fama)`;
         // solo le prime 12 per fama, e le "d'ufficio" servono a riempire
         // FINO A 20 tappe con quelle che NON aveva preso — con un tetto
         // troppo basso non restava nessuna candidata da aggiungere.
-        if (img && !giaVista && top.length < 25) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
+        if (img && !giaVista && top.length < 30) top.push({ titolo, autore: autore && !/^Q\d+$/.test(autore) ? autore : '', anno, inv, foto: img, tipo });
       }
       // Si conserva solo una risposta VERA: un elenco vuoto potrebbe essere
       // il sintomo di un QID sbagliato, e metterlo in cache per un mese
@@ -8619,8 +8619,11 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // altrimenti entravano come "opere" (l'incendio di Notre-Dame, i
           // funerali a Westminster, la morte di un pontefice).
           const r = await opereDelMuseo(wikidataId, langCfg.wiki, isChurch
-            ? { n: 12, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
-            : { n: 20, budgetMs: inDiretta ? 20000 : 45000 });
+            // 30 e 16 (12/09/2026 sera, committente: «nelle guide più opere ci
+            // sono meglio è, che siano importanti»): l'ordine resta quello
+            // della notorietà Wikidata, quindi le prime 30 sono le più note.
+            ? { n: 16, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
+            : { n: 30, budgetMs: inDiretta ? 20000 : 45000 });
           // Diagnostica temporanea (12/09/2026, richiesta android-c2): il
           // Louvre/Pompidou/Tate falliscono in produzione ma vanno sul
           // droplet — serve vedere se è un timeout di budget, un errore
@@ -8954,7 +8957,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         // Se la fonte e la traduzione coincidono, la seconda riga in scheda
         // sarebbe una ripetizione: si tiene solo «nome».
         .map((t: any) => (t.nomeFonte && normalizzaTesto(t.nomeFonte) === normalizzaTesto(t.nome)) ? { ...t, nomeFonte: '' } : t)
-        .slice(0, 20);
+        // 30 (12/09/2026 sera, committente: «più opere ci sono meglio è, che
+        // siano importanti»): il tetto era 20.
+        .slice(0, 30);
       const scartate = tappeIn.length - tappe.length;
       if (scartate > 0) console.warn(`[VenueGuide] ${venue.name}: scartate ${scartate} tappe non presenti nel materiale`);
 
