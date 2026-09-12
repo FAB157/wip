@@ -30,6 +30,7 @@ export default function MuseumPrintView({
   visit,
   language,
   opere,
+  mappe,
 }: {
   visit: MuseumVisit;
   language: Language;

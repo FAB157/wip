@@ -611,9 +611,11 @@ export function fornitoreRicerca(): 'brave' | 'google' | null {
 const hashBreve = (s: string) => createHash('md5').update(s).digest('hex').slice(0, 12);
 
 export async function ricercaWeb(query: string, opts: { lang?: string; cc?: string; count?: number;
-  /** 12/09/2026: fornitore e chiave dedicati (i musei non devono bruciare il credito degli Eventi). */
-  provider?: 'brave' | 'google'; braveKey?: string } = {}): Promise<RisultatoWeb[]> {
-  let fornitore: 'brave' | 'google' | null = opts.provider || fornitoreRicerca();
+  /** 12/09/2026: fornitore e chiave dedicati (i musei non devono bruciare il credito degli Eventi).
+   *  'searxng' = istanza SearXNG auto-ospitata (SEARXNG_URL + SEARXNG_TOKEN): gratis, senza crediti. */
+  provider?: 'brave' | 'google' | 'searxng'; braveKey?: string } = {}): Promise<RisultatoWeb[]> {
+  let fornitore: 'brave' | 'google' | 'searxng' | null = opts.provider || fornitoreRicerca();
+  if (fornitore === 'searxng' && !process.env.SEARXNG_URL) fornitore = fornitoreRicerca();
   if (fornitore === 'google' && !(process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX)) fornitore = fornitoreRicerca();
   if (fornitore === 'brave' && !(opts.braveKey || process.env.BRAVE_SEARCH_API_KEY)) fornitore = fornitoreRicerca();
   const q = String(query || '').trim();
@@ -626,7 +628,17 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
   if (Array.isArray(hit)) return hit;
   let out: RisultatoWeb[] = [];
   try {
-    if (fornitore === 'brave') {
+    if (fornitore === 'searxng') {
+      // SearXNG sul droplet (12/09/2026 sera, committente): GET /search con
+      // format=json; il token segreto nell'header protegge l'istanza.
+      const base = String(process.env.SEARXNG_URL || '').replace(/\/+$/, '');
+      const r = await axios.get(`${base}/search`, {
+        params: { q, format: 'json', language: lang, safesearch: 1, categories: 'general' },
+        headers: { Accept: 'application/json', ...(process.env.SEARXNG_TOKEN ? { 'X-Searx-Token': process.env.SEARXNG_TOKEN } : {}) },
+        timeout: 15000,
+      });
+      out = (r.data?.results || []).slice(0, count).map((x: any) => ({ title: String(x.title || ''), url: String(x.url || ''), snippet: String(x.content || '') }));
+    } else if (fornitore === 'brave') {
       const r = await axios.get('https://api.search.brave.com/res/v1/web/search', {
         params: { q, count, search_lang: lang, ...(cc ? { country: cc } : {}), safesearch: 'moderate', text_decorations: false },
         headers: { 'X-Subscription-Token': opts.braveKey || process.env.BRAVE_SEARCH_API_KEY, Accept: 'application/json' },

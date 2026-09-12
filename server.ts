@@ -12439,8 +12439,12 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
       // `provider: 'google'` usa Google CSE (100/giorno gratis) se le chiavi
       // ci sono; altrimenti il fornitore di default.
       const braveMusei = process.env.BRAVE_SEARCH_API_KEY_MUSEI || '';
-      const provider = String(req.body?.provider || '') === 'google' ? 'google' : (braveMusei ? 'brave' : undefined);
-      if (!eventiFeed.fornitoreRicerca() && !braveMusei) return res.json({ ok: false, reason: 'ricerca_spenta' });
+      const searx = process.env.SEARXNG_URL || '';
+      // Ordine: provider chiesto dal client → SearXNG sul droplet (gratis) →
+      // chiave Brave dedicata → fornitore di default.
+      const chiesto = String(req.body?.provider || '');
+      const provider: 'brave' | 'google' | 'searxng' | undefined = chiesto === 'google' ? 'google' : chiesto === 'searxng' ? 'searxng' : chiesto === 'brave' ? 'brave' : (searx ? 'searxng' : braveMusei ? 'brave' : undefined);
+      if (!eventiFeed.fornitoreRicerca() && !braveMusei && !searx) return res.json({ ok: false, reason: 'ricerca_spenta' });
       const queries: string[] = (Array.isArray(req.body?.queries) ? req.body.queries : []).map((q: any) => String(q || '').trim().slice(0, 200)).filter(Boolean).slice(0, 30);
       const lang = String(req.body?.lang || 'en').slice(0, 2).toLowerCase();
       const count = Math.min(10, Math.max(3, parseInt(String(req.body?.count || '8'), 10) || 8));
@@ -18312,13 +18316,27 @@ ${description}
   // sorgente (quella dentro I18N.it, non l'HTML: identiche perché il body
   // parte già in italiano). L'h1 ha un tag <em> annidato: si sostituisce
   // l'HTML intero, non il testo semplice.
+  // LETTURA VIA HTTP, NON FILESYSTEM (12/09/2026, trovato in verifica dopo
+  // il deploy). `fs.readFileSync(__dirname + '/public/scopri/...')` funziona
+  // in locale (gira dalla cartella del repository) ma su Vercel la funzione
+  // serverless NON ha `public/` nel proprio filesystem — solo `dist/`
+  // (l'hosting statico) lo contiene, ed è un albero separato dalla funzione.
+  // Risultato: 404 silenzioso in produzione, invisibile finché non si prova
+  // davvero l'URL. Si legge invece la pagina già pubblicata su se stessi:
+  // stesso identico file, un giro HTTP in più mitigato dalla cache in
+  // memoria del processo (la pagina cambia solo quando la si edita a mano).
   let scopriHtmlCache: string | null = null;
-  const scopriHtml = (): string => {
-    if (scopriHtmlCache !== null) return scopriHtmlCache;
+  let scopriHtmlCachedAt = 0;
+  const SCOPRI_CACHE_MS = 10 * 60 * 1000;
+  const scopriHtml = async (): Promise<string> => {
+    if (scopriHtmlCache !== null && Date.now() - scopriHtmlCachedAt < SCOPRI_CACHE_MS) return scopriHtmlCache;
     try {
-      scopriHtmlCache = fs.readFileSync(path.join(__dirname, 'public', 'scopri', 'index.html'), 'utf8');
-    } catch {
-      scopriHtmlCache = '';
+      const r = await axios.get(`${SEO_SITO}/scopri`, { timeout: 6000 });
+      scopriHtmlCache = String(r.data || '');
+      scopriHtmlCachedAt = Date.now();
+    } catch (e: any) {
+      console.warn('[scopri] pagina base non raggiungibile:', e?.message);
+      if (scopriHtmlCache === null) scopriHtmlCache = '';
     }
     return scopriHtmlCache;
   };
@@ -18326,9 +18344,8 @@ ${description}
   // sui delimitatori (sono nostri, scritti a mano, non input esterno) e si
   // valuta come oggetto letterale — niente eval su dati di un utente.
   let scopriI18nCache: Record<string, Record<string, string>> | null = null;
-  const scopriI18n = (): Record<string, Record<string, string>> | null => {
-    if (scopriI18nCache !== null) return scopriI18nCache;
-    const html = scopriHtml();
+  const scopriI18n = async (): Promise<Record<string, Record<string, string>> | null> => {
+    const html = await scopriHtml();
     const m = html.match(/var I18N = (\{[\s\S]*?\n\});/);
     if (!m) return null;
     try {
@@ -18359,9 +18376,9 @@ ${description}
     ru: 'аудиогид, бесплатный аудиогид, офлайн аудиогид, туристический гид, маршрут путешествия, навигатор для туристов, что посмотреть, приложение для путешествий, WIP',
     zh: '语音导览, 免费语音导览, 离线语音导览, 旅游导览, 旅行行程, 旅游导航, 有什么好看的, 旅行应用, WIP',
   };
-  const scopriPagina = (lang: string) => {
-    const base = scopriHtml();
-    const i18n = scopriI18n();
+  const scopriPagina = async (lang: string) => {
+    const base = await scopriHtml();
+    const i18n = await scopriI18n();
     if (!base || !i18n || !i18n.it || !i18n[lang]) return null;
     // Il testo IT ricompare anche DENTRO il <script> più sotto (è la var
     // I18N da cui vengono queste stesse traduzioni): sostituirlo lì
@@ -18399,10 +18416,15 @@ ${description}
       .replace(/<meta property="og:description" content="[^"]*">/, `<meta property="og:description" content="${seoEscape(descrizione)}">`);
     return html;
   };
-  app.get(`/scopri/:lang(${SCOPRI_LINGUE.join('|')})`, (req, res) => {
-    const html = scopriPagina(String((req.params as any).lang));
-    if (!html) { res.status(404).type('text/plain').send('not found'); return; }
-    res.set('Cache-Control', 'public, max-age=3600, s-maxage=86400').type('text/html').send(html);
+  app.get(`/scopri/:lang(${SCOPRI_LINGUE.join('|')})`, async (req, res) => {
+    try {
+      const html = await scopriPagina(String((req.params as any).lang));
+      if (!html) { res.status(404).type('text/plain').send('not found'); return; }
+      res.set('Cache-Control', 'public, max-age=3600, s-maxage=86400').type('text/html').send(html);
+    } catch (e: any) {
+      console.warn('[scopri] generazione pagina fallita:', e?.message);
+      res.status(503).type('text/plain').send('temporarily unavailable');
+    }
   });
 
   // Indice delle sitemap. Il conteggio esatto costerebbe una scansione su

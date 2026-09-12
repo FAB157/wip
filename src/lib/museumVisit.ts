@@ -40,6 +40,11 @@ export type VenueTappa = {
    *  «sopra l'altare». È il dato che porta davvero davanti all'opera —
    *  in una sala con ottanta quadri il numero della sala non basta. */
   puntoPreciso?: string;
+  /** SOLO il codice della sala come sta sulla pianta e sui cartelli («Room
+   *  32», «Salle 711»): è la chiave che abbina l'opera al pin della pianta e
+   *  raggruppa le tappe sala per sala. Mai tradotto; '' se il museo dà solo
+   *  un nome discorsivo (che resta in «dove»). */
+  salaCodice?: string;
   /** Il titolo com'è scritto sul cartellino, quando è diverso dal nostro:
    *  chi cerca l'opera con gli occhi legge il muro, non la traduzione. Non
    *  si traduce mai, in nessuna lingua. */
