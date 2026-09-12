@@ -481,7 +481,51 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
    * salverebbe con lo stesso nome dell'app, e dieci musei diventerebbero
    * dieci file identici nella cartella dei download.
    */
-  const handleStampa = () => {
+  const handleStampa = async () => {
+    // SUL TELEFONO NON ESISTE window.print() (12/09/2026, committente: «il
+    // tasto stampa la guida non funziona»): il WebView non stampa. Come per
+    // gli itinerari (PlanScreen) si genera il PDF con html2pdf dalla vista di
+    // stampa e lo si salva nei Documenti. La vista è display:none: la si
+    // mostra fuori schermo solo per il tempo del rendering.
+    const nomeFile = `WIP - ${visit.venue.name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60)}.pdf`;
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      if (Capacitor.isNativePlatform()) {
+        const elemento = document.getElementById('museum-print-view') as HTMLElement | null;
+        if (!elemento) { notify(t('pf_pdf_non_riuscito')); return; }
+        notify(t('pf_pdf_in_corso'));
+        const stilePrima = elemento.getAttribute('style') || '';
+        elemento.setAttribute('style', 'display:block;position:absolute;top:0;left:-9999px;width:794px;background:#fff;color:#1e1b14');
+        try {
+          const mod: any = await import('html2pdf.js');
+          const html2pdf = mod.default || mod;
+          const blob: Blob = await html2pdf().set({
+            margin: [10, 12, 15, 12],
+            filename: nomeFile,
+            image: { type: 'jpeg', quality: 0.95 },
+            html2canvas: {
+              scale: 2, useCORS: true, logging: false, allowTaint: true, scrollY: 0, windowWidth: 794,
+              onclone: (doc: Document) => {
+                const clone = doc.getElementById('museum-print-view') as HTMLElement | null;
+                if (clone) clone.setAttribute('style', 'display:block;position:static;width:794px;max-width:none;background:#fff;color:#1e1b14');
+              },
+            },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: ['css', 'legacy'] },
+          }).from(elemento).outputPdf('blob');
+          const { saveBlobAsFile } = await import('../services/premiumGuideService');
+          const ok = await saveBlobAsFile(blob, nomeFile);
+          notify(t(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito'));
+        } finally {
+          elemento.setAttribute('style', stilePrima);
+        }
+        return;
+      }
+    } catch (e) {
+      console.error('[MuseumVisitSheet] PDF non riuscito', e);
+      notify(t('pf_pdf_non_riuscito'));
+      return;
+    }
     const titoloPrima = document.title;
     document.title = `WIP - ${visit.venue.name}`;
     printScoped('museum', () => {
@@ -2312,14 +2356,22 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
 
           {/* La guida su carta: si piega in quattro e sta in tasca anche col
               telefono spento, e si manda agli amici prima di partire. */}
+          {/* Stampa e Termina sulla stessa riga (12/09/2026, committente:
+              «per avere più spazio»); la cartolina, quando c'è, sotto. */}
           <div className="flex gap-2">
             <button
-              onClick={handleStampa}
+              onClick={() => void handleStampa()}
               className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2"
             >
               <Printer className="w-4 h-4" />
               {t('mv_stampa_guida')}
             </button>
+            <button onClick={handleEnd} className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2">
+              <MapPin className="w-4 h-4" />
+              {t('mv_end')}
+            </button>
+          </div>
+          <div className="flex gap-2">
             {/* LA CARTOLINA: solo quando c'è qualcosa da raccontare */}
             {countSeen(visit) > 0 && (
               <button
@@ -2332,11 +2384,6 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               </button>
             )}
           </div>
-
-          <button onClick={handleEnd} className="w-full py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2">
-            <MapPin className="w-4 h-4" />
-            {t('mv_end')}
-          </button>
         </div>
       </motion.div>
     </div>

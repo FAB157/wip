@@ -14,7 +14,9 @@ if (!poiId || !nome) { console.error('Uso: node scripts/musei-rigenera-uno.mjs <
 const t0 = Date.now();
 const r = await fetch(`${env.WIP_API || 'https://www.wip.guide'}/api/vision/venue-guide`, {
   method: 'POST', headers: { 'Content-Type': 'application/json', 'x-script-secret': env.SCRIPT_SHARED_SECRET },
-  body: JSON.stringify({ poiId, venueHint: nome, venueHintSource: 'user', lat: lat ? +lat : null, lon: lon ? +lon : null, language: lingua, rigenera: true }),
+  // NO_RIGENERA=1: chiama la rotta come farebbe l'app (cache e libreria valgono,
+  // e vale la cache opere_museo pre-riempita dal droplet).
+  body: JSON.stringify({ poiId, venueHint: nome, venueHintSource: 'user', lat: lat ? +lat : null, lon: lon ? +lon : null, language: lingua, rigenera: process.env.NO_RIGENERA !== '1' }),
   signal: AbortSignal.timeout(290000),
 });
 const j = await r.json().catch(() => ({}));
