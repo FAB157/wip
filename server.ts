@@ -8453,7 +8453,10 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       const OPERE_MUSEO_CACHE_TTL_MS = 30 * 86_400_000;
       const opereMuseoKey = wikidataId ? `opere_museo:v1:${wikidataId}:${langCfg.wiki}` : '';
       const opereMuseoPromise = (async (): Promise<OpereDelMuseoRisultato | null> => {
-        if (!wikidataId || isSito) return null;
+        if (!wikidataId || isSito) {
+          console.log(`[VenueGuide] opereMuseo ${venue.name}: saltato (wikidataId='${wikidataId}', isSito=${isSito})`);
+          return null;
+        }
         if (opereMuseoKey) {
           const riga = await getFromCache(opereMuseoKey);
           const eta = riga ? Date.now() - Date.parse(riga.created_at || '') : Infinity;
@@ -8471,10 +8474,16 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           const r = await opereDelMuseo(wikidataId, langCfg.wiki, isChurch
             ? { n: 12, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
             : { n: 20, budgetMs: inDiretta ? 20000 : 45000 });
+          // Diagnostica temporanea (12/09/2026, richiesta android-c2): il
+          // Louvre/Pompidou/Tate falliscono in produzione ma vanno sul
+          // droplet — serve vedere se è un timeout di budget, un errore
+          // Wikidata (403/429, tipico degli IP dei datacenter Vercel) o
+          // qualcos'altro. Da togliere una volta trovata la causa.
+          console.log(`[VenueGuide] opereMuseo ${venue.name} (${wikidataId})`, r?.opere?.length, 'parti:', r?.museo?.parti, 'ms:', JSON.stringify(r?.diagnostica?.ms), 'errori:', (r?.diagnostica?.errori || []).slice(0, 3));
           if (r.opere.length && opereMuseoKey) saveToCache(opereMuseoKey, 'opere_museo', JSON.stringify(r));
           return r;
         } catch (e: any) {
-          console.warn(`[VenueGuide] opereDelMuseo fallita per ${venue.name}:`, e?.message);
+          console.warn(`[VenueGuide] opereDelMuseo fallita per ${venue.name}:`, e?.message, e?.stack?.slice(0, 300));
           return null;
         }
       })();
