@@ -3285,7 +3285,13 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
     // interno del museo (sale, ordine, opere da non perdere), che costa una
     // generazione in più e vale come servizio a sé (10/09/2026).
     museum_pass: 100,
-    museum_pass_tour: 150,
+    // VISITA MUSEO (12/09/2026 sera, committente): 200 crediti = la guida
+    // completa del museo (percorso per sale, spiegazioni, curiosità, foto,
+    // pianta con i pin, confronti; scaricabile la sera prima, offline, resta
+    // nei download) PIÙ 20 scansioni con la fotocamera; valida 7 giorni
+    // (MUSEUM_VISIT_DAYS). Il Pass Museo da 100 resta: 40 scansioni in 4 ore,
+    // solo con internet.
+    museum_pass_tour: 200,
     // NUOVO (hardening ago 2026) — /api/regenerate: src/lib/pricing.ts
     // (PRICING_LIST) NON ha una voce dedicata per questa rotta. Il client
     // oggi addebita `audio_guide` A PARTE (nel modale crediti) PRIMA di
@@ -5741,9 +5747,10 @@ function isNameMatching(name1: string, name2: string): boolean {
       }
       if (!quota.allowed) {
         const quotaUid = quota.userId && !String(quota.userId).startsWith('anonymous-') ? String(quota.userId) : null;
-        const passExp = quotaUid ? await getActiveMuseumPassExpiry(quotaUid) : null;
+        const passQ = quotaUid ? await getActiveMuseumPass(quotaUid) : null;
+        const passExp = passQ?.expiresAt ?? null;
         const passHasRoom = passExp && quotaUid
-          ? (await countMuseumPassScans(quotaUid, passExp)) < MUSEUM_PASS_MAX_SCANS
+          ? (await countMuseumPassScans(quotaUid, passExp)) < limiteScansioniPass(passQ?.tier)
           : false;
         if (!passHasRoom) {
           return res.status(429).json({ error: "Quota Exceeded", message: quota.error });
@@ -5908,16 +5915,18 @@ function isNameMatching(name1: string, name2: string): boolean {
       // e la cache GPS è bypassata in lettura E scrittura: in un museo due
       // opere distano pochi metri, la cache per coordinate (30 m)
       // risponderebbe con la scheda dell'opera sbagliata.
-      const museumPassExpiresAt = realUserId ? await getActiveMuseumPassExpiry(realUserId) : null;
+      const museumPassInfo = realUserId ? await getActiveMuseumPass(realUserId) : null;
+      const museumPassExpiresAt = museumPassInfo?.expiresAt ?? null;
       let museumPassActive = !!museumPassExpiresAt;
 
-      // Tetto anti-spam del pass: oltre MUSEUM_PASS_MAX_SCANS scansioni nella
-      // finestra il pass smette di coprire e si torna all'addebito per foto
-      // (lo spam diventa costoso; un visitatore vero non ci arriva mai).
+      // Tetto anti-spam del pass: oltre il tetto del livello (40 per il Pass,
+      // 20 per la Visita) il pass smette di coprire e si torna all'addebito
+      // per foto (lo spam diventa costoso; un visitatore vero non ci arriva).
       if (museumPassActive && realUserId && museumPassExpiresAt) {
         const used = await countMuseumPassScans(realUserId, museumPassExpiresAt);
-        if (used >= MUSEUM_PASS_MAX_SCANS) {
-          console.warn(`[Vision] Pass Museo: tetto ${MUSEUM_PASS_MAX_SCANS} scansioni raggiunto (${used}): si torna all'addebito standard`);
+        const tetto = limiteScansioniPass(museumPassInfo?.tier);
+        if (used >= tetto) {
+          console.warn(`[Vision] Pass Museo: tetto ${tetto} scansioni raggiunto (${used}): si torna all'addebito standard`);
           museumPassActive = false;
         }
       }
@@ -6616,6 +6625,13 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   // visitatore vero non esaurisce in quattro ore. Superato il tetto il pass
   // smette di coprire e ogni scansione torna a costare i crediti standard.
   const MUSEUM_PASS_MAX_SCANS = 40;
+  // VISITA MUSEO (12/09/2026 sera): il livello 'tour' è la Visita — 7 giorni
+  // di validità (si compra la sera prima), 20 scansioni con la fotocamera
+  // oltre alle opere della guida; l'ascolto delle opere della guida NON
+  // consuma scansioni.
+  const MUSEUM_VISIT_DAYS = 7;
+  const MUSEUM_VISIT_MAX_SCANS = 20;
+  const limiteScansioniPass = (tier: 'base' | 'tour' | null | undefined) => tier === 'tour' ? MUSEUM_VISIT_MAX_SCANS : MUSEUM_PASS_MAX_SCANS;
 
   /**
    * Scansioni fatte nella finestra del pass corrente: ogni /api/vision salva
@@ -6759,13 +6775,15 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     const expiresAt = pass?.expiresAt ?? null;
     const scansUsed = expiresAt ? await countMuseumPassScans(userId, expiresAt) : 0;
     res.json({
-      active: !!expiresAt && scansUsed < MUSEUM_PASS_MAX_SCANS,
+      active: !!expiresAt && scansUsed < limiteScansioniPass(pass?.tier),
       expiresAt,
       tier: pass?.tier || null,
       tourIncluded: pass?.tier === 'tour',
       scansUsed,
-      scansLimit: MUSEUM_PASS_MAX_SCANS,
-      hours: MUSEUM_PASS_HOURS,
+      scansLimit: limiteScansioniPass(pass?.tier),
+      hours: pass?.tier === 'tour' ? MUSEUM_VISIT_DAYS * 24 : MUSEUM_PASS_HOURS,
+      visitDays: MUSEUM_VISIT_DAYS,
+      visitScans: MUSEUM_VISIT_MAX_SCANS,
       // Prezzi effettivi: l'acquisto passa da chargeOrReject, che usa lo stesso
       // listino — banner e addebito non possono divergere.
       priceCredits: await prezzoDi('museum_pass'),
@@ -6799,23 +6817,28 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
           chargeUp = { cost: differenza };
         }
         if (!chargeUp) return;
+        // La Visita vale 7 giorni: l'upgrade riparte da oggi (scadenza più
+        // avanti = vince su quella del Pass in getActiveMuseumPass).
+        const scadenzaVisita = Date.now() + MUSEUM_VISIT_DAYS * 86_400_000;
         try {
           await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, {
             user_id: userId,
             reward_source_type: 'museum_pass',
-            reward_source_id: `mpass-${existing.expiresAt}-t-${Math.random().toString(36).slice(2, 7)}`
+            reward_source_id: `mpass-${scadenzaVisita}-t-${Math.random().toString(36).slice(2, 7)}`
           }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' } });
         } catch {
           if (chargeUp.cost > 0) await refundServer(userId, chargeUp.cost);
           return res.status(500).json({ error: 'pass_activation_failed' });
         }
-        return res.json({ active: true, expiresAt: existing.expiresAt, tier: 'tour', tourIncluded: true, charged: chargeUp.cost, upgraded: true, hours: MUSEUM_PASS_HOURS });
+        return res.json({ active: true, expiresAt: scadenzaVisita, tier: 'tour', tourIncluded: true, charged: chargeUp.cost, upgraded: true, hours: MUSEUM_VISIT_DAYS * 24 });
       }
 
       const charge = await chargeOrReject(req, res, tier === 'tour' ? 'museum_pass_tour' : 'museum_pass');
       if (!charge) return;
 
-      const expiresAt = Date.now() + MUSEUM_PASS_HOURS * 3_600_000;
+      // Pass: 4 ore. Visita: 7 giorni (si compra la sera prima, la guida
+      // scaricata resta comunque per sempre sul telefono).
+      const expiresAt = Date.now() + (tier === 'tour' ? MUSEUM_VISIT_DAYS * 86_400_000 : MUSEUM_PASS_HOURS * 3_600_000);
       try {
         await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, {
           user_id: userId,
@@ -6827,7 +6850,7 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
         await refundServer(userId, charge.cost);
         return res.status(500).json({ error: 'pass_activation_failed' });
       }
-      res.json({ active: true, expiresAt, tier, tourIncluded: tier === 'tour', charged: charge.cost, hours: MUSEUM_PASS_HOURS });
+      res.json({ active: true, expiresAt, tier, tourIncluded: tier === 'tour', charged: charge.cost, hours: tier === 'tour' ? MUSEUM_VISIT_DAYS * 24 : MUSEUM_PASS_HOURS });
     } catch (e: any) {
       console.error('[MuseumPass] Errore acquisto:', e.message);
       res.status(500).json({ error: e.message });
@@ -9816,7 +9839,9 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
           return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
         }
         usate = await countMuseumPassScans(userId, pass.expiresAt);
-        if (usate >= MUSEUM_PASS_MAX_SCANS) {
+        // Con la Visita l'ascolto delle opere della guida è compreso: il
+        // tetto delle scansioni vale solo per la fotocamera.
+        if (pass.tier !== 'tour' && usate >= MUSEUM_PASS_MAX_SCANS) {
           return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
         }
       }
@@ -10812,7 +10837,7 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
           if (p?.testo) return res.json({ ok: true, testo: p.testo, parole: p.parole, language: outLang, cached: true });
         } catch { /* si rigenera */ }
       }
-      if (!gratuita && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+      if (!gratuita && pass?.tier !== 'tour' && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
 
       // La foto, scaricata qui: il motore la vede in base64.
       let b64 = '';
@@ -10938,7 +10963,7 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
           if (p?.testo) return res.json({ ok: true, ...p, cached: true });
         } catch { /* si rigenera */ }
       }
-      if (inDiretta && !gratuita && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+      if (inDiretta && !gratuita && pass?.tier !== 'tour' && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
 
       // Il materiale di ciascuna opera: prima l'audioguida già scritta (in
       // qualunque lingua), poi la voce Wikipedia. Senza materiale per

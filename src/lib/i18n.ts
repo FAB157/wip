@@ -2542,59 +2542,68 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "博物馆通票"
   },
   museum_pass_desc: {
-    IT: "40 audioguide in 4 ore: inquadra le opere che vuoi, WIP te le racconta.",
-    EN: "40 audio guides in 4 hours: frame the artworks you like, WIP tells their story.",
-    FR: "40 audioguides en 4 heures : cadrez les œuvres que vous voulez, WIP les raconte.",
-    ES: "40 audioguías en 4 horas: encuadra las obras que quieras y WIP te las cuenta.",
-    DE: "40 Audioguides in 4 Stunden: Werke anvisieren, WIP erzählt sie dir.",
-    RU: "40 аудиогидов за 4 часа: наводите камеру на любые экспонаты — WIP расскажет.",
-    ZH: "4 小时内 40 段语音讲解：想看哪件就对准哪件，WIP 为你讲解。"
+    IT: "40 scansioni in 4 ore: inquadra ciò che vuoi con la fotocamera e ascolti la scheda. Serve internet.",
+    EN: "40 scans in 4 hours: frame anything with the camera and listen to its card. Internet required.",
+    FR: "40 scans en 4 heures : cadrez ce que vous voulez avec l'appareil photo et écoutez la fiche. Internet requis.",
+    ES: "40 escaneos en 4 horas: encuadra lo que quieras con la cámara y escucha la ficha. Requiere internet.",
+    DE: "40 Scans in 4 Stunden: Anvisieren mit der Kamera und die Karte anhören. Internet nötig.",
+    RU: "40 сканов за 4 часа: наводите камеру на что угодно и слушайте карточку. Нужен интернет.",
+    ZH: "4 小时内 40 次扫描：用相机对准想看的东西，收听讲解卡。需要联网。"
   },
-  // ── Pass Museo con VISITA GUIDATA (10/09/2026) ──
+  museum_pass_offline_warn: {
+    IT: "Senza internet il Pass Museo non funziona: ogni scansione passa dal riconoscimento sul server.",
+    EN: "Without internet the Museum Pass does not work: every scan needs the server to recognise the work.",
+    FR: "Sans internet le Pass Musée ne fonctionne pas : chaque scan passe par la reconnaissance sur le serveur.",
+    ES: "Sin internet el Pase Museo no funciona: cada escaneo necesita el reconocimiento en el servidor.",
+    DE: "Ohne Internet funktioniert der Museumspass nicht: jeder Scan braucht die Erkennung auf dem Server.",
+    RU: "Без интернета Музейный пасс не работает: каждое сканирование требует распознавания на сервере.",
+    ZH: "没有网络时博物馆通票无法使用：每次扫描都需要服务器识别。"
+  },
+  // ── VISITA MUSEO (12/09/2026): la guida completa + 20 scansioni, 7 giorni ──
   museum_pass_tour_title: {
-    IT: "Pass Museo con visita guidata",
-    EN: "Museum Pass with guided visit",
-    FR: "Pass Musée avec visite guidée",
-    ES: "Pase Museo con visita guiada",
-    DE: "Museumspass mit Führung",
-    RU: "Музейный пасс с экскурсией",
-    ZH: "博物馆通票（含导览路线）"
+    IT: "Visita Museo",
+    EN: "Museum Visit",
+    FR: "Visite Musée",
+    ES: "Visita Museo",
+    DE: "Museumsbesuch",
+    RU: "Визит в музей",
+    ZH: "博物馆导览"
   },
   museum_pass_tour_desc: {
-    IT: "Le stesse 40 audioguide più il percorso dentro il museo: dove sei, quali opere vedere e in che ordine.",
-    EN: "The same 40 audio guides plus the route inside the museum: where you are, which works to see and in what order.",
-    FR: "Les mêmes 40 audioguides plus le parcours dans le musée : où vous êtes, quelles œuvres voir et dans quel ordre.",
-    ES: "Las mismas 40 audioguías más el recorrido dentro del museo: dónde estás, qué obras ver y en qué orden.",
-    DE: "Dieselben 40 Audioguides plus der Rundgang im Museum: wo du bist, welche Werke du sehen solltest und in welcher Reihenfolge.",
-    RU: "Те же 40 аудиогидов плюс маршрут по музею: где вы, какие произведения смотреть и в каком порядке.",
-    ZH: "同样的 40 段语音讲解，外加馆内路线：你在哪里、看哪些作品、按什么顺序。"
+    IT: "La guida completa: percorso per sale, spiegazioni, curiosità, foto, pianta con le opere, confronti. Scaricala la sera prima, funziona offline e resta nei tuoi download. In più 20 scansioni con la fotocamera. Vale 7 giorni.",
+    EN: "The complete guide: route by rooms, explanations, curiosities, photos, floor plan with the works, comparisons. Download it the night before, works offline and stays in your downloads. Plus 20 camera scans. Valid 7 days.",
+    FR: "Le guide complet : parcours par salles, explications, anecdotes, photos, plan avec les œuvres, comparaisons. Téléchargez-le la veille, il fonctionne hors ligne et reste dans vos téléchargements. Plus 20 scans. Valable 7 jours.",
+    ES: "La guía completa: recorrido por salas, explicaciones, curiosidades, fotos, plano con las obras, comparaciones. Descárgala la noche anterior, funciona sin conexión y queda en tus descargas. Más 20 escaneos. Válida 7 días.",
+    DE: "Der komplette Guide: Rundgang nach Sälen, Erklärungen, Anekdoten, Fotos, Plan mit den Werken, Vergleiche. Am Abend vorher laden, läuft offline und bleibt in deinen Downloads. Plus 20 Scans. 7 Tage gültig.",
+    RU: "Полный гид: маршрут по залам, объяснения, факты, фото, план с экспонатами, сравнения. Скачайте накануне, работает офлайн и остаётся в загрузках. Плюс 20 сканов. Действует 7 дней.",
+    ZH: "完整导览：按展厅的路线、讲解、趣闻、照片、带作品的平面图、对比。前一晚下载，可离线使用并保留在下载中。另含 20 次扫描。有效期 7 天。"
   },
   museum_pass_tour_badge: {
-    IT: "con visita guidata",
-    EN: "with guided visit",
-    FR: "avec visite guidée",
-    ES: "con visita guiada",
-    DE: "mit Führung",
-    RU: "с экскурсией",
-    ZH: "含导览路线"
+    IT: "Visita Museo",
+    EN: "Museum Visit",
+    FR: "Visite Musée",
+    ES: "Visita Museo",
+    DE: "Museumsbesuch",
+    RU: "Визит в музей",
+    ZH: "博物馆导览"
   },
   museum_pass_upgrade: {
-    IT: "Aggiungi la visita guidata",
-    EN: "Add the guided visit",
-    FR: "Ajouter la visite guidée",
-    ES: "Añadir la visita guiada",
-    DE: "Führung hinzufügen",
-    RU: "Добавить экскурсию",
-    ZH: "加购导览路线"
+    IT: "Passa alla Visita Museo",
+    EN: "Upgrade to the Museum Visit",
+    FR: "Passer à la Visite Musée",
+    ES: "Pasar a la Visita Museo",
+    DE: "Zum Museumsbesuch wechseln",
+    RU: "Перейти на Визит в музей",
+    ZH: "升级为博物馆导览"
   },
   museum_pass_upgrade_desc: {
-    IT: "Il tuo pass resta valido fino alla stessa ora: paghi solo la differenza.",
-    EN: "Your pass stays valid until the same time: you only pay the difference.",
-    FR: "Votre pass reste valable jusqu'à la même heure : vous ne payez que la différence.",
-    ES: "Tu pase sigue válido hasta la misma hora: solo pagas la diferencia.",
-    DE: "Dein Pass bleibt bis zur selben Uhrzeit gültig: Du zahlst nur die Differenz.",
-    RU: "Ваш пасс действует до того же времени: вы платите только разницу.",
-    ZH: "通票有效时间不变：只需补差价。"
+    IT: "Paghi solo la differenza: la Visita vale 7 giorni e la guida resta nei tuoi download.",
+    EN: "You only pay the difference: the Visit is valid for 7 days and the guide stays in your downloads.",
+    FR: "Vous ne payez que la différence : la Visite est valable 7 jours et le guide reste dans vos téléchargements.",
+    ES: "Solo pagas la diferencia: la Visita vale 7 días y la guía queda en tus descargas.",
+    DE: "Du zahlst nur die Differenz: der Besuch gilt 7 Tage und der Guide bleibt in deinen Downloads.",
+    RU: "Вы платите только разницу: Визит действует 7 дней, гид остаётся в загрузках.",
+    ZH: "只需补差价：导览有效期 7 天，指南保留在你的下载中。"
   },
   museum_pass_scans_left: {
     IT: "{n} audioguide su {t} ancora disponibili",
