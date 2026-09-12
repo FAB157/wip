@@ -195,6 +195,14 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
       else if (a && b) console.log(`     «${s}»: tre pareri diversi (${a.x.toFixed(2)},${a.y.toFixed(2)}) (${b.x.toFixed(2)},${b.y.toFixed(2)})${c ? ` (${c.x.toFixed(2)},${c.y.toFixed(2)})` : ''} → fuori`);
       else if (a || b) pins.push({ ...(b || a), origine: 'ai', concordi: false, incerto: true });
     }
+    // SALE DIVERSE NELLO STESSO PUNTO = risposta a caso (Neuschwanstein:
+    // quattro sale tutte a 0,50/0,50). Si tolgono i gruppi con coordinate
+    // identiche (entro 1%), e il punto esatto (0,5, 0,5) da solo non vale.
+    const chiaveXY = (p) => `${Math.round(p.x * 100)}:${Math.round(p.y * 100)}`;
+    const conteggio = {}; for (const p of pins) conteggio[chiaveXY(p)] = (conteggio[chiaveXY(p)] || 0) + 1;
+    const prima = pins.length;
+    pins = pins.filter(p => conteggio[chiaveXY(p)] === 1 && !(Math.abs(p.x - 0.5) < 0.01 && Math.abs(p.y - 0.5) < 0.01));
+    if (pins.length < prima) console.log(`     ${prima - pins.length} pin scartati: stesso punto per sale diverse`);
     const upd = await fetch(`${SB}/rest/v1/mappe_museo?poi_id=eq.${encodeURIComponent(poiId)}&indice=eq.${indice}`, { method: 'PATCH', headers: H, body: JSON.stringify({ pins, pins_origine: pins.length ? 'ai' : null, aggiornato_at: new Date().toISOString() }) });
     if (!upd.ok) { stat.errori++; console.log(`  ✗ ${nome}: salvataggio pin (${upd.status})`); continue; }
     if (pins.length) stat.conPin++;

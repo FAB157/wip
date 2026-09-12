@@ -9671,6 +9671,7 @@ REGOLE TASSATIVE:
 - "dove" si compila solo se il materiale dice dove sta; altrimenti "".
 - "perche": una o due frasi con un fatto preciso del materiale, e il motivo per cui merita la sosta pur non essendo famosa.
 - "curiosita": OBBLIGATORIA, 2-3 frasi — un fatto sorprendente e documentato su QUESTA opera, oppure un consiglio pratico articolato per guardarla meglio. Mai vuota, mai generica, sempre dal materiale.
+- Una tappa è SOLO un'opera o un elemento artistico/architettonico da guardare (dipinto, scultura, affresco, portale, stemma, fregio, colonna, arredo storico, sala decorata). MAI spazi d'uso o di servizio (residenze, appartamenti, uffici, studi professionali, negozi, bar, biglietteria, parcheggio, bagni) e MAI dati di proprietà o nomi di privati: non sono tappe di una visita.
 ${regolaSpecificita(museo)}
 
 LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
@@ -9719,6 +9720,15 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         }))
         .filter((t: any) => {
           if (!t.nome) return false;
+          // NON È UN'OPERA (12/09/2026, collaudo): su un palazzo (Palazzo
+          // delle Logge, Carrara) il materiale è la voce Wikipedia, che dice
+          // anche «oggi ospita residenze condominiali e studi medici»; il
+          // modello ne ha fatto la tappa 13, «Le residenze condominiali
+          // interne · 2021 (proprietà …)», col nome di un privato. Il
+          // controllo «il nome sta nel materiale» non basta: gli spazi d'uso
+          // e i dati di proprietà si scartano a prescindere.
+          const NON_OPERA = /\b(residenz\w*|condomin\w*|appartament\w*|uffic\w*|studi\s+(medici|legali|professionali)|studio\s+(medico|legale)|negoz\w*|bar|ristorant\w*|caffetteri\w*|bigliett\w*|parchegg\w*|bagn[io]|toilette|ascensor\w*|guardaroba|bookshop|propriet[àa]|residential|apartments?|offices?|parking|restrooms?|ticket\s+office|shop)\b/i;
+          if (NON_OPERA.test(`${t.nome} ${t.autore} ${t.anno}`)) return false;
           const n = normalizzaTesto(t.nome);
           if ([...nomiGia].some(g => g === n)) return false;
           const tok = tokenSignificativi(t.nome);
@@ -11618,7 +11628,14 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         .slice(0, 4);
       // Lo stesso museo può avere piante sotto due prefissi (wv-/wd-): prima
       // quelle con i pin, poi le altre; i pin sul bordo non si mostrano.
-      const pulisciPin = (p: any[]) => (Array.isArray(p) ? p : []).filter((q: any) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && q.x > 0.02 && q.x < 0.98 && q.y > 0.02 && q.y < 0.98);
+      const pulisciPin = (p: any[]) => {
+        const validi = (Array.isArray(p) ? p : []).filter((q: any) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && q.x > 0.02 && q.x < 0.98 && q.y > 0.02 && q.y < 0.98);
+        // Sale diverse nello stesso punto = risposta a caso del modello: via
+        // (un pin messo a mano dall'admin resta sempre).
+        const chiave = (q: any) => `${Math.round(q.x * 100)}:${Math.round(q.y * 100)}`;
+        const conteggio: Record<string, number> = {}; for (const q of validi) conteggio[chiave(q)] = (conteggio[chiave(q)] || 0) + 1;
+        return validi.filter((q: any) => q.origine === 'admin' || conteggio[chiave(q)] === 1);
+      };
       maps = maps.map((m: any) => ({ ...m, pins: pulisciPin(m.pins) })).sort((a: any, b: any) => b.pins.length - a.pins.length || a.indice - b.indice);
       res.set('Cache-Control', 'public, max-age=120');
       res.json({ ok: true, maps: maps.map((m: any, k: number) => ({ indice: k + 1, titolo: m.titolo || null, url: m.url, fonteUrl: m.fonte_url || null, larghezza: m.larghezza || null, altezza: m.altezza || null, pins: m.pins, pinsOrigine: m.pins_origine || null })), links });
@@ -16616,6 +16633,14 @@ ${description}
       const newEarned = (p.earned_credits || 0) + correct; // 1 credito per risposta
       await axios.patch(`${supabaseUrl}/rest/v1/user_profiles?id=eq.${userId}`,
         { xp_points: newXp, earned_credits: newEarned }, { headers: svcHeaders });
+      // Il premio va nel registro come il coupon (12/09/2026, collaudo): il
+      // saldo saliva di +1 ma credit_transactions non aveva la riga, e nel
+      // pannello i crediti del quiz sembravano apparsi dal nulla. Stesso
+      // ripiego su 'admin_credit' se il vincolo del DB non conosce 'trivia'.
+      const movimento = (tipo: string) => axios.post(`${supabaseUrl}/rest/v1/credit_transactions`,
+        { user_id: userId, amount: correct, type: tipo, source: 'server', description: `Premio quiz ${quizId}` },
+        { headers: svcHeaders });
+      await movimento('trivia').catch(() => movimento('admin_credit').catch(() => {}));
       res.json({ success: true, credits: correct, xp: correct * 20 });
     } catch (e: any) {
       console.error('[trivia-reward] Errore:', e?.message);
