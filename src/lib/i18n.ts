@@ -1615,6 +1615,11 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   dl_zone: { IT: "Zone mappa", EN: "Map areas", FR: "Zones de carte", ES: "Zonas del mapa", DE: "Kartenbereiche", RU: "Области карты", ZH: "地图区域" },
   dl_audioguide: { IT: "Audioguide", EN: "Audio guides", FR: "Audioguides", ES: "Audioguías", DE: "Audioguides", RU: "Аудиогиды", ZH: "语音导览" },
   dl_guide: { IT: "Guide e audiolibri", EN: "Guides & audiobooks", FR: "Guides et livres audio", ES: "Guías y audiolibros", DE: "Guides & Hörbücher", RU: "Гиды и аудиокниги", ZH: "指南与有声书" },
+  dl_musei: { IT: "Musei", EN: "Museums", FR: "Musées", ES: "Museos", DE: "Museen", RU: "Музеи", ZH: "博物馆" },
+  dl_ordine_data: { IT: "Data", EN: "Date", FR: "Date", ES: "Fecha", DE: "Datum", RU: "Дата", ZH: "日期" },
+  dl_ordine_nome: { IT: "Nome", EN: "Name", FR: "Nom", ES: "Nombre", DE: "Name", RU: "Имя", ZH: "名称" },
+  dl_vista_lista: { IT: "Vista elenco", EN: "List view", FR: "Vue liste", ES: "Vista de lista", DE: "Listenansicht", RU: "Список", ZH: "列表视图" },
+  dl_vista_griglia: { IT: "Vista griglia", EN: "Grid view", FR: "Vue grille", ES: "Vista de cuadrícula", DE: "Rasteransicht", RU: "Сетка", ZH: "网格视图" },
   dl_vuoto: { IT: "Non hai ancora scaricato nulla. Dagli itinerari e dalla mappa trovi il tasto «Scarica per offline».", EN: "Nothing downloaded yet. Use “Download for offline” on itineraries and the map.", FR: "Rien de téléchargé pour l'instant. Utilisez « Télécharger pour hors ligne » sur les itinéraires et la carte.", ES: "Aún no has descargado nada. Usa «Descargar sin conexión» en itinerarios y mapa.", DE: "Noch nichts heruntergeladen. Nutze „Für offline laden“ bei Routen und Karte.", RU: "Пока ничего не загружено. Используйте «Скачать для офлайн» в маршрутах и на карте.", ZH: "尚未下载任何内容。在行程和地图中使用“下载以离线使用”。" },
   dl_pronto: { IT: "Pronto offline", EN: "Ready offline", FR: "Prêt hors ligne", ES: "Listo sin conexión", DE: "Offline bereit", RU: "Готово офлайн", ZH: "可离线" },
   dl_parziale: { IT: "Incompleto", EN: "Incomplete", FR: "Incomplet", ES: "Incompleto", DE: "Unvollständig", RU: "Неполный", ZH: "不完整" },
@@ -2570,13 +2575,13 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "博物馆导览"
   },
   museum_pass_tour_desc: {
-    IT: "La guida completa: percorso per sale, spiegazioni, curiosità, foto, pianta con le opere, confronti. Scaricala la sera prima, funziona offline e resta nei tuoi download. In più 20 scansioni con la fotocamera. Vale 7 giorni.",
-    EN: "The complete guide: route by rooms, explanations, curiosities, photos, floor plan with the works, comparisons. Download it the night before, works offline and stays in your downloads. Plus 20 camera scans. Valid 7 days.",
-    FR: "Le guide complet : parcours par salles, explications, anecdotes, photos, plan avec les œuvres, comparaisons. Téléchargez-le la veille, il fonctionne hors ligne et reste dans vos téléchargements. Plus 20 scans. Valable 7 jours.",
-    ES: "La guía completa: recorrido por salas, explicaciones, curiosidades, fotos, plano con las obras, comparaciones. Descárgala la noche anterior, funciona sin conexión y queda en tus descargas. Más 20 escaneos. Válida 7 días.",
-    DE: "Der komplette Guide: Rundgang nach Sälen, Erklärungen, Anekdoten, Fotos, Plan mit den Werken, Vergleiche. Am Abend vorher laden, läuft offline und bleibt in deinen Downloads. Plus 20 Scans. 7 Tage gültig.",
-    RU: "Полный гид: маршрут по залам, объяснения, факты, фото, план с экспонатами, сравнения. Скачайте накануне, работает офлайн и остаётся в загрузках. Плюс 20 сканов. Действует 7 дней.",
-    ZH: "完整导览：按展厅的路线、讲解、趣闻、照片、带作品的平面图、对比。前一晚下载，可离线使用并保留在下载中。另含 20 次扫描。有效期 7 天。"
+    IT: "La guida completa: percorso per sale, spiegazioni, curiosità, foto, pianta con le opere, confronti. Scaricala la sera prima, funziona offline e resta per sempre nei tuoi download. In più 20 scansioni con la fotocamera. Non scade.",
+    EN: "The complete guide: route by rooms, explanations, curiosities, photos, floor plan with the works, comparisons. Download it the night before, works offline and stays in your downloads for good. Plus 20 camera scans. Never expires.",
+    FR: "Le guide complet : parcours par salles, explications, anecdotes, photos, plan avec les œuvres, comparaisons. Téléchargez-le la veille, il fonctionne hors ligne et reste pour toujours dans vos téléchargements. Plus 20 scans. Sans expiration.",
+    ES: "La guía completa: recorrido por salas, explicaciones, curiosidades, fotos, plano con las obras, comparaciones. Descárgala la noche anterior, funciona sin conexión y queda para siempre en tus descargas. Más 20 escaneos. No caduca.",
+    DE: "Der komplette Guide: Rundgang nach Sälen, Erklärungen, Anekdoten, Fotos, Plan mit den Werken, Vergleiche. Am Abend vorher laden, läuft offline und bleibt für immer in deinen Downloads. Plus 20 Scans. Läuft nie ab.",
+    RU: "Полный гид: маршрут по залам, объяснения, факты, фото, план с экспонатами, сравнения. Скачайте накануне, работает офлайн и навсегда остаётся в загрузках. Плюс 20 сканов. Без срока действия.",
+    ZH: "完整导览：按展厅的路线、讲解、趣闻、照片、带作品的平面图、对比。前一晚下载，可离线使用并永久保留在下载中。另含 20 次扫描。永不过期。"
   },
   museum_pass_tour_badge: {
     IT: "Visita Museo",
@@ -2597,13 +2602,13 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "升级为博物馆导览"
   },
   museum_pass_upgrade_desc: {
-    IT: "Paghi solo la differenza: la Visita vale 7 giorni e la guida resta nei tuoi download.",
-    EN: "You only pay the difference: the Visit is valid for 7 days and the guide stays in your downloads.",
-    FR: "Vous ne payez que la différence : la Visite est valable 7 jours et le guide reste dans vos téléchargements.",
-    ES: "Solo pagas la diferencia: la Visita vale 7 días y la guía queda en tus descargas.",
-    DE: "Du zahlst nur die Differenz: der Besuch gilt 7 Tage und der Guide bleibt in deinen Downloads.",
-    RU: "Вы платите только разницу: Визит действует 7 дней, гид остаётся в загрузках.",
-    ZH: "只需补差价：导览有效期 7 天，指南保留在你的下载中。"
+    IT: "Paghi solo la differenza: la Visita non scade e la guida resta per sempre nei tuoi download.",
+    EN: "You only pay the difference: the Visit never expires and the guide stays in your downloads for good.",
+    FR: "Vous ne payez que la différence : la Visite n'expire pas et le guide reste pour toujours dans vos téléchargements.",
+    ES: "Solo pagas la diferencia: la Visita no caduca y la guía queda para siempre en tus descargas.",
+    DE: "Du zahlst nur die Differenz: der Besuch läuft nie ab und der Guide bleibt für immer in deinen Downloads.",
+    RU: "Вы платите только разницу: Визит без срока действия, гид навсегда остаётся в загрузках.",
+    ZH: "只需补差价：导览永不过期，指南永久保留在你的下载中。"
   },
   museum_pass_scans_left: {
     IT: "{n} audioguide su {t} ancora disponibili",
@@ -2615,13 +2620,13 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "还剩 {n}/{t} 段讲解"
   },
   mv_locked_title: {
-    IT: "La visita guidata è nel pass con itinerario",
-    EN: "The guided visit comes with the itinerary pass",
-    FR: "La visite guidée est dans le pass avec itinéraire",
-    ES: "La visita guiada está en el pase con itinerario",
-    DE: "Die Führung gehört zum Pass mit Rundgang",
-    RU: "Экскурсия входит в пасс с маршрутом",
-    ZH: "导览路线包含在含路线的通票中"
+    IT: "Questa guida si sblocca con la Visita Museo",
+    EN: "This guide unlocks with the Museum Visit",
+    FR: "Ce guide se débloque avec la Visite Musée",
+    ES: "Esta guía se desbloquea con la Visita Museo",
+    DE: "Dieser Guide wird mit dem Museumsbesuch freigeschaltet",
+    RU: "Этот гид открывается с Визитом в музей",
+    ZH: "此导览需通过博物馆导览解锁"
   },
   mv_locked_desc: {
     IT: "WIP capisce in che museo sei e ti porta di sala in sala fra le opere da non perdere.",

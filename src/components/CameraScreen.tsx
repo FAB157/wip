@@ -24,7 +24,7 @@ import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey } from '../lib/museumVisit';
-import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
+import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { Landmark } from 'lucide-react';
@@ -297,12 +297,18 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   };
   // La chiave del museo per cui si compra la Visita (senza scadenza).
   const [passVenueKey, setPassVenueKey] = useState<string | null>(null);
-  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null, venueKey?: string | null) => {
+  // Cosa riaprire DOPO l'acquisto (12/09/2026 sera, committente: «ho cercato
+  // Duomo di Milano, ho cliccato... la guida non c'è»). Prima, comprata la
+  // Visita, ripartiva startGuidedVisit() senza nome, cioè il museo più
+  // vicino alle coordinate — non quello toccato nell'elenco o cercato.
+  const riavviaDopoPassRef = useRef<null | (() => Promise<void> | void)>(null);
+  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null, venueKey?: string | null, riavvia?: () => Promise<void> | void) => {
     setPocheOpere(null);
     setNeedsTourPass(true);
     setPassPerLuogo(nome);
     setPassSample(sample);
     setPassVenueKey(venueKey || null);
+    riavviaDopoPassRef.current = riavvia || null;
     notify(tr('mv_locked_title'));
     // Al prossimo frame la scheda esiste (needsTourPass appena messo a true).
     window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
@@ -389,7 +395,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       // schermo (12/09/2026, «se clicco su Palazzo delle Logge non succede
       // nulla»). Ora la scheda prende il nome del museo toccato, l'assaggio
       // della sua introduzione, e ci si scorre sopra.
-      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null, out.venueKey || m.venue_key || null);
+      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null, out.venueKey || m.venue_key || null, () => apriVisitaDiElenco(m));
       else if (out.reason === 'poche_opere') mostraPocheOpere(m.venue_name, out);
       else notify(tr('mv_not_found'));
     } catch (e) {
@@ -411,6 +417,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       if (!r) return;
       setMode('visite');
       void caricaMuseiVicini();
+      // "I miei download" (12/09/2026): con la lingua del pacchetto valorizzata,
+      // il museo e' gia' scaricato — si riapre dall'ARCHIVIO offline (niente
+      // rete, niente nuovo addebito), non si rifà partire una visita online.
+      const archiviata = r.venueKey && r.language ? museoScaricato(r.venueKey, r.language) : null;
+      if (archiviata) { riapriConservata(archiviata); return; }
       void apriVisitaDiElenco({ venue_key: r.venueKey || (r.poiId ? `poi_${r.poiId}` : `nome_${r.venueName}`), venue_name: r.venueName, poi_id: r.poiId, venue_type: 'museo', city: null, lat: r.lat ?? null, lon: r.lon ?? null, stops_count: 0, stops_with_room: 0, official_site: null });
     };
     apri();
@@ -470,7 +481,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
-        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null, out.venueKey);
+        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null, out.venueKey, () => startGuidedVisit(typedName));
         else if (out.reason === 'poche_opere') mostraPocheOpere(typedName.trim(), out);
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
@@ -484,7 +495,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       } else if (resp && resp.ok === false && resp.reason === 'needs_tour_pass') {
         // La visita guidata è del pass con itinerario: si propone lo sblocco,
         // senza generare nulla (nessun costo AI per chi non ha pagato).
-        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null, (resp as any).venueKey || null);
+        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null, (resp as any).venueKey || null, () => startGuidedVisit());
       } else if (resp && resp.ok === false && resp.reason === 'poche_opere') {
         mostraPocheOpere(seiQui?.name || resp.venue?.name || null, resp);
       } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
@@ -725,16 +736,25 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     setBuyingPass(true);
     const out = await buyMuseumPass(tier, tier === 'tour' ? passVenueKey : null);
     setBuyingPass(false);
+    // Riparte ESATTAMENTE la richiesta che aveva chiesto il pass (museo
+    // dell'elenco, nome cercato, o «sei qui»); senza, il museo della scheda.
+    const riparti = () => {
+      const r = riavviaDopoPassRef.current;
+      riavviaDopoPassRef.current = null;
+      setNeedsTourPass(false);
+      if (r) void r();
+      else void startGuidedVisit(passPerLuogo || undefined);
+    };
     if (out.ok && out.permanent) {
       // Visita Museo comprata per sempre per questo museo: la visita parte.
       notify(getTranslation("museum_pass_bought", language));
-      void startGuidedVisit();
+      riparti();
     } else if (out.ok && out.expiresAt) {
       setPassExpiresAt(out.expiresAt);
       setPassTier(out.tier || tier);
       notify(getTranslation("museum_pass_bought", language));
       // Comprato il pass con itinerario: la visita parte subito.
-      if ((out.tier || tier) === 'tour') void startGuidedVisit();
+      if ((out.tier || tier) === 'tour') riparti();
     } else if (out.error === 'credits') {
       notify(tr('vis_no_credits'));
       openCreditShop();
@@ -1357,6 +1377,12 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     window.dispatchEvent(new CustomEvent('wip-itinerary-checkin', { detail: { poiId: 'reel-to-plan' } }));
   };
 
+  // La scheda «serve la Visita» si vede anche con una visita già attiva
+  // (12/09/2026 sera: con la Pietà aperta, toccare «Duomo di Milano» dava
+  // solo un avviso e nessuna cassa, perché la scheda era nascosta da
+  // `!visit`). Con un museo richiesto per nome, si mostra sempre.
+  const schedaPassVisibile = needsTourPass && (!visit || !!passPerLuogo);
+
   // LA SCHEDA «SERVE IL PASS CON ITINERARIO», una sola (11/09/2026, dalle
   // foto del committente). Prima viveva solo nel modo Scansione, dove
   // stava sopra i due pass in vendita e offriva il pass da 150 due volte;
@@ -1385,7 +1411,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         <Camera className="w-4 h-4" />{tr('mv_poche_opere_scansiona')} · {pocheOpere.prezzo} {getTranslation('credits_word', language)}
       </button>
     </div>
-  ) : needsTourPass && !visit ? (
+  ) : schedaPassVisibile ? (
     <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
@@ -1786,7 +1812,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                   dalla tab Visite, in «Luogo» e «Natura» sparivano ENTRAMBE le
                   offerte da 150 (12/09/2026, foto del committente: solo il
                   pass da 100 sotto «Scatta foto»). */}
-              {!(needsTourPass && !visit && visionTarget === 'artwork') && (
+              {!(schedaPassVisibile && visionTarget === 'artwork') && (
               <button
                 onClick={() => void handleBuyPass('tour')}
                 disabled={isScanning || buyingPass}
@@ -1920,7 +1946,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 </button>
                 {/* Il pass da 150 NON si ripete quando la scheda "serve il
                     pass" qui sopra lo sta già offrendo. */}
-                {!(needsTourPass && !visit) && (
+                {!schedaPassVisibile && (
                   <button
                     onClick={() => void handleBuyPass('tour')}
                     disabled={buyingPass}
