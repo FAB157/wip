@@ -210,7 +210,9 @@ export function matchTappa(guide: VenueGuide, workName: string): number {
 type VenueGuideResponse =
   | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null; venuePhoto?: string; venuePhotoIcon?: string }
   // 'needs_tour_pass': la visita guidata è del Pass Museo con itinerario.
-  | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number; sourcesOk?: boolean; sample?: { text: string; language: string } | null };
+  | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number; sourcesOk?: boolean; sample?: { text: string; language: string } | null;
+      /** reason 'poche_opere' (12/09/2026): la guida ha meno di minOpere opere, il pass non conviene: scansioni singole a prezzoScansione crediti. */
+      opere?: number; minOpere?: number; prezzoScansione?: number };
 
 async function authHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
@@ -1068,12 +1070,12 @@ export async function onArtworkRecognized(card: any, coords: { lat: number | nul
 }
 
 /** L'utente scrive il nome del museo all'inizio: la guida parte da lì. */
-export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null };
+export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null; opere?: number; minOpere?: number; prezzoScansione?: number };
 
 export async function startVisitByName(name: string, coords: { lat: number | null; lon: number | null }, language: Language): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: coords.lat, lon: coords.lon, venueHint: name, venueHintSource: 'user', language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione };
   return { ok: true, visit: startVisitFromGuide(resp) };
 }
 
@@ -1086,7 +1088,7 @@ export async function startVisitByName(name: string, coords: { lat: number | nul
 export async function startVisitByPoi(poiId: string, language: Language, fallbackCoords?: { lat: number | null; lon: number | null }): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: fallbackCoords?.lat ?? null, lon: fallbackCoords?.lon ?? null, poiId, language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione };
   return { ok: true, visit: startVisitFromGuide(resp) };
 }
 

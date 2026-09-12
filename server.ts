@@ -7987,10 +7987,30 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         if (parole.length < 25) return '';
         return parole.slice(0, 90).join(' ');
       };
-      const chiediPass = async (assaggio = '') => {
+      // POCHE OPERE, NIENTE PASS (12/09/2026, committente): «se un museo ha
+      // meno di N opere è inutile pagare 40 scansioni in 4 ore: WIP deve
+      // dirlo e consigliare le scansioni singole a 5 crediti». Soglia 12: il
+      // pass da 100 conviene da 20 scansioni (100 ÷ 5), sotto le 12 opere
+      // anche scansionandole tutte si spende meno con le singole. Vale per
+      // il pass da 100 e per quello da 150.
+      const MIN_OPERE_PASS = 12;
+      const chiediPass = async (assaggio = '', guida: any = null) => {
         if (!inDiretta) return null;
         const pass = await getActiveMuseumPass(userId);
         if (pass?.tier === 'tour') return null;
+        const opere = Array.isArray(guida?.tappe) ? guida.tappe.filter((t: any) => !t?.soloCollezione).length : null;
+        if (opere !== null && opere < MIN_OPERE_PASS) {
+          return {
+            ok: false,
+            reason: 'poche_opere',
+            opere,
+            minOpere: MIN_OPERE_PASS,
+            prezzoScansione: await prezzoDi('photo_search'),
+            priceCredits: await prezzoDi('museum_pass_tour'),
+            venue,
+            sample: assaggio ? { text: assaggio, language: outLang } : null,
+          };
+        }
         return {
           ok: false,
           reason: 'needs_tour_pass',
@@ -8218,7 +8238,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             // una chiamata AI per ogni visitatore senza migliorare nulla.
             // Nessun TTL qui, e non aggiungetene: se una guida va rifatta si
             // svuota la sua riga di cache a mano o si aggiorna dalla libreria.
-            const gate = await chiediPass(assaggioDa(parsed.guide?.intro));
+            const gate = await chiediPass(assaggioDa(parsed.guide?.intro), parsed.guide);
             if (gate) return res.json(gate);
             return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source, venuePhoto: parsed.venuePhoto || '', venuePhotoIcon: parsed.venuePhotoIcon || '' });
           }
@@ -8263,7 +8283,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         // 1) LINGUA DELL'UTENTE, sempre per prima: è già pronta, costo zero.
         const riga = righe.find((r: any) => String(r?.language) === outLang);
         if (riga) {
-          const gate = await chiediPass(assaggioDa(riga.guide?.intro));
+          const gate = await chiediPass(assaggioDa(riga.guide?.intro), riga.guide);
           if (gate) return res.json(gate);
           const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null, ...fotoDaRiga(riga) };
           await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
@@ -8579,7 +8599,32 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           }
         }
       }
+      // L'ARCHIVIO PRIVATO DELLE FONTI PRIMA DI TUTTO (12/09/2026, decisione
+      // del committente): la guida ufficiale in PDF (pianta, sale, servizi,
+      // percorso), le pagine del sito già conservate, il listing Wikivoyage
+      // (orari, prezzi). Sono scritte dal museo, valgono più di Wikipedia, e
+      // stanno in fonti_poi sotto l'id del POI o sotto un altro prefisso con
+      // lo stesso QID (wv-/wd-). Fail-open: senza archivio si va avanti come
+      // prima con le fonti in diretta.
+      let fontiArchivio = '';
+      try {
+        const idsFonti = [...new Set([venue.id, chiaveLuogo, chiaveLuogo.replace(/^poi_/, ''), qidDelPoi ? `wd-${qidDelPoi}` : ''].filter(Boolean))];
+        const filtroFonti = qidDelPoi ? `poi_id=like.*-${qidDelPoi}` : `poi_id=in.(${idsFonti.map(x => `"${String(x).replace(/"/g, '')}"`).join(',')})`;
+        const fr = await axios.get(`${supabaseUrl}/rest/v1/fonti_poi?${filtroFonti}&fonte=in.(pdf,sito,wikivoyage)&select=fonte,lingua,titolo,testo,url&order=fonte&limit=40`,
+          { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
+        const righeF: any[] = Array.isArray(fr.data) ? fr.data : [];
+        const pdfTesto = righeF.filter(x => x.fonte === 'pdf').map(x => String(x.testo || '')).join('\n\n').slice(0, 14000);
+        const sitoTesto = righeF.filter(x => x.fonte === 'sito').map(x => `[${x.titolo || x.url}]\n${String(x.testo || '')}`).join('\n\n').slice(0, 9000);
+        const wvTesto = righeF.filter(x => x.fonte === 'wikivoyage' && (x.lingua === langCfg.wiki || x.lingua === 'en')).map(x => String(x.testo || '')).join('\n').slice(0, 2500);
+        fontiArchivio = [
+          pdfTesto ? `DALLA GUIDA UFFICIALE IN PDF DEL MUSEO (pianta, sale, piani, servizi, percorso consigliato — è la fonte più autorevole per le sale):\n${pdfTesto}` : '',
+          sitoTesto && !sitoOut.testo ? `DAL SITO UFFICIALE (copia in archivio):\n${sitoTesto}` : '',
+          wvTesto ? `DA WIKIVOYAGE (orari, prezzi, consigli pratici):\n${wvTesto}` : '',
+        ].filter(Boolean).join('\n\n');
+        if (fontiArchivio) console.log(`[VenueGuide] ${venue.name}: archivio fonti ${Math.round(fontiArchivio.length / 1024)} kB (pdf ${pdfTesto.length ? 'sì' : 'no'}, sito ${sitoTesto.length ? 'sì' : 'no'}, wikivoyage ${wvTesto.length ? 'sì' : 'no'})`);
+      } catch (e: any) { console.warn('[VenueGuide] archivio fonti non letto:', e?.message); }
       const materiale = [
+        fontiArchivio,
         // Il sito ufficiale per primo: è la fonte più aggiornata su sale,
         // piani e allestimento, ed è ciò che rende il percorso navigabile.
         sitoOut.testo ? `DAL SITO UFFICIALE DEL MUSEO (disposizione delle sale, orari, allestimento):\n${sitoOut.testo}` : '',
@@ -8632,6 +8677,7 @@ ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadr
 - "nome": il titolo nella lingua di uscita (${langCfg.name}). Se l'opera ha un titolo consolidato in quella lingua, usa quello. Se nel materiale il titolo è in un'altra lingua ed è DESCRITTIVO ("stained-glass windows of the cathedral", "portrait of a young man"), traducilo. Se è un titolo proprio senza equivalente noto, lascialo identico a "nomeFonte". Mai inventare titoli.
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "curiosita": OBBLIGATORIO per OGNI tappa, senza eccezioni, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELLA tappa (un furto, un restauro, un aneddoto, un dettaglio nascosto, un errore dell'artista) raccontato con un minimo di contesto, oppure — se il materiale non contiene nulla di sorprendente su di essa — un consiglio pratico articolato per guardarla meglio (un dettaglio preciso da cercare e perché conta, il punto migliore da cui osservarla, l'ora meno affollata). Sempre specifico di QUELLA tappa, mai generico, mai ripetuto identico su più tappe, sempre dal materiale: mai un'invenzione.
+- "salaCodice": SOLO il codice della sala come lo scrive il museo sulla pianta e sui cartelli («Room 32», «Salle 711», «Sala 10», «Gallery 40», «Saal 12»): serve ad abbinare l'opera al punto sulla pianta, quindi mai tradotto, mai con il nome della sala aggiunto. Se il materiale dà solo un nome discorsivo, "dove" tiene il nome e "salaCodice" resta ''.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
 - SALE CHIUSE: se il materiale dice che una sala, un piano o una sezione sono CHIUSI, IN RESTAURO o TEMPORANEAMENTE INACCESSIBILI (parole come "chiuso", "chiusura", "in restauro", "closed", "temporarily closed", "under restoration" vicino al nome di un luogo), NON scrivere quel nome in "dove" per nessuna tappa — un percorso non deve mandare nessuno davanti a una porta chiusa. Se un'opera importante sta lì, tienila come tappa ma con "dove" vuoto, e cita la chiusura in "consiglio" con la data se il materiale la dà.
@@ -8644,7 +8690,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "intro": "...",
   "consiglio": "...",
   "servizi": { "bagni": "... o ''", "guardaroba": "... o ''", "caffetteria": "... o ''", "bookshop": "... o ''", "uscita": "... o ''", "accessibilita": "... o ''" },
-  "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "...", "curiosita": "curiosità o consiglio di QUESTA tappa, MAI vuoto" } ]
+  "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "salaCodice": "il codice della sala ESATTAMENTE come sulla pianta o nel materiale, senza traduzione e senza aggiunte (es. 'Room 32', 'Salle 711', 'Sala 10', 'Gallery 40'), altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "...", "curiosita": "curiosità o consiglio di QUESTA tappa, MAI vuoto" } ]
 }`;
 
       // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
@@ -11632,6 +11678,67 @@ x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell
     } catch (e: any) {
       console.error('[MappaMuseo] auto-pins:', e?.response?.data?.message || e?.message);
       res.status(500).json({ error: e?.message || 'auto_pins_failed' });
+    }
+  });
+
+  // CRUSCOTTO «COMPLETEZZA MUSEI» (12/09/2026, punto 3 del piano): un rigo
+  // per museo prioritario (musei_prioritari, i primi 500 per notorietà) con
+  // ciò che ha e ciò che manca: guida (lingue, tappe, quante con il codice
+  // sala), fonti in archivio (wikipedia, pdf, sito, wikivoyage, foto),
+  // piante verificate e pin (concordi / incerti), sito raggiungibile.
+  // Il QID in coda all'id è la chiave comune fra i prefissi (wd-/wv-/nome_).
+  app.get("/api/admin/museums/completeness", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      const limite = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '200'), 10) || 200));
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const [mp, mg, mm, fp] = await Promise.all([
+        axios.get(`${supabaseUrl}/rest/v1/musei_prioritari?select=qid,rango,nome,sito,paese,sitelinks&order=rango&limit=${limite}`, { headers: svc, timeout: 8000 }),
+        axios.get(`${supabaseUrl}/rest/v1/museum_guides?select=venue_key,poi_id,language,stops_count,stops_with_room,venue_name,guide->tappe&limit=2000`, { headers: svc, timeout: 15000 }),
+        axios.get(`${supabaseUrl}/rest/v1/mappe_museo?select=poi_id,indice,titolo,url,pins,pins_origine&limit=3000`, { headers: svc, timeout: 8000 }),
+        axios.get(`${supabaseUrl}/rest/v1/fonti_poi?select=poi_id,fonte,lingua,dati->verificataMappa,dati->nonMappa&limit=20000`, { headers: svc, timeout: 15000 }),
+      ]);
+      const qidDi = (s: any) => String(s || '').match(/-(Q\d+)$/)?.[1] || '';
+      const perQid: Record<string, any> = {};
+      const rigaDi = (q: string) => (perQid[q] ||= { guide: [], piante: [], fonti: {} as Record<string, number>, fotoLicenza: 0, wikipediaLingue: new Set<string>() });
+      for (const g of (Array.isArray(mg.data) ? mg.data : [])) {
+        const q = qidDi(g.poi_id) || qidDi(g.venue_key); if (!q) continue;
+        const tappe: any[] = Array.isArray(g.tappe) ? g.tappe : [];
+        rigaDi(q).guide.push({ lingua: g.language, tappe: g.stops_count || tappe.length, conSala: tappe.filter((t: any) => t?.dove && !t?.soloCollezione).length, conCodice: tappe.filter((t: any) => t?.salaCodice).length, chiave: g.venue_key, nome: g.venue_name });
+      }
+      for (const m of (Array.isArray(mm.data) ? mm.data : [])) {
+        const q = qidDi(m.poi_id); if (!q) continue;
+        const pins: any[] = Array.isArray(m.pins) ? m.pins : [];
+        rigaDi(q).piante.push({ poiId: m.poi_id, indice: m.indice, titolo: m.titolo, url: m.url, pins: pins.length, concordi: pins.filter(p => p.concordi === true || p.origine === 'admin').length, origine: m.pins_origine });
+      }
+      for (const f of (Array.isArray(fp.data) ? fp.data : [])) {
+        const q = qidDi(f.poi_id); if (!q) continue;
+        const r = rigaDi(q);
+        if (f.fonte === 'mappa') { if (f.verificataMappa === true && f.nonMappa !== true) r.fonti.piante_verificate = (r.fonti.piante_verificate || 0) + 1; else if (f.verificataMappa !== true) r.fonti.piante_da_verificare = (r.fonti.piante_da_verificare || 0) + 1; continue; }
+        r.fonti[f.fonte] = (r.fonti[f.fonte] || 0) + 1;
+        if (f.fonte === 'wikipedia' && f.lingua) r.wikipediaLingue.add(String(f.lingua));
+      }
+      const righe = (Array.isArray(mp.data) ? mp.data : []).map((m: any) => {
+        const r = perQid[m.qid] || { guide: [], piante: [], fonti: {}, wikipediaLingue: new Set() };
+        const pin = r.piante.reduce((s: number, p: any) => s + p.pins, 0);
+        const concordi = r.piante.reduce((s: number, p: any) => s + p.concordi, 0);
+        const guidaIt = r.guide.find((g: any) => g.lingua === 'IT') || r.guide[0] || null;
+        return {
+          qid: m.qid, rango: m.rango, nome: m.nome, sito: m.sito, paese: m.paese, sitelinks: m.sitelinks,
+          guida: guidaIt ? { lingue: r.guide.map((g: any) => g.lingua), tappe: guidaIt.tappe, conSala: guidaIt.conSala, conCodice: guidaIt.conCodice, chiave: guidaIt.chiave } : null,
+          fonti: { wikipedia: r.wikipediaLingue.size, pdf: r.fonti.pdf || 0, sito: r.fonti.sito || 0, wikivoyage: r.fonti.wikivoyage || 0, commons: r.fonti.commons || 0, pianteVerificate: r.fonti.piante_verificate || 0, pianteDaVerificare: r.fonti.piante_da_verificare || 0 },
+          piante: r.piante, pin, pinConcordi: concordi,
+          // Il semaforo: verde = guida con sale + pianta con pin; giallo = manca
+          // uno dei due; rosso = niente guida.
+          stato: !guidaIt ? 'rosso' : (r.piante.length && pin > 0 && guidaIt.conSala > 0) ? 'verde' : 'giallo',
+        };
+      });
+      const totali = { musei: righe.length, verdi: righe.filter(r => r.stato === 'verde').length, gialli: righe.filter(r => r.stato === 'giallo').length, rossi: righe.filter(r => r.stato === 'rosso').length, conPianta: righe.filter(r => r.piante.length).length, conPin: righe.filter(r => r.pin > 0).length, conPdf: righe.filter(r => r.fonti.pdf > 0).length };
+      res.json({ ok: true, generatoIl: new Date().toISOString(), totali, righe });
+    } catch (e: any) {
+      console.error('[Completezza musei]', e?.response?.data?.message || e?.message);
+      res.status(500).json({ error: e?.message || 'completeness_failed' });
     }
   });
 

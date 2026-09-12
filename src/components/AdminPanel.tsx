@@ -4,7 +4,7 @@ import { UserProfile } from '../lib/quotaManager';
 import {
   User, Search, Calendar, Check, Shield, Tag, Edit, Trash2, Flag,
   RefreshCw, Award, Key, CheckCircle2, AlertTriangle, Users, BarChart3, Edit3, Activity, Bell, Camera, MapPin, Wallet, Ticket,
-  ClipboardList, SlidersHorizontal, Share2, Eye
+  ClipboardList, SlidersHorizontal, Share2, Eye, Landmark
 } from 'lucide-react';
 import { getApiUrl } from '../lib/api';
 import AdminCounters from './AdminCounters';
@@ -36,13 +36,15 @@ const AdminSocialStats = lazy(() => import('./admin/AdminSocialStats'));
 // Visite del sito (pagine, referrer, dispositivi): caricato a richiesta.
 const AdminVisits = lazy(() => import('./admin/AdminVisits'));
 const AdminNotifiche = lazy(() => import('./admin/AdminNotifiche'));
+// Completezza dei musei prioritari + editor dei pin sulla pianta (12/09/2026).
+const AdminMusei = lazy(() => import('./admin/AdminMusei'));
 
 const CaricamentoScheda = () => (
   <div className="py-16 text-center text-sm font-bold text-on-surface-variant/70">Carico la scheda…</div>
 );
 
 export default function AdminPanel() {
-  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'coupons' | 'counters' | 'editor' | 'poi_map' | 'beni_culturali' | 'gamification' | 'health' | 'api_stats' | 'affiliate_stats' | 'enriched_pois' | 'system_errors' | 'reports' | 'vision' | 'content_queue' | 'ops' | 'social' | 'visits' | 'notifiche' | 'musei'>('users');
   // La scheda Utenti ora e' quella nuova (ricerca, consumo per utente, azioni
   // tracciate). La vista storica resta raggiungibile con un interruttore:
   // mostra cose che la nuova non ha (storico ascolti, righe dei pass).
@@ -541,6 +543,16 @@ export default function AdminPanel() {
             <Eye className="w-4 h-4" />
             Visite
           </button>
+          {/* Completezza dei musei prioritari + editor dei pin (12/09/2026) */}
+          <button
+            onClick={() => setActiveTab('musei')}
+            className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
+              activeTab === 'musei' ? 'bg-white text-sky-600 shadow-sm' : 'text-primary/60 hover:text-sky-600'
+            }`}
+          >
+            <Landmark className="w-4 h-4" />
+            Musei
+          </button>
           <button
             onClick={() => setActiveTab('editor')}
             className={`flex-1 min-w-[120px] py-2.5 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all ${
@@ -652,6 +664,9 @@ export default function AdminPanel() {
       )}
       {activeTab === 'visits' && (
         <Suspense fallback={<CaricamentoScheda />}><AdminVisits /></Suspense>
+      )}
+      {activeTab === 'musei' && (
+        <Suspense fallback={<CaricamentoScheda />}><AdminMusei /></Suspense>
       )}
       {managedUser && <UserManageModal user={managedUser} onClose={() => setManagedUser(null)} onChanged={() => fetchData()} />}
 

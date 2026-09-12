@@ -86,7 +86,9 @@ for (const [poiId, piante] of perPoi) {
   const orGuida = [`poi_id.eq.${encodeURIComponent(poiId)}`, `venue_key.eq.${encodeURIComponent(poiId)}`, `venue_key.eq.${encodeURIComponent('poi_' + poiId)}`, ...(qidDi ? [`poi_id.like.*-${qidDi}`] : [])].join(',');
   const g = await (await fetch(`${SB}/rest/v1/museum_guides?or=(${orGuida})&select=venue_name,language,guide&limit=8`, { headers: H })).json();
   const sale = new Set();
-  for (const x of (Array.isArray(g) ? g : [])) for (const tp of (x?.guide?.tappe || [])) { const d = String(tp?.dove || '').trim(); if (d && !tp.soloCollezione) sale.add(d); }
+  // Prima il codice della sala («Room 32»), poi il nome discorsivo: sulla
+  // pianta c'è il codice.
+  for (const x of (Array.isArray(g) ? g : [])) for (const tp of (x?.guide?.tappe || [])) { if (tp?.soloCollezione) continue; const c = String(tp?.salaCodice || '').trim(); const d = String(tp?.dove || '').trim(); if (c) sale.add(c); else if (d) sale.add(d); }
   const nome = g?.[0]?.venue_name || poiId;
   if (!sale.size) { stat.senzaGuida++; console.log(`  – ${nome}: nessuna guida con sale, salto`); continue; }
   // Righe mappe_museo esistenti

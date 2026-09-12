@@ -284,7 +284,19 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // così a un tocco più in basso nell'elenco, altrimenti la risposta resta
   // fuori dallo schermo e il tocco sembra a vuoto.
   const schedaPassRef = useRef<HTMLDivElement | null>(null);
+  // POCHE OPERE (12/09/2026, committente): il server ha detto che la guida
+  // di questo museo ha meno di {minOpere} opere. Il pass da 100/150 non
+  // conviene: lo si scrive, si consigliano le scansioni singole a 5 crediti
+  // e la cassa del pass resta chiusa per questo museo.
+  const [pocheOpere, setPocheOpere] = useState<{ nome: string; opere: number; minOpere: number; prezzo: number } | null>(null);
+  const mostraPocheOpere = (nome: string | null, out: { opere?: number; minOpere?: number; prezzoScansione?: number }) => {
+    setNeedsTourPass(false);
+    setPocheOpere({ nome: nome || '', opere: out.opere ?? 0, minOpere: out.minOpere ?? 12, prezzo: out.prezzoScansione ?? PRICING_LIST.photo_search });
+    notify(tr('mv_poche_opere_title'));
+    window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
   const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null) => {
+    setPocheOpere(null);
     setNeedsTourPass(true);
     setPassPerLuogo(nome);
     setPassSample(sample);
@@ -375,6 +387,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       // nulla»). Ora la scheda prende il nome del museo toccato, l'assaggio
       // della sua introduzione, e ci si scorre sopra.
       else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null);
+      else if (out.reason === 'poche_opere') mostraPocheOpere(m.venue_name, out);
       else notify(tr('mv_not_found'));
     } catch (e) {
       console.warn('[Visite] Avvio visita fallito:', e);
@@ -438,6 +451,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
         else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null);
+        else if (out.reason === 'poche_opere') mostraPocheOpere(typedName.trim(), out);
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
       }
@@ -451,6 +465,8 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         // La visita guidata è del pass con itinerario: si propone lo sblocco,
         // senza generare nulla (nessun costo AI per chi non ha pagato).
         mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null);
+      } else if (resp && resp.ok === false && resp.reason === 'poche_opere') {
+        mostraPocheOpere(seiQui?.name || resp.venue?.name || null, resp);
       } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
         // Nessun museo/chiesa entro 200 m nel nostro archivio: si chiede il nome.
         setVisitNameFallback('');
@@ -665,6 +681,13 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
    */
   const handleBuyPass = async (tier: 'base' | 'tour' = 'base') => {
     if (buyingPass) return;
+    // Museo con poche opere: niente cassa del pass, si ripete il consiglio
+    // (12/09/2026, committente: «stessa logica per il pass da 150»).
+    if (pocheOpere && !visit) {
+      notify(tr('mv_poche_opere_desc').replace('{s}', pocheOpere.nome || tr('mv_title')).replace('{n}', String(pocheOpere.opere)).replace('{p}', String(pocheOpere.prezzo)));
+      schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     const { data } = await supabase.auth.getSession();
     const uid = data?.session?.user?.id;
     if (!uid) { setError(tr('vis_pass_login')); return; }
@@ -1315,7 +1338,28 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // server rispondeva «serve il pass» e sullo schermo non succedeva nulla.
   // Ora è una sola scheda, mostrata dove serve, e sotto di lei il pass da
   // 150 non si ripete.
-  const schedaPassTour = needsTourPass && !visit ? (
+  const schedaPassTour = pocheOpere && !visit ? (
+    <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border border-amber-300 bg-amber-50 text-left space-y-2">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-xl bg-white border border-amber-200 flex items-center justify-center shrink-0">
+          <Ticket className="w-5 h-5 text-amber-700" />
+        </div>
+        <div className="flex-1 min-w-0">
+          {pocheOpere.nome && <p className="text-[9px] font-black uppercase tracking-[0.1em] text-amber-800 truncate">{pocheOpere.nome}</p>}
+          <p className="text-xs font-black text-slate-900">{tr('mv_poche_opere_title')}</p>
+          <p className="text-[10px] font-bold text-slate-600 leading-snug">
+            {tr('mv_poche_opere_desc').replace('{s}', pocheOpere.nome || tr('mv_title')).replace('{n}', String(pocheOpere.opere)).replace('{p}', String(pocheOpere.prezzo))}
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={() => { setMode('vision'); setVisionTarget('artwork'); void openCamera(); }}
+        className="w-full py-2.5 rounded-xl bg-primary text-white text-xs font-black active:scale-95 transition-transform flex items-center justify-center gap-2"
+      >
+        <Camera className="w-4 h-4" />{tr('mv_poche_opere_scansiona')} · {pocheOpere.prezzo} {getTranslation('credits_word', language)}
+      </button>
+    </div>
+  ) : needsTourPass && !visit ? (
     <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
@@ -1601,7 +1645,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           {/* VISITA GUIDATA — WIP capisce dove sei (GPS + opera riconosciuta)
               e ti accompagna nel museo o nella chiesa con un percorso. */}
           {(visionTarget === 'artwork' || passActive || visit) && (
-            needsTourPass && !visit ? (
+            (needsTourPass || pocheOpere) && !visit ? (
               // Il server ha detto che il percorso è del pass con itinerario.
               schedaPassTour
             ) : visit ? (

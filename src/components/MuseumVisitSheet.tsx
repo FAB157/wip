@@ -1721,10 +1721,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             // opera riconosciuta.
             const numeroDi = (i: number) => { const pos = ordineAttivo.indexOf(i); return pos < 0 ? 0 : ordineAttivo.slice(0, pos + 1).filter(k => !visit.guide.tappe[k].soloCollezione).length; };
             const ultimaVista = [...ordineAttivo].reverse().find(k => !!visit.guide.tappe[k].seenCardId);
-            const salaQui = ultimaVista !== undefined ? normSalaMappa(visit.guide.tappe[ultimaVista].dove) : '';
+            // Il codice della sala («Room 32») quando la guida lo ha, altrimenti
+            // il nome discorsivo: è il codice che combacia con la pianta.
+            const salaDi = (k: number) => { const tp: any = visit.guide.tappe[k]; return normSalaMappa(tp.salaCodice || tp.dove); };
+            const salaQui = ultimaVista !== undefined ? salaDi(ultimaVista) : '';
             const pinConTappe = mappa.pins.map(p => {
               const ns = normSalaMappa(p.sala);
-              const tappe = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && normSalaMappa(visit.guide.tappe[k].dove) === ns);
+              const tappe = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && (salaDi(k) === ns || normSalaMappa(visit.guide.tappe[k].dove) === ns));
               return { pin: p, tappe, seiQui: !!ns && ns === salaQui };
             }).filter(x => x.tappe.length > 0);
             return (

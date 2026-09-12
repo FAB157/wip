@@ -426,6 +426,19 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Cerca un museo o una chiesa", EN: "Search a museum or church", FR: "Chercher un musée ou une église",
     ES: "Busca un museo o una iglesia", DE: "Museum oder Kirche suchen", RU: "Найти музей или церковь", ZH: "搜索博物馆或教堂"
   },
+  mv_poche_opere_title: {
+    IT: "Qui il pass non conviene", EN: "The pass isn't worth it here", FR: "Ici le pass ne vaut pas la peine", ES: "Aquí el pase no compensa", DE: "Hier lohnt sich der Pass nicht", RU: "Здесь абонемент невыгоден", ZH: "此处不建议购买通票"
+  },
+  mv_poche_opere_desc: {
+    IT: "{s} ha solo {n} opere in guida: 40 scansioni in 4 ore sarebbero sprecate. Inquadra le opere che ti interessano: {p} crediti a scansione.",
+    EN: "{s} has only {n} works in its guide: 40 scans in 4 hours would be wasted. Frame the works you care about: {p} credits per scan.",
+    FR: "{s} n'a que {n} œuvres dans le guide : 40 scans en 4 heures seraient gaspillés. Cadrez les œuvres qui vous intéressent : {p} crédits par scan.",
+    ES: "{s} solo tiene {n} obras en la guía: 40 escaneos en 4 horas serían un desperdicio. Encuadra las obras que te interesan: {p} créditos por escaneo.",
+    DE: "{s} hat nur {n} Werke im Guide: 40 Scans in 4 Stunden wären verschwendet. Fotografiere die Werke, die dich interessieren: {p} Credits pro Scan.",
+    RU: "В {s} всего {n} экспонатов в гиде: 40 сканов за 4 часа пропали бы зря. Снимайте только интересные работы: {p} кредитов за скан.",
+    ZH: "{s} 的导览中只有 {n} 件作品：4 小时 40 次扫描会浪费。只扫描您感兴趣的作品：每次 {p} 积分。"
+  },
+  mv_poche_opere_scansiona: { IT: "Scansiona un'opera", EN: "Scan a work", FR: "Scanner une œuvre", ES: "Escanear una obra", DE: "Ein Werk scannen", RU: "Сканировать работу", ZH: "扫描一件作品" },
   mv_vista_lista: { IT: "Lista", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
   mv_vista_mappa: { IT: "Mappa", EN: "Map", FR: "Plan", ES: "Mapa", DE: "Karte", RU: "Карта", ZH: "地图" },
   mv_mappa_pin_hint: {
