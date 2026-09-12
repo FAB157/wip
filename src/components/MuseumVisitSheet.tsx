@@ -1172,8 +1172,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             />
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_title')}</p>
-            <h2 className="text-lg font-black text-primary leading-tight truncate">{visit.venue.name}</h2>
+            {/* Etichetta e nome sulla STESSA riga (12/09/2026, committente:
+                «anche sopra metti tutto su una riga»). Un nome lungo non si
+                taglia: il carattere scende e va a capo, al massimo due righe
+                («Museo Nacional Centro de Arte Reina Sofía» ci sta). */}
+            <h2 className={`font-black text-primary leading-tight line-clamp-2 ${visit.venue.name.length > 34 ? 'text-sm' : visit.venue.name.length > 22 ? 'text-base' : 'text-lg'}`}>
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 mr-1.5 align-middle whitespace-nowrap">{t('mv_title')} ·</span>
+              {visit.venue.name}
+            </h2>
             {visit.gratuita && (
               <p className="text-[10px] font-black text-emerald-700 mt-0.5">{t('mv_gratuita')}</p>
             )}
