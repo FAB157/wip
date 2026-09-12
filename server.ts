@@ -8684,6 +8684,7 @@ ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadr
 - "nome": il titolo nella lingua di uscita (${langCfg.name}). Se l'opera ha un titolo consolidato in quella lingua, usa quello. Se nel materiale il titolo è in un'altra lingua ed è DESCRITTIVO ("stained-glass windows of the cathedral", "portrait of a young man"), traducilo. Se è un titolo proprio senza equivalente noto, lascialo identico a "nomeFonte". Mai inventare titoli.
 - "perche": una o due frasi con un fatto preciso del materiale (autore, data, materiale, misura, committente, vicenda), mai un giudizio vuoto.
 - "curiosita": OBBLIGATORIO per OGNI tappa, senza eccezioni, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELLA tappa (un furto, un restauro, un aneddoto, un dettaglio nascosto, un errore dell'artista) raccontato con un minimo di contesto, oppure — se il materiale non contiene nulla di sorprendente su di essa — un consiglio pratico articolato per guardarla meglio (un dettaglio preciso da cercare e perché conta, il punto migliore da cui osservarla, l'ora meno affollata). Sempre specifico di QUELLA tappa, mai generico, mai ripetuto identico su più tappe, sempre dal materiale: mai un'invenzione.
+- MAI MOSTRE: le tappe sono opere, sale o elementi PERMANENTI del luogo. Una mostra temporanea, un'esposizione passata, una rassegna con date («2019», «1972.», «Il viaggio a Carrara», «Altre voci, altri luoghi») NON è una tappa, anche se il sito ne parla a lungo: chi visita oggi non la trova. Se il materiale ha solo mostre, scrivi meno tappe.
 - "salaCodice": SOLO il codice della sala come lo scrive il museo sulla pianta e sui cartelli («Room 32», «Salle 711», «Sala 10», «Gallery 40», «Saal 12»): serve ad abbinare l'opera al punto sulla pianta, quindi mai tradotto, mai con il nome della sala aggiunto. Se il materiale dà solo un nome discorsivo, "dove" tiene il nome e "salaCodice" resta ''.
 - "intro": 2-3 frasi che dicono al visitatore dove si trova e cosa contiene il luogo, con dati concreti del materiale (fondazione, sede, numero di opere, epoca).
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
@@ -8840,6 +8841,19 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         }))
         .filter((t: any) => {
           if (!t.nome) return false;
+          // MOSTRE TEMPORANEE O PASSATE NON SONO TAPPE (12/09/2026, CARMI di
+          // Carrara: 9 tappe su 14 erano mostre finite prese dall'archivio del
+          // sito — «CANOVA. Il viaggio a Carrara», «1972. Michelucci, Moore e
+          // Michelangelo», «Uliano Lucas – Altre voci, altri luoghi»). Titolo
+          // con «mostra/exhibition/rassegna», o che inizia con un anno, o
+          // con un sottotitolo da locandina («Titolo. Sottotitolo lungo»):
+          // fuori, con il motivo nel log.
+          const titolo = `${t.nome} ${t.nomeFonte || ''}`;
+          const daMostra = /\b(mostra|mostre|exhibition|exposition|exposición|ausstellung|rassegna|retrospettiva|retrospective|biennale)\b/i.test(titolo)
+            || /^\s*(1[5-9]|20)\d{2}\s*[.\-–:]/.test(t.nome)
+            || /\b(1[5-9]|20)\d{2}\s*[-–]\s*(1[5-9]|20)\d{2}\b/.test(t.nome)
+            || (/[.!?]\s+\S+/.test(t.nome) && t.nome.length > 40 && !/\b(sala|room|cappella|chapel|galleria|gallery)\b/i.test(t.nome));
+          if (daMostra) { motiviScarto.push({ nome: t.nome, motivo: 'mostra temporanea o passata' }); return false; }
           // Una tappa che è il luogo stesso non è una tappa (il Palazzo delle
           // Logge proponeva come tappa "Palazzo Diana", il suo vecchio nome).
           if (sovrapposizioneNomi(t.nome, venue!.name) >= 0.8 && sovrapposizioneNomi(venue!.name, t.nome) >= 0.8) return false;
@@ -11486,7 +11500,7 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
             const f = String(p.image_url || '');
             const daCommons = /commons\.wikimedia\.org/i.test(f);
             daArchivio.push({
-              kind: 'poi',
+              kind: 'poi', is_gem: p.is_gem === true,
               venue_key: `poi_${p.id}`, venue_name: String(p.name), poi_id: String(p.id), language: lang,
               venue_type: /church|chiesa|cathedral|cattedrale|chapel|cappella|basilica|monaster|abbey|abbazia|shrine|santuario|place_of_worship/.test(cat) ? 'chiesa' : 'museo',
               city: p.city || null, lat: p.lat, lon: p.lon, stops_count: 0, stops_with_room: 0, official_site: null,
@@ -11499,6 +11513,19 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           // L'archivio è un di più: senza, l'elenco resta quello della libreria.
           console.warn('[MuseumLibrary] vicini dall\'archivio non letti:', e?.message);
         }
+        // ORDINE PER IMPORTANZA (committente 12/09/2026: «il Palazzo delle
+        // Logge deve sempre vedersi, ma in presenza di altri musei più
+        // importanti e con più opere viene dopo»). Entro 3 km comanda
+        // l'importanza — opere in guida, gemma, museo vero — e a parità la
+        // distanza; oltre i 3 km, la distanza. Così a Carrara il Museo del
+        // Marmo (gemma) sta sopra un palazzo con quattro tappe a 80 metri.
+        const importanza = (r: any) => (Number(r.stops_count) || 0) + (r.is_gem === true ? 10 : 0) + (r.kind === 'library' ? 3 : 0) + (/museum|musei|museo/.test(String(r.venue_type || '')) ? 2 : 0);
+        righe.sort((a: any, b: any) => {
+          const fa = (a.distance_m ?? 1e9) > 3000 ? 1 : 0, fb = (b.distance_m ?? 1e9) > 3000 ? 1 : 0;
+          if (fa !== fb) return fa - fb;
+          if (fa === 0) { const d = importanza(b) - importanza(a); if (d) return d; }
+          return (a.distance_m ?? 1e9) - (b.distance_m ?? 1e9);
+        });
       }
       res.set('Cache-Control', 'public, max-age=300');
       res.json({ ok: true, language: lang, count: righe.length, museums: righe });
