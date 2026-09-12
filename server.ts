@@ -6659,13 +6659,14 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    */
   /**
    * GUIDA GRATUITA (12/09/2026 sera, committente): «quelle che non hanno foto
-   * o poche opere sono gratuite». Sotto le 12 opere, o con meno di 12 opere
-   * fotografate, non si vende nulla: niente pass e niente scansioni a
-   * pagamento. Le 12 sono la soglia sotto cui il pass da 100 non conviene
-   * (100 ÷ 5 crediti a scansione = 20). Una tappa «soloCollezione» (opera
-   * senza sala, nota e non tappa) non conta come opera.
+   * o poche opere sono gratuite», poi «sotto 8»). Sotto le 8 opere, o con
+   * meno di 8 opere fotografate, non si vende nulla: niente pass e niente
+   * scansioni a pagamento. Fra 8 e 11 resta il consiglio delle scansioni
+   * singole (MIN_OPERE_PASS = 12, il pass da 100 conviene da 20 scansioni).
+   * Una tappa «soloCollezione» (opera senza sala, nota e non tappa) non
+   * conta come opera.
    */
-  const MIN_OPERE_GUIDA_A_PAGAMENTO = 12;
+  const MIN_OPERE_GUIDA_A_PAGAMENTO = 8;
   function guidaGratuita(guida: any): boolean {
     const tappe: any[] = Array.isArray(guida?.tappe) ? guida.tappe : [];
     if (!tappe.length) return false;
@@ -8067,8 +8068,10 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // il pass da 100 e per quello da 150.
       const MIN_OPERE_PASS = 12;
       // GRATUITA (12/09/2026 sera, committente: «quelle che non hanno foto o
-      // poche opere sono gratuite»): sotto le 12 opere, o con meno di 12
-      // opere fotografate, la guida non si vende — si dà. Niente pass,
+      // poche opere sono gratuite», «sotto 8»): sotto le 8 opere, o con meno
+      // di 8 opere fotografate, la guida non si vende — si dà, MA SOLO SE GIÀ
+      // GENERATA (cache o libreria): chiediPass riceve la guida solo lì; la
+      // generazione al volo e la traduzione passano dal pass. Niente pass,
       // niente scansioni a pagamento, e la risposta lo dice (gratuita: true)
       // così la scheda lo mostra. La regola vive in guidaGratuita() a livello
       // di modulo: la usano anche le audioguide delle opere, la descrizione
@@ -8387,9 +8390,10 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         };
         const sorgente = righe.find(abbastanzaBuona);
         if (sorgente) {
-          // La traduzione costa una chiamata AI: si fa solo per chi ha il pass
-          // (o se la guida sorgente è gratuita: poche opere/foto).
-          const gate = await chiediPass('', sorgente.guide);
+          // La traduzione costa una chiamata AI: si fa solo per chi ha il pass.
+          // «Gratuita solo se già generata» (committente): la traduzione è una
+          // generazione, quindi qui la regola gratuita non vale.
+          const gate = await chiediPass();
           if (gate) return res.json(gate);
           const tradotta = await traduciGuidaMuseo(sorgente.guide, sorgente.language, outLang, sorgente.venue_name || venue.name, inDiretta);
           if (tradotta) {
@@ -8400,7 +8404,9 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
               source: sorgente.source || null,
               officialSite: sorgente.official_site || null,
               ...fotoDaRiga(sorgente),
-              gratuita: guidaGratuita(tradotta),
+              // Appena tradotta: pagata da chi l'ha chiesta. Dalla prossima
+              // lettura (cache/libreria) la regola gratuita si applica da sola.
+              gratuita: false,
             };
             await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadTr));
             await salvaInLibreriaMusei({
@@ -9626,7 +9632,10 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       const daCommonsLuogo = /commons\.wikimedia\.org/i.test(fotoLuogoRaw);
       const payload = {
         ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null,
-        gratuita: guidaGratuita(guide),
+        // GRATUITA SOLO SE GIÀ GENERATA (12/09/2026 sera, committente): la
+        // prima generazione la paga chi la chiede; da cache e libreria, se è
+        // piccola (guidaGratuita), sarà gratuita per tutti.
+        gratuita: false,
         venuePhoto: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 900) : fotoLuogoRaw) : '',
         venuePhotoIcon: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 160) : fotoLuogoRaw) : '',
         // Le tappe uscite e perché — per non dover indovinare, collaudando,

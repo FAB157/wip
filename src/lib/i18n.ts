@@ -443,8 +443,8 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "{s} 的导览中只有 {n} 件作品：4 小时 40 次扫描会浪费。只扫描您感兴趣的作品：每次 {p} 积分。"
   },
   mv_gratuita: {
-    IT: "Guida gratuita · poche opere o poche foto", EN: "Free guide · few works or few photos", FR: "Guide gratuit · peu d'œuvres ou peu de photos",
-    ES: "Guía gratuita · pocas obras o pocas fotos", DE: "Kostenloser Guide · wenige Werke oder wenige Fotos", RU: "Бесплатный гид · мало экспонатов или фото", ZH: "免费导览 · 作品或照片较少"
+    IT: "Guida gratuita · meno di 8 opere con foto", EN: "Free guide · fewer than 8 works with photos", FR: "Guide gratuit · moins de 8 œuvres avec photo",
+    ES: "Guía gratuita · menos de 8 obras con foto", DE: "Kostenloser Guide · weniger als 8 Werke mit Foto", RU: "Бесплатный гид · меньше 8 экспонатов с фото", ZH: "免费导览 · 少于 8 件带照片的作品"
   },
   mv_poche_opere_scansiona: { IT: "Scansiona un'opera", EN: "Scan a work", FR: "Scanner une œuvre", ES: "Escanear una obra", DE: "Ein Werk scannen", RU: "Сканировать работу", ZH: "扫描一件作品" },
   mv_vista_lista: { IT: "Lista", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
