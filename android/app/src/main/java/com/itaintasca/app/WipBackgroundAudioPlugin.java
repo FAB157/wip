@@ -65,6 +65,16 @@ public class WipBackgroundAudioPlugin extends Plugin {
             // effetto che non arrivera' mai (01/09/2026).
             notifyListeners("megaphoneUnavailable", new JSObject());
         }
+
+        // (12/09/2026, visita museo) Stessi eventi del plugin iOS.
+        @Override
+        public void onRemoteNext() { notifyListeners("remoteNext", new JSObject()); }
+
+        @Override
+        public void onRemotePrevious() { notifyListeners("remotePrevious", new JSObject()); }
+
+        @Override
+        public void onRemotePlay() { notifyListeners("remotePlay", new JSObject()); }
     };
 
     private final ServiceConnection connection = new ServiceConnection() {
@@ -280,6 +290,30 @@ public class WipBackgroundAudioPlugin extends Plugin {
     @PluginMethod
     public void setupMediaSession(PluginCall call) {
         withService(call, (service, c) -> c.resolve());
+    }
+
+    /** Visita museo: «successiva/precedente» e banner persistente (vedi il servizio). */
+    @PluginMethod
+    public void setTrackCommands(PluginCall call) {
+        Boolean next = call.getBoolean("next", false);
+        Boolean previous = call.getBoolean("previous", false);
+        boolean enabled = (next != null && next) || (previous != null && previous);
+        withService(call, (service, c) -> {
+            service.setTrackCommands(enabled);
+            c.resolve();
+        });
+    }
+
+    /** Titolo/sottotitolo/copertina del banner senza rifar partire l'audio. */
+    @PluginMethod
+    public void updateNowPlaying(PluginCall call) {
+        String title = call.getString("title");
+        String subtitle = call.getString("subtitle");
+        String imageUri = call.getString("imageUri");
+        withService(call, (service, c) -> {
+            service.updateNowPlaying(title, subtitle, imageUri);
+            c.resolve();
+        });
     }
 
     @Override

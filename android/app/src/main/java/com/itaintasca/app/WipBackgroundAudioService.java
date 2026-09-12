@@ -22,6 +22,7 @@ import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -55,9 +56,26 @@ public class WipBackgroundAudioService extends Service {
          * lasciarlo acceso a vuoto (01/09/2026).
          */
         void onMegaphoneUnavailable();
+        /**
+         * (12/09/2026, visita museo) Tasti «successiva»/«precedente» della
+         * notifica media, della schermata di blocco e delle cuffie, e «play»
+         * premuto a traccia finita: decide il JS (sa qual e' l'opera dopo).
+         */
+        void onRemoteNext();
+        void onRemotePrevious();
+        void onRemotePlay();
     }
 
     private static final String TAG = "WipAudio";
+    public static final String ACTION_NEXT = "com.itaintasca.audio.NEXT";
+    public static final String ACTION_PREVIOUS = "com.itaintasca.audio.PREVIOUS";
+    /**
+     * (12/09/2026, visita museo — «stesso banner» di iOS) Con i comandi di
+     * traccia accesi dal JS: «successiva/precedente» al posto dei salti di
+     * 15 s, il banner resta a fine opera (in pausa, col nome della prossima)
+     * e il play a traccia finita va al JS che fa partire l'opera dopo.
+     */
+    private volatile boolean trackCommandsEnabled = false;
     private static final String CHANNEL_ID = "wip_audio_channel";
     private static final int NOTIFICATION_ID = 101;
     private static final long PROGRESS_INTERVAL_MS = 500L;
@@ -174,9 +192,18 @@ public class WipBackgroundAudioService extends Service {
         if (ACTION_PAUSE.equals(action)) {
             pause();
         } else if (ACTION_RESUME.equals(action)) {
-            resume();
+            // A traccia finita, in visita museo, «riprendi» = prossima opera.
+            if (trackCommandsEnabled && exoPlayer != null && exoPlayer.getPlaybackState() == Player.STATE_ENDED && callback != null) {
+                callback.onRemotePlay();
+            } else {
+                resume();
+            }
         } else if (ACTION_STOP.equals(action)) {
             stop();
+        } else if (ACTION_NEXT.equals(action)) {
+            if (callback != null) callback.onRemoteNext();
+        } else if (ACTION_PREVIOUS.equals(action)) {
+            if (callback != null) callback.onRemotePrevious();
         }
         return START_STICKY;
     }
@@ -261,6 +288,47 @@ public class WipBackgroundAudioService extends Service {
         this.callback = cb;
     }
 
+    /** Visita museo: accende/spegne «successiva/precedente» e il banner persistente. */
+    public void setTrackCommands(boolean enabled) {
+        trackCommandsEnabled = enabled;
+        if (!enabled && exoPlayer != null && exoPlayer.getPlaybackState() == Player.STATE_ENDED) {
+            // Visita chiusa a traccia finita: il banner rimasto acceso si spegne.
+            releaseForeground();
+            stopSelfIfIdle();
+        } else {
+            updateNotification();
+        }
+    }
+
+    /**
+     * Titolo/sottotitolo/copertina del banner senza rifar partire l'audio,
+     * anche a traccia finita (a fine opera dice «Prossima: X»). Il MediaItem
+     * viene sostituito con gli stessi dati e i nuovi metadati: e' da li' che
+     * la schermata di blocco (Android 13+) e l'auto leggono titolo e foto.
+     */
+    public void updateNowPlaying(@Nullable String title, @Nullable String subtitle, @Nullable String imageUri) {
+        if (title != null && !title.isEmpty()) currentTitle = title;
+        if (subtitle != null) currentSubtitle = subtitle;
+        try {
+            if (exoPlayer != null && exoPlayer.getMediaItemCount() > 0) {
+                MediaItem corrente = exoPlayer.getCurrentMediaItem();
+                if (corrente != null) {
+                    MediaMetadata.Builder mb = corrente.mediaMetadata.buildUpon()
+                            .setTitle(currentTitle)
+                            .setArtist(currentSubtitle);
+                    if (imageUri != null && !imageUri.isEmpty()) {
+                        try { mb.setArtworkUri(Uri.parse(imageUri)); } catch (Exception ignored) { }
+                    }
+                    exoPlayer.replaceMediaItem(exoPlayer.getCurrentMediaItemIndex(),
+                            corrente.buildUpon().setMediaMetadata(mb.build()).build());
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Aggiornamento metadati non riuscito, resta la notifica: " + e.getMessage());
+        }
+        updateNotification();
+    }
+
     private void ensurePlayer() {
         if (exoPlayer != null) return;
 
@@ -315,9 +383,15 @@ public class WipBackgroundAudioService extends Service {
                         callback.onPlaybackEnded();
                     }
                     pausedByNativeVoice = false;
-                    releaseForeground();
-                    // (AUD-02) Guida finita e nessuno legato: si spegne.
-                    stopSelfIfIdle();
+                    if (trackCommandsEnabled) {
+                        // Visita museo: il banner resta, in pausa, coi tasti
+                        // successiva/precedente (il JS ci scrive «Prossima: X»).
+                        updateNotification();
+                    } else {
+                        releaseForeground();
+                        // (AUD-02) Guida finita e nessuno legato: si spegne.
+                        stopSelfIfIdle();
+                    }
                 }
             }
 
@@ -353,7 +427,51 @@ public class WipBackgroundAudioService extends Service {
         });
 
         try {
-            mediaSession = new MediaSession.Builder(this, exoPlayer)
+            // (12/09/2026) Il player visto dalla MediaSession dichiara SEMPRE
+            // «successiva/precedente»: in visita museo vanno al JS (opera
+            // dopo/prima), altrimenti valgono come salto di 15 s. A traccia
+            // finita, in visita, il play chiede al JS la prossima invece di
+            // ripartire da capo.
+            Player playerPerSessione = new ForwardingPlayer(exoPlayer) {
+                @Override
+                public Player.Commands getAvailableCommands() {
+                    return super.getAvailableCommands().buildUpon()
+                            .add(Player.COMMAND_SEEK_TO_NEXT)
+                            .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                            .build();
+                }
+
+                @Override
+                public boolean isCommandAvailable(int command) {
+                    if (command == Player.COMMAND_SEEK_TO_NEXT || command == Player.COMMAND_SEEK_TO_PREVIOUS) return true;
+                    return super.isCommandAvailable(command);
+                }
+
+                @Override
+                public void seekToNext() {
+                    if (trackCommandsEnabled) { if (callback != null) callback.onRemoteNext(); }
+                    else super.seekForward();
+                }
+
+                @Override
+                public void seekToPrevious() {
+                    if (trackCommandsEnabled) { if (callback != null) callback.onRemotePrevious(); }
+                    else super.seekBack();
+                }
+
+                @Override
+                public void play() {
+                    if (trackCommandsEnabled && getPlaybackState() == Player.STATE_ENDED && callback != null) callback.onRemotePlay();
+                    else super.play();
+                }
+
+                @Override
+                public void setPlayWhenReady(boolean playWhenReady) {
+                    if (playWhenReady && trackCommandsEnabled && getPlaybackState() == Player.STATE_ENDED && callback != null) callback.onRemotePlay();
+                    else super.setPlayWhenReady(playWhenReady);
+                }
+            };
+            mediaSession = new MediaSession.Builder(this, playerPerSessione)
                     .setId("wip_audio_session")
                     .setSessionActivity(buildContentIntent())
                     .build();
@@ -676,6 +794,7 @@ public class WipBackgroundAudioService extends Service {
 
     private Notification buildNotification() {
         boolean playing = isPlaying();
+        boolean museo = trackCommandsEnabled;
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(currentTitle)
@@ -684,22 +803,30 @@ public class WipBackgroundAudioService extends Service {
                 .setContentIntent(buildContentIntent())
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setOnlyAlertOnce(true)
-                .setOngoing(playing)
-                .addAction(
-                        playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                        playing ? "Pausa" : "Riprendi",
-                        buildActionIntent(playing ? ACTION_PAUSE : ACTION_RESUME, playing ? 1 : 2)
-                )
-                .addAction(
-                        android.R.drawable.ic_menu_close_clear_cancel,
-                        "Stop",
-                        buildActionIntent(ACTION_STOP, 3)
-                );
+                .setOngoing(playing);
+        // Visita museo: ‹ precedente · play/pausa · successiva › · stop.
+        if (museo) {
+            builder.addAction(android.R.drawable.ic_media_previous, "Precedente", buildActionIntent(ACTION_PREVIOUS, 4));
+        }
+        builder.addAction(
+                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing ? "Pausa" : "Riprendi",
+                buildActionIntent(playing ? ACTION_PAUSE : ACTION_RESUME, playing ? 1 : 2)
+        );
+        if (museo) {
+            builder.addAction(android.R.drawable.ic_media_next, "Successiva", buildActionIntent(ACTION_NEXT, 5));
+        }
+        builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Stop",
+                buildActionIntent(ACTION_STOP, 3)
+        );
 
         if (mediaSession != null) {
             try {
-                builder.setStyle(new MediaStyleNotificationHelper.MediaStyle(mediaSession)
-                        .setShowActionsInCompactView(0, 1));
+                MediaStyleNotificationHelper.MediaStyle stile = new MediaStyleNotificationHelper.MediaStyle(mediaSession);
+                if (museo) stile.setShowActionsInCompactView(0, 1, 2); else stile.setShowActionsInCompactView(0, 1);
+                builder.setStyle(stile);
             } catch (Exception e) {
                 Log.w(TAG, "MediaStyle non applicabile: " + e.getMessage());
             }
