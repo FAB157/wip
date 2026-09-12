@@ -8000,32 +8000,55 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // avere la sua guida, generata al volo se non è già in libreria.
       const poiIdRichiesto = String(req.body?.poiId || '').trim().slice(0, 120);
       if (poiIdRichiesto && !poiIdRichiesto.startsWith('vision-')) {
-        try {
-          const r = await axios.get(
-            `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdRichiesto)}&select=id,name,lat,lon,category,poi_type,description_long,contact_website,wikidata,technical_data&limit=1`,
-            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 7000 }
-          );
-          const p = r.data?.[0];
-          if (p?.name) {
-            venue = {
-              id: String(p.id), name: String(p.name), lat: p.lat ?? null, lon: p.lon ?? null,
-              category: String(p.category || p.poi_type || ''), description: String(p.description_long || ''),
-              // Il QID e la pagina Wikipedia, quando il POI li porta GIÀ come
-              // colonne (12/09/2026, segnalazione dal vivo del committente:
-              // «Palazzo delle Logge» a Carrara dava «materiale insufficiente»
-              // pur avendo una guida pronta sotto un altro id — il doppione
-              // toccato dalla scheda, `wiki-8880081`, non aveva `wikidata` ma
-              // aveva già `technical_data.wikipedia_raw.pageid`/`title`: non
-              // c'era bisogno di indovinare nulla dal nome).
-              wikidata: String(p?.wikidata || '').match(/^Q\d+$/) ? String(p.wikidata) : '',
-              paginaWiki: (() => { const w = p?.technical_data?.wikipedia_raw; return w?.pageid && w?.title ? { pageid: Number(w.pageid), title: String(w.title) } : null; })(),
-            };
-            // Il POI porta le sue coordinate: valgono per la conferma
-            // geografica della voce Wikipedia anche senza GPS del telefono.
-            if (!hasGps && Number.isFinite(p.lat) && Number.isFinite(p.lon)) { lat = p.lat; lon = p.lon; hasGps = true; }
+        // Due tentativi, 15 s ciascuno (12/09/2026, trovato dalla semina):
+        // durante la fase B degli indirizzi (milioni di UPDATE su
+        // shared_pois dal droplet, ~100.000 righe/ora, in corso per giorni)
+        // una select per id può superare tranquillamente i vecchi 7 s.
+        let ultimoErrore: any = null;
+        let letto = false;
+        for (let tentativo = 0; tentativo < 2 && !letto; tentativo++) {
+          try {
+            const r = await axios.get(
+              `${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiIdRichiesto)}&select=id,name,lat,lon,category,poi_type,description_long,contact_website,wikidata,technical_data&limit=1`,
+              { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 15000 }
+            );
+            const p = r.data?.[0];
+            if (p?.name) {
+              venue = {
+                id: String(p.id), name: String(p.name), lat: p.lat ?? null, lon: p.lon ?? null,
+                category: String(p.category || p.poi_type || ''), description: String(p.description_long || ''),
+                // Il QID e la pagina Wikipedia, quando il POI li porta GIÀ come
+                // colonne (12/09/2026, segnalazione dal vivo del committente:
+                // «Palazzo delle Logge» a Carrara dava «materiale insufficiente»
+                // pur avendo una guida pronta sotto un altro id — il doppione
+                // toccato dalla scheda, `wiki-8880081`, non aveva `wikidata` ma
+                // aveva già `technical_data.wikipedia_raw.pageid`/`title`: non
+                // c'era bisogno di indovinare nulla dal nome).
+                wikidata: String(p?.wikidata || '').match(/^Q\d+$/) ? String(p.wikidata) : '',
+                paginaWiki: (() => { const w = p?.technical_data?.wikipedia_raw; return w?.pageid && w?.title ? { pageid: Number(w.pageid), title: String(w.title) } : null; })(),
+              };
+              // Il POI porta le sue coordinate: valgono per la conferma
+              // geografica della voce Wikipedia anche senza GPS del telefono.
+              if (!hasGps && Number.isFinite(p.lat) && Number.isFinite(p.lon)) { lat = p.lat; lon = p.lon; hasGps = true; }
+            }
+            letto = true;
+          } catch (e: any) {
+            ultimoErrore = e;
+            if (tentativo === 0) await new Promise(r => setTimeout(r, 1500));
           }
-        } catch (e: any) {
-          console.warn('[VenueGuide] POI richiesto non leggibile:', e?.message);
+        }
+        // MAI UNA GUIDA DEGRADATA (12/09/2026, principio del committente):
+        // se il POI richiesto ESPLICITAMENTE (scheda museo, "Visita
+        // guidata") non si legge nemmeno al secondo tentativo, la rotta non
+        // deve ripiegare in silenzio sul prompt libero senza QID — quella
+        // guida scadente finirebbe salvata in libreria PER SEMPRE (trovato
+        // dalla semina: "Salon of 1824" e un fatto di cronaca del 2017 fra
+        // le tappe del Louvre, causati esattamente da questo timeout).
+        // Meglio nessuna guida che una guida sbagliata: lo script di semina
+        // tratta questo come la quota, aspetta e riprova lo stesso museo.
+        if (!letto) {
+          console.warn('[VenueGuide] POI richiesto non leggibile dopo 2 tentativi:', ultimoErrore?.message);
+          return res.status(503).json({ ok: false, reason: 'poi_non_leggibile' });
         }
       }
       // Il museo scelto dall'elenco "qui vicino" (fetchMuseumLibrary) porta
