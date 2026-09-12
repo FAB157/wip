@@ -267,11 +267,13 @@ async function resolveDestinationId(cityName: string, apiKey: string): Promise<n
   try {
     const payload = {
       searchTerm: cityName,
-      searchTypes: [{ searchType: "DESTINATIONS" }],
+      // La pagination va DENTRO il searchType (12/09/2026): con quella
+      // solo in cima Viator rispondeva ancora 400 «Missing pagination», la
+      // ricerca dinamica falliva sempre e si finiva sul fallback freetext
+      // dei prodotti, che aveva lo stesso difetto — risultato: zero
+      // esperienze Viator ovunque, da quando esiste questa funzione.
+      searchTypes: [{ searchType: "DESTINATIONS", pagination: { start: 1, count: 5 } }],
       currency: "EUR",
-      // Senza pagination Viator risponde 400 "Missing pagination" anche con
-      // una chiave valida: la ricerca dinamica delle destinazioni falliva
-      // sempre e si finiva sul fallback freetext dei prodotti.
       pagination: { start: 1, count: 5 }
     };
     const res = await axios.post(`https://${viatorApiHost()}/partner/search/freetext`, payload, {
@@ -412,9 +414,14 @@ export async function searchViatorExperiences(lat: number, lng: number, radiusKm
     // Se non troviamo il destinationId, possiamo provare una ricerca prodotti "Freetext"
     if (!destinationId) {
       console.log(`[Viator] Città '${cityName}' non trovata dinamicamente. Fallback a ricerca Freetext su PRODUCTS.`);
+      // La paginazione va DENTRO ogni searchType, non (solo) in cima: senza
+      // Viator risponde 400 «Missing pagination» e QUESTA funzione — usata
+      // da musei, itinerari e libreria — tornava sempre vuota (verificato
+      // il 12/09/2026 su Musei Vaticani, Uffizi, Museo del Marmo).
+      // searchViatorFreetext qui sopra lo faceva già giusto.
       const freePayload = {
         searchTerm: cityName || "Italia",
-        searchTypes: [{ searchType: "PRODUCTS" }],
+        searchTypes: [{ searchType: "PRODUCTS", pagination: { start: 1, count: quanti } }],
         currency: "EUR",
         pagination: { start: 1, count: quanti }
       };
