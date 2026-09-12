@@ -8526,7 +8526,13 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // da fare a Wikidata dipende da questo (una chiesa non «possiede» la
       // sua pala d'altare, ce l'ha dentro). Il nostro dato vale più della
       // risposta del modello — il Duomo di Firenze usciva classificato museo.
-      const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise/i.test(`${venue.category} ${venue.name}`);
+      // «temple/templo/tempio/sagrada/sainte-chapelle/mosque/synagogue»
+      // aggiunti il 12/09/2026 sera (sessione libreria: «Temple Expiatori de
+      // la Sagrada Família» non era chiesa, quindi niente ramo «parti»
+      // dell'edificio e le facciate/cripta non entravano). Per un tempio non
+      // cristiano il ramo «parti» aggiunge solo elementi architettonici: va
+      // bene lo stesso.
+      const isChurch = /chies|church|cathedral|cattedral|basilic|chapel|cappell|abbaz|abbey|monaster|santuar|shrine|duomo|dom\b|kirche|iglesia|église|eglise|templ|tempio|sagrada|mosque|moschea|mezquita|mosquée|synagog|sinagog|pagoda|\bwat\b/i.test(`${venue.category} ${venue.name}`);
       // SITO ARCHEOLOGICO O MONUMENTO (12/09/2026, trovato dalla semina):
       // il Colosseo e Santa Sofia non hanno "opere in sale" — la guida li
       // scartava per insufficienza di tappe mentre il vero problema era il
@@ -8541,13 +8547,17 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // Cache 30 giorni SOLO se ha trovato qualcosa: un risultato vuoto è
       // quasi sempre un timeout di Wikidata, non un dato su quel museo.
       const OPERE_MUSEO_CACHE_TTL_MS = 30 * 86_400_000;
-      const opereMuseoKey = wikidataId ? `opere_museo:v1:${wikidataId}:${langCfg.wiki}` : '';
+      // v2 (12/09/2026 sera): la chiave porta anche il modo chiesa/museo — la
+      // Sagrada Família, letta come «museo» prima della correzione di
+      // isChurch, restava in cache SENZA le parti (facciate, cripta) anche
+      // dopo la correzione. Con rigenera=true la cache delle opere si salta.
+      const opereMuseoKey = wikidataId ? `opere_museo:v2:${wikidataId}:${langCfg.wiki}:${isChurch ? 'chiesa' : 'museo'}` : '';
       const opereMuseoPromise = (async (): Promise<OpereDelMuseoRisultato | null> => {
         if (!wikidataId || isSito) {
           console.log(`[VenueGuide] opereMuseo ${venue.name}: saltato (wikidataId='${wikidataId}', isSito=${isSito})`);
           return null;
         }
-        if (opereMuseoKey) {
+        if (opereMuseoKey && !rigenera) {
           const riga = await getFromCache(opereMuseoKey);
           const eta = riga ? Date.now() - Date.parse(riga.created_at || '') : Infinity;
           if (riga && Number.isFinite(eta) && eta < OPERE_MUSEO_CACHE_TTL_MS) {
@@ -9036,7 +9046,15 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           const daMuseo = fraseDalMuseoPer(o.titolo, testoMuseo) || fraseDalMuseoPer(o.titoloEn, testoMuseo);
           if (daMuseo) o.testoFonte = daMuseo;
         }
-        const ordinate = [...opere.filter(o => o.esposta !== false), ...opere.filter(o => o.esposta === false)];
+        // LA FOTO DEVE ESSERCI SEMPRE (12/09/2026 sera, committente sugli
+        // Uffizi: «ma deve esserci sempre la foto»): le opere con foto
+        // vengono prima; se ce ne sono almeno 12, quelle senza foto restano
+        // fuori dal percorso. Mai una foto «a tema» al posto di quella vera.
+        const esposte = opere.filter(o => o.esposta !== false);
+        const conFotoOp = esposte.filter(o => o.foto);
+        const senzaFotoOp = esposte.filter(o => !o.foto);
+        if (senzaFotoOp.length && conFotoOp.length >= 12) console.log(`[VenueGuide] ${venue.name}: ${senzaFotoOp.length} opere senza foto lasciate fuori (${conFotoOp.length} con foto bastano)`);
+        const ordinate = [...conFotoOp, ...(conFotoOp.length >= 12 ? [] : senzaFotoOp), ...opere.filter(o => o.esposta === false)];
         const LOTTO = 5;
         for (let k = 0; k < ordinate.length; k += LOTTO) {
           const lotto = ordinate.slice(k, k + LOTTO).filter(o => o.testoFonte);
@@ -9309,21 +9327,36 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             // Ricerca per nome: i file devono «dire» il museo nel titolo o
             // nella descrizione, altrimenti non entrano (foto a tema = mai).
             const GEN_NOME = new Set(['museo', 'museum', 'musee', 'museu', 'civico', 'civica', 'nazionale', 'national', 'galleria', 'gallery', 'palazzo', 'villa', 'casa', 'fondazione', 'collezione', 'centro', 'arte', 'art', 'della', 'delle', 'degli', 'del', 'dei', 'di', 'the', 'of', 'and', 'e', 'la', 'il', 'les', 'des', 'du', 'de', 'da']);
-            const sigla = (String(venue.name).match(/\b[A-Z]{4,}\b/) || [])[0];
-            const proprie = normalizzaTesto(venue.name).split(' ').filter(w => w.length >= 4 && !GEN_NOME.has(w));
-            // Si cerca con la sigla (CARMI) o con le parole proprie, MAI col
-            // nome intero fra virgolette: «CARMI Museo Carrara e Michelangelo»
-            // come frase esatta non sta in nessun titolo di file.
-            const ricerche = sigla ? [sigla, proprie.join(' ')] : [proprie.join(' ')];
+            // Il nome in archivio può essere uno slug («CARMI-museocarrara…»):
+            // le parole proprie vengono anche dal nome detto dall'utente o
+            // dallo script («CARMI Museo Carrara e Michelangelo»).
+            const nomiMuseo = [String(venue.name || ''), venueHint].filter(Boolean);
+            const sigla = nomiMuseo.map(n => (n.match(/\b[A-Z]{4,}\b/) || [])[0]).find(Boolean);
+            const siglaN = sigla ? normalizzaTesto(sigla) : '';
+            const proprie = [...new Set(nomiMuseo.flatMap(n => normalizzaTesto(n).split(' ')).filter(w => w.length >= 4 && w.length <= 25 && !GEN_NOME.has(w) && w !== siglaN))];
+            // Si cerca con sigla + una parola propria («CARMI Carrara»), o con
+            // le prime tre parole proprie: MAI la sigla da sola («CARMI» dà
+            // persone di cognome Carmi e una città dell'Illinois), MAI il nome
+            // intero fra virgolette (non sta in nessun titolo di file).
+            const ricerche = [...new Set([
+              sigla && proprie[0] ? `${sigla} ${proprie[0]}` : '',
+              proprie.slice(0, 3).join(' '),
+            ].filter(q => q && q.split(' ').length >= 2))];
             const trovati: any[] = [];
-            for (const q of ricerche.filter(Boolean)) {
+            for (const q of ricerche) {
               const sr = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=40&gsrsearch=${encodeURIComponent(q)}&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth=800&format=json`, UA).catch(() => null);
               for (const f of leggiPagine(sr?.data?.query?.pages)) if (!trovati.some(x => x.url === f.url)) trovati.push(f);
             }
+            // Un file «dice» il museo se contiene almeno DUE parole fra sigla
+            // e parole proprie (una sola: «Carmi» è anche un cognome).
+            // Se il museo ha una sigla, il file DEVE contenerla («Carrara» e
+            // «Michelangelo» insieme stanno anche sui disegni delle cave).
             const dicono = trovati.filter(f => {
-              if (sigla && f.testo.includes(normalizzaTesto(sigla))) return true;
-              const n = proprie.filter(p => f.testo.includes(p)).length;
-              return proprie.length ? n >= Math.min(2, proprie.length) : false;
+              const conSigla = !!siglaN && f.testo.includes(siglaN);
+              if (siglaN && !conSigla) return false;
+              const n = (conSigla ? 1 : 0) + proprie.filter(p => f.testo.includes(p)).length;
+              const richieste = Math.min(2, (siglaN ? 1 : 0) + proprie.length);
+              return richieste > 0 && n >= richieste;
             });
             const giaVisti = new Set(file.map(f => f.url));
             for (const f of dicono) if (!giaVisti.has(f.url)) file.push(f);
@@ -9337,7 +9370,7 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             // Le parole del NOME DEL LUOGO non abbinano niente: «Logge» sta in
             // ogni file del Palazzo delle Logge, e «il loggiato» prendeva la
             // foto generale della facciata.
-            const paroleLuogo = new Set(normalizzaTesto(venue.name).split(' ').filter(Boolean));
+            const paroleLuogo = new Set([venue.name, venueHint].filter(Boolean).flatMap(n => normalizzaTesto(n).split(' ')).filter(Boolean));
             // «Parola del luogo» = uguale, o il plurale/singolare (al più due
             // lettere in più): «logge»/«loggia» sì, «marmoteca» NO rispetto a
             // «marmo» (prima il confronto sulle prime 4 lettere buttava via
@@ -9364,11 +9397,31 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
                   return conRadici && n.length >= 6 && parole.some((p: string) => p.length >= 6 && stelo(p) === stelo(n));
                 });
               };
-              return file.find(f => !usate.has(f.url) && combacia(f)) || null;
+              return file.find(f => !usate.has(f.url) && combacia(f) && coerente(f)) || null;
+            };
+            // COERENZA INTERNO/ESTERNO (12/09/2026 sera, CARMI: tutti i file
+            // dicono «villa Fabbricotti alla Padula», e la tappa del parco
+            // prendeva una foto d'interno). Una tappa parco/giardino vuole un
+            // file che parli di parco o giardino; una tappa villa/facciata/
+            // cortile vuole un esterno (o un file che non si dichiara
+            // interno); una collezione/sala/sezione vuole un interno (o un
+            // file che non si dichiara esterno).
+            const ESTERNO_F = /\b(esterno|esterni|exterior|outside|facciata|facade|fassade|fachada|giardino|giardini|garden|gardens|jardin|parco|park|cortile|courtyard|veduta|view)\b/;
+            const INTERNO_F = /\b(interno|interni|interior|inside|sala|salle|saal|room|hall|esposizione|exhibition|allestimento|display)\b/;
+            let tipoTappa: 'parco' | 'esterno' | 'interno' | '' = '';
+            const coerente = (f: any) => {
+              if (tipoTappa === 'parco') return /\b(parco|park|giardin\w*|garden|gardens|jardin|grounds)\b/.test(f.testo);
+              if (tipoTappa === 'esterno') return !INTERNO_F.test(f.testo) || ESTERNO_F.test(f.testo);
+              if (tipoTappa === 'interno') return !ESTERNO_F.test(f.testo) || INTERNO_F.test(f.testo);
+              return true;
             };
             let assegnate = 0;
             tappeConFoto.forEach((t: any, idx: number) => {
               if (t.foto) return;
+              const nomeT = normalizzaTesto(`${t.nome} ${t.nomeFonte || ''}`);
+              tipoTappa = /\b(parco|park|giardin\w*|garden|gardens|jardin)\b/.test(nomeT) ? 'parco'
+                : /\b(villa|palazzo|palace|facciata|facade|cortile|courtyard|esterno|exterior|portale|portal|torre|tower|campanile|cupola|dome|chiostro|cloister)\b/.test(nomeT) ? 'esterno'
+                : /\b(collezione|collection|sala|sale|room|hall|sezione|section|esposizione|exhibition|galleria|gallery|opere|works|dipint\w*|scultur\w*|sculpture|painting)\b/.test(nomeT) ? 'interno' : '';
               // 1) per le parole del NOME della tappa (l'opera o l'elemento);
               // 2) se la tappa È una zona (sala, sezione, giardino, collezione,
               //    parco), anche per le parole di dove sta: la foto della
