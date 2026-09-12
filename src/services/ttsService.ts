@@ -649,6 +649,12 @@ export async function speakAudioguide(
    * questa funzione: impostarla dopo farebbe lampeggiare il titolo sbagliato.
    */
   etichetta?: string,
+  /**
+   * BANNER DEL LETTORE NATIVO (12/09/2026, visita museo): titolo = nome
+   * dell'opera, sottotitolo = museo e prossima opera, copertina = foto
+   * dell'opera. Senza, il banner mostrava le prime 40 lettere del testo.
+   */
+  meta?: { title?: string; subtitle?: string; imageUri?: string },
 ): Promise<void> {
   if (locationService.getIsGuideMuted()) {
     // onEnd DEVE arrivare: i chiamanti fanno "await speakAudioguide(...)"
@@ -693,8 +699,9 @@ export async function speakAudioguide(
           nativePlaybackActive = true;
           await WipBackgroundAudio.play({
             url: nativeUri,
-            title: text.length > 40 ? text.slice(0, 40) + '...' : text,
-            subtitle: 'Audioguida'
+            title: meta?.title || (text.length > 40 ? text.slice(0, 40) + '...' : text),
+            subtitle: meta?.subtitle || etichettaVoce || 'Audioguida',
+            ...(meta?.imageUri ? { imageUri: meta.imageUri } : {}),
           });
           if (velocitaVoce !== 1) WipBackgroundAudio.setSpeed({ speed: velocitaVoce }).catch(() => {});
           emitAudioState(true, true);

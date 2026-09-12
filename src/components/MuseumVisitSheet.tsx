@@ -11,6 +11,8 @@ import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
+import { Capacitor } from '@capacitor/core';
+import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { printScoped } from '../lib/printScoped';
 import MuseumPrintView from './MuseumPrintView';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -339,6 +341,54 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     window.addEventListener('wip-museum-stop-from-leader', onStop);
     return () => window.removeEventListener('wip-museum-stop-from-leader', onStop);
   }, [sonoLeader]);
+
+  // BANNER NATIVO DELLA VISITA (12/09/2026, committente: «sulla nativa Apple
+  // non c'è il banner quando ascolto l'audioguida del museo a display
+  // spento, come c'è per i POI: con tutte le funzioni del player, nome
+  // dell'opera, nome della prossima, play, pausa»). Il lettore nativo
+  // (WipBackgroundAudio) mostra già play/pausa: qui gli si danno il nome
+  // dell'opera, la prossima e la foto, e si accendono «successiva» e
+  // «precedente» sulla schermata di blocco. A fine opera il banner resta
+  // fermo col nome della prossima: play la fa partire senza aprire l'app.
+  const metaOpera = (i: number) => {
+    const tappa = visit.guide.tappe[i];
+    // La prossima DOPO questa: la prima non vista e non saltata del percorso
+    // attivo che non sia l'opera che sta per partire (quella viene spuntata
+    // solo dopo l'avvio).
+    const attive = tappeAttive(visit);
+    const kNext = visit.guide.tappe.findIndex((x, k) => k !== i && attive.has(k) && !x.seenCardId && !x.skipped);
+    const prossima = kNext >= 0 ? visit.guide.tappe[kNext] : null;
+    return {
+      title: tappa?.nome || visit.venue.name,
+      subtitle: prossima ? `${visit.venue.name} · ${t('mv_next_short')}: ${prossima.nome}` : visit.venue.name,
+      ...(tappa?.foto ? { imageUri: tappa.foto } : {}),
+    };
+  };
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const prossima = () => { const p = prossimaTappa(getVisitSnapshot()); if (p) void handleOpera(p.indice, { daCapo: true }); };
+    const precedente = () => {
+      const corrente = operaParla ?? operaInPausa ?? operaAperta;
+      const attive = [...tappeAttive(getVisitSnapshot())].sort((a, b) => a - b);
+      const idx = corrente === null ? -1 : attive.indexOf(corrente);
+      const prev = idx > 0 ? attive[idx - 1] : (corrente !== null && corrente > 0 ? corrente - 1 : null);
+      if (prev !== null && visit.guide.tappe[prev]) void handleOpera(prev, { daCapo: true });
+    };
+    const play = () => { if (operaInPausa !== null) void handleOpera(operaInPausa); else prossima(); };
+    const handles: Array<{ remove: () => void }> = [];
+    (async () => {
+      try {
+        await WipBackgroundAudio.setTrackCommands({ next: true, previous: true });
+        handles.push(await WipBackgroundAudio.addListener('remoteNext', prossima));
+        handles.push(await WipBackgroundAudio.addListener('remotePrevious', precedente));
+        handles.push(await WipBackgroundAudio.addListener('remotePlay', play));
+      } catch { /* plugin senza questi comandi (Android non ancora aggiornato): resta play/pausa */ }
+    })();
+    return () => {
+      for (const h of handles) { try { h.remove(); } catch { /* ok */ } }
+      WipBackgroundAudio.setTrackCommands({ next: false, previous: false }).catch(() => {});
+    };
+  });
 
   // DAL TASTO DELLE CUFFIE (11/09/2026): sul web e nella PWA i comandi
   // «traccia successiva» e «play» della schermata di blocco e delle cuffie
@@ -806,11 +856,19 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         armaPromemoria();
         const p = prossimaTappa(getVisitSnapshot());
         if (!p || p.indice === i) return;
+        // Banner nativo fermo col nome della prossima: play la fa partire.
+        if (Capacitor.isNativePlatform()) {
+          WipBackgroundAudio.updateNowPlaying({
+            title: `${t('mv_next_short')}: ${p.tappa.nome}`,
+            subtitle: visit.venue.name,
+            ...(p.tappa.foto ? { imageUri: p.tappa.foto } : {}),
+          }).catch(() => {});
+        }
         const frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
         void speakWithSystemVoice(frase, lingua, getGuideCharacter());
       };
       const parlaGuida = async () => {
-        await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera);
+        await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, undefined, metaOpera(i));
         setOperaParla(i);
         // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.
         markStopListened(i);
@@ -820,7 +878,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       const descr = descrizioneAuto && (tappa.foto || guida.foto) ? await ottieniDescrizione(i) : null;
       if (descr) {
         setSpeechSpeed(0.85);
-        await speakAudioguide(descr, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); void parlaGuida(); });
+        await speakAudioguide(descr, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); void parlaGuida(); }, undefined, metaOpera(i));
         setOperaParla(i);
       } else {
         await parlaGuida();
