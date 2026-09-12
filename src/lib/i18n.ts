@@ -1520,6 +1520,24 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Открывает Google Карты со всеми точками маршрута ({n})",
     ZH: "在 Google 地图中打开行程的全部 {n} 个地点"
   },
+  // Su iPhone due tasti (12/09/2026, App Review Guideline 4): Mappe di Apple
+  // e Google Maps, entrambi raggiungibili.
+  nav_in_auto_apple: {
+    IT: "In auto con Mappe", EN: "By car with Apple Maps", FR: "En voiture avec Plans", ES: "En coche con Mapas de Apple",
+    DE: "Mit dem Auto in Apple Karten", RU: "На машине в Apple Картах", ZH: "驾车（Apple 地图）"
+  },
+  nav_in_auto_apple_sub: {
+    IT: "Apre l'app Mappe di Apple", EN: "Opens the Apple Maps app", FR: "Ouvre l'app Plans d'Apple", ES: "Abre la app Mapas de Apple",
+    DE: "Öffnet die Apple-Karten-App", RU: "Откроет приложение Apple Карты", ZH: "打开 Apple 地图"
+  },
+  nav_in_auto_google: {
+    IT: "In auto con Google Maps", EN: "By car with Google Maps", FR: "En voiture avec Google Maps", ES: "En coche con Google Maps",
+    DE: "Mit dem Auto in Google Maps", RU: "На машине в Google Картах", ZH: "驾车（谷歌地图）"
+  },
+  nav_in_auto_google_sub: {
+    IT: "Apre Google Maps", EN: "Opens Google Maps", FR: "Ouvre Google Maps", ES: "Abre Google Maps",
+    DE: "Öffnet Google Maps", RU: "Откроет Google Карты", ZH: "打开谷歌地图"
+  },
   nav_in_auto_sub: {
     IT: "Apre Google Maps o Mappe",
     EN: "Opens Google Maps or Maps",

@@ -42,13 +42,21 @@ export async function navigaAPiediVerso(poi: NavChoicePoi) {
   }));
 }
 
-export async function navigaInAutoVerso(poi: NavChoicePoi) {
+/**
+ * `app` (12/09/2026, App Review Guideline 4 «give users the option to launch
+ * the native Apple Maps app»): su iPhone si offrono DUE tasti, Mappe di Apple
+ * e Google Maps; prima il plugin apriva Google se installata e Mappe non era
+ * mai raggiungibile. "apple" = sempre Mappe; "google"/assente = come prima.
+ */
+export async function navigaInAutoVerso(poi: NavChoicePoi, app?: 'apple' | 'google') {
   const a = await puntoArrivoSuStrada(poi as any);
-  const web = () => window.open(`https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, "_blank");
+  const web = () => window.open(app === 'apple'
+    ? `https://maps.apple.com/?daddr=${a.lat},${a.lon}&dirflg=d`
+    : `https://www.google.com/maps/dir/?api=1&destination=${a.lat},${a.lon}&travelmode=driving`, "_blank");
   if (Capacitor.isNativePlatform()) {
     try {
       const plugin = registerPlugin<any>("ItaintaBackgroundPoiPlugin");
-      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name || poi.nome, mode: "driving" });
+      await plugin.openSystemNavigator({ lat: a.lat, lon: a.lon, name: poi.name || poi.nome, mode: "driving", ...(app ? { app } : {}) });
       return;
     } catch (e) {
       console.warn("[NavChoice] openSystemNavigator fallito, apro il link web", e);
@@ -144,6 +152,10 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
   // campiona — meglio dirlo nel sottotitolo che far contare le fermate a chi guida.
   const quanteInAuto = giroInAuto ? Math.min(giroInAuto.length, MAX_TAPPE_GOOGLE) : 0;
   const stop = (e: React.SyntheticEvent) => { e.preventDefault(); e.stopPropagation(); };
+  // Su iPhone, verso una meta sola: Mappe di Apple E Google Maps, due tasti
+  // (App Review, Guideline 4). Con un giro di più tappe resta Google, che
+  // accetta le tappe intermedie; Mappe no.
+  const dueNavigatori = Capacitor.getPlatform() === 'ios' && !modoItinerario && !giroInAuto;
   const sheet = (
     <div
       className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
@@ -185,26 +197,38 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
             className="h-5 w-5 accent-blue-700"
           />
         </label>
+        {dueNavigatori && (
+          <button
+            onClick={(e) => { stop(e); onClose(); void navigaInAutoVerso(poi, 'apple'); }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+          >
+            <span className="text-xl">🚗</span>
+            <span className="flex-1">
+              <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto_apple", lang)}</span>
+              <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_apple_sub", lang)}</span>
+            </span>
+          </button>
+        )}
         <button
           onClick={(e) => {
             stop(e); onClose();
             if (modoItinerario) navigaInAutoItinerario(tappe!);
             else if (giroInAuto) navigaInAutoItinerario(giroInAuto);
-            else void navigaInAutoVerso(poi);
+            else void navigaInAutoVerso(poi, dueNavigatori ? 'google' : undefined);
           }}
           className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
         >
-          <span className="text-xl">🚗</span>
+          <span className="text-xl">{dueNavigatori ? '🗺️' : '🚗'}</span>
           <span className="flex-1">
             <span className="block text-sm font-bold text-gray-900">
-              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : giroInAuto ? "nav_giro_in_auto" : "nav_in_auto", lang)}
+              {getTranslation(modoItinerario ? "nav_giorno_in_auto" : giroInAuto ? "nav_giro_in_auto" : dueNavigatori ? "nav_in_auto_google" : "nav_in_auto", lang)}
             </span>
             <span className="block text-[11px] text-gray-500">
               {modoItinerario
                 ? getTranslation("nav_giorno_in_auto_sub", lang)
                 : giroInAuto
                   ? getTranslation("nav_giro_in_auto_sub", lang).replace("{n}", String(quanteInAuto))
-                  : getTranslation("nav_in_auto_sub", lang)}
+                  : dueNavigatori ? getTranslation("nav_in_auto_google_sub", lang) : getTranslation("nav_in_auto_sub", lang)}
             </span>
           </span>
         </button>

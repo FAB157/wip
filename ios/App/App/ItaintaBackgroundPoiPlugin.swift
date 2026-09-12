@@ -664,8 +664,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         // sensi unici ignorati (verificato il 22/08/2026). Stesso parametro del
         // plugin Android.
         let driving = (call.getString("mode") ?? "walking").lowercased().hasPrefix("driv")
+        // `app`: "apple" apre SEMPRE Mappe di Apple (12/09/2026, App Review,
+        // Guideline 4: «give users the option to launch the native Apple Maps
+        // app» — prima, con Google Maps installata, Mappe non era mai
+        // raggiungibile). "google" o assente: Google Maps se c'è, altrimenti Mappe.
+        let app = (call.getString("app") ?? "").lowercased()
         DispatchQueue.main.async {
-            if let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=\(driving ? "driving" : "walking")"),
+            if app != "apple",
+               let gmaps = URL(string: "comgooglemaps://?daddr=\(lat),\(lon)&directionsmode=\(driving ? "driving" : "walking")"),
                UIApplication.shared.canOpenURL(gmaps) {
                 UIApplication.shared.open(gmaps)
             } else {
