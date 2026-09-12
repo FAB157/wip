@@ -9204,12 +9204,18 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             const GENERICHE_EL = new Set(['palazzo', 'palace', 'chiesa', 'church', 'museo', 'museum', 'della', 'delle', 'degli', 'del', 'dei', 'di', 'the', 'of', 'and', 'con', 'vista', 'generale', 'lato', 'verso', 'grande', 'grandi', 'due', 'tre', 'principale']);
             const SINONIMI: Record<string, string[]> = { loggiato: ['loggia', 'loggiato', 'logge', 'arcate', 'arcade'], loggetta: ['loggetta', 'loggia'], portale: ['portale', 'portal', 'porta', 'door', 'ingresso'], balconcino: ['balcone', 'balconcino', 'balcony'], colonne: ['colonne', 'colonna', 'column', 'columns'], facciata: ['facciata', 'facade', 'fronte'], cortile: ['cortile', 'courtyard'], scalone: ['scala', 'scalone', 'staircase', 'stairs'], affreschi: ['affresco', 'affreschi', 'fresco', 'frescoes'], soffitto: ['soffitto', 'ceiling', 'volta'], campanile: ['campanile', 'bell tower', 'torre'], cupola: ['cupola', 'dome'], altare: ['altare', 'altar'], cappella: ['cappella', 'chapel'], finestre: ['finestra', 'finestre', 'window', 'windows', 'bifora'], fregio: ['fregio', 'frieze'], stemma: ['stemma', 'scudo', 'coat of arms'] };
             const usate = new Set<string>();
+            // Le parole del NOME DEL LUOGO non abbinano niente: «Logge» sta in
+            // ogni file del Palazzo delle Logge, e «il loggiato» prendeva la
+            // foto generale della facciata.
+            const paroleLuogo = new Set(normalizzaTesto(venue.name).split(' ').filter(Boolean));
             let assegnate = 0;
             tappeConFoto.forEach((t: any, idx: number) => {
               if (t.foto) return;
-              const parole = normalizzaTesto(`${t.nome} ${t.nomeFonte || ''}`).split(' ').filter(w => w.length >= 5 && !GENERICHE_EL.has(w));
+              const parole = normalizzaTesto(`${t.nome} ${t.nomeFonte || ''}`).split(' ').filter(w => w.length >= 5 && !GENERICHE_EL.has(w) && !paroleLuogo.has(w) && ![...paroleLuogo].some(pl => pl.length >= 4 && (w.startsWith(pl.slice(0, 4)) )));
               const chiavi = new Set<string>(parole);
               for (const p of parole) for (const [k, syn] of Object.entries(SINONIMI)) if (p.startsWith(k.slice(0, 5)) || syn.some(s => p.startsWith(s.slice(0, 5)))) syn.forEach(s => chiavi.add(s));
+              // Anche i sinonimi che coincidono con il nome del luogo escono.
+              for (const c of [...chiavi]) if ([...paroleLuogo].some(pl => pl.length >= 4 && (c === pl || c.startsWith(pl.slice(0, 4))))) chiavi.delete(c);
               if (!chiavi.size) return;
               const hit = file.find(f => !usate.has(f.url) && [...chiavi].some(k => f.testo.includes(normalizzaTesto(k))));
               if (!hit) return;
