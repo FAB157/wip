@@ -6795,14 +6795,28 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    */
   const VENUE_CATEGORIES = new Set([
     'museum', 'musei', 'museo', 'gallery', 'galleria', 'art_gallery',
+    'art_museum', 'natural_history_museum', 'house_museum', 'museum_ship', 'science_museum', 'history_museum',
+    'archaeology_museum', 'archaeological_museum', 'archaeological_park', 'pinacoteca', 'open_air_museum', 'military_museum', 'maritime_museum',
     'church', 'chiesa', 'chiese', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario',
-    'monument', 'monumenti', 'monumento', 'attraction', 'attrazioni', 'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo', 'fort', 'tower', 'palace', 'palazzo', 'villa'
+    'monument', 'monumenti', 'monumento', 'attraction', 'attrazioni', 'castle', 'castelli', 'ruins', 'archaeological_site', 'archeo', 'fort', 'tower', 'palace', 'palazzo', 'villa',
+    'roman_baths', 'catacomb', 'mausoleum', 'amphitheatre', 'concentration_camp', 'temple', 'fortress', 'stadium', 'theatre', 'memorial'
   ]);
   // Sottoinsieme "si visita dentro": ha un percorso interno da raccontare.
   const MUSEI_TYPES_VENUE = new Set([
     'museum', 'musei', 'museo', 'gallery', 'galleria', 'art_gallery',
+    // Le categorie «museo di …» degli import (12/09/2026, prova sui 300
+    // musei più famosi del mondo: 38 art_museum, 3 natural_history_museum,
+    // house_museum, museum_ship, archaeological_park… erano fuori da questo
+    // insieme, quindi invisibili al «Sei a» e all'elenco dei vicini).
+    'art_museum', 'natural_history_museum', 'house_museum', 'museum_ship', 'science_museum', 'history_museum',
+    'archaeology_museum', 'archaeological_museum', 'archaeological_park', 'pinacoteca', 'open_air_museum', 'military_museum', 'maritime_museum',
     'church', 'chiesa', 'chiese', 'place_of_worship', 'cathedral', 'cattedrale', 'chapel', 'cappella', 'basilica', 'monastery', 'monastero', 'abbey', 'abbazia', 'shrine', 'santuario',
-    'palace', 'palazzo', 'castle', 'castelli', 'villa'
+    'palace', 'palazzo', 'castle', 'castelli', 'villa',
+    // Siti che si visitano DENTRO, col biglietto, e hanno un percorso
+    // (stessa prova del 12/09/2026: Colosseo «stadium», Terme di Caracalla
+    // «roman_baths», Catacombe di Parigi «catacomb», piramide Cestia
+    // «mausoleum», Buchenwald «concentration_camp» — tutti fuori).
+    'archaeological_site', 'archeo', 'ruins', 'roman_baths', 'catacomb', 'mausoleum', 'amphitheatre', 'concentration_camp', 'temple', 'fort', 'fortress'
   ]);
   // Per quanto vale un «non ho trovato fonti». Tre giorni: abbastanza da non
   // ripetere la stessa ricerca a vuoto per ogni visitatore, poco abbastanza da
@@ -11192,13 +11206,228 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         if (i < 0) uniche.push(r);
         else if (piuRicca(uniche[i], r) > 0) uniche[i] = { ...r, distance_m: uniche[i].distance_m ?? r.distance_m };
       }
-      righe = uniche;
+      righe = uniche.map((r: any) => ({ ...r, kind: 'library' }));
+
+      // ANCHE I MUSEI SENZA GUIDA (12/09/2026, committente: «dove sono io
+      // non appaiono CARMI e Museo del Marmo»). L'elenco mostrava solo le
+      // sedi già in libreria: un museo che nessuno aveva ancora chiesto era
+      // invisibile, come se non esistesse. Dopo le guide pronte si accodano
+      // i musei, le chiese e i palazzi del nostro archivio entro 3 km,
+      // marcati `kind: 'poi'` (il client scrive «si prepara al momento»):
+      // si aprono con lo stesso tocco e la guida si genera alla prima
+      // richiesta. Niente monumenti all'aperto: la visita è dentro.
+      if (haGeo && !q) {
+        try {
+          const rpc = await axios.post(`${supabaseUrl}/rest/v1/rpc/nearby_pois`,
+            { p_lat: lat, p_lon: lon, radius_m: 3000, limit_num: 300 },
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 4000 });
+          const vicini = (Array.isArray(rpc.data) ? rpc.data : [])
+            .map((p: any) => ({ ...p, name: p?.name ?? p?.nome }))
+            .filter((p: any) => p?.name && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+            .filter((p: any) => !['rejected', 'hidden', 'draft'].includes(String(p.status || '')) && !p.is_hidden)
+            .filter((p: any) => String(p.category || '') !== 'community' && !String(p.id || '').startsWith('vision-'))
+            .filter((p: any) => MUSEI_TYPES_VENUE.has(String(p.category || '').toLowerCase()) || MUSEI_TYPES_VENUE.has(String(p.poi_type || '').toLowerCase()))
+            // CHIESE SOLO GEMME (12/09/2026, committente: «la chiesetta
+            // senza opere non serve citarla»). Le chiese sono decine per
+            // chilometro quadrato e quasi nessuna ha un percorso interno da
+            // raccontare: in elenco entrano solo quelle marcate gemma
+            // (is_gem, mai la categoria — vedi la regola delle gemme). Musei
+            // e palazzi entrano tutti.
+            .filter((p: any) => {
+              const cat = `${String(p.category || '')} ${String(p.poi_type || '')}`.toLowerCase();
+              const chiesa = /church|chiesa|cathedral|cattedrale|chapel|cappella|basilica|monaster|abbey|abbazia|shrine|santuario|place_of_worship/.test(cat);
+              return !chiesa || p.is_gem === true;
+            })
+            .map((p: any) => ({ ...p, distance_m: Math.round(getHaversineDistance(lat, lon, p.lat, p.lon)) }))
+            .sort((a: any, b: any) => a.distance_m - b.distance_m);
+          const daArchivio: any[] = [];
+          for (const p of vicini) {
+            if (daArchivio.length >= 12) break;
+            const gia = righe.some((r: any) => r.poi_id === String(p.id) || stessaSede(r, { venue_name: p.name, lat: p.lat, lon: p.lon, source: null }))
+              || daArchivio.some((d: any) => stessaSede(d, { venue_name: p.name, lat: p.lat, lon: p.lon, source: null }));
+            if (gia) continue;
+            const cat = String(p.category || p.poi_type || '').toLowerCase();
+            const f = String(p.image_url || '');
+            const daCommons = /commons\.wikimedia\.org/i.test(f);
+            daArchivio.push({
+              kind: 'poi',
+              venue_key: `poi_${p.id}`, venue_name: String(p.name), poi_id: String(p.id), language: lang,
+              venue_type: /church|chiesa|cathedral|cattedrale|chapel|cappella|basilica|monaster|abbey|abbazia|shrine|santuario|place_of_worship/.test(cat) ? 'chiesa' : 'museo',
+              city: p.city || null, lat: p.lat, lon: p.lon, stops_count: 0, stops_with_room: 0, official_site: null,
+              distance_m: p.distance_m,
+              ...(f ? { venue_photo: daCommons ? fotoCommons(f, 900) : f, venue_photo_icon: daCommons ? fotoCommons(f, 160) : f } : {}),
+            });
+          }
+          righe = [...righe, ...daArchivio];
+        } catch (e: any) {
+          // L'archivio è un di più: senza, l'elenco resta quello della libreria.
+          console.warn('[MuseumLibrary] vicini dall\'archivio non letti:', e?.message);
+        }
+      }
       res.set('Cache-Control', 'public, max-age=300');
       res.json({ ok: true, language: lang, count: righe.length, museums: righe });
     } catch (e: any) {
       console.error('[MuseumLibrary] Errore:', e?.response?.data?.message || e?.message);
       // Tabella non ancora creata o DB giù: la libreria è vuota, non è un errore.
       res.json({ ok: true, language: String(req.query.language || 'IT').toUpperCase().slice(0, 2), count: 0, museums: [] });
+    }
+  });
+
+  // ── SUGGERIMENTI PER LA CASELLA «Cerca un museo o una chiesa» ──────────
+  // (12/09/2026, richiesta del committente: «una casella che si
+  // autocompleti e che accetti errori e più lingue»). Prima la casella non
+  // suggeriva nulla: con almeno 3 lettere avviava la visita del nome scritto
+  // tale e quale, e «Musei Vaticni» dava «non trovato».
+  // Tre pozzi in parallelo, ognuno col suo tetto di tempo (la regola della
+  // barra di ricerca: mai rallentare, vuoto e via):
+  //  1. la LIBRERIA (museum_guides, poche centinaia di righe): confronto
+  //     per bigrammi fatto qui, tollerante agli errori di battitura, e in
+  //     tutte le lingue in cui la guida esiste («Uffizi Gallery» trova la
+  //     riga EN, che porta alla stessa sede);
+  //  2. i POI del DB per nome (RPC search_pois, indice trigram), filtrati ai
+  //     luoghi visitabili dentro;
+  //  3. WIKIPEDIA nella lingua dell'utente, in italiano e in inglese, con
+  //     la ricerca "fuzzy" di CirrusSearch (parola~): tutto il mondo,
+  //     anche con una lettera sbagliata. Si tengono solo le voci che parlano
+  //     di un museo, una chiesa, un palazzo.
+  // Ogni voce torna nella forma dell'elenco «qui vicino» (MuseumLibraryItem)
+  // così il client la apre con lo stesso gesto: guida pronta → per chiave;
+  // POI → per id; Wikipedia → per nome, e la guida si genera al momento.
+  app.get("/api/museums/suggest", rateLimiter, async (req, res) => {
+    const t0 = Date.now();
+    const vuoto = { ok: true, suggestions: [] as any[] };
+    try {
+      const q = String(req.query.q || '').trim().slice(0, 80);
+      const lang = String(req.query.language || 'IT').toUpperCase().slice(0, 2);
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      const haGeo = Number.isFinite(lat) && Number.isFinite(lon);
+      const qn = normalizzaTesto(q);
+      if (qn.length < 2) return res.json(vuoto);
+
+      // Somiglianza per bigrammi (Dice) su testo normalizzato: «vaticni» ~
+      // «vaticani» 0,7; più un premio se una contiene l'altra per intero.
+      const bigrammi = (s: string): Map<string, number> => {
+        const t = ` ${s} `; const m = new Map<string, number>();
+        for (let i = 0; i < t.length - 1; i++) { const b = t.slice(i, i + 2); m.set(b, (m.get(b) || 0) + 1); }
+        return m;
+      };
+      const dice = (a: string, b: string): number => {
+        if (!a || !b) return 0;
+        const ma = bigrammi(a), mb = bigrammi(b); let comuni = 0, na = 0, nb = 0;
+        for (const [k, v] of ma) { na += v; comuni += Math.min(v, mb.get(k) || 0); }
+        for (const v of mb.values()) nb += v;
+        return na + nb ? (2 * comuni) / (na + nb) : 0;
+      };
+      const somiglianza = (nome: string): number => {
+        const n = normalizzaTesto(nome).replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+        if (!n) return 0;
+        if (n === qn) return 1;
+        if (n.includes(qn) || qn.includes(n)) return 0.9;
+        // Anche parola per parola: «borghese» dentro «galleria borghese».
+        const parole = n.split(' ');
+        const perParola = Math.max(...qn.split(' ').map(pq => Math.max(...parole.map(p => dice(pq, p)))));
+        return Math.max(dice(qn, n), perParola * 0.85);
+      };
+      const conTetto = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+        Promise.race([p.catch(() => fallback), new Promise<T>(r => setTimeout(() => r(fallback), ms))]);
+      const svcH = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const foto = (f: any) => {
+        const s = String(f || ''); if (!s) return { venue_photo: undefined, venue_photo_icon: undefined };
+        const daCommons = /commons\.wikimedia\.org/i.test(s);
+        return { venue_photo: daCommons ? fotoCommons(s, 900) : s, venue_photo_icon: daCommons ? fotoCommons(s, 160) : s };
+      };
+
+      // 1. Libreria: tutte le righe, tutte le lingue (è piccola).
+      const libP = conTetto((async () => {
+        const r = await axios.get(
+          `${supabaseUrl}/rest/v1/museum_guides?select=venue_key,venue_name,poi_id,language,venue_type,city,lat,lon,stops_count,stops_with_room,official_site,venue_photo&limit=1000`,
+          { headers: svcH, timeout: 2500 });
+        return Array.isArray(r.data) ? r.data : [];
+      })(), 2500, [] as any[]);
+      // 2. POI per nome (trigram), solo luoghi da visitare dentro.
+      const poiP = conTetto((async () => {
+        if (qn.length < 3) return [];
+        const r = await axios.post(`${supabaseUrl}/rest/v1/rpc/search_pois`,
+          { q, p_lat: haGeo ? lat : null, p_lon: haGeo ? lon : null, n: 20 }, { headers: svcH, timeout: 1500 });
+        return Array.isArray(r.data) ? r.data : [];
+      })(), 1500, [] as any[]);
+      // 3. Wikipedia fuzzy in 2-3 lingue.
+      const WIKI_LANG: Record<string, string> = { IT: 'it', EN: 'en', FR: 'fr', ES: 'es', DE: 'de', RU: 'ru', ZH: 'zh' };
+      const lingue = [...new Set([WIKI_LANG[lang] || 'it', 'it', 'en'])];
+      const PAROLE_LUOGO = /\b(museo|musei|museum|museums|mus[ée]e|museu|museo|galler[iy]|galerie|galería|pinacoteca|chiesa|church|église|eglise|iglesia|igreja|kirche|basilica|basilique|basílica|cattedrale|cathedral|cath[ée]drale|catedral|kathedrale|dom|duomo|abbazia|abbey|abbaye|abadía|abtei|monastero|monastery|monastère|monasterio|kloster|santuario|sanctuary|sanctuaire|palazzo|palace|palais|palacio|palast|schloss|villa|castello|castle|ch[âa]teau|castillo|burg|музей|собор|церковь|дворец|博物馆|美术馆|教堂|宫)\b/iu;
+      const fuzzy = q.split(/\s+/).filter(Boolean).map(w => (w.length >= 4 && !/[~"*]/.test(w)) ? `${w}~` : w).join(' ');
+      const wikiP = conTetto(Promise.all(lingue.map(async (wl) => {
+        try {
+          const r = await axios.get(
+            `https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(fuzzy)}&srlimit=8&srprop=snippet&format=json`,
+            { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 2500 });
+          const hits: any[] = r.data?.query?.search || [];
+          return hits.map(h => ({ lang: wl, title: String(h.title || ''), snippet: String(h.snippet || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim() }))
+            .filter(h => h.title && !/^(list of|elenco|liste des|lista de|liste der)/i.test(h.title) && PAROLE_LUOGO.test(`${h.title} ${h.snippet}`));
+        } catch { return []; }
+      })), 3000, [] as any[][]);
+
+      const [lib, poi, wikiPerLingua] = await Promise.all([libP, poiP, wikiP]);
+
+      const out: any[] = [];
+      const giaPreso = (nome: string, poiId?: string | null) =>
+        out.some(o => (poiId && o.poi_id === poiId) || dice(normalizzaTesto(o.venue_name).replace(/\([^)]*\)/g, ' ').trim(), normalizzaTesto(nome).replace(/\([^)]*\)/g, ' ').trim()) >= 0.85);
+
+      // Libreria: una voce per sede, la lingua dell'utente se c'è, il
+      // punteggio migliore fra tutte le lingue.
+      const perSede = new Map<string, { riga: any; score: number }>();
+      for (const r of lib) {
+        const s = somiglianza(r.venue_name);
+        if (s < 0.4) continue;
+        const prev = perSede.get(r.venue_key);
+        const preferita = String(r.language) === lang;
+        if (!prev || s > prev.score + 0.05 || (preferita && s >= prev.score - 0.05 && String(prev.riga.language) !== lang)) perSede.set(r.venue_key, { riga: r, score: s });
+      }
+      const libVoci = [...perSede.values()].sort((a, b) => b.score - a.score).slice(0, 5);
+      for (const { riga: r, score } of libVoci) {
+        if (giaPreso(r.venue_name, r.poi_id)) continue;
+        out.push({
+          kind: 'library', score,
+          venue_key: r.venue_key, venue_name: r.venue_name, poi_id: r.poi_id || null, venue_type: r.venue_type || '', city: r.city || null,
+          lat: r.lat ?? null, lon: r.lon ?? null, stops_count: r.stops_count || 0, stops_with_room: r.stops_with_room || 0, official_site: r.official_site || null,
+          subtitle: r.city || null, language: r.language, ...foto(r.venue_photo),
+        });
+      }
+      // POI del DB: solo luoghi visitabili dentro, mai community/vision.
+      for (const p of poi) {
+        const cat = String(p.category || '').toLowerCase(), tipo = String(p.poi_type || '').toLowerCase();
+        if (!(VENUE_CATEGORIES.has(cat) || VENUE_CATEGORIES.has(tipo))) continue;
+        if (cat === 'community' || String(p.id || '').startsWith('vision-')) continue;
+        if (giaPreso(p.name, String(p.id))) continue;
+        out.push({
+          kind: 'poi', score: somiglianza(p.name),
+          venue_key: `poi_${p.id}`, venue_name: String(p.name), poi_id: String(p.id), venue_type: cat, city: p.city || null,
+          lat: p.lat ?? null, lon: p.lon ?? null, stops_count: 0, stops_with_room: 0, official_site: null,
+          subtitle: [p.city, p.country].filter(Boolean).join(', ') || null, ...foto(p.image_url),
+        });
+        if (out.length >= 8) break;
+      }
+      // Wikipedia: il resto del mondo.
+      for (const hits of wikiPerLingua) {
+        for (const h of hits) {
+          if (out.length >= 8) break;
+          if (giaPreso(h.title)) continue;
+          out.push({
+            kind: 'wiki', score: somiglianza(h.title),
+            venue_key: `nome_${normalizzaTesto(h.title).replace(/ /g, '_').slice(0, 60)}`, venue_name: h.title, poi_id: null, venue_type: '', city: null,
+            lat: null, lon: null, stops_count: 0, stops_with_room: 0, official_site: null,
+            subtitle: h.snippet.slice(0, 90) || null, language: h.lang.toUpperCase(),
+          });
+        }
+      }
+      // Ordine: guide pronte prima, poi per somiglianza col nome scritto.
+      out.sort((a, b) => (a.kind === 'library' ? 0 : 1) - (b.kind === 'library' ? 0 : 1) || b.score - a.score);
+      res.set('Cache-Control', 'public, max-age=120');
+      res.json({ ok: true, suggestions: out.slice(0, 8), ms: Date.now() - t0 });
+    } catch (e: any) {
+      // Mai un errore alla casella: vuoto e via.
+      res.json({ ...vuoto, ms: Date.now() - t0, error: e?.message });
     }
   });
 

@@ -23,7 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -233,6 +233,40 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // Sezione Visite: i musei e le chiese qui intorno che hanno la guida pronta.
   const [museiVicini, setMuseiVicini] = useState<MuseumLibraryItem[] | null>(null);
   const [cercaMuseo, setCercaMuseo] = useState('');
+  // AUTOCOMPLETAMENTO della casella (12/09/2026, committente: «una casella
+  // che si autocompleti e che accetti errori e più lingue»). Dopo 300 ms
+  // di pausa nella digitazione si chiedono i suggerimenti: guide pronte,
+  // musei dell'archivio, voci Wikipedia; la richiesta precedente si annulla.
+  const [suggerimenti, setSuggerimenti] = useState<MuseumSuggestion[] | null>(null);
+  const [suggerendo, setSuggerendo] = useState(false);
+  const suggTimer = useRef<number | null>(null);
+  const suggAbort = useRef<AbortController | null>(null);
+  // Le coordinate lette per la sezione Visite: servono ai suggerimenti per
+  // mettere prima i luoghi vicini, senza rileggere il GPS a ogni lettera.
+  const coordsVisite = useRef<{ lat: number | null; lon: number | null }>({ lat: null, lon: null });
+  const onCercaMuseo = (v: string) => {
+    setCercaMuseo(v);
+    if (suggTimer.current) window.clearTimeout(suggTimer.current);
+    suggAbort.current?.abort();
+    const q = v.trim();
+    if (q.length < 2) { setSuggerimenti(null); setSuggerendo(false); return; }
+    setSuggerendo(true);
+    suggTimer.current = window.setTimeout(async () => {
+      const ctrl = new AbortController();
+      suggAbort.current = ctrl;
+      const out = await fetchMuseumSuggest({ q, lat: coordsVisite.current.lat, lon: coordsVisite.current.lon, language, signal: ctrl.signal });
+      if (ctrl.signal.aborted) return;
+      setSuggerimenti(out);
+      setSuggerendo(false);
+    }, 300);
+  };
+  const scegliSuggerimento = (s: MuseumSuggestion) => {
+    suggAbort.current?.abort();
+    setSuggerimenti(null);
+    setSuggerendo(false);
+    setCercaMuseo(s.venue_name);
+    void apriVisitaDiElenco(s);
+  };
   // LE TUE VISITE: quelle già fatte, conservate per sempre. Sono roba già
   // pagata e si riaprono senza chiamare il server — anche in aereo.
   const [visiteSalvate, setVisiteSalvate] = useState<ArchivioMuseo[]>([]);
@@ -298,6 +332,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     // dell'utente.
     setVisiteSalvate(visiteConservate(language));
     const coords = await resolveVisitCoords();
+    coordsVisite.current = coords;
     // In parallelo: «dove sono» (istantaneo) e l'elenco dei vicini.
     const [qui, elenco] = await Promise.all([
       whereAmI(coords, language),
@@ -1837,19 +1872,72 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
 
             {/* Ricerca: qualsiasi museo o chiesa del mondo */}
             <form
-              onSubmit={(e) => { e.preventDefault(); if (cercaMuseo.trim().length >= 3) void startGuidedVisit(cercaMuseo.trim()); }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                // Invio: il primo suggerimento se c'è (è già il migliore),
+                // altrimenti il nome scritto, come prima.
+                if (suggerimenti && suggerimenti.length > 0) scegliSuggerimento(suggerimenti[0]);
+                else if (cercaMuseo.trim().length >= 3) void startGuidedVisit(cercaMuseo.trim());
+              }}
               className="w-full flex gap-2"
             >
               <input
                 value={cercaMuseo}
-                onChange={(e) => setCercaMuseo(e.target.value)}
+                onChange={(e) => onCercaMuseo(e.target.value)}
                 placeholder={tr('mv_cerca_luogo')}
+                autoComplete="off"
+                autoCorrect="off"
                 className="flex-1 min-w-0 px-3.5 py-2.5 rounded-2xl bg-white border border-gray-200 text-[13px] text-slate-900 placeholder:text-slate-400 outline-none focus:border-primary"
               />
               <button type="submit" disabled={visitStarting || cercaMuseo.trim().length < 3} className="px-3.5 rounded-2xl bg-primary text-white disabled:opacity-40">
                 <Search className="w-4 h-4" />
               </button>
             </form>
+
+            {/* I SUGGERIMENTI: guide pronte con la spunta, poi i musei
+                dell'archivio e le voci Wikipedia («si prepara al momento»).
+                Un tocco apre la visita con lo stesso gesto dell'elenco. */}
+            {cercaMuseo.trim().length >= 2 && (suggerendo || suggerimenti !== null) && (
+              <div className="w-full -mt-1 rounded-2xl bg-white border border-gray-200 shadow-[0_8px_24px_rgba(15,23,42,0.08)] overflow-hidden">
+                {suggerendo && !(suggerimenti && suggerimenti.length) ? (
+                  <div className="flex items-center justify-center py-3"><Loader2 className="w-4 h-4 text-primary animate-spin" /></div>
+                ) : suggerimenti && suggerimenti.length === 0 ? (
+                  <p className="text-[11px] font-bold text-slate-400 leading-snug px-3.5 py-3">{tr('mv_sugg_nessuno')}</p>
+                ) : (
+                  <div className="max-h-[36vh] overflow-y-auto divide-y divide-gray-100">
+                    {(suggerimenti || []).map(s => {
+                      const chiesa = s.venue_type === 'chiesa';
+                      return (
+                        <button
+                          key={s.venue_key}
+                          type="button"
+                          onClick={() => scegliSuggerimento(s)}
+                          disabled={visitStarting}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 text-left active:bg-blue-50/60 transition-colors disabled:opacity-50"
+                        >
+                          {s.venue_photo_icon ? (
+                            <img src={s.venue_photo_icon} alt="" loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} className="w-8 h-8 rounded-full object-cover shrink-0 border border-gray-200" />
+                          ) : (
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                              <Landmark className={`w-4 h-4 ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                            </div>
+                          )}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13px] font-black text-slate-900 truncate">{s.venue_name}</p>
+                            <p className="text-[11px] font-bold text-slate-500 truncate">
+                              {s.kind === 'library'
+                                ? `${tr('mv_sugg_pronta')} · ${tr('mv_n_opere').replace('{n}', String(s.stops_count))}${s.subtitle ? ` · ${s.subtitle}` : ''}`
+                                : (s.subtitle || tr('mv_sugg_genera'))}
+                            </p>
+                          </div>
+                          {s.kind === 'library' && <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 shrink-0">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* LE TUE VISITE: già pagate, si riaprono gratis e senza rete */}
             {visiteSalvate.length > 0 && (
@@ -1935,7 +2023,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                       <div className="flex-1 min-w-0">
                         <p className="text-[13px] font-black text-slate-900 truncate">{m.venue_name}</p>
                         <p className="text-[11px] font-bold text-slate-500">
-                          {tr('mv_n_opere').replace('{n}', String(m.stops_count))}
+                          {/* Museo dell'archivio senza guida: «si prepara al
+                              momento», non «0 opere». */}
+                          {m.kind === 'poi' || !(m.stops_count > 0)
+                            ? tr('mv_sugg_genera')
+                            : tr('mv_n_opere').replace('{n}', String(m.stops_count))}
                           {m.stops_with_room > 0 ? ` · ${tr('mv_con_sale')}` : ''}
                         </p>
                       </div>

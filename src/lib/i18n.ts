@@ -426,6 +426,16 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Cerca un museo o una chiesa", EN: "Search a museum or church", FR: "Chercher un musée ou une église",
     ES: "Busca un museo o una iglesia", DE: "Museum oder Kirche suchen", RU: "Найти музей или церковь", ZH: "搜索博物馆或教堂"
   },
+  mv_sugg_pronta: {
+    IT: "Guida pronta", EN: "Guide ready", FR: "Guide prêt", ES: "Guía lista", DE: "Guide fertig", RU: "Гид готов", ZH: "导览已就绪"
+  },
+  mv_sugg_genera: {
+    IT: "Si prepara al momento", EN: "Prepared on the spot", FR: "Préparé à l'instant", ES: "Se prepara al momento", DE: "Wird sofort erstellt", RU: "Готовится сразу", ZH: "即时生成"
+  },
+  mv_sugg_nessuno: {
+    IT: "Nessun museo trovato: prova il nome ufficiale", EN: "No museum found: try the official name", FR: "Aucun musée trouvé : essayez le nom officiel",
+    ES: "Ningún museo encontrado: prueba el nombre oficial", DE: "Kein Museum gefunden: offiziellen Namen versuchen", RU: "Музей не найден: попробуйте официальное название", ZH: "未找到博物馆：请试试官方名称"
+  },
   mv_qui_vicino: {
     IT: "Qui vicino, da visitare dentro", EN: "Nearby, to visit inside", FR: "Tout près, à visiter à l'intérieur",
     ES: "Cerca de aquí, para visitar por dentro", DE: "In der Nähe, von innen zu besichtigen", RU: "Рядом, можно зайти внутрь", ZH: "附近可入内参观"
@@ -563,6 +573,18 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "这件作品没有可核实的资料：我不会编造描述。"
   },
   mv_not_found: { IT: "Non ho trovato abbastanza materiale verificato su questo luogo per guidarti: inquadra le opere e te le racconto una per una.", EN: "I couldn't find enough verified material about this place to guide you: frame the works and I'll tell you about them one by one.", FR: "Je n'ai pas trouvé assez de matériel vérifié sur ce lieu pour te guider : cadre les œuvres et je te les raconte une par une.", ES: "No he encontrado suficiente material verificado sobre este lugar para guiarte: enfoca las obras y te las cuento una a una.", DE: "Ich habe nicht genug geprüftes Material über diesen Ort, um dich zu führen: Nimm die Werke auf und ich erzähle sie dir eins nach dem anderen.", RU: "Недостаточно проверенных материалов об этом месте, чтобы вести вас: наводите камеру на произведения, и я расскажу о каждом.", ZH: "关于这个地方，我没有找到足够的可靠资料来引导你：请拍摄作品，我会逐一为你讲解。" },
+  // La generazione al volo di un percorso può richiedere fino a qualche
+  // minuto: senza un avviso immediato, chi tocca un museo dell'elenco pensa
+  // che il tocco non abbia funzionato (11/09/2026, segnalazione utente).
+  mv_generating: {
+    IT: "Sto preparando la visita di {s}, può volerci un minuto…",
+    EN: "Preparing the visit for {s}, this can take a minute…",
+    FR: "Je prépare la visite de {s}, ça peut prendre une minute…",
+    ES: "Preparando la visita de {s}, puede tardar un minuto…",
+    DE: "Ich bereite den Besuch von {s} vor, das kann eine Minute dauern…",
+    RU: "Готовлю визит в {s}, это может занять минуту…",
+    ZH: "正在准备{s}的参观路线，可能需要一分钟…",
+  },
   // ── Vision / WIP Community v2 (21/08/2026) ──
   // CameraScreen
   vis_tab_scan: { IT: "Scansione AI", EN: "AI Scan", FR: "Scan IA", ES: "Escaneo IA", DE: "KI-Scan", RU: "ИИ-сканирование", ZH: "AI 扫描" },

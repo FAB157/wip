@@ -278,6 +278,10 @@ export type MuseumLibraryItem = {
    *  una: in quel caso resta il simbolo, mai la foto di un altro posto. */
   venue_photo?: string;
   venue_photo_icon?: string;
+  /** 'library' = guida già pronta; 'poi' = museo del nostro archivio senza
+   *  guida, si prepara alla prima richiesta (12/09/2026). Assente nelle
+   *  risposte vecchie: vale 'library'. */
+  kind?: 'library' | 'poi';
 };
 
 export async function fetchMuseumLibrary(args: { lat?: number | null; lon?: number | null; q?: string; language: Language; radiusKm?: number; limit?: number }): Promise<MuseumLibraryItem[]> {
@@ -294,6 +298,31 @@ export async function fetchMuseumLibrary(args: { lat?: number | null; lon?: numb
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data?.museums) ? data.museums : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * SUGGERIMENTI per la casella «Cerca un museo o una chiesa» (12/09/2026):
+ * guide pronte in libreria, POI del DB e voci Wikipedia, tolleranti agli
+ * errori di battitura e in più lingue. Ogni voce ha la forma dell'elenco
+ * «qui vicino», così si apre con lo stesso gesto (apriVisitaDiElenco).
+ */
+export type MuseumSuggestion = MuseumLibraryItem & {
+  kind: 'library' | 'poi' | 'wiki';
+  subtitle: string | null;
+  language?: string;
+};
+
+export async function fetchMuseumSuggest(args: { q: string; lat?: number | null; lon?: number | null; language: Language; signal?: AbortSignal }): Promise<MuseumSuggestion[]> {
+  try {
+    const p = new URLSearchParams({ q: args.q, language: args.language });
+    if (Number.isFinite(args.lat as number) && Number.isFinite(args.lon as number)) { p.set('lat', String(args.lat)); p.set('lon', String(args.lon)); }
+    const res = await fetch(getApiUrl(`/api/museums/suggest?${p.toString()}`), { signal: args.signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.suggestions) ? data.suggestions : [];
   } catch {
     return [];
   }
