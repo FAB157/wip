@@ -87,19 +87,37 @@ async function candidatiCommons(qid, nomi) {
 }
 /** Wayback: ultima copia della pagina o del PDF. */
 async function wayback(url) {
-  try {
-    const j = await getJson(`https://archive.org/wayback/available?url=${encodeURIComponent(url)}`);
-    const s = j?.archived_snapshots?.closest; if (s?.available && s.url) return s.url.replace(/^http:/, 'https:');
-  } catch {}
+  // Lettura diretta dell'ultima copia («web/2id_/»: contenuto grezzo, senza
+  // la barra di Wayback): l'API «available» rispondeva HTML o timeout
+  // quando la si chiama a raffica (12/09/2026).
+  for (let t = 0; t < 2; t++) {
+    try {
+      const r = await fetch(`https://web.archive.org/web/2id_/${url}`, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(40000) });
+      if (r.status === 429) { await dormi(30000); continue; }
+      if (r.ok && /web\.archive\.org\/web\//.test(r.url)) return r.url;
+      return null;
+    } catch { await dormi(5000); }
+  }
   return null;
 }
 async function candidatiWayback(sito) {
   const out = [];
   let home; try { home = new URL(sito); } catch { return out; }
-  // Le pagine tipiche della pianta, nelle lingue dei grandi musei.
-  const percorsi = ['/visit/museum-map', '/visit/map', '/visit/floor-plans', '/visit/floorplans', '/plan', '/plans', '/map', '/maps', '/visite/plan', '/en/visit/map', '/en/plan-your-visit', '/visita/mapa', '/visita/plano', '/en/visita/mapa', '/visit/plan-your-visit', '/floor-plan', '/floorplan', '/en/map', '/en/visit/museum-map'];
+  // Niente percorsi indovinati (primo giro: 0 trovati su 96): si chiede
+  // all'indice CDX di Internet Archive quali URL del dominio contengono
+  // «map/plan/pianta/floor» — pagine e file — e si legge l'ultima copia.
+  const percorsi = [];
+  try {
+    const cdx = await getJson(`https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(home.hostname)}/*&output=json&fl=original,mimetype,statuscode&filter=statuscode:200&filter=original:(?i).*(map|plan|pianta|planimetr|floor|piantina|plano|grundriss).*&collapse=urlkey&limit=120`);
+    const righe = Array.isArray(cdx) ? cdx.slice(1) : [];
+    // Prima i file (pdf/immagini), poi le pagine html più corte (di solito la pagina «mappa» vera).
+    const file = righe.filter(r => /\.(pdf|png|jpe?g|svg|webp)(\?|$)/i.test(r[0]) && !/logo|icon|thumb|sitemap|roadmap|google|mapbox|osm|tile/i.test(r[0])).map(r => r[0]);
+    const pagine = righe.filter(r => /text\/html/.test(r[1] || '') && !/sitemap|roadmap|google|\?/i.test(r[0])).map(r => r[0]).sort((a, b) => a.length - b.length);
+    for (const f of file.slice(0, 6)) { const snap = await wayback(f); if (snap) out.push({ url: snap, pagina: snap }); }
+    for (const p of pagine.slice(0, 5)) percorsi.push(p);
+  } catch (e) { console.log(`     cdx ${home.hostname}: ${String(e?.message || e).slice(0, 60)}`); }
   for (const p of percorsi) {
-    const snap = await wayback(home.origin + p); if (!snap) continue;
+    const snap = await wayback(p); if (!snap) continue;
     try {
       const r = await fetch(snap, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(20000) });
       if (!r.ok) continue;
