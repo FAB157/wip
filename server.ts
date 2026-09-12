@@ -8880,7 +8880,12 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             const parsedLotto = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
             const elenco = Array.isArray(parsedLotto?.opere) ? parsedLotto.opere : [];
             lotto.forEach((o, i) => {
-              const p = campoOpzionale(elenco[i]?.perche, 700);
+              // 700 caratteri era il vero tetto della lunghezza (12/09/2026,
+              // trovato dal collaudo): ~110-120 parole in italiano, esattamente
+              // il muro misurato su tutte le 26 guide indipendentemente dalla
+              // fonte — il modello scriveva fino a 250 parole, campoOpzionale
+              // le tagliava qui. 1.900 caratteri copre 250 parole con margine.
+              const p = campoOpzionale(elenco[i]?.perche, 1900);
               if (p) (o as any)._perche = p;
               const c = campoOpzionale(elenco[i]?.curiosita, 500);
               if (c) (o as any)._curiosita = c;
