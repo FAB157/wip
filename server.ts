@@ -9087,6 +9087,49 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             } catch { /* resta senza testo: la tappa si omette come prima */ }
           }));
           if (recuperate) console.log(`[VenueGuide] ${venue.name}: ${recuperate}/${senzaTesto.length} opere senza testo recuperate dalla voce Wikipedia (qualsiasi lingua)`);
+          // LE PARTI DI UN MONUMENTO NON HANNO UNA VOCE: HANNO UNA SEZIONE
+          // (12/09/2026 sera, verificato: Passion/Glory/Nativity Facade,
+          // Crypt e Tomb of Gaudí su Wikidata hanno SOLO la categoria
+          // Commons). Il loro testo sta nell'articolo del monumento stesso,
+          // nelle sezioni «Passion Façade», «Crypt», «Facciata della
+          // Passione». Si legge l'articolo del luogo (inglese, poi lingua
+          // della guida) diviso per sezioni e si abbina per parola del
+          // titolo (radice di 5 lettere: passion/passione, nativ/natività).
+          const ancoraSenza = senzaTesto.filter(o => !o.testoFonte);
+          if (ancoraSenza.length && /^Q\d+$/.test(wikidataId)) {
+            try {
+              const ent = await axios.get(`https://www.wikidata.org/wiki/Special:EntityData/${wikidataId}.json`, UAW);
+              const sl = ent.data?.entities?.[wikidataId]?.sitelinks || {};
+              const lingueArticolo = [...new Set(['en', langCfg.wiki])].filter(l => sl[`${l}wiki`]?.title);
+              const sezioni: { titolo: string; corpo: string; lingua: string }[] = [];
+              for (const l of lingueArticolo) {
+                const r = await axios.get(`https://${l}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=wiki&redirects=1&format=json&titles=${encodeURIComponent(String(sl[`${l}wiki`].title))}`, UAW).catch(() => null);
+                const p: any = Object.values(r?.data?.query?.pages || {})[0] || {};
+                const testo = String(p.extract || '');
+                const pezzi = testo.split(/\n(?===+\s*[^=\n]+?\s*==+\s*\n)/);
+                for (const pz of pezzi.slice(1)) {
+                  const m = /^==+\s*([^=\n]+?)\s*==+\s*\n([\s\S]*)$/.exec(pz);
+                  if (!m) continue;
+                  const corpo = m[2].replace(/\n==+\s*[^=\n]+?\s*==+\s*\n/g, '\n').trim();
+                  if (corpo.length >= 200) sezioni.push({ titolo: m[1].trim(), corpo: corpo.slice(0, 6000), lingua: l });
+                }
+              }
+              const paroleLuogoOp = new Set(normalizzaTesto(venue.name).split(' ').filter(Boolean));
+              const GEN_PARTE = new Set(['facade', 'facciata', 'fachada', 'tower', 'torre', 'towers', 'the', 'of', 'and', 'della', 'delle', 'del', 'dei', 'di', 'de', 'la', 'el', 'les', 'des']);
+              let daSezione = 0;
+              for (const o of ancoraSenza) {
+                const chiavi = [...new Set([o.titoloEn, o.titolo].filter(Boolean).flatMap(x => normalizzaTesto(x).split(' ')))]
+                  .filter(w => w.length >= 4 && !GEN_PARTE.has(w) && !paroleLuogoOp.has(w));
+                if (!chiavi.length) continue;
+                const hit = sezioni.find(s => { const t = normalizzaTesto(s.titolo); return chiavi.some(k => t.includes(k.slice(0, 5))); });
+                if (!hit) continue;
+                o.testoFonte = `${hit.titolo}. ${hit.corpo}`;
+                o.fonteTesto = hit.lingua === langCfg.wiki ? 'voce' : 'voce_en';
+                daSezione++;
+              }
+              if (daSezione) console.log(`[VenueGuide] ${venue.name}: ${daSezione}/${ancoraSenza.length} parti senza voce prese dalle sezioni dell'articolo del luogo`);
+            } catch (e: any) { console.warn('[VenueGuide] sezioni dell\'articolo del luogo non lette:', e?.message); }
+          }
         }
         for (const o of opere) {
           if (o.testoFonte) continue;
