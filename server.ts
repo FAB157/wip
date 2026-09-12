@@ -8641,9 +8641,13 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // le chiese 20/16. L'ordine resta quello della notorietà, quindi
           // le prime N sono sempre le più note.
           const rangoMuseo = await rangoPrioritario(wikidataId);
+          // 40/30 (12/09/2026 sera, misurato: con 50 e 40 opere Pergamon, V&A
+          // e Tret'jakov superavano i 300 s di Vercel e la guida non
+          // arrivava; i Vaticani a 50 ci stavano in 107 s). Oltre queste
+          // si aggiunge con «Aggiungi opere» dalla scheda.
           const nOpere = isChurch
             ? (rangoMuseo && rangoMuseo <= 100 ? 20 : 16)
-            : (rangoMuseo && rangoMuseo <= 20 ? 50 : rangoMuseo && rangoMuseo <= 100 ? 40 : 30);
+            : (rangoMuseo && rangoMuseo <= 20 ? 40 : 30);
           const r = await opereDelMuseo(wikidataId, langCfg.wiki, isChurch
             ? { n: nOpere, luogo: 'chiesa', budgetMs: inDiretta ? 20000 : 45000 }
             : { n: nOpere, budgetMs: inDiretta ? 20000 : 45000 });
