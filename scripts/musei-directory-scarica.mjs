@@ -55,7 +55,8 @@ function leggiScheda(html, id) {
   const orari = {};
   for (const g of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Holidays']) { const v = dopo(g.toLowerCase()); if (v && /\d|closed|open/i.test(v)) orari[g] = v; }
   const iAdm = riga.findIndex(x => x.toLowerCase() === 'admission');
-  const ingresso = iAdm >= 0 ? riga.slice(iAdm + 1, iAdm + 5).filter(x => !/^rating$/i.test(x)).join(' · ').slice(0, 200) : '';
+  let ingresso = '';
+  if (iAdm >= 0) { const pezzi = []; for (let k = iAdm + 1; k < Math.min(riga.length, iAdm + 7); k++) { if (/^(rating|reviews|number of reviews|museums nearby)/i.test(riga[k])) break; if (/don't have anything/i.test(riga[k])) { pezzi.length = 0; break; } pezzi.push(riga[k]); } ingresso = pezzi.join(' · ').slice(0, 200); }
   const iVic = riga.findIndex(x => /^museums nearby$/i.test(x));
   const vicini = [];
   if (iVic >= 0) for (let k = iVic + 1; k < Math.min(riga.length, iVic + 16); k += 2) { const n = riga[k], d = riga[k + 1] || ''; if (!n || /Translate|Suggest|Tweet/i.test(n)) break; const m = /([\d.,]+)\s*(km|m)\b/.exec(d); if (!m) break; vicini.push({ nome: n, distanza: m[1] + ' ' + m[2] }); }
@@ -76,17 +77,30 @@ const scrivi = async () => {
   if (r.ok) stat.salvate += lotto.length; else { stat.errori++; console.log('  DB', r.status, (await r.text()).slice(0, 160)); }
   lotto = [];
 };
-for (let id = DA; id <= A; id++) {
-  try {
-    const r = await fetch(`https://museu.ms/museum/details/${id}/x`, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(25000) });
+// A LOTTI PARALLELI (12/09/2026 sera): una scheda per volta faceva 7 al
+// minuto (giorni per 25.000 id). Ora CONCORRENZA richieste insieme, poi la
+// pausa: ~5 al secondo, educato ma finisce in poche ore.
+const CONCORRENZA = parseInt(arg('--parallelo', '6'), 10);
+let fine = false;
+for (let id = DA; id <= A && !fine; id += CONCORRENZA) {
+  const ids = []; for (let k = id; k < Math.min(A + 1, id + CONCORRENZA); k++) ids.push(k);
+  const esiti = await Promise.all(ids.map(async (x) => {
+    try {
+      const r = await fetch(`https://museu.ms/museum/details/${x}/x`, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(25000) });
+      if (r.status === 429 || r.status >= 500) return { x, ritenta: true, status: r.status };
+      const html = r.ok ? await r.text() : '';
+      return { x, scheda: html ? leggiScheda(html, x) : null };
+    } catch (e) { return { x, errore: String(e?.message || e) }; }
+  }));
+  if (esiti.some(e => e.ritenta)) { console.log(`  ${id}: ${esiti.find(e => e.ritenta).status}, aspetto 60 s`); await dormi(60000); id -= CONCORRENZA; continue; }
+  for (const e of esiti) {
     stat.lette++;
-    if (r.status === 429 || r.status >= 500) { console.log(`  ${id}: ${r.status}, aspetto 60 s`); await dormi(60000); id--; continue; }
-    const html = r.ok ? await r.text() : '';
-    const scheda = html ? leggiScheda(html, id) : null;
-    if (!scheda) { stat.vuote++; vuoteDiFila++; if (vuoteDiFila >= 400) { console.log(`  400 schede vuote di fila da ${id - 399}: fine dell'indice`); break; } }
-    else { vuoteDiFila = 0; lotto.push(scheda); if (lotto.length >= 25) await scrivi(); }
-    if (stat.lette % 500 === 0) { await scrivi(); console.log(`  ${new Date().toLocaleTimeString('it-IT')} id ${id}: lette ${stat.lette}, salvate ${stat.salvate}, vuote ${stat.vuote}`); }
-  } catch (e) { stat.errori++; if (stat.errori % 20 === 0) console.log(`  ${id}: ${String(e?.message || e).slice(0, 80)}`); await dormi(3000); }
+    if (e.errore) { stat.errori++; if (stat.errori % 20 === 0) console.log(`  ${e.x}: ${e.errore.slice(0, 80)}`); continue; }
+    if (!e.scheda) { stat.vuote++; vuoteDiFila++; if (vuoteDiFila >= 400) { console.log(`  400 schede vuote di fila fino a ${e.x}: fine dell'indice`); fine = true; break; } }
+    else { vuoteDiFila = 0; lotto.push(e.scheda); }
+  }
+  if (lotto.length >= 25) await scrivi();
+  if (stat.lette % 600 < CONCORRENZA) { await scrivi(); console.log(`  ${new Date().toLocaleTimeString('it-IT')} id ${id}: lette ${stat.lette}, salvate ${stat.salvate}, vuote ${stat.vuote}, errori ${stat.errori}`); }
   await dormi(PAUSA);
 }
 await scrivi();
