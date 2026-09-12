@@ -27,7 +27,10 @@ if (!DA) {
   DA = (Array.isArray(u) && u[0]?.fonte_id ? u[0].fonte_id + 1 : 1);
 }
 const decode = s => String(s || '').replace(/&amp;/g, '&').replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
-const testoDi = h => decode(h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h\d|tr)>/gi, '\n').replace(/<[^>]+>/g, ' ')).replace(/ *\n */g, '\n');
+// Ogni tag = a capo (come nella prova del 12/09 sera): «Monday» e «10:00 -
+// 17:30» stanno in due celle, e con gli spazi al posto dei tag finivano
+// sulla stessa riga e nessun campo combaciava.
+const testoDi = h => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, '\n').split('\n').map(x => decode(x)).filter(Boolean).join('\n');
 
 function leggiScheda(html, id) {
   const og = k => decode((html.match(new RegExp(`<meta[^>]+property="og:${k}"[^>]+content="([^"]*)"`, 'i')) || [])[1] || '');
@@ -36,8 +39,12 @@ function leggiScheda(html, id) {
   const t = testoDi(html);
   // «Nome\nIndirizzo, Città, Paese\nContact information»
   const riga = (t.split('\n').map(x => x.trim()).filter(Boolean));
-  const iNome = riga.findIndex((x, k) => k > 3 && x === nome);
-  const indirizzo = iNome >= 0 ? riga[iNome + 1] || '' : '';
+  // Il nome compare due volte (briciole + titolo): l'indirizzo è la riga
+  // dopo l'ULTIMA occorrenza nella testata, e non deve essere il nome stesso.
+  let iNome = -1;
+  for (let k = 3; k < Math.min(riga.length, 80); k++) if (riga[k] === nome && riga[k + 1] !== nome) iNome = k;
+  const candidato = iNome >= 0 ? riga[iNome + 1] || '' : '';
+  const indirizzo = /^(Contact information|Opening hours|Phone|Website)$/i.test(candidato) ? '' : candidato;
   const parti = indirizzo.split(',').map(x => x.trim());
   const paese = parti.length >= 2 ? parti[parti.length - 1] : '';
   const citta = parti.length >= 3 ? parti[parti.length - 2] : (parti.length === 2 ? parti[0] : '');
