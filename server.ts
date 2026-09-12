@@ -6657,6 +6657,50 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * il tour, "mpass-<ms>-<rnd>" per il base. `split('-')[1]` continua a dare la
    * scadenza, quindi i pass già venduti restano validi come 'base'.
    */
+  /**
+   * GUIDA GRATUITA (12/09/2026 sera, committente): «quelle che non hanno foto
+   * o poche opere sono gratuite». Sotto le 12 opere, o con meno di 12 opere
+   * fotografate, non si vende nulla: niente pass e niente scansioni a
+   * pagamento. Le 12 sono la soglia sotto cui il pass da 100 non conviene
+   * (100 ÷ 5 crediti a scansione = 20). Una tappa «soloCollezione» (opera
+   * senza sala, nota e non tappa) non conta come opera.
+   */
+  const MIN_OPERE_GUIDA_A_PAGAMENTO = 12;
+  function guidaGratuita(guida: any): boolean {
+    const tappe: any[] = Array.isArray(guida?.tappe) ? guida.tappe : [];
+    if (!tappe.length) return false;
+    const opere = tappe.filter((t: any) => !t?.soloCollezione);
+    const conFoto = opere.filter((t: any) => !!t?.foto);
+    return opere.length < MIN_OPERE_GUIDA_A_PAGAMENTO || conFoto.length < MIN_OPERE_GUIDA_A_PAGAMENTO;
+  }
+  /** La stessa regola dal nome del museo (audioguida opera, descrizione, confronto): guida in libreria o in cache. 5 minuti di memoria. */
+  const gratuitaPerNomeCache = new Map<string, { v: boolean; t: number }>();
+  async function visitaGratuitaPer(nomeMuseo: string, lingua: string): Promise<boolean> {
+    const nome = String(nomeMuseo || '').trim();
+    if (!nome) return false;
+    const k = `${normalizzaTesto(nome)}|${lingua}`;
+    const c = gratuitaPerNomeCache.get(k);
+    if (c && Date.now() - c.t < 5 * 60_000) return c.v;
+    let v = false;
+    try {
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const g = await axios.get(`${supabaseUrl}/rest/v1/museum_guides?venue_name=ilike.${encodeURIComponent(nome.replace(/[%*,()]/g, ' ').trim())}&select=guide,language&limit=8`, { headers: svc, timeout: 5000 });
+      const righe: any[] = Array.isArray(g.data) ? g.data : [];
+      const riga = righe.find(r => String(r.language) === lingua) || righe[0];
+      if (riga?.guide) v = guidaGratuita(riga.guide);
+      else {
+        // Visita avviata per nome: la guida sta solo in cache («nome_…»).
+        const slug = normalizzaTesto(nome).replace(/ /g, '_').slice(0, 60);
+        const r = await axios.get(`${supabaseUrl}/rest/v1/api_cache?cache_key=like.${encodeURIComponent(`venue_guide:v1:nome_${slug}:*`)}&select=text_content&limit=3`, { headers: svc, timeout: 5000 });
+        for (const row of (Array.isArray(r.data) ? r.data : [])) {
+          try { const p = JSON.parse(row.text_content); if (p?.ok && p.guide) { v = guidaGratuita(p.guide); break; } } catch { /* riga illeggibile */ }
+        }
+      }
+    } catch { /* in dubbio non è gratuita: si chiede il pass come prima */ }
+    gratuitaPerNomeCache.set(k, { v, t: Date.now() });
+    return v;
+  }
+
   async function getActiveMuseumPass(userId: string): Promise<{ expiresAt: number; tier: 'base' | 'tour' } | null> {
     try {
       const { data } = await axios.get(
@@ -8022,23 +8066,18 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       // anche scansionandole tutte si spende meno con le singole. Vale per
       // il pass da 100 e per quello da 150.
       const MIN_OPERE_PASS = 12;
+      // GRATUITA (12/09/2026 sera, committente: «quelle che non hanno foto o
+      // poche opere sono gratuite»): sotto le 12 opere, o con meno di 12
+      // opere fotografate, la guida non si vende — si dà. Niente pass,
+      // niente scansioni a pagamento, e la risposta lo dice (gratuita: true)
+      // così la scheda lo mostra. La regola vive in guidaGratuita() a livello
+      // di modulo: la usano anche le audioguide delle opere, la descrizione
+      // audio e il confronto.
       const chiediPass = async (assaggio = '', guida: any = null) => {
         if (!inDiretta) return null;
+        if (guida && guidaGratuita(guida)) return null;
         const pass = await getActiveMuseumPass(userId);
         if (pass?.tier === 'tour') return null;
-        const opere = Array.isArray(guida?.tappe) ? guida.tappe.filter((t: any) => !t?.soloCollezione).length : null;
-        if (opere !== null && opere < MIN_OPERE_PASS) {
-          return {
-            ok: false,
-            reason: 'poche_opere',
-            opere,
-            minOpere: MIN_OPERE_PASS,
-            prezzoScansione: await prezzoDi('photo_search'),
-            priceCredits: await prezzoDi('museum_pass_tour'),
-            venue,
-            sample: assaggio ? { text: assaggio, language: outLang } : null,
-          };
-        }
         return {
           ok: false,
           reason: 'needs_tour_pass',
@@ -8268,7 +8307,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
             // svuota la sua riga di cache a mano o si aggiorna dalla libreria.
             const gate = await chiediPass(assaggioDa(parsed.guide?.intro), parsed.guide);
             if (gate) return res.json(gate);
-            return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source, venuePhoto: parsed.venuePhoto || '', venuePhotoIcon: parsed.venuePhotoIcon || '' });
+            return res.json({ ok: true, cached: true, venue, guide: parsed.guide, source: parsed.source, venuePhoto: parsed.venuePhoto || '', venuePhotoIcon: parsed.venuePhotoIcon || '', gratuita: guidaGratuita(parsed.guide) });
           }
         } catch { /* cache illeggibile: si rigenera */ }
       }
@@ -8314,7 +8353,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         if (riga) {
           const gate = await chiediPass(assaggioDa(riga.guide?.intro), riga.guide);
           if (gate) return res.json(gate);
-          const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null, ...fotoDaRiga(riga) };
+          const payloadLib = { ok: true, venue: { ...venue, name: riga.venue_name || venue.name }, guide: riga.guide, source: riga.source || null, officialSite: riga.official_site || null, ...fotoDaRiga(riga), gratuita: guidaGratuita(riga.guide) };
           await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadLib));
           // Contatore d'uso: dice quali musei della libreria servono davvero.
           axios.post(`${supabaseUrl}/rest/v1/rpc/increment_museum_guide_hits`, { p_venue_key: chiaveLuogo, p_language: outLang },
@@ -8348,8 +8387,9 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         };
         const sorgente = righe.find(abbastanzaBuona);
         if (sorgente) {
-          // La traduzione costa una chiamata AI: si fa solo per chi ha il pass.
-          const gate = await chiediPass();
+          // La traduzione costa una chiamata AI: si fa solo per chi ha il pass
+          // (o se la guida sorgente è gratuita: poche opere/foto).
+          const gate = await chiediPass('', sorgente.guide);
           if (gate) return res.json(gate);
           const tradotta = await traduciGuidaMuseo(sorgente.guide, sorgente.language, outLang, sorgente.venue_name || venue.name, inDiretta);
           if (tradotta) {
@@ -8360,6 +8400,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
               source: sorgente.source || null,
               officialSite: sorgente.official_site || null,
               ...fotoDaRiga(sorgente),
+              gratuita: guidaGratuita(tradotta),
             };
             await saveToCache(cacheKey, 'venue_guide', JSON.stringify(payloadTr));
             await salvaInLibreriaMusei({
@@ -9585,6 +9626,7 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       const daCommonsLuogo = /commons\.wikimedia\.org/i.test(fotoLuogoRaw);
       const payload = {
         ok: true, venue, guide, source: wikiSource, officialSite: sitoOut.pagine[0] || null,
+        gratuita: guidaGratuita(guide),
         venuePhoto: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 900) : fotoLuogoRaw) : '',
         venuePhotoIcon: fotoLuogoRaw ? (daCommonsLuogo ? fotoCommons(fotoLuogoRaw, 160) : fotoLuogoRaw) : '',
         // Le tappe uscite e perché — per non dover indovinare, collaudando,
@@ -9680,7 +9722,10 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       // La semina riempie la libreria per tutti: nessun pass da consumare.
       let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
       let usate = 0;
-      if (inDiretta) {
+      // Museo con guida GRATUITA (poche opere o poche foto): le audioguide
+      // delle sue opere non chiedono il pass e non consumano scansioni.
+      const gratuita = inDiretta ? await visitaGratuitaPer(museo, outLang) : false;
+      if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
         if (!pass) {
           return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
@@ -10667,9 +10712,10 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       try { urlFoto = new URL(foto); } catch { return res.json({ ok: false, reason: 'no_photo' }); }
       if (!/^(upload\.wikimedia\.org|commons\.wikimedia\.org)$/i.test(urlFoto.hostname)) return res.json({ ok: false, reason: 'no_photo' });
 
-      const pass = await getActiveMuseumPass(userId);
-      if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
-      const usate = await countMuseumPassScans(userId, pass.expiresAt);
+      const gratuita = await visitaGratuitaPer(museo, outLang);
+      const pass = gratuita ? null : await getActiveMuseumPass(userId);
+      if (!pass && !gratuita) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
+      const usate = pass ? await countMuseumPassScans(userId, pass.expiresAt) : 0;
 
       const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
       const cacheKey = `museum_ad:v1:${chiaveOpera}:${outLang}`;
@@ -10681,7 +10727,7 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
           if (p?.testo) return res.json({ ok: true, testo: p.testo, parole: p.parole, language: outLang, cached: true });
         } catch { /* si rigenera */ }
       }
-      if (usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+      if (!gratuita && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
 
       // La foto, scaricata qui: il motore la vede in base64.
       let b64 = '';
@@ -10791,7 +10837,8 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
 
       let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
       let usate = 0;
-      if (inDiretta) {
+      const gratuita = inDiretta ? await visitaGratuitaPer(museo, outLang) : false;
+      if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
         if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
         usate = await countMuseumPassScans(userId, pass.expiresAt);
@@ -10806,7 +10853,7 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
           if (p?.testo) return res.json({ ok: true, ...p, cached: true });
         } catch { /* si rigenera */ }
       }
-      if (inDiretta && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
+      if (inDiretta && !gratuita && usate >= MUSEUM_PASS_MAX_SCANS) return res.json({ ok: false, reason: 'pass_exhausted', scansUsed: usate, scansLimit: MUSEUM_PASS_MAX_SCANS });
 
       // Il materiale di ciascuna opera: prima l'audioguida già scritta (in
       // qualunque lingua), poi la voce Wikipedia. Senza materiale per
@@ -12029,12 +12076,44 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
       // Stesso museo, prefissi diversi (wv-Q180788 in libreria, wd-Q180788
       // nelle fonti dei 100): il QID in coda vale come chiave comune.
       const qidComune = candidati.map(c => c.match(/-(Q\d+)$/)?.[1]).find(Boolean);
-      const inLista = qidComune
+      let inLista = qidComune
         ? `like.*-${qidComune}`
         : `in.(${candidati.map(c => `"${c.replace(/"/g, '')}"`).join(',')})`;
       const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
       const r = await axios.get(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=${inLista}&select=*&order=indice`, { headers: svc, timeout: 6000 });
       let maps: any[] = Array.isArray(r.data) ? r.data : [];
+      // PER NOME (12/09/2026 sera, committente: «la pianta con mappa
+      // interattiva degli Uffizi non c'è»): la visita avviata scrivendo il
+      // nome ha chiave «nome_uffizi» e nessun POI, mentre la pianta sta sotto
+      // wd-Q51252. Si risale al QID dalle guide in libreria con lo stesso nome
+      // (entro 2 km se la richiesta porta le coordinate), poi da Wikidata.
+      const nomeRaw = String(req.query.name || '').trim().slice(0, 160);
+      const latQ = parseFloat(String(req.query.lat || '')); const lonQ = parseFloat(String(req.query.lon || ''));
+      const conCoord = Number.isFinite(latQ) && Number.isFinite(lonQ);
+      if (!maps.length && !qidComune && nomeRaw.length >= 3) {
+        let qidNome = '';
+        try {
+          const pulito = nomeRaw.replace(/[%*,()]/g, ' ').replace(/\s+/g, ' ').trim();
+          const g = await axios.get(`${supabaseUrl}/rest/v1/museum_guides?venue_name=ilike.${encodeURIComponent(`*${pulito}*`)}&select=poi_id,venue_name,lat,lon&limit=30`, { headers: svc, timeout: 6000 });
+          const righe: any[] = Array.isArray(g.data) ? g.data : [];
+          const vicina = (x: any) => !conCoord || !Number.isFinite(x?.lat) || !Number.isFinite(x?.lon) || haversineDistance(latQ, lonQ, x.lat, x.lon) <= 2000;
+          qidNome = righe.map(x => ({ q: String(x?.poi_id || '').match(/-(Q\d+)$/)?.[1] || '', x })).filter(({ q, x }) => q && vicina(x)).map(({ q }) => q)[0] || '';
+          if (!qidNome && conCoord) {
+            const s = await axios.get(`https://www.wikidata.org/w/api.php?action=wbsearchentities&search=${encodeURIComponent(pulito)}&language=it&uselang=it&type=item&limit=5&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 6000 });
+            for (const c of (s.data?.search || []).slice(0, 5)) {
+              const cl = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P625&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 6000 }).catch(() => null);
+              const co = cl?.data?.claims?.P625?.[0]?.mainsnak?.datavalue?.value;
+              if (co && haversineDistance(latQ, lonQ, co.latitude, co.longitude) <= 2000) { qidNome = c.id; break; }
+            }
+          }
+        } catch (e: any) { console.warn('[MappaMuseo] risoluzione per nome fallita:', e?.message); }
+        if (qidNome) {
+          inLista = `like.*-${qidNome}`;
+          const r2 = await axios.get(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=${inLista}&select=*&order=indice`, { headers: svc, timeout: 6000 });
+          maps = Array.isArray(r2.data) ? r2.data : [];
+          console.log(`[MappaMuseo] «${nomeRaw}» (${keyRaw || poiIdRaw}) → ${qidNome}: ${maps.length} piante`);
+        }
+      }
       const poiId = maps[0]?.poi_id || poiIdRaw || keyRaw.replace(/^poi_/, '') || keyRaw;
       // Prima volta: dalle piante trovate sul sito ufficiale.
       if (!maps.length) {

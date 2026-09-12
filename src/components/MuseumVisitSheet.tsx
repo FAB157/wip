@@ -70,7 +70,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   useEffect(() => {
     let vivo = true;
     setMappaCaricata(false);
-    fetchMuseumMap(visit.venue.id, visit.venueKey).then(({ maps, links }) => { if (!vivo) return; setMappe(maps); setMappaLink(links); setMappaCaricata(true); });
+    fetchMuseumMap(visit.venue.id, visit.venueKey, { name: visit.venue.name, lat: visit.venue.lat ?? null, lon: visit.venue.lon ?? null }).then(({ maps, links }) => { if (!vivo) return; setMappe(maps); setMappaLink(links); setMappaCaricata(true); });
     return () => { vivo = false; };
   }, [visit.venue.id, visit.venueKey]);
   /** Dal pin alla tappa: scorre alla riga e avvia l'audioguida. */
@@ -1130,6 +1130,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{t('mv_title')}</p>
             <h2 className="text-lg font-black text-primary leading-tight truncate">{visit.venue.name}</h2>
+            {visit.gratuita && (
+              <p className="text-[10px] font-black text-emerald-700 mt-0.5">{t('mv_gratuita')}</p>
+            )}
             {inGruppo && (
               <p className="text-[10px] font-black text-emerald-700 flex items-center gap-1 mt-0.5">
                 <Users className="w-3 h-3" />{sonoLeader ? t('mv_group_leader') : t('mv_group_follower')}

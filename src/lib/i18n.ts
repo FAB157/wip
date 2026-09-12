@@ -442,6 +442,10 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "В {s} всего {n} экспонатов в гиде: 40 сканов за 4 часа пропали бы зря. Снимайте только интересные работы: {p} кредитов за скан.",
     ZH: "{s} 的导览中只有 {n} 件作品：4 小时 40 次扫描会浪费。只扫描您感兴趣的作品：每次 {p} 积分。"
   },
+  mv_gratuita: {
+    IT: "Guida gratuita · poche opere o poche foto", EN: "Free guide · few works or few photos", FR: "Guide gratuit · peu d'œuvres ou peu de photos",
+    ES: "Guía gratuita · pocas obras o pocas fotos", DE: "Kostenloser Guide · wenige Werke oder wenige Fotos", RU: "Бесплатный гид · мало экспонатов или фото", ZH: "免费导览 · 作品或照片较少"
+  },
   mv_poche_opere_scansiona: { IT: "Scansiona un'opera", EN: "Scan a work", FR: "Scanner une œuvre", ES: "Escanear una obra", DE: "Ein Werk scannen", RU: "Сканировать работу", ZH: "扫描一件作品" },
   mv_vista_lista: { IT: "Lista", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
   mv_vista_mappa: { IT: "Mappa", EN: "Map", FR: "Plan", ES: "Mapa", DE: "Karte", RU: "Карта", ZH: "地图" },

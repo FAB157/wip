@@ -125,6 +125,8 @@ export type MuseumVisit = {
    *  dichiara. */
   venuePhoto?: string;
   venuePhotoIcon?: string;
+  /** Guida gratuita (poche opere o poche foto): la scheda lo dice, nessun pass. */
+  gratuita?: boolean;
   source: { lang: string; title: string; url: string } | null;
   startedAt: number;
   updatedAt: number;
@@ -249,7 +251,9 @@ export function matchTappa(guide: VenueGuide, workName: string): number {
 }
 
 type VenueGuideResponse =
-  | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null; venuePhoto?: string; venuePhotoIcon?: string }
+  | { ok: true; cached?: boolean; fromLibrary?: boolean; venue: VenueInfo; guide: VenueGuide; source: MuseumVisit['source']; officialSite?: string | null; venuePhoto?: string; venuePhotoIcon?: string;
+      /** 12/09/2026: guida con poche opere o poche foto → gratuita, niente pass né scansioni a pagamento. */
+      gratuita?: boolean }
   // 'needs_tour_pass': la visita guidata è del Pass Museo con itinerario.
   | { ok: false; reason: string; venue?: VenueInfo; hasBasePass?: boolean; priceCredits?: number; upgradeCredits?: number; sourcesOk?: boolean; sample?: { text: string; language: string } | null;
       /** reason 'poche_opere' (12/09/2026): la guida ha meno di minOpere opere, il pass non conviene: scansioni singole a prezzoScansione crediti. */
@@ -380,14 +384,18 @@ export type MuseumMapPin = { sala: string; x: number; y: number; origine?: strin
 export type MuseumMap = { indice: number; titolo: string | null; url: string; fonteUrl: string | null; larghezza: number | null; altezza: number | null; pins: MuseumMapPin[]; pinsOrigine: string | null };
 export type MuseumMapLink = { url: string; titolo: string; tipo: 'pagina' | 'pdf' };
 
-export async function fetchMuseumMap(poiId: string | null | undefined, venueKey?: string | null): Promise<{ maps: MuseumMap[]; links: MuseumMapLink[] }> {
+export async function fetchMuseumMap(poiId: string | null | undefined, venueKey?: string | null, luogo?: { name?: string | null; lat?: number | null; lon?: number | null } | null): Promise<{ maps: MuseumMap[]; links: MuseumMapLink[] }> {
   // Anche per chiave di libreria: le visite avviate per nome («nome_louvre»)
-  // non hanno un POI, ma hanno fonti e piante sotto quella chiave.
-  if (!poiId && !venueKey) return { maps: [], links: [] };
+  // non hanno un POI, ma hanno fonti e piante sotto quella chiave. Il nome e
+  // le coordinate servono al server per risalire al museo (12/09/2026: la
+  // visita «nome_uffizi» non trovava la pianta salvata sotto wd-Q51252).
+  if (!poiId && !venueKey && !luogo?.name) return { maps: [], links: [] };
   try {
     const p = new URLSearchParams();
     if (poiId) p.set('poiId', poiId);
     if (venueKey) p.set('key', venueKey);
+    if (luogo?.name) p.set('name', String(luogo.name).slice(0, 160));
+    if (Number.isFinite(luogo?.lat as number) && Number.isFinite(luogo?.lon as number)) { p.set('lat', String(luogo!.lat)); p.set('lon', String(luogo!.lon)); }
     const res = await fetch(getApiUrl(`/api/museums/map?${p.toString()}`));
     if (!res.ok) return { maps: [], links: [] };
     const data = await res.json();
@@ -424,6 +432,7 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
       ...current, venue: resp.venue, guide: { ...resp.guide, tappe }, source: resp.source, updatedAt: now,
       venuePhoto: resp.venuePhoto || current.venuePhoto,
       venuePhotoIcon: resp.venuePhotoIcon || current.venuePhotoIcon,
+      gratuita: resp.gratuita === true,
     };
     saveVisit(v);
     return v;
@@ -447,6 +456,7 @@ export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true
     },
     ...(resp.venuePhoto ? { venuePhoto: resp.venuePhoto } : {}),
     ...(resp.venuePhotoIcon ? { venuePhotoIcon: resp.venuePhotoIcon } : {}),
+    ...(resp.gratuita === true ? { gratuita: true } : {}),
     ...(prec && prec.viste.size > 0 ? { visitaPrecedente: { quando: prec.quando, viste: prec.viste.size, preferite: prec.preferite.size } } : {}),
     source: resp.source,
     startedAt: now,
