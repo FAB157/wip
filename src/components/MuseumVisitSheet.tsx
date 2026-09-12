@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, markStopListened, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -768,6 +768,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       const parlaGuida = async () => {
         await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera);
         setOperaParla(i);
+        // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.
+        markStopListened(i);
       };
       // ACCESSIBILITÀ (12/09/2026): con la preferenza accesa, prima si dice
       // cosa si vede — lentamente — e poi parte il racconto.

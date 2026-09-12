@@ -480,6 +480,28 @@ function leggiVisitaPrecedente(venueKey: string, lang: string): { quando: number
   }
 }
 
+/**
+ * ASCOLTATA = VISTA (12/09/2026, committente agli Uffizi: «ho ascoltato un
+ * pezzo della Nascita di Venere ma mi dice che non l'ho vista»). Prima la
+ * spunta arrivava SOLO dal riconoscimento con la fotocamera (markWorkSeen,
+ * che nessuno chiamava più): ascoltare l'audioguida davanti al quadro non
+ * contava. Ora la tappa si spunta appena parte il suo ascolto — chi preme
+ * play sta davanti all'opera, non serve arrivare in fondo — e una tappa
+ * saltata che poi si ascolta torna nel percorso.
+ */
+export function markStopListened(index: number): MuseumVisit | null {
+  const v = getVisit();
+  if (!v || !v.guide?.tappe?.[index]) return null;
+  const t = v.guide.tappe[index] as any;
+  if (t.seenCardId && !t.skipped) return v;
+  const { skipped, skippedAt, ...resto } = t;
+  v.guide.tappe[index] = { ...resto, seenCardId: t.seenCardId || `listened-${Date.now()}`, seenAt: t.seenAt || Date.now() };
+  if (!v.seen.some(s => s.name === t.nome)) v.seen.push({ name: t.nome, cardId: null, ts: Date.now() });
+  v.updatedAt = Date.now();
+  saveVisit(v);
+  return v;
+}
+
 /** Registra un'opera riconosciuta: entra in `seen` e spunta la tappa se c'è. */
 export function markWorkSeen(workName: string, cardId: string | null): MuseumVisit | null {
   const v = getVisit();
