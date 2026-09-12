@@ -204,6 +204,8 @@ Read-only keys for the admin "Diagnostica" → Monitoraggio esterno panel (`/api
 
 Ricerca web nella lingua locale per la scheda Eventi (`/api/events/portali`, 07/09/2026): il fornitore si sceglie dalla chiave presente, `BRAVE_SEARCH_API_KEY` (Brave Search API) oppure `GOOGLE_CSE_API_KEY` + `GOOGLE_CSE_CX` (Google Programmable Search su tutto il web). Senza chiave la ricerca è spenta e restano i portali del registro `src/data/fontiEventi.ts`. Cache 7 giorni per query, tetto di 40 città «fredde» al giorno.
 
+Ricerca web per i MUSEI (sale e piante, `/api/admin/museums/web-search`, 12/09/2026 sera): passa da SearXNG auto-ospitato sul droplet 104 (`SEARXNG_URL` + `SEARXNG_TOKEN`, header `X-Searx-Token`), gratis e senza crediti; la rotta lo sceglie da sola quando la variabile esiste, con ripiego su `BRAVE_SEARCH_API_KEY_MUSEI` e poi sul fornitore degli Eventi. Brave resta agli Eventi.
+
 Affiliazioni Klook e Trip.com (07/09/2026) sono costanti in `klookCities.ts` (`KLOOK_AID`, `KLOOK_ADS`: un widget per città creato nel pannello affiliati) e `eventiFeed.ts` (`TRIPCOM_ALLIANCE_ID`, `TRIPCOM_SID`); non sono chiavi segrete.
 
 Routes degrade to an error response rather than crashing when a key is absent.
