@@ -1105,6 +1105,100 @@ function isPublicHttpUrl(raw: any): boolean {
   return true;
 }
 
+// ── RISCONTRI DAL WEB via SearXNG (12/09/2026 sera, committente) ─────────────
+//
+// Da quando la ricerca web è gratis (SearXNG sul droplet) si può chiedere
+// alla rete quello che prima si chiedeva solo ai modelli. Due usi, entrambi
+// SOMMATI alle regole esistenti e mai al posto loro:
+//   1. firmaWebLuogo — terza firma dell'anti-allucinazione: «"<nome>" <città>»
+//      trova pagine che citano quel nome? Un luogo vero piccolo può non avere
+//      presenza web, quindi il vuoto abbassa solo la fiducia (poco_noto), non
+//      boccia; un riscontro che cita anche la città salva una tappa che il
+//      revisore AI aveva bocciato per invenzione (l'80% degli errori è un
+//      nome storpiato, e la rete lo sa meglio del modello).
+//   2. sitoUfficialeViaRicerca — quando OSM e Wikidata non danno il sito del
+//      POI, si cerca il sito ufficiale e lo si accetta SOLO se il dominio è
+//      coerente col nome e non è un aggregatore. La foto, dopo, si prende
+//      soltanto da quel sito (og:image): mai da una ricerca immagini, regola
+//      fissa del repo dopo La Spezia e le 210 foto sbagliate.
+const tokensNomeLuogo = (s: string): string[] => {
+  const stop = new Set(['di','del','della','dei','delle','degli','the','of','la','le','il','lo','san','santa','santo','chiesa','church','museo','museum','musee','museu','palazzo','villa','via','piazza','torre','castello','castle','cattedrale','cathedral','basilica','teatro','theatre','theater','parco','park','monte','lago','lake','de','du','des','el','los','las','and','e','y','et','und','der','die','das','von','national','nazionale','civico','galleria','gallery','fondazione','foundation','centro','center','centre','casa','house']);
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((t) => t.length >= 4 && !stop.has(t));
+};
+const normTesto = (s: string) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+
+/** Riscontro web di un nome di luogo in una città. `hit` = almeno una pagina
+ *  cita il nome; `conCitta` = una di quelle cita anche la città. null =
+ *  ricerca spenta o fallita (nessun segnale, non «assente»). */
+async function firmaWebLuogo(nome: string, citta: string, lang: string): Promise<{ hit: boolean; conCitta: boolean } | null> {
+  if (!process.env.SEARXNG_URL) return null;
+  const tok = tokensNomeLuogo(nome);
+  if (!tok.length) return null;
+  try {
+    const ris = await eventiFeed.ricercaWeb(`"${String(nome).trim()}" ${String(citta || '').trim()}`, { lang, count: 8, provider: 'searxng' });
+    if (!ris.length) return { hit: false, conCitta: false };
+    const cittaTok = tokensNomeLuogo(citta);
+    let hit = false, conCitta = false;
+    for (const r of ris) {
+      const testo = normTesto(`${r.title} ${r.snippet}`);
+      const citaNome = tok.filter((t) => testo.includes(t)).length >= Math.min(2, tok.length);
+      if (!citaNome) continue;
+      hit = true;
+      if (cittaTok.length && cittaTok.some((c) => testo.includes(c))) { conCitta = true; break; }
+    }
+    return { hit, conCitta };
+  } catch { return null; }
+}
+
+const HOST_AGGREGATORI = /wikipedia|wikimedia|wikidata|wikivoyage|tripadvisor|facebook|instagram|youtube|youtu\.be|twitter|x\.com|booking\.|expedia|google|yelp|foursquare|paginegialle|paginebianche|tiqets|getyourguide|viator|civitatis|musement|klook|trip\.com|airbnb|pinterest|tiktok|linkedin|apple\.com|amazon|ebay|flickr|lonelyplanet|timeout|atlasobscura|eventbrite|allevents|mapcarta|mapy\.cz|openstreetmap|waze|reddit|quora|medium\.com|blogspot|wordpress\.com|wix|tumblr|italia\.it|touringclub|beniculturali\.it\/luogo|prenotazion|biglietteria|ticketone|vivaticket|hotel|holidaycheck|zoover|tourism|turismo|visit[a-z]+\.|inyourpocket|travel|viaggi|guida|guide/i;
+
+/** Sito ufficiale di un POI dalla ricerca web, solo se il dominio è coerente
+ *  col nome (o la pagina si dichiara ufficiale e porta il nome intero). */
+async function sitoUfficialeViaRicerca(nome: string, citta: string, lang: string): Promise<{ url: string; host: string } | null> {
+  if (!process.env.SEARXNG_URL) return null;
+  const tok = tokensNomeLuogo(nome);
+  if (!tok.length) return null;
+  const parola: Record<string, string> = { it: 'sito ufficiale', en: 'official website', fr: 'site officiel', es: 'sitio oficial', de: 'offizielle Website', pt: 'site oficial', nl: 'officiële website' };
+  const l = String(lang || 'it').slice(0, 2).toLowerCase();
+  try {
+    const ris = await eventiFeed.ricercaWeb(`"${String(nome).trim()}" ${String(citta || '').trim()} ${parola[l] || parola.en}`, { lang: l, count: 8, provider: 'searxng' });
+    for (const r of ris) {
+      if (!isPublicHttpUrl(r.url)) continue;
+      let host = '';
+      try { host = new URL(r.url).hostname.toLowerCase().replace(/^www\./, ''); } catch { continue; }
+      if (HOST_AGGREGATORI.test(host) || HOST_AGGREGATORI.test(r.url)) continue;
+      const hostNorm = normTesto(host.split('.').slice(0, -1).join(''));
+      const dominioColNome = tok.some((t) => hostNorm.includes(t)) || hostNorm.length >= 6 && tok.length >= 2 && hostNorm.includes(tok.slice(0, 2).map((t) => t.slice(0, 3)).join(''));
+      const titolo = normTesto(`${r.title} ${r.snippet}`);
+      const nomeIntero = tok.every((t) => titolo.includes(t));
+      const siDichiara = /ufficiale|official|officiel|oficial|offiziell/i.test(`${r.title} ${r.snippet}`);
+      if (dominioColNome || (nomeIntero && siDichiara)) return { url: r.url, host };
+    }
+    return null;
+  } catch { return null; }
+}
+
+/** L'immagine principale (og:image) di una pagina: SOLO per il sito ufficiale
+ *  del POI, mai per un risultato di ricerca. Scarta loghi e icone. */
+async function fotoDaPaginaUfficiale(urlPagina: string): Promise<string | null> {
+  if (!isPublicHttpUrl(urlPagina)) return null;
+  try {
+    const r = await axios.get(urlPagina, { timeout: 8000, maxRedirects: 3, responseType: 'text', maxContentLength: 1_500_000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WIPGuide/1.0; +https://wip.guide)', Accept: 'text/html' } });
+    const html = String(r.data || '');
+    const m = html.match(/<meta[^>]+property=["']og:image(?::secure_url)?["'][^>]+content=["']([^"']+)["']/i) || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) || html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
+    if (!m) return null;
+    let foto = '';
+    try { foto = new URL(m[1].trim(), urlPagina).toString(); } catch { return null; }
+    if (!isPublicHttpUrl(foto) || /logo|icon|sprite|placeholder|default|avatar|banner-generic|\.svg(\?|$)/i.test(foto)) return null;
+    const h = await axios.head(foto, { timeout: 5000, maxRedirects: 3, validateStatus: (s) => s < 400 }).catch(() => null);
+    if (!h) return null;
+    if (!/^image\//i.test(String(h.headers?.['content-type'] || ''))) return null;
+    const len = Number(h.headers?.['content-length'] || 0);
+    if (len && len < 20_000) return null; // icona o segnaposto, non una foto
+    return foto;
+  } catch { return null; }
+}
+
 // Finestra date del viaggio dal mese del form (replica di getTripDateWindow
 // in PlanScreen.tsx): mese passato = anno prossimo; mese corrente = da oggi.
 // Accetta il nome italiano ('Agosto'), il numero (1-12) o 'YYYY-MM'.
@@ -1247,6 +1341,22 @@ async function verifyItineraryAntiHallucination(itineraryObj: any, opts: any) {
     giorno: s.giorno,
   }));
   const constraints = [specialRequests, (Array.isArray(interests) ? interests : []).join(', ')].filter(Boolean).join(' | ') || 'nessuno';
+
+  // TERZA FIRMA: la rete (12/09/2026 sera). Parte INSIEME alle domande AI,
+  // solo sulle tappe non agganciate al DB (quelle agganciate esistono per
+  // definizione), al massimo 12 per non pesare sul tetto dei 20 s in diretta,
+  // due alla volta per rispettare il limite dell'istanza SearXNG.
+  const firmeWeb = new Map<number, { hit: boolean; conCitta: boolean }>();
+  const firmeWebPromise = (async () => {
+    if (!process.env.SEARXNG_URL) return;
+    const daFirmare = stops.map((s, i) => ({ s, i })).filter(({ s }) => !s.ref.poi_id && (s.ref.titolo_tappa || s.ref.titolo)).slice(0, 12);
+    for (let k = 0; k < daFirmare.length; k += 2) {
+      await Promise.all(daFirmare.slice(k, k + 2).map(async ({ s, i }) => {
+        const f = await firmaWebLuogo(s.ref.titolo_tappa || s.ref.titolo, destination, String(language || 'it').toLowerCase());
+        if (f) firmeWeb.set(i, f);
+      }));
+    }
+  })().catch(() => {});
 
   const verifierPrompt = `Sei il revisore anti-allucinazioni di un'app di viaggi. Un ALTRO modello ha generato un itinerario per "${destination}". Il tuo compito è SOLO verificare, non riscrivere.
 Per OGNI tappa dell'elenco valuta:
@@ -1418,6 +1528,28 @@ ${JSON.stringify(compact.map((c) => ({ n: c.n, nome: c.titolo })))}`;
       s.ref.verifica = 'verificata';
     }
   });
+
+  // ── TERZA FIRMA: cosa dice la rete ──────────────────────────────────────
+  // Sommata al giudizio AI, mai da sola:
+  //  - bocciata dal revisore ma la rete cita nome E città → torna «poco
+  //    noto» (il revisore sbaglia soprattutto sui nomi che non conosce);
+  //  - «dubbio» ma la rete cita nome e città → verificata;
+  //  - «verificata» senza coordinate in zona e ZERO pagine che citano il
+  //    nome → «poco noto» (consiglio di controllare, non allarme).
+  await firmeWebPromise;
+  let firmeUsate = 0;
+  firmeWeb.forEach((f, i) => {
+    const s = stops[i];
+    if (!s || s.ref.poi_id) return;
+    if (s.ref.verifica === 'da_verificare' && f.conCitta && String(s.ref.nota_verifica || '').startsWith('⚠ Tappa non confermata')) {
+      s.ref.verifica = 'poco_noto'; s.ref.nota_verifica = hiddenGemNote; firmeUsate++;
+    } else if (s.ref.verifica === 'poco_noto' && f.conCitta) {
+      s.ref.verifica = 'verificata'; s.ref.nota_verifica = ''; flagged = Math.max(0, flagged - 1); firmeUsate++;
+    } else if (s.ref.verifica === 'verificata' && !f.hit && !dentroPerCoordinate.has(s.ref)) {
+      s.ref.verifica = 'poco_noto'; s.ref.nota_verifica = hiddenGemNote; flagged++; firmeUsate++;
+    }
+  });
+  if (firmeUsate) console.log(`[Itinerario] "${destination}": la rete ha cambiato ${firmeUsate} verdetti su ${firmeWeb.size} tappe cercate`);
 
   // ── SECONDA DOMANDA: «E DOVE?» — passaggio a sé, su TUTTE le tappe ───────
   //
@@ -14911,7 +15043,7 @@ ${manuale}`;
 
       // 1. CACHE: già arricchito? ritorna dal DB (a meno di force).
       const cur = await axios.get(
-        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=contact_phone,contact_website,opening_hours_json,contact_enriched_at,lat,lon,name,wikidata,category,poi_type,is_gem&limit=1`,
+        `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}&select=contact_phone,contact_website,opening_hours_json,contact_enriched_at,lat,lon,name,wikidata,category,poi_type,is_gem,city,image_url&limit=1`,
         { headers: H }
       ).catch(() => null);
       const row = cur?.data?.[0] || {};
@@ -14994,11 +15126,36 @@ ${manuale}`;
         }
       }
 
+      // 3-bis. SITO UFFICIALE DALLA RETE (12/09/2026 sera, committente): se
+      //    né OSM né Wikidata lo conoscono, SearXNG cerca «"<nome>" <città>
+      //    sito ufficiale»; entra solo un dominio coerente col nome, mai un
+      //    aggregatore. Vale per tutte le categorie turistiche (gemme,
+      //    monumenti, musei, panorami): bar e negozi sono già esclusi sopra.
+      let sitoDallaRete = false;
+      if (!website && (name || row.name)) {
+        const trovato = await sitoUfficialeViaRicerca(name || row.name, row.city || '', String(req.body?.lang || 'it'));
+        if (trovato) { website = trovato.url; sitoDallaRete = true; }
+      }
+      // 3-ter. FOTO SOLO DAL SITO UFFICIALE: il POI non ha immagine e ora ha
+      //    un sito suo → si prende l'og:image di QUELLA pagina, e nient'altro.
+      //    Regola fissa: mai una foto da ricerca immagini.
+      let fotoUfficiale: string | null = null;
+      if (!row.image_url && website) {
+        fotoUfficiale = await fotoDaPaginaUfficiale(website);
+      }
+
       // 4. Salva SEMPRE contact_enriched_at (anche se vuoto: non riprovare a
       //    ogni apertura un POI che semplicemente non ha contatti pubblici).
       const patch: any = { contact_enriched_at: new Date().toISOString() };
       if (phone) patch.contact_phone = phone;
       if (website) patch.contact_website = website;
+      if (fotoUfficiale) {
+        let hostFoto = '';
+        try { hostFoto = new URL(website).hostname.replace(/^www\./, ''); } catch {}
+        patch.image_url = fotoUfficiale; patch.photo_url = fotoUfficiale;
+        patch.image_source = 'sito_ufficiale'; patch.image_attribution = hostFoto ? `© ${hostFoto}` : null;
+      }
+      if (sitoDallaRete) console.log(`[contacts] sito ufficiale dalla rete per "${name || row.name}": ${website}${fotoUfficiale ? ' + foto' : ''}`);
       if (openingHours) patch.opening_hours_json = { raw: openingHours, source: 'osm' };
       await axios.patch(
         `${sUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(poiId)}`,
@@ -15006,7 +15163,7 @@ ${manuale}`;
         { headers: { ...H, 'Content-Type': 'application/json', Prefer: 'return=minimal' } }
       ).catch((e: any) => console.warn('[contacts] save failed:', e?.message));
 
-      res.json({ phone, website, opening_hours: openingHours });
+      res.json({ phone, website, opening_hours: openingHours, ...(fotoUfficiale ? { image_url: fotoUfficiale } : {}) });
     } catch (e: any) {
       console.error('[api/poi/contacts] error:', e.message);
       res.status(500).json({ error: e.message });
