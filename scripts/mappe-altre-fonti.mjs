@@ -125,6 +125,10 @@ async function candidatiWayback(sito) {
       // I file di pianta linkati nella copia (URL riscritti da Wayback: /web/<ts>/<orig>)
       for (const m of html.matchAll(/(?:href|src)\s*=\s*["']([^"']+\.(?:pdf|png|jpe?g|svg|webp))(?:\?[^"']*)?["']/gi)) {
         let u = m[1]; if (u.startsWith('//')) u = 'https:' + u; else if (u.startsWith('/web/')) u = 'https://web.archive.org' + u;
+        // Percorsi relativi («lageplan_de.png», «/fileadmin/...pdf») risolti
+        // contro la copia Wayback (12/09 sera: «Failed to parse URL» su
+        // Alte Pinakothek, Altes Museum, Bode, Biblioteca Austriaca).
+        if (!/^https?:\/\//i.test(u)) { try { u = new URL(u, snap).href; } catch { continue; } }
         if (!/plan|map|mapp|pianta|floor|piano|level|guide|guida|brochure|visitor/i.test(u)) continue;
         if (!out.some(x => x.url === u)) out.push({ url: u, pagina: snap });
       }
