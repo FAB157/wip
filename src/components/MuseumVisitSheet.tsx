@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints, Mic, MicOff, Eye } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, markStopListened, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -91,7 +91,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // loro ordine. Gli indici restano quelli originali, così le audioguide
   // già aperte (operaGuide[i]) non si spostano quando si cambia filtro.
   const attivi = tappeAttive(visit);
-  const ordineAttivo = visit.guide.tappe.map((_, k) => k).filter(k => attivi.has(k));
+  // ORDINE PER TRAGITTO (12/09/2026 sera): con i pin sulla pianta le sale
+  // si susseguono per vicinanza; le opere restano raggruppate per sala e
+  // l'utente sceglie quale ascoltare. Senza pin, l'ordine della guida.
+  const ordineTragitto = useMemo(() => ordinaPerTragitto(visit.guide.tappe, mappe), [visit.guide.tappe, mappe]);
+  const ordineAttivo = ordineTragitto.filter(k => attivi.has(k));
   const pers = visit.personalizzazione || PERSONALIZZAZIONE_BASE;
   const personalizzato = pers.tempo !== 'tutto' || pers.interessi !== 'tutto' || pers.bambini;
   // Ci sono tipi noti? Se nessuna opera ha un tipo, il filtro per interessi
@@ -366,7 +370,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   };
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
-    const prossima = () => { const p = prossimaTappa(getVisitSnapshot()); if (p) void handleOpera(p.indice, { daCapo: true }); };
+    const prossima = () => { const p = prossimaTappa(getVisitSnapshot(), ordineTragitto); if (p) void handleOpera(p.indice, { daCapo: true }); };
     const precedente = () => {
       const corrente = operaParla ?? operaInPausa ?? operaAperta;
       const attive = [...tappeAttive(getVisitSnapshot())].sort((a, b) => a - b);
@@ -399,7 +403,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   useEffect(() => {
     const ms = (typeof navigator !== 'undefined' && (navigator as any).mediaSession) || null;
     if (!ms) return;
-    const prossima = () => { const p = prossimaTappa(visit); if (p) void handleOpera(p.indice); };
+    const prossima = () => { const p = prossimaTappa(visit, ordineTragitto); if (p) void handleOpera(p.indice); };
     try {
       ms.setActionHandler('nexttrack', prossima);
       ms.setActionHandler('play', () => { if (operaInPausa !== null) void handleOpera(operaInPausa); else prossima(); });
@@ -854,7 +858,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // Da qui parte il conto del promemoria: se fra un minuto e mezzo non
         // è successo niente, si propone di inquadrare la targa della sala.
         armaPromemoria();
-        const p = prossimaTappa(getVisitSnapshot());
+        const snap = getVisitSnapshot();
+        const p = prossimaTappa(snap, ordineTragitto);
         if (!p || p.indice === i) return;
         // Banner nativo fermo col nome della prossima: play la fa partire.
         if (Capacitor.isNativePlatform()) {
@@ -864,7 +869,21 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             ...(p.tappa.foto ? { imageUri: p.tappa.foto } : {}),
           }).catch(() => {});
         }
-        const frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
+        // SALA PER SALA (12/09/2026 sera, committente): finita un'opera, se
+        // nella stessa sala restano opere non ascoltate si dicono quelle
+        // («scegli tu da quale continuare»); quando la sala è finita si dice
+        // «ora passa alla sala X». Senza sale, il teaser di prima.
+        const salaQui = normSalaMappa(tappa.salaCodice || tappa.dove);
+        const restano = salaQui ? ordineAttivo.filter(k => k !== i && !snap.guide.tappe[k].seenCardId && !snap.guide.tappe[k].skipped && !snap.guide.tappe[k].soloCollezione && normSalaMappa(snap.guide.tappe[k].salaCodice || snap.guide.tappe[k].dove) === salaQui) : [];
+        let frase: string;
+        if (restano.length) {
+          const nomi = restano.slice(0, 2).map(k => snap.guide.tappe[k].nome).join(', ');
+          frase = t('mv_teaser_same_room').replace('{n}', String(restano.length)).replace('{o}', nomi);
+        } else if (salaQui && p.tappa.dove && normSalaMappa(p.tappa.salaCodice || p.tappa.dove) !== salaQui) {
+          frase = t('mv_teaser_room_done').replace('{s}', String(tappa.dove || tappa.salaCodice)).replace('{t}', String(p.tappa.dove)).replace('{n}', p.tappa.nome);
+        } else {
+          frase = (p.tappa.dove ? t('mv_teaser_next').replace('{s}', p.tappa.dove) : t('mv_teaser_next_noroom')).replace('{n}', p.tappa.nome);
+        }
         void speakWithSystemVoice(frase, lingua, getGuideCharacter());
       };
       const parlaGuida = async () => {
@@ -974,7 +993,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // prossima) con la voce di sistema, gratis.
   azioniRef.current = {
     prossima: () => {
-      const p = prossimaTappa(visit);
+      const p = prossimaTappa(visit, ordineTragitto);
       if (p) void handleOpera(p.indice, { daCapo: true }); else notify(t('mv_voice_nothing'));
     },
     ripeti: () => {
@@ -983,7 +1002,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       void handleOpera(i, { daCapo: true });
     },
     dove: () => {
-      const i = operaParla ?? operaInPausa ?? operaAperta ?? prossimaTappa(visit)?.indice ?? null;
+      const i = operaParla ?? operaInPausa ?? operaAperta ?? prossimaTappa(visit, ordineTragitto)?.indice ?? null;
       const tp = i === null ? null : visit.guide.tappe[i];
       if (!tp) { notify(t('mv_voice_nothing')); return; }
       const frase = `${tp.nome}. ${tp.dove ? t('mv_voice_where').replace('{s}', tp.dove) : t('mv_room_unknown')}${tp.puntoPreciso ? `. ${tp.puntoPreciso}` : ''}`;
@@ -1484,6 +1503,23 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               </div>
             </div>
           )}
+          {/* BARRA «SEI QUI → PROSSIMA» (12/09/2026 sera, committente: una
+              modalità semplice senza far impazzire l'utente). La sala corrente
+              viene dal cartello o dall'ultima opera ascoltata, oppure da un
+              tocco sull'intestazione della sala nella lista («Sono qui»). */}
+          {(() => {
+            const p = prossimaTappa(visit, ordineTragitto);
+            const qui = String(visit.salaCorrente || p?.daSala || '').trim();
+            if (!qui && !p) return null;
+            return (
+              <div className="w-full px-3.5 py-2 rounded-2xl bg-primary/5 border border-primary/15 mb-2 text-[11px] font-bold text-slate-700 leading-snug">
+                <span className="text-primary font-black">{qui ? t('mv_bar_here').replace('{s}', qui) : t('mv_bar_here_unknown')}</span>
+                {p && (
+                  <span> · {t('mv_next_short')}: {p.tappa.dove ? `${p.tappa.dove}, ` : ''}<button type="button" className="underline decoration-primary/40 font-black text-slate-900" onClick={() => { setVista('lista'); window.setTimeout(() => document.getElementById(`mv-tappa-${p.indice}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60); }}>{p.tappa.nome}</button></span>
+                )}
+              </div>
+            );
+          })()}
           <button
             onClick={() => cartelloRef.current?.click()}
             disabled={leggendoSala}
@@ -1613,7 +1649,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               Da dove sei — il cartello letto, o l'ultima opera inquadrata —
               alla prossima non vista, con quante sale in mezzo. */}
           {(() => {
-            const p = prossimaTappa(visit);
+            const p = prossimaTappa(visit, ordineTragitto);
             if (!p) return null;
             return (
               <button
@@ -1660,7 +1696,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               La regola parte semplice — le tre più famose, dalle 11 alle 15 —
               e i salti raccolti col tempo la affineranno. */}
           {(() => {
-            const p = prossimaTappa(visit);
+            const p = prossimaTappa(visit, ordineTragitto);
             if (!p?.tappa.affollata || p.tappa.rimandata) return null;
             const ora = new Date().getHours();
             if (ora < 11 || ora >= 15) return null;
@@ -1683,7 +1719,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
           {/* Una alla volta · Leggi con calma */}
           <div className="flex gap-2 mb-3">
             <button
-              onClick={() => { const p = prossimaTappa(visit); setLettore(p ? p.indice : 0); }}
+              onClick={() => { const p = prossimaTappa(visit, ordineTragitto); setLettore(p ? p.indice : 0); }}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-2xl bg-white border border-slate-200 text-[12px] font-black text-slate-700 active:scale-[0.99] transition-transform"
             >
               <ListMusic className="w-4 h-4 text-primary" />
@@ -1896,15 +1932,22 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               const primaSenzaSala = !!tappa.soloCollezione && (prec === null || !prec.soloCollezione);
               return (
               <div key={`g-${i}-${tappa.nome}`}>
-                {apreSala && (
-                  <div className="flex items-center gap-2 px-1 pt-2 pb-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-primary shrink-0" />
-                    <span className="text-[11px] font-black text-primary truncate">{salaQui}</span>
-                    <span className="text-[10px] font-bold text-slate-400 shrink-0">
-                      {t('mv_in_room').replace('{n}', String(quanteQui))}
-                    </span>
-                  </div>
-                )}
+                {apreSala && (() => {
+                  // «SONO QUI» (12/09/2026 sera): un tocco sull'intestazione
+                  // della sala imposta la sala corrente — senza fotografare il
+                  // cartello — e la «prossima» riparte da qui.
+                  const qui = normSalaMappa(visit.salaCorrente || '') === normSalaMappa(salaQui) && !!visit.salaCorrente;
+                  return (
+                    <button type="button" onClick={() => impostaSalaCorrente(salaQui)} className={`w-full flex items-center gap-2 px-1 pt-2 pb-1.5 text-left ${qui ? 'text-amber-700' : ''}`}>
+                      <MapPin className={`w-3.5 h-3.5 shrink-0 ${qui ? 'text-amber-600' : 'text-primary'}`} />
+                      <span className={`text-[11px] font-black truncate ${qui ? 'text-amber-700' : 'text-primary'}`}>{salaQui}</span>
+                      <span className="text-[10px] font-bold text-slate-400 shrink-0">
+                        {t('mv_in_room').replace('{n}', String(quanteQui))}
+                      </span>
+                      <span className={`ml-auto text-[10px] font-black shrink-0 px-2 py-0.5 rounded-full ${qui ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'}`}>{qui ? t('mv_you_are_in_room').replace('{s}', '').replace(/[:：]\s*$/, '').trim() || t('mv_sono_qui') : t('mv_sono_qui')}</span>
+                    </button>
+                  );
+                })()}
                 {primaSenzaSala && (
                   <div className="flex items-center gap-2 px-1 pt-3 pb-1.5">
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{t('mv_also_in_collection')}</span>

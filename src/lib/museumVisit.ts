@@ -602,14 +602,58 @@ export type ProssimaTappa = {
   saleDiDistanza: number | null;
 };
 
-export function prossimaTappa(v: MuseumVisit | null): ProssimaTappa | null {
+/**
+ * ORDINE PER TRAGITTO (12/09/2026 sera, committente): «le opere e le sale
+ * sono una lista come ora, solo disposte per tragitto e raggruppate in sale,
+ * dove è possibile; altrimenti resta come ora». Con i pin sulla pianta si
+ * conosce la posizione delle sale: si parte dalla prima sala del percorso e
+ * si passa ogni volta alla sala più vicina non ancora presa (piano per
+ * piano, nell'ordine delle piante); le opere restano nell'ordine della
+ * guida dentro la sala; le sale senza pin seguono in coda nell'ordine della
+ * guida; le opere «solo collezione» stanno per ultime. Senza almeno due
+ * sale con pin non si tocca nulla: torna l'ordine della guida.
+ */
+export function ordinaPerTragitto(tappe: VenueTappa[], mappe?: MuseumMap[] | null): number[] {
+  const base = tappe.map((_, k) => k);
+  if (!mappe?.length) return base;
+  const salaDi = (t: VenueTappa) => normSalaMappa((t as any).salaCodice || t.dove);
+  const posizione = new Map<string, { m: number; x: number; y: number }>();
+  mappe.forEach((m, mi) => { for (const p of m.pins || []) { const ns = normSalaMappa(p.sala); if (ns && !posizione.has(ns)) posizione.set(ns, { m: mi, x: p.x, y: p.y }); } });
+  const sale: string[] = [];
+  for (const t of tappe) { const s = t.soloCollezione ? '' : salaDi(t); if (s && !sale.includes(s)) sale.push(s); }
+  const conPin = sale.filter(s => posizione.has(s));
+  if (conPin.length < 2) return base;
+  // Vicino più vicino, piano per piano.
+  const ordinate: string[] = [];
+  const restanti = new Set(conPin);
+  let corrente = conPin[0];
+  ordinate.push(corrente); restanti.delete(corrente);
+  while (restanti.size) {
+    const qui = posizione.get(corrente)!;
+    let migliore = ''; let dMin = Infinity;
+    for (const s of restanti) { const p = posizione.get(s)!; const d = (p.m === qui.m ? 0 : 10 * Math.abs(p.m - qui.m)) + Math.hypot(p.x - qui.x, p.y - qui.y); if (d < dMin) { dMin = d; migliore = s; } }
+    ordinate.push(migliore); restanti.delete(migliore); corrente = migliore;
+  }
+  for (const s of sale) if (!ordinate.includes(s)) ordinate.push(s);
+  const rango = new Map(ordinate.map((s, i) => [s, i]));
+  return [...base].sort((a, b) => {
+    const ta = tappe[a], tb = tappe[b];
+    const ra = ta.soloCollezione ? 1e6 : (rango.get(salaDi(ta)) ?? 1e5);
+    const rb = tb.soloCollezione ? 1e6 : (rango.get(salaDi(tb)) ?? 1e5);
+    return ra - rb || a - b;
+  });
+}
+
+export function prossimaTappa(v: MuseumVisit | null, ordine?: number[] | null): ProssimaTappa | null {
   if (!v?.guide?.tappe?.length) return null;
   const tappe = v.guide.tappe;
   // La prossima è la prima non vista e non saltata, nell'ordine del percorso,
-  // fra quelle del percorso su misura scelto.
+  // fra quelle del percorso su misura scelto. PRIMA LA STESSA SALA
+  // (12/09/2026 sera, committente): se nella sala in cui si è restano opere
+  // non ascoltate, la prossima è una di quelle; si cambia sala solo a sala
+  // finita. L'ordine può essere quello per tragitto (`ordine`).
   const attive = tappeAttive(v);
-  const idx = tappe.findIndex((t, k) => attive.has(k) && !t.seenCardId && !t.skipped);
-  if (idx < 0) return null;
+  const seq = ordine && ordine.length ? ordine : tappe.map((_, k) => k);
 
   // Da dove si parte, in ordine di certezza:
   //  1. il cartello della sala appena inquadrato — è scritto sul muro;
@@ -617,10 +661,14 @@ export function prossimaTappa(v: MuseumVisit | null): ProssimaTappa | null {
   //     già fatto senza saperlo.
   let daSala = String(v.salaCorrente || '').trim();
   if (!daSala) {
-    for (let i = tappe.length - 1; i >= 0; i--) {
-      if (tappe[i].seenCardId && String(tappe[i].dove || '').trim()) { daSala = String(tappe[i].dove).trim(); break; }
-    }
+    let ultima = -1;
+    for (let i = 0; i < tappe.length; i++) if (tappe[i].seenCardId && String(tappe[i].dove || '').trim() && (tappe[i].seenAt || 0) >= (tappe[ultima]?.seenAt || 0)) ultima = i;
+    if (ultima >= 0) daSala = String(tappe[ultima].dove).trim();
   }
+  const salaN = (s: string) => normSalaMappa(s);
+  let idx = daSala ? seq.find(k => attive.has(k) && !tappe[k].seenCardId && !tappe[k].skipped && !tappe[k].soloCollezione && salaN(String(tappe[k].dove || '')) === salaN(daSala)) ?? -1 : -1;
+  if (idx < 0) idx = seq.find(k => attive.has(k) && !tappe[k].seenCardId && !tappe[k].skipped) ?? -1;
+  if (idx < 0) return null;
 
   const aSala = String(tappe[idx].dove || '').trim();
   let saleDiDistanza: number | null = null;
