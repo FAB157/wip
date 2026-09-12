@@ -19,6 +19,7 @@ const r = await fetch(`${env.WIP_API || 'https://www.wip.guide'}/api/vision/venu
 });
 const j = await r.json().catch(() => ({}));
 console.log('stato', r.status, 'ok', j.ok, j.reason || '', `${((Date.now() - t0) / 1000).toFixed(0)} s`);
+if (!j.ok) console.log('dettaglio:', JSON.stringify({ tappeProposte: j.tappeProposte, motiviScarto: j.motiviScarto, error: j.error }));
 if (j.ok) {
   const g = j.guide; const t = g.tappe || [];
   console.log('intro', (g.intro || '').length, 'consiglio', (g.consiglio || '').length, 'servizi', Object.values(g.servizi || {}).filter(Boolean).length, 'fotoMuseo', !!j.venuePhoto);

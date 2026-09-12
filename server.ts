@@ -7027,9 +7027,13 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
    * quando la query d'insieme non ha dato NESSUNA riga (il segnale del
    * timeout, non "il museo non ha foto").
    */
-  async function fotoOperaPerTitolo(titolo: string, autore: string, lang: string): Promise<string> {
+  // `qui` (12/09/2026 sera, CARMI: la tappa «Villa Fabbricotti» prese la
+  // foto della Villa Fabbricotti di LIVORNO): se l'oggetto Wikidata ha delle
+  // coordinate (P625) devono stare entro 3 km dal museo; se dichiara una
+  // collezione (P195) o un luogo (P276) diverso dal museo, non è la nostra.
+  async function fotoOperaPerTitolo(titolo: string, autore: string, lang: string, qui?: { lat: number; lon: number; qid?: string }): Promise<string> {
     if (!titolo) return '';
-    const chiave = `wd_foto_titolo:${normalizzaTesto(titolo).slice(0, 60)}:${normalizzaTesto(autore || '').slice(0, 40)}:${lang}`;
+    const chiave = `wd_foto_titolo:${normalizzaTesto(titolo).slice(0, 60)}:${normalizzaTesto(autore || '').slice(0, 40)}:${lang}:${qui ? `${qui.lat.toFixed(2)},${qui.lon.toFixed(2)}` : ''}`;
     const conservata = await getFromCache(chiave, 'wikidata_foto_opera', 30 * 24 * 60 * 60 * 1000);
     if (conservata) {
       try {
@@ -7049,9 +7053,20 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
         Math.max(sovrapposizioneNomi(titolo, c.label || ''), sovrapposizioneNomi(c.label || '', titolo)) >= 0.7
       );
       for (const c of candidati.slice(0, 2)) {
-        const r = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&property=P18&format=json`, ua);
-        const nomeFile = r.data?.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
-        if (nomeFile) { foto = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nomeFile)}`; break; }
+        const r = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${c.id}&format=json`, ua);
+        const cl = r.data?.claims || {};
+        const nomeFile = cl.P18?.[0]?.mainsnak?.datavalue?.value;
+        if (!nomeFile) continue;
+        if (qui) {
+          const coord = cl.P625?.[0]?.mainsnak?.datavalue?.value;
+          if (coord && Number.isFinite(coord.latitude) && Number.isFinite(coord.longitude)) {
+            const d = haversineDistance(qui.lat, qui.lon, coord.latitude, coord.longitude);
+            if (d > 3000) { console.log(`[VenueGuide] foto per titolo «${titolo}»: ${c.id} sta a ${Math.round(d / 1000)} km, scartata`); continue; }
+          }
+          const dove = [...(cl.P195 || []), ...(cl.P276 || [])].map((x: any) => x?.mainsnak?.datavalue?.value?.id).filter(Boolean);
+          if (qui.qid && dove.length && !dove.includes(qui.qid)) { console.log(`[VenueGuide] foto per titolo «${titolo}»: ${c.id} sta in ${dove.join(',')}, non in ${qui.qid}, scartata`); continue; }
+        }
+        foto = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(nomeFile)}`; break;
       }
     } catch { /* niente foto per questa opera: si riprova al prossimo giro */ }
     await saveToCache(chiave, 'wikidata_foto_opera', JSON.stringify(foto ? { foto } : { foto: '', negativoDel: new Date().toISOString() }));
@@ -8859,6 +8874,10 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           // Una tappa che è il luogo stesso non è una tappa (il Palazzo delle
           // Logge proponeva come tappa "Palazzo Diana", il suo vecchio nome).
           if (sovrapposizioneNomi(t.nome, venue!.name) >= 0.8 && sovrapposizioneNomi(venue!.name, t.nome) >= 0.8) return false;
+          // Anche contro il nome DETTO dall'utente/script: il nome in archivio
+          // può essere uno slug («CARMI-museocarraramichelangeloavilla…») e
+          // la tappa «CARMI – Museo Carrara e Michelangelo» gli sfuggiva.
+          if (venueHint && sovrapposizioneNomi(t.nome, venueHint) >= 0.8 && sovrapposizioneNomi(venueHint, t.nome) >= 0.8) return false;
           // Il controllo «sta nel materiale» si fa sul titolo COM'È NELLA
           // FONTE: quello tradotto, per definizione, nel materiale non c'è.
           const tok = tokenSignificativi(t.nomeFonte || t.nome);
@@ -9133,8 +9152,11 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
         : tappe2Finale;
 
       if (tappeOrdinate.length < 3) {
-        const out = { ok: false, reason: 'insufficient', venue, negativoDel: new Date().toISOString() };
-        await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
+        const out = { ok: false, reason: 'insufficient', venue, negativoDel: new Date().toISOString(), motiviScarto: motiviScarto.slice(0, 30), tappeProposte: tappeIn.length };
+        console.warn(`[VenueGuide] ${venue.name}: insufficient — proposte ${tappeIn.length}, rimaste ${tappeOrdinate.length}; scarti: ${motiviScarto.slice(0, 12).map(m => `${m.nome} (${m.motivo})`).join('; ')}`);
+        // Con rigenera=true (script) il negativo NON va in cache: si sta
+        // provando a rifare la guida, non a chiudere il museo per sempre.
+        if (!rigenera) await saveToCache(cacheKey, 'venue_guide', JSON.stringify(out));
         return res.json(out);
       }
 
@@ -9188,7 +9210,8 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // combacia per titolo/autore o non dà nulla.
       if (!isSito && tappeConFoto.some((t: any) => !t.foto)) {
         const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 12);
-        const trovate = await Promise.all(daProvare.map((t: any) => fotoOperaPerTitolo(t.nomeFonte || t.nome, t.autore || '', langCfg.wiki)));
+        const quiVenue = (Number.isFinite(Number(venue.lat)) && Number.isFinite(Number(venue.lon))) ? { lat: Number(venue.lat), lon: Number(venue.lon), qid: wikidataId || undefined } : undefined;
+        const trovate = await Promise.all(daProvare.map((t: any) => fotoOperaPerTitolo(t.nomeFonte || t.nome, t.autore || '', langCfg.wiki, quiVenue)));
         daProvare.forEach((t: any, i: number) => {
           if (!trovate[i]) return;
           const idx = tappeConFoto.indexOf(t);
@@ -9206,17 +9229,61 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // descrizione deve contenere una parola propria della tappa
       // («loggia», «portale», «balcone», «colonne»…). Niente parola in
       // comune = niente foto: mai una foto «a tema».
-      if (wikidataId && tappeConFoto.some((t: any) => !t.foto)) {
+      // ANCHE SENZA WIKIDATA E ANCHE PER I MUSEI (12/09/2026 sera, CARMI e
+      // Museo del Marmo di Carrara): il CARMI non ha un QID ma Commons ha 19
+      // foto «Carrara - Museo Carmi» (calco del Mosè, esposizione su
+      // Michelangelo); il Museo del Marmo ha una categoria con Marmoteca,
+      // epigrafe, vagone. Senza categoria si cerca per nome e si tengono
+      // SOLO i file il cui titolo/descrizione contiene il nome del museo
+      // (la sigla se c'è, altrimenti almeno due parole proprie del nome).
+      if (tappeConFoto.some((t: any) => !t.foto)) {
         try {
-          const ent = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${wikidataId}&property=P373&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 6000 });
-          const categoria = ent.data?.claims?.P373?.[0]?.mainsnak?.datavalue?.value;
+          const UA = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 10000 };
+          let categoria = '';
+          if (wikidataId) {
+            const ent = await axios.get(`https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${wikidataId}&property=P373&format=json`, { ...UA, timeout: 6000 }).catch(() => null);
+            categoria = ent?.data?.claims?.P373?.[0]?.mainsnak?.datavalue?.value || '';
+          }
+          const leggiPagine = (pages: any): any[] => Object.values(pages || {}).map((p: any) => {
+            const ii = p?.imageinfo?.[0]; if (!ii || !/^image\/(jpeg|png|webp)$/.test(String(ii.mime || 'image/jpeg'))) return null;
+            // La descrizione conta solo se è corta: una descrizione lunga che
+            // racconta tutto il museo («…la trattrice a vapore, la marmoteca,
+            // le epigrafi…») farebbe combaciare ogni file con ogni tappa (è
+            // successo: l'epigrafe sepolcrale sulla trattrice a vapore).
+            const descr = String(ii?.extmetadata?.ImageDescription?.value || '').replace(/<[^>]+>/g, ' ').trim();
+            return { titolo: String(p.title || '').replace(/^File:/, ''), testo: normalizzaTesto(`${p.title} ${descr.length <= 120 ? descr : ''}`), url: ii.url };
+          }).filter(Boolean);
+          let file: any[] = [];
           if (categoria) {
-            const cm = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=categorymembers&gcmtitle=Category:${encodeURIComponent(categoria)}&gcmtype=file&gcmlimit=60&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=800&format=json`, { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 10000 });
-            const file: any[] = Object.values(cm.data?.query?.pages || {}).map((p: any) => {
-              const ii = p?.imageinfo?.[0]; if (!ii || !/^image\/(jpeg|png|webp)$/.test(String(ii.mime || 'image/jpeg'))) return null;
-              const descr = String(ii?.extmetadata?.ImageDescription?.value || '').replace(/<[^>]+>/g, ' ');
-              return { titolo: String(p.title || '').replace(/^File:/, ''), testo: normalizzaTesto(`${p.title} ${descr}`), url: ii.url };
-            }).filter(Boolean);
+            const cm = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=categorymembers&gcmtitle=Category:${encodeURIComponent(categoria)}&gcmtype=file&gcmlimit=60&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth=800&format=json`, UA);
+            file = leggiPagine(cm.data?.query?.pages);
+          }
+          if (file.length < 3) {
+            // Ricerca per nome: i file devono «dire» il museo nel titolo o
+            // nella descrizione, altrimenti non entrano (foto a tema = mai).
+            const GEN_NOME = new Set(['museo', 'museum', 'musee', 'museu', 'civico', 'civica', 'nazionale', 'national', 'galleria', 'gallery', 'palazzo', 'villa', 'casa', 'fondazione', 'collezione', 'centro', 'arte', 'art', 'della', 'delle', 'degli', 'del', 'dei', 'di', 'the', 'of', 'and', 'e', 'la', 'il', 'les', 'des', 'du', 'de', 'da']);
+            const sigla = (String(venue.name).match(/\b[A-Z]{4,}\b/) || [])[0];
+            const proprie = normalizzaTesto(venue.name).split(' ').filter(w => w.length >= 4 && !GEN_NOME.has(w));
+            // Si cerca con la sigla (CARMI) o con le parole proprie, MAI col
+            // nome intero fra virgolette: «CARMI Museo Carrara e Michelangelo»
+            // come frase esatta non sta in nessun titolo di file.
+            const ricerche = sigla ? [sigla, proprie.join(' ')] : [proprie.join(' ')];
+            const trovati: any[] = [];
+            for (const q of ricerche.filter(Boolean)) {
+              const sr = await axios.get(`https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrlimit=40&gsrsearch=${encodeURIComponent(q)}&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth=800&format=json`, UA).catch(() => null);
+              for (const f of leggiPagine(sr?.data?.query?.pages)) if (!trovati.some(x => x.url === f.url)) trovati.push(f);
+            }
+            const dicono = trovati.filter(f => {
+              if (sigla && f.testo.includes(normalizzaTesto(sigla))) return true;
+              const n = proprie.filter(p => f.testo.includes(p)).length;
+              return proprie.length ? n >= Math.min(2, proprie.length) : false;
+            });
+            const giaVisti = new Set(file.map(f => f.url));
+            for (const f of dicono) if (!giaVisti.has(f.url)) file.push(f);
+            if (dicono.length) console.log(`[VenueGuide] ${venue.name}: ${dicono.length} foto Commons trovate per nome (senza categoria)`);
+          }
+          if (file.length) {
+            if (!categoria) categoria = `ricerca «${venue.name}»`;
             const GENERICHE_EL = new Set(['palazzo', 'palace', 'chiesa', 'church', 'museo', 'museum', 'della', 'delle', 'degli', 'del', 'dei', 'di', 'the', 'of', 'and', 'con', 'vista', 'generale', 'lato', 'verso', 'grande', 'grandi', 'due', 'tre', 'principale']);
             const SINONIMI: Record<string, string[]> = { loggiato: ['loggia', 'loggiato', 'logge', 'arcate', 'arcade'], loggetta: ['loggetta', 'loggia'], portale: ['portale', 'portal', 'porta', 'door', 'ingresso'], balconcino: ['balcone', 'balconcino', 'balcony'], colonne: ['colonne', 'colonna', 'column', 'columns'], facciata: ['facciata', 'facade', 'fronte'], cortile: ['cortile', 'courtyard'], scalone: ['scala', 'scalone', 'staircase', 'stairs'], affreschi: ['affresco', 'affreschi', 'fresco', 'frescoes'], soffitto: ['soffitto', 'ceiling', 'volta'], campanile: ['campanile', 'bell tower', 'torre'], cupola: ['cupola', 'dome'], altare: ['altare', 'altar'], cappella: ['cappella', 'chapel'], finestre: ['finestra', 'finestre', 'window', 'windows', 'bifora'], fregio: ['fregio', 'frieze'], stemma: ['stemma', 'scudo', 'coat of arms'] };
             const usate = new Set<string>();
@@ -9224,16 +9291,35 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
             // ogni file del Palazzo delle Logge, e «il loggiato» prendeva la
             // foto generale della facciata.
             const paroleLuogo = new Set(normalizzaTesto(venue.name).split(' ').filter(Boolean));
+            // «Parola del luogo» = uguale, o il plurale/singolare (al più due
+            // lettere in più): «logge»/«loggia» sì, «marmoteca» NO rispetto a
+            // «marmo» (prima il confronto sulle prime 4 lettere buttava via
+            // «marmoteca», «archeologia» e ogni parola che cominciasse come
+            // il nome del museo).
+            const eParolaLuogo = (w: string) => [...paroleLuogo].some(pl => pl.length >= 4 && (w === pl || (w.startsWith(pl) && w.length - pl.length <= 2) || (pl.startsWith(w) && pl.length - w.length <= 2)));
+            const GENERICHE_ZONA = new Set(['sala', 'sale', 'sezione', 'sezioni', 'collezione', 'collezioni', 'giardino', 'giardini', 'parco', 'esterno', 'esterni', 'interno', 'interni', 'piano', 'terra', 'primo', 'secondo', 'ala', 'room', 'rooms', 'hall', 'gallery', 'wing', 'floor', 'garden', 'gardens', 'section', 'collection']);
+            const cerca = (testo: string, conRadici: boolean): any => {
+              const parole = normalizzaTesto(testo).split(' ').filter(w => w.length >= 5 && !GENERICHE_EL.has(w) && !GENERICHE_ZONA.has(w) && !eParolaLuogo(w));
+              const chiavi = new Set<string>(parole);
+              for (const p of parole) for (const [k, syn] of Object.entries(SINONIMI)) if (p.startsWith(k.slice(0, 5)) || syn.some(s => p.startsWith(s.slice(0, 5)))) syn.forEach(s => chiavi.add(s));
+              for (const c of [...chiavi]) if (eParolaLuogo(c)) chiavi.delete(c);
+              if (!chiavi.size) return null;
+              // Radice: «giardini» trova «giardino», «epigrafi» «epigrafe»
+              // (prime 6 lettere, solo per parole di almeno 7).
+              const combacia = (f: any) => [...chiavi].some(k => { const n = normalizzaTesto(k); return f.testo.includes(n) || (conRadici && n.length >= 7 && f.testo.includes(n.slice(0, 6))); });
+              return file.find(f => !usate.has(f.url) && combacia(f)) || null;
+            };
             let assegnate = 0;
             tappeConFoto.forEach((t: any, idx: number) => {
               if (t.foto) return;
-              const parole = normalizzaTesto(`${t.nome} ${t.nomeFonte || ''}`).split(' ').filter(w => w.length >= 5 && !GENERICHE_EL.has(w) && !paroleLuogo.has(w) && ![...paroleLuogo].some(pl => pl.length >= 4 && (w.startsWith(pl.slice(0, 4)) )));
-              const chiavi = new Set<string>(parole);
-              for (const p of parole) for (const [k, syn] of Object.entries(SINONIMI)) if (p.startsWith(k.slice(0, 5)) || syn.some(s => p.startsWith(s.slice(0, 5)))) syn.forEach(s => chiavi.add(s));
-              // Anche i sinonimi che coincidono con il nome del luogo escono.
-              for (const c of [...chiavi]) if ([...paroleLuogo].some(pl => pl.length >= 4 && (c === pl || c.startsWith(pl.slice(0, 4))))) chiavi.delete(c);
-              if (!chiavi.size) return;
-              const hit = file.find(f => !usate.has(f.url) && [...chiavi].some(k => f.testo.includes(normalizzaTesto(k))));
+              // 1) per le parole del NOME della tappa (l'opera o l'elemento);
+              // 2) se la tappa È una zona (sala, sezione, giardino, collezione,
+              //    parco), anche per le parole di dove sta: la foto della
+              //    sezione «Archeologia industriale» sta bene sulla tappa
+              //    «sezione di archeologia industriale», mai su un'opera.
+              let hit = cerca(`${t.nome} ${t.nomeFonte || ''}`, false) || cerca(`${t.nome} ${t.nomeFonte || ''}`, true);
+              const eZona = /\b(sala|sale|sezione|collezione|giardin|parco|cortile|chiostro|deposito|percorso|area|ala|room|hall|gallery|wing|garden|section|collection)\b/i.test(`${t.nome} ${t.nomeFonte || ''}`);
+              if (!hit && eZona && t.dove) hit = cerca(String(t.dove), true);
               if (!hit) return;
               usate.add(hit.url);
               tappeConFoto[idx] = { ...t, foto: fotoCommons(hit.url, 800), fotoIcona: fotoCommons(hit.url, 160), fotoDaCategoria: hit.titolo };
@@ -9296,6 +9382,46 @@ ${JSON.stringify(elenco)}`;
             });
             if (tolte || ripulite) console.warn(`[VenueGuide] ${venue.name}: revisore — ${tolte} tappe tolte, ${ripulite} spiegazioni segnalate`);
             tappeVerificate = tenute;
+            // RISCRITTURA DELLE SPIEGAZIONI SEGNALATE (12/09/2026 sera, CARMI:
+            // «David e Pietà non presenti nel testo», «anno 1865 e restauro
+            // 2019 non presenti»). Segnalare non basta: il testo con il fatto
+            // inventato resterebbe al visitatore. Una sola chiamata per tutte
+            // le tappe segnalate: riscrivi spiegazione e curiosità SOLO dal
+            // materiale, togliendo ciò che il revisore ha indicato. Se la
+            // riscrittura non arriva, resta la segnalazione.
+            const daRiscrivere = tenute.map((t: any, i: number) => ({ t, i })).filter(({ t }: any) => t.revisione);
+            if (daRiscrivere.length) {
+              try {
+                const promptRiscrivi = `Sei una guida museale. Per ogni tappa qui sotto riscrivi "perche" (2-4 frasi, 40-90 parole) e "curiosita" (1-3 frasi) usando SOLO il MATERIALE: niente date, nomi, misure, tecniche o aneddoti che non stiano nel materiale. Il revisore ha trovato questi problemi, che devi eliminare: vedi "problema". Se sul materiale non c'è abbastanza per una curiosità, metti una frase pratica su dove/come guardare l'opera, mai un'invenzione. Lingua: ${langCfg.name}.
+Rispondi SOLO con JSON: {"tappe":[{"n":1,"perche":"...","curiosita":"..."}]}
+
+MATERIALE:
+"""
+${materiale.slice(0, 150000)}
+"""
+
+TAPPE:
+${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeFonte || t.nome, autore: t.autore || '', sala: t.salaCodice || t.dove || '', perche: t.perche, curiosita: t.curiosita, problema: t.revisione })))}`;
+                const ri = await callUniversalAi(motoreGuida, [{ role: 'user', content: promptRiscrivi }], {
+                  temperature: 0.2, max_tokens: 3500, response_format: { type: 'json_object' },
+                  excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
+                }, 'venue_guide_riscrittura', supabaseUrl, supabaseServiceKey, groq, userId);
+                const rawR = String(ri?.data || '');
+                const esitoR = JSON.parse(rawR.slice(rawR.indexOf('{'), rawR.lastIndexOf('}') + 1));
+                let riscritte = 0;
+                for (const r of (Array.isArray(esitoR?.tappe) ? esitoR.tappe : [])) {
+                  const idx = Number(r.n) - 1; const t = tenute[idx];
+                  if (!t || !t.revisione) continue;
+                  const perche = togliFrasiGeneriche(campoOpzionale(r.perche, 500));
+                  const curiosita = togliFrasiGeneriche(campoOpzionale(r.curiosita, 400));
+                  if (!perche) continue;
+                  tenute[idx] = { ...t, perche, curiosita: curiosita || t.curiosita, riscritta: true, revisione: undefined };
+                  riscritte++;
+                }
+                if (riscritte) console.log(`[VenueGuide] ${venue.name}: ${riscritte}/${daRiscrivere.length} spiegazioni riscritte dal materiale dopo il revisore`);
+                tappeVerificate = tenute;
+              } catch (e: any) { console.warn('[VenueGuide] riscrittura dopo revisore non riuscita:', e?.message); }
+            }
           } else {
             console.warn(`[VenueGuide] ${venue.name}: revisore muto o parziale (${giudizi.size}/${tappeConFoto.length}), tappe lasciate come sono`);
           }
