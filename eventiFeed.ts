@@ -602,7 +602,11 @@ export function eventiDaJsonLd(html: string, baseUrl: string, tipi: RegExp = TIP
 
 export interface RisultatoWeb { title: string; url: string; snippet: string; }
 
-export function fornitoreRicerca(): 'brave' | 'google' | null {
+export function fornitoreRicerca(): 'brave' | 'google' | 'searxng' | null {
+  // 12/09/2026 sera (committente): SearXNG sul droplet ha la precedenza
+  // ovunque, Eventi compresi. Brave resta di riserva: se SearXNG non
+  // risponde, ricercaWeb ripiega da sola sulla chiave Brave.
+  if (process.env.SEARXNG_URL) return 'searxng';
   if (process.env.BRAVE_SEARCH_API_KEY) return 'brave';
   if (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) return 'google';
   return null;
@@ -615,7 +619,8 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
    *  'searxng' = istanza SearXNG auto-ospitata (SEARXNG_URL + SEARXNG_TOKEN): gratis, senza crediti. */
   provider?: 'brave' | 'google' | 'searxng'; braveKey?: string } = {}): Promise<RisultatoWeb[]> {
   let fornitore: 'brave' | 'google' | 'searxng' | null = opts.provider || fornitoreRicerca();
-  if (fornitore === 'searxng' && !process.env.SEARXNG_URL) fornitore = fornitoreRicerca();
+  const riserva = (): 'brave' | 'google' | null => (opts.braveKey || process.env.BRAVE_SEARCH_API_KEY) ? 'brave' : (process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX) ? 'google' : null;
+  if (fornitore === 'searxng' && !process.env.SEARXNG_URL) fornitore = riserva();
   if (fornitore === 'google' && !(process.env.GOOGLE_CSE_API_KEY && process.env.GOOGLE_CSE_CX)) fornitore = fornitoreRicerca();
   if (fornitore === 'brave' && !(opts.braveKey || process.env.BRAVE_SEARCH_API_KEY)) fornitore = fornitoreRicerca();
   const q = String(query || '').trim();
@@ -654,6 +659,9 @@ export async function ricercaWeb(query: string, opts: { lang?: string; cc?: stri
     }
   } catch (e: any) {
     console.warn(`[ricercaWeb] ${fornitore} fallita:`, e?.response?.status || e?.message);
+    // SearXNG giù (container fermo, certificato scaduto, droplet spento):
+    // un solo ripiego sul fornitore a pagamento, che non passa da qui.
+    if (fornitore === 'searxng' && riserva()) return ricercaWeb(query, { ...opts, provider: riserva()! });
     return [];
   }
   out = out.filter((x) => /^https?:\/\//i.test(x.url));
