@@ -75,6 +75,14 @@ export type OperaDelMuseo = {
   testoFonte: string;
   fonteTesto: 'voce' | 'voce_en' | 'scheda_ufficiale' | 'wikidata' | '';
   sala: string;
+  /** IL CODICE NUDO, ESATTAMENTE come sulla pianta ufficiale del museo
+   *  («Room 32», «Salle 711», «Sala 10», «Saal X») — MAI tradotto e MAI col
+   *  nome del reparto davanti. Serve ad android-13 per i pin sulla pianta:
+   *  cercarli su `sala` (discorsivo, «Gemäldegalerie Saal X») dava 0 pin dove
+   *  la guida scrive un nome invece del codice; su `salaCodice` il pin si
+   *  trova cercando la stessa stringa che compare sulla pianta. Vuoto quando
+   *  nessuna fonte dà un codice riconoscibile (resta solo `sala`, se c'è). */
+  salaCodice: string;
   fonteSala: 'api_museo' | 'wikidata' | 'scheda_ufficiale' | '';
   urlScheda: string;
   /** Testo curatoriale della scheda ufficiale, se la pagina ne ha. */
@@ -140,6 +148,20 @@ export function titoloBreve(etichetta: string, titoloVoce = ''): string {
   if (virgolette) return virgolette[1].trim();
   const taglio = e.split(/,|;| con | with | mit | avec /)[0].trim();
   return (taglio.length <= 70 ? taglio : taglio.slice(0, 67).replace(/\s+\S*$/, '') + '…');
+}
+
+// Il CODICE nudo di una sala, come sta scritto sulla pianta del museo — mai
+// il nome del reparto davanti, mai tradotto. Condiviso fra la sala letta da
+// Wikidata e quella letta dalle schede ufficiali, così i due canali producono
+// lo stesso formato.
+const NUMERO_SALA = '(?:n\\.?\\s*|nr\\.?\\s*|no\\.?\\s*)?(?:[0-9]{1,4}(?:\\.[0-9]{1,3})?[A-Za-z]?|[IVXLC]{1,6})\\b';
+const PAROLA_SALA = '(?:Saal|Kabinett|Raum|Room|Hall|Gallery|Galerie|Salle|Sala|Zaal|Sal|Sală|Зал)';
+const RE_CODICE_SALA = new RegExp(`\\b${PAROLA_SALA}\\s+${NUMERO_SALA}`, 'i');
+/** Estrae «Room 32» da «National Gallery, Room 32 (ground floor)»; '' se il
+ *  testo non contiene un codice riconoscibile (solo un nome discorsivo). */
+export function codiceSalaDa(testo: string): string {
+  const m = RE_CODICE_SALA.exec(String(testo || ''));
+  return m ? m[0].replace(/\s+/g, ' ').trim() : '';
 }
 
 /** Esegue n compiti con al massimo `k` in parallelo. */
@@ -435,13 +457,14 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     for (const [luogo, etichetta] of g.luoghi) {
       if (luogo !== qidMuseo && parti.has(luogo) && etichetta && !/^Q\d+$/.test(etichetta)) { sala = etichetta; fonteSala = 'wikidata'; break; }
     }
+    const salaCodice = sala ? codiceSalaDa(sala) : '';
     return {
       qid: g.qid, titolo: senzaNomeLuogo(titoloBreve(g.lab || g.labEn, g.voce || g.voceEn)), titoloEn: titoloBreve(g.labEn || g.lab, g.voceEn), autore: autori.slice(0, 2).join(', '), anno: g.anno, inv: g.inv,
       tipo: g.tipo, materiale: [...g.materiali].slice(0, 3).join(', '), dimensioni, fama: fama[g.qid] || 0,
       foto: g.img, fonteFoto: g.img ? 'P18' : '',
       voce: g.voce ? { lingua: lang, titolo: g.voce, url: `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(g.voce.replace(/ /g, '_'))}` }
         : g.voceEn ? { lingua: 'en', titolo: g.voceEn, url: `https://en.wikipedia.org/wiki/${encodeURIComponent(g.voceEn.replace(/ /g, '_'))}` } : null,
-      testoFonte: '', fonteTesto: '', sala, fonteSala, urlScheda: '', testoScheda: '', esposta: null,
+      testoFonte: '', fonteTesto: '', sala, salaCodice, fonteSala, urlScheda: '', testoScheda: '', esposta: null,
       // campi di lavoro, tolti alla fine
       ...({ _cat: g.cat, _desc: g.desc } as any),
     } as OperaDelMuseo;
@@ -573,7 +596,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
       if (!r?.ok) return;
       try {
         const e = api.leggi(await r.json());
-        if (e.sala) { o.sala = e.sala; o.fonteSala = 'api_museo'; }
+        if (e.sala) { o.sala = e.sala; o.salaCodice = codiceSalaDa(e.sala); o.fonteSala = 'api_museo'; }
         if (e.esposta !== null) o.esposta = e.esposta;
         if (e.testo && e.testo.trim().length > 150) o.testoScheda = e.testo.replace(/\s+/g, ' ').trim().slice(0, 1500);
       } catch { /* API muta: si passa oltre */ }
@@ -585,8 +608,6 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     .replace(/<\/(p|div|li|h\d|tr|dd|dt|section)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/&#x27;|&#39;|&rsquo;/g, "'").replace(/&quot;/g, '"')
     .replace(/[ \t]+/g, ' ').replace(/\n\s+/g, '\n');
-  const NUMERO_SALA = '(?:n\\.?\\s*|nr\\.?\\s*|no\\.?\\s*)?(?:[0-9]{1,4}(?:\\.[0-9]{1,3})?[A-Za-z]?|[IVXLC]{1,6})\\b';
-  const PAROLA_SALA = '(?:Saal|Kabinett|Raum|Room|Gallery|Galerie|Salle|Sala|Zaal|Sal|Sală|Зал)';
   // «Ort» è tolto: in tedesco è qualunque luogo. E una collocazione vale solo
   // se nomina una sala, un piano o un'ala (sotto): al Rijksmuseum «Location:»
   // precedeva il credito fotografico «M. Zeldenrust / G. Tauber, RMA, 2007».
@@ -601,7 +622,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
   // «Kunsthistorisches Museum , Gemäldegalerie Saal X» → «Gemäldegalerie Saal X»:
   // il nome del museo davanti alla sala non dice niente a chi è già dentro.
   const pulisciSala = (s: string) => s.replace(/\s+/g, ' ').replace(/^[^,\/]*\b(museo|museum|musée|musei|museu|muzeum)\b[^,\/]*\s*[,\/]\s*/i, '').replace(/^(museo|museum|musée)\s*\/\s*/i, '').replace(/\s*\/\s*(cornice|vetrina|case|vitrine|shelf|ripiano)\b.*$/i, '').replace(/\s*[|·].*$/, '').trim().slice(0, 90);
-  const leggiScheda = (corpo: string, tipo: string, titolo: string): { sala: string; esposta: boolean | null; testo: string } => {
+  const leggiScheda = (corpo: string, tipo: string, titolo: string): { sala: string; salaCodice: string; esposta: boolean | null; testo: string } => {
     let testo = '';
     if (/json/i.test(tipo)) {
       // Linked Art (Rijksmuseum): i testi stanno nei campi "content".
@@ -610,7 +631,8 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
       try { visita(JSON.parse(corpo)); } catch { /* non è JSON vero */ }
       const lunghi = contenuti.filter(c => c.length > 150).sort((a, b) => b.length - a.length);
       const sala = contenuti.find(c => new RegExp(`^${PAROLA_SALA}\\s+${NUMERO_SALA}`, 'i').test(c) || /\b(Gallery|Zaal|Room)\b/.test(c) && c.length < 60) || '';
-      return { sala: pulisciSala(sala), esposta: null, testo: lunghi.slice(0, 2).join('\n\n').slice(0, 1500) };
+      const salaPulita = pulisciSala(sala);
+      return { sala: salaPulita, salaCodice: codiceSalaDa(salaPulita), esposta: null, testo: lunghi.slice(0, 2).join('\n\n').slice(0, 1500) };
     }
     const t = soloTesto(corpo);
     // Si guarda vicino al titolo quando c'è: una scheda nomina anche le
@@ -627,7 +649,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
     const paragrafi = [...corpo.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)].map(m => soloTesto(m[1]).replace(/\s+/g, ' ').trim())
       .filter(p => p.length >= 150 && !/cookie|javascript|newsletter|privacy|©|copyright|iscriviti|subscribe/i.test(p));
     testo = paragrafi.slice(0, 3).join('\n\n').slice(0, 1500);
-    return { sala, esposta, testo };
+    return { sala, salaCodice: codiceSalaDa(sala), esposta, testo };
   };
   if (opzioni.schede !== false) {
     await aGruppi(opere, 4, async (o) => {
@@ -642,7 +664,7 @@ export async function opereDelMuseo(qidMuseo: string, lingua: string, opzioni: O
       try {
         const corpo = (await r.text()).slice(0, 400000);
         const e = leggiScheda(corpo, r.headers.get('content-type') || '', o.titoloEn || o.titolo);
-        if (e.sala && !o.sala) { o.sala = e.sala; o.fonteSala = 'scheda_ufficiale'; }
+        if (e.sala && !o.sala) { o.sala = e.sala; o.salaCodice = e.salaCodice; o.fonteSala = 'scheda_ufficiale'; }
         if (e.esposta === false) o.esposta = false;
         if (e.testo && !o.testoScheda) o.testoScheda = e.testo;
       } catch { /* scheda illeggibile */ }
