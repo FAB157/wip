@@ -741,7 +741,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (!foto) { notify(t('mv_describe_no_photo')); return null; }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return null; }
     setDescrivendo(i);
-    const r = await fetchAudioDescription({ artwork: tappa.nomeFonte || tappa.nome, venueName: visit.venue.name, photo: foto, language });
+    const r = await fetchAudioDescription({ artwork: tappa.nomeFonte || tappa.nome, venueName: visit.venue.name, photo: foto, language, venueKey: visit.venueKey });
     setDescrivendo(null);
     if (r.ok === false) {
       const motivo = r.reason;
@@ -811,6 +811,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         room: tappa.dove || null,
         language,
         stile: pers.bambini ? 'bambini' : '',
+        venueKey: visit.venueKey,
       });
       setOperaLoading(null);
       if (!resp) { notify(t('vis_generic_error')); return; }
@@ -947,7 +948,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return; }
     setCaricandoGuidaCartellino(true);
-    const resp = await fetchArtworkGuide({ artwork: cartellino.titolo, venueName: visit.venue.name, artist: cartellino.autore || null, language });
+    const resp = await fetchArtworkGuide({ artwork: cartellino.titolo, venueName: visit.venue.name, artist: cartellino.autore || null, language, venueKey: visit.venueKey });
     setCaricandoGuidaCartellino(false);
     if (!resp) { notify(t('vis_generic_error')); return; }
     if (resp.ok !== true) {
@@ -970,7 +971,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (!testo) {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) { notify(t('mv_offline_non_scaricata')); return; }
       setConfrontando(k);
-      const r = await fetchConfronto({ a: visit.guide.tappe[c.a], b: visit.guide.tappe[c.b], venueName: visit.venue.name, language });
+      const r = await fetchConfronto({ a: visit.guide.tappe[c.a], b: visit.guide.tappe[c.b], venueName: visit.venue.name, language, venueKey: visit.venueKey });
       setConfrontando(null);
       if (r.ok === false) {
         notify(r.reason === 'needs_pass' ? t('mv_art_needs_pass') : r.reason === 'pass_exhausted' ? t('mv_art_exhausted') : t('mv_compare_failed'));

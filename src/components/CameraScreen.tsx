@@ -23,7 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -295,11 +295,14 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     notify(tr('mv_poche_opere_title'));
     window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
-  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null) => {
+  // La chiave del museo per cui si compra la Visita (senza scadenza).
+  const [passVenueKey, setPassVenueKey] = useState<string | null>(null);
+  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null, venueKey?: string | null) => {
     setPocheOpere(null);
     setNeedsTourPass(true);
     setPassPerLuogo(nome);
     setPassSample(sample);
+    setPassVenueKey(venueKey || null);
     notify(tr('mv_locked_title'));
     // Al prossimo frame la scheda esiste (needsTourPass appena messo a true).
     window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
@@ -386,7 +389,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       // schermo (12/09/2026, «se clicco su Palazzo delle Logge non succede
       // nulla»). Ora la scheda prende il nome del museo toccato, l'assaggio
       // della sua introduzione, e ci si scorre sopra.
-      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null);
+      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null, out.venueKey || m.venue_key || null);
       else if (out.reason === 'poche_opere') mostraPocheOpere(m.venue_name, out);
       else notify(tr('mv_not_found'));
     } catch (e) {
@@ -467,7 +470,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
-        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null);
+        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null, out.venueKey);
         else if (out.reason === 'poche_opere') mostraPocheOpere(typedName.trim(), out);
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
@@ -481,7 +484,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       } else if (resp && resp.ok === false && resp.reason === 'needs_tour_pass') {
         // La visita guidata è del pass con itinerario: si propone lo sblocco,
         // senza generare nulla (nessun costo AI per chi non ha pagato).
-        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null);
+        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null, (resp as any).venueKey || null);
       } else if (resp && resp.ok === false && resp.reason === 'poche_opere') {
         mostraPocheOpere(seiQui?.name || resp.venue?.name || null, resp);
       } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
@@ -720,9 +723,13 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     );
     if (!confirmed) return;
     setBuyingPass(true);
-    const out = await buyMuseumPass(tier);
+    const out = await buyMuseumPass(tier, tier === 'tour' ? passVenueKey : null);
     setBuyingPass(false);
-    if (out.ok && out.expiresAt) {
+    if (out.ok && out.permanent) {
+      // Visita Museo comprata per sempre per questo museo: la visita parte.
+      notify(getTranslation("museum_pass_bought", language));
+      void startGuidedVisit();
+    } else if (out.ok && out.expiresAt) {
       setPassExpiresAt(out.expiresAt);
       setPassTier(out.tier || tier);
       notify(getTranslation("museum_pass_bought", language));
@@ -1095,7 +1102,9 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
           // Modalità "Opera" (ondata 7): il server identifica l'opera
           // inquadrata (quadro/statua/reperto), non l'edificio del GPS.
           // Modalità "Natura": prompt da naturalista, categoria 'natura'.
-          ...(visionTarget !== 'place' ? { mode: visionTarget } : {})
+          ...(visionTarget !== 'place' ? { mode: visionTarget } : {}),
+          // La scansione durante una Visita posseduta è coperta dalle sue 20.
+          ...(visitaAttivaKey() ? { venueKey: visitaAttivaKey() } : {}),
         })
       });
 

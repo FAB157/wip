@@ -103,17 +103,23 @@ export async function fetchMuseumPassFull(): Promise<MuseumPassStatus> {
   }
 }
 
-export async function buyMuseumPass(tier: MuseumPassTier = 'base'): Promise<{ ok: boolean; expiresAt?: number; tier?: MuseumPassTier; upgraded?: boolean; error?: 'login' | 'credits' | 'generic' }> {
+export async function buyMuseumPass(tier: MuseumPassTier = 'base', venueKey?: string | null): Promise<{ ok: boolean; expiresAt?: number; tier?: MuseumPassTier; upgraded?: boolean; permanent?: boolean; venueKey?: string; error?: 'login' | 'credits' | 'generic' }> {
   try {
     const res = await fetch(getApiUrl('/api/vision/museum-pass'), {
       method: 'POST',
       headers: await authHeaders(),
-      body: JSON.stringify({ tier }),
+      // venueKey: la Visita Museo (tour) si lega al museo e non scade.
+      body: JSON.stringify({ tier, ...(tier === 'tour' && venueKey ? { venueKey } : {}) }),
     });
     if (res.status === 401) return { ok: false, error: 'login' };
     if (res.status === 402) return { ok: false, error: 'credits' };
     if (!res.ok) return { ok: false, error: 'generic' };
     const data = await res.json();
+    if (data?.permanent === true) {
+      const { data: session } = await supabase.auth.getSession();
+      notifyCreditsChanged({ userId: session?.session?.user?.id });
+      return { ok: true, tier: 'tour', permanent: true, venueKey: String(data.venueKey || venueKey || '') };
+    }
     const expiresAt = Number(data?.expiresAt) || 0;
     if (!expiresAt) return { ok: false, error: 'generic' };
     const tierOut: MuseumPassTier = data?.tier === 'tour' ? 'tour' : 'base';

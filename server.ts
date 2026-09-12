@@ -5918,11 +5918,17 @@ function isNameMatching(name1: string, name2: string): boolean {
       const museumPassInfo = realUserId ? await getActiveMuseumPass(realUserId) : null;
       const museumPassExpiresAt = museumPassInfo?.expiresAt ?? null;
       let museumPassActive = !!museumPassExpiresAt;
+      // VISITA MUSEO (12/09/2026 sera): la scansione fatta durante una visita
+      // posseduta (l'app manda venueKey) è coperta dalle 20 della Visita,
+      // senza scadenza. Si registra a parte, per museo.
+      const venueKeyVisitaScan = String(req.body?.venueKey || '').trim().slice(0, 160);
+      const copertaDaVisita = !!(realUserId && venueKeyVisitaScan && await visitaCopreScansione(realUserId, venueKeyVisitaScan));
+      if (copertaDaVisita) museumPassActive = true;
 
       // Tetto anti-spam del pass: oltre il tetto del livello (40 per il Pass,
       // 20 per la Visita) il pass smette di coprire e si torna all'addebito
       // per foto (lo spam diventa costoso; un visitatore vero non ci arriva).
-      if (museumPassActive && realUserId && museumPassExpiresAt) {
+      if (museumPassActive && !copertaDaVisita && realUserId && museumPassExpiresAt) {
         const used = await countMuseumPassScans(realUserId, museumPassExpiresAt);
         const tetto = limiteScansioniPass(museumPassInfo?.tier);
         if (used >= tetto) {
@@ -6497,7 +6503,9 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       // Pass Museo: la scansione coperta si registra su un contatore NON
       // cancellabile dall'utente (prima contava vision_cards: bastava svuotare
       // l'album per azzerare il tetto).
-      if (museumPassActive && realUserId && museumPassExpiresAt) {
+      if (museumPassActive && realUserId && copertaDaVisita) {
+        await registraScansioneVisita(realUserId, venueKeyVisitaScan, saved.cardId || `scan-${Date.now()}`);
+      } else if (museumPassActive && realUserId && museumPassExpiresAt) {
         await recordMuseumPassScan(realUserId, museumPassExpiresAt, saved.cardId || `scan-${Date.now()}`);
       }
 
@@ -6655,6 +6663,46 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     }
   }
 
+  // ── VISITA MUSEO SENZA SCADENZA (12/09/2026 sera, committente: «la visita
+  // non ha scadenza, rimane sempre nell'archivio dell'utente») ──
+  // Non un pass a tempo ma un ACQUISTO PER MUSEO: una riga in
+  // user_rewards_claimed (type 'museum_visit', id «mvisit-<venue_key>»),
+  // per sempre. Dà la guida completa di quel museo e 20 scansioni con la
+  // fotocamera in quel museo (type 'museum_visit_scan'), senza finestra di
+  // tempo. Il Pass Museo da 100 resta a tempo (4 ore, 40 scansioni).
+  const chiaveVisita = (venueKey: string) => `mvisit-${String(venueKey || '').replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 110)}`;
+  const chiaveLuogoDi = (v: any) => v?.id ? `poi_${v.id}` : `nome_${normalizzaTesto(String(v?.name || '')).replace(/ /g, '_').slice(0, 60)}`;
+  const visiteCache = new Map<string, { v: boolean; t: number }>();
+  async function haVisitaMuseo(userId: string, venueKey: string): Promise<boolean> {
+    if (!userId || !venueKey) return false;
+    const k = `${userId}|${venueKey}`;
+    const c = visiteCache.get(k);
+    if (c && c.v && Date.now() - c.t < 600_000) return true;
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&reward_source_id=eq.${encodeURIComponent(chiaveVisita(venueKey))}&select=id&limit=1`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
+      const v = Array.isArray(r.data) && r.data.length > 0;
+      visiteCache.set(k, { v, t: Date.now() });
+      return v;
+    } catch { return false; }
+  }
+  async function contaScansioniVisita(userId: string, venueKey: string): Promise<number> {
+    try {
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit_scan&reward_source_id=like.${encodeURIComponent(`${chiaveVisita(venueKey)}-*`)}&select=id`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, Prefer: 'count=exact', 'Range-Unit': 'items', Range: '0-0' } });
+      return parseInt(String(r.headers['content-range'] || '0/0').split('/')[1] || '0', 10) || 0;
+    } catch { return 0; }
+  }
+  async function registraScansioneVisita(userId: string, venueKey: string, cardId: string): Promise<void> {
+    try {
+      await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, { user_id: userId, reward_source_type: 'museum_visit_scan', reward_source_id: `${chiaveVisita(venueKey)}-${cardId}`.slice(0, 180) }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=ignore-duplicates' } });
+    } catch (e: any) { console.warn('[VisitaMuseo] scansione non registrata:', e?.message); }
+  }
+  /** Visita posseduta per questo museo e con scansioni ancora disponibili? */
+  async function visitaCopreScansione(userId: string | null, venueKey: string): Promise<boolean> {
+    if (!userId || !venueKey) return false;
+    if (!(await haVisitaMuseo(userId, venueKey))) return false;
+    return (await contaScansioniVisita(userId, venueKey)) < MUSEUM_VISIT_MAX_SCANS;
+  }
+
   async function recordMuseumPassScan(userId: string, passExpiresAt: number, cardId: string): Promise<void> {
     try {
       await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`,
@@ -6774,7 +6822,12 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     const pass = await getActiveMuseumPass(userId);
     const expiresAt = pass?.expiresAt ?? null;
     const scansUsed = expiresAt ? await countMuseumPassScans(userId, expiresAt) : 0;
+    // Visita posseduta per il museo chiesto (?venueKey=…): senza scadenza.
+    const venueKeyQ = String(req.query.venueKey || '').trim().slice(0, 160);
+    const visitOwned = venueKeyQ ? await haVisitaMuseo(userId, venueKeyQ) : false;
+    const visitScansUsed = visitOwned ? await contaScansioniVisita(userId, venueKeyQ) : 0;
     res.json({
+      visitOwned, visitScansUsed, visitScansLimit: MUSEUM_VISIT_MAX_SCANS,
       active: !!expiresAt && scansUsed < limiteScansioniPass(pass?.tier),
       expiresAt,
       tier: pass?.tier || null,
@@ -6800,6 +6853,32 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       // Livello scelto: 'tour' include la visita guidata del museo.
       const tier: 'base' | 'tour' = String(req.body?.tier || 'base') === 'tour' ? 'tour' : 'base';
       const existing = await getActiveMuseumPass(userId);
+      // VISITA MUSEO PER SEMPRE (12/09/2026 sera): con la chiave del museo
+      // l'acquisto 'tour' non è un pass a tempo ma la Visita di quel museo,
+      // che resta nell'archivio dell'utente. Con un Pass base attivo si paga
+      // la differenza. Idempotente: già posseduta = nessun addebito.
+      const venueKeyVisita = String(req.body?.venueKey || '').trim().slice(0, 160);
+      if (tier === 'tour' && venueKeyVisita) {
+        if (await haVisitaMuseo(userId, venueKeyVisita)) {
+          return res.json({ active: true, tier: 'tour', tourIncluded: true, permanent: true, venueKey: venueKeyVisita, expiresAt: null, charged: 0, alreadyActive: true, visitScans: MUSEUM_VISIT_MAX_SCANS });
+        }
+        const pieno = await prezzoDi('museum_pass_tour');
+        const costo = existing?.tier === 'base' ? Math.max(0, pieno - (await prezzoDi('museum_pass'))) : pieno;
+        if (costo > 0) {
+          const esito = await consumeCreditsServer(userId, costo, `museum_visit ${venueKeyVisita}`.slice(0, 80));
+          if (esito === 'insufficient') { res.status(402).json({ error: 'insufficient_credits', cost: costo }); return; }
+          if (esito === 'error') { res.status(500).json({ error: 'charge_failed' }); return; }
+        }
+        try {
+          await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, { user_id: userId, reward_source_type: 'museum_visit', reward_source_id: chiaveVisita(venueKeyVisita) }, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=ignore-duplicates' } });
+          visiteCache.delete(`${userId}|${venueKeyVisita}`);
+        } catch {
+          if (costo > 0) await refundServer(userId, costo);
+          return res.status(500).json({ error: 'pass_activation_failed' });
+        }
+        try { capturaEvento(userId, 'museum_visit_purchased', { venueKey: venueKeyVisita, credits: costo }); } catch { /* analytics */ }
+        return res.json({ active: true, tier: 'tour', tourIncluded: true, permanent: true, venueKey: venueKeyVisita, expiresAt: null, charged: costo, visitScans: MUSEUM_VISIT_MAX_SCANS });
+      }
       if (existing) {
         // Con un pass base attivo si può salire a 'tour' pagando la differenza:
         // chi ha già pagato non ricomincia da capo e la scadenza non si muove.
@@ -8117,11 +8196,15 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       const chiediPass = async (assaggio = '', guida: any = null) => {
         if (!inDiretta) return null;
         if (guida && guidaGratuita(guida)) return null;
+        // La Visita di QUESTO museo, comprata una volta, vale per sempre.
+        if (venue && await haVisitaMuseo(userId, chiaveLuogoDi(venue))) return null;
         const pass = await getActiveMuseumPass(userId);
         if (pass?.tier === 'tour') return null;
         return {
           ok: false,
           reason: 'needs_tour_pass',
+          // La chiave del museo: l'acquisto della Visita si lega a questa.
+          venueKey: venue ? chiaveLuogoDi(venue) : null,
           hasBasePass: pass?.tier === 'base',
           priceCredits: await prezzoDi('museum_pass_tour'),
           upgradeCredits: Math.max(0, (await prezzoDi('museum_pass_tour')) - (await prezzoDi('museum_pass'))),
@@ -9832,7 +9915,11 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       let usate = 0;
       // Museo con guida GRATUITA (poche opere o poche foto): le audioguide
       // delle sue opere non chiedono il pass e non consumano scansioni.
-      const gratuita = inDiretta ? await visitaGratuitaPer(museo, outLang) : false;
+      // Visita posseduta per questo museo (l'app manda venueKey): l'ascolto
+      // delle opere è compreso per sempre.
+      const venueKeyArt = String(req.body?.venueKey || '').trim().slice(0, 160);
+      const visitaPosseduta = inDiretta && venueKeyArt ? await haVisitaMuseo(userId, venueKeyArt) : false;
+      const gratuita = inDiretta ? (visitaPosseduta || await visitaGratuitaPer(museo, outLang)) : false;
       if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
         if (!pass) {
@@ -10822,7 +10909,8 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       try { urlFoto = new URL(foto); } catch { return res.json({ ok: false, reason: 'no_photo' }); }
       if (!/^(upload\.wikimedia\.org|commons\.wikimedia\.org)$/i.test(urlFoto.hostname)) return res.json({ ok: false, reason: 'no_photo' });
 
-      const gratuita = await visitaGratuitaPer(museo, outLang);
+      const venueKeyAd = String(req.body?.venueKey || '').trim().slice(0, 160);
+      const gratuita = (venueKeyAd && await haVisitaMuseo(userId, venueKeyAd)) || await visitaGratuitaPer(museo, outLang);
       const pass = gratuita ? null : await getActiveMuseumPass(userId);
       if (!pass && !gratuita) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
       const usate = pass ? await countMuseumPassScans(userId, pass.expiresAt) : 0;
@@ -10947,7 +11035,8 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
 
       let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
       let usate = 0;
-      const gratuita = inDiretta ? await visitaGratuitaPer(museo, outLang) : false;
+      const venueKeyCmp = String(req.body?.venueKey || '').trim().slice(0, 160);
+      const gratuita = inDiretta ? ((venueKeyCmp && await haVisitaMuseo(userId, venueKeyCmp)) || await visitaGratuitaPer(museo, outLang)) : false;
       if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
         if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });

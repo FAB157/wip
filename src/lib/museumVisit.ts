@@ -934,12 +934,12 @@ export function coppieDaConfrontare(v: MuseumVisit, attivi?: Set<number>, quante
   prova('epoca', (a, b) => { const ya = annoDi(a.anno), yb = annoDi(b.anno); return ya !== null && yb !== null && Math.abs(ya - yb) <= 40 && (a.tipo || '') === (b.tipo || '') && normalize(a.autore || '') !== normalize(b.autore || ''); });
   return out;
 }
-export async function fetchConfronto(args: { a: VenueTappa; b: VenueTappa; venueName: string; language: Language }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
+export async function fetchConfronto(args: { a: VenueTappa; b: VenueTappa; venueName: string; language: Language; venueKey?: string | null }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
   const headers = await authHeaders();
   if (!headers) return { ok: false, reason: 'login' };
   const opera = (t: VenueTappa) => ({ nome: t.nome, nomeFonte: t.nomeFonte || t.nome, autore: t.autore || '', anno: t.anno || '' });
   try {
-    const res = await fetch(getApiUrl('/api/museums/compare'), { method: 'POST', headers, body: JSON.stringify({ a: opera(args.a), b: opera(args.b), venueName: args.venueName, language: args.language }) });
+    const res = await fetch(getApiUrl('/api/museums/compare'), { method: 'POST', headers, body: JSON.stringify({ a: opera(args.a), b: opera(args.b), venueName: args.venueName, language: args.language, ...(args.venueKey ? { venueKey: args.venueKey } : {}) }) });
     if (!res.ok) return { ok: false, reason: `http_${res.status}` };
     const d = await res.json();
     return d?.ok === true && d.testo ? { ok: true, testo: String(d.testo), cached: !!d.cached } : { ok: false, reason: String(d?.reason || 'no_source') };
@@ -977,7 +977,7 @@ export async function fetchMostre(v: MuseumVisit, language: Language): Promise<M
  * foto vera. Serve il pass; una volta generata resta (cache server + archivio
  * qui sotto, così vale anche senza rete).
  */
-export async function fetchAudioDescription(args: { artwork: string; venueName: string; photo: string; language: Language }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
+export async function fetchAudioDescription(args: { artwork: string; venueName: string; photo: string; language: Language; venueKey?: string | null }): Promise<{ ok: true; testo: string; cached?: boolean } | { ok: false; reason: string }> {
   const headers = await authHeaders();
   if (!headers) return { ok: false, reason: 'login' };
   try {
@@ -1191,12 +1191,20 @@ export async function onArtworkRecognized(card: any, coords: { lat: number | nul
 }
 
 /** L'utente scrive il nome del museo all'inizio: la guida parte da lì. */
-export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null; opere?: number; minOpere?: number; prezzoScansione?: number };
+export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null; opere?: number; minOpere?: number; prezzoScansione?: number;
+  /** 12/09/2026: la chiave del museo a cui legare l'acquisto della Visita (senza scadenza). */
+  venueKey?: string | null };
+
+/** La chiave del museo della visita in corso (per legare scansioni e ascolti alla Visita posseduta). */
+export function visitaAttivaKey(): string | null {
+  const v = getVisit();
+  return v?.venueKey || null;
+}
 
 export async function startVisitByName(name: string, coords: { lat: number | null; lon: number | null }, language: Language): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: coords.lat, lon: coords.lon, venueHint: name, venueHintSource: 'user', language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione, venueKey: (resp as any).venueKey || null };
   return { ok: true, visit: startVisitFromGuide(resp) };
 }
 
@@ -1209,7 +1217,7 @@ export async function startVisitByName(name: string, coords: { lat: number | nul
 export async function startVisitByPoi(poiId: string, language: Language, fallbackCoords?: { lat: number | null; lon: number | null }): Promise<EsitoAvvioVisita> {
   const resp = await fetchVenueGuide({ lat: fallbackCoords?.lat ?? null, lon: fallbackCoords?.lon ?? null, poiId, language });
   if (!resp) return { ok: false, reason: 'network' };
-  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione };
+  if (resp.ok !== true) return { ok: false, reason: resp.reason, priceCredits: resp.priceCredits, upgradeCredits: resp.upgradeCredits, hasBasePass: resp.hasBasePass, sample: resp.sample || null, opere: resp.opere, minOpere: resp.minOpere, prezzoScansione: resp.prezzoScansione, venueKey: (resp as any).venueKey || null };
   return { ok: true, visit: startVisitFromGuide(resp) };
 }
 
@@ -1406,6 +1414,8 @@ export async function fetchArtworkGuide(args: {
   language: Language;
   /** «bambini»: la stessa opera raccontata a un bambino di otto anni. */
   stile?: 'bambini' | '';
+  /** Chiave del museo: con la Visita posseduta l'ascolto è compreso per sempre. */
+  venueKey?: string | null;
 }): Promise<ArtworkGuideResponse | null> {
   const headers = await authHeaders();
   if (!headers) return null;
@@ -1416,6 +1426,7 @@ export async function fetchArtworkGuide(args: {
       body: JSON.stringify({
         artwork: args.artwork,
         venueName: args.venueName,
+        ...(args.venueKey ? { venueKey: args.venueKey } : {}),
         ...(args.artist ? { artist: args.artist } : {}),
         ...(args.room ? { room: args.room } : {}),
         ...(args.officialSite ? { officialSite: args.officialSite } : {}),
