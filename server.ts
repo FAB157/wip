@@ -7033,6 +7033,13 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   // collezione (P195) o un luogo (P276) diverso dal museo, non è la nostra.
   async function fotoOperaPerTitolo(titolo: string, autore: string, lang: string, qui?: { lat: number; lon: number; qid?: string }): Promise<string> {
     if (!titolo) return '';
+    // Un EDIFICIO o uno spazio («Villa Fabbricotti», «Parco della Padula»,
+    // «Sala grande») è ambiguo per nome: ce n'è uno in ogni città. Senza le
+    // coordinate del museo per il confronto, la ricerca non si fa.
+    if (!qui && !autore && /\b(villa|palazzo|palace|parco|park|giardin\w*|garden|castello|castle|chiesa|church|cappella|chapel|torre|tower|casa|house|cortile|courtyard|sala|hall|room|galleria|gallery|collezione|collection|sezione|section|museo|museum|biblioteca|library|teatro|theatre|theater|piazza|square|fontana|fountain)\b/i.test(titolo)) {
+      console.log(`[VenueGuide] foto per titolo «${titolo}»: nome di luogo senza coordinate del museo, non si cerca`);
+      return '';
+    }
     const chiave = `wd_foto_titolo:${normalizzaTesto(titolo).slice(0, 60)}:${normalizzaTesto(autore || '').slice(0, 40)}:${lang}:${qui ? `${qui.lat.toFixed(2)},${qui.lon.toFixed(2)}` : ''}`;
     const conservata = await getFromCache(chiave, 'wikidata_foto_opera', 30 * 24 * 60 * 60 * 1000);
     if (conservata) {
@@ -8991,6 +8998,39 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       }
       async function tappeOperaPerOpera(opere: OperaDelMuseo[]): Promise<any[]> {
         const testoMuseo = `${sitoOut.testo} ${wikiText}`;
+        // RIPIEGO SULLA VOCE IN QUALSIASI LINGUA (12/09/2026 sera, Sagrada
+        // Família segnalata dalla sessione libreria: Facciata della Passione,
+        // della Gloria, della Natività e Cripta scartate per «nessun
+        // materiale»). opereMuseo.ts legge la voce solo entro il suo budget
+        // di tempo e solo in lingua/inglese: con molte parti il budget
+        // finisce. Qui, per le opere rimaste senza testo, si prende la voce
+        // dai sitelink di Wikidata nella prima lingua disponibile (lingua
+        // della guida, poi en/es/fr/de/it/ca/pt/nl): è la voce di QUELLA
+        // opera (QID), mai una ricerca per nome.
+        const senzaTesto = opere.filter(o => !o.testoFonte && /^Q\d+$/.test(String(o.qid || ''))).slice(0, 12);
+        if (senzaTesto.length) {
+          const UAW = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 8000 };
+          let recuperate = 0;
+          await Promise.all(senzaTesto.map(async (o) => {
+            try {
+              let voce = o.voce;
+              if (!voce) {
+                const e = await axios.get(`https://www.wikidata.org/wiki/Special:EntityData/${o.qid}.json`, UAW);
+                const sl = e.data?.entities?.[o.qid]?.sitelinks || {};
+                const lingua = [langCfg.wiki, 'en', 'es', 'fr', 'de', 'it', 'ca', 'pt', 'nl'].find(l => sl[`${l}wiki`]?.title);
+                if (lingua) voce = { lingua, titolo: String(sl[`${lingua}wiki`].title), url: '' };
+              }
+              if (!voce) return;
+              const r = await axios.get(`https://${voce.lingua}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&redirects=1&format=json&titles=${encodeURIComponent(voce.titolo)}`, UAW);
+              const p: any = Object.values(r.data?.query?.pages || {})[0] || {};
+              const testo = String(p.extract || '')
+                .split(/\n(?=(?:Note|Bibliografia|Voci correlate|Collegamenti esterni|Altri progetti|References|Notes|Bibliography|See also|External links|Further reading|Referencias|Enlaces externos|Véase también|Einzelnachweise|Literatur|Weblinks|Siehe auch|Notes et références|Liens externes|Voir aussi)\s*\n)/)[0]
+                .replace(/\n{3,}/g, '\n\n').slice(0, 6000).trim();
+              if (testo.length >= 200) { o.testoFonte = testo; o.fonteTesto = voce.lingua === langCfg.wiki ? 'voce' : 'voce_en'; o.voce = voce; recuperate++; }
+            } catch { /* resta senza testo: la tappa si omette come prima */ }
+          }));
+          if (recuperate) console.log(`[VenueGuide] ${venue.name}: ${recuperate}/${senzaTesto.length} opere senza testo recuperate dalla voce Wikipedia (qualsiasi lingua)`);
+        }
         for (const o of opere) {
           if (o.testoFonte) continue;
           const daMuseo = fraseDalMuseoPer(o.titolo, testoMuseo) || fraseDalMuseoPer(o.titoloEn, testoMuseo);
@@ -9210,7 +9250,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
       // combacia per titolo/autore o non dà nulla.
       if (!isSito && tappeConFoto.some((t: any) => !t.foto)) {
         const daProvare = tappeConFoto.filter((t: any) => !t.foto).slice(0, 12);
-        const quiVenue = (Number.isFinite(Number(venue.lat)) && Number.isFinite(Number(venue.lon))) ? { lat: Number(venue.lat), lon: Number(venue.lon), qid: wikidataId || undefined } : undefined;
+        // Se il museo in archivio non ha coordinate (riga di museum_guides
+        // nata senza, es. CARMI da un POI Overture), per il SOLO filtro delle
+        // foto valgono quelle della richiesta: chi genera sta nel museo, e lo
+        // script passa quelle del museo. Non si salvano da nessuna parte.
+        const latF = Number.isFinite(Number(venue.lat)) ? Number(venue.lat) : (hasGps ? Number(lat) : NaN);
+        const lonF = Number.isFinite(Number(venue.lon)) ? Number(venue.lon) : (hasGps ? Number(lon) : NaN);
+        const quiVenue = (Number.isFinite(latF) && Number.isFinite(lonF)) ? { lat: latF, lon: lonF, qid: wikidataId || undefined } : undefined;
+        if (!quiVenue) console.warn(`[VenueGuide] ${venue.name}: nessuna coordinata, foto per titolo senza filtro di luogo`);
         const trovate = await Promise.all(daProvare.map((t: any) => fotoOperaPerTitolo(t.nomeFonte || t.nome, t.autore || '', langCfg.wiki, quiVenue)));
         daProvare.forEach((t: any, i: number) => {
           if (!trovate[i]) return;
@@ -9304,9 +9351,19 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
               for (const p of parole) for (const [k, syn] of Object.entries(SINONIMI)) if (p.startsWith(k.slice(0, 5)) || syn.some(s => p.startsWith(s.slice(0, 5)))) syn.forEach(s => chiavi.add(s));
               for (const c of [...chiavi]) if (eParolaLuogo(c)) chiavi.delete(c);
               if (!chiavi.size) return null;
-              // Radice: «giardini» trova «giardino», «epigrafi» «epigrafe»
-              // (prime 6 lettere, solo per parole di almeno 7).
-              const combacia = (f: any) => [...chiavi].some(k => { const n = normalizzaTesto(k); return f.testo.includes(n) || (conRadici && n.length >= 7 && f.testo.includes(n.slice(0, 6))); });
+              // Plurale/singolare: «giardini» trova «giardino», «epigrafi»
+              // «epigrafe» (stessa parola senza l'ultima vocale). MAI la sola
+              // radice: «archeologico» prendeva «archeologia industriale»
+              // (il campionario dei marmi romani con la foto del giardino).
+              const stelo = (w: string) => w.replace(/[aeiou]$/, '');
+              const combacia = (f: any) => {
+                const parole = f.testo.split(' ');
+                return [...chiavi].some(k => {
+                  const n = normalizzaTesto(k);
+                  if (f.testo.includes(n)) return true;
+                  return conRadici && n.length >= 6 && parole.some((p: string) => p.length >= 6 && stelo(p) === stelo(n));
+                });
+              };
               return file.find(f => !usate.has(f.url) && combacia(f)) || null;
             };
             let assegnate = 0;
@@ -9392,7 +9449,8 @@ ${JSON.stringify(elenco)}`;
             const daRiscrivere = tenute.map((t: any, i: number) => ({ t, i })).filter(({ t }: any) => t.revisione);
             if (daRiscrivere.length) {
               try {
-                const promptRiscrivi = `Sei una guida museale. Per ogni tappa qui sotto riscrivi "perche" (2-4 frasi, 40-90 parole) e "curiosita" (1-3 frasi) usando SOLO il MATERIALE: niente date, nomi, misure, tecniche o aneddoti che non stiano nel materiale. Il revisore ha trovato questi problemi, che devi eliminare: vedi "problema". Se sul materiale non c'è abbastanza per una curiosità, metti una frase pratica su dove/come guardare l'opera, mai un'invenzione. Lingua: ${langCfg.name}.
+                const promptRiscrivi = `Sei una guida museale. Per ogni tappa qui sotto riscrivi "perche" (2-4 frasi, 40-90 parole) e "curiosita" (1-3 frasi) usando SOLO il MATERIALE: niente date, nomi, misure, tecniche o aneddoti che non stiano nel materiale. Il revisore ha trovato questi problemi, che devi eliminare: vedi "problema".
+OGNI FRASE deve contenere un fatto concreto su QUESTA tappa preso dal materiale (un'opera, un materiale, una data, una persona, una sala, un dettaglio visibile). Vietate le frasi valide per qualsiasi museo: «tappa imprescindibile», «ambiente suggestivo», «dialoga con la natura», «patrimonio da approfondire», «vale la visita» e simili. Se il materiale ha pochi fatti, scrivi meno frasi: due frasi vere valgono più di quattro vuote. Se sul materiale non c'è abbastanza per una curiosità, metti una frase pratica su dove/come guardare l'opera, mai un'invenzione. Lingua: ${langCfg.name}.
 Rispondi SOLO con JSON: {"tappe":[{"n":1,"perche":"...","curiosita":"..."}]}
 
 MATERIALE:

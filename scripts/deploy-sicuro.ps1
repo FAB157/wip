@@ -1,6 +1,10 @@
 # Deploy con prova di caricamento obbligatoria, poi comandi opzionali.
-# Uso: pwsh scripts/deploy-sicuro.ps1 <file log> [comandi dopo...]
-param([string]$Log, [string[]]$Dopo)
+# Uso: pwsh scripts/deploy-sicuro.ps1 -Log <file log> -Dopo "cmd1 ;; cmd2 ;; cmd3"
+# (un'unica stringa separata da « ;; »: con -File un array passato dalla
+# riga di comando arriva come un solo elemento).
+param([string]$Log, [string]$DopoTesto)
+$Dopo = @()
+if ($DopoTesto) { $Dopo = $DopoTesto -split '\s*;;\s*' | Where-Object { $_ } }
 Set-Location (Split-Path $PSScriptRoot -Parent)
 $env:PORT = '3997'
 $out = npx tsx scripts/prova-caricamento.mjs 2>&1 | Select-String -Pattern 'MODULO CARICATO|ERRORE CARICAMENTO'
