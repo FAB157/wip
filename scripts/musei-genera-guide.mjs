@@ -55,7 +55,11 @@ async function guidaBuona(qid, lingua) {
     // Anche le spiegazioni contano: una guida con le tappe ma senza «perché»
     // (revisore troppo severo del 12/09 pomeriggio) è da rifare.
     const conPerche = tappe.filter(t => String(t?.perche || '').trim().length > 20).length;
-    if (tappe.length >= MIN_TAPPE && conSala >= 1 && conPerche >= tappe.length * 0.6) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length, conPerche };
+    // Nella passata «come gli Uffizi» (minTappe alto) la sala non è
+    // condizione: Orsay e British escono a 30 opere senza sale (sito
+    // anti-bot) e rifarle non le darebbe. Le sale arrivano dal web/droplet.
+    const salaOk = MIN_TAPPE >= 20 ? true : conSala >= 1;
+    if (tappe.length >= MIN_TAPPE && salaOk && conPerche >= tappe.length * 0.6) return { chiave: r.venue_key, tappe: tappe.length, conSala, conCodice: tappe.filter(t => t?.salaCodice).length, conPerche };
   }
   return null;
 }
