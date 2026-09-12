@@ -8851,8 +8851,10 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
           const titolo = `${t.nome} ${t.nomeFonte || ''}`;
           const daMostra = /\b(mostra|mostre|exhibition|exposition|exposición|ausstellung|rassegna|retrospettiva|retrospective|biennale)\b/i.test(titolo)
             || /^\s*(1[5-9]|20)\d{2}\s*[.\-–:]/.test(t.nome)
-            || /\b(1[5-9]|20)\d{2}\s*[-–]\s*(1[5-9]|20)\d{2}\b/.test(t.nome)
-            || (/[.!?]\s+\S+/.test(t.nome) && t.nome.length > 40 && !/\b(sala|room|cappella|chapel|galleria|gallery)\b/i.test(t.nome));
+            || /\b(1[5-9]|20)\d{2}\s*[-–]\s*(1[5-9]|20)\d{2}\b/.test(t.nome);
+          // (Il sottotitolo da locandina «Titolo. Sottotitolo» da solo NON
+          // basta: al CARMI toglieva anche le sezioni permanenti e la guida
+          // scendeva sotto le 3 tappe → «insufficient».)
           if (daMostra) { motiviScarto.push({ nome: t.nome, motivo: 'mostra temporanea o passata' }); return false; }
           // Una tappa che è il luogo stesso non è una tappa (il Palazzo delle
           // Logge proponeva come tappa "Palazzo Diana", il suo vecchio nome).
@@ -11521,9 +11523,13 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         // Marmo (gemma) sta sopra un palazzo con quattro tappe a 80 metri.
         const importanza = (r: any) => (Number(r.stops_count) || 0) + (r.is_gem === true ? 10 : 0) + (r.kind === 'library' ? 3 : 0) + (/museum|musei|museo/.test(String(r.venue_type || '')) ? 2 : 0);
         righe.sort((a: any, b: any) => {
-          const fa = (a.distance_m ?? 1e9) > 3000 ? 1 : 0, fb = (b.distance_m ?? 1e9) > 3000 ? 1 : 0;
+          // 5 km, non 3: il Museo del Marmo di Carrara sta a 3,3 km dal
+          // centro e finiva nella fascia «lontani», sotto un palazzo a 80 m.
+          const fa = (a.distance_m ?? 1e9) > 5000 ? 1 : 0, fb = (b.distance_m ?? 1e9) > 5000 ? 1 : 0;
           if (fa !== fb) return fa - fb;
           if (fa === 0) { const d = importanza(b) - importanza(a); if (d) return d; }
+          // Entro i 5 km anche i lontani-ma-importanti passano avanti;
+          // sopra i 5 km comanda solo la distanza.
           return (a.distance_m ?? 1e9) - (b.distance_m ?? 1e9);
         });
       }
