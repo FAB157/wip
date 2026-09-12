@@ -426,11 +426,26 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Cerca un museo o una chiesa", EN: "Search a museum or church", FR: "Chercher un musée ou une église",
     ES: "Busca un museo o una iglesia", DE: "Museum oder Kirche suchen", RU: "Найти музей или церковь", ZH: "搜索博物馆或教堂"
   },
+  mv_vista_lista: { IT: "Lista", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
+  mv_vista_mappa: { IT: "Mappa", EN: "Map", FR: "Plan", ES: "Mapa", DE: "Karte", RU: "Карта", ZH: "地图" },
+  mv_mappa_pin_hint: {
+    IT: "Tocca un numero sulla pianta: si apre l'opera e parte l'audioguida.", EN: "Tap a number on the plan: the work opens and the audio guide starts.",
+    FR: "Touchez un numéro sur le plan : l'œuvre s'ouvre et l'audioguide démarre.", ES: "Toca un número en el plano: se abre la obra y arranca la audioguía.",
+    DE: "Tippe auf eine Nummer im Plan: das Werk öffnet sich und der Audioguide startet.", RU: "Нажмите номер на плане: откроется экспонат и начнётся аудиогид.", ZH: "点击平面图上的数字：打开作品并开始语音导览。"
+  },
+  mv_mappa_senza_pin: {
+    IT: "Pianta ufficiale del museo. Le posizioni delle sale arriveranno a breve.", EN: "Official museum plan. Room positions are coming soon.",
+    FR: "Plan officiel du musée. Les positions des salles arrivent bientôt.", ES: "Plano oficial del museo. Las posiciones de las salas llegarán pronto.",
+    DE: "Offizieller Museumsplan. Die Raumpositionen folgen in Kürze.", RU: "Официальный план музея. Расположение залов появится скоро.", ZH: "博物馆官方平面图。展厅位置即将提供。"
+  },
+  mv_mappa_ufficiale: { IT: "Pianta ufficiale", EN: "Official plan", FR: "Plan officiel", ES: "Plano oficial", DE: "Offizieller Plan", RU: "Официальный план", ZH: "官方平面图" },
+  mv_mappa_sei_qui: { IT: "Sei qui", EN: "You are here", FR: "Vous êtes ici", ES: "Estás aquí", DE: "Du bist hier", RU: "Вы здесь", ZH: "您在这里" },
   mv_sugg_pronta: {
     IT: "Guida pronta", EN: "Guide ready", FR: "Guide prêt", ES: "Guía lista", DE: "Guide fertig", RU: "Гид готов", ZH: "导览已就绪"
   },
   mv_sugg_genera: {
-    IT: "Si prepara al momento", EN: "Prepared on the spot", FR: "Préparé à l'instant", ES: "Se prepara al momento", DE: "Wird sofort erstellt", RU: "Готовится сразу", ZH: "即时生成"
+    // «Si genera in 1 minuto», come gli itinerari (committente, 12/09/2026).
+    IT: "Si genera in 1 minuto", EN: "Generated in 1 minute", FR: "Généré en 1 minute", ES: "Se genera en 1 minuto", DE: "In 1 Minute erstellt", RU: "Создаётся за 1 минуту", ZH: "1 分钟内生成"
   },
   mv_sugg_nessuno: {
     IT: "Nessun museo trovato: prova il nome ufficiale", EN: "No museum found: try the official name", FR: "Aucun musée trouvé : essayez le nom officiel",

@@ -11218,33 +11218,82 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
       // richiesta. Niente monumenti all'aperto: la visita è dentro.
       if (haGeo && !q) {
         try {
-          const rpc = await axios.post(`${supabaseUrl}/rest/v1/rpc/nearby_pois`,
-            { p_lat: lat, p_lon: lon, radius_m: 3000, limit_num: 300 },
-            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' }, timeout: 4000 });
-          const vicini = (Array.isArray(rpc.data) ? rpc.data : [])
-            .map((p: any) => ({ ...p, name: p?.name ?? p?.nome }))
+          // Riquadro di ~3 km con la CATEGORIA nel filtro, senza ordinamento
+          // (vedi la memoria sui timeout di shared_pois: è l'order a farli
+          // scattare). Prima si chiedeva alla RPC nearby_pois i 300 POI più
+          // vicini di QUALSIASI categoria: in una città sono bar e negozi
+          // nel raggio di 400 m, e il Museo del Marmo a 2 km non arrivava
+          // mai (verificato a Carrara, 12/09/2026).
+          // RAGGIO 15 KM (12/09/2026, committente: «museo del marmo, CARMI
+          // ecc. nel raggio di 10/15 km»): la visita di un museo si
+          // programma, non si inciampa; e i musei vanno PRIMA di tutto,
+          // anche senza guida (a Carrara CARMI a 700 m e il Museo del Marmo
+          // a 2,4 km restavano fuori dal tetto riempito dai palazzi a 200 m).
+          const kmArchivio = Math.min(15, kmRaggio);
+          const d = kmArchivio / 111;
+          const dLon = d / Math.max(0.2, Math.cos(lat * Math.PI / 180));
+          const categorie = [...MUSEI_TYPES_VENUE].map(c => c.replace(/[(),]/g, '')).join(',');
+          const r = await axios.get(
+            `${supabaseUrl}/rest/v1/shared_pois?lat=gte.${(lat - d).toFixed(4)}&lat=lte.${(lat + d).toFixed(4)}&lon=gte.${(lon - dLon).toFixed(4)}&lon=lte.${(lon + dLon).toFixed(4)}&category=in.(${categorie})&is_hidden=not.is.true&status=not.in.(rejected,hidden,draft)&select=id,name,lat,lon,category,poi_type,status,is_hidden,is_gem,wikidata,wikipedia_url,image_url,city&limit=800`,
+            { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 });
+          const vicini = (Array.isArray(r.data) ? r.data : [])
             .filter((p: any) => p?.name && Number.isFinite(p.lat) && Number.isFinite(p.lon))
             .filter((p: any) => !['rejected', 'hidden', 'draft'].includes(String(p.status || '')) && !p.is_hidden)
             .filter((p: any) => String(p.category || '') !== 'community' && !String(p.id || '').startsWith('vision-'))
-            .filter((p: any) => MUSEI_TYPES_VENUE.has(String(p.category || '').toLowerCase()) || MUSEI_TYPES_VENUE.has(String(p.poi_type || '').toLowerCase()))
-            // CHIESE SOLO GEMME (12/09/2026, committente: «la chiesetta
-            // senza opere non serve citarla»). Le chiese sono decine per
-            // chilometro quadrato e quasi nessuna ha un percorso interno da
-            // raccontare: in elenco entrano solo quelle marcate gemma
-            // (is_gem, mai la categoria — vedi la regola delle gemme). Musei
-            // e palazzi entrano tutti.
+            // SOLO LUOGHI CON QUALCOSA DA RACCONTARE (12/09/2026, committente:
+            // «chiese solo gemme», «la chiesetta senza opere non serve
+            // citarla»; e a Carrara l'elenco si riempiva di gallerie
+            // commerciali, studi d'arte e uffici comunali). I musei entrano
+            // tutti; chiese, gallerie e palazzi solo se gemma o con una
+            // voce Wikipedia/Wikidata — cioè se una fonte ne parla.
             .filter((p: any) => {
               const cat = `${String(p.category || '')} ${String(p.poi_type || '')}`.toLowerCase();
-              const chiesa = /church|chiesa|cathedral|cattedrale|chapel|cappella|basilica|monaster|abbey|abbazia|shrine|santuario|place_of_worship/.test(cat);
-              return !chiesa || p.is_gem === true;
+              const museo = /museum|musei|museo|pinacoteca|archaeolog|archeo|roman_baths|catacomb|mausoleum|amphitheatre|concentration_camp/.test(cat);
+              const conFonte = p.is_gem === true || /^Q\d+$/.test(String(p.wikidata || '')) || !!p.wikipedia_url;
+              if (!museo) return conFonte;
+              // La categoria «museum» dell'archivio è rumorosa (a Carrara:
+              // «Tenerano», «La scogliera dell'Amore», «Pro loco», «Il
+              // Sentiero per Campiglia»). Un museo senza fonte entra solo se
+              // il NOME dice che è un museo.
+              return conFonte || /\b(museo|musei|museum|muse[ée]|museu|galleria|gallery|pinacoteca|collezione|collection|planetari|mudac|carmi|acquari|aquarium|ecomuse)/i.test(String(p.name || ''));
             })
-            .map((p: any) => ({ ...p, distance_m: Math.round(getHaversineDistance(lat, lon, p.lat, p.lon)) }))
-            .sort((a: any, b: any) => a.distance_m - b.distance_m);
+            .map((p: any) => {
+              const cat = `${String(p.category || '')} ${String(p.poi_type || '')}`.toLowerCase();
+              const museo = /museum|musei|museo|pinacoteca|archaeolog|archeo|roman_baths|catacomb|mausoleum|amphitheatre|concentration_camp/.test(cat);
+              return { ...p, _museo: museo, _fonte: p.is_gem === true || /^Q\d+$/.test(String(p.wikidata || '')) || !!p.wikipedia_url, distance_m: Math.round(getHaversineDistance(lat, lon, p.lat, p.lon)) };
+            })
+            .filter((p: any) => p.distance_m <= kmArchivio * 1000)
+            // ORDINE (committente, 12/09/2026): musei prima di tutto; fra i
+            // musei prima l'importanza — le gemme — poi la distanza; poi il
+            // resto (chiese-gemma, palazzi con fonte) per distanza.
+            .sort((a: any, b: any) => (b._museo ? 1 : 0) - (a._museo ? 1 : 0)
+              || (b.is_gem === true ? 1 : 0) - (a.is_gem === true ? 1 : 0)
+              || (b._fonte ? 1 : 0) - (a._fonte ? 1 : 0)
+              || a.distance_m - b.distance_m);
+          // LO STESSO MUSEO IMPORTATO SETTE VOLTE (Museo del Marmo a Carrara:
+          // OSM, CSV, Wikidata, Overture, con nomi un po' diversi e a 800 m
+          // l'uno dall'altro): è una sede sola. Due nomi sono la stessa sede
+          // se, tolte le parole generiche, le parole proprie di uno stanno
+          // tutte nell'altro («museo del marmo» ⊂ «museo civico del marmo di
+          // carrara») e i punti distano meno di 1 km. Si tiene la riga con
+          // Wikidata/Wikipedia, poi la gemma, poi quella con la foto.
+          const GENERICHE_SEDE = new Set(['museo', 'musei', 'museum', 'museums', 'civico', 'civica', 'comunale', 'nazionale', 'national', 'galleria', 'gallery', 'palazzo', 'palace', 'chiesa', 'church', 'villa', 'casa', 'di', 'del', 'della', 'dei', 'degli', 'delle', 'the', 'of', 'de', 'la', 'le', 'e', 'and']);
+          const proprie = (s: string) => new Set(nomeNudo(s).split(' ').filter(t => t.length >= 3 && !GENERICHE_SEDE.has(t)));
+          const stessaSedeLarga = (a: any, b: any) => {
+            if (stessaSede(a, b)) return true;
+            if (!Number.isFinite(a.lat) || !Number.isFinite(b.lat)) return false;
+            if (getHaversineDistance(a.lat, a.lon, b.lat, b.lon) > 1000) return false;
+            const pa = proprie(a.venue_name), pb = proprie(b.venue_name);
+            if (!pa.size || !pb.size) return false;
+            const [piccolo, grande] = pa.size <= pb.size ? [pa, pb] : [pb, pa];
+            return [...piccolo].every(t => grande.has(t));
+          };
           const daArchivio: any[] = [];
           for (const p of vicini) {
-            if (daArchivio.length >= 12) break;
-            const gia = righe.some((r: any) => r.poi_id === String(p.id) || stessaSede(r, { venue_name: p.name, lat: p.lat, lon: p.lon, source: null }))
-              || daArchivio.some((d: any) => stessaSede(d, { venue_name: p.name, lat: p.lat, lon: p.lon, source: null }));
+            if (daArchivio.length >= 30) break;
+            const comeSede = { venue_name: p.name, lat: p.lat, lon: p.lon, source: null };
+            const gia = righe.some((r: any) => r.poi_id === String(p.id) || stessaSedeLarga(r, comeSede))
+              || daArchivio.some((d: any) => stessaSedeLarga(d, comeSede));
             if (gia) continue;
             const cat = String(p.category || p.poi_type || '').toLowerCase();
             const f = String(p.image_url || '');
@@ -11319,14 +11368,22 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
         for (const v of mb.values()) nb += v;
         return na + nb ? (2 * comuni) / (na + nb) : 0;
       };
+      // Le parole che stanno nel nome di QUALSIASI museo non distinguono
+      // niente: «musei vaticni» trovava Prado ed Egizio per la sola parola
+      // «museo» (verificato dal vivo 12/09/2026). Nel confronto parola per
+      // parola contano solo le parole proprie («vaticani», «borghese»).
+      const GENERICHE = new Set(['museo', 'musei', 'museum', 'museums', 'musee', 'museu', 'galleria', 'gallery', 'galerie', 'galeria', 'pinacoteca', 'chiesa', 'church', 'eglise', 'iglesia', 'kirche', 'palazzo', 'palace', 'palais', 'palacio', 'castello', 'castle', 'chateau', 'castillo', 'basilica', 'cattedrale', 'cathedral', 'duomo', 'nazionale', 'national', 'nationale', 'nacional', 'civico', 'arte', 'art', 'di', 'del', 'della', 'dei', 'degli', 'delle', 'the', 'of', 'de', 'la', 'le', 'les', 'el', 'los', 'las', 'der', 'die', 'das', 'und', 'and', 'e', 'y', 'et']);
       const somiglianza = (nome: string): number => {
         const n = normalizzaTesto(nome).replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
         if (!n) return 0;
         if (n === qn) return 1;
         if (n.includes(qn) || qn.includes(n)) return 0.9;
         // Anche parola per parola: «borghese» dentro «galleria borghese».
-        const parole = n.split(' ');
-        const perParola = Math.max(...qn.split(' ').map(pq => Math.max(...parole.map(p => dice(pq, p)))));
+        const parole = n.split(' ').filter(p => !GENERICHE.has(p));
+        const proprie = qn.split(' ').filter(p => !GENERICHE.has(p) && p.length >= 3);
+        const perParola = (parole.length && proprie.length)
+          ? Math.min(...proprie.map(pq => Math.max(...parole.map(p => dice(pq, p)))))
+          : 0;
         return Math.max(dice(qn, n), perParola * 0.85);
       };
       const conTetto = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
@@ -11364,7 +11421,15 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
             { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 2500 });
           const hits: any[] = r.data?.query?.search || [];
           return hits.map(h => ({ lang: wl, title: String(h.title || ''), snippet: String(h.snippet || '').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim() }))
-            .filter(h => h.title && !/^(list of|elenco|liste des|lista de|liste der)/i.test(h.title) && PAROLE_LUOGO.test(`${h.title} ${h.snippet}`));
+            // La parola «museo» nel TITOLO basta; nello snippet vale solo se
+            // il titolo somiglia davvero a ciò che si è scritto (la
+            // «Rappresentativa calcistica dipendenti vaticani» passava
+            // perché lo snippet citava un museo, 12/09/2026).
+            .filter(h => h.title && !/^(list of|elenco|liste des|lista de|liste der)/i.test(h.title)
+              // Nello snippet conta solo la frase di definizione («X è un
+              // museo…»), i primi 120 caratteri: la squadra di calcio citava
+              // un museo tre righe più giù.
+              && (PAROLE_LUOGO.test(h.title) || (PAROLE_LUOGO.test(h.snippet.slice(0, 120)) && somiglianza(h.title) >= 0.6)));
         } catch { return []; }
       })), 3000, [] as any[][]);
 
@@ -11379,7 +11444,9 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
       const perSede = new Map<string, { riga: any; score: number }>();
       for (const r of lib) {
         const s = somiglianza(r.venue_name);
-        if (s < 0.4) continue;
+        // 0,5 e non 0,4: a 0,4 «musei vaticni» portava anche il Van Gogh
+        // Museum per i bigrammi in comune di «museum» (12/09/2026).
+        if (s < 0.5) continue;
         const prev = perSede.get(r.venue_key);
         const preferita = String(r.language) === lang;
         if (!prev || s > prev.score + 0.05 || (preferita && s >= prev.score - 0.05 && String(prev.riga.language) !== lang)) perSede.set(r.venue_key, { riga: r, score: s });
@@ -11428,6 +11495,163 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
     } catch (e: any) {
       // Mai un errore alla casella: vuoto e via.
       res.json({ ...vuoto, ms: Date.now() - t0, error: e?.message });
+    }
+  });
+
+  // ── MAPPA INTERATTIVA DEL MUSEO ──────────────────────────────────────────
+  // Regola fissa del committente (12/09/2026): ogni museo con audioguide ha
+  // la LISTA delle opere e la MAPPA con i pin delle opere che hanno la
+  // guida. La pianta viene dal sito ufficiale (fonti_poi, fonte 'mappa',
+  // scaricata dalla passata scratch/fonti-passata-musei.mjs); alla prima
+  // richiesta si copia sul bucket pubblico «mappe» e nasce la riga in
+  // mappe_museo; i pin (sala → x,y in frazione 0-1) li mette un modello
+  // vision leggendo le etichette della pianta, e l'admin li corregge.
+  // Mai una pianta di un altro museo: senza pianta la rotta torna vuoto e
+  // resta la lista. I PDF non si disegnano: si offrono come link ufficiale.
+  let bucketMappeOk = false;
+  const assicuraBucketMappe = async () => {
+    if (bucketMappeOk) return;
+    const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+    try { await axios.get(`${supabaseUrl}/storage/v1/bucket/mappe`, { headers: svc, timeout: 5000 }); bucketMappeOk = true; return; } catch { /* manca */ }
+    try { await axios.post(`${supabaseUrl}/storage/v1/bucket`, { id: 'mappe', name: 'mappe', public: true }, { headers: svc, timeout: 8000 }); bucketMappeOk = true; }
+    catch (e: any) { console.warn('[MappaMuseo] bucket mappe non creato:', e?.response?.data?.message || e?.message); }
+  };
+  const normSala = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\b(sala|room|salle|saal|galleria|gallery|galerie|hall|zaal)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+
+  app.get("/api/museums/map", rateLimiter, async (req, res) => {
+    const vuoto = { ok: true, maps: [] as any[], links: [] as any[] };
+    try {
+      // Il museo si può chiamare in tre modi: id del POI («wd-Q51252»), chiave
+      // di libreria («poi_wd-Q51252» o «nome_louvre» per le visite avviate per
+      // nome, che non hanno un POI). fonti_poi e mappe_museo usano l'id del
+      // POI quando c'è, altrimenti la chiave «nome_…».
+      const poiIdRaw = String(req.query.poiId || '').trim().slice(0, 120);
+      const keyRaw = String(req.query.key || '').trim().slice(0, 160);
+      const candidati = [...new Set([poiIdRaw, keyRaw, keyRaw.replace(/^poi_/, '')].filter(Boolean))];
+      if (!candidati.length) return res.json(vuoto);
+      // Stesso museo, prefissi diversi (wv-Q180788 in libreria, wd-Q180788
+      // nelle fonti dei 100): il QID in coda vale come chiave comune.
+      const qidComune = candidati.map(c => c.match(/-(Q\d+)$/)?.[1]).find(Boolean);
+      const inLista = qidComune
+        ? `like.*-${qidComune}`
+        : `in.(${candidati.map(c => `"${c.replace(/"/g, '')}"`).join(',')})`;
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const r = await axios.get(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=${inLista}&select=*&order=indice`, { headers: svc, timeout: 6000 });
+      let maps: any[] = Array.isArray(r.data) ? r.data : [];
+      const poiId = maps[0]?.poi_id || poiIdRaw || keyRaw.replace(/^poi_/, '') || keyRaw;
+      // Prima volta: dalle piante trovate sul sito ufficiale.
+      if (!maps.length) {
+        const f = await axios.get(`${supabaseUrl}/rest/v1/fonti_poi?poi_id=${inLista}&fonte=eq.mappa&select=poi_id,chiave,url,titolo,dati,storage_path,attribuzione&order=recuperato_at`, { headers: svc, timeout: 6000 });
+        const righe: any[] = Array.isArray(f.data) ? f.data : [];
+        let indice = 0;
+        for (const m of righe) {
+          const tipo = String(m?.dati?.tipo || '').toLowerCase();
+          if (!['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(tipo)) continue;
+          // SOLO piante verificate dal modello vision (scratch/mappe-auto-pins.mjs):
+          // agli Uffizi la «mappa» presa dalla home era la Venere di Botticelli.
+          // Una pianta non verificata o bocciata non si mostra mai.
+          if (m?.dati?.verificataMappa !== true || m?.dati?.nonMappa === true) continue;
+          await assicuraBucketMappe();
+          const est = tipo === 'jpeg' ? 'jpg' : tipo;
+          const dst = `${poiId.replace(/[^A-Za-z0-9_-]/g, '_')}/mappa-${indice + 1}.${est}`;
+          try {
+            const file = await axios.get(`${supabaseUrl}/storage/v1/object/fonti/${m.storage_path}`, { headers: svc, responseType: 'arraybuffer', timeout: 20000 });
+            await axios.post(`${supabaseUrl}/storage/v1/object/mappe/${dst}`, file.data, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': String(file.headers?.['content-type'] || (est === 'svg' ? 'image/svg+xml' : `image/${est === 'jpg' ? 'jpeg' : est}`)), 'x-upsert': 'true' }, timeout: 20000 });
+          } catch (e: any) { console.warn('[MappaMuseo] copia pianta fallita:', e?.message); continue; }
+          indice++;
+          const riga = { poi_id: poiId, indice, titolo: m.titolo || null, storage_path: dst, url: `${supabaseUrl}/storage/v1/object/public/mappe/${dst}`, fonte_url: m?.dati?.paginaUfficiale || m.url || null, origine: 'sito', pins: [], pins_origine: null };
+          await axios.post(`${supabaseUrl}/rest/v1/mappe_museo?on_conflict=poi_id,indice`, riga, { headers: { ...svc, Prefer: 'resolution=merge-duplicates,return=minimal' }, timeout: 6000 });
+          maps.push(riga);
+        }
+      }
+      // I rimandi ufficiali: la pagina «mappa» del sito e i PDF della pianta.
+      const l = await axios.get(`${supabaseUrl}/rest/v1/fonti_poi?poi_id=${inLista}&fonte=in.(mappa,sito)&select=fonte,url,titolo,dati&order=recuperato_at`, { headers: svc, timeout: 6000 });
+      const links = (Array.isArray(l.data) ? l.data : [])
+        .filter((x: any) => (x.fonte === 'sito' && x?.dati?.paginaMappa === true) || (x.fonte === 'mappa' && String(x?.dati?.tipo || '') === 'pdf'))
+        .map((x: any) => ({ url: x.url, titolo: x.titolo || '', tipo: x.fonte === 'sito' ? 'pagina' : 'pdf' }))
+        .slice(0, 4);
+      // Lo stesso museo può avere piante sotto due prefissi (wv-/wd-): prima
+      // quelle con i pin, poi le altre; i pin sul bordo non si mostrano.
+      const pulisciPin = (p: any[]) => (Array.isArray(p) ? p : []).filter((q: any) => Number.isFinite(q?.x) && Number.isFinite(q?.y) && q.x > 0.02 && q.x < 0.98 && q.y > 0.02 && q.y < 0.98);
+      maps = maps.map((m: any) => ({ ...m, pins: pulisciPin(m.pins) })).sort((a: any, b: any) => b.pins.length - a.pins.length || a.indice - b.indice);
+      res.set('Cache-Control', 'public, max-age=120');
+      res.json({ ok: true, maps: maps.map((m: any, k: number) => ({ indice: k + 1, titolo: m.titolo || null, url: m.url, fonteUrl: m.fonte_url || null, larghezza: m.larghezza || null, altezza: m.altezza || null, pins: m.pins, pinsOrigine: m.pins_origine || null })), links });
+    } catch (e: any) {
+      console.warn('[MappaMuseo] errore:', e?.response?.data?.message || e?.message);
+      res.json(vuoto);
+    }
+  });
+
+  // I PIN DALLA PIANTA (admin): il modello vision legge le etichette delle
+  // sale sulla pianta e restituisce dove stanno le sale della guida.
+  // NIENTE `requireAdmin` come middleware QUI (12/09/2026, sito giù per 15
+  // minuti): quel `const` è dichiarato ~4.700 righe più sotto e usarlo come
+  // argomento di app.post a questo punto del file fa saltare l'intero modulo
+  // al caricamento («Cannot access 'requireAdmin' before initialization»),
+  // cioè OGNI rotta del server. Il controllo admin si fa dentro l'handler,
+  // che gira a richiesta, quando il modulo è già tutto caricato.
+  app.post("/api/admin/museums/map/auto-pins", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      const poiId = String(req.body?.poiId || '').trim().slice(0, 120);
+      const indice = Math.max(1, parseInt(String(req.body?.indice || '1'), 10) || 1);
+      if (!poiId) return res.status(400).json({ error: 'poiId mancante' });
+      if (!ai) return res.status(503).json({ error: 'gemini_non_configurato' });
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      const [mr, gr] = await Promise.all([
+        axios.get(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=eq.${encodeURIComponent(poiId)}&indice=eq.${indice}&select=*&limit=1`, { headers: svc, timeout: 6000 }),
+        axios.get(`${supabaseUrl}/rest/v1/museum_guides?poi_id=eq.${encodeURIComponent(poiId)}&select=language,guide&limit=8`, { headers: svc, timeout: 6000 }),
+      ]);
+      const mappa = mr.data?.[0]; if (!mappa) return res.status(404).json({ error: 'mappa assente' });
+      // Le sale da trovare: come le scrive la guida (in tutte le lingue: la
+      // dicitura della pianta è quella del museo, di solito in inglese o
+      // nella lingua del paese).
+      const sale = new Set<string>();
+      for (const g of (Array.isArray(gr.data) ? gr.data : [])) for (const tp of (g?.guide?.tappe || [])) { const d = String(tp?.dove || '').trim(); if (d && !tp.soloCollezione) sale.add(d); }
+      if (!sale.size) return res.status(400).json({ error: 'la guida non ha sale' });
+      const img = await axios.get(mappa.url, { responseType: 'arraybuffer', timeout: 20000 });
+      const mime = String(img.headers?.['content-type'] || 'image/png').split(';')[0];
+      if (!/^image\/(png|jpeg|webp)$/.test(mime)) return res.status(415).json({ error: `formato ${mime} non leggibile dal modello (serve PNG/JPEG/WEBP)` });
+      const b64 = Buffer.from(img.data).toString('base64');
+      const prompt = `Questa è la pianta (mappa) di un museo. Trova sulla pianta DOVE stanno queste sale/aree, leggendo le etichette e i numeri scritti sulla pianta: ${JSON.stringify([...sale])}.
+Rispondi SOLO con JSON: {"pins":[{"sala":"<esattamente come nell'elenco>","x":0.00,"y":0.00,"trovata":true|false,"etichetta":"<testo letto sulla pianta>"}]}
+x e y sono la posizione del CENTRO della sala in frazione della larghezza e dell'altezza dell'immagine (0-1, origine in alto a sinistra). Se una sala non è sulla pianta metti trovata=false e x=y=0. Non inventare posizioni: meglio trovata=false di un punto sbagliato.`;
+      const gRes: any = await ai.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: b64 } }] }],
+        config: { responseMimeType: 'application/json' },
+      });
+      let parsed: any = null;
+      try { const raw = String(gRes?.text || ''); parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { /* sotto */ }
+      const pins = (Array.isArray(parsed?.pins) ? parsed.pins : [])
+        .filter((p: any) => p && p.trovata !== false && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)) && sale.has(String(p.sala)))
+        .map((p: any) => ({ sala: String(p.sala), x: Math.min(1, Math.max(0, Number(p.x))), y: Math.min(1, Math.max(0, Number(p.y))), origine: 'ai', etichetta: String(p.etichetta || '').slice(0, 40) }));
+      await axios.patch(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=eq.${encodeURIComponent(poiId)}&indice=eq.${indice}`, { pins, pins_origine: pins.length ? 'ai' : null, aggiornato_at: new Date().toISOString() }, { headers: svc, timeout: 6000 });
+      res.json({ ok: true, sale: [...sale], trovate: pins.length, pins });
+    } catch (e: any) {
+      console.error('[MappaMuseo] auto-pins:', e?.response?.data?.message || e?.message);
+      res.status(500).json({ error: e?.message || 'auto_pins_failed' });
+    }
+  });
+
+  // Correzione a mano dell'admin: i pin definitivi.
+  app.post("/api/admin/museums/map/pins", rateLimiter, async (req, res) => {
+    try {
+      const adminId = await verifyAdminToken(req);
+      if (!adminId) return res.status(401).json({ error: 'Unauthorized' });
+      const poiId = String(req.body?.poiId || '').trim().slice(0, 120);
+      const indice = Math.max(1, parseInt(String(req.body?.indice || '1'), 10) || 1);
+      const pins = (Array.isArray(req.body?.pins) ? req.body.pins : [])
+        .filter((p: any) => p && String(p.sala || '').trim() && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+        .map((p: any) => ({ sala: String(p.sala).trim().slice(0, 80), x: Math.min(1, Math.max(0, Number(p.x))), y: Math.min(1, Math.max(0, Number(p.y))), origine: 'admin', piano: p.piano ? String(p.piano).slice(0, 20) : undefined }))
+        .slice(0, 200);
+      if (!poiId) return res.status(400).json({ error: 'poiId mancante' });
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+      await axios.patch(`${supabaseUrl}/rest/v1/mappe_museo?poi_id=eq.${encodeURIComponent(poiId)}&indice=eq.${indice}`, { pins, pins_origine: pins.length ? 'admin' : null, aggiornato_at: new Date().toISOString() }, { headers: svc, timeout: 6000 });
+      res.json({ ok: true, pins: pins.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || 'pins_failed' });
     }
   });
 
@@ -30459,7 +30683,11 @@ out center tags;`;
   // filesystem è in sola lettura), quindi il tetto dei 500k gratuiti non ha
   // mai contato nulla in produzione. Fail-open: se il contatore non si legge
   // si usa Azure lo stesso.
-  const AZURE_LIMIT = 500000;
+  // 500.000 = la fascia gratuita REALE di Azure Speech al mese: non è un
+  // valore nostro, sforarlo vuol dire pagare. Configurabile via env come gli
+  // altri tre motori (committente 12/09/2026), ma il default resta quello
+  // vero — un tetto più alto messo qui farebbe pagare Azure, non risparmiare.
+  const AZURE_LIMIT = Number(process.env.AZURE_TTS_MONTHLY_LIMIT) || 500000;
   // Tetti mensili per motore (12/09/2026, richiesta del committente: "metti
   // i limiti a tutti i tre motori, superata la soglia ferma") — superata la
   // soglia quel motore si SALTA (come già faceva Azure), mai un costo non

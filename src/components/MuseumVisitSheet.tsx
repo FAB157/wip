@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, prossimaTappa, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -58,6 +58,29 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   // cercare nella lista.
   const [lettore, setLettore] = useState<number | null>(null);
   const swipeX = useRef<number | null>(null);
+  // MAPPA INTERATTIVA (12/09/2026, regola fissa del committente: sempre la
+  // lista E la pianta con i pin delle opere che hanno la guida). La pianta
+  // viene dal sito ufficiale; ogni tappa si abbina al pin della sua sala; un
+  // tocco sul numero scorre alla tappa e avvia l'audioguida.
+  const [vista, setVista] = useState<'lista' | 'mappa'>('lista');
+  const [mappe, setMappe] = useState<MuseumMap[]>([]);
+  const [mappaLink, setMappaLink] = useState<MuseumMapLink[]>([]);
+  const [mappaIndice, setMappaIndice] = useState(0);
+  const [mappaCaricata, setMappaCaricata] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    setMappaCaricata(false);
+    fetchMuseumMap(visit.venue.id, visit.venueKey).then(({ maps, links }) => { if (!vivo) return; setMappe(maps); setMappaLink(links); setMappaCaricata(true); });
+    return () => { vivo = false; };
+  }, [visit.venue.id, visit.venueKey]);
+  /** Dal pin alla tappa: scorre alla riga e avvia l'audioguida. */
+  const apriDalPin = (i: number) => {
+    setVista('lista');
+    window.setTimeout(() => {
+      document.getElementById(`mv-tappa-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      void handleOpera(i);
+    }, 60);
+  };
   // Il tour di gruppo: si legge una volta per render, così la scheda mostra
   // a chi guida che il gruppo lo segue e a chi segue che sta seguendo.
   const sonoLeader = isLiveLeader();
@@ -1661,6 +1684,82 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               {t('mv_no_rooms')}
             </p>
           )}
+          {/* LISTA | MAPPA (12/09/2026, regola fissa): il commutatore compare
+              solo se il museo ha una pianta (dal sito ufficiale) o almeno un
+              rimando alla pianta ufficiale. Mai una pianta di un altro museo. */}
+          {(mappe.length > 0 || mappaLink.length > 0) && (
+            <div className="flex items-center gap-2 mb-2">
+              <div className="flex bg-white rounded-xl p-0.5 border border-slate-200 gap-0.5">
+                <button type="button" onClick={() => setVista('lista')} aria-pressed={vista === 'lista'} className={`px-3 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1 ${vista === 'lista' ? 'bg-primary text-white' : 'text-slate-500'}`}>
+                  <ListMusic className="w-3.5 h-3.5" />{t('mv_vista_lista')}
+                </button>
+                <button type="button" onClick={() => setVista('mappa')} aria-pressed={vista === 'mappa'} disabled={mappe.length === 0} className={`px-3 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1 disabled:opacity-40 ${vista === 'mappa' ? 'bg-primary text-white' : 'text-slate-500'}`}>
+                  <MapIcon className="w-3.5 h-3.5" />{t('mv_vista_mappa')}
+                </button>
+              </div>
+              {mappe.length > 1 && vista === 'mappa' && (
+                <div className="flex gap-1 overflow-x-auto">
+                  {mappe.map((m, k) => (
+                    <button key={m.indice} type="button" onClick={() => setMappaIndice(k)} className={`px-2 py-1 rounded-lg text-[10px] font-black border ${k === mappaIndice ? 'bg-blue-50 border-primary text-primary' : 'bg-white border-slate-200 text-slate-500'}`}>
+                      {m.titolo ? m.titolo.slice(0, 18) : `${t('mv_vista_mappa')} ${k + 1}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {mappaLink[0] && (
+                <a href={mappaLink[0].url} target="_blank" rel="noopener noreferrer" className="ml-auto text-[10px] font-black text-primary flex items-center gap-1 shrink-0">
+                  <ExternalLink className="w-3 h-3" />{t('mv_mappa_ufficiale')}
+                </a>
+              )}
+            </div>
+          )}
+          {vista === 'mappa' && mappe[mappaIndice] && (() => {
+            const mappa = mappe[mappaIndice];
+            // Ogni pin (sala) raccoglie le tappe attive di quella sala; il
+            // numero sul pin è quello della prima tappa nel percorso, con
+            // «+n» se nella sala ce ne sono altre. «Sei qui» = l'ultima
+            // opera riconosciuta.
+            const numeroDi = (i: number) => { const pos = ordineAttivo.indexOf(i); return pos < 0 ? 0 : ordineAttivo.slice(0, pos + 1).filter(k => !visit.guide.tappe[k].soloCollezione).length; };
+            const ultimaVista = [...ordineAttivo].reverse().find(k => !!visit.guide.tappe[k].seenCardId);
+            const salaQui = ultimaVista !== undefined ? normSalaMappa(visit.guide.tappe[ultimaVista].dove) : '';
+            const pinConTappe = mappa.pins.map(p => {
+              const ns = normSalaMappa(p.sala);
+              const tappe = ordineAttivo.filter(k => !visit.guide.tappe[k].soloCollezione && normSalaMappa(visit.guide.tappe[k].dove) === ns);
+              return { pin: p, tappe, seiQui: !!ns && ns === salaQui };
+            }).filter(x => x.tappe.length > 0);
+            return (
+              <div className="mb-3">
+                <div className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white">
+                  <img src={mappa.url} alt={mappa.titolo || t('mv_vista_mappa')} className="block w-full h-auto select-none" draggable={false} />
+                  {pinConTappe.map(({ pin, tappe, seiQui }) => {
+                    const primo = tappe[0];
+                    const fatte = tappe.every(k => !!visit.guide.tappe[k].seenCardId);
+                    return (
+                      <button
+                        key={`${pin.sala}-${primo}`}
+                        type="button"
+                        onClick={() => apriDalPin(primo)}
+                        aria-label={`${pin.sala}: ${tappe.map(k => visit.guide.tappe[k].nome).join(', ')}`}
+                        style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+                        className={`absolute -translate-x-1/2 -translate-y-1/2 min-w-7 h-7 px-1.5 rounded-full flex items-center justify-center text-[11px] font-black border-2 border-white shadow-[0_2px_8px_rgba(15,23,42,0.35)] active:scale-90 transition-transform ${fatte ? 'bg-emerald-600 text-white' : 'bg-primary text-white'} ${seiQui ? 'ring-4 ring-amber-400' : ''}`}
+                      >
+                        {numeroDi(primo)}{tappe.length > 1 ? `+${tappe.length - 1}` : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] font-bold text-slate-500 leading-snug mt-1.5 px-1">
+                  {pinConTappe.length > 0 ? t('mv_mappa_pin_hint') : t('mv_mappa_senza_pin')}
+                  {pinConTappe.some(x => x.seiQui) ? ` · ${t('mv_mappa_sei_qui')}` : ''}
+                </p>
+                {mappa.fonteUrl && (
+                  <a href={mappa.fonteUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-black text-primary px-1 flex items-center gap-1">
+                    <ExternalLink className="w-3 h-3" />{t('mv_mappa_ufficiale')}
+                  </a>
+                )}
+              </div>
+            );
+          })()}
           <ol className="space-y-2">
             {ordineAttivo.map((i, posizione) => {
               const tappa = visit.guide.tappe[i];
@@ -1694,7 +1793,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">{t('mv_also_in_collection')}</span>
                   </div>
                 )}
-                <li key={`${i}-${tappa.nome}`} className={`flex gap-3 px-3.5 py-3 rounded-2xl border transition-opacity ${done ? 'bg-emerald-50 border-emerald-200' : tappa.skipped ? 'bg-white border-slate-200 opacity-60' : 'bg-white border-slate-200'}`}>
+                <li id={`mv-tappa-${i}`} key={`${i}-${tappa.nome}`} className={`flex gap-3 px-3.5 py-3 rounded-2xl border transition-opacity ${done ? 'bg-emerald-50 border-emerald-200' : tappa.skipped ? 'bg-white border-slate-200 opacity-60' : 'bg-white border-slate-200'}`}>
                   {/* La foto dell'opera nel cerchio, col numero quando manca.
                       UN TOCCO E SI APRE GRANDE (11/09/2026): dentro una sala
                       affollata l'occhio riconosce un quadro in un secondo,

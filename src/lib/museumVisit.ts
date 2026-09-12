@@ -328,6 +328,35 @@ export async function fetchMuseumSuggest(args: { q: string; lat?: number | null;
   }
 }
 
+/**
+ * MAPPA INTERATTIVA (12/09/2026, regola fissa): la pianta del museo dal sito
+ * ufficiale con i pin delle sale; il client abbina le tappe della guida al
+ * pin della loro sala. Senza pianta torna vuoto e resta la lista.
+ */
+export type MuseumMapPin = { sala: string; x: number; y: number; origine?: string; piano?: string; etichetta?: string };
+export type MuseumMap = { indice: number; titolo: string | null; url: string; fonteUrl: string | null; larghezza: number | null; altezza: number | null; pins: MuseumMapPin[]; pinsOrigine: string | null };
+export type MuseumMapLink = { url: string; titolo: string; tipo: 'pagina' | 'pdf' };
+
+export async function fetchMuseumMap(poiId: string | null | undefined, venueKey?: string | null): Promise<{ maps: MuseumMap[]; links: MuseumMapLink[] }> {
+  // Anche per chiave di libreria: le visite avviate per nome («nome_louvre»)
+  // non hanno un POI, ma hanno fonti e piante sotto quella chiave.
+  if (!poiId && !venueKey) return { maps: [], links: [] };
+  try {
+    const p = new URLSearchParams();
+    if (poiId) p.set('poiId', poiId);
+    if (venueKey) p.set('key', venueKey);
+    const res = await fetch(getApiUrl(`/api/museums/map?${p.toString()}`));
+    if (!res.ok) return { maps: [], links: [] };
+    const data = await res.json();
+    return { maps: Array.isArray(data?.maps) ? data.maps : [], links: Array.isArray(data?.links) ? data.links : [] };
+  } catch {
+    return { maps: [], links: [] };
+  }
+}
+
+/** «Sala 10», «Room 10», «Salle 10» → «10»: la stessa sala scritta in due lingue. */
+export const normSalaMappa = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\b(sala|room|salle|saal|galleria|gallery|galerie|hall|zaal)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+
 const venueKeyOf = (venue: VenueInfo) => venue.id ? `poi_${venue.id}` : `nome_${normalize(venue.name).replace(/ /g, '_')}`;
 
 /**
