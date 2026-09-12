@@ -50,7 +50,27 @@ export default function MuseumPrintView({
             color: #1e1b14 !important;
           }
           #museum-print-view { display: block !important; }
-
+        }
+        /* STESSA VESTE DEGLI ITINERARI (12/09/2026, committente: «come quella
+           con stessa grafica, impostazioni, font degli itinerari»): stessi
+           colori (navy #1e3a8a, oro #d4af37, ambra #b45309), stessi font
+           (sistema per i titoli, Georgia per i testi), stesse misure di
+           PrintView. Le regole stanno FUORI da @media print: il PDF sul
+           telefono (html2pdf) rende la pagina come schermo e ignorava tutto
+           — il PDF usciva senza grafica. */
+        #museum-print-view {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+          color: #1e1b14;
+          background: #ffffff;
+        }
+        #museum-print-view .mp-logo { width: 58px; height: 58px; object-fit: contain; border-radius: 10px; }
+        #museum-print-view .mp-subtitle {
+          font-size: 7.5pt; color: #b45309; font-weight: 800; text-transform: uppercase; letter-spacing: 0.14em; margin: 0;
+        }
+        #museum-print-view .mp-intro-desc {
+          font-size: 8pt; color: #57534e; line-height: 1.4; margin: 5px 0 0 0; font-style: italic; max-width: 92%;
+          font-family: Georgia, "Times New Roman", serif;
+        }
           .mp-header {
             display: flex !important;
             align-items: flex-start;
@@ -177,23 +197,24 @@ export default function MuseumPrintView({
             display: flex;
             justify-content: space-between;
           }
-        }
       `}</style>
 
-      {/* Il titolo apre la pagina: niente fasce sopra */}
+      {/* Testata identica a quella degli itinerari (PrintView): titolo che
+          apre la pagina, occhiello «wip.guide · …», introduzione in corsivo,
+          logo discreto a destra. */}
       <div className="mp-header">
-        <div>
-          <p className="mp-eyebrow">{t('mv_title')}</p>
+        <div style={{ flex: 1 }}>
           <h1 className="mp-title">{visit.venue.name}</h1>
-          <p className="mp-meta">
-            {t('mv_n_opere').replace('{n}', String(tappe.length))}
+          <p className="mp-subtitle">
+            wip.guide · {t('mv_title')} · {t('mv_n_opere').replace('{n}', String(tappe.length))}
             {conSala > 0 ? ` · ${t('mv_con_sale')}` : ''}
           </p>
+          {visit.guide?.intro && <p className="mp-intro-desc">{visit.guide.intro}</p>}
         </div>
-        <div className="mp-from">wip.guide</div>
+        <div style={{ flexShrink: 0 }}>
+          <img src="/logo.jpg" alt="World in Pocket" className="mp-logo" />
+        </div>
       </div>
-
-      {visit.guide?.intro && <p className="mp-intro">{visit.guide.intro}</p>}
       {visit.guide?.consiglio && <div className="mp-advice">{visit.guide.consiglio}</div>}
 
       {/* Il museo non pubblica le sale: si dice anche su carta, dove non
