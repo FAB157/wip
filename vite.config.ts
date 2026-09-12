@@ -60,7 +60,14 @@ export default defineConfig(({mode}) => {
           // Le pagine legali statiche (compliance store) vivono FUORI dalla SPA:
           // senza denylist il service worker rispondeva a /privacy &co. con
           // index.html (navigation fallback) per chi aveva già il SW attivo.
-          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//],
+          // `/luogo/…` (12/09/2026): le pagine SEO dei luoghi sono servite dal
+          // server, non dalla SPA. Senza questa riga il service worker
+          // rispondeva con index.html a chi aveva già visitato il sito: chi
+          // arrivava da Google su una pagina luogo finiva sulla HOME, e il
+          // difetto era invisibile da riga di comando (curl non ha il SW) e
+          // per Googlebot (che il SW non ce l'ha). Stesso motivo per
+          // sitemap/robots, serviti dal server.
+          navigateFallbackDenylist: [/^\/privacy/, /^\/terms/, /^\/support/, /^\/delete-account/, /^\/api\//, /^\/luogo\//, /^\/sitemap/, /^\/robots\.txt/],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,

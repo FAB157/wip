@@ -25,7 +25,7 @@ import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo } from '../lib/pacchettoMuseo';
-import { speakWithSystemVoice, speakAudioguide, stopSpeech } from '../services/ttsService';
+import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { Landmark } from 'lucide-react';
 
@@ -221,6 +221,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const [visit, setVisit] = useState<MuseumVisit | null>(() => getVisit());
   const [visitOpen, setVisitOpen] = useState(false);
   const [visitStarting, setVisitStarting] = useState(false);
+  // Quale riga dell'elenco "qui vicino" sta generando la propria guida: solo
+  // quella mostra lo spinner al posto della foto/icona, le altre restano
+  // toccabili solo dopo (visitStarting le disabilita tutte, ma questo dice
+  // QUALE sta lavorando).
+  const [avviandoKey, setAvviandoKey] = useState<string | null>(null);
   // Ripiego SOLO quando il GPS non trova nessun luogo: campo per il nome.
   const [visitNameFallback, setVisitNameFallback] = useState<string | null>(null);
   // Il server ha risposto che la visita guidata è del pass con itinerario.
@@ -238,6 +243,21 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // esiste già, manda i primi novanta secondi dell'introduzione. Si ascolta
   // la voce PRIMA di pagare, come in ogni podcast.
   const [passSample, setPassSample] = useState<{ text: string; language: string } | null>(null);
+  // Per QUALE luogo il server ha chiesto il pass (nome del museo toccato
+  // nell'elenco o cercato): compare in testa alla scheda «serve il pass».
+  const [passPerLuogo, setPassPerLuogo] = useState<string | null>(null);
+  // La scheda «serve il pass»: ci si scorre sopra quando il server risponde
+  // così a un tocco più in basso nell'elenco, altrimenti la risposta resta
+  // fuori dallo schermo e il tocco sembra a vuoto.
+  const schedaPassRef = useRef<HTMLDivElement | null>(null);
+  const mostraSchedaPass = (nome: string | null, sample: { text: string; language: string } | null) => {
+    setNeedsTourPass(true);
+    setPassPerLuogo(nome);
+    setPassSample(sample);
+    notify(tr('mv_locked_title'));
+    // Al prossimo frame la scheda esiste (needsTourPass appena messo a true).
+    window.setTimeout(() => schedaPassRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
   // La scansione non ha riconosciuto l'opera: si sceglie con gli occhi fra
   // quelle del percorso, la sala in cui si è per prima.
   const [sceltaOpera, setSceltaOpera] = useState<{ cardId: string | null; image: string; refunded: boolean } | null>(null);
@@ -300,16 +320,33 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   const apriVisitaDiElenco = async (m: MuseumLibraryItem) => {
     if (visitStarting) return;
     setVisitStarting(true);
+    // Un museo senza guida in libreria la genera al volo: può volerci fino a
+    // un minuto (vedi Agnes sui prompt lunghi). Senza un avviso subito, il
+    // tocco sembra non aver fatto nulla — l'unico segnale prima era lo
+    // spinner generico sull'icona "Sei qui", invisibile per un tocco più giù
+    // nell'elenco (11/09/2026, segnalazione utente: "ho cliccato e non
+    // succede nulla").
+    setAvviandoKey(m.venue_key);
+    notify(tr('mv_generating').replace('{s}', m.venue_name));
     void apriQuizAttesa(m.venue_name);
     try {
       const out = m.poi_id
         ? await startVisitByPoi(m.poi_id, language, { lat: m.lat, lon: m.lon })
         : await startVisitByName(m.venue_name, { lat: m.lat, lon: m.lon }, language);
       if (out.ok && out.visit) { setVisit(out.visit); setVisitOpen(true); }
-      else if (out.reason === 'needs_tour_pass') setNeedsTourPass(true);
+      // Prima qui c'era solo setNeedsTourPass(true): se la scheda «serve il
+      // pass» era GIÀ aperta per un altro museo, non cambiava niente sullo
+      // schermo (12/09/2026, «se clicco su Palazzo delle Logge non succede
+      // nulla»). Ora la scheda prende il nome del museo toccato, l'assaggio
+      // della sua introduzione, e ci si scorre sopra.
+      else if (out.reason === 'needs_tour_pass') mostraSchedaPass(m.venue_name, out.sample || null);
       else notify(tr('mv_not_found'));
+    } catch (e) {
+      console.warn('[Visite] Avvio visita fallito:', e);
+      notify(tr('mv_not_found'));
     } finally {
       setVisitStarting(false);
+      setAvviandoKey(null);
       setQuizAperto(false);
     }
   };
@@ -353,14 +390,19 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     void apriQuizAttesa(typedName || '');
     try {
       const coords = await resolveVisitCoords();
-      // La voce parte SUBITO: «Sei agli Uffizi, sto preparando il percorso».
-      // Voce di sistema, gratis e immediata; il percorso arriva dietro.
-      const nomeQui = (typedName && typedName.trim()) || seiQui?.name;
-      if (nomeQui) void speakWithSystemVoice(tr('mv_preparing').replace('{s}', nomeQui), String(language).toLowerCase(), getGuideCharacter());
+      // Prima qui c'era anche una voce di sistema («Sei agli Uffizi, sto
+      // preparando il percorso»): su iOS con i sottotitoli in diretta attivi
+      // (Accessibilità → Contenuto vocale) fa comparire una fascia di
+      // sottotitoli di SISTEMA, sopra qualunque schermata dell'app, che resta
+      // visibile anche cambiando tab — non è un elemento nostro, e toccare la
+      // X dentro l'app non la chiude (11/09/2026, segnalazione utente: la
+      // fascia "Sei a Duomo..." restava fissa passando da Radar AR a Visite
+      // alla Mappa). Il nome del luogo è già scritto nella scheda "Sei qui":
+      // la voce era un di più, non l'unica fonte dell'informazione.
       if (typedName && typedName.trim().length >= 3) {
         const out = await startVisitByName(typedName.trim(), coords, language);
         if (out.ok && out.visit) { setVisitNameFallback(null); setVisit(out.visit); setVisitOpen(true); }
-        else if (out.reason === 'needs_tour_pass') { setNeedsTourPass(true); setPassSample(out.sample || null); notify(tr('mv_locked_title')); }
+        else if (out.reason === 'needs_tour_pass') mostraSchedaPass(typedName.trim(), out.sample || null);
         else notify(out.reason === 'network' ? tr('vis_generic_error') : tr('mv_not_found'));
         return;
       }
@@ -373,8 +415,7 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       } else if (resp && resp.ok === false && resp.reason === 'needs_tour_pass') {
         // La visita guidata è del pass con itinerario: si propone lo sblocco,
         // senza generare nulla (nessun costo AI per chi non ha pagato).
-        setNeedsTourPass(true);
-        setPassSample(resp.sample || null);
+        mostraSchedaPass(seiQui?.name || resp.venue?.name || null, resp.sample || null);
       } else if (resp && resp.ok === false && resp.reason === 'venue_unknown') {
         // Nessun museo/chiesa entro 200 m nel nostro archivio: si chiede il nome.
         setVisitNameFallback('');
@@ -1240,12 +1281,17 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // Ora è una sola scheda, mostrata dove serve, e sotto di lei il pass da
   // 150 non si ripete.
   const schedaPassTour = needsTourPass && !visit ? (
-    <div className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
+    <div ref={schedaPassRef} className="w-full px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] text-left space-y-2">
       <div className="flex items-center gap-3">
         <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
           <Landmark className="w-5 h-5 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
+          {/* Il museo toccato nell'elenco, per nome: la scheda deve dire DI
+              CHI è il pass che chiede, altrimenti toccare «Palazzo delle
+              Logge» e vedere la stessa scheda di prima è «non succede
+              nulla» (12/09/2026, foto del committente). */}
+          {passPerLuogo && <p className="text-[9px] font-black uppercase tracking-[0.1em] text-primary truncate">{passPerLuogo}</p>}
           <p className="text-xs font-black text-slate-900">{tr('mv_locked_title')}</p>
           <p className="text-[10px] font-bold text-slate-500 leading-snug">{tr('mv_locked_desc')}</p>
         </div>
@@ -1386,9 +1432,13 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         )}
       </AnimatePresence>
       {onClose && mode !== 'ar' && (
-        <button 
+        // Allineata alla stessa quota della X di Radar AR (top-0 + p-4): prima
+        // stava più in basso (top-6), sola, senza nessuna barra a fianco —
+        // qui non c'è una testata come nell'AR, ma la X deve comunque cadere
+        // alla stessa altezza quando si passa da un modo all'altro (11/09/2026).
+        <button
           onClick={onClose}
-          className="absolute top-6 right-6 z-40 w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-slate-900 active:scale-90 transition-transform shadow-[0_1px_3px_rgba(15,23,42,0.08)] cursor-pointer hover:bg-gray-50"
+          className="absolute top-4 right-4 z-40 w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-slate-900 active:scale-90 transition-transform shadow-[0_1px_3px_rgba(15,23,42,0.08)] cursor-pointer hover:bg-gray-50"
         >
           <X className="w-5 h-5" />
         </button>
@@ -1403,10 +1453,24 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-[#d4af37]/[0.07] rounded-full blur-[100px]" />
       </div>
 
-      {/* pt-20: sotto la X in alto a destra (top-6 + 40 px) non deve finire
+      {/* pt-20: sotto la X in alto a destra (top-4 + 40 px) non deve finire
           niente. Nel modo Scansione il contenuto è alto e il selettore dei
-          tre modi saliva fin sotto la X, che copriva «Visite». */}
-      <div className="flex-1 relative flex flex-col items-center justify-center px-8 pb-8 pt-20 z-10">
+          tre modi saliva fin sotto la X, che copriva «Visite».
+          SCORREVOLE (11/09/2026): prima il contenitore era `overflow-hidden`
+          col genitore e centrato in verticale — con più di una schermata di
+          contenuto (Pass Museo, elenco "qui vicino"...) il resto restava
+          semplicemente tagliato fuori, senza modo di raggiungerlo. `justify-
+          center` con overflow-y-auto rende irraggiungibile la PARTE ALTA del
+          contenuto quando supera l'altezza dello schermo (bug noto dei
+          browser); si allinea in alto e si lascia che sia il contenuto breve
+          a restare centrato "a vista" grazie al padding, non al centraggio
+          flex.
+          min-h-0 (12/09/2026, foto del committente: nel modo Opera il pass da
+          150 restava tagliato in fondo e la pagina non scorreva): un figlio
+          flex ha min-height:auto, quindi cresceva quanto il contenuto e a
+          tagliare era l'overflow-hidden del genitore — overflow-y-auto qui
+          non aveva mai niente da far scorrere. */}
+      <div className="flex-1 min-h-0 relative flex flex-col items-center px-8 pb-8 pt-20 z-10 overflow-y-auto overscroll-contain">
         {mode === 'vision' ? (
           <>
             {/* I TRE MODI DI WIP VISION (10/09/2026): scansione, radar e le
@@ -1611,8 +1675,13 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 </div>
               </button>
               {/* Il pass da 150 NON si ripete quando la scheda «serve il
-                  pass» qui sopra lo sta già offrendo. */}
-              {!(needsTourPass && !visit) && (
+                  pass» qui sopra lo sta già offrendo — e quella scheda, in
+                  questo modo, esiste SOLO con «Opera» selezionato. Prima la
+                  condizione ignorava il modo: dopo un «serve il pass» arrivato
+                  dalla tab Visite, in «Luogo» e «Natura» sparivano ENTRAMBE le
+                  offerte da 150 (12/09/2026, foto del committente: solo il
+                  pass da 100 sotto «Scatta foto»). */}
+              {!(needsTourPass && !visit && visionTarget === 'artwork') && (
               <button
                 onClick={() => void handleBuyPass('tour')}
                 disabled={isScanning || buyingPass}
@@ -1698,6 +1767,74 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                 dell'elenco non fa succedere niente sullo schermo. */}
             {schedaPassTour}
 
+            {/* PASS MUSEO — prima c'era solo nella tab "Scansione AI": qui in
+                "Visite" si vedeva SOLO l'offerta da 150 crediti (dentro
+                schedaPassTour, e solo quando un museo la richiedeva), mai
+                l'opzione base da 100 senza percorso (11/09/2026, segnalazione
+                utente). */}
+            {passActive && passExpiresAt !== null ? (
+              <div className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-[#d4af37] bg-[#f8f5f0] shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+                <div className="w-9 h-9 rounded-xl bg-white border border-[#e8dfc9] flex items-center justify-center shrink-0">
+                  <Ticket className="w-5 h-5 text-amber-700" />
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-black text-amber-800">
+                    {getTranslation("museum_pass_active", language)}
+                    {passTier === 'tour' ? ` · ${getTranslation("museum_pass_tour_badge", language)}` : ''}
+                  </p>
+                  <p className="text-[10px] font-bold text-amber-700/80">
+                    {tr('museum_pass_scans_left').replace('{n}', String(Math.max(0, passScans.limit - passScans.used))).replace('{t}', String(passScans.limit))} · {getTranslation("museum_pass_remaining", language)} {formatPassRemaining(passExpiresAt)}
+                  </p>
+                </div>
+                {passTier === 'base' && (
+                  <button
+                    onClick={() => void handleBuyPass('tour')}
+                    disabled={buyingPass}
+                    className="shrink-0 px-3 py-2 rounded-xl bg-primary text-white text-[11px] font-black disabled:opacity-50"
+                  >
+                    {buyingPass ? <Loader2 className="w-4 h-4 animate-spin" /> : tr('museum_pass_upgrade')}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="w-full flex flex-col gap-2">
+                <button
+                  onClick={() => void handleBuyPass('base')}
+                  disabled={buyingPass}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-gray-200 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06)] active:scale-95 transition-all hover:bg-[#f8f5f0] disabled:opacity-50"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-[#f8f5f0] flex items-center justify-center shrink-0">
+                    {buyingPass ? <Loader2 className="w-5 h-5 text-amber-700 animate-spin" /> : <Ticket className="w-5 h-5 text-amber-700" />}
+                  </div>
+                  <div className="flex-1 min-w-0 text-left">
+                    <p className="text-xs font-black text-slate-900">
+                      {getTranslation("museum_pass_title", language)} · {PRICING_LIST.museum_pass} {getTranslation("credits_word", language)}
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_desc", language)}</p>
+                  </div>
+                </button>
+                {/* Il pass da 150 NON si ripete quando la scheda "serve il
+                    pass" qui sopra lo sta già offrendo. */}
+                {!(needsTourPass && !visit) && (
+                  <button
+                    onClick={() => void handleBuyPass('tour')}
+                    disabled={buyingPass}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border-2 border-primary bg-white shadow-[0_12px_28px_rgba(30,58,138,0.12)] active:scale-95 transition-all hover:bg-blue-50/40 disabled:opacity-50"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                      {buyingPass ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> : <Landmark className="w-5 h-5 text-primary" />}
+                    </div>
+                    <div className="flex-1 min-w-0 text-left">
+                      <p className="text-xs font-black text-slate-900">
+                        {getTranslation("museum_pass_tour_title", language)} · {PRICING_LIST.museum_pass_tour} {getTranslation("credits_word", language)}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 leading-snug">{getTranslation("museum_pass_tour_desc", language)}</p>
+                    </div>
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Ricerca: qualsiasi museo o chiesa del mondo */}
             <form
               onSubmit={(e) => { e.preventDefault(); if (cercaMuseo.trim().length >= 3) void startGuidedVisit(cercaMuseo.trim()); }}
@@ -1774,8 +1911,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                     >
                       {/* La FOTO del luogo nel cerchio, come per le opere. Se il
                           museo non ne ha una dichiarata resta il simbolo: mai
-                          la foto di un altro posto, mai una foto "a tema". */}
-                      {m.venue_photo_icon ? (
+                          la foto di un altro posto, mai una foto "a tema".
+                          Mentre QUESTA riga genera la guida, lo spinner
+                          sostituisce foto/simbolo: è l'unico segnale che il
+                          tocco ha funzionato, la guida può volerci un minuto. */}
+                      {avviandoKey === m.venue_key ? (
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${chiesa ? 'bg-[#f8f5f0]' : 'bg-blue-50'}`}>
+                          <Loader2 className={`w-4 h-4 animate-spin ${chiesa ? 'text-amber-700' : 'text-primary'}`} />
+                        </div>
+                      ) : m.venue_photo_icon ? (
                         <img
                           src={m.venue_photo_icon}
                           alt=""

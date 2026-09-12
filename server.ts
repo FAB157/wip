@@ -8226,7 +8226,11 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
           // «Galleria degli Uffizi». Ora si cerca dentro il nome; le
           // virgolette proteggono i nomi con la virgola («National Gallery,
           // London») dalla sintassi dell'or.
-          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${String(venue.name).replace(/["*]/g, '')}*"`)})&select=guide,source,official_site,venue_name,language,stops_count,venue_photo&order=stops_count.desc&limit=8`,
+          // La disambiguazione fra parentesi NON entra nella ricerca
+          // (12/09/2026): «Palazzo delle Logge (Carrara)» cercato tale e
+          // quale non trovava «Palazzo delle Logge» già in libreria, e la
+          // stessa sede finiva in elenco due volte con due POI diversi.
+          `${supabaseUrl}/rest/v1/museum_guides?or=(venue_key.eq.${encodeURIComponent(chiaveLuogo)},venue_name.ilike.${encodeURIComponent(`"*${(String(venue.name).replace(/\s*\([^)]*\)\s*/g, ' ').replace(/["*]/g, '').trim() || String(venue.name).replace(/["*]/g, ''))}*"`)})&select=guide,source,official_site,venue_name,language,stops_count,venue_photo&order=stops_count.desc&limit=8`,
           { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 6000 }
         );
         const righe = (lib.data || []).filter((r: any) => r?.guide?.tappe?.length >= 3);
@@ -11167,6 +11171,28 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
           .filter((x: any) => x.distance_m === null || x.distance_m <= kmRaggio * 1000)
           .sort((a: any, b: any) => (a.distance_m ?? 1e9) - (b.distance_m ?? 1e9));
       }
+      // UNA riga per sede (12/09/2026, dalle foto del committente: «Palazzo
+      // delle Logge (Carrara)» e «Palazzo delle Logge» uno sotto l'altro, a
+      // 2,9 km entrambi). Due POI diversi della stessa sede — una da
+      // Wikidata, una dal CSV — avevano generato due guide dalla stessa voce
+      // Wikipedia. Stessa fonte, o stesso nome (senza la parentesi) a meno
+      // di 120 m: si tiene la guida più ricca, le altre non si mostrano.
+      const nomeNudo = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\([^)]*\)/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const stessaSede = (a: any, b: any) => {
+        const ua = String(a?.source?.url || ''), ub = String(b?.source?.url || '');
+        if (ua && ua === ub) return true;
+        if (nomeNudo(a.venue_name) !== nomeNudo(b.venue_name)) return false;
+        if (!Number.isFinite(a.lat) || !Number.isFinite(b.lat) || !Number.isFinite(a.lon) || !Number.isFinite(b.lon)) return true;
+        return getHaversineDistance(a.lat, a.lon, b.lat, b.lon) <= 120;
+      };
+      const piuRicca = (a: any, b: any) => (b.stops_count || 0) - (a.stops_count || 0) || (b.official_site ? 1 : 0) - (a.official_site ? 1 : 0) || (b.venue_photo ? 1 : 0) - (a.venue_photo ? 1 : 0);
+      const uniche: any[] = [];
+      for (const r of righe) {
+        const i = uniche.findIndex((u: any) => stessaSede(u, r));
+        if (i < 0) uniche.push(r);
+        else if (piuRicca(uniche[i], r) > 0) uniche[i] = { ...r, distance_m: uniche[i].distance_m ?? r.distance_m };
+      }
+      righe = uniche;
       res.set('Cache-Control', 'public, max-age=300');
       res.json({ ok: true, language: lang, count: righe.length, museums: righe });
     } catch (e: any) {
