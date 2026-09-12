@@ -18,9 +18,22 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}` };
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : d; };
 const OGGI = process.argv.includes('--oggi'); const LINGUA = arg('--lingua', 'IT');
 const oggi = new Date().toISOString().slice(0, 10);
-const g = await (await fetch(`${SB}/rest/v1/museum_guides?select=venue_key,venue_name,poi_id,language,stops_count,updated_at,venue_photo,guide&language=eq.${LINGUA}${OGGI ? `&updated_at=gte.${oggi}` : ''}&order=updated_at.desc&limit=400`, { headers: H })).json();
-const mappe = await (await fetch(`${SB}/rest/v1/mappe_museo?select=poi_id,pins`, { headers: H })).json();
+// --da / --a (12/09/2026 sera): solo i musei di musei_prioritari in quel
+// rango, in ordine di rango, e i mancanti (senza guida) elencati in fondo.
+const DA = parseInt(arg('--da', '0'), 10), A = parseInt(arg('--a', '0'), 10);
+const prioritari = A > 0 ? await (await fetch(`${SB}/rest/v1/musei_prioritari?select=qid,rango,nome&rango=gte.${DA}&rango=lte.${A}&order=rango`, { headers: H })).json() : [];
+const normNome = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+const rangoDiQid = {}; const rangoDiNome = {}; for (const p of prioritari) { rangoDiQid[p.qid] = p; rangoDiNome[normNome(p.nome)] = p; }
 const qidDi = s => String(s || '').match(/-(Q\d+)$/)?.[1] || '';
+// La guida si abbina per QID (poi_id o venue_key «…-Q123») e, in mancanza,
+// per nome normalizzato: le guide seminate dall'altra sessione portano il
+// poi_id dell'archivio, non il QID.
+const prioDi = r => rangoDiQid[qidDi(r.poi_id) || qidDi(r.venue_key)] || rangoDiNome[normNome(r.venue_name)] || null;
+let g = await (await fetch(`${SB}/rest/v1/museum_guides?select=venue_key,venue_name,poi_id,language,stops_count,updated_at,venue_photo,guide&language=eq.${LINGUA}${OGGI ? `&updated_at=gte.${oggi}` : ''}&order=updated_at.desc&limit=1000`, { headers: H })).json();
+if (A > 0) {
+  g = g.filter(r => prioDi(r)).sort((x, y) => prioDi(x).rango - prioDi(y).rango);
+}
+const mappe = await (await fetch(`${SB}/rest/v1/mappe_museo?select=poi_id,pins`, { headers: H })).json();
 const pinPerQid = {}; for (const m of (Array.isArray(mappe) ? mappe : [])) { const q = qidDi(m.poi_id); if (!q) continue; pinPerQid[q] = (pinPerQid[q] || 0) + (Array.isArray(m.pins) ? m.pins.length : 0); pinPerQid[q + ':piante'] = (pinPerQid[q + ':piante'] || 0) + 1; }
 console.log(`guide ${LINGUA}${OGGI ? ' scritte oggi' : ''}: ${g.length}`);
 console.log('rango/museo | tappe | foto | spieg | curios | sale | codici | servizi | intro | fotoMuseo | piante/pin');
@@ -35,6 +48,12 @@ for (const r of g) {
   const ok = t.length >= 8 && foto >= Math.ceil(t.length * 0.6) && sp >= t.length * 0.9 && cu >= t.length * 0.8 && sale > 0 && serv > 0 && intro === 'sì' && fm === 'sì';
   tot.n++; if (ok) tot.complete++; tot.foto += foto; tot.tappe += t.length; tot.sale += sale;
   if (foto < Math.ceil(t.length * 0.6)) tot.senzaFoto++; if (!sale) tot.senzaSale++; if (!serv) tot.senzaServizi++; if (fm === 'NO') tot.senzaFotoMuseo++; if (piante) tot.conPianta++; if (pin) tot.conPin++;
-  console.log(`${ok ? '✓' : '·'} ${r.venue_name.slice(0, 34).padEnd(34)} | ${String(t.length).padStart(2)} | ${String(foto).padStart(2)} | ${String(sp).padStart(2)} | ${String(cu).padStart(2)} | ${String(sale).padStart(2)} | ${String(cod).padStart(2)} | ${serv} | ${intro} | ${fm} | ${piante}/${pin}`);
+  const rg = A > 0 ? String(prioDi(r)?.rango || '').padStart(3) + ' ' : '';
+  console.log(`${ok ? '✓' : '·'} ${rg}${r.venue_name.slice(0, 34).padEnd(34)} | ${String(t.length).padStart(2)} | ${String(foto).padStart(2)} | ${String(sp).padStart(2)} | ${String(cu).padStart(2)} | ${String(sale).padStart(2)} | ${String(cod).padStart(2)} | ${serv} | ${intro} | ${fm} | ${piante}/${pin}`);
+}
+if (A > 0) {
+  const conGuida = new Set(g.map(r => prioDi(r)?.qid));
+  const mancanti = prioritari.filter(p => !conGuida.has(p.qid));
+  console.log(`\nSENZA GUIDA ${LINGUA} (${mancanti.length} su ${prioritari.length} del rango ${DA}-${A}): ${mancanti.map(p => `${p.rango} ${p.nome}`).join('; ')}`);
 }
 console.log(`\nTOTALE: ${tot.n} guide, complete ${tot.complete}; tappe ${tot.tappe}, con foto ${tot.foto} (${Math.round(100 * tot.foto / Math.max(1, tot.tappe))}%), con sala ${tot.sale}; guide con poche foto ${tot.senzaFoto}, senza sale ${tot.senzaSale}, senza servizi ${tot.senzaServizi}, senza foto museo ${tot.senzaFotoMuseo}; con pianta ${tot.conPianta}, con pin ${tot.conPin}`);
