@@ -11560,7 +11560,11 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
    */
   app.post("/api/museums/artwork-faq", rateLimiter, async (req, res) => {
     try {
-      const userId = await verifyUserToken(req);
+      // Anche dalla semina di sfondo col segreto degli script (13/09/2026):
+      // le domande pronte si preparano di notte sul droplet, non solo al
+      // primo scaricamento di un utente.
+      const daScript = !!SCRIPT_SHARED_SECRET && req.headers['x-script-secret'] === SCRIPT_SHARED_SECRET;
+      const userId = daScript ? 'background-script' : await verifyUserToken(req);
       if (!userId) return res.status(401).json({ error: 'login_required' });
       const opera = String(req.body?.artwork || '').trim().slice(0, 160);
       const museo = String(req.body?.venueName || '').trim().slice(0, 120);
