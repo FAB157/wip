@@ -7,6 +7,7 @@
 import { supabase } from '../lib/supabase';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { Capacitor } from '@capacitor/core';
+import { registraDownload } from '../lib/downloadsRegistry';
 
 // ── Salvataggio file: browser (<a download>) oppure nativo (Filesystem) ──────
 // Nel WebView di Capacitor il click su un <a download> con blob: URL non fa
@@ -155,6 +156,20 @@ export async function saveGuideLocally(result: GenerateGuideResult): Promise<voi
       content: result.content,
       media_manifest: result.media_manifest,
       savedAt: Date.now(),
+    });
+    // REGISTRO UNICO (12/09/2026): la Guida d'Autore restava fruibile offline
+    // (IndexedDB, sopra) ma invisibile in "I miei download" — nessuno la
+    // registrava. È già pagata e non si ripaga: comparire qui è solo
+    // visibilità, non un nuovo costo. Riapre nell'Archivio del Piano, che
+    // legge già le guide salvate (fetchSavedPremiumGuides), stesso posto
+    // delle guide/audiolibri esistenti.
+    const giorni = result.content?.giorni?.length || 0;
+    void registraDownload('guida', result.hash, {
+      nome: result.content?.guida_titolo || 'Guida d\'autore',
+      sottotitolo: giorni ? `${giorni} ${giorni === 1 ? 'giorno' : 'giorni'}` : undefined,
+      bytes: new TextEncoder().encode(JSON.stringify(result.content || {})).length,
+      parti: { poi: true },
+      meta: { hash: result.hash },
     });
   } catch (e) {
     console.warn('[PremiumGuide] Salvataggio locale fallito:', e);

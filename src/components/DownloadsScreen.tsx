@@ -10,11 +10,12 @@
 // =====================================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Download, Map as MapIcon, Route, Headphones, BookOpen, Trash2, Navigation2, CheckCircle2, AlertTriangle, HardDrive, ChevronRight } from 'lucide-react';
+import { Download, Map as MapIcon, Route, Headphones, BookOpen, Trash2, Navigation2, CheckCircle2, AlertTriangle, HardDrive, ChevronRight, Landmark, LayoutList, LayoutGrid, ArrowDownAZ, CalendarClock } from 'lucide-react';
 import { getTranslation, type Language } from '../lib/i18n';
 import { elencoDownload, byteTotaliDownload, statoDownload, EVENTO_DOWNLOADS, type DownloadRecord } from '../lib/downloadsRegistry';
 import { getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
 import { scaricaPacchettoOffline, eliminaPacchettoOffline } from '../lib/pacchettoOffline';
+import { eliminaPacchettoMuseo } from '../lib/pacchettoMuseo';
 import { notify } from '../lib/toast';
 import OfflineMapsTab from './OfflineMapsTab';
 
@@ -56,6 +57,43 @@ const Voce: React.FC<VoceProps> = ({ icona, titolo, sotto, badge, onApri, azioni
   );
 };
 
+/** Stessa scheda della lista, in formato compatto per la griglia (due colonne). */
+const VoceGriglia: React.FC<VoceProps> = ({ icona, titolo, sotto, onApri, azioni }) => {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onApri}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onApri(); } }}
+      className="relative flex flex-col gap-2 p-3 rounded-2xl bg-white border border-outline-variant/10 shadow-sm hover:bg-primary/5 active:scale-[0.98] transition-all text-left cursor-pointer"
+    >
+      {azioni && (
+        <div className="absolute top-2 right-2" onClick={(e) => e.stopPropagation()}>{azioni}</div>
+      )}
+      <div className="shrink-0 grid place-items-center w-10 h-10 rounded-xl bg-primary/10 text-primary">{icona}</div>
+      <div className="min-w-0">
+        <p className="text-[13px] font-black text-on-surface line-clamp-2 leading-tight">{titolo}</p>
+        {sotto && <div className="mt-1 text-[10px] text-on-surface-variant/70 font-semibold truncate">{sotto}</div>}
+      </div>
+    </div>
+  );
+};
+
+/** Vista lista/griglia (12/09/2026, preferenza dell'utente): stesse voci,
+ *  cambia solo il contenitore. Persistita cosi' non torna a "lista" ogni volta. */
+type Vista = 'lista' | 'griglia';
+type Ordine = 'data' | 'nome';
+const CHIAVE_VISTA = 'wip_downloads_vista';
+const CHIAVE_ORDINE = 'wip_downloads_ordine';
+function leggiVista(): Vista { try { return localStorage.getItem(CHIAVE_VISTA) === 'griglia' ? 'griglia' : 'lista'; } catch { return 'lista'; } }
+function leggiOrdine(): Ordine { try { return localStorage.getItem(CHIAVE_ORDINE) === 'nome' ? 'nome' : 'data'; } catch { return 'data'; } }
+
+/** Una sezione di voci, che si adatta alla vista corrente. */
+const Sezione: React.FC<{ vista: Vista; children: React.ReactNode }> = ({ vista, children }) =>
+  vista === 'griglia'
+    ? <div className="grid grid-cols-2 gap-2.5">{children}</div>
+    : <div className="space-y-2.5">{children}</div>;
+
 function Badge({ stato, t }: { stato: 'pronto' | 'parziale' | 'vuoto'; t: (k: string) => string }) {
   if (stato === 'pronto') return <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-green-700 bg-green-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} />{t('dl_pronto')}</span>;
   if (stato === 'parziale') return <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full"><AlertTriangle size={11} />{t('dl_parziale')}</span>;
@@ -68,6 +106,10 @@ export default function DownloadsScreen({ language }: Props) {
   const [offlinePlans, setOfflinePlans] = useState<any[]>([]);
   const [bytes, setBytes] = useState(0);
   const [inCorso, setInCorso] = useState<string | null>(null);
+  const [vista, setVista] = useState<Vista>(leggiVista);
+  const [ordine, setOrdine] = useState<Ordine>(leggiOrdine);
+  const cambiaVista = (v: Vista) => { setVista(v); try { localStorage.setItem(CHIAVE_VISTA, v); } catch { /* niente */ } };
+  const cambiaOrdine = (o: Ordine) => { setOrdine(o); try { localStorage.setItem(CHIAVE_ORDINE, o); } catch { /* niente */ } };
 
   const ricarica = async () => {
     const [r, p, b] = await Promise.all([elencoDownload(), getOfflineItinerariesList().catch(() => []), byteTotaliDownload()]);
@@ -94,15 +136,37 @@ export default function DownloadsScreen({ language }: Props) {
       const esistente = perId.get(id);
       perId.set(id, { id, nome: esistente?.nome || r.nome, sotto: r.sottotitolo, data: esistente?.data || r.updatedAt, record: r });
     }
-    return [...perId.values()].sort((a, b) => (b.data || 0) - (a.data || 0));
-  }, [records, offlinePlans]);
+    const arr = [...perId.values()];
+    return ordine === 'nome' ? arr.sort((a, b) => a.nome.localeCompare(b.nome)) : arr.sort((a, b) => (b.data || 0) - (a.data || 0));
+  }, [records, offlinePlans, ordine]);
 
-  const audioguide = records.filter(r => r.tipo === 'audioguida');
-  const guide = records.filter(r => r.tipo === 'guida');
+  // Stesso ordinamento per i tre elenchi dal registro unico: data (piu' recente
+  // prima) o nome (alfabetico) — scelta dell'utente, vedi header piu' sotto.
+  const ordinaRecord = (a: DownloadRecord[]) =>
+    ordine === 'nome' ? [...a].sort((x, y) => x.nome.localeCompare(y.nome)) : [...a].sort((x, y) => y.updatedAt - x.updatedAt);
+  const audioguide = ordinaRecord(records.filter(r => r.tipo === 'audioguida'));
+  const guide = ordinaRecord(records.filter(r => r.tipo === 'guida'));
+  const musei = ordinaRecord(records.filter(r => r.tipo === 'museo'));
   const zone = records.filter(r => r.tipo === 'zona');
-  const vuoto = itinerari.length === 0 && audioguide.length === 0 && guide.length === 0 && zone.length === 0;
+  // «Musei» mancava qui (12/09/2026): il pacchetto si registrava già nel
+  // registro unico (pacchettoMuseo.ts, tipo='museo') ma questa schermata non
+  // lo filtrava né lo mostrava — un museo scaricato risultava invisibile e
+  // "Non hai ancora scaricato nulla" appariva anche con lo spazio già occupato.
+  const vuoto = itinerari.length === 0 && audioguide.length === 0 && guide.length === 0 && musei.length === 0 && zone.length === 0;
+  // Conteggio totale (12/09/2026, richiesta: "numero dei prodotti all'interno").
+  // Le zone mappa non sono contate qui: OfflineMapsTab ha il suo elenco e
+  // conteggio proprio, un secondo numero diverso confonderebbe più che aiutare.
+  const totaleProdotti = itinerari.length + audioguide.length + guide.length + musei.length;
 
   const apri = (detail: Record<string, unknown>): void => { window.dispatchEvent(new CustomEvent('wip-apri-download', { detail })); };
+
+  const eliminaMuseo = async (r: DownloadRecord) => {
+    const venueKey = String(r.meta?.venueKey || '');
+    const lang = String(r.meta?.language || '');
+    if (!venueKey || !lang) return;
+    try { await eliminaPacchettoMuseo(venueKey, lang); } catch { /* best-effort */ }
+    void ricarica();
+  };
 
   const completaItinerario = async (id: string) => {
     if (inCorso) return;
@@ -146,10 +210,46 @@ export default function DownloadsScreen({ language }: Props) {
             <p className="mt-1 text-[12px] text-white/80 font-semibold">{t('dl_sottotitolo')}</p>
           </div>
         </div>
-        <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider">
-          <HardDrive size={13} className="text-secondary" /> {t('dl_spazio')}: {fmtBytes(bytes)}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider">
+            <HardDrive size={13} className="text-secondary" /> {t('dl_spazio')}: {fmtBytes(bytes)}
+          </div>
+          {!vuoto && (
+            <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black uppercase tracking-wider">
+              <Download size={13} className="text-secondary" /> {totaleProdotti}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Ordine (data/nome) e vista (lista/griglia): scelta dell'utente,
+          persistita. Nascosti a vuoto: niente da ordinare o disporre. */}
+      {!vuoto && (
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div className="inline-flex rounded-full bg-surface-variant/40 p-0.5">
+            <button
+              onClick={() => cambiaOrdine('data')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black transition-colors ${ordine === 'data' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/60'}`}
+            ><CalendarClock size={13} /> {t('dl_ordine_data')}</button>
+            <button
+              onClick={() => cambiaOrdine('nome')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-black transition-colors ${ordine === 'nome' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/60'}`}
+            ><ArrowDownAZ size={13} /> {t('dl_ordine_nome')}</button>
+          </div>
+          <div className="inline-flex rounded-full bg-surface-variant/40 p-0.5">
+            <button
+              onClick={() => cambiaVista('lista')}
+              aria-label={t('dl_vista_lista')} title={t('dl_vista_lista')}
+              className={`grid place-items-center w-8 h-8 rounded-full transition-colors ${vista === 'lista' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/60'}`}
+            ><LayoutList size={15} /></button>
+            <button
+              onClick={() => cambiaVista('griglia')}
+              aria-label={t('dl_vista_griglia')} title={t('dl_vista_griglia')}
+              className={`grid place-items-center w-8 h-8 rounded-full transition-colors ${vista === 'griglia' ? 'bg-white shadow-sm text-primary' : 'text-on-surface-variant/60'}`}
+            ><LayoutGrid size={15} /></button>
+          </div>
+        </div>
+      )}
 
       {vuoto && (
         <div className="p-10 border-2 border-dashed border-outline-variant/30 rounded-[2rem] text-center text-on-surface-variant/60">
@@ -162,12 +262,14 @@ export default function DownloadsScreen({ language }: Props) {
       {itinerari.length > 0 && (
         <section className="space-y-2.5">
           <h3 className="px-1 text-[11px] font-black uppercase tracking-[0.16em] text-on-surface-variant/60 flex items-center gap-2"><Route size={13} /> {t('dl_itinerari')} · {itinerari.length}</h3>
+          <Sezione vista={vista}>
           {itinerari.map((it) => {
             const p = it.record?.parti || {};
             const stato = it.record ? statoDownload(it.record) : 'parziale';
             const ag = p.audioguide;
+            const Componente = vista === 'griglia' ? VoceGriglia : Voce;
             return (
-              <Voce
+              <Componente
                 key={it.id}
                 icona={<Route size={20} />}
                 titolo={it.nome}
@@ -203,6 +305,7 @@ export default function DownloadsScreen({ language }: Props) {
               />
             );
           })}
+          </Sezione>
         </section>
       )}
 
@@ -210,8 +313,11 @@ export default function DownloadsScreen({ language }: Props) {
       {audioguide.length > 0 && (
         <section className="space-y-2.5">
           <h3 className="px-1 text-[11px] font-black uppercase tracking-[0.16em] text-on-surface-variant/60 flex items-center gap-2"><Headphones size={13} /> {t('dl_audioguide')} · {audioguide.length}</h3>
-          {audioguide.map((r) => (
-            <Voce
+          <Sezione vista={vista}>
+          {audioguide.map((r) => {
+            const Componente = vista === 'griglia' ? VoceGriglia : Voce;
+            return (
+            <Componente
               key={r.id}
               icona={<Headphones size={20} />}
               titolo={r.nome}
@@ -219,7 +325,9 @@ export default function DownloadsScreen({ language }: Props) {
               badge={<Badge stato={statoDownload(r)} t={t} />}
               onApri={() => apri({ tipo: 'audioguida', id: r.id.replace(/^audio:/, ''), nome: r.nome, lat: r.meta?.lat, lon: r.meta?.lon, poi: r.meta?.poi })}
             />
-          ))}
+            );
+          })}
+          </Sezione>
         </section>
       )}
 
@@ -227,15 +335,50 @@ export default function DownloadsScreen({ language }: Props) {
       {guide.length > 0 && (
         <section className="space-y-2.5">
           <h3 className="px-1 text-[11px] font-black uppercase tracking-[0.16em] text-on-surface-variant/60 flex items-center gap-2"><BookOpen size={13} /> {t('dl_guide')} · {guide.length}</h3>
-          {guide.map((r) => (
-            <Voce
+          <Sezione vista={vista}>
+          {guide.map((r) => {
+            const Componente = vista === 'griglia' ? VoceGriglia : Voce;
+            return (
+            <Componente
               key={r.id}
               icona={<BookOpen size={20} />}
               titolo={r.nome}
               sotto={<>{r.sottotitolo && <span>{r.sottotitolo}</span>}{r.bytes ? <span>{fmtBytes(r.bytes)}</span> : null}</>}
               onApri={() => apri({ tipo: 'guida', id: r.id.replace(/^guida:/, '') })}
             />
-          ))}
+            );
+          })}
+          </Sezione>
+        </section>
+      )}
+
+      {/* MUSEI: il percorso, l'audioguida di ogni opera e le foto (12/09/2026,
+          pacchettoMuseo.ts). "Quello che e' scaricato e' dell'utente e non si
+          ripaga": riaprire da qui non tocca pass ne' crediti. */}
+      {musei.length > 0 && (
+        <section className="space-y-2.5">
+          <h3 className="px-1 text-[11px] font-black uppercase tracking-[0.16em] text-on-surface-variant/60 flex items-center gap-2"><Landmark size={13} /> {t('dl_musei')} · {musei.length}</h3>
+          <Sezione vista={vista}>
+          {musei.map((r) => {
+            const Componente = vista === 'griglia' ? VoceGriglia : Voce;
+            return (
+            <Componente
+              key={r.id}
+              icona={<Landmark size={20} />}
+              titolo={r.nome}
+              sotto={<>{r.sottotitolo && <span>{r.sottotitolo}</span>}{r.bytes ? <span>{fmtBytes(r.bytes)}</span> : null}</>}
+              onApri={() => apri({ tipo: 'museo', id: r.id, venueKey: r.meta?.venueKey, nome: r.nome, language: r.meta?.language })}
+              azioni={
+                <button
+                  onClick={() => { void eliminaMuseo(r); }}
+                  aria-label="Elimina"
+                  className="grid place-items-center w-9 h-9 rounded-full bg-red-50 text-red-500 hover:bg-red-500 hover:text-white transition-colors"
+                ><Trash2 size={15} /></button>
+              }
+            />
+            );
+          })}
+          </Sezione>
         </section>
       )}
 

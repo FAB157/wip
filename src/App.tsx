@@ -5,6 +5,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { getGuideCharacter, setGuideCharacter, isCategoryAllowed } from "./lib/guideSettings";
+import { apriGuidaMuseo } from "./lib/museumVisit";
 import { getBlockedCommunityPoiIds, refreshBlockedCommunityPois } from "./lib/communityModeration";
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from "./lib/supabase";
@@ -916,6 +917,12 @@ export default function App() {
         setMountedTabs(prev => prev.has("plan") ? prev : new Set(prev).add("plan"));
         setActiveTab('plan');
         setTimeout(() => window.dispatchEvent(new CustomEvent('wip-apri-archivio')), 300);
+      } else if (tipo === 'museo') {
+        // Un museo scaricato (pacchettoMuseo.ts): riapre la visita
+        // dall'ARCHIVIO offline in Vision (CameraScreen consuma la richiesta
+        // in sospeso quando è montata — apriGuidaMuseo fa anche il cambio
+        // scheda tramite OPEN_MUSEUM_GUIDE_EVENT, ascoltato più sopra).
+        apriGuidaMuseo({ poiId: null, venueKey: String(d.venueKey || ''), venueName: String(d.nome || ''), language: d.language ? String(d.language) : null });
       }
     };
     window.addEventListener('wip-apri-download', h);
