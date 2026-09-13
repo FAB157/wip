@@ -788,7 +788,15 @@ async function callUniversalAi(
 // Contatore mensile in api_cache, letto prima di accodare DeepSeek a un
 // lavoro di sfondo e aggiornato a ogni risposta pagata. Fail-closed: se il
 // contatore non si legge, la semina resta gratuita.
-const DEEPSEEK_SEMINA_LIMIT_USD = Number(process.env.DEEPSEEK_SEMINA_LIMIT_USD) || 20;
+// «0» SPEGNE DeepSeek nella semina (13/09/2026 sera, committente: «basta
+// DeepSeek fino a ordine contrario» dopo i primi 100 musei + 30 siti):
+// con `|| 20` lo zero tornava 20 e non c'era modo di chiuderlo senza
+// togliere la chiave. Assente o non numerico = 20.
+const DEEPSEEK_SEMINA_LIMIT_USD = (() => {
+  const raw = String(process.env.DEEPSEEK_SEMINA_LIMIT_USD ?? '').trim();
+  const v = Number(raw);
+  return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 20;
+})();
 const chiaveSpesaSemina = () => `deepseek_semina_usd_${new Date().toISOString().slice(0, 7)}`;
 async function seminaDeepSeekConsentita(): Promise<boolean> {
   try {
