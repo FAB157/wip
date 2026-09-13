@@ -163,7 +163,13 @@ export const OPEN_MUSEUM_VISIT_EVENT = 'wip-open-museum-visit';
  * quando è montata, consuma la richiesta in sospeso e avvia la visita.
  */
 export const OPEN_MUSEUM_GUIDE_EVENT = 'wip-open-museum-guide';
-export type RichiestaGuidaMuseo = { poiId: string | null; venueKey?: string | null; venueName: string; lat?: number | null; lon?: number | null };
+export type RichiestaGuidaMuseo = {
+  poiId: string | null; venueKey?: string | null; venueName: string; lat?: number | null; lon?: number | null;
+  /** Lingua del pacchetto scaricato da riaprire (schermata "I miei download",
+   *  12/09/2026): con questa valorizzata CameraScreen riapre dall'ARCHIVIO
+   *  offline invece di generare/scaricare una guida nuova. */
+  language?: string | null;
+};
 let richiestaGuidaInSospeso: RichiestaGuidaMuseo | null = null;
 export function apriGuidaMuseo(r: RichiestaGuidaMuseo): void {
   richiestaGuidaInSospeso = r;
@@ -1274,7 +1280,10 @@ export function tappeAttive(v: MuseumVisit | null): Set<number> {
   // 2) TEMPO e BAMBINI: quante opere tenere. Tre minuti l'una fra ascolto e
   //    spostamento; coi bambini sei opere e non di più — reggono venti
   //    minuti, e la settima è quella che rovina le prime sei.
-  const quante = p.bambini ? 6 : p.tempo === '30' ? 8 : p.tempo === '60' ? 15 : Number.POSITIVE_INFINITY;
+  // 13/09/2026 (committente: «per i bambini solo 6 opere?»): il numero lo
+  // decide il tempo scelto, anche coi bambini; «bambini» cambia il racconto,
+  // non il percorso. Senza un tempo scelto, tutte le opere.
+  const quante = p.tempo === '30' ? 8 : p.tempo === '60' ? 15 : Number.POSITIVE_INFINITY;
   const scelte = new Set<number>();
   if (candidati.length <= quante) {
     for (const x of candidati) scelte.add(x.k);

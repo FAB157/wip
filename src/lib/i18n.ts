@@ -150,9 +150,9 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   mv_int_other: { IT: "Altro", EN: "Other", FR: "Autre", ES: "Otro", DE: "Anderes", RU: "Другое", ZH: "其他" },
   mv_kids: { IT: "Con bambini", EN: "With kids", FR: "Avec des enfants", ES: "Con niños", DE: "Mit Kindern", RU: "С детьми", ZH: "带孩子" },
   mv_kids_hint: {
-    IT: "Sei opere, raccontate a un bambino di otto anni", EN: "Six works, told for an eight-year-old",
-    FR: "Six œuvres, racontées pour un enfant de huit ans", ES: "Seis obras, contadas para un niño de ocho años",
-    DE: "Sechs Werke, erzählt für ein achtjähriges Kind", RU: "Шесть произведений, рассказанных для восьмилетнего ребёнка", ZH: "六件作品，讲给八岁孩子听",
+    IT: "Le stesse opere, raccontate a un bambino di otto anni", EN: "The same works, told for an eight-year-old",
+    FR: "Les mêmes œuvres, racontées pour un enfant de huit ans", ES: "Las mismas obras, contadas para un niño de ocho años",
+    DE: "Dieselben Werke, erzählt für ein achtjähriges Kind", RU: "Те же произведения, рассказанные для восьмилетнего ребёнка", ZH: "同样的作品，讲给八岁孩子听",
   },
   // Domani: orari, chiusure, biglietto, dal sito ufficiale.
   mv_tomorrow: { IT: "Domani", EN: "Tomorrow", FR: "Demain", ES: "Mañana", DE: "Morgen", RU: "Завтра", ZH: "明天" },
@@ -472,9 +472,14 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   mv_vista_lista: { IT: "Lista", EN: "List", FR: "Liste", ES: "Lista", DE: "Liste", RU: "Список", ZH: "列表" },
   mv_vista_mappa: { IT: "Mappa", EN: "Map", FR: "Plan", ES: "Mapa", DE: "Karte", RU: "Карта", ZH: "地图" },
   mv_mappa_pin_hint: {
-    IT: "Tocca un numero sulla pianta: si apre l'opera e parte l'audioguida.", EN: "Tap a number on the plan: the work opens and the audio guide starts.",
-    FR: "Touchez un numéro sur le plan : l'œuvre s'ouvre et l'audioguide démarre.", ES: "Toca un número en el plano: se abre la obra y arranca la audioguía.",
-    DE: "Tippe auf eine Nummer im Plan: das Werk öffnet sich und der Audioguide startet.", RU: "Нажмите номер на плане: откроется экспонат и начнётся аудиогид.", ZH: "点击平面图上的数字：打开作品并开始语音导览。"
+    IT: "Ogni pallino è una sala: il numero dice quante opere del percorso ci sono. Toccalo per scegliere l'opera e ascoltarla.", EN: "Each dot is a room: the number is how many works of the route are there. Tap it to pick a work and listen.",
+    FR: "Chaque pastille est une salle : le nombre indique combien d'œuvres du parcours s'y trouvent. Touchez-la pour choisir une œuvre et l'écouter.", ES: "Cada punto es una sala: el número dice cuántas obras del recorrido hay. Tócalo para elegir la obra y escucharla.",
+    DE: "Jeder Punkt ist ein Saal: die Zahl sagt, wie viele Werke der Route dort sind. Antippen, um ein Werk zu wählen und zu hören.", RU: "Каждая точка — зал: число показывает, сколько экспонатов маршрута там. Нажмите, чтобы выбрать и послушать.", ZH: "每个圆点是一个展厅：数字表示该厅有几件路线作品。点击选择作品并收听。"
+  },
+  mv_pin_sala_opere: {
+    IT: "{s}: {n} opere. Scegli da quale partire", EN: "{s}: {n} works. Choose where to start",
+    FR: "{s} : {n} œuvres. Choisissez par où commencer", ES: "{s}: {n} obras. Elige por cuál empezar",
+    DE: "{s}: {n} Werke. Wähle, womit du beginnst", RU: "{s}: {n} экспонатов. Выберите, с чего начать", ZH: "{s}：{n} 件作品。选择从哪一件开始"
   },
   mv_mappa_senza_pin: {
     IT: "Pianta ufficiale del museo. Le posizioni delle sale arriveranno a breve.", EN: "Official museum plan. Room positions are coming soon.",

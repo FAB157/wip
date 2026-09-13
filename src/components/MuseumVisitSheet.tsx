@@ -68,6 +68,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [mappe, setMappe] = useState<MuseumMap[]>([]);
   const [mappaLink, setMappaLink] = useState<MuseumMapLink[]>([]);
   const [mappaIndice, setMappaIndice] = useState(0);
+  const [zoomMappa, setZoomMappa] = useState(1);
+  // Il pin toccato con più opere nella sala: la scelta si apre sotto la pianta
+  // (13/09/2026, committente: «cosa sono i numeri 1+7?» — ora il pin dice
+  // QUANTE opere ci sono nella sala e il tocco le elenca).
+  const [pinAperto, setPinAperto] = useState<{ sala: string; tappe: number[] } | null>(null);
   const [mappaCaricata, setMappaCaricata] = useState(false);
   useEffect(() => {
     let vivo = true;
@@ -1896,7 +1901,21 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             }).filter(x => x.tappe.length > 0);
             return (
               <div className="mb-3">
-                <div className="relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-white">
+                {/* ZOOM (13/09/2026, committente: «la mappa non si può zoomare»):
+                    la WebView non ha lo zoom di pagina, quindi la pianta si
+                    ingrandisce con i tasti (+/−, doppio tocco) e si trascina
+                    col dito dentro il riquadro; i pin, in percentuale, seguono. */}
+                <div className="flex items-center justify-end gap-1 mb-1">
+                  <button type="button" onClick={() => setZoomMappa(z => Math.max(1, +(z - 0.5).toFixed(1)))} disabled={zoomMappa <= 1} aria-label="−" className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-700 font-black disabled:opacity-40">−</button>
+                  <span className="text-[10px] font-black text-slate-500 w-9 text-center">{zoomMappa}×</span>
+                  <button type="button" onClick={() => setZoomMappa(z => Math.min(4, +(z + 0.5).toFixed(1)))} disabled={zoomMappa >= 4} aria-label="+" className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-slate-700 font-black disabled:opacity-40">+</button>
+                </div>
+                <div
+                  className="relative w-full rounded-2xl overflow-auto border border-slate-200 bg-white"
+                  style={{ maxHeight: '70vh', touchAction: 'pan-x pan-y', WebkitOverflowScrolling: 'touch' as any }}
+                  onDoubleClick={() => setZoomMappa(z => (z >= 2 ? 1 : 2))}
+                >
+                <div className="relative" style={{ width: `${zoomMappa * 100}%` }}>
                   <img src={mappa.url} alt={mappa.titolo || t('mv_vista_mappa')} className="block w-full h-auto select-none" draggable={false} />
                   {pinConTappe.map(({ pin, tappe, seiQui }) => {
                     const primo = tappe[0];
@@ -1905,16 +1924,33 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       <button
                         key={`${pin.sala}-${primo}`}
                         type="button"
-                        onClick={() => apriDalPin(primo)}
+                        onClick={() => { if (tappe.length === 1) apriDalPin(primo); else setPinAperto(p => (p && p.sala === pin.sala ? null : { sala: pin.sala, tappe })); }}
                         aria-label={`${pin.sala}: ${tappe.map(k => visit.guide.tappe[k].nome).join(', ')}`}
                         style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
-                        className={`absolute -translate-x-1/2 -translate-y-1/2 min-w-7 h-7 px-1.5 rounded-full flex items-center justify-center text-[11px] font-black border-2 border-white shadow-[0_2px_8px_rgba(15,23,42,0.35)] active:scale-90 transition-transform ${fatte ? 'bg-emerald-600 text-white' : 'bg-primary text-white'} ${seiQui ? 'ring-4 ring-amber-400' : ''}`}
+                        className={`absolute -translate-x-1/2 -translate-y-1/2 min-w-7 h-7 px-1.5 rounded-full flex items-center justify-center text-[11px] font-black border-2 border-white shadow-[0_2px_8px_rgba(15,23,42,0.35)] active:scale-90 transition-transform ${fatte ? 'bg-emerald-600 text-white' : 'bg-primary text-white'} ${seiQui ? 'ring-4 ring-amber-400' : ''} ${pinAperto?.sala === pin.sala ? 'ring-4 ring-primary/40' : ''}`}
                       >
-                        {numeroDi(primo)}{tappe.length > 1 ? `+${tappe.length - 1}` : ''}
+                        {tappe.length === 1 ? numeroDi(primo) : tappe.length}
                       </button>
                     );
                   })}
                 </div>
+                </div>
+                {pinAperto && pinAperto.tappe.length > 1 && (
+                  <div className="mt-2 rounded-2xl border border-primary/30 bg-blue-50/40 p-2">
+                    <p className="text-[10px] font-black text-primary px-1 mb-1">{t('mv_pin_sala_opere').replace('{s}', pinAperto.sala).replace('{n}', String(pinAperto.tappe.length))}</p>
+                    {pinAperto.tappe.map(k => {
+                      const tp = visit.guide.tappe[k];
+                      return (
+                        <button key={k} type="button" onClick={() => { setPinAperto(null); apriDalPin(k); }} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-xl text-left active:bg-white">
+                          <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0 ${tp.seenCardId ? 'bg-emerald-600 text-white' : 'bg-primary text-white'}`}>{numeroDi(k)}</span>
+                          {tp.fotoIcona && <img src={tp.fotoIcona} alt="" className="w-7 h-7 rounded-lg object-cover shrink-0" />}
+                          <span className="flex-1 text-[12px] font-bold text-slate-800 truncate">{tp.nome}</span>
+                          {tp.seenCardId ? <Check className="w-4 h-4 text-emerald-600 shrink-0" /> : <Volume2 className="w-4 h-4 text-primary shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <p className="text-[10px] font-bold text-slate-500 leading-snug mt-1.5 px-1">
                   {pinConTappe.length > 0 ? t('mv_mappa_pin_hint') : t('mv_mappa_senza_pin')}
                   {pinConTappe.some(x => x.seiQui) ? ` · ${t('mv_mappa_sei_qui')}` : ''}
