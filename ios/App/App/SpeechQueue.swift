@@ -409,7 +409,11 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         // (AUD-01) La sessione è condivisa con il player JS: se sta suonando
         // (o sta per riprendere dopo la nostra pausa) non gli si spegne la
         // sessione sotto i piedi.
-        if let jsPlayer = WipBackgroundAudioPlugin.shared, jsPlayer.isPlaying || jsPlayer.isPausedForSpeech { return }
+        // `riproduzioneVoluta` (13/09/2026): il player JS appena avviato ha
+        // rate 0 finche' l'item non e' pronto — `isPlaying` diceva «fermo» e
+        // qui si spegneva la sessione sotto l'opera del museo che stava per
+        // partire: audio ok, ma niente lettore sulla schermata di blocco.
+        if let jsPlayer = WipBackgroundAudioPlugin.shared, jsPlayer.isPlaying || jsPlayer.isPausedForSpeech || jsPlayer.riproduzioneVoluta { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

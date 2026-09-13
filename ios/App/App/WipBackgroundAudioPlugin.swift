@@ -58,7 +58,11 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     /// L'utente (o il JS) vuole la riproduzione in corso: serve allo stacco
     /// delle cuffie, quando iOS mette in pausa l'AVPlayer da solo e noi
     /// dobbiamo farlo ripartire dall'altoparlante (decisione 28/08/2026).
-    private var riproduzioneVoluta = false
+    /// `private(set)` (13/09/2026): la legge SpeechQueue.deactivateAudioSessionIfIdle,
+    /// perche' `isPlaying` (rate > 0) e' ancora falso nei primi istanti dopo
+    /// play() — e in quel varco la voce di sistema che si chiude spegneva la
+    /// sessione audio appena attivata (niente lettore sulla schermata di blocco).
+    private(set) var riproduzioneVoluta = false
     private var progressTimer: Timer?
     /// Velocità scelta dall'utente: va riapplicata a ogni resume perché
     /// AVPlayer riparte sempre a rate 1.0 con play().
@@ -238,6 +242,21 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             self.updateNowPlayingInfo()
             self.notifyPlaybackState(isPlaying: true)
             call.resolve(["playing": true])
+
+            // SCHERMATA DI BLOCCO (13/09/2026, committente: «faccio play ma il
+            // banner a display spento non c'e'» sulle opere del museo). Lo
+            // stopSpeaking() qui sopra chiude la voce di sistema in un blocco
+            // main.async che gira DOPO questo: se decideva che nessuno stava
+            // suonando (rate ancora 0 durante il caricamento) spegneva la
+            // sessione audio e iOS toglieva l'app dalla schermata di blocco.
+            // Un giro di main dopo — quindi dopo quel blocco — si riattiva la
+            // sessione e si ripubblica il Now Playing: idempotente se era tutto
+            // a posto, risolutivo se non lo era.
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.player === player, self.riproduzioneVoluta else { return }
+                self.activateAudioSession()
+                self.updateNowPlayingInfo()
+            }
         }
     }
 
