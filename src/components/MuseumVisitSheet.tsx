@@ -304,6 +304,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   const [confrontoParla, setConfrontoParla] = useState<string | null>(null);
   const [promemoria, setPromemoria] = useState(false);
   const promemoriaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** (13/09/2026) Ultima opera ASCOLTATA per intero: il cruscotto della Live
+   * Activity la mostra attenuata sopra quella in ascolto. Aggiornato solo
+   * quando un'opera finisce per davvero (fineOpera), non a ogni tocco. */
+  const ultimaAscoltataRef = useRef<{ titolo: string; sala: string }>({ titolo: '', sala: '' });
   const azzeraPromemoria = () => {
     if (promemoriaTimer.current) { clearTimeout(promemoriaTimer.current); promemoriaTimer.current = null; }
     setPromemoria(false);
@@ -415,6 +419,39 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       ...(tappa?.foto ? { imageUri: tappa.foto } : {}),
     };
   };
+
+  /**
+   * IL CRUSCOTTO DELLA VISITA MUSEO (13/09/2026, requisito del committente:
+   * «l'opera che hai ascoltato, quella che stai ascoltando e la prossima»).
+   * Live Activity su iOS; su Android l'equivalente è già la notifica del
+   * foreground service (WipBackgroundAudioService), quindi si chiama solo
+   * su iOS — `ok:false` non cambia nulla lato JS, il Now Playing (già
+   * attivo) resta comunque il ripiego.
+   */
+  const aggiornaBannerMuseo = (opts: {
+    inAscolto?: { titolo: string; sala: string };
+    prossima?: { titolo: string; sala: string } | null;
+    inPausa?: boolean;
+    indice?: number;
+  }) => {
+    if (Capacitor.getPlatform() !== 'ios') return;
+    const indice = opts.indice ?? (operaAperta !== null ? operaAperta : 0);
+    const posizione = ordineAttivo.indexOf(indice);
+    WipBackgroundAudio.updateMuseumBanner({
+      attivo: true,
+      nomeMuseo: visit.venue.name,
+      ascoltataTitolo: ultimaAscoltataRef.current.titolo,
+      ascoltataSala: ultimaAscoltataRef.current.sala,
+      inAscoltoTitolo: opts.inAscolto?.titolo || '',
+      inAscoltoSala: opts.inAscolto?.sala || '',
+      inPausa: opts.inPausa ?? false,
+      prossimaTitolo: opts.prossima?.titolo || '',
+      prossimaSala: opts.prossima?.sala || '',
+      indiceTappa: posizione >= 0 ? posizione + 1 : 1,
+      tappeTotali: Math.max(ordineAttivo.length, 1),
+    }).catch(() => { /* Live Activity non disponibile: il Now Playing resta il ripiego */ });
+  };
+
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     const prossima = () => { const p = prossimaTappa(getVisitSnapshot(), ordineTragitto); if (p) void handleOpera(p.indice, { daCapo: true }); };
@@ -506,7 +543,12 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     } }));
   }, [operaParla, operaInPausa, ordineTragitto, visit]);
   // A scheda chiusa la barra si spegne: i comandi vivono in questo componente.
-  useEffect(() => () => { window.dispatchEvent(new CustomEvent('wip-museum-player', { detail: { attivo: false } })); }, []);
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent('wip-museum-player', { detail: { attivo: false } }));
+    // Visita chiusa: il cruscotto della Live Activity non ha più senso,
+    // anche se l'ultima opera non è arrivata a fineOpera (uscita anticipata).
+    if (Capacitor.getPlatform() === 'ios') WipBackgroundAudio.endMuseumBanner().catch(() => {});
+  }, []);
   useEffect(() => {
     const onCmd = (e: Event) => {
       const d = ((e as CustomEvent).detail || {}) as { cmd?: string; indice?: number | null };
@@ -1009,6 +1051,17 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       if (!pers.bambini) conservaOpera(visit.venueKey, language, tappa.nome, guida);
     }
     setOperaAperta(i);
+    // Il cruscotto della visita museo (Live Activity): questa entra in
+    // ascolto, la prossima si calcola come nel teaser di fineOpera. Non ai
+    // follower del gruppo: a loro parla il leader, non hanno un giro proprio.
+    if (!visit.dalLeader) {
+      const pOra = prossimaTappa(getVisitSnapshot(), ordineTragitto);
+      aggiornaBannerMuseo({
+        inAscolto: { titolo: tappa.nome, sala: String(tappa.dove || tappa.salaCodice || '') },
+        prossima: (pOra && pOra.indice !== i) ? { titolo: pOra.tappa.nome, sala: String(pOra.tappa.dove || pOra.tappa.salaCodice || '') } : null,
+        indice: i,
+      });
+    }
     // TOUR DI GRUPPO: chi guida manda l'opera al gruppo PRIMA di ascoltarla,
     // così le voci partono insieme. Il modulo ignora l'evento se non si è
     // leader. Due messaggi: la scheda (testo sotto la tappa giusta) e la voce
@@ -1046,6 +1099,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             ...(p.tappa.foto ? { imageUri: p.tappa.foto } : {}),
           }).catch(() => {});
         }
+        // L'opera appena finita diventa "ascoltata" nel cruscotto: nessuna
+        // opera in ascolto adesso (parla il teaser di sistema), la prossima
+        // è già calcolata sopra.
+        ultimaAscoltataRef.current = { titolo: tappa.nome, sala: String(tappa.dove || tappa.salaCodice || '') };
+        aggiornaBannerMuseo({
+          prossima: { titolo: p.tappa.nome, sala: String(p.tappa.dove || p.tappa.salaCodice || '') },
+          indice: i,
+        });
         // SALA PER SALA (12/09/2026 sera, committente): finita un'opera, se
         // nella stessa sala restano opere non ascoltate si dicono quelle
         // («scegli tu da quale continuare»); quando la sala è finita si dice

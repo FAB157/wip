@@ -24,6 +24,8 @@ public class MainActivity extends BridgeActivity {
         // chiamata a WipBackgroundAudio fallisce con "not implemented":
         // l'audioguida restava confinata alla WebView e si interrompeva a schermo spento.
         registerPlugin(WipBackgroundAudioPlugin.class);
+        // (14/09/2026) Snapshot per i quattro widget della home (widget/WipWidgetsPlugin.kt).
+        registerPlugin(com.itaintasca.app.widget.WipWidgetsPlugin.class);
         super.onCreate(savedInstanceState);
         
         // Attiva il Watchdog per il servizio di background

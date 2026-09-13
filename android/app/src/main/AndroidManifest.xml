@@ -42,6 +42,15 @@
                 <data android:scheme="itainta" android:host="poi" />
             </intent-filter>
 
+            <!-- Tocco su un widget della home (14/09/2026): itainta://widget/<azione>,
+                 gestito dal listener appUrlOpen di App.tsx (azioneDaWidget). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="itainta" android:host="widget" />
+            </intent-filter>
+
             <!-- Ritorno da "Continua con Google/Apple" nativo (09/09/2026): schema
                  personalizzato itainta://auth/callback (vedi LoginScreen.tsx). Usato
                  al posto dell'App Link https://wip.guide/auth/callback qui sotto perché
@@ -131,6 +140,26 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_widget_info" />
+        </receiver>
+
+        <!-- I quattro widget della home (14/09/2026): itinerario di oggi, visita
+             museo, crediti e pass, vicino a te. Dati dallo snapshot dell'app
+             (WipWidgetsPlugin), tocco → itainta://widget/<azione>. -->
+        <receiver android:name=".widget.WipItinerarioWidget" android:exported="true" android:label="@string/wip_w_itinerario_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_itinerario_info" />
+        </receiver>
+        <receiver android:name=".widget.WipVisitaWidget" android:exported="true" android:label="@string/wip_w_visita_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_visita_info" />
+        </receiver>
+        <receiver android:name=".widget.WipCreditiWidget" android:exported="true" android:label="@string/wip_w_crediti_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_crediti_info" />
+        </receiver>
+        <receiver android:name=".widget.WipViciniWidget" android:exported="true" android:label="@string/wip_w_vicini_nome">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/wip_w_vicini_info" />
         </receiver>
 
         <!-- Transizioni Activity Recognition (Play Services, via PendingIntent):

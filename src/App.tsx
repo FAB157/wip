@@ -44,6 +44,7 @@ const CameraScreen = lazy(() => import("./components/CameraScreen"));
 import VisionCardSheet from "./components/VisionCardSheet";
 import MuseumVisitSheet from "./components/MuseumVisitSheet";
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit } from "./lib/museumVisit";
+import { avviaSincronizzazioneWidget, azioneDaWidget } from "./lib/widgetDati";
 import { getLocalMuseumPassExpiry } from "./lib/museumPass";
 import GeofenceAudioGuide from "./components/GeofenceAudioGuide";
 import PoiRadarPanel from "./components/PoiRadarPanel";
@@ -1337,15 +1338,40 @@ export default function App() {
   // ?code=... da scambiare con exchangeCodeForSession. Il browser di sistema
   // aperto da LoginScreen (@capacitor/browser) va richiuso a mano: non è la
   // WebView dell'app, nessuno lo farebbe da solo.
+  // (14/09/2026) I widget della home: lo snapshot (crediti, visita, itinerario,
+  // vicini) si consegna al nativo a ogni evento che lo cambia.
+  useEffect(() => { avviaSincronizzazioneWidget(); }, []);
+
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
     let handle: any = null;
     (async () => {
       try {
         const { App: CapApp } = await import('@capacitor/app');
+        // Avvio a freddo da un widget: l'URL di lancio non passa da appUrlOpen.
+        try {
+          const lancio = await CapApp.getLaunchUrl();
+          if (lancio?.url) {
+            const daWidget = azioneDaWidget(lancio.url);
+            if (daWidget?.tipo === 'visita') setActiveTab('camera');
+            else if (daWidget?.tipo === 'itinerario') setActiveTab('plan');
+            else if (daWidget?.tipo === 'crediti') setActiveTab('profile');
+          }
+        } catch { /* nessun URL di lancio */ }
         handle = await CapApp.addListener('appUrlOpen', async ({ url }: { url: string }) => {
           try {
             const parsed = new URL(url);
+            // (14/09/2026) Tocco su un widget della home: itainta://widget/<azione>.
+            // widgetDati riconosce l'azione ed emette gli eventi già esistenti
+            // (visita museo, POI); qui si cambia solo scheda.
+            const daWidget = azioneDaWidget(parsed);
+            if (daWidget) {
+              if (daWidget.tipo === 'visita') setActiveTab('camera');
+              else if (daWidget.tipo === 'itinerario') setActiveTab('plan');
+              else if (daWidget.tipo === 'crediti') setActiveTab('profile');
+              else setActiveTab('map');
+              return;
+            }
             const query = new URLSearchParams(parsed.search);
             const code = query.get('code');
             if (code) {

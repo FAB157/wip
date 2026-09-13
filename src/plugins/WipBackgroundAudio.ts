@@ -60,6 +60,33 @@ export interface WipBackgroundAudioPlugin {
   /** Aggiorna titolo/sottotitolo/copertina del banner senza rifar partire l'audio (anche a player fermo). */
   updateNowPlaying(options: { title?: string; subtitle?: string; imageUri?: string }): Promise<void>;
 
+  /**
+   * IL CRUSCOTTO DELLA VISITA MUSEO (13/09/2026, requisito del committente:
+   * «l'opera che hai ascoltato, quella che stai ascoltando e la prossima»).
+   * Live Activity su iOS 16.1+, ignorata (ok:false) altrove: il banner Now
+   * Playing (updateNowPlaying, gia' attivo) resta comunque il ripiego, non
+   * serve gestire il caso `ok:false` in modo diverso.
+   */
+  updateMuseumBanner(options: {
+    attivo: boolean;
+    nomeMuseo?: string;
+    ascoltataTitolo?: string;
+    ascoltataSala?: string;
+    inAscoltoTitolo?: string;
+    inAscoltoSala?: string;
+    /** 0...1, assente = sconosciuto (niente barra). */
+    inAscoltoProgresso?: number;
+    inPausa?: boolean;
+    prossimaTitolo?: string;
+    prossimaSala?: string;
+    /** 1-based. */
+    indiceTappa?: number;
+    tappeTotali?: number;
+  }): Promise<{ ok: boolean; reason?: string }>;
+
+  /** Chiude il cruscotto della visita museo: fine visita o uscita anticipata. */
+  endMuseumBanner(): Promise<void>;
+
   /** Tasto «successiva» dalla schermata di blocco / cuffie (solo con setTrackCommands). */
   addListener(eventName: 'remoteNext', listener: () => void): Promise<PluginListenerHandle> & PluginListenerHandle;
   /** Tasto «precedente» dalla schermata di blocco / cuffie. */

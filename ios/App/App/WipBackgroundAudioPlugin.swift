@@ -28,7 +28,11 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getStatus", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setupMediaSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "setTrackCommands", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "updateNowPlaying", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "updateNowPlaying", returnType: CAPPluginReturnPromise),
+        // (13/09/2026) Il cruscotto della visita museo (Live Activity):
+        // ascoltata/in ascolto/prossima, vedi LiveActivityMuseum.swift.
+        CAPPluginMethod(name: "updateMuseumBanner", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "endMuseumBanner", returnType: CAPPluginReturnPromise)
     ]
 
     /// (12/09/2026, visita museo) Tasti «successiva/precedente» accesi dal
@@ -125,6 +129,25 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
+        // (13/09/2026) IL TASTO "PROSSIMA" DELLA LIVE ACTIVITY VISITA MUSEO
+        // (WipMuseumIntents.swift, perform()): arriva qui come notifica
+        // in-process, esattamente come i tasti del navigatore arrivano a
+        // ItaintaBackgroundPoiPlugin. Si traduce nello STESSO evento
+        // 'remoteNext' gia' usato dal tasto della schermata di blocco:
+        // MuseumVisitSheet.tsx ascolta gia' quell'evento, nessun listener
+        // JS nuovo da aggiungere. La chiave nell'App Group copre il tocco
+        // arrivato PRIMA che il plugin fosse in ascolto (app appena
+        // rilanciata dal sistema).
+        NotificationCenter.default.addObserver(forName: WipMuseumAzione.notifica, object: nil, queue: .main) { [weak self] n in
+            let azione = (n.userInfo?["azione"] as? String) ?? ""
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
+            guard azione == WipMuseumAzione.prossima else { return }
+            self?.notifyListeners("remoteNext", data: [:])
+        }
+        if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipMuseumAzione.chiavePendente), !pendente.isEmpty {
+            UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
+            if pendente == WipMuseumAzione.prossima { notifyListeners("remoteNext", data: [:]) }
+        }
     }
 
     deinit {
@@ -404,6 +427,54 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             call.resolve()
         }
+    }
+
+    /**
+     * IL CRUSCOTTO DELLA VISITA MUSEO (13/09/2026): avvia o aggiorna la Live
+     * Activity con l'opera ascoltata, quella in ascolto e la prossima.
+     * MuseumVisitSheet.tsx la chiama a inizio e fine di ogni opera — stesso
+     * schema di ItaintaBackgroundPoiPlugin.updateNavBanner.
+     *
+     * `ok: false` quando le Live Activities non ci sono o sono disattivate:
+     * il banner Now Playing (updateNowPlaying, gia' in uso) resta comunque
+     * il ripiego, quindi il JS non deve fare nulla di diverso in quel caso.
+     */
+    @objc func updateMuseumBanner(_ call: CAPPluginCall) {
+        let attivo = call.getBool("attivo") ?? false
+        if !attivo {
+            LiveActivityMuseum.shared.termina()
+            call.resolve(["ok": true])
+            return
+        }
+        guard LiveActivityMuseum.shared.disponibili else {
+            call.resolve(["ok": false, "reason": "live_activities_unavailable"])
+            return
+        }
+        let nomeMuseo = call.getString("nomeMuseo") ?? ""
+        let stato: [String: Any] = [
+            "ascoltataTitolo": call.getString("ascoltataTitolo") ?? "",
+            "ascoltataSala": call.getString("ascoltataSala") ?? "",
+            "inAscoltoTitolo": call.getString("inAscoltoTitolo") ?? "",
+            "inAscoltoSala": call.getString("inAscoltoSala") ?? "",
+            "inAscoltoProgresso": call.getDouble("inAscoltoProgresso") ?? -1,
+            "inPausa": call.getBool("inPausa") ?? false,
+            "prossimaTitolo": call.getString("prossimaTitolo") ?? "",
+            "prossimaSala": call.getString("prossimaSala") ?? "",
+            "indiceTappa": call.getDouble("indiceTappa") ?? 1,
+            "tappeTotali": call.getDouble("tappeTotali") ?? 1
+        ]
+        // Le API di ActivityKit vogliono il main thread.
+        DispatchQueue.main.async {
+            let ok = LiveActivityMuseum.shared.avviaOAggiorna(nomeMuseo: nomeMuseo, stato: stato)
+            call.resolve(ok ? ["ok": true] : ["ok": false, "reason": "live_activity_request_failed"])
+        }
+    }
+
+    /// Chiude il cruscotto della visita museo: fine visita, o "esci dalla
+    /// visita" prima che l'ultima opera sia finita.
+    @objc func endMuseumBanner(_ call: CAPPluginCall) {
+        LiveActivityMuseum.shared.termina()
+        call.resolve()
     }
 
     // MARK: - Audio session

@@ -46,6 +46,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // dell'app il cruscotto del giro ne avvierebbe una seconda e la
         // vecchia resterebbe appesa sulla lock screen. Vedi LiveActivityNav.
         LiveActivityNav.shared.riaggancia()
+        // Stesso motivo, per il cruscotto della visita museo (13/09/2026).
+        LiveActivityMuseum.shared.riaggancia()
         return true
     }
 
@@ -87,6 +89,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // dell'intent iOS 17, il plugin la gira al JS come navBannerAction.
         if let azione = WipNavLink.azione(da: url) {
             WipNavConsegna.consegna(azione)
+            return true
+        }
+        // Stesso schema per il tasto "Prossima" della visita museo su iOS 16
+        // (WipMuseumIntents.swift).
+        if let azione = WipMuseumLink.azione(da: url) {
+            WipMuseumConsegna.consegna(azione)
             return true
         }
         return ApplicationDelegateProxy.shared.application(app, open: url, options: options)

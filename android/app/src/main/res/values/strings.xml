@@ -13,4 +13,17 @@
     <string name="wip_widget_credits_fmt">%1$s crediti</string>
     <string name="wip_widget_empty_value">—</string>
     <string name="wip_widget_refresh_glyph">⟳</string>
+
+    <!-- I quattro widget della home (14/09/2026). I testi dentro i widget arrivano
+         già tradotti dall'app (snapshot); qui solo nomi e descrizioni del selettore. -->
+    <string name="wip_w_marchio">WIP</string>
+    <string name="wip_w_cuffie">🎧</string>
+    <string name="wip_w_itinerario_nome">WIP · Itinerario</string>
+    <string name="wip_w_itinerario_desc">La prossima tappa di oggi, con ora e minuti a piedi.</string>
+    <string name="wip_w_visita_nome">WIP · Visita museo</string>
+    <string name="wip_w_visita_desc">Il museo in corso: opere ascoltate e la prossima da ascoltare.</string>
+    <string name="wip_w_crediti_nome">WIP · Crediti e Pass</string>
+    <string name="wip_w_crediti_desc">Il saldo crediti e il Day Pass attivo con la scadenza.</string>
+    <string name="wip_w_vicini_nome">WIP · Vicino a te</string>
+    <string name="wip_w_vicini_desc">Gemme e luoghi con audioguida vicino a te: un tocco e parte la voce.</string>
 </resources>

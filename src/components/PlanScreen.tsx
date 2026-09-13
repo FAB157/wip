@@ -9,6 +9,7 @@ import { registraDownload } from '../lib/downloadsRegistry';
 import DownloadsScreen from './DownloadsScreen';
 import { tourService, MAX_TAPPE } from '../services/tourService';
 import { getDayPassState } from '../services/dayPassService';
+import { salvaPianoPerWidget, scegliGiornoPerWidget } from '../lib/widgetDati';
 import { apriCassaDayPass } from '../lib/tour/passRichiesto';
 import NavChoiceSheet from './NavChoiceSheet';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
@@ -984,9 +985,12 @@ export default function PlanScreen({
       const next = typeof p === 'function' ? (p as any)(prev) : p;
       const deduped = dedupTappaIds(next);
       if (setExternalPlan) setExternalPlan(deduped);
+      // (14/09/2026) Il widget «Itinerario di oggi» legge una copia leggera del piano.
+      salvaPianoPerWidget(deduped);
       return deduped;
     });
   };
+  useEffect(() => { scegliGiornoPerWidget(validMapSelectedDay); }, [validMapSelectedDay]);
 
   useEffect(() => {
     if (externalPlan && !generatedPlan) {

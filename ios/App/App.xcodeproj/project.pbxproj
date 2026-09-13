@@ -36,6 +36,15 @@
 		B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */; };
 		B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */; };
 		B22A0000000000000000A0A5 /* WipNavIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */; };
+		C33B0000000000000000A101 /* WipWidgetsPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F001 /* WipWidgetsPlugin.swift */; };
+		C33B0000000000000000A102 /* WipWidgetDati.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F002 /* WipWidgetDati.swift */; };
+		C33B0000000000000000A103 /* WipHomeWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F003 /* WipHomeWidgets.swift */; };
+		C33B0000000000000000A104 /* LiveActivityMuseum.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F004 /* LiveActivityMuseum.swift */; };
+		C33B0000000000000000A105 /* WipMuseumAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F005 /* WipMuseumAttributes.swift */; };
+		C33B0000000000000000A205 /* WipMuseumAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F005 /* WipMuseumAttributes.swift */; };
+		C33B0000000000000000A106 /* WipMuseumIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F006 /* WipMuseumIntents.swift */; };
+		C33B0000000000000000A206 /* WipMuseumIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F006 /* WipMuseumIntents.swift */; };
+		C33B0000000000000000A107 /* WipMuseumLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33B0000000000000000F007 /* WipMuseumLiveActivity.swift */; };
 		B22A0000000000000000A0A4 /* WipNavActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B22A0000000000000000B0B4 /* WipNavActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		504EC30D1FED79650016851F /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30B1FED79650016851F /* Main.storyboard */; };
 		504EC30F1FED79650016851F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 504EC30E1FED79650016851F /* Assets.xcassets */; };
@@ -73,6 +82,13 @@
 		A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityNav.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavAttributes.swift; path = ../WipNavActivity/WipNavAttributes.swift; sourceTree = "<group>"; };
 		A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipNavIntents.swift; path = ../WipNavActivity/WipNavIntents.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F001 /* WipWidgetsPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipWidgetsPlugin.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F002 /* WipWidgetDati.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipWidgetDati.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F003 /* WipHomeWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipHomeWidgets.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F004 /* LiveActivityMuseum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityMuseum.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F005 /* WipMuseumAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipMuseumAttributes.swift; path = ../WipNavActivity/WipMuseumAttributes.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F006 /* WipMuseumIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = WipMuseumIntents.swift; path = ../WipNavActivity/WipMuseumIntents.swift; sourceTree = "<group>"; };
+		C33B0000000000000000F007 /* WipMuseumLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipMuseumLiveActivity.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavActivityBundle.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WipNavLiveActivity.swift; sourceTree = "<group>"; };
 		B22A0000000000000000B0B3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -167,6 +183,9 @@
 			children = (
 				B22A0000000000000000B0B1 /* WipNavActivityBundle.swift */,
 				B22A0000000000000000B0B2 /* WipNavLiveActivity.swift */,
+				C33B0000000000000000F007 /* WipMuseumLiveActivity.swift */,
+				C33B0000000000000000F002 /* WipWidgetDati.swift */,
+				C33B0000000000000000F003 /* WipHomeWidgets.swift */,
 				B22A0000000000000000B0B3 /* Info.plist */,
 				B22A0000000000000000B0B6 /* WipNavActivity.entitlements */,
 			);
@@ -200,6 +219,10 @@
 				A11A2B3C4D5E6F7080910112 /* LiveActivityNav.swift */,
 				A11A2B3C4D5E6F7080910114 /* WipNavAttributes.swift */,
 				A11A2B3C4D5E6F7080910116 /* WipNavIntents.swift */,
+				C33B0000000000000000F004 /* LiveActivityMuseum.swift */,
+				C33B0000000000000000F005 /* WipMuseumAttributes.swift */,
+				C33B0000000000000000F006 /* WipMuseumIntents.swift */,
+				C33B0000000000000000F001 /* WipWidgetsPlugin.swift */,
 				B22A0000000000000000B0B5 /* App.entitlements */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
@@ -393,6 +416,10 @@
 				A11A2B3C4D5E6F7080910111 /* LiveActivityNav.swift in Sources */,
 				A11A2B3C4D5E6F7080910113 /* WipNavAttributes.swift in Sources */,
 				A11A2B3C4D5E6F7080910115 /* WipNavIntents.swift in Sources */,
+				C33B0000000000000000A104 /* LiveActivityMuseum.swift in Sources */,
+				C33B0000000000000000A105 /* WipMuseumAttributes.swift in Sources */,
+				C33B0000000000000000A106 /* WipMuseumIntents.swift in Sources */,
+				C33B0000000000000000A101 /* WipWidgetsPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -404,6 +431,11 @@
 				B22A0000000000000000A0A2 /* WipNavLiveActivity.swift in Sources */,
 				B22A0000000000000000A0A3 /* WipNavAttributes.swift in Sources */,
 				B22A0000000000000000A0A5 /* WipNavIntents.swift in Sources */,
+				C33B0000000000000000A205 /* WipMuseumAttributes.swift in Sources */,
+				C33B0000000000000000A206 /* WipMuseumIntents.swift in Sources */,
+				C33B0000000000000000A107 /* WipMuseumLiveActivity.swift in Sources */,
+				C33B0000000000000000A102 /* WipWidgetDati.swift in Sources */,
+				C33B0000000000000000A103 /* WipHomeWidgets.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
