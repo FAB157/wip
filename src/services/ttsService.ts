@@ -698,19 +698,31 @@ export async function speakAudioguide(
         }
 
         if (Capacitor.isNativePlatform()) {
-          ensureNativeListeners();
-          const nativeUri = await getNativeAudioUri(blob, `tts_guide_${Date.now()}.mp3`);
-          pendingOnEnd = onEnd || null;
-          nativePlaybackActive = true;
-          await WipBackgroundAudio.play({
-            url: nativeUri,
-            title: meta?.title || (text.length > 40 ? text.slice(0, 40) + '...' : text),
-            subtitle: meta?.subtitle || etichettaVoce || 'Audioguida',
-            ...(meta?.imageUri ? { imageUri: meta.imageUri } : {}),
-          });
-          if (velocitaVoce !== 1) WipBackgroundAudio.setSpeed({ speed: velocitaVoce }).catch(() => {});
-          emitAudioState(true, true);
-          return;
+          try {
+            ensureNativeListeners();
+            const nativeUri = await getNativeAudioUri(blob, `tts_guide_${Date.now()}.mp3`);
+            pendingOnEnd = onEnd || null;
+            nativePlaybackActive = true;
+            await WipBackgroundAudio.play({
+              url: nativeUri,
+              title: meta?.title || (text.length > 40 ? text.slice(0, 40) + '...' : text),
+              subtitle: meta?.subtitle || etichettaVoce || 'Audioguida',
+              ...(meta?.imageUri ? { imageUri: meta.imageUri } : {}),
+            });
+            if (velocitaVoce !== 1) WipBackgroundAudio.setSpeed({ speed: velocitaVoce }).catch(() => {});
+            emitAudioState(true, true);
+            return;
+          } catch (eNativo) {
+            // LA VOCE NEURALE PRIMA DI TUTTO (13/09/2026, committente: «deve
+            // essere generata con le voci neurali, quella nativa solo se non
+            // ci sono alternative»). L'MP3 e' gia' qui: se il lettore nativo
+            // lo rifiuta (file, memoria, sessione audio) si suona LO STESSO
+            // MP3 nella WebView, sotto — prima si saltava dritti alla voce
+            // di sistema, robotica e senza lettore sulla schermata di blocco.
+            console.warn('[ttsService] lettore nativo fallito, MP3 nella WebView:', (eNativo as any)?.message || eNativo);
+            nativePlaybackActive = false;
+            pendingOnEnd = null;
+          }
         }
 
         const url = URL.createObjectURL(blob);
@@ -808,7 +820,7 @@ export async function speakAudioguideFile(
   } catch (e) {
     console.warn('[ttsService] file locale non riproducibile, strada normale:', e);
     nativePlaybackActive = false; pendingOnEnd = null;
-    return speakAudioguide(text, lang, character, onEnd, undefined, meta);
+    return speakAudioguide(text, lang, character, onEnd, etichetta, meta);
   }
 }
 
