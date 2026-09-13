@@ -34,6 +34,27 @@ interface MuseumVisitSheetProps {
 }
 
 /**
+ * Una foto che non arriva si RITENTA prima di sparire (13/09/2026,
+ * committente in 4G: «sono sparite tutte le foto delle guide museo» — i
+ * dati erano tutti a posto, Commons rispondeva 200 dal PC; il redirect di
+ * Special:FilePath sotto rete lenta scadeva e `display:none` la nascondeva
+ * per sempre). Due tentativi a distanza crescente con un frammento diverso
+ * (stessa richiesta, ma il WebView la rifa'); solo poi il vuoto — mai la
+ * foto di un altro posto.
+ */
+function ritentaFoto(e: React.SyntheticEvent<HTMLImageElement>) {
+  const img = e.currentTarget;
+  const n = Number(img.dataset.tentativi || 0);
+  if (n < 2) {
+    img.dataset.tentativi = String(n + 1);
+    const base = img.src.split('#')[0];
+    setTimeout(() => { img.src = `${base}#r${n + 1}`; }, 1500 * (n + 1));
+    return;
+  }
+  img.style.display = 'none';
+}
+
+/**
  * Scheda della VISITA GUIDATA: dove sei, il percorso consigliato con le
  * tappe già viste spuntate, l'introduzione da ascoltare. Tema chiaro come
  * la scheda Vision (VisionCardSheet), perché si apre sopra di essa.
@@ -540,7 +561,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             return (
               <a key={`${chiave}-${k}`} href={e.url} target="_blank" rel="noopener noreferrer nofollow sponsored" className="snap-start shrink-0 w-[168px] rounded-2xl bg-white border border-slate-200 overflow-hidden active:scale-[0.98] transition-transform">
                 {img ? (
-                  <img src={img} alt="" loading="lazy" className="w-full h-[96px] object-cover" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                  <img src={img} alt="" loading="lazy" className="w-full h-[96px] object-cover" onError={ritentaFoto} />
                 ) : (
                   <div className="w-full h-[96px] bg-amber-50 flex items-center justify-center"><Ticket className="w-6 h-6 text-amber-700" /></div>
                 )}
@@ -856,7 +877,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               >
                 {m.venue_photo_icon ? (
                   <img src={m.venue_photo_icon} alt="" loading="lazy" className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
-                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                    onError={ritentaFoto} />
                 ) : (
                   <div className="w-11 h-11 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
                 )}
@@ -1248,7 +1269,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                 alt={tp.nome}
                 onClick={() => setFotoGrande({ url: tp.foto || tp.fotoIcona || '', nome: tp.nome, dove: tp.dove || '' })}
                 className="max-h-[42vh] max-w-full object-contain rounded-3xl border border-slate-200 bg-white cursor-pointer"
-                onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                onError={ritentaFoto}
               />
             ) : (
               <div className="w-40 h-40 rounded-3xl bg-blue-50 flex items-center justify-center"><Landmark className="w-12 h-12 text-primary" /></div>
@@ -1316,7 +1337,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     <div key={`${sala}-${k}`} className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-white border border-slate-200">
                       {t2.fotoIcona && (
                         <img src={t2.fotoIcona} alt="" loading="lazy" className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                          onError={ritentaFoto} />
                       )}
                       <span className="text-[12px] font-bold text-slate-800 truncate flex-1">{t2.nome}</span>
                       {t2.skipped && <span className="text-[9px] font-black uppercase text-slate-400 shrink-0">{t('mv_skipped_badge')}</span>}
@@ -1357,7 +1378,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
           src={fotoGrande.url}
           alt={fotoGrande.nome}
           className="max-w-full max-h-[74vh] object-contain rounded-2xl"
-          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+          onError={ritentaFoto}
         />
         <div className="mt-4 text-center px-4">
           <p className="text-white font-black text-base leading-tight">{fotoGrande.nome}</p>
@@ -1399,7 +1420,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               src={visit.venuePhotoIcon}
               alt=""
               loading="lazy"
-              onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+              onError={ritentaFoto}
               className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
             />
           )}
@@ -1427,7 +1448,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             )}
             {prefetch && prefetch.fatte < prefetch.totali && (
               <p className="text-[10px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
-                <Download className="w-3 h-3 shrink-0" />{t('mv_prefetch_progress').replace('{t}', String(prefetch.totali)).replace('{n}', String(prefetch.fatte))}
+                <Download className="w-3 h-3 shrink-0" />{t('mv_prefetch_progress').split('{t}').join(String(prefetch.totali)).replace('{n}', String(prefetch.fatte))}
               </p>
             )}
             <p className="text-[11px] font-bold text-slate-500 flex items-center gap-1 mt-0.5">
@@ -1585,7 +1606,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                       onClick={() => { const i = visit.guide.tappe.indexOf(x); if (i >= 0) void handleOpera(i); }}
                       className="flex-1 min-w-0 flex flex-col items-center gap-1 px-1.5 py-1.5 rounded-xl bg-white border border-amber-200 active:scale-95 transition-transform"
                     >
-                      {x.fotoIcona ? <img src={x.fotoIcona} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} /> : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center"><Landmark className="w-4 h-4 text-primary" /></div>}
+                      {x.fotoIcona ? <img src={x.fotoIcona} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200" onError={ritentaFoto} /> : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center"><Landmark className="w-4 h-4 text-primary" /></div>}
                       <span className="text-[10px] font-black text-slate-800 leading-tight text-center line-clamp-2">{x.nome}</span>
                       {x.dove && <span className="text-[9px] font-bold text-slate-500 truncate max-w-full">{x.dove}</span>}
                     </button>
@@ -1821,7 +1842,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     loading="lazy"
                     onClick={(e) => { e.stopPropagation(); setFotoGrande({ url: p.tappa.foto || p.tappa.fotoIcona || '', nome: p.tappa.nome, dove: p.tappa.dove || '' }); }}
                     className="w-12 h-12 rounded-full object-cover border border-slate-200 shrink-0"
-                    onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                    onError={ritentaFoto}
                   />
                 ) : (
                   <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
@@ -2163,7 +2184,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         alt=""
                         loading="lazy"
                         className="w-11 h-11 rounded-full object-cover border border-slate-200"
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                        onError={ritentaFoto}
                       />
                       <div className={`absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-black border-2 border-white ${done ? 'bg-emerald-600 text-white' : tappa.soloCollezione ? 'bg-slate-400 text-white' : 'bg-primary text-white'}`}>
                         {done ? <Check className="w-2.5 h-2.5" /> : tappa.soloCollezione ? '·' : numero}
@@ -2335,7 +2356,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                             alt={operaGuide[i].titolo || tappa.nome}
                             loading="lazy"
                             className="w-full max-h-56 object-contain bg-slate-100"
-                            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                            onError={ritentaFoto}
                           />
                         )}
                         <div className="p-3">
@@ -2461,7 +2482,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                     className="flex flex-col items-center gap-1.5 p-2 rounded-2xl bg-white border border-rose-200 active:scale-95 transition-transform"
                   >
                     {x.fotoIcona ? (
-                      <img src={x.foto || x.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                      <img src={x.foto || x.fotoIcona} alt="" loading="lazy" className="w-full aspect-square rounded-xl object-cover border border-slate-200" onError={ritentaFoto} />
                     ) : (
                       <div className="w-full aspect-square rounded-xl bg-blue-50 flex items-center justify-center"><Landmark className="w-6 h-6 text-primary" /></div>
                     )}
@@ -2490,7 +2511,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                         {[A, B].map((x, n) => (
                           <div key={n} className="flex-1 min-w-0 flex items-center gap-2">
                             {(x.fotoIcona || x.foto) ? (
-                              <img src={x.fotoIcona || x.foto} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                              <img src={x.fotoIcona || x.foto} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
                             ) : (
                               <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-5 h-5 text-primary" /></div>
                             )}
