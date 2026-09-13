@@ -401,15 +401,20 @@ export async function speakWithSystemVoice(
   onEnd?: () => void,
 ): Promise<boolean> {
   if (!text) return false;
+  // Il riquadro «istruzione» (ApproachBanner) e' per le frasi brevi del
+  // navigatore: un racconto intero di un'opera (13/09/2026, committente:
+  // «un banner con testo che non si puo' chiudere») e' gia' a schermo nella
+  // scheda e li' non ci va.
+  const mostraIstruzione = () => { if (text.length <= 220) { try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ } } };
   if (await speakNativeSystemVoice(text, lang, character, onEnd)) {
-    try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
+    mostraIstruzione();
     clearFallback();
     emitAudioState(true, true);
     return true;
   }
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
   try {
-    try { window.dispatchEvent(new CustomEvent('wip-nav-instruction', { detail: { text } })); } catch { /* ignore */ }
+    mostraIstruzione();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = bcp47(lang);
     u.rate = velocitaVoce;

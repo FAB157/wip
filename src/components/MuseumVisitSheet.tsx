@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints, Mic, MicOff, Eye } from 'lucide-react';
+import { X, Camera, Check, Volume2, Pause, Play, Loader2, RotateCcw, Landmark, Church, MapPin, ExternalLink, Ticket, Plus, Download, SkipForward, Printer, ChevronLeft, ChevronRight, ListMusic, Clock, Users, Bath, Shirt, Coffee, ShoppingBag, DoorOpen, Accessibility, Glasses, Heart, HelpCircle, Map as MapIcon, Share2, ImagePlus, Footprints, Mic, MicOff, Eye } from 'lucide-react';
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
@@ -2627,6 +2627,48 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
 
         {/* Azioni */}
         <div className="px-5 pb-6 pt-2 shrink-0 space-y-2 bg-[#fdfbf7]">
+          {/* IL PLAYER FISSO DELLA SCHEDA (13/09/2026, committente: «ho messo
+              l'ascolto di un'opera ma non c'e' il player ad app aperta»). La
+              barra generale (AudioPlayerBanner) sta SOTTO questa scheda a
+              tutto schermo, quindi qui dentro non si vede: finche' un'opera e'
+              in ascolto o in pausa, sopra i tasti resta questa riga — foto,
+              nome, prossima, da capo, play/pausa, prossima opera, stop — che
+              non scorre via con la lista. */}
+          {(() => {
+            const c = operaParla ?? operaInPausa;
+            if (c === null) return null;
+            const tp = visit.guide.tappe[c];
+            const pn = prossimaTappa(visit, ordineTragitto);
+            let pIdx: number | null = pn && pn.indice !== c ? pn.indice : null;
+            if (pIdx === null) {
+              const att = tappeAttive(visit);
+              const k = visit.guide.tappe.findIndex((x, j) => j !== c && att.has(j) && !x.seenCardId && !x.skipped);
+              pIdx = k >= 0 ? k : null;
+            }
+            const prossimaNome = pIdx !== null ? visit.guide.tappe[pIdx]?.nome : '';
+            const inAscolto = operaParla !== null;
+            return (
+              <div className="flex items-center gap-2 p-2 rounded-2xl bg-white border border-slate-200 shadow-sm">
+                {tp?.fotoIcona || tp?.foto
+                  ? <img src={tp.fotoIcona || tp.foto} alt="" className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0" onError={ritentaFoto} />
+                  : <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center shrink-0"><Landmark className="w-4 h-4 text-primary" /></div>}
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-black text-slate-900 leading-tight truncate">{tp?.nome}</p>
+                  <p className="text-[11px] font-semibold text-slate-500 truncate">
+                    {inAscolto ? t('mv_art_playing') : t('mv_art_paused')}{prossimaNome ? ` · ${t('mv_next_short')}: ${prossimaNome}` : ''}
+                  </p>
+                </div>
+                <button onClick={() => { void handleOpera(c, { daCapo: true }); }} aria-label={t('audio_da_capo')} title={t('audio_da_capo')} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 active:scale-90 transition-transform shrink-0"><RotateCcw className="w-4 h-4" /></button>
+                <button onClick={() => { void handleOpera(c); }} aria-label={inAscolto ? t('vis_pause') : t('mv_art_resume')} className="w-11 h-11 rounded-full bg-primary text-white flex items-center justify-center active:scale-90 transition-transform shrink-0">
+                  {operaLoading === c ? <Loader2 className="w-5 h-5 animate-spin" /> : inAscolto ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                </button>
+                {pIdx !== null && (
+                  <button onClick={() => { void handleOpera(pIdx as number, { daCapo: true }); }} aria-label={`${t('audio_prossima_opera')}: ${prossimaNome}`} title={`${t('audio_prossima_opera')}: ${prossimaNome}`} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700 active:scale-90 transition-transform shrink-0"><SkipForward className="w-4 h-4" /></button>
+                )}
+                <button onClick={() => azioniRef.current.stop?.()} aria-label={t('a11y_ferma_audio')} className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500 active:scale-90 transition-transform shrink-0"><X className="w-4 h-4" /></button>
+              </div>
+            );
+          })()}
           <button
             onClick={onScanNext}
             className="w-full py-3.5 rounded-2xl bg-primary text-white font-black text-sm shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2"

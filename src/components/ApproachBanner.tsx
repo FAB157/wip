@@ -99,6 +99,7 @@ function getBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
 export default function ApproachBanner({ language = 'IT' }: Props) {
   const [entries, setEntries] = useState<ApproachEntry[]>([]);
   const [navInstruction, setNavInstruction] = useState<string>('');
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [userLocation, setUserLocation] = useState<{lat: number, lon: number, heading?: number | null} | null>(null);
 
   // DAY PASS ATTIVO (03/09/2026, segnalato dal committente: «perche' mi ha
@@ -300,7 +301,12 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
 
     const onNavInstruction = (e: Event) => {
       const text = (e as CustomEvent).detail?.text;
-      if (text) setNavInstruction(text);
+      if (!text) return;
+      setNavInstruction(text);
+      // Si spegne da sola (13/09/2026, committente: «rimane per sempre,
+      // bisogna swipare l'app»): il tempo di leggerla, mai oltre 15 s.
+      if (navTimerRef.current) clearTimeout(navTimerRef.current);
+      navTimerRef.current = setTimeout(() => setNavInstruction(''), Math.min(15000, 4000 + String(text).length * 60));
     };
 
     /**
@@ -435,10 +441,18 @@ export default function ApproachBanner({ language = 'IT' }: Props) {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 10 }}
-            className="pointer-events-none bg-stone-900/80 backdrop-blur-lg text-white rounded-xl px-4 py-2 flex items-center gap-2 shadow-lg border border-white/10"
+            className="pointer-events-auto bg-stone-900/80 backdrop-blur-lg text-white rounded-xl pl-4 pr-1 py-1 flex items-center gap-2 shadow-lg border border-white/10"
           >
             <span aria-hidden="true">🧭</span>
-            <span className="text-[13px] font-black">{navInstruction}</span>
+            <span className="text-[13px] font-black flex-1 max-h-24 overflow-hidden">{navInstruction}</span>
+            <button
+              type="button"
+              onClick={() => { if (navTimerRef.current) clearTimeout(navTimerRef.current); setNavInstruction(''); }}
+              aria-label={getTranslation('close', language)}
+              className="min-w-11 min-h-11 flex items-center justify-center rounded-full text-white/80 hover:bg-white/10 shrink-0"
+            >
+              <span aria-hidden="true">✕</span>
+            </button>
           </motion.div>
         )}
 
