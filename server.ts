@@ -32457,7 +32457,7 @@ out center tags;`;
    *  (12/09/2026). Polly ed ElevenLabs restano inerti finché non arrivano le
    *  rispettive chiavi: passano oltre in pochi millisecondi, non rallentano
    *  chi già funziona con Azure/Google. */
-  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' }> {
+  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Piper' }> {
     const charCount = text.length;
     const currentUsage = await getTtsUsage();
 
@@ -32538,12 +32538,14 @@ out center tags;`;
       console.warn(`[TTS] ElevenLabs oltre il tetto mensile (${TTS_LIMITI_MENSILI.elevenlabs} caratteri), salto a Google`);
     }
 
-    // Ultimo ripiego: Google TTS, anche lui sotto tetto mensile.
+    // Google TTS, anche lui sotto tetto mensile; se cade o è oltre tetto,
+    // resta Piper sul droplet (13/09/2026), gratis e senza quota.
+    try {
     const key = process.env.GOOGLE_TTS_API_KEY;
     if (!key) throw new Error("Google TTS Key missing");
     const usoGoogle = await getTtsUsage('google');
     if (usoGoogle >= TTS_LIMITI_MENSILI.google) {
-      console.warn(`[TTS] Google oltre il tetto mensile (${usoGoogle}/${TTS_LIMITI_MENSILI.google} caratteri): nessuna sintesi, il client userà la voce nativa`);
+      console.warn(`[TTS] Google oltre il tetto mensile (${usoGoogle}/${TTS_LIMITI_MENSILI.google} caratteri): passo a Piper`);
       throw new Error('Google TTS monthly limit reached');
     }
 
@@ -32609,6 +32611,52 @@ out center tags;`;
     await updateTtsUsage('google', charCount);
     insertApiUsageLog({ api_name: 'google_tts', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0002, tokens_used: 0, success: true }).catch(() => {});
     return { buffer: audioBuffer, provider: 'Google' };
+    } catch (e: any) {
+      console.warn("Google TTS non disponibile, ultimo ripiego Piper sul droplet... Error:", e?.message);
+    }
+
+    // PIPER SUL DROPLET (13/09/2026, committente: «si possono installare su
+    // droplet?»): voce open source, gratis, senza quota, sempre accesa. È
+    // l'ultimo anello: la voce cloud non finisce mai. Senza PIPER_URL si
+    // salta e il client legge con la voce nativa del telefono.
+    if (process.env.PIPER_URL) {
+      const audioBuffer = await synthesizePiper(text, voiceName);
+      if (audioBuffer.length < 500) throw new Error(`Piper returned ${audioBuffer.length} bytes`);
+      await updateTtsUsage('piper', charCount);
+      insertApiUsageLog({ api_name: 'piper', feature_context: 'sintesi_vocale_tts', cost_estimation: 0, tokens_used: 0, success: true }).catch(() => {});
+      return { buffer: audioBuffer, provider: 'Piper' };
+    }
+    throw new Error('Nessun motore TTS disponibile');
+  }
+
+  /** Voce Piper per locale e personaggio (huggingface.co/rhasspy/piper-voices). */
+  const PIPER_VOCI: Record<string, { nicky: string; dante: string }> = {
+    'it-IT': { nicky: 'it_IT-paola-medium', dante: 'it_IT-riccardo-x_low' },
+    'en-US': { nicky: 'en_US-lessac-medium', dante: 'en_US-ryan-medium' },
+    'fr-FR': { nicky: 'fr_FR-siwis-medium', dante: 'fr_FR-upmc-medium' },
+    'es-ES': { nicky: 'es_ES-davefx-medium', dante: 'es_MX-claude-high' },
+    'de-DE': { nicky: 'de_DE-thorsten-medium', dante: 'de_DE-kerstin-low' },
+    'ru-RU': { nicky: 'ru_RU-irina-medium', dante: 'ru_RU-dmitri-medium' },
+    'zh-CN': { nicky: 'zh_CN-huayan-medium', dante: 'zh_CN-huayan-medium' },
+  };
+  /** Chiede al wrapper Piper sul droplet (POST /synth, token, risposta MP3);
+   *  testi lunghi a blocchi, come Polly. */
+  async function synthesizePiper(text: string, voiceName: string): Promise<Buffer> {
+    const base = String(process.env.PIPER_URL || '').replace(/\/+$/, '');
+    if (!base) throw new Error('Piper non configurato (PIPER_URL assente)');
+    let voiceLocale = 'it-IT';
+    if (voiceName.includes('-')) { const parts = voiceName.split('-'); if (parts.length >= 2) voiceLocale = `${parts[0]}-${parts[1]}`; }
+    const voci = PIPER_VOCI[voiceLocale] || PIPER_VOCI['it-IT'];
+    const voice = E_VOCE_DANTE.test(voiceName) ? voci.dante : voci.nicky;
+    const buffers: Buffer[] = [];
+    for (const chunk of aBlocchi(text, 4000)) {
+      const r = await axios.post(`${base}/synth`, { text: chunk, voice }, {
+        headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg', ...(process.env.PIPER_TOKEN ? { 'X-Piper-Token': process.env.PIPER_TOKEN } : {}) },
+        responseType: 'arraybuffer', timeout: 120000,
+      });
+      buffers.push(Buffer.from(r.data));
+    }
+    return Buffer.concat(buffers);
   }
 
   /**
