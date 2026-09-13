@@ -10896,10 +10896,16 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
       const tokEscl = tokenSignificativi(escludi);
       const delMuseoEscluso = (titolo: string) => tokEscl.length > 0 && tokEscl.every(x => normalizzaTesto(titolo).includes(x));
-      const distKm = (la: any, lo: any) => (Number.isFinite(Number(la)) && Number.isFinite(Number(lo)) && Number(la) && Number(lo)) ? Math.round(haversineDistance(lat, lon, Number(la), Number(lo)) / 100) / 10 : null;
+      // Distanza solo quando è vera: i prodotti senza coordinate proprie
+      // ereditano quelle della richiesta (0 km) e non si mostrano.
+      const distKm = (la: any, lo: any) => {
+        if (!Number.isFinite(Number(la)) || !Number.isFinite(Number(lo)) || !Number(la) || !Number(lo)) return null;
+        const m = haversineDistance(lat, lon, Number(la), Number(lo));
+        return m < 30 ? null : Math.round(m / 100) / 10;
+      };
       const visti = new Set<string>();
       const esperienze = [
-        ...tiqets.map((p: any) => ({ fonte: 'tiqets', titolo: String(p.name || ''), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), distanzaKm: typeof p.distanceKm === 'number' ? p.distanceKm : distKm(p.lat, p.lon), url: String(p.url || '') })),
+        ...tiqets.map((p: any) => ({ fonte: 'tiqets', titolo: String(p.name || ''), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), distanzaKm: (typeof p.distanceKm === 'number' && p.distanceKm > 0.05) ? Math.round(p.distanceKm * 10) / 10 : distKm(p.lat, p.lon), url: String(p.url || '') })),
         ...viator.map((p: any) => ({ fonte: 'viator', titolo: String(p.title || p.name || ''), prezzo: String(p.price || p.fromPrice || ''), immagine: String(p.imageUrl || p.image || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), distanzaKm: distKm(p.lat, p.lon), url: String(p.url || p.productUrl || p.webURL || '') })),
         ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), prezzo: String(p.prezzo || p.price || ''), immagine: '', voto: '', durata: '', distanzaKm: null, url: String(p.url || '') })),
       ]
@@ -35523,7 +35529,13 @@ REGOLE:
         price,
         duration: p.duration || "",
         rating: ratingAvg ? `${parseFloat(ratingAvg).toFixed(1)} ⭐` : "",
-        imageUrl: p.images?.[0]?.large || p.images?.[0]?.medium || p.images?.[0]?.url || p.image_url || "",
+        // Il campo della foto cambia fra versioni dell'API: si provano tutte
+        // le forme viste (13/09/2026: le carte uscivano senza immagine).
+        imageUrl: (() => {
+          const im: any = Array.isArray(p.images) ? p.images[0] : (p.images || null);
+          const daIm = im ? (typeof im === 'string' ? im : (im.large || im.medium || im.full || im.small || im.url || im.src || '')) : '';
+          return daIm || p.image_url || p.image || p.photo || p.thumbnail || p.hero_image || p.main_image || (Array.isArray(p.media) ? (p.media[0]?.url || '') : '') || '';
+        })(),
         // product_url arriva già col partner: è il link commissionabile.
         url: p.product_url || p.product_checkout_url || "",
         source: "tiqets",
