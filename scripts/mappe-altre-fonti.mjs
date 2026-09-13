@@ -23,7 +23,7 @@ import path from 'path';
 const env = {};
 for (const f of ['.env', '.env.local']) {
   try {
-    for (const l of fs.readFileSync(path.join('C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) {
+    for (const l of fs.readFileSync(path.join(process.env.SEMINA_DIR || 'C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) {
       const m = l.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/);
       if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, '');
     }

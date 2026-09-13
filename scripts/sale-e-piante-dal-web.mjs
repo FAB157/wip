@@ -24,8 +24,10 @@
 import fs from 'fs';
 import path from 'path';
 const env = {};
+// SEMINA_DIR sostituisce il percorso .env fisso quando si gira fuori da
+// C:/progetti/itainta (droplet 104.248.133.30, /root/semina-musei).
 for (const f of ['.env', '.env.local']) {
-  try { for (const l of fs.readFileSync(path.join('C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) { const m = l.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/); if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, ''); } } catch {}
+  try { for (const l of fs.readFileSync(path.join(process.env.SEMINA_DIR || 'C:/progetti/itainta', f), 'utf8').split(/\r?\n/)) { const m = l.match(/^([A-Z0-9_]+)\s*=\s*(.*)$/); if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, ''); } } catch {}
 }
 const SB = env.VITE_SUPABASE_URL, KEY = env.SUPABASE_SERVICE_ROLE_KEY, API = env.WIP_API || 'https://www.wip.guide';
 const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' };

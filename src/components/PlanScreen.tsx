@@ -3122,6 +3122,26 @@ export default function PlanScreen({
   };
 
   /**
+   * Alternativa Mappe di Apple (13/09/2026, App Review Guideline 4: offrire
+   * SEMPRE Mappe di sistema accanto a Google Maps su iPhone/iPad, l'utente
+   * deve poter scegliere). Limite reale, non aggirabile: lo schema URL di
+   * Apple Maps non accetta waypoint intermedi come Google — solo un
+   * `daddr`. Con più tappe si porta a destinazione l'ULTIMA, le fermate di
+   * mezzo restano solo nel percorso Google: si dice nell'etichetta del
+   * tasto (vedi open_apple_maps_solo_arrivo), mai in silenzio.
+   */
+  const buildAppleMapsUrl = (gIdx: number) => {
+    if (!generatedPlan) return '#';
+    const tappe = generatedPlan.giorni[gIdx]?.tappe || [];
+    if (tappe.length === 0) return '#';
+    const destination = tappe[tappe.length - 1];
+    const daddr = destination.coordinate?.lat && destination.coordinate.lat !== 0
+      ? `${destination.coordinate.lat},${destination.coordinate.lng || (destination.coordinate as any).lon}`
+      : encodeURIComponent(destination.titolo_tappa);
+    return `https://maps.apple.com/?daddr=${daddr}&dirflg=w`;
+  };
+
+  /**
    * AGENTE WIP → FORM STANDARD (23/08/2026). L'agente non genera: riempie
    * il form "Itinerario su misura" con quello che ha capito e lascia che
    * sia handleGenerateAutomatic a fare tutto — geocodifica della
@@ -8180,7 +8200,10 @@ export default function PlanScreen({
                   className="flex items-center justify-center gap-2 w-full py-4 bg-amber-500 text-white font-black rounded-2xl text-sm shadow-lg hover:bg-amber-600 transition-colors active:scale-95"
                 >
                   <Compass className="w-5 h-5" />
-                  {getTranslation('internal_nav_beta', language)}
+                  <span className="flex flex-col leading-tight">
+                    <span>{getTranslation('internal_nav_beta', language)}</span>
+                    <span className="text-[10px] font-bold opacity-80">{getTranslation('wipnav_solo_piedi', language)}</span>
+                  </span>
                 </button>
 
                 <a
@@ -8193,6 +8216,28 @@ export default function PlanScreen({
                   <Navigation className="w-5 h-5" />
                   {getTranslation('open_gmaps', language)}
                 </a>
+
+                {/* Mappe di Apple accanto a Google Maps, SOLO su iOS (App
+                    Review Guideline 4: l'utente deve poter scegliere anche
+                    la mappa di sistema, non solo Google). Su più tappe porta
+                    solo all'ultima: Apple Maps non accetta waypoint intermedi. */}
+                {Capacitor.getPlatform() === 'ios' && (
+                  <a
+                    href={buildAppleMapsUrl(navModal.gIdx)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setNavModal({ open: false, gIdx: null })}
+                    className="flex items-center justify-center gap-2 w-full py-4 bg-white text-primary border-2 border-primary font-black rounded-2xl text-sm shadow-sm hover:bg-primary/5 transition-colors active:scale-95"
+                  >
+                    <Navigation className="w-5 h-5" />
+                    {getTranslation(
+                      (generatedPlan?.giorni[navModal.gIdx ?? -1]?.tappe.length || 0) > 1
+                        ? 'open_apple_maps_solo_arrivo'
+                        : 'open_apple_maps',
+                      language,
+                    )}
+                  </a>
+                )}
               </div>
 
               <p className="text-center text-[10px] text-gray-500 font-medium">
