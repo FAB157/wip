@@ -748,6 +748,11 @@ async function callUniversalAi(
         ?? Math.max(0, (responseData.usage?.prompt_tokens || 0) - cacheHitTokens);
       const outputTokens = responseData.usage?.completion_tokens || 0;
       realCost = (cacheHitTokens * (rates.hit / 1000000)) + (cacheMissTokens * (rates.miss / 1000000)) + (outputTokens * (rates.out / 1000000));
+      // VERIFICA DELLA CACHE (13/09/2026, committente): a ogni risposta
+      // DeepSeek si scrive quanti token del prompt sono arrivati dalla cache.
+      // Con i prompt riordinati (parte fissa prima) il valore deve essere
+      // migliaia dal secondo museo in poi; zero vuol dire prefisso diverso.
+      console.log(`[Universal AI] DeepSeek cache: hit ${cacheHitTokens} / miss ${cacheMissTokens} token, out ${outputTokens}, costo ${realCost.toFixed(5)} $ (${featureContext})`);
     } else {
       // Fallback per altri motori (stima generica; 0 per i gratuiti Groq/Agnes)
       realCost = (finalModel.includes('llama') || finalModel.includes('gpt-oss') || finalModel.includes('agnes')) ? 0 : 0.005;
@@ -763,9 +768,10 @@ async function callUniversalAi(
     if (userId === 'background-script' && finalModel.includes('deepseek') && realCost > 0) {
       await registraSpesaSeminaDeepSeek(realCost).catch(() => {});
     }
+    const cachePart = finalModel.includes('deepseek') ? ` | CacheHit: ${responseData.usage?.prompt_cache_hit_tokens || 0}` : '';
     await insertApiUsageLog({
       api_name: apiName,
-      feature_context: `${featureContext} | Token: ${tokensUsed}${userPart}`,
+      feature_context: `${featureContext} | Token: ${tokensUsed}${userPart}${cachePart}`,
       user_id: realUserId,
       cost_estimation: realCost,
       tokens_used: tokensUsed,
