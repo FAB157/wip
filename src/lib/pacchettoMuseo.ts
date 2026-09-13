@@ -17,6 +17,34 @@ import { db } from './db';
 import { registraDownload, rimuoviDownload, leggiDownload } from './downloadsRegistry';
 import { MuseumVisit, VenueTappa, ArtworkGuide, fetchArtworkGuide, tappeAttive, ARCHIVIO_MUSEI_KEY } from './museumVisit';
 import { Language } from './i18n';
+import { supabase } from './supabase';
+import { getApiUrl } from './api';
+import { azureVoiceName } from '../services/ttsService';
+import { getGuideCharacter } from './guideSettings';
+
+/**
+ * LA VOCE SI PREPARA PRIMA (13/09/2026, committente: «prima di iniziare ci
+ * mette 6-7 secondi»). Il testo delle prime opere arriva all'ingresso, ma
+ * l'MP3 veniva sintetizzato al primo «Ascolta»: sintesi cloud più download,
+ * con la persona davanti all'opera. Qui si chiede al server di sintetizzare
+ * e mettere in cache (preloadOnly: nessun MP3 scaricato ora); al tocco la
+ * risposta è un redirect alla cache, un secondo invece di sette. Solo con la
+ * sessione (la sintesi a pagamento vuole il Bearer); mai bloccante.
+ */
+async function preparaVoce(testo: string, language: Language): Promise<void> {
+  try {
+    if (!testo || testo.length < 40) return;
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    if (!token) return;
+    await fetch(getApiUrl('/api/tts/smart'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ text: testo, voice: azureVoiceName(String(language).toLowerCase(), getGuideCharacter()), preloadOnly: true }),
+      signal: AbortSignal.timeout(45000),
+    });
+  } catch { /* la voce si farà al tocco, come prima */ }
+}
 
 /** Le audioguide scaricate, per (museo, opera, lingua). La chiave vive in
  *  museumVisit.ts, che la legge per riconoscere la seconda visita. */
@@ -185,6 +213,8 @@ export async function prescaricaPrimeOpere(
     if (resp && resp.ok === true) {
       if (!stile) conservaOpera(visit.venueKey, language, t.nome, resp.guide);
       fatte++;
+      // Le prime tre voci pronte in cache: il primo «Ascolta» non aspetta.
+      if (i < 3) void preparaVoce(String(resp.guide?.testo || ''), language);
     } else if (resp && resp.ok === false && (resp.reason === 'pass_exhausted' || resp.reason === 'needs_pass')) {
       break;
     }

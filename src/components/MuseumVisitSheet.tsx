@@ -182,7 +182,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     setRisposte(prev => ({ ...prev, [i]: [...(prev[i] || []), { q: testoQ, a: r.risposta || '' }] }));
     setDomanda('');
     stopSpeech(); setOperaParla(null); setOperaInPausa(null);
-    void speakWithSystemVoice(r.risposta || '', String(language).toLowerCase(), getGuideCharacter());
+    // La risposta con la STESSA voce del racconto (13/09/2026, committente):
+    // la voce di sistema su iPhone apriva la fascia dei sottotitoli di
+    // sistema, che restava anche fuori dalla guida e senza una X. Con il
+    // player nativo c'è banner, pausa e stop come per ogni opera.
+    void speakAudioguide(r.risposta || '', String(language).toLowerCase(), getGuideCharacter(), undefined, undefined, metaOpera(i)).catch(() => {});
   };
 
   // FOTO RICORDO (12/09/2026): lo scatto della persona davanti all'opera,
@@ -317,7 +321,20 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (!online || visit.dalLeader || visit.prefetchFatto) return;
     let vivo = true;
     prescaricaPrimeOpere(visit, language, 8, (f, t) => { if (vivo) setPrefetch({ fatte: f, totali: t }); }, pers.bambini ? 'bambini' : '')
-      .then(() => { if (vivo) { setPrefetch(null); segnaPrefetchFatto(); } })
+      .then(async () => {
+        if (!vivo) return;
+        setPrefetch(null); segnaPrefetchFatto();
+        // TUTTA LA GUIDA SI SCARICA DA SOLA (13/09/2026, committente: «tutte
+        // le guide devono essere scaricate ed essere offline, perché dentro
+        // il museo non c'è linea»). Dopo le prime otto, il resto in silenzio;
+        // il tasto in fondo diventa solo lo stato «disponibile offline».
+        if (scaricato || scaricando || pers.bambini || !museoScaricato(visit.venueKey, language)) return;
+        try {
+          setScaricando({ fatte: 0, totali: visit.guide.tappe.length });
+          await scaricaPacchettoMuseo(visit, language, (f, t) => { if (vivo) setScaricando({ fatte: f, totali: t }); });
+          if (vivo) setScaricato(true);
+        } catch { /* si riprova al prossimo ingresso */ } finally { if (vivo) setScaricando(null); }
+      })
       .catch(() => { if (vivo) setPrefetch(null); });
     return () => { vivo = false; };
   }, [visit.venueKey, online]);
@@ -392,7 +409,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       for (const h of handles) { try { h.remove(); } catch { /* ok */ } }
       WipBackgroundAudio.setTrackCommands({ next: false, previous: false }).catch(() => {});
     };
-  });
+    // Senza dipendenze l'effetto girava a OGNI render (13/09/2026): i
+    // listener nativi si registravano di nuovo prima che i precedenti
+    // fossero rimossi (addListener è asincrono) e i comandi si sommavano —
+    // un «play» eseguito più volte. Ora si rifà solo quando cambia lo stato
+    // che i comandi leggono.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [operaParla, operaInPausa, operaAperta, ordineTragitto, visit.venueKey]);
 
   // DAL TASTO DELLE CUFFIE (11/09/2026): sul web e nella PWA i comandi
   // «traccia successiva» e «play» della schermata di blocco e delle cuffie
@@ -1172,16 +1195,6 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             >
               {t('mv_keep_visiting')}
             </button>
-            {countSeen(visit) > 0 && (
-              <button
-                onClick={() => void condividiGiornata()}
-                disabled={condividendo}
-                aria-label={t('mv_share_day')}
-                className="w-12 py-3 rounded-2xl bg-white border border-primary/40 text-primary flex items-center justify-center active:scale-[0.98] transition-transform disabled:opacity-60"
-              >
-                {condividendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-              </button>
-            )}
             <button
               onClick={() => { stopSpeech(); endVisit(); onClose(); }}
               className="flex-1 py-3 rounded-2xl bg-white border border-slate-200 text-slate-700 font-bold text-[13px] active:scale-[0.98] transition-transform"
@@ -2480,19 +2493,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               {t('mv_end')}
             </button>
           </div>
-          <div className="flex gap-2">
-            {/* LA CARTOLINA: solo quando c'è qualcosa da raccontare */}
-            {countSeen(visit) > 0 && (
-              <button
-                onClick={() => void condividiGiornata()}
-                disabled={condividendo}
-                className="flex-1 py-3 rounded-2xl bg-white border border-primary/40 text-primary font-black text-sm active:scale-[0.98] transition-transform flex items-center justify-center gap-2 disabled:opacity-60"
-              >
-                {condividendo ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                {t('mv_share_day')}
-              </button>
-            )}
-          </div>
+          {/* «Condividi giornata» tolto il 13/09/2026 (committente: «non
+              funziona, meglio eliminarlo e fare spazio»): su iPhone la
+              condivisione dei file dalla WebView non parte. La cartolina
+              resta in fotoRicordo per quando ci sarà il plugin nativo. */}
         </div>
       </motion.div>
     </div>
