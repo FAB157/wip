@@ -32484,7 +32484,7 @@ out center tags;`;
    *  (12/09/2026). Polly ed ElevenLabs restano inerti finché non arrivano le
    *  rispettive chiavi: passano oltre in pochi millisecondi, non rallentano
    *  chi già funziona con Azure/Google. */
-  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Piper' }> {
+  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Piper' | 'Kokoro' }> {
     const charCount = text.length;
     const currentUsage = await getTtsUsage();
 
@@ -32494,7 +32494,10 @@ out center tags;`;
       if (parts.length >= 2) voiceLocale = `${parts[0]}-${parts[1]}`; // e.g. en-US, zh-CN
     }
 
-    // Regola: Usa Azure se sotto il limite di 500k caratteri/mese
+    // ORDINE DELLE VOCI (13/09/2026, strategia del committente): Nicky =
+    // Azure Elsa, Dante = Polly Adriano, finché reggono le quote gratuite;
+    // poi Kokoro (Nicola) sul droplet; poi ElevenLabs, Google, Piper.
+    const provaAzure = async (): Promise<{ buffer: Buffer; provider: 'Azure' } | null> => {
     if (currentUsage < AZURE_LIMIT) {
       try {
         const key = process.env.AZURE_SPEECH_KEY;
@@ -32529,13 +32532,15 @@ out center tags;`;
         insertApiUsageLog({ api_name: 'azure', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.001, tokens_used: 0, success: true }).catch(() => {});
         return { buffer: audioBuffer, provider: 'Azure' };
       } catch (e: any) {
-        console.warn("Azure TTS Failed or Limit Reached, falling back to Polly... Error message:", e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
+        console.warn("Azure TTS Failed or Limit Reached, falling back... Error message:", e.message, "Status:", e.response?.status, "Data:", e.response?.data ? Buffer.from(e.response.data).toString().slice(0, 300) : "");
       }
     }
+    return null;
+    };
 
-    // Fallback su Polly (inerte finché non arrivano le chiavi AWS), sotto il
-    // suo tetto mensile — superata la soglia si salta, mai un costo a
-    // sorpresa (richiesta del committente).
+    // Polly (inerte finché non arrivano le chiavi AWS), sotto il suo tetto
+    // mensile — superata la soglia si salta, mai un costo a sorpresa.
+    const provaPolly = async (): Promise<{ buffer: Buffer; provider: 'Polly' } | null> => {
     if ((await getTtsUsage('polly')) < TTS_LIMITI_MENSILI.polly) {
       try {
         const audioBuffer = await synthesizePolly(text, voiceName);
@@ -32544,10 +32549,31 @@ out center tags;`;
         insertApiUsageLog({ api_name: 'polly', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0004, tokens_used: 0, success: true }).catch(() => {});
         return { buffer: audioBuffer, provider: 'Polly' };
       } catch (e: any) {
-        console.warn("Polly TTS non disponibile, provo ElevenLabs... Error:", e.message);
+        console.warn("Polly TTS non disponibile... Error:", e.message);
       }
     } else {
-      console.warn(`[TTS] Polly oltre il tetto mensile (${TTS_LIMITI_MENSILI.polly} caratteri), salto a ElevenLabs`);
+      console.warn(`[TTS] Polly oltre il tetto mensile (${TTS_LIMITI_MENSILI.polly} caratteri), salto`);
+    }
+    return null;
+    };
+
+    // Dante: prima Polly (Adriano), poi Azure; Nicky: prima Azure (Elsa), poi Polly.
+    const primi = E_VOCE_DANTE.test(voiceName) ? [provaPolly, provaAzure] : [provaAzure, provaPolly];
+    for (const prova of primi) { const r = await prova(); if (r) return r; }
+
+    // KOKORO SUL DROPLET (13/09/2026): la voce gratuita scelta dal
+    // committente dopo le quote a pagamento (Nicola). Solo per le lingue che
+    // Kokoro copre; lento su CPU, quindi mai in diretta oltre i 90 s.
+    if (process.env.KOKORO_URL && KOKORO_VOCI[voiceLocale]) {
+      try {
+        const audioBuffer = await synthesizeWrapper(process.env.KOKORO_URL, process.env.KOKORO_TOKEN, E_VOCE_DANTE.test(voiceName) ? KOKORO_VOCI[voiceLocale].dante : KOKORO_VOCI[voiceLocale].nicky, text, 240000);
+        if (audioBuffer.length < 500) throw new Error(`Kokoro returned ${audioBuffer.length} bytes`);
+        await updateTtsUsage('kokoro', charCount);
+        insertApiUsageLog({ api_name: 'kokoro', feature_context: 'sintesi_vocale_tts', cost_estimation: 0, tokens_used: 0, success: true }).catch(() => {});
+        return { buffer: audioBuffer, provider: 'Kokoro' };
+      } catch (e: any) {
+        console.warn("Kokoro non disponibile, provo ElevenLabs... Error:", e?.message);
+      }
     }
 
     // Fallback su ElevenLabs, stesso principio: tetto mensile, poi si salta.
@@ -32674,7 +32700,12 @@ out center tags;`;
       if (provider === 'polly') buffer = await synthesizePolly(text, voiceName);
       else if (provider === 'elevenlabs') buffer = await synthesizeElevenLabs(text, voiceName);
       else if (provider === 'piper') buffer = await synthesizePiper(text, voiceName);
-      else return res.status(400).json({ error: 'provider non supportato (polly, elevenlabs, piper)' });
+      else if (provider === 'kokoro') {
+        let loc = 'it-IT'; if (voiceName.includes('-')) { const p = voiceName.split('-'); if (p.length >= 2) loc = `${p[0]}-${p[1]}`; }
+        const v = KOKORO_VOCI[loc] || KOKORO_VOCI['it-IT'];
+        buffer = await synthesizeWrapper(process.env.KOKORO_URL, process.env.KOKORO_TOKEN, E_VOCE_DANTE.test(voiceName) ? v.dante : v.nicky, text, 240000);
+      }
+      else return res.status(400).json({ error: 'provider non supportato (polly, elevenlabs, piper, kokoro)' });
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('X-TTS-Provider', provider);
       res.setHeader('X-TTS-Ms', String(Date.now() - t0));
@@ -32694,24 +32725,36 @@ out center tags;`;
     'ru-RU': { nicky: 'ru_RU-irina-medium', dante: 'ru_RU-dmitri-medium' },
     'zh-CN': { nicky: 'zh_CN-huayan-medium', dante: 'zh_CN-huayan-medium' },
   };
-  /** Chiede al wrapper Piper sul droplet (POST /synth, token, risposta MP3);
-   *  testi lunghi a blocchi, come Polly. */
-  async function synthesizePiper(text: string, voiceName: string): Promise<Buffer> {
-    const base = String(process.env.PIPER_URL || '').replace(/\/+$/, '');
-    if (!base) throw new Error('Piper non configurato (PIPER_URL assente)');
-    let voiceLocale = 'it-IT';
-    if (voiceName.includes('-')) { const parts = voiceName.split('-'); if (parts.length >= 2) voiceLocale = `${parts[0]}-${parts[1]}`; }
-    const voci = PIPER_VOCI[voiceLocale] || PIPER_VOCI['it-IT'];
-    const voice = E_VOCE_DANTE.test(voiceName) ? voci.dante : voci.nicky;
+  /** Voci Kokoro (hexgrad/Kokoro-82M) per locale: solo le lingue coperte. */
+  const KOKORO_VOCI: Record<string, { nicky: string; dante: string }> = {
+    'it-IT': { nicky: 'if_sara', dante: 'im_nicola' },
+    'en-US': { nicky: 'af_heart', dante: 'am_michael' },
+    'fr-FR': { nicky: 'ff_siwis', dante: 'ff_siwis' },
+    'es-ES': { nicky: 'ef_dora', dante: 'em_alex' },
+    'zh-CN': { nicky: 'zf_xiaobei', dante: 'zm_yunjian' },
+  };
+  /** Un wrapper HTTP sul droplet (Piper, Kokoro): POST {base}/synth
+   *  {text, voice}, header X-Piper-Token, risposta MP3; testi a blocchi. */
+  async function synthesizeWrapper(baseUrl: string | undefined, token: string | undefined, voice: string, text: string, timeoutMs = 120000): Promise<Buffer> {
+    const base = String(baseUrl || '').replace(/\/+$/, '');
+    if (!base) throw new Error('wrapper voce non configurato');
     const buffers: Buffer[] = [];
     for (const chunk of aBlocchi(text, 4000)) {
       const r = await axios.post(`${base}/synth`, { text: chunk, voice }, {
-        headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg', ...(process.env.PIPER_TOKEN ? { 'X-Piper-Token': process.env.PIPER_TOKEN } : {}) },
-        responseType: 'arraybuffer', timeout: 120000,
+        headers: { 'Content-Type': 'application/json', Accept: 'audio/mpeg', ...(token ? { 'X-Piper-Token': token } : {}) },
+        responseType: 'arraybuffer', timeout: timeoutMs,
       });
       buffers.push(Buffer.from(r.data));
     }
     return Buffer.concat(buffers);
+  }
+  /** Piper sul droplet, voce per locale e personaggio. */
+  async function synthesizePiper(text: string, voiceName: string): Promise<Buffer> {
+    if (!process.env.PIPER_URL) throw new Error('Piper non configurato (PIPER_URL assente)');
+    let voiceLocale = 'it-IT';
+    if (voiceName.includes('-')) { const parts = voiceName.split('-'); if (parts.length >= 2) voiceLocale = `${parts[0]}-${parts[1]}`; }
+    const voci = PIPER_VOCI[voiceLocale] || PIPER_VOCI['it-IT'];
+    return synthesizeWrapper(process.env.PIPER_URL, process.env.PIPER_TOKEN, E_VOCE_DANTE.test(voiceName) ? voci.dante : voci.nicky, text, 120000);
   }
 
   /**
