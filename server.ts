@@ -1178,6 +1178,29 @@ async function sitoUfficialeViaRicerca(nome: string, citta: string, lang: string
   } catch { return null; }
 }
 
+/** Le pagine GIUSTE di un sito ufficiale via SearXNG (13/09/2026, committente:
+ *  «si usa per tutto questo»): «"<nome>" <parole> site:<host>» — orari e
+ *  prezzi, mostre — invece di scovarle a tentoni dai link della home.
+ *  Restano solo gli indirizzi dello stesso host. */
+async function pagineDelSitoViaRicerca(nome: string, host: string, parole: string, lang: string, max = 4): Promise<string[]> {
+  if (!process.env.SEARXNG_URL || !host) return [];
+  const h = String(host).toLowerCase().replace(/^www\./, '');
+  try {
+    const ris = await eventiFeed.ricercaWeb(`"${String(nome).trim()}" ${parole} site:${h}`, { lang: String(lang || 'it').slice(0, 2), count: 8, provider: 'searxng' });
+    const out: string[] = [];
+    for (const r of ris) {
+      try {
+        const u = new URL(r.url);
+        if (u.hostname.toLowerCase().replace(/^www\./, '') !== h) continue;
+        if (/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4)$/i.test(u.pathname)) continue;
+        if (!out.includes(u.href)) out.push(u.href);
+      } catch { /* url non valido */ }
+      if (out.length >= max) break;
+    }
+    return out;
+  } catch { return []; }
+}
+
 /** L'immagine principale (og:image) di una pagina: SOLO per il sito ufficiale
  *  del POI, mai per un risultato di ricerca. Scarta loghi e icone. */
 async function fotoDaPaginaUfficiale(urlPagina: string): Promise<string | null> {
@@ -8224,6 +8247,12 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         if (sito) return sito;
       }
     } catch { /* si prova la ricerca web */ }
+    // SEARXNG (13/09/2026): stessa regola severa dei contatti POI — dominio
+    // coerente col nome, mai aggregatori — e niente crediti.
+    try {
+      const s = await sitoUfficialeViaRicerca(nome, '', lingua);
+      if (s) return `https://${s.host}`;
+    } catch { /* si prova la ricerca generica */ }
     try {
       // Ricerca web: la stessa usata per gli eventi (Brave o Google CSE).
       if (!eventiFeed.fornitoreRicerca()) return '';
@@ -11469,6 +11498,16 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
             if (gia) gia.peso = Math.max(gia.peso, peso); else candidati.push({ href: u.href, peso });
           } catch { /* link non valido */ }
         }
+        // SEARXNG (13/09/2026): la pagina delle mostre in corso cercata dal
+        // motore dentro il sito, prima dei link della home.
+        try {
+          const daRicerca = await pagineDelSitoViaRicerca(venueName || String(base.hostname), base.hostname, wl === 'it' ? 'mostre in corso' : wl === 'en' ? 'current exhibitions' : wl === 'fr' ? 'expositions en cours' : wl === 'es' ? 'exposiciones actuales' : wl === 'de' ? 'aktuelle Ausstellungen' : 'exhibitions', wl, 3);
+          for (const href of daRicerca) {
+            if (RE_NO.test(href) || href === base.href) continue;
+            const gia = candidati.find(c => c.href === href);
+            if (gia) gia.peso = Math.max(gia.peso, 4); else candidati.push({ href, peso: 4 });
+          }
+        } catch { /* la ricerca è un di più */ }
         candidati.sort((a, b) => b.peso - a.peso);
         for (const c of candidati.slice(0, 3)) {
           try {
@@ -11671,6 +11710,17 @@ Massimo 3 mostre. "sale", "riga" e "opere" in ${nomeLingua(langKey)} (traduci se
               if (gia) gia.peso = Math.max(gia.peso, w); else candidati.push({ href: u.href, peso: w });
             } catch { /* link non valido */ }
           }
+          // SEARXNG PRIMA DEI LINK (13/09/2026): le pagine di orari e prezzi
+          // trovate dal motore dentro il sito valgono più di qualsiasi link
+          // della home; eventi e mostre restano fuori anche qui.
+          try {
+            const daRicerca = await pagineDelSitoViaRicerca(venueName || String(base.hostname), base.hostname, wl === 'it' ? 'orari biglietti prezzi' : wl === 'en' ? 'opening hours tickets prices' : wl === 'fr' ? 'horaires billets tarifs' : wl === 'es' ? 'horarios entradas precios' : wl === 'de' ? 'Öffnungszeiten Tickets Preise' : 'opening hours tickets', wl, 4);
+            for (const href of daRicerca) {
+              if (/(eventi|event|mostr|exhibit|attivit|activit|visite-speciali|avvis|news|notiz|blog|serale|evening|night)/i.test(href) || href === base.href) continue;
+              const gia = candidati.find(c => c.href === href);
+              if (gia) gia.peso = Math.max(gia.peso, 4); else candidati.push({ href, peso: 4 });
+            }
+          } catch { /* la ricerca è un di più */ }
           candidati.sort((a, b) => b.peso - a.peso);
           const scelti = candidati.slice(0, 4).map(c => c.href);
           const htmlPagine: string[] = [];
@@ -27912,6 +27962,43 @@ app.post("/api/poi/enrich", rateLimiter, ...guardiaCostosa, async (req, res) => 
 
         if (commonsResult.status === "fulfilled" && commonsResult.value) thumbnail = commonsResult.value;
         if (!extract && wvResult.status === "fulfilled" && wvResult.value) extract = wvResult.value;
+      }
+
+      // 3-bis. IL SITO UFFICIALE COME FONTE (13/09/2026, committente: «si usa
+      // per tutto questo»). Un POI senza Wikipedia né Wikivoyage — la
+      // pieve, il museo di paese, il parco — spesso ha un sito suo: SearXNG
+      // lo cerca col nome e la città, entra solo un dominio coerente col
+      // nome (mai aggregatori), e il testo della sua pagina diventa il
+      // materiale della descrizione, con l'URL come fonte dichiarata. La
+      // foto NON si prende da qui: resta la regola delle fonti verificate.
+      let sitoComeFonte = '';
+      if (!extract && name) {
+        try {
+          let cittaPoi = '';
+          if (id) {
+            const rc = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=eq.${encodeURIComponent(String(id))}&select=city,contact_website&limit=1`,
+              { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 }).catch(() => null);
+            cittaPoi = String(rc?.data?.[0]?.city || '');
+            if (rc?.data?.[0]?.contact_website && isPublicHttpUrl(rc.data[0].contact_website)) sitoComeFonte = String(rc.data[0].contact_website);
+          }
+          if (!sitoComeFonte) {
+            const s = await sitoUfficialeViaRicerca(String(name), cittaPoi, String(lang || 'it'));
+            if (s) sitoComeFonte = s.url;
+          }
+          if (sitoComeFonte) {
+            const r = await axios.get(sitoComeFonte, { timeout: 8000, maxRedirects: 3, responseType: 'text', maxContentLength: 1_500_000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WIPGuide/1.0; +https://wip.guide)', Accept: 'text/html' } });
+            const testo = String(r.data || '')
+              .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<nav[\s\S]*?<\/nav>|<footer[\s\S]*?<\/footer>/gi, ' ')
+              .replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+            // Il testo deve parlare del POI: almeno una parola propria del nome.
+            if (testo.length >= 300 && tokensNomeLuogo(String(name)).some((t) => normTesto(testo).includes(t))) {
+              extract = testo.slice(0, 4000);
+              pageUrl = sitoComeFonte;
+              distanceKm = 0;
+              console.log(`[enrich] "${name}": materiale dal sito ufficiale ${sitoComeFonte} (${testo.length} caratteri)`);
+            } else sitoComeFonte = '';
+          }
+        } catch (e: any) { sitoComeFonte = ''; console.warn('[enrich] sito ufficiale come fonte non riuscito:', e?.message); }
       }
 
 
