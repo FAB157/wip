@@ -10795,13 +10795,17 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
         }
       };
 
-      const cacheKey = `museum_ticket:v2:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
+      // v3 (13/09/2026): il link passava per /api/out con «url=» mentre la
+      // rotta legge «u=» → «Compra il biglietto» dava 400. In più si
+      // restituiscono TUTTE le esperienze del museo (visita guidata, salta
+      // la fila, combinati), non solo il biglietto scelto.
+      const cacheKey = `museum_ticket:v3:${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 50)}:${lang}`;
       const inCache = await getFromCache(cacheKey, 'museum_ticket', 24 * 60 * 60 * 1000);
       if (inCache) {
         try {
           const p = JSON.parse(inCache);
           const disponibilita = p?.ticket?.fonte === 'tiqets' && p?.ticket?.id ? await fasceDi(String(p.ticket.id)) : null;
-          return res.json({ ok: true, cached: true, ticket: p.ticket ? { ...p.ticket, disponibilita } : null });
+          return res.json({ ok: true, cached: true, ticket: p.ticket ? { ...p.ticket, disponibilita } : null, esperienze: Array.isArray(p.esperienze) ? p.esperienze : [] });
         } catch { /* si rigenera */ }
       }
 
@@ -10830,26 +10834,113 @@ LINGUA: ${langCfg.name}. Rispondi SOLO con JSON:
       const RE_NON_INGRESSO = /(tour|guided|guidat|guidée|guiada|geführt|walking|city|cena|dinner|show|cooking|workshop|laboratori|class|combo|bus|boat|barca|bike|segway|wine)/i;
       const prezzoNum = (s: string): number => { const m = String(s || '').replace(',', '.').match(/(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : Number.POSITIVE_INFINITY; };
 
-      const candidati = [
-        ...tiqets.map((p: any) => ({ fonte: 'tiqets', id: String(p.id || ''), titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
-        ...viator.map((p: any) => ({ fonte: 'viator', titolo: String(p.title || p.name || ''), descrizione: String(p.description || p.shortDescription || '').slice(0, 240), prezzo: String(p.price || p.fromPrice || ''), url: String(p.url || p.productUrl || p.webURL || '') })),
-        ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), descrizione: '', prezzo: '', url: String(p.url || '') })),
+      const delMuseo = [
+        ...tiqets.map((p: any) => ({ fonte: 'tiqets', id: String(p.id || ''), titolo: String(p.name || ''), descrizione: String(p.description || '').slice(0, 240), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), url: String(p.bookingUrl || p.product_url || p.url || '') })),
+        ...viator.map((p: any) => ({ fonte: 'viator', id: '', titolo: String(p.title || p.name || ''), descrizione: String(p.description || p.shortDescription || '').slice(0, 240), prezzo: String(p.price || p.fromPrice || ''), immagine: String(p.imageUrl || p.image || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), url: String(p.url || p.productUrl || p.webURL || '') })),
+        ...gyg.map((p: any) => ({ fonte: 'getyourguide', id: '', titolo: String(p.titolo || p.title || ''), descrizione: '', prezzo: String(p.prezzo || p.price || ''), immagine: '', voto: '', durata: '', url: String(p.url || '') })),
       ]
         .filter(e => e.titolo && e.url && libIsBookableHost(e.url))
-        .filter(e => parlaDelMuseo(e.titolo, e.descrizione))
+        .filter(e => parlaDelMuseo(e.titolo, e.descrizione));
+      const candidati = delMuseo
         .filter(e => RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo))
         // Il più economico con un prezzo; a parità Tiqets, che vende ingressi.
         .sort((a, b) => (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)) || (a.fonte === 'tiqets' ? -1 : 1));
 
+      const viaAffiliazione = (e: any) => `/api/out?src=${encodeURIComponent(e.fonte)}&u=${encodeURIComponent(e.url)}`;
       const scelto: any = candidati[0] || null;
-      const ticket = scelto ? { ...scelto, descrizione: undefined, url: `/api/out?src=${encodeURIComponent(scelto.fonte)}&url=${encodeURIComponent(scelto.url)}` } : null;
-      await saveToCache(cacheKey, 'museum_ticket', JSON.stringify({ ticket }));
+      const ticket = scelto ? { ...scelto, descrizione: undefined, url: viaAffiliazione(scelto) } : null;
+      // LE ESPERIENZE DEL MUSEO (13/09/2026, committente): visita guidata,
+      // salta la fila, ingresso + tour — tutte col nostro codice, senza
+      // doppioni per titolo, il biglietto scelto per primo.
+      const vistiTitoli = new Set<string>();
+      const esperienze = delMuseo
+        .sort((a, b) => (a === scelto ? -1 : b === scelto ? 1 : 0) || (prezzoNum(a.prezzo) - prezzoNum(b.prezzo)))
+        .filter(e => { const k = normalizzaTesto(e.titolo).slice(0, 60); if (vistiTitoli.has(k)) return false; vistiTitoli.add(k); return true; })
+        .slice(0, 8)
+        .map(e => ({ fonte: e.fonte, titolo: e.titolo, prezzo: e.prezzo, immagine: e.immagine, voto: e.voto, durata: e.durata, tipo: RE_INGRESSO.test(e.titolo) && !RE_NON_INGRESSO.test(e.titolo) ? 'biglietto' : 'esperienza', url: viaAffiliazione(e) }));
+      await saveToCache(cacheKey, 'museum_ticket', JSON.stringify({ ticket, esperienze }));
       const disponibilita = ticket?.fonte === 'tiqets' && ticket?.id ? await fasceDi(String(ticket.id)) : null;
       res.set('Cache-Control', 'private, max-age=600');
-      res.json({ ok: true, ticket: ticket ? { ...ticket, disponibilita } : null });
+      res.json({ ok: true, ticket: ticket ? { ...ticket, disponibilita } : null, esperienze });
     } catch (e: any) {
       console.warn('[BigliettoIngresso] Errore:', e?.message);
       res.json({ ok: true, ticket: null });
+    }
+  });
+
+  /**
+   * ESPERIENZE QUI VICINO (13/09/2026, committente: «una galleria scorrevole
+   * delle esperienze lì vicine, cliccabili e con nostro codice»). Tiqets per
+   * coordinate (3 km), GetYourGuide e Viator per città/coordinate; carte con
+   * foto, prezzo, voto, fonte e link affiliato via /api/out. Cache 6 ore per
+   * punto e lingua; mai una carta inventata: senza risultati, elenco vuoto.
+   */
+  app.get("/api/museums/experiences-near", rateLimiter, async (req, res) => {
+    try {
+      const lat = parseFloat(String(req.query.lat || ''));
+      const lon = parseFloat(String(req.query.lon || ''));
+      const citta = String(req.query.city || '').trim().slice(0, 80);
+      const lang = String(req.query.language || 'IT').toLowerCase().slice(0, 2);
+      const escludi = String(req.query.exclude || '').trim().slice(0, 160);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return res.status(400).json({ ok: false, reason: 'lat e lon richiesti' });
+      const ck = partnerCacheKey('exp-near', lat, lon, 3, lang, citta.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30));
+      const hit = await partnerCacheGet(ck, 6 * 60 * 60 * 1000);
+      if (hit) return res.json({ ok: true, cached: true, esperienze: hit });
+      const conTimeout = <T,>(p: Promise<T>, fallback: T) => Promise.race([p, new Promise<T>((r) => setTimeout(() => r(fallback), 9000))]).catch(() => fallback);
+      const [tiqets, viatorRaw, gyg] = await Promise.all([
+        conTimeout(fetchTiqetsProducts({ lat, lon, radiusKm: 3, lang, pageSize: 16 }), [] as any[]),
+        conTimeout(agentTools.searchViatorExperiences(lat, lon, 5, undefined, undefined, citta || undefined), '[]'),
+        conTimeout(citta ? fetchGygExperiencesScraped(citta, lang) : Promise.resolve([] as any[]), [] as any[]),
+      ]);
+      let viator: any[] = [];
+      try { const a = JSON.parse(String(viatorRaw || '[]')); if (Array.isArray(a)) viator = a; } catch { /* fail-open */ }
+      const tokEscl = tokenSignificativi(escludi);
+      const delMuseoEscluso = (titolo: string) => tokEscl.length > 0 && tokEscl.every(x => normalizzaTesto(titolo).includes(x));
+      const distKm = (la: any, lo: any) => (Number.isFinite(Number(la)) && Number.isFinite(Number(lo)) && Number(la) && Number(lo)) ? Math.round(haversineDistance(lat, lon, Number(la), Number(lo)) / 100) / 10 : null;
+      const visti = new Set<string>();
+      const esperienze = [
+        ...tiqets.map((p: any) => ({ fonte: 'tiqets', titolo: String(p.name || ''), prezzo: String(p.price || ''), immagine: String(p.imageUrl || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), distanzaKm: typeof p.distanceKm === 'number' ? p.distanceKm : distKm(p.lat, p.lon), url: String(p.url || '') })),
+        ...viator.map((p: any) => ({ fonte: 'viator', titolo: String(p.title || p.name || ''), prezzo: String(p.price || p.fromPrice || ''), immagine: String(p.imageUrl || p.image || ''), voto: String(p.rating || ''), durata: String(p.duration || ''), distanzaKm: distKm(p.lat, p.lon), url: String(p.url || p.productUrl || p.webURL || '') })),
+        ...gyg.map((p: any) => ({ fonte: 'getyourguide', titolo: String(p.titolo || p.title || ''), prezzo: String(p.prezzo || p.price || ''), immagine: '', voto: '', durata: '', distanzaKm: null, url: String(p.url || '') })),
+      ]
+        .filter(e => e.titolo && e.url && libIsBookableHost(e.url) && !delMuseoEscluso(e.titolo))
+        .filter(e => { const k = normalizzaTesto(e.titolo).slice(0, 60); if (visti.has(k)) return false; visti.add(k); return true; })
+        // Prima chi ha foto e distanza, poi il resto; mai più di 12.
+        .sort((a, b) => (Number(!!b.immagine) - Number(!!a.immagine)) || ((a.distanzaKm ?? 99) - (b.distanzaKm ?? 99)))
+        .slice(0, 12)
+        .map(e => ({ ...e, url: `/api/out?src=${encodeURIComponent(e.fonte)}&u=${encodeURIComponent(e.url)}` }));
+      partnerCacheSet(ck, 'exp-near', esperienze);
+      res.set('Cache-Control', 'private, max-age=600');
+      res.json({ ok: true, esperienze });
+    } catch (e: any) {
+      console.warn('[EsperienzeVicine] Errore:', e?.message);
+      res.json({ ok: true, esperienze: [] });
+    }
+  });
+
+  /**
+   * IL PREZZO DEL BIGLIETTO NELL'ELENCO (13/09/2026, committente: «Biglietto
+   * da 18 €» sui musei che lo hanno). Solo dalla cache del biglietto scelto
+   * (museum_ticket): nessuna chiamata ai fornitori da qui, l'elenco deve
+   * restare istantaneo. Chi non è in cache non ha l'etichetta.
+   */
+  app.get("/api/museums/ticket-badges", rateLimiter, async (req, res) => {
+    try {
+      const lang = String(req.query.language || 'IT').toLowerCase().slice(0, 2);
+      const nomi = String(req.query.names || '').split('|').map(s => s.trim()).filter(Boolean).slice(0, 30);
+      const out: Record<string, string> = {};
+      await Promise.all(nomi.map(async (nome) => {
+        try {
+          const c = await getFromCache(`museum_ticket:v3:${normalizzaTesto(nome).replace(/ /g, '_').slice(0, 50)}:${lang}`, 'museum_ticket', 24 * 60 * 60 * 1000);
+          if (!c) return;
+          const p = JSON.parse(c);
+          if (p?.ticket?.prezzo) out[nome] = String(p.ticket.prezzo);
+        } catch { /* niente etichetta */ }
+      }));
+      res.set('Cache-Control', 'private, max-age=600');
+      res.json({ ok: true, prezzi: out });
+    } catch (e: any) {
+      res.json({ ok: true, prezzi: {} });
     }
   });
 
@@ -11423,6 +11514,87 @@ Rispondi SOLO con JSON: {"risposta": "..."}`;
     } catch (e: any) {
       console.error('[ChiediGuida] Errore:', e?.message);
       res.status(500).json({ error: 'ask_failed' });
+    }
+  });
+
+  /**
+   * LE DOMANDE SENZA RETE (13/09/2026, committente: «se non ho connessione,
+   * come faccio a chiedere?»). Per ogni opera tre domande e risposte già
+   * pronte, dallo STESSO materiale di «Chiedi alla guida», scritte una volta
+   * e messe in cache per sempre; il pacchetto offline le porta con sé e in
+   * sala si leggono con la voce del telefono. Motori gratuiti, nessun
+   * credito: fanno parte dello scaricamento. Senza materiale, elenco vuoto.
+   */
+  app.post("/api/museums/artwork-faq", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const opera = String(req.body?.artwork || '').trim().slice(0, 160);
+      const museo = String(req.body?.venueName || '').trim().slice(0, 120);
+      const langKey = String(req.body?.language || 'IT').toUpperCase().slice(0, 2);
+      const LANGS: Record<string, { name: string; wiki: string }> = {
+        IT: { name: 'italiano', wiki: 'it' }, EN: { name: 'inglese', wiki: 'en' }, FR: { name: 'francese', wiki: 'fr' },
+        ES: { name: 'spagnolo', wiki: 'es' }, DE: { name: 'tedesco', wiki: 'de' }, RU: { name: 'russo', wiki: 'ru' }, ZH: { name: 'cinese semplificato', wiki: 'zh' }
+      };
+      const langCfg = LANGS[langKey] || LANGS.IT;
+      const outLang = LANGS[langKey] ? langKey : 'IT';
+      if (!opera || !museo) return res.status(400).json({ error: 'dati_mancanti' });
+      const chiaveOpera = `${normalizzaTesto(museo).replace(/ /g, '_').slice(0, 40)}__${normalizzaTesto(opera).replace(/ /g, '_').slice(0, 60)}`;
+      const chiaveFaq = `artwork_faq:v1:${chiaveOpera}:${outLang}`;
+      const inCache = await getFromCache(chiaveFaq);
+      if (inCache?.text_content) { try { return res.json({ ok: true, cached: true, faq: JSON.parse(String(inCache.text_content)) }); } catch { /* si rigenera */ } }
+
+      const pezzi: string[] = [];
+      const c = await getFromCache(`artwork_guide:v1:${chiaveOpera}:${outLang}`);
+      if (c?.text_content) {
+        try {
+          const g = JSON.parse(String(c.text_content))?.guide;
+          if (g?.testo) pezzi.push(`RACCONTO GIÀ SCRITTO PER QUEST'OPERA:\n${g.testo}\n${(g.daGuardare || []).map((d: string) => `- ${d}`).join('\n')}\n${g.curiosita || ''}\n${[g.tecnica, g.misure, g.autore, g.anno].filter(Boolean).join(' · ')}`);
+        } catch { /* cache illeggibile */ }
+      }
+      const ua = { headers: { 'User-Agent': 'WorldInPocket/1.0 (support@wip.guide)' }, timeout: 7000 };
+      for (const wl of [...new Set([langCfg.wiki, 'en', 'it'])]) {
+        try {
+          const s = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&list=search&srlimit=3&format=json&srsearch=${encodeURIComponent(`${opera} ${museo}`)}`, ua);
+          const hit = (s.data?.query?.search || []).find((h: any) => Math.max(sovrapposizioneNomi(opera, h.title), sovrapposizioneNomi(h.title, opera)) >= 0.6);
+          if (!hit) continue;
+          const ext = await axios.get(`https://${wl}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&exlimit=1&format=json&titles=${encodeURIComponent(hit.title)}`, ua);
+          const page: any = Object.values(ext.data?.query?.pages || {})[0];
+          const testo = String(page?.extract || '').replace(/\s+/g, ' ').trim();
+          if (testo.length > 300) { pezzi.push(`VOCE ENCICLOPEDICA (${hit.title}):\n${testo.slice(0, 9000)}`); break; }
+        } catch { /* lingua successiva */ }
+      }
+      const materiale = pezzi.join('\n\n');
+      if (materiale.length < 300) return res.json({ ok: true, faq: [] });
+
+      const prompt = `Sei la guida del museo "${museo}", davanti all'opera "${opera}". Scrivi le TRE domande che un visitatore fa più spesso su quest'opera e le risposte, SOLO con i fatti del materiale.
+
+MATERIALE (unica fonte ammessa):
+"""
+${materiale}
+"""
+
+Regole: domande brevi e concrete (perché è famosa, cosa guardare, chi l'ha voluta, com'è stata fatta, cosa rappresenta, cosa le è successo); risposte in ${langCfg.name}, 40-80 parole ciascuna, come parlando a voce, senza formule di cortesia e senza markdown; mai inventare nomi, date o vicende; se il materiale permette solo una o due domande buone, scrivine meno.
+Rispondi SOLO con JSON: {"faq":[{"q":"...","a":"..."}]}`;
+      let raw = '';
+      try {
+        const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
+          temperature: 0.2, max_tokens: 900, response_format: { type: 'json_object' },
+          excludeEngines: ['agnes'], ultimaSpiaggiaPagante: false,
+        }, 'museum_faq', supabaseUrl, supabaseServiceKey, groq, userId);
+        raw = String(ai?.data || '');
+      } catch { return res.json({ ok: false, reason: 'ai_non_disponibile' }); }
+      let faq: { q: string; a: string }[] = [];
+      try {
+        const pulito = raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        const j = JSON.parse(pulito.slice(pulito.indexOf('{'), pulito.lastIndexOf('}') + 1));
+        faq = (Array.isArray(j?.faq) ? j.faq : []).map((x: any) => ({ q: String(x?.q || '').trim().slice(0, 160), a: String(x?.a || '').trim().slice(0, 700) })).filter((x: any) => x.q.length > 5 && x.a.length > 20).slice(0, 3);
+      } catch { faq = []; }
+      if (faq.length) await saveToCache(chiaveFaq, 'artwork_faq', JSON.stringify(faq));
+      res.json({ ok: true, faq, language: outLang });
+    } catch (e: any) {
+      console.error('[DomandeOffline] Errore:', e?.message);
+      res.status(500).json({ error: 'faq_failed' });
     }
   });
 
@@ -18321,7 +18493,17 @@ ${description}
     sv: ['och', 'är', 'till', 'som', 'med', 'av', 'den', 'det', 'för', 'har', 'inte', 'på'],
   };
   const seoLingua = (testo: string) => {
-    const parole = String(testo || '').toLowerCase().match(/[\p{L}']+/gu);
+    const t = String(testo || '');
+    // Russo e cinese non hanno "parole spia" latine da contare: un testo in
+    // cirillico o in caratteri Han veniva quindi sempre classificato inglese
+    // per difetto (13/09/2026, segnalato dall'utente su una lapide georgiana
+    // — lì l'georgiano resta fuori dalle 7 lingue dell'app, corretto che
+    // scada su 'en', ma lo stesso difetto colpiva russo e cinese, che INVECE
+    // l'app supporta). Il riconoscimento per alfabeto è più affidabile di
+    // qualsiasi lista di parole per questi due script.
+    if (/[Ѐ-ӿ]/.test(t)) return 'ru';
+    if (/[一-鿿]/.test(t)) return 'zh';
+    const parole = t.toLowerCase().match(/[\p{L}']+/gu);
     if (!parole || parole.length < 12) return 'en';   // testo troppo corto per decidere
     const conta: Record<string, number> = {};
     for (const p of parole) {
@@ -18333,6 +18515,65 @@ ${description}
     // Serve un minimo di prove: sotto, meglio l'inglese di un'ipotesi.
     return vinta && vinta[1] >= 3 ? vinta[0] : 'en';
   };
+
+  // TESTO DI CONTORNO NELLA LINGUA DELLA PAGINA (13/09/2026, segnalato
+  // dall'utente su una lapide in georgiano): `lingua` veniva calcolata da
+  // seoLingua() ma usata SOLO per l'attributo lang="" dell'html — il
+  // pulsante "Ascolta l'audioguida", il "Qui vicino" e il testo promozionale
+  // in fondo restavano stringhe italiane fisse per QUALSIASI lingua rilevata
+  // nel testo del luogo. Un utente che trova (tramite ricerca o AI) la
+  // pagina di un luogo in inglese/russo/cinese ecc. leggeva il contenuto
+  // nella sua lingua ma il resto della pagina in italiano.
+  // Solo le 7 lingue dell'app: un testo rilevato in nl/pt/no/sv (fuori dalle
+  // 7) ricade sull'inglese, come già fa seoLingua() per i testi troppo corti.
+  const SEO_LUOGO_UI: Record<string, {
+    titoloConFoto: string; titoloSenzaFoto: string; ctaAscolta: string; ctaSotto: string;
+    quiVicino: string; aKm: string; footer: string;
+  }> = {
+    it: {
+      titoloConFoto: 'storia, foto e audioguida gratis', titoloSenzaFoto: 'storia e audioguida gratis',
+      ctaAscolta: "Ascolta l'audioguida di", ctaSotto: 'Gratis su WIP — parte da sola quando arrivi sul posto, anche a schermo spento',
+      quiVicino: 'Qui vicino', aKm: 'a {km} km',
+      footer: 'WIP · World in Pocket racconta oltre 9 milioni di luoghi in 7 lingue. L\'audioguida parte da sola mentre cammini: non devi cercare niente.',
+    },
+    en: {
+      titoloConFoto: 'history, photos and a free audio guide', titoloSenzaFoto: 'history and a free audio guide',
+      ctaAscolta: 'Listen to the audio guide for', ctaSotto: "Free on WIP — starts by itself when you arrive, even with the screen off",
+      quiVicino: 'Nearby', aKm: '{km} km away',
+      footer: 'WIP · World in Pocket tells the story of over 9 million places in 7 languages. The audio guide starts by itself as you walk: nothing to search for.',
+    },
+    fr: {
+      titoloConFoto: 'histoire, photos et audioguide gratuit', titoloSenzaFoto: 'histoire et audioguide gratuit',
+      ctaAscolta: "Écouter l'audioguide de", ctaSotto: "Gratuit sur WIP — démarre tout seul à ton arrivée, même écran éteint",
+      quiVicino: 'À proximité', aKm: 'à {km} km',
+      footer: "WIP · World in Pocket raconte plus de 9 millions de lieux en 7 langues. L'audioguide démarre tout seul quand tu marches : rien à chercher.",
+    },
+    es: {
+      titoloConFoto: 'historia, fotos y audioguía gratis', titoloSenzaFoto: 'historia y audioguía gratis',
+      ctaAscolta: 'Escucha la audioguía de', ctaSotto: 'Gratis en WIP — arranca sola al llegar, incluso con la pantalla apagada',
+      quiVicino: 'Cerca de aquí', aKm: 'a {km} km',
+      footer: 'WIP · World in Pocket cuenta más de 9 millones de lugares en 7 idiomas. La audioguía arranca sola mientras caminas: no hay que buscar nada.',
+    },
+    de: {
+      titoloConFoto: 'Geschichte, Fotos und ein kostenloser Audioguide', titoloSenzaFoto: 'Geschichte und ein kostenloser Audioguide',
+      ctaAscolta: 'Audioguide anhören für', ctaSotto: 'Kostenlos auf WIP — startet von selbst bei der Ankunft, auch bei ausgeschaltetem Bildschirm',
+      quiVicino: 'In der Nähe', aKm: '{km} km entfernt',
+      footer: 'WIP · World in Pocket erzählt von über 9 Millionen Orten in 7 Sprachen. Der Audioguide startet von selbst, während du gehst: nichts zu suchen.',
+    },
+    ru: {
+      titoloConFoto: 'история, фото и бесплатный аудиогид', titoloSenzaFoto: 'история и бесплатный аудиогид',
+      ctaAscolta: 'Слушать аудиогид:', ctaSotto: 'Бесплатно в WIP — включается сам по прибытии, даже с выключенным экраном',
+      quiVicino: 'Рядом', aKm: 'в {km} км',
+      footer: 'WIP · World in Pocket рассказывает о более чем 9 миллионах мест на 7 языках. Аудиогид включается сам, пока вы идёте: ничего не нужно искать.',
+    },
+    zh: {
+      titoloConFoto: '历史、照片和免费语音导览', titoloSenzaFoto: '历史和免费语音导览',
+      ctaAscolta: '收听语音导览：', ctaSotto: 'WIP 免费提供 — 到达后自动播放，熄屏也能用',
+      quiVicino: '附近', aKm: '{km} 公里',
+      footer: 'WIP · World in Pocket 讲述超过 900 万个地点的故事，支持 7 种语言。走路时导览会自动开始讲解，无需搜索任何内容。',
+    },
+  };
+  const seoLuoghiUI = (lingua: string) => SEO_LUOGO_UI[lingua] || SEO_LUOGO_UI.en;
 
   /** Il testo piu' lungo fra i due campi, tolte le formule: molti luoghi
    *  hanno solo il lungo, e molti hanno solo un modello compilato. */
@@ -18750,13 +18991,18 @@ ${description}
         return;
       }
 
+      // La lingua e' quella del TESTO, non la nostra: vedi seoLingua(). Va
+      // calcolata PRIMA del titolo: anche il testo di contorno (titolo, CTA,
+      // "Qui vicino", footer) deve seguirla, non restare fisso in italiano.
+      const lingua = seoLingua(seoTesto(poi));
+      const ui = seoLuoghiUI(lingua);
       // Il titolo non promette la foto quando la foto non c'e'. Da quando la
       // soglia di ammissione non richiede piu' l'immagine (09/09/2026) una
       // parte delle pagine e' di solo testo, e un titolo che dice «foto» a chi
       // arriva dalla ricerca e' una promessa non mantenuta: fa tornare
       // indietro, ed e' esattamente il segnale che affossa una pagina.
       const titolo = `${poi.name}${poi.city ? ` – ${poi.city}` : ''}: `
-        + (poi.image_url ? 'storia, foto e audioguida gratis' : 'storia e audioguida gratis');
+        + (poi.image_url ? ui.titoloConFoto : ui.titoloSenzaFoto);
       // Il testo migliore disponibile, non per forza quello «corto»: molti
       // luoghi hanno solo description_long, e prima finivano in 404 pur
       // avendo una scheda ricca.
@@ -18788,9 +19034,6 @@ ${description}
           },
         } : {}),
       };
-
-      // La lingua e' quella del TESTO, non la nostra: vedi seoLingua().
-      const lingua = seoLingua(seoTesto(poi));
 
       // ── LUOGHI VICINI: il rimedio alle pagine orfane ────────────────────
       // Finche' ogni pagina esiste solo dentro la sitemap, il sito e'
@@ -18863,16 +19106,15 @@ ul.vicini .d{color:#777;font-size:14px;font-weight:400;display:block}
 ${poi.image_url ? `<img class="hero" src="${seoEscape(poi.image_url)}" alt="${seoEscape(poi.name)}" loading="lazy">` : ''}
 <p>${seoEscape(descr)}</p>
 ${testoLungo ? `<p>${seoEscape(testoLungo.slice(0, 1200))}</p>` : ''}
-<a class="cta" href="${seoEscape(seoLinkApp(poi))}">Ascolta l'audioguida di ${seoEscape(poi.name)}
-<small>Gratis su WIP — parte da sola quando arrivi sul posto, anche a schermo spento</small></a>
+<a class="cta" href="${seoEscape(seoLinkApp(poi))}">${seoEscape(ui.ctaAscolta)} ${seoEscape(poi.name)}
+<small>${seoEscape(ui.ctaSotto)}</small></a>
 ${vicini.length ? `<section class="vicini">
-<h2>Qui vicino</h2>
+<h2>${seoEscape(ui.quiVicino)}</h2>
 <ul class="vicini">${vicini.map((v: any) => `<li><a href="${seoEscape(SEO_SITO)}/luogo/${seoEscape(v.u)}">${seoEscape(v.n)}</a>
-<span class="d">${seoEscape(v.c || '')}${v.c && v.km ? ' · ' : ''}${v.km ? `a ${seoEscape(v.km)} km` : ''}</span></li>`).join('')}</ul>
+<span class="d">${seoEscape(v.c || '')}${v.c && v.km ? ' · ' : ''}${v.km ? seoEscape(ui.aKm.replace('{km}', String(v.km))) : ''}</span></li>`).join('')}</ul>
 </section>` : ''}
 <footer>
-<p><strong>WIP · World in Pocket</strong> racconta oltre 9 milioni di luoghi in 7 lingue.
-L'audioguida parte da sola mentre cammini: non devi cercare niente.</p>
+<p><strong>WIP · World in Pocket</strong>${seoEscape(ui.footer).replace('WIP · World in Pocket', '')}</p>
 <p><a href="${seoEscape(SEO_SITO)}">wip.guide</a></p>
 </footer>
 </div>

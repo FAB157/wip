@@ -4,7 +4,7 @@ import { X, Camera, Check, Volume2, Pause, Play, Loader2, Landmark, Church, MapP
 import { isLiveLeader, hasLiveSession } from '../hooks/useLiveTour';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
-import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
+import { MuseumVisit, endVisit, countSeen, fetchArtworkGuide, ArtworkGuide, fetchMoreArtworks, fetchEsperienzeMuseo, EsperienzaMuseo, fetchEsperienzeVicine, Esperienza, skipStop, unskipStop, markStopListened, prossimaTappa, ordinaPerTragitto, leggiCartelloSala, impostaSalaCorrente, rimandaTappa, tappeAttive, impostaPersonalizzazione, PERSONALIZZAZIONE_BASE, segnaPrefetchFatto, getLeggiConCalma, setLeggiConCalma, fetchDomani, Domani, togglePreferita, askGuide, fetchBigliettoIngresso, BigliettoIngresso, applicaSaleChiuse, museiAPiediDaQui, MuseumLibraryItem, startVisitByPoi, startVisitByName, OPEN_MUSEUM_VISIT_EVENT, fetchOrariDi, fetchMostre, Mostra, fetchAudioDescription, descrizioneDallArchivio, conservaDescrizione, getAudiodescrizioneAuto, setAudiodescrizioneAuto, leggiCartellino, Cartellino, coppieDaConfrontare, Coppia, fetchConfronto, matchTappa, fetchMuseumMap, MuseumMap, MuseumMapLink, normSalaMappa } from '../lib/museumVisit';
 import { avviaAscolto, comandiVocaliDisponibili, ComandoVocale } from '../lib/comandiVocali';
 import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/fotoRicordo';
 import TargaSala from './TargaSala';
@@ -460,6 +460,46 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     fetchEsperienzeMuseo(visit, language).then(e => { if (vivo) setEsperienze(e); });
     return () => { vivo = false; };
   }, [visit.venueKey, language, online]);
+  // LE ESPERIENZE QUI VICINO (13/09/2026, committente): galleria scorrevole
+  // delle cose prenotabili entro 3 km, col nostro codice. Il museo stesso
+  // resta fuori (ha la sua sezione). Solo online, solo con le coordinate.
+  const [esperienzeVicine, setEsperienzeVicine] = useState<Esperienza[]>([]);
+  useEffect(() => {
+    if (!online || visit.venue.lat == null || visit.venue.lon == null) return;
+    let vivo = true;
+    fetchEsperienzeVicine(visit.venue.lat, visit.venue.lon, language, undefined, visit.venue.name).then(e => { if (vivo) setEsperienzeVicine(e); });
+    return () => { vivo = false; };
+  }, [visit.venueKey, language, online]);
+  /** Una galleria orizzontale di carte prenotabili: foto, titolo, prezzo, fonte. */
+  const galleriaEsperienze = (items: Array<{ titolo: string; prezzo: string; durata?: string; voto?: string; fonte: string; url: string; foto?: string; immagine?: string; distanzaKm?: number | null }>, titolo: string, chiave: string) => {
+    if (!items.length) return null;
+    const nomeFonte = (f: string) => f === 'tiqets' ? 'Tiqets' : f === 'viator' ? 'Viator' : f === 'getyourguide' ? 'GetYourGuide' : f;
+    return (
+      <div className="mt-4" key={chiave}>
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{titolo}</p>
+        <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x" style={{ WebkitOverflowScrolling: 'touch' as any }}>
+          {items.map((e, k) => {
+            const img = e.immagine || e.foto || '';
+            return (
+              <a key={`${chiave}-${k}`} href={e.url} target="_blank" rel="noopener noreferrer nofollow sponsored" className="snap-start shrink-0 w-[168px] rounded-2xl bg-white border border-slate-200 overflow-hidden active:scale-[0.98] transition-transform">
+                {img ? (
+                  <img src={img} alt="" loading="lazy" className="w-full h-[96px] object-cover" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                ) : (
+                  <div className="w-full h-[96px] bg-amber-50 flex items-center justify-center"><Ticket className="w-6 h-6 text-amber-700" /></div>
+                )}
+                <div className="p-2">
+                  <p className="text-[12px] font-black text-slate-900 leading-tight line-clamp-2 min-h-[2.4em]">{e.titolo}</p>
+                  <p className="text-[11px] font-bold text-primary mt-1">{[e.prezzo, e.durata].filter(Boolean).join(' · ')}</p>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">{[nomeFonte(e.fonte), e.voto, e.distanzaKm != null ? `${e.distanzaKm} km` : ''].filter(Boolean).join(' · ')}</p>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+        <p className="text-[10px] text-slate-400 mt-1.5">{t('mv_esperienze_nota')}</p>
+      </div>
+    );
+  };
 
   /** Scarica tutto: percorso, audioguide di ogni opera, foto. */
   const handleScarica = async () => {
@@ -706,10 +746,13 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
   };
 
   const renderEPoi = () => {
-    if (!prossimi || prossimi.length === 0) return null;
+    if ((!prossimi || prossimi.length === 0) && esperienzeVicine.length === 0) return null;
+    if (!prossimi || prossimi.length === 0) return galleriaEsperienze(esperienzeVicine, t('mv_esperienze_vicine'), 'vicine-epoi');
     return (
       <div className="mt-3">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5 flex items-center gap-1.5">
+        {/* E POI? Anche le esperienze a piedi da qui (13/09/2026). */}
+        {galleriaEsperienze(esperienzeVicine, t('mv_esperienze_vicine'), 'vicine-epoi')}
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5 mt-3 flex items-center gap-1.5">
           <Footprints className="w-3.5 h-3.5" />{t('mv_next_museum')}
         </p>
         <div className="space-y-1.5">
@@ -1390,6 +1433,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
               <ExternalLink className="w-4 h-4 shrink-0 text-white/80" />
             </a>
           )}
+
+          {/* VISITE GUIDATE E SALTA LA FILA DEL MUSEO (13/09/2026): la sera
+              prima, accanto al biglietto, in galleria scorrevole. */}
+          {galleriaEsperienze(esperienze, t('mv_esperienze_museo'), 'museo-biglietto')}
 
           {/* LE FASCE ORARIE DI DOMANI (12/09/2026): «alle 8:15 ci sono posti,
               alle 11 è esaurito» — dati del fornitore, non un'opinione. */}
@@ -2237,6 +2284,29 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
                                 <p className={`${calma ? 'text-[15px] leading-relaxed' : 'text-[12px] leading-snug'} text-slate-800 mt-0.5`}>{r.a}</p>
                               </div>
                             ))}
+                            {/* LE DOMANDE PRONTE (13/09/2026): scritte al momento dello
+                                scaricamento, si leggono anche senza rete, con la voce
+                                del telefono se il cloud non c'è. */}
+                            {(operaGuide[i]?.faq || []).length > 0 && (
+                              <div className="mb-2">
+                                <p className="text-[10px] font-bold text-slate-500 mb-1">{t('mv_faq_pronte')}</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(operaGuide[i]?.faq || []).map((f, k) => (
+                                    <button
+                                      key={`faq-${k}`}
+                                      onClick={() => {
+                                        setRisposte(prev => ({ ...prev, [i]: [...(prev[i] || []).filter(r => r.q !== f.q), { q: f.q, a: f.a }] }));
+                                        stopSpeech(); setOperaParla(null); setOperaInPausa(null);
+                                        void speakAudioguide(f.a, String(language).toLowerCase(), getGuideCharacter(), undefined, undefined, metaOpera(i)).catch(() => {});
+                                      }}
+                                      className="px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-800 active:scale-95 transition-transform"
+                                    >
+                                      {f.q}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                             <div className="flex flex-wrap gap-1.5 mb-2">
                               {[t('mv_ask_q1'), t('mv_ask_q2'), t('mv_ask_q3')].map(q => (
                                 <button
@@ -2433,40 +2503,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             </div>
           )}
 
-          {/* Esperienze prenotabili: biglietti e visite guidate col prezzo.
-              Compaiono solo a chi ha il pass, e solo se ce ne sono davvero. */}
-          {esperienze.length > 0 && (
-            <div className="mt-4">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">{t('mv_esperienze')}</p>
-              <div className="space-y-2">
-                {esperienze.map((e, i) => (
-                  <a
-                    key={`${i}-${e.titolo}`}
-                    href={e.url}
-                    target="_blank"
-                    rel="noopener noreferrer nofollow sponsored"
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-white border border-slate-200 active:scale-[0.99] transition-transform"
-                  >
-                    {e.foto ? (
-                      <img src={e.foto} alt="" loading="lazy" className="w-12 h-12 rounded-xl object-cover shrink-0" onError={(ev) => { (ev.currentTarget as HTMLImageElement).style.display = 'none'; }} />
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
-                        <Ticket className="w-5 h-5 text-amber-700" />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] font-black text-slate-900 leading-tight line-clamp-2">{e.titolo}</p>
-                      <p className="text-[11px] font-bold text-slate-500">
-                        {[e.prezzo, e.durata, e.voto].filter(Boolean).join(' · ')}
-                      </p>
-                    </div>
-                    <ExternalLink className="w-4 h-4 text-slate-400 shrink-0" />
-                  </a>
-                ))}
-              </div>
-              <p className="text-[10px] text-slate-400 mt-1.5">{t('mv_esperienze_nota')}</p>
-            </div>
-          )}
+          {/* ESPERIENZE QUI VICINO (13/09/2026): la galleria scorrevole in fondo,
+              col nostro codice. Quelle del museo stanno sopra, accanto al biglietto. */}
+          {galleriaEsperienze(esperienzeVicine, t('mv_esperienze_vicine'), 'vicine-fondo')}
 
           {visit.source?.url && (
             <a href={visit.source.url} target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">

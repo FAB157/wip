@@ -23,7 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
-import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey } from '../lib/museumVisit';
+import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey, fetchPrezziBiglietti } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
@@ -361,7 +361,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
     ]);
     setSeiQui(qui);
     setMuseiVicini(elenco);
+    // «Biglietto da 18 €» sui musei che lo hanno (13/09/2026): solo dalla
+    // cache del server, l'elenco resta istantaneo.
+    fetchPrezziBiglietti(elenco.map(m => m.venue_name), language).then(setPrezziBiglietti).catch(() => {});
   };
+  const [prezziBiglietti, setPrezziBiglietti] = useState<Record<string, string>>({});
 
   /**
    * Riapre una visita conservata. Non chiama il server, quindi non consuma
@@ -2126,6 +2130,11 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
                             : tr('mv_n_opere').replace('{n}', String(m.stops_count))}
                           {m.stops_with_room > 0 ? ` · ${tr('mv_con_sale')}` : ''}
                         </p>
+                        {prezziBiglietti[m.venue_name] && (
+                          <span className="inline-flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-[10px] font-black text-emerald-800">
+                            <Ticket className="w-3 h-3" />{tr('mv_biglietto_da').replace('{p}', prezziBiglietti[m.venue_name])}
+                          </span>
+                        )}
                       </div>
                       {m.distance_m != null && (
                         <span className="text-[11px] font-black text-slate-400 shrink-0">

@@ -1053,17 +1053,68 @@ export type BigliettoIngresso = {
   /** Le fasce orarie di domani (solo Tiqets): «alle 8:15 ci sono posti». */
   disponibilita?: { data: string; fasce: { ora: string; posti: boolean }[] } | null;
 };
+/** Una carta prenotabile (13/09/2026): biglietto, visita guidata, salta la
+ *  fila, esperienza in città. `url` passa da /api/out col nostro codice. */
+export type Esperienza = {
+  fonte: 'tiqets' | 'viator' | 'getyourguide' | string;
+  titolo: string;
+  prezzo: string;
+  immagine: string;
+  voto: string;
+  durata: string;
+  tipo?: 'biglietto' | 'esperienza';
+  distanzaKm?: number | null;
+  url: string;
+};
 export async function fetchBigliettoIngresso(v: MuseumVisit, language: Language): Promise<BigliettoIngresso | null> {
+  return (await fetchBigliettoEdEsperienze(v, language)).ticket;
+}
+/** Biglietto scelto + tutte le esperienze del museo (visita guidata, salta la fila…). */
+export async function fetchBigliettoEdEsperienze(v: MuseumVisit, language: Language): Promise<{ ticket: BigliettoIngresso | null; esperienze: Esperienza[] }> {
   try {
     const p = new URLSearchParams({ language, venueName: v.venue.name });
     if (v.venue.lat != null && v.venue.lon != null) { p.set('lat', String(v.venue.lat)); p.set('lon', String(v.venue.lon)); }
     const res = await fetch(getApiUrl(`/api/museums/entrance-ticket?${p.toString()}`));
-    if (!res.ok) return null;
+    if (!res.ok) return { ticket: null, esperienze: [] };
     const d = await res.json();
-    return d?.ok === true && d?.ticket?.url ? (d.ticket as BigliettoIngresso) : null;
+    return { ticket: d?.ok === true && d?.ticket?.url ? (d.ticket as BigliettoIngresso) : null, esperienze: d?.ok === true && Array.isArray(d.esperienze) ? d.esperienze : [] };
   } catch {
-    return null;
+    return { ticket: null, esperienze: [] };
   }
+}
+/** Le esperienze prenotabili intorno a un punto (3 km), col nostro codice. */
+export async function fetchEsperienzeVicine(lat: number, lon: number, language: Language, city?: string, exclude?: string): Promise<Esperienza[]> {
+  try {
+    const p = new URLSearchParams({ language, lat: String(lat), lon: String(lon) });
+    if (city) p.set('city', city);
+    if (exclude) p.set('exclude', exclude);
+    const res = await fetch(getApiUrl(`/api/museums/experiences-near?${p.toString()}`));
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d?.ok === true && Array.isArray(d.esperienze) ? d.esperienze : [];
+  } catch { return []; }
+}
+/** I prezzi dei biglietti già noti, per l'etichetta nell'elenco. */
+export async function fetchPrezziBiglietti(nomi: string[], language: Language): Promise<Record<string, string>> {
+  try {
+    if (!nomi.length) return {};
+    const p = new URLSearchParams({ language, names: nomi.slice(0, 30).join('|') });
+    const res = await fetch(getApiUrl(`/api/museums/ticket-badges?${p.toString()}`));
+    if (!res.ok) return {};
+    const d = await res.json();
+    return d?.ok === true && d.prezzi ? d.prezzi : {};
+  } catch { return {}; }
+}
+/** Le tre domande pronte di un'opera (per il pacchetto offline). */
+export async function fetchArtworkFaq(args: { artwork: string; venueName: string; language: Language }): Promise<{ q: string; a: string }[]> {
+  const headers = await authHeaders();
+  if (!headers) return [];
+  try {
+    const res = await fetch(getApiUrl('/api/museums/artwork-faq'), { method: 'POST', headers, body: JSON.stringify(args), signal: AbortSignal.timeout(40000) });
+    if (!res.ok) return [];
+    const d = await res.json();
+    return d?.ok === true && Array.isArray(d.faq) ? d.faq : [];
+  } catch { return []; }
 }
 
 /** Segna che le prime opere sono state prescaricate: una volta per visita. */
@@ -1418,6 +1469,8 @@ export type ArtworkGuide = {
    *  di quando c'è rete, e con il banner a schermo spento. */
   audioPath?: string;
   audioFile?: string;
+  /** Tre domande e risposte pronte (13/09/2026): si leggono anche senza rete. */
+  faq?: { q: string; a: string }[];
 };
 
 export type ArtworkGuideResponse =

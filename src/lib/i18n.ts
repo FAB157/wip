@@ -476,6 +476,23 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     FR: "Chaque pastille est une salle : le nombre indique combien d'œuvres du parcours s'y trouvent. Touchez-la pour choisir une œuvre et l'écouter.", ES: "Cada punto es una sala: el número dice cuántas obras del recorrido hay. Tócalo para elegir la obra y escucharla.",
     DE: "Jeder Punkt ist ein Saal: die Zahl sagt, wie viele Werke der Route dort sind. Antippen, um ein Werk zu wählen und zu hören.", RU: "Каждая точка — зал: число показывает, сколько экспонатов маршрута там. Нажмите, чтобы выбрать и послушать.", ZH: "每个圆点是一个展厅：数字表示该厅有几件路线作品。点击选择作品并收听。"
   },
+  // ESPERIENZE E BIGLIETTI (13/09/2026): visite guidate e salta-la-fila del
+  // museo, esperienze in città, prezzo del biglietto nell'elenco, domande pronte.
+  mv_esperienze_museo: {
+    IT: "Visite guidate e salta la fila", EN: "Guided tours and skip the line", FR: "Visites guidées et coupe-file", ES: "Visitas guiadas y sin colas",
+    DE: "Führungen und ohne Anstehen", RU: "Экскурсии и без очереди", ZH: "导览与免排队"
+  },
+  mv_esperienze_vicine: {
+    IT: "Esperienze qui vicino", EN: "Experiences nearby", FR: "Expériences à proximité", ES: "Experiencias cerca",
+    DE: "Erlebnisse in der Nähe", RU: "Впечатления рядом", ZH: "附近的体验"
+  },
+  mv_biglietto_da: {
+    IT: "Biglietto {p}", EN: "Ticket {p}", FR: "Billet {p}", ES: "Entrada {p}", DE: "Ticket {p}", RU: "Билет {p}", ZH: "门票 {p}"
+  },
+  mv_faq_pronte: {
+    IT: "Domande pronte, anche senza rete", EN: "Ready answers, also offline", FR: "Réponses prêtes, même hors ligne", ES: "Respuestas listas, también sin conexión",
+    DE: "Fertige Antworten, auch offline", RU: "Готовые ответы, и без сети", ZH: "现成问答，离线也可用"
+  },
   mv_pin_sala_opere: {
     IT: "{s}: {n} opere. Scegli da quale partire", EN: "{s}: {n} works. Choose where to start",
     FR: "{s} : {n} œuvres. Choisissez par où commencer", ES: "{s}: {n} obras. Elige por cuál empezar",
