@@ -9127,14 +9127,14 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
       const frasePrimaOpera = currentWork
         ? ` per un visitatore che è già dentro e ha appena riconosciuto con la fotocamera l'opera "${currentWork}"`
         : ' per un visitatore che sta per entrare';
-      const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA di "${venue.name}"${frasePrimaOpera}.
+      // ORDINE DEL PROMPT PER LA CACHE DI DEEPSEEK (13/09/2026, committente:
+      // «fai in modo di avere cache»): la parte FISSA (compito, regole,
+      // formato) sta all'inizio ed è identica per ogni luogo dello stesso
+      // tipo e lingua; nome del luogo, opera di partenza e materiale stanno
+      // in fondo. DeepSeek fattura il prefisso già visto a 1/30 del prezzo.
+      const prompt = `Sei una guida museale esperta. Devi preparare la VISITA GUIDATA del luogo indicato in fondo (LUOGO), usando SOLO il MATERIALE che segue.
 
-MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):
-"""
-${materiale}
-"""
-
-COMPITO: scegli ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : isSito ? '6-15 PUNTI DI INTERESSE del percorso di visita — settori, ambienti, strutture ed elementi architettonici del sito (arena, ipogei, cavea, gradinate, porte, templi, terme, mosaici, are, iscrizioni, reperti visibili in loco), mai opere da museo con sale numerate' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani, navate${isSito ? ', settori o il percorso di visita consigliato' : ''} se il materiale la descrive; altrimenti l'ordine cronologico${isSito ? ' o quello logico del percorso (dall\'ingresso verso l\'uscita)' : ' delle opere'}. Se l'opera "${currentWork || ''}" è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
+COMPITO: scegli ${isChurch ? '6-12 cose da vedere DENTRO la chiesa (cappelle, affreschi, pale d\'altare, sculture, monumenti funebri, organo, cripta)' : isSito ? '6-15 PUNTI DI INTERESSE del percorso di visita — settori, ambienti, strutture ed elementi architettonici del sito (arena, ipogei, cavea, gradinate, porte, templi, terme, mosaici, are, iscrizioni, reperti visibili in loco), mai opere da museo con sale numerate' : '12-20 opere o sale da non perdere nel museo — METTINE IL PIÙ POSSIBILE, purché ognuna sia nel materiale: si comincia dai capolavori assoluti e si continua con le altre opere importanti'} e mettile in un ORDINE DI VISITA sensato: segui la sequenza di sale, ali, piani, navate${isSito ? ', settori o il percorso di visita consigliato' : ''} se il materiale la descrive; altrimenti l'ordine cronologico${isSito ? ' o quello logico del percorso (dall\'ingresso verso l\'uscita)' : ' delle opere'}. Se in fondo è indicata un'OPERA DI PARTENZA ed è citata nel materiale, mettila per PRIMA (il visitatore è lì davanti).
 REGOLE TASSATIVE:
 - SOLO ${isSito ? 'I PUNTI PRINCIPALI PER CUI QUESTO SITO È CONOSCIUTO' : 'OPERE PRINCIPALI E FAMOSE'}: il percorso è fatto dei ${isSito ? 'luoghi' : 'capolavori'} per cui questo luogo è conosciuto, mai di dettagli minori messi lì per allungare l'elenco. Se quelli citati dal materiale sono meno di quanti ne chiedo, fermati: meglio 6 tappe che conta tutti conoscono che 15 di cui 9 dimenticabili.
 ${isSito ? '' : `- Le OPERE CENSITE elencate sopra (quando ci sono) sono la spina dorsale del percorso e ti arrivano GIÀ ORDINATE PER NOTORIETÀ, le più famose per prime: pesca da lì partendo dall'alto, sono opere realmente in collezione. QUESTA CAUTELA VALE PER LA PROSA, NON PER QUESTO ELENCO: ogni riga lì dentro è già stata scelta da Wikidata come opera vera e notevole di questo museo. SE L'ELENCO NE HA 15 O PIÙ, la tappa 15 non è "dimenticabile" solo perché non è fra le prime 6 — è comunque un capolavoro censito, e DEVI arrivare almeno a 15 tappe (fino a 20) pescandole in ordine dall'alto, non fermarti a 6-9: nei musei enormi (British Museum, Louvre, Metropolitan) fermarsi presto quando l'elenco ne offre decine lascia fuori dalla guida pezzi come il Vaso di Portland o lo Stendardo di Ur, che sono esattamente ciò per cui quel museo è famoso.
@@ -9152,7 +9152,7 @@ ${isSito ? '' : `- Preferisci sempre OPERE SINGOLE con un nome proprio (un quadr
 - "consiglio": un suggerimento pratico specifico preso dal materiale (da dove iniziare, cosa c'è al piano superiore, un dettaglio da cercare), oppure "".
 - SALE CHIUSE: se il materiale dice che una sala, un piano o una sezione sono CHIUSI, IN RESTAURO o TEMPORANEAMENTE INACCESSIBILI (parole come "chiuso", "chiusura", "in restauro", "closed", "temporarily closed", "under restoration" vicino al nome di un luogo), NON scrivere quel nome in "dove" per nessuna tappa — un percorso non deve mandare nessuno davanti a una porta chiusa. Se un'opera importante sta lì, tienila come tappa ma con "dove" vuoto, e cita la chiusura in "consiglio" con la data se il materiale la dà.
 - "servizi": DOVE SONO bagni, guardaroba, caffetteria o ristorante, bookshop, uscita, ascensori e accessibilità — SOLO se il materiale del sito ufficiale dice DOVE STA QUEL servizio, con una frase che parla di lui. Ogni voce una riga breve col piano o la posizione. Se per un servizio il materiale non dice dove sta, la voce resta VUOTA: non dedurlo dagli altri, non ripetere la stessa frase per più servizi, non scrivere «piano terra» perché è probabile. Dopo un'ora e mezza dentro un museo la cosa che serve è il bagno, e mandare qualcuno al piano sbagliato è peggio che non dirlo.
-${regolaSpecificita(venue.name)}
+${regolaSpecificita('il luogo indicato in fondo')}
 
 LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON valido, senza testo attorno:
 {
@@ -9161,7 +9161,14 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
   "consiglio": "...",
   "servizi": { "bagni": "... o ''", "guardaroba": "... o ''", "caffetteria": "... o ''", "bookshop": "... o ''", "uscita": "... o ''", "accessibilita": "... o ''" },
   "tappe": [ { "nome": "titolo in ${langCfg.name}", "nomeFonte": "titolo esatto come nel materiale", "autore": "... o ''", "anno": "... o ''", "dove": "sala/cappella/ala se nel materiale, altrimenti ''", "salaCodice": "il codice della sala ESATTAMENTE come sulla pianta o nel materiale, senza traduzione e senza aggiunte (es. 'Room 32', 'Salle 711', 'Sala 10', 'Gallery 40'), altrimenti ''", "puntoPreciso": "dove dentro la sala, se il materiale lo dice, altrimenti ''", "perche": "...", "curiosita": "curiosità o consiglio di QUESTA tappa, MAI vuoto" } ]
-}`;
+}
+
+LUOGO: "${venue.name}"${frasePrimaOpera}.
+OPERA DI PARTENZA: ${currentWork ? `"${currentWork}"` : 'nessuna'}.
+MATERIALE (unica fonte ammessa — tutto ciò che scrivi deve venire da qui):
+"""
+${materiale}
+"""`;
 
       // Catena: motori di callUniversalAi (gratuiti, con fallback) e, se sono
       // tutti a quota esaurita, OpenAI gpt-4o-mini come riserva pagante —
@@ -9549,7 +9556,9 @@ LINGUA DI USCITA: ${langCfg.name}. Rispondi ESCLUSIVAMENTE con un oggetto JSON v
               : '40-80 parole, scrivi solo quello che il materiale permette, niente riempitivo';
             return `OPERA ${i + 1} — "${o.titolo}"${o.autore ? ` di ${o.autore}` : ''}${o.anno ? ` (${o.anno})` : ''} — lunghezza attesa: ${lunghezza}\n${o.testoFonte}`;
           }).join('\n\n---\n\n');
-          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per ${lotto.length} opere di "${venue.name}", una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto). Rispetta la lunghezza indicata per ciascuna opera: non è un minimo, è il traguardo — una fonte ricca (150-250 parole) va usata fino in fondo, non fermata al primo minimo raggiunto.\n\n${corpo}\n${regolaSpecificita(venue.name, { soloSpecificita: true })}\n\nPer ogni opera scrivi anche "curiosita": OBBLIGATORIA, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELL'opera (un furto, un restauro, un aneddoto, un errore dell'artista, un dettaglio nascosto), oppure — se il materiale non ne contiene uno — un consiglio pratico articolato per guardarla meglio. Sempre specifica, mai generica, mai identica fra due opere, sempre dal materiale: mai un'invenzione.\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "...", "curiosita": "..." }, ... ] } nello stesso ordine delle opere sopra.`;
+          // Parte fissa prima, opere in fondo: così DeepSeek serve il prefisso
+          // dalla cache a ogni lotto (13/09/2026, «fai in modo di avere cache»).
+          const prompt = `Sei una guida museale esperta. Scrivi la spiegazione per le opere elencate in fondo (del museo indicato lì), una per una, ognuna SOLO dal proprio materiale (mai mescolare fatti fra opere diverse del lotto). Rispetta la lunghezza indicata per ciascuna opera: non è un minimo, è il traguardo — una fonte ricca (150-250 parole) va usata fino in fondo, non fermata al primo minimo raggiunto.\n${regolaSpecificita('il museo indicato in fondo', { soloSpecificita: true })}\n\nPer ogni opera scrivi anche "curiosita": OBBLIGATORIA, 2-3 frasi (non una riga sola) — un fatto sorprendente e documentato su QUELL'opera (un furto, un restauro, un aneddoto, un errore dell'artista, un dettaglio nascosto), oppure — se il materiale non ne contiene uno — un consiglio pratico articolato per guardarla meglio. Sempre specifica, mai generica, mai identica fra due opere, sempre dal materiale: mai un'invenzione.\n\nRispondi ESCLUSIVAMENTE con un oggetto JSON, senza testo attorno: { "opere": [ { "titolo": "il titolo esatto dell'opera 1", "perche": "...", "curiosita": "..." }, ... ] } nello stesso ordine delle opere sotto.\n\nMUSEO: "${venue.name}" — ${lotto.length} opere.\n\n${corpo}`;
           try {
             const ai = await callUniversalAi('groq', [{ role: 'user', content: prompt }], {
               // Fino a 250 parole per "perche" + 2-3 frasi di "curiosita" per
