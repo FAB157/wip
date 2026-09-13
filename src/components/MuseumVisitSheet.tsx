@@ -10,7 +10,7 @@ import { componiFotoRicordo, componiCartolina, condividiImmagine } from '../lib/
 import TargaSala from './TargaSala';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { scaricaPacchettoMuseo, museoScaricato, operaDallArchivio, conservaVisita, conservaOpera, prescaricaPrimeOpere } from '../lib/pacchettoMuseo';
-import { speakAudioguide, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
+import { speakAudioguide, speakAudioguideFile, stopSpeech, pauseSpeech, resumeSpeech, speakWithSystemVoice, setSpeechSpeed } from '../services/ttsService';
 import { Capacitor } from '@capacitor/core';
 import { WipBackgroundAudio } from '../plugins/WipBackgroundAudio';
 import { printScoped } from '../lib/printScoped';
@@ -916,7 +916,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         void speakWithSystemVoice(frase, lingua, getGuideCharacter());
       };
       const parlaGuida = async () => {
-        await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, undefined, metaOpera(i));
+        // Voce dal file nel telefono se c'è (stessa voce anche senza rete),
+        // altrimenti dal cloud.
+        if (guida.audioFile) await speakAudioguideFile(guida.audioFile, guida.testo, lingua, getGuideCharacter(), fineOpera, metaOpera(i));
+        else await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, undefined, metaOpera(i));
         setOperaParla(i);
         // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.
         markStopListened(i);

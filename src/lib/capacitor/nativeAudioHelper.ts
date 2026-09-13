@@ -48,6 +48,32 @@ async function purgeOldAudioFiles(): Promise<void> {
 }
 
 /**
+ * AUDIO PERMANENTE (13/09/2026, committente: «le audioguide devono essere
+ * già scaricate, con le voci»). Diverso dalla cache dei file tts_*: sta in
+ * Directory.Data, non viene ripulito, e vale finché la visita resta nei
+ * download. `path` relativo, es. musei/<museo>/<lingua>/<hash>.mp3.
+ * Ritorna l'URI nativo del file, o '' sul web / in caso di errore.
+ */
+export async function salvaAudioPermanente(blob: Blob, path: string): Promise<string> {
+  if (!Capacitor.isNativePlatform()) return '';
+  try {
+    const base64Data = await blobToBase64(blob);
+    await Filesystem.writeFile({ path, data: base64Data, directory: Directory.Data, recursive: true });
+    const uriResult = await Filesystem.getUri({ path, directory: Directory.Data });
+    return uriResult.uri;
+  } catch (error) {
+    console.warn('[nativeAudioHelper] audio permanente non salvato:', error);
+    return '';
+  }
+}
+
+/** Il file permanente c'è ancora? (dopo una reinstallazione non c'è più). */
+export async function audioPermanenteEsiste(path: string): Promise<boolean> {
+  if (!Capacitor.isNativePlatform() || !path) return false;
+  try { await Filesystem.stat({ path, directory: Directory.Data }); return true; } catch { return false; }
+}
+
+/**
  * Prende un Blob audio, lo scrive nella cache nativa del dispositivo
  * e ritorna il percorso nativo (es. file:///) compatibile con ExoPlayer.
  */

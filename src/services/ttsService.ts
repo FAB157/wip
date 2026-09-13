@@ -762,6 +762,49 @@ export async function speakAudioguide(
   }, 0);
 }
 
+/**
+ * LA VOCE DAL FILE SCARICATO (13/09/2026, committente: «se non ho
+ * connessione, le audioguide con le voci sono già scaricate?»). Dentro il
+ * museo la rete non c'è: l'MP3 salvato nel telefono al momento dello
+ * scaricamento si riproduce col player nativo, stesso banner e stessi
+ * comandi di quando c'è rete. Sul web, o se il file non c'è più, si torna
+ * alla strada normale (cloud, poi voce di sistema).
+ */
+export async function speakAudioguideFile(
+  fileUri: string,
+  text: string,
+  lang: string,
+  character: GuideCharacter,
+  onEnd?: () => void,
+  meta?: { title?: string; subtitle?: string; imageUri?: string },
+): Promise<void> {
+  if (!fileUri || !Capacitor.isNativePlatform()) return speakAudioguide(text, lang, character, onEnd, undefined, meta);
+  if (locationService.getIsGuideMuted()) {
+    setTimeout(() => { emitAudioState(false, false); if (onEnd) onEnd(); }, 0);
+    return;
+  }
+  stopSpeech();
+  ultimaBattuta = { testo: text, lingua: lang, personaggio: character };
+  etichettaVoce = null;
+  try {
+    ensureNativeListeners();
+    pendingOnEnd = onEnd || null;
+    nativePlaybackActive = true;
+    await WipBackgroundAudio.play({
+      url: fileUri,
+      title: meta?.title || (text.length > 40 ? text.slice(0, 40) + '...' : text),
+      subtitle: meta?.subtitle || 'Audioguida',
+      ...(meta?.imageUri ? { imageUri: meta.imageUri } : {}),
+    });
+    if (velocitaVoce !== 1) WipBackgroundAudio.setSpeed({ speed: velocitaVoce }).catch(() => {});
+    emitAudioState(true, true);
+  } catch (e) {
+    console.warn('[ttsService] file locale non riproducibile, strada normale:', e);
+    nativePlaybackActive = false; pendingOnEnd = null;
+    return speakAudioguide(text, lang, character, onEnd, undefined, meta);
+  }
+}
+
 // Pre-carica le voci (alcuni browser le popolano in modo asincrono)
 if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
   window.speechSynthesis.onvoiceschanged = () => {

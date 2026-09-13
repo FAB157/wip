@@ -1413,6 +1413,11 @@ export type ArtworkGuide = {
   fotoIcona?: string;
   parole: number;
   language: string;
+  /** MP3 della voce scaricato sul telefono (13/09/2026): percorso relativo
+   *  in Directory.Data e URI nativo. Offline si ascolta con la STESSA voce
+   *  di quando c'è rete, e con il banner a schermo spento. */
+  audioPath?: string;
+  audioFile?: string;
 };
 
 export type ArtworkGuideResponse =

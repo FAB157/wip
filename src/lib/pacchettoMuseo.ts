@@ -21,6 +21,36 @@ import { supabase } from './supabase';
 import { getApiUrl } from './api';
 import { azureVoiceName } from '../services/ttsService';
 import { getGuideCharacter } from './guideSettings';
+import { postForAudioBlob } from './audioFetch';
+import { salvaAudioPermanente, audioPermanenteEsiste } from './capacitor/nativeAudioHelper';
+import { Capacitor } from '@capacitor/core';
+
+/** Hash corto e stabile di testo+voce: il nome del file MP3 nel telefono. */
+function hashBreve(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * L'MP3 DELLA VOCE NEL TELEFONO (13/09/2026, committente: «se non ho
+ * connessione, le audioguide con le voci sono già scaricate?»). Solo sull'app
+ * nativa: si chiede il file al server (cache-first, non ripaga) e lo si
+ * scrive in Directory.Data; la guida conserva percorso e URI. Se il file c'è
+ * già, niente da fare. Un fallimento non ferma lo scaricamento del resto.
+ */
+async function scaricaVoce(venueKey: string, language: Language, guida: ArtworkGuide): Promise<ArtworkGuide> {
+  if (!Capacitor.isNativePlatform() || !guida?.testo) return guida;
+  try {
+    if (guida.audioPath && await audioPermanenteEsiste(guida.audioPath)) return guida;
+    const voice = azureVoiceName(String(language).toLowerCase(), getGuideCharacter());
+    const { ok, blob } = await postForAudioBlob(getApiUrl('/api/tts/smart'), { text: guida.testo, voice });
+    if (!ok || !blob || blob.size < 500 || (blob.type || '').includes('json')) return guida;
+    const path = `musei/${String(venueKey).replace(/[^A-Za-z0-9_-]/g, '_')}/${String(language).toLowerCase()}/${hashBreve(`${guida.testo}|${voice}`)}.mp3`;
+    const uri = await salvaAudioPermanente(blob, path);
+    return uri ? { ...guida, audioPath: path, audioFile: uri } : guida;
+  } catch { return guida; }
+}
 
 /**
  * LA VOCE SI PREPARA PRIMA (13/09/2026, committente: «prima di iniziare ci
@@ -211,10 +241,12 @@ export async function prescaricaPrimeOpere(
       ...(stile ? { stile } : {}),
     });
     if (resp && resp.ok === true) {
-      if (!stile) conservaOpera(visit.venueKey, language, t.nome, resp.guide);
+      // Sull'app la voce si scarica subito (file nel telefono); sul web si
+      // prepara solo la cache del server per le prime tre.
+      const guida = !stile ? await scaricaVoce(visit.venueKey, language, resp.guide) : resp.guide;
+      if (!stile) conservaOpera(visit.venueKey, language, t.nome, guida);
       fatte++;
-      // Le prime tre voci pronte in cache: il primo «Ascolta» non aspetta.
-      if (i < 3) void preparaVoce(String(resp.guide?.testo || ''), language);
+      if (i < 3 && !guida.audioFile) void preparaVoce(String(resp.guide?.testo || ''), language);
     } else if (resp && resp.ok === false && (resp.reason === 'pass_exhausted' || resp.reason === 'needs_pass')) {
       break;
     }
@@ -258,8 +290,9 @@ export async function scaricaPacchettoMuseo(
     const t = tappe[i];
     onProgress?.(i, tappe.length);
     const k = normalizza(t.nome);
-    // Già in archivio: non si riscarica e NON si ripaga.
-    if (opere[k]) { esito.opere++; continue; }
+    // Già in archivio: non si riscarica e NON si ripaga. La voce, se manca
+    // ancora nel telefono, si scarica adesso (cache del server: gratis).
+    if (opere[k]) { opere[k] = await scaricaVoce(visit.venueKey, language, opere[k]); esito.opere++; continue; }
     const resp = await fetchArtworkGuide({
       artwork: t.nomeFonte || t.nome,
       venueName: visit.venue.name,
@@ -268,7 +301,7 @@ export async function scaricaPacchettoMuseo(
       language,
     });
     if (resp && resp.ok === true) {
-      opere[k] = resp.guide;
+      opere[k] = await scaricaVoce(visit.venueKey, language, resp.guide);
       esito.opere++;
       esito.bytes += (resp.guide.testo || '').length * 2;
     } else {
