@@ -6902,8 +6902,12 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     return r;
   }
   function guidaGratuita(guida: any): boolean {
-    const tappe: any[] = Array.isArray(guida?.tappe) ? guida.tappe : [];
-    if (!tappe.length) return false;
+    // Solo una guida GENERATA (con l'elenco tappe, anche vuoto) può essere
+    // gratuita: senza oggetto guida non si sa ancora niente. Zero opere
+    // documentate (13/09/2026, Villa Fabbricotti chiedeva 200 crediti) è
+    // il caso più gratuito di tutti: 0 < 8.
+    if (!Array.isArray(guida?.tappe)) return false;
+    const tappe: any[] = guida.tappe;
     const opere = tappe.filter((t: any) => !t?.soloCollezione);
     const conFoto = opere.filter((t: any) => !!t?.foto);
     return opere.length < MIN_OPERE_GUIDA_A_PAGAMENTO || conFoto.length < MIN_OPERE_GUIDA_A_PAGAMENTO;
