@@ -27,6 +27,10 @@ interface MuseumVisitSheetProps {
   onClose: () => void;
   /** «Inquadra la prossima opera»: chiude la scheda e apre l'obiettivo. */
   onScanNext: () => void;
+  /** Montata ma invisibile (13/09/2026): la scheda e' stata chiusa mentre
+   *  un'opera e' in ascolto o in pausa. Restano vivi stato, comandi della
+   *  schermata di blocco e barra del player in app; niente sullo schermo. */
+  nascosta?: boolean;
 }
 
 /**
@@ -34,7 +38,7 @@ interface MuseumVisitSheetProps {
  * tappe già viste spuntate, l'introduzione da ascoltare. Tema chiaro come
  * la scheda Vision (VisionCardSheet), perché si apre sopra di essa.
  */
-export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClose, onScanNext }: MuseumVisitSheetProps) {
+export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClose, onScanNext, nascosta }: MuseumVisitSheetProps) {
   const t = (key: string) => getTranslation(key, language);
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
@@ -394,7 +398,12 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (!Capacitor.isNativePlatform()) return;
     const prossima = () => { const p = prossimaTappa(getVisitSnapshot(), ordineTragitto); if (p) void handleOpera(p.indice, { daCapo: true }); };
     const precedente = () => {
-      const corrente = operaParla ?? operaInPausa ?? operaAperta;
+      // «Riproduci da inizio» (13/09/2026, committente): come in ogni
+      // lettore, «precedente» con un'opera in ascolto o in pausa la fa
+      // ripartire da capo; va all'opera prima solo se non c'e' niente in corso.
+      const inCorso = operaParla ?? operaInPausa;
+      if (inCorso !== null) { void handleOpera(inCorso, { daCapo: true }); return; }
+      const corrente = operaAperta;
       const attive = [...tappeAttive(getVisitSnapshot())].sort((a, b) => a - b);
       const idx = corrente === null ? -1 : attive.indexOf(corrente);
       const prev = idx > 0 ? attive[idx - 1] : (corrente !== null && corrente > 0 ? corrente - 1 : null);
@@ -436,10 +445,58 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       ms.setActionHandler('nexttrack', prossima);
       ms.setActionHandler('play', () => { if (operaInPausa !== null) void handleOpera(operaInPausa); else prossima(); });
       ms.setActionHandler('pause', () => { if (operaParla !== null) void handleOpera(operaParla); });
+      // «Precedente» = da capo sull'opera in corso, come sul lettore nativo.
+      ms.setActionHandler('previoustrack', () => { const c = operaParla ?? operaInPausa; if (c !== null) void handleOpera(c, { daCapo: true }); });
     } catch { /* browser senza mediaSession completa */ }
     return () => {
-      try { ms.setActionHandler('nexttrack', null); ms.setActionHandler('play', null); ms.setActionHandler('pause', null); } catch { /* ok */ }
+      try { ms.setActionHandler('nexttrack', null); ms.setActionHandler('play', null); ms.setActionHandler('pause', null); ms.setActionHandler('previoustrack', null); } catch { /* ok */ }
     };
+  });
+
+  // LA BARRA DEL PLAYER IN APP (13/09/2026, committente: «anche con l'app
+  // aperta: opera in riproduzione, play, pausa, riproduci da inizio, nome
+  // della prossima opera e tasto per farla partire»). AudioPlayerBanner
+  // (App.tsx, sopra la barra delle schede, visibile su ogni scheda) riceve
+  // qui lo stato finche' un'opera e' in ascolto o in pausa e rimanda i tocchi
+  // come 'wip-museum-player-cmd'. La prossima e' la STESSA che il tasto
+  // «successiva» del lettore nativo farebbe partire (prossimaTappa sul
+  // tragitto), cosi' banner e schermata di blocco dicono la stessa cosa.
+  useEffect(() => {
+    const corrente = operaParla ?? operaInPausa;
+    const attivo = corrente !== null;
+    let prossimaIndice: number | null = null;
+    if (attivo) {
+      const p = prossimaTappa(visit, ordineTragitto);
+      if (p && p.indice !== corrente) prossimaIndice = p.indice;
+      else {
+        const attive = tappeAttive(visit);
+        const k = visit.guide.tappe.findIndex((x, j) => j !== corrente && attive.has(j) && !x.seenCardId && !x.skipped);
+        prossimaIndice = k >= 0 ? k : null;
+      }
+    }
+    window.dispatchEvent(new CustomEvent('wip-museum-player', { detail: {
+      attivo,
+      playing: operaParla !== null,
+      indice: corrente,
+      nome: attivo ? (visit.guide.tappe[corrente as number]?.nome || visit.venue.name) : '',
+      museo: visit.venue.name,
+      prossimaIndice,
+      prossimaNome: prossimaIndice !== null ? (visit.guide.tappe[prossimaIndice]?.nome || '') : '',
+    } }));
+  }, [operaParla, operaInPausa, ordineTragitto, visit]);
+  // A scheda chiusa la barra si spegne: i comandi vivono in questo componente.
+  useEffect(() => () => { window.dispatchEvent(new CustomEvent('wip-museum-player', { detail: { attivo: false } })); }, []);
+  useEffect(() => {
+    const onCmd = (e: Event) => {
+      const d = ((e as CustomEvent).detail || {}) as { cmd?: string; indice?: number | null };
+      const corrente = operaParla ?? operaInPausa;
+      if (d.cmd === 'toggle') { if (corrente !== null) void handleOpera(corrente); return; }
+      if (d.cmd === 'restart') { if (corrente !== null) void handleOpera(corrente, { daCapo: true }); return; }
+      if (d.cmd === 'next') { const i = Number(d.indice); if (Number.isFinite(i) && visit.guide.tappe[i]) void handleOpera(i, { daCapo: true }); return; }
+      if (d.cmd === 'stop') azioniRef.current.stop?.();
+    };
+    window.addEventListener('wip-museum-player-cmd', onCmd);
+    return () => window.removeEventListener('wip-museum-player-cmd', onCmd);
   });
 
   useEffect(() => {
@@ -988,8 +1045,9 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       const parlaGuida = async () => {
         // Voce dal file nel telefono se c'è (stessa voce anche senza rete),
         // altrimenti dal cloud.
-        if (guida.audioFile) await speakAudioguideFile(guida.audioFile, guida.testo, lingua, getGuideCharacter(), fineOpera, metaOpera(i));
-        else await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, undefined, metaOpera(i));
+        // Il nome dell'opera anche sulla barra in app (etichetta), non solo sul lettore nativo (meta).
+        if (guida.audioFile) await speakAudioguideFile(guida.audioFile, guida.testo, lingua, getGuideCharacter(), fineOpera, metaOpera(i), tappa.nome);
+        else await speakAudioguide(guida.testo, lingua, getGuideCharacter(), fineOpera, tappa.nome, metaOpera(i));
         setOperaParla(i);
         // Ascoltata = vista: la spunta parte con l'ascolto, non alla fine.
         markStopListened(i);
@@ -999,7 +1057,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       const descr = descrizioneAuto && (tappa.foto || guida.foto) ? await ottieniDescrizione(i) : null;
       if (descr) {
         setSpeechSpeed(0.85);
-        await speakAudioguide(descr, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); void parlaGuida(); }, undefined, metaOpera(i));
+        await speakAudioguide(descr, String(language).toLowerCase(), getGuideCharacter(), () => { setSpeechSpeed(calma ? 0.85 : 1); void parlaGuida(); }, tappa.nome, metaOpera(i));
         setOperaParla(i);
       } else {
         await parlaGuida();
@@ -1135,6 +1193,10 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       },
     );
   };
+
+  // Chiusa con un'opera in ascolto: tutto vivo (hook, listener nativi,
+  // barra in app), niente da disegnare. Dopo tutti gli hook, mai prima.
+  if (nascosta) return null;
 
   return (
     <>

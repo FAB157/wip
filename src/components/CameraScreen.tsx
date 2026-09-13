@@ -220,6 +220,16 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   // Lo stato vive in museumVisit.ts; qui solo la vista.
   const [visit, setVisit] = useState<MuseumVisit | null>(() => getVisit());
   const [visitOpen, setVisitOpen] = useState(false);
+  // Un'opera in ascolto o in pausa tiene MONTATA la scheda della visita
+  // anche quando e' chiusa (13/09/2026): i comandi della schermata di blocco
+  // e della barra del player in app vivono dentro MuseumVisitSheet, e
+  // smontarla li spegneva a meta' racconto.
+  const [museoInAscolto, setMuseoInAscolto] = useState(false);
+  useEffect(() => {
+    const h = (e: Event) => setMuseoInAscolto(!!((e as CustomEvent).detail || {}).attivo);
+    window.addEventListener('wip-museum-player', h);
+    return () => window.removeEventListener('wip-museum-player', h);
+  }, []);
   const [visitStarting, setVisitStarting] = useState(false);
   // Quale riga dell'elenco "qui vicino" sta generando la propria guida: solo
   // quella mostra lo spinner al posto della foto/icona, le altre restano
@@ -2372,12 +2382,13 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
       )}
 
       {/* Visita guidata: dove sei e percorso consigliato */}
-      {visitOpen && visit && (
+      {(visitOpen || museoInAscolto) && visit && (
         <MuseumVisitSheet
           key={visit.venueKey}
           visit={visit}
           language={language}
           passExpiresAt={passExpiresAt}
+          nascosta={!visitOpen}
           onClose={() => setVisitOpen(false)}
           onScanNext={() => { setVisitOpen(false); setVisionTarget('artwork'); void openCamera(); }}
         />

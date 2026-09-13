@@ -1640,6 +1640,8 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   // Tasto "ripeti" del mini-player (09/09/2026): riascolta l'ultima battuta,
   // pensato per l'agente WIP ma valido per ogni narrazione di ttsService.
   audio_ripeti: { IT: "Ripeti", EN: "Repeat", FR: "Répéter", ES: "Repetir", DE: "Wiederholen", RU: "Повторить", ZH: "重复" },
+  audio_da_capo: { IT: "Riproduci da inizio", EN: "Play from the start", FR: "Reprendre du début", ES: "Reproducir desde el inicio", DE: "Von vorn abspielen", RU: "Воспроизвести с начала", ZH: "从头播放" },
+  audio_prossima_opera: { IT: "Prossima opera", EN: "Next artwork", FR: "Œuvre suivante", ES: "Siguiente obra", DE: "Nächstes Werk", RU: "Следующее произведение", ZH: "下一件作品" },
   nav_skip_stop: { IT: "Salta tappa", EN: "Skip stop", FR: "Passer l'étape", ES: "Saltar parada", DE: "Halt überspringen", RU: "Пропустить точку", ZH: "跳过此站" },
   nav_svolte: { IT: "svolte", EN: "turns", FR: "virages", ES: "giros", DE: "Abbiegungen", RU: "поворотов", ZH: "个转弯" },
   nav_gemma_vicina: { IT: "Gemma a {m} m dal percorso", EN: "Gem {m} m off your route", FR: "Perle à {m} m du trajet", ES: "Joya a {m} m de la ruta", DE: "Geheimtipp {m} m neben der Route", RU: "Жемчужина в {m} м от маршрута", ZH: "路线旁{m}米处有一颗宝石" },

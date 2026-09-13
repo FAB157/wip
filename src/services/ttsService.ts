@@ -777,15 +777,17 @@ export async function speakAudioguideFile(
   character: GuideCharacter,
   onEnd?: () => void,
   meta?: { title?: string; subtitle?: string; imageUri?: string },
+  /** Nome per la barra del player in app (come in speakAudioguide): l'opera, non "Audioguida". */
+  etichetta?: string,
 ): Promise<void> {
-  if (!fileUri || !Capacitor.isNativePlatform()) return speakAudioguide(text, lang, character, onEnd, undefined, meta);
+  if (!fileUri || !Capacitor.isNativePlatform()) return speakAudioguide(text, lang, character, onEnd, etichetta, meta);
   if (locationService.getIsGuideMuted()) {
     setTimeout(() => { emitAudioState(false, false); if (onEnd) onEnd(); }, 0);
     return;
   }
   stopSpeech();
   ultimaBattuta = { testo: text, lingua: lang, personaggio: character };
-  etichettaVoce = null;
+  etichettaVoce = etichetta && etichetta.trim() ? etichetta.trim() : null;
   try {
     ensureNativeListeners();
     pendingOnEnd = onEnd || null;
