@@ -604,12 +604,39 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
    * dieci file identici nella cartella dei download.
    */
   const handleStampa = async () => {
-    // SUL TELEFONO NON ESISTE window.print() (12/09/2026, committente: «il
-    // tasto stampa la guida non funziona»): il WebView non stampa. Come per
-    // gli itinerari (PlanScreen) si genera il PDF con html2pdf dalla vista di
-    // stampa e lo si salva nei Documenti. La vista è display:none: la si
-    // mostra fuori schermo solo per il tempo del rendering.
     const nomeFile = `WIP - ${visit.venue.name.replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 60)}.pdf`;
+
+    // IL PDF E' UN LIBRO, NON UNA FOTO (13/09/2026, segnalazione committente:
+    // «PDF non riuscito» sul Kunsthistorisches, 30 opere). Prima si passava
+    // SEMPRE da html2pdf (screenshot di #museum-print-view): un museo con
+    // molte opere produce un contenitore altissimo, e html2canvas rasterizza
+    // tutto in un unico canvas che sul telefono (soprattutto iOS/WebKit)
+    // supera i limiti dimensionali del motore grafico e fallisce in silenzio.
+    // Ora si impagina prima con @react-pdf/renderer (MuseumGuidaPdf, pagine
+    // vere, nessun canvas gigante) — stessa via già usata per itinerario e
+    // Guida Premium (base.tsx). html2pdf resta SOLO ripiego (lingue non
+    // latine, o se il motore non ce la fa).
+    const ordinati = ordineAttivo.map(k => visit.guide.tappe[k]);
+    const opereOrdinate = Object.fromEntries(ordineAttivo.map((k, n) => [n, operaGuide[k]]).filter(([, g]) => !!g));
+    try {
+      notify(t('pf_pdf_in_corso'));
+      const { generaPdfMuseo } = await import('../lib/pdf/generaPdf');
+      const blob = await generaPdfMuseo({ ...visit, guide: { ...visit.guide, tappe: ordinati } }, opereOrdinate, mappe, language);
+      if (blob) {
+        const { saveBlobAsFile } = await import('../services/premiumGuideService');
+        const ok = await saveBlobAsFile(blob, nomeFile);
+        notify(t(ok ? 'pf_pdf_salvato' : 'pf_pdf_non_riuscito'));
+        return;
+      }
+    } catch (e) {
+      console.error('[MuseumVisitSheet] PDF museo (react-pdf) non riuscito, ripiego su html2pdf', e);
+    }
+
+    // SUL TELEFONO NON ESISTE window.print() (12/09/2026, committente: «il
+    // tasto stampa la guida non funziona»): il WebView non stampa. Ripiego:
+    // si genera il PDF con html2pdf dalla vista di stampa e lo si salva nei
+    // Documenti. La vista è display:none: la si mostra fuori schermo solo
+    // per il tempo del rendering.
     try {
       const { Capacitor } = await import('@capacitor/core');
       if (Capacitor.isNativePlatform()) {

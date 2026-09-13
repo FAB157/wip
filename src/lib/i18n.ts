@@ -1663,6 +1663,7 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
   dl_vuoto: { IT: "Non hai ancora scaricato nulla. Dagli itinerari e dalla mappa trovi il tasto «Scarica per offline».", EN: "Nothing downloaded yet. Use “Download for offline” on itineraries and the map.", FR: "Rien de téléchargé pour l'instant. Utilisez « Télécharger pour hors ligne » sur les itinéraires et la carte.", ES: "Aún no has descargado nada. Usa «Descargar sin conexión» en itinerarios y mapa.", DE: "Noch nichts heruntergeladen. Nutze „Für offline laden“ bei Routen und Karte.", RU: "Пока ничего не загружено. Используйте «Скачать для офлайн» в маршрутах и на карте.", ZH: "尚未下载任何内容。在行程和地图中使用“下载以离线使用”。" },
   dl_pronto: { IT: "Pronto offline", EN: "Ready offline", FR: "Prêt hors ligne", ES: "Listo sin conexión", DE: "Offline bereit", RU: "Готово офлайн", ZH: "可离线" },
   dl_parziale: { IT: "Incompleto", EN: "Incomplete", FR: "Incomplet", ES: "Incompleto", DE: "Unvollständig", RU: "Неполный", ZH: "不完整" },
+  dl_nel_account: { IT: "Nel tuo account", EN: "In your account", FR: "Dans votre compte", ES: "En tu cuenta", DE: "In deinem Konto", RU: "В вашем аккаунте", ZH: "在你的账户中" },
   dl_mappa: { IT: "Mappa", EN: "Map", FR: "Carte", ES: "Mapa", DE: "Karte", RU: "Карта", ZH: "地图" },
   dl_navigazione: { IT: "Navigazione", EN: "Navigation", FR: "Navigation", ES: "Navegación", DE: "Navigation", RU: "Навигация", ZH: "导航" },
   dl_completa: { IT: "Completa download", EN: "Complete download", FR: "Terminer le téléchargement", ES: "Completar descarga", DE: "Download vervollständigen", RU: "Завершить загрузку", ZH: "完成下载" },
@@ -4416,13 +4417,25 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     ZH: "输入地址"
   , DE: "Adresse eingeben"},
   internal_nav_beta: {
-    IT: "Navigatore Interno (Beta)",
-    EN: "Internal Navigator (Beta)",
-    FR: "Navigateur Interne (Bêta)",
-    ES: "Navegador Interno (Beta)",
-    RU: "Внутренний навигатор (Бета)",
-    ZH: "内部导航器（Beta）"
-  , DE: "Interner Navigator (Beta)"},
+    // (13/09/2026) Rinominato da "Navigatore Interno (Beta)": il nome
+    // dell'utente per la stessa cosa è "WipNav" ovunque nell'app — un nome
+    // diverso qui confondeva, e "interno" non diceva il limite vero (solo a
+    // piedi). Vedi wipnav_solo_piedi per la frase sotto al tasto.
+    IT: "WipNav",
+    EN: "WipNav",
+    FR: "WipNav",
+    ES: "WipNav",
+    RU: "WipNav",
+    ZH: "WipNav"
+  , DE: "WipNav"},
+  wipnav_solo_piedi: {
+    IT: "Solo percorsi a piedi",
+    EN: "Walking routes only",
+    FR: "Itinéraires à pied uniquement",
+    ES: "Solo rutas a pie",
+    RU: "Только пешие маршруты",
+    ZH: "仅限步行路线"
+  , DE: "Nur Fußwege"},
   open_gmaps: {
     IT: "Apri Google Maps",
     EN: "Open Google Maps",
@@ -4431,6 +4444,27 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     RU: "Открыть Google Maps",
     ZH: "打开谷歌地图"
   , DE: "Google Maps öffnen"},
+  // Alternativa Apple Maps (13/09/2026, App Review Guideline 4: offrire
+  // sempre Mappe di sistema accanto a Google Maps su iPhone/iPad).
+  open_apple_maps: {
+    IT: "Apri Mappe (Apple)",
+    EN: "Open Apple Maps",
+    FR: "Ouvrir Plans (Apple)",
+    ES: "Abrir Mapas (Apple)",
+    RU: "Открыть Карты Apple",
+    ZH: "打开苹果地图"
+  , DE: "Apple Karten öffnen"},
+  // Multi-tappa: Apple Maps non accetta waypoint intermedi come Google —
+  // si dice onestamente PRIMA di aprirla, non dopo che l'utente scopre che
+  // mancano le fermate di mezzo.
+  open_apple_maps_solo_arrivo: {
+    IT: "Apri Mappe (Apple) — solo l'ultima tappa",
+    EN: "Open Apple Maps — last stop only",
+    FR: "Ouvrir Plans (Apple) — dernière étape uniquement",
+    ES: "Abrir Mapas (Apple) — solo la última parada",
+    RU: "Открыть Карты Apple — только последняя точка",
+    ZH: "打开苹果地图 — 仅最后一站"
+  , DE: "Apple Karten öffnen — nur letzte Station"},
   areas_to_avoid: {
     IT: "Zone da Evitare",
     EN: "Areas to Avoid",

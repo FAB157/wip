@@ -7,6 +7,19 @@
 // Legge dal registro unico (downloadsRegistry) e dalla lista degli
 // itinerari salvati offline (retrocompatibilita': quelli salvati prima del
 // registro compaiono comunque).
+//
+// COLLEGATO ALL'ACCOUNT (13/09/2026, segnalazione committente): tutto quanto
+// sopra vive SOLO nell'IndexedDB del dispositivo — un itinerario salvato
+// (user_itineraries) o una Guida d'Autore arrivata per email (generata dal
+// server, itinerary_guides) non passano MAI da qui, perche' nessuno dei due
+// flussi tocca il registro locale. Risultato: «la trovi nell'Archivio»
+// (la mail lo promette) ma in Download restava vuoto o incompleto — vero
+// anche per gli itinerari, visibili in "I miei itinerari" (Piano) ma non
+// qui. Le due liste sotto (`itinerariAccount`, `guideAccount`) leggono le
+// STESSE tabelle di PlanScreen (fetchMyItineraries/fetchSavedPremiumGuides):
+// tutto cio' che e' sull'account compare, scaricato per offline o no. Chi
+// non e' anche nel registro locale apre l'Archivio (stesso posto delle
+// guide) invece della copia offline, che non esiste su questo dispositivo.
 // =====================================================================
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -17,6 +30,7 @@ import { getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary 
 import { scaricaPacchettoOffline, eliminaPacchettoOffline } from '../lib/pacchettoOffline';
 import { eliminaPacchettoMuseo } from '../lib/pacchettoMuseo';
 import { notify } from '../lib/toast';
+import { supabase } from '../lib/supabase';
 import OfflineMapsTab from './OfflineMapsTab';
 
 interface Props { language: Language }
@@ -94,9 +108,10 @@ const Sezione: React.FC<{ vista: Vista; children: React.ReactNode }> = ({ vista,
     ? <div className="grid grid-cols-2 gap-2.5">{children}</div>
     : <div className="space-y-2.5">{children}</div>;
 
-function Badge({ stato, t }: { stato: 'pronto' | 'parziale' | 'vuoto'; t: (k: string) => string }) {
+function Badge({ stato, t }: { stato: 'pronto' | 'parziale' | 'vuoto' | 'account'; t: (k: string) => string }) {
   if (stato === 'pronto') return <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-green-700 bg-green-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={11} />{t('dl_pronto')}</span>;
   if (stato === 'parziale') return <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full"><AlertTriangle size={11} />{t('dl_parziale')}</span>;
+  if (stato === 'account') return <span className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full"><Download size={11} />{t('dl_nel_account')}</span>;
   return null;
 }
 
@@ -104,6 +119,8 @@ export default function DownloadsScreen({ language }: Props) {
   const t = (k: string) => getTranslation(k, language);
   const [records, setRecords] = useState<DownloadRecord[]>([]);
   const [offlinePlans, setOfflinePlans] = useState<any[]>([]);
+  const [itinerariAccount, setItinerariAccount] = useState<any[]>([]);
+  const [guideAccount, setGuideAccount] = useState<any[]>([]);
   const [bytes, setBytes] = useState(0);
   const [inCorso, setInCorso] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>(leggiVista);
@@ -111,9 +128,28 @@ export default function DownloadsScreen({ language }: Props) {
   const cambiaVista = (v: Vista) => { setVista(v); try { localStorage.setItem(CHIAVE_VISTA, v); } catch { /* niente */ } };
   const cambiaOrdine = (o: Ordine) => { setOrdine(o); try { localStorage.setItem(CHIAVE_ORDINE, o); } catch { /* niente */ } };
 
+  // Itinerari e Guide d'Autore dell'ACCOUNT (13/09/2026): stesse tabelle e
+  // stessa query di PlanScreen (fetchMyItineraries/fetchSavedPremiumGuides).
+  // Senza sessione tornano vuote — nessun mirror locale qui, quel ripiego
+  // serve solo a PlanScreen per l'uso offline totale.
+  const caricaAccount = async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uid = sessionData?.session?.user?.id;
+      if (!uid) { setItinerariAccount([]); setGuideAccount([]); return; }
+      const [ri, rg] = await Promise.all([
+        supabase.from('user_itineraries').select('id, titolo, updated_at').eq('user_id', uid).order('updated_at', { ascending: false }).limit(200),
+        supabase.from('itinerary_guides').select('itinerary_hash, created_at, content_data').eq('user_id', uid).order('created_at', { ascending: false }).limit(200),
+      ]);
+      setItinerariAccount(Array.isArray(ri.data) ? ri.data : []);
+      setGuideAccount(Array.isArray(rg.data) ? rg.data : []);
+    } catch { /* best-effort: restano solo i download locali */ }
+  };
+
   const ricarica = async () => {
     const [r, p, b] = await Promise.all([elencoDownload(), getOfflineItinerariesList().catch(() => []), byteTotaliDownload()]);
     setRecords(r); setOfflinePlans(p || []); setBytes(b);
+    void caricaAccount();
   };
   useEffect(() => {
     void ricarica();
@@ -122,30 +158,60 @@ export default function DownloadsScreen({ language }: Props) {
     return () => window.removeEventListener(EVENTO_DOWNLOADS, h);
   }, []);
 
-  // Itinerari: unione fra registro e piani salvati offline (quelli salvati
-  // prima del registro non hanno una voce ma devono comparire).
+  // Itinerari: unione fra registro locale, piani salvati offline (quelli
+  // salvati prima del registro non hanno una voce ma devono comparire) e
+  // ORA anche gli itinerari dell'account (13/09/2026) — soloAccount=true
+  // quando esistono solo sull'account, mai scaricati su QUESTO dispositivo:
+  // si aprono nell'Archivio invece che dalla copia offline, che non c'e'.
   const itinerari = useMemo(() => {
-    const perId = new Map<string, { id: string; nome: string; sotto?: string; data?: number; record?: DownloadRecord }>();
+    const perId = new Map<string, { id: string; nome: string; sotto?: string; data?: number; record?: DownloadRecord; soloAccount?: boolean }>();
+    for (const it of itinerariAccount) {
+      const id = String(it.id || '');
+      if (!id) continue;
+      perId.set(id, { id, nome: it.titolo || 'Itinerario', data: Date.parse(it.updated_at) || undefined, soloAccount: true });
+    }
     for (const p of offlinePlans) {
       const id = String(p.id || '');
       if (!id) continue;
-      perId.set(id, { id, nome: p.title || p.titolo || 'Itinerario', data: Number(p.date || p.data_salvataggio) || undefined });
+      const esistente = perId.get(id);
+      perId.set(id, { id, nome: p.title || p.titolo || esistente?.nome || 'Itinerario', data: Number(p.date || p.data_salvataggio) || esistente?.data, soloAccount: false });
     }
     for (const r of records.filter(r => r.tipo === 'itinerario')) {
       const id = String(r.meta?.offlineId || r.id.replace(/^iti:/, ''));
       const esistente = perId.get(id);
-      perId.set(id, { id, nome: esistente?.nome || r.nome, sotto: r.sottotitolo, data: esistente?.data || r.updatedAt, record: r });
+      perId.set(id, { id, nome: esistente?.nome || r.nome, sotto: r.sottotitolo, data: esistente?.data || r.updatedAt, record: r, soloAccount: false });
     }
     const arr = [...perId.values()];
     return ordine === 'nome' ? arr.sort((a, b) => a.nome.localeCompare(b.nome)) : arr.sort((a, b) => (b.data || 0) - (a.data || 0));
-  }, [records, offlinePlans, ordine]);
+  }, [records, offlinePlans, itinerariAccount, ordine]);
 
   // Stesso ordinamento per i tre elenchi dal registro unico: data (piu' recente
   // prima) o nome (alfabetico) — scelta dell'utente, vedi header piu' sotto.
   const ordinaRecord = (a: DownloadRecord[]) =>
     ordine === 'nome' ? [...a].sort((x, y) => x.nome.localeCompare(y.nome)) : [...a].sort((x, y) => y.updatedAt - x.updatedAt);
   const audioguide = ordinaRecord(records.filter(r => r.tipo === 'audioguida'));
-  const guide = ordinaRecord(records.filter(r => r.tipo === 'guida'));
+  // Guide: unione fra registro locale e Guide d'Autore dell'account (13/09/2026)
+  // non ancora presenti nel registro — dedup per hash, cosi' una guida che
+  // ARRIVA anche per email (server) e viene poi scaricata offline non duplica.
+  const guide = useMemo(() => {
+    const locali = records.filter(r => r.tipo === 'guida');
+    const hashLocali = new Set(locali.map(r => String(r.meta?.hash || r.id.replace(/^guida:/, ''))));
+    const soloAccount = guideAccount
+      .filter(g => g.itinerary_hash && !hashLocali.has(String(g.itinerary_hash)))
+      .map(g => ({
+        id: `guida:${g.itinerary_hash}`,
+        tipo: 'guida' as const,
+        nome: g.content_data?.guida_titolo || 'Guida d\'autore',
+        sottotitolo: undefined as string | undefined,
+        createdAt: Date.parse(g.created_at) || 0,
+        updatedAt: Date.parse(g.created_at) || 0,
+        bytes: 0,
+        meta: { hash: g.itinerary_hash } as any,
+        parti: {} as any,
+        soloAccount: true,
+      }));
+    return ordinaRecord([...locali, ...soloAccount] as unknown as DownloadRecord[]) as Array<DownloadRecord & { soloAccount?: boolean }>;
+  }, [records, guideAccount, ordine]);
   const musei = ordinaRecord(records.filter(r => r.tipo === 'museo'));
   const zone = records.filter(r => r.tipo === 'zona');
   // «Musei» mancava qui (12/09/2026): il pacchetto si registrava già nel
@@ -265,7 +331,7 @@ export default function DownloadsScreen({ language }: Props) {
           <Sezione vista={vista}>
           {itinerari.map((it) => {
             const p = it.record?.parti || {};
-            const stato = it.record ? statoDownload(it.record) : 'parziale';
+            const stato = it.soloAccount ? 'account' : it.record ? statoDownload(it.record) : 'parziale';
             const ag = p.audioguide;
             const Componente = vista === 'griglia' ? VoceGriglia : Voce;
             return (
@@ -273,16 +339,16 @@ export default function DownloadsScreen({ language }: Props) {
                 key={it.id}
                 icona={<Route size={20} />}
                 titolo={it.nome}
-                sotto={<>
+                sotto={it.soloAccount ? undefined : <>
                   {it.sotto && <span>{it.sotto}</span>}
                   <span className={p.mappa ? 'text-green-700' : 'text-on-surface-variant/50'}>{t('dl_mappa')} {p.mappa ? '✓' : '✗'}</span>
                   <span className={p.strade ? 'text-green-700' : 'text-on-surface-variant/50'}>{t('dl_navigazione')} {p.strade ? '✓' : '✗'}</span>
                   {ag && <span className={ag.fatte >= ag.totali && ag.totali > 0 ? 'text-green-700' : 'text-on-surface-variant/50'}>{t('dl_audioguide')} {ag.fatte}/{ag.totali}</span>}
                   {it.record?.bytes ? <span>{fmtBytes(it.record.bytes)}</span> : null}
                 </>}
-                badge={<Badge stato={stato} t={t} />}
-                onApri={() => apri({ tipo: 'itinerario', id: it.id })}
-                azioni={<>
+                badge={<Badge stato={stato as any} t={t} />}
+                onApri={() => it.soloAccount ? apri({ tipo: 'guida' }) : apri({ tipo: 'itinerario', id: it.id })}
+                azioni={it.soloAccount ? undefined : <>
                   <button
                     onClick={() => { void navigaVersoPrimaTappa(it.id); }}
                     aria-label={t('dl_naviga')} title={t('dl_naviga')}
@@ -338,12 +404,14 @@ export default function DownloadsScreen({ language }: Props) {
           <Sezione vista={vista}>
           {guide.map((r) => {
             const Componente = vista === 'griglia' ? VoceGriglia : Voce;
+            const soloAccount = !!(r as any).soloAccount;
             return (
             <Componente
               key={r.id}
               icona={<BookOpen size={20} />}
               titolo={r.nome}
               sotto={<>{r.sottotitolo && <span>{r.sottotitolo}</span>}{r.bytes ? <span>{fmtBytes(r.bytes)}</span> : null}</>}
+              badge={soloAccount ? <Badge stato="account" t={t} /> : undefined}
               onApri={() => apri({ tipo: 'guida', id: r.id.replace(/^guida:/, '') })}
             />
             );

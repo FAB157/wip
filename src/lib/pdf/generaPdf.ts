@@ -121,6 +121,47 @@ export async function generaPdfItinerario(plan: any, language: unknown): Promise
   return numeraPagine(await pdf(doc as any).toBlob(), ET_ITINERARIO[l].pagina, 1);
 }
 
+export const ET_MUSEO: Record<Lang, import('./MuseumGuidaPdf').MuseumPdfEtichette> = {
+  IT: { pagina: 'Pagina', museo: 'Guida al museo', nOpere: '{n} opere', conSale: 'con le sale', mappa: 'Pianta del museo', ancheCollezione: 'Anche nella collezione', nessunaSala: 'Il museo non pubblica le sale: chiedi in biglietteria.', guardaAnche: 'Guarda anche', curiosita: 'Curiosità', soloCollezione: 'Nella collezione, fuori dal percorso principale', suEtichetta: 'Sull\'etichetta' },
+  EN: { pagina: 'Page', museo: 'Museum guide', nOpere: '{n} artworks', conSale: 'with rooms', mappa: 'Museum map', ancheCollezione: 'Also in the collection', nessunaSala: 'The museum does not publish room numbers: ask at the ticket desk.', guardaAnche: 'Look for', curiosita: 'Curiosity', soloCollezione: 'In the collection, off the main route', suEtichetta: 'On the label' },
+  FR: { pagina: 'Page', museo: 'Guide du musée', nOpere: '{n} œuvres', conSale: 'avec les salles', mappa: 'Plan du musée', ancheCollezione: 'Également dans la collection', nessunaSala: 'Le musée ne publie pas les numéros de salle : demandez à la billetterie.', guardaAnche: 'À regarder', curiosita: 'Curiosité', soloCollezione: 'Dans la collection, hors du parcours principal', suEtichetta: 'Sur l\'étiquette' },
+  ES: { pagina: 'Página', museo: 'Guía del museo', nOpere: '{n} obras', conSale: 'con salas', mappa: 'Plano del museo', ancheCollezione: 'También en la colección', nessunaSala: 'El museo no publica los números de sala: pregunta en taquilla.', guardaAnche: 'Fíjate en', curiosita: 'Curiosidad', soloCollezione: 'En la colección, fuera del recorrido principal', suEtichetta: 'En la etiqueta' },
+  DE: { pagina: 'Seite', museo: 'Museumsführer', nOpere: '{n} Werke', conSale: 'mit Sälen', mappa: 'Museumsplan', ancheCollezione: 'Auch in der Sammlung', nessunaSala: 'Das Museum veröffentlicht keine Saalnummern: fragen Sie an der Kasse.', guardaAnche: 'Achten Sie auf', curiosita: 'Wissenswertes', soloCollezione: 'In der Sammlung, außerhalb der Hauptroute', suEtichetta: 'Auf dem Schild' },
+};
+
+export async function generaPdfMuseo(
+  visit: import('../museumVisit').MuseumVisit,
+  opere: Record<number, import('../museumVisit').ArtworkGuide>,
+  mappe: import('../museumVisit').MuseumMap[] | undefined,
+  language: unknown,
+): Promise<Blob | null> {
+  const l = lingua(language);
+  const tappe = visit.guide?.tappe || [];
+  const primaOpera = Object.values(opere)[0];
+  const campione = String(visit.venue?.name || '') + String(tappe[0]?.perche || '') + String(primaOpera?.testo || '');
+  if (haCaratteriNonLatini(campione)) return null;
+  const [{ pdf }, { default: MuseumGuidaPdf }, React] = await Promise.all([
+    import('@react-pdf/renderer'), import('./MuseumGuidaPdf'), import('react'),
+  ]);
+  const mappeConImmagine = (mappe || []).filter((m) => m.url);
+  const immaginiMappe: Record<number, string> = {};
+  const immaginiTappe: Record<number, string> = {};
+  await Promise.all([
+    ...mappeConImmagine.map(async (m) => {
+      const d = await scaricaImmagine(m.url);
+      if (d) immaginiMappe[m.indice] = d;
+    }),
+    ...tappe.map(async (t, i) => {
+      const d = await scaricaImmagine(t.foto);
+      if (d) immaginiTappe[i] = d;
+    }),
+  ]);
+  const copertina = await scaricaImmagine(visit.venuePhoto);
+  const doc = React.createElement(MuseumGuidaPdf, { visit, opere, mappe: mappeConImmagine, etichette: ET_MUSEO[l], immaginiMappe, immaginiTappe, copertina });
+  // Dalla pagina 2: la copertina non porta numero (stesso schema della Guida Premium).
+  return numeraPagine(await pdf(doc as any).toBlob(), ET_MUSEO[l].pagina, 2);
+}
+
 export async function generaPdfGuida(content: PremiumGuideContent, mediaManifest: Record<string, string>, language: unknown): Promise<Blob | null> {
   const l = lingua(language);
   if (haCaratteriNonLatini(String(content?.guida_titolo || '') + String(content?.introduzione || '').slice(0, 400))) return null;
