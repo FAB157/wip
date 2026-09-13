@@ -32629,6 +32629,34 @@ out center tags;`;
     throw new Error('Nessun motore TTS disponibile');
   }
 
+  /**
+   * CAMPIONE DI VOCE PER MOTORE (13/09/2026, committente: «fammi sentire lo
+   * stesso testo con Azure, Polly, Piper e Kokoro»). Solo con il segreto
+   * degli script: forza UN motore (polly, elevenlabs, piper) e restituisce
+   * l'MP3 senza cache, per confrontare le voci. Testo max 1200 caratteri.
+   */
+  app.get("/api/admin/tts-sample", rateLimiter, async (req, res) => {
+    try {
+      if (!SCRIPT_SHARED_SECRET || req.headers['x-script-secret'] !== SCRIPT_SHARED_SECRET) return res.status(403).json({ error: 'forbidden' });
+      const provider = String(req.query.provider || 'polly').toLowerCase();
+      const voiceName = normalizeTtsVoice(String(req.query.voice || 'it-IT-ElsaNeural'));
+      const text = String(req.query.text || '').slice(0, 1200);
+      if (!text) return res.status(400).json({ error: 'text richiesto' });
+      const t0 = Date.now();
+      let buffer: Buffer;
+      if (provider === 'polly') buffer = await synthesizePolly(text, voiceName);
+      else if (provider === 'elevenlabs') buffer = await synthesizeElevenLabs(text, voiceName);
+      else if (provider === 'piper') buffer = await synthesizePiper(text, voiceName);
+      else return res.status(400).json({ error: 'provider non supportato (polly, elevenlabs, piper)' });
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('X-TTS-Provider', provider);
+      res.setHeader('X-TTS-Ms', String(Date.now() - t0));
+      res.send(buffer);
+    } catch (e: any) {
+      res.status(502).json({ error: e?.message || 'sintesi fallita' });
+    }
+  });
+
   /** Voce Piper per locale e personaggio (huggingface.co/rhasspy/piper-voices). */
   const PIPER_VOCI: Record<string, { nicky: string; dante: string }> = {
     'it-IT': { nicky: 'it_IT-paola-medium', dante: 'it_IT-riccardo-x_low' },
