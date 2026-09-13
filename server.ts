@@ -648,6 +648,24 @@ async function callUniversalAi(
   ) {
     consentiti = [...consentiti, 'deepseek'];
   }
+  // LA SEMINA PUÒ PAGARE, CON UN TETTO (13/09/2026, committente: «proviamo
+  // con DeepSeek e tetto 20 USD»). Quando i motori gratuiti sono esauriti
+  // (Gemini 500 richieste/giorno, Groq 200k token/giorno per chiave), i
+  // lavori di sfondo NON si fermano più: DeepSeek entra in coda, ma la
+  // spesa del mese dei soli script è contata in api_cache
+  // (deepseek_semina_usd_YYYY-MM) e oltre DEEPSEEK_SEMINA_LIMIT_USD (20 $)
+  // si torna alla catena gratuita e basta. Il tetto vale solo per la semina:
+  // l'utente in diretta ha la sua regola sopra.
+  if (
+    userId === 'background-script' &&
+    !options.ultimaSpiaggiaPagante &&
+    !vietati.has('deepseek') &&
+    !consentiti.includes('deepseek') &&
+    !!deepseekKey &&
+    (await seminaDeepSeekConsentita())
+  ) {
+    consentiti = [...consentiti, 'deepseek'];
+  }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
   // richiamato 16 volte su 40, ogni volta per fallire e ricadere su agnes.
@@ -738,7 +756,13 @@ async function callUniversalAi(
     const userPart = userId ? ` | User: ${userId}` : '';
     // user_id in colonna dedicata (il pannello admin lo usa per la ricerca
     // per email); resta anche nel context per i tool che parsano il testo.
-    const realUserId = userId && userId !== 'mock-user-id' && userId !== 'anonymous' ? userId : null;
+    // 'background-script' non è un uuid: con quello l'insert completo
+    // falliva e il costo non veniva registrato (13/09/2026).
+    const realUserId = userId && userId !== 'mock-user-id' && userId !== 'anonymous' && userId !== 'background-script' ? userId : null;
+    // Il tetto della semina: la spesa DeepSeek degli script si somma qui.
+    if (userId === 'background-script' && finalModel.includes('deepseek') && realCost > 0) {
+      await registraSpesaSeminaDeepSeek(realCost).catch(() => {});
+    }
     await insertApiUsageLog({
       api_name: apiName,
       feature_context: `${featureContext} | Token: ${tokensUsed}${userPart}`,
@@ -752,6 +776,29 @@ async function callUniversalAi(
   } catch (e: any) {}
 
   return { ...responseData, data: textContent, truncated: wasTruncated };
+}
+
+// ── TETTO DEEPSEEK PER LA SEMINA (13/09/2026) ─────────────────────────
+// Contatore mensile in api_cache, letto prima di accodare DeepSeek a un
+// lavoro di sfondo e aggiornato a ogni risposta pagata. Fail-closed: se il
+// contatore non si legge, la semina resta gratuita.
+const DEEPSEEK_SEMINA_LIMIT_USD = Number(process.env.DEEPSEEK_SEMINA_LIMIT_USD) || 20;
+const chiaveSpesaSemina = () => `deepseek_semina_usd_${new Date().toISOString().slice(0, 7)}`;
+async function seminaDeepSeekConsentita(): Promise<boolean> {
+  try {
+    const row = await getFromCache(chiaveSpesaSemina());
+    const spesa = Number(row?.text_content) || 0;
+    if (spesa >= DEEPSEEK_SEMINA_LIMIT_USD) {
+      console.warn(`[Universal AI] semina: DeepSeek oltre il tetto mensile (${spesa.toFixed(2)}/${DEEPSEEK_SEMINA_LIMIT_USD} $), resto sui gratuiti`);
+      return false;
+    }
+    return true;
+  } catch { return false; }
+}
+async function registraSpesaSeminaDeepSeek(usd: number): Promise<void> {
+  const row = await getFromCache(chiaveSpesaSemina());
+  const spesa = (Number(row?.text_content) || 0) + usd;
+  await saveToCache(chiaveSpesaSemina(), 'counter', spesa.toFixed(6));
 }
 
 // ── TELEMETRIA API RESILIENTE ──────────────────────────────────────────
