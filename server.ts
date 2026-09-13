@@ -9018,8 +9018,35 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         ].filter(Boolean).join('\n\n');
         if (fontiArchivio) console.log(`[VenueGuide] ${venue.name}: archivio fonti ${Math.round(fontiArchivio.length / 1024)} kB (pdf ${pdfTesto.length ? 'sì' : 'no'}, sito ${sitoTesto.length ? 'sì' : 'no'}, wikivoyage ${wvTesto.length ? 'sì' : 'no'})`);
       } catch (e: any) { console.warn('[VenueGuide] archivio fonti non letto:', e?.message); }
+      // LE PAGINE GIUSTE DEL SITO, CERCATE (13/09/2026, committente: «cerca
+      // anche con SearXNG per avere le guide dei principali più complete
+      // possibili»). Il sito ufficiale letto dalla home dà poche pagine; il
+      // motore, dentro il sito, trova quelle di collezione, capolavori,
+      // sale e piani. Solo dal dominio ufficiale: nessun aggregatore, mai un
+      // blog. In diretta si salta se il tempo stringe.
+      let pagineCercate = '';
+      try {
+        const hostSito = (() => { try { return new URL(String(sitoOut?.pagine?.[0] || '')).hostname; } catch { return ''; } })();
+        if (process.env.SEARXNG_URL && hostSito && (!inDiretta || msRimasti() > 150_000)) {
+          const parole = langCfg.wiki === 'it' ? 'collezione capolavori opere sale piano' : langCfg.wiki === 'fr' ? 'collections chefs-d\'œuvre salles étage' : langCfg.wiki === 'es' ? 'colección obras maestras salas planta' : langCfg.wiki === 'de' ? 'Sammlung Meisterwerke Säle Etage' : 'collection highlights masterpieces rooms floor';
+          const urls = (await pagineDelSitoViaRicerca(venue.name, hostSito, parole, langCfg.wiki, 4)).filter(u => !(sitoOut?.pagine || []).includes(u));
+          const testi: string[] = [];
+          for (const u of urls.slice(0, 3)) {
+            try {
+              const r = await axios.get(u, { timeout: 8000, maxRedirects: 3, responseType: 'text', maxContentLength: 1_500_000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36', Accept: 'text/html' } });
+              const t = testoPaginaMuseo(String(r.data || ''));
+              if (t.length > 400) testi.push(`[${u}]\n${t.slice(0, 5000)}`);
+            } catch { /* pagina saltata */ }
+          }
+          if (testi.length) {
+            pagineCercate = `DALLE PAGINE DEL SITO UFFICIALE TROVATE CON LA RICERCA (collezione, capolavori, sale):\n${testi.join('\n\n')}`;
+            console.log(`[VenueGuide] ${venue.name}: ${testi.length} pagine del sito dalla ricerca (${Math.round(pagineCercate.length / 1024)} kB)`);
+          }
+        }
+      } catch (e: any) { console.warn('[VenueGuide] pagine dalla ricerca non lette:', e?.message); }
       const materiale = [
         fontiArchivio,
+        pagineCercate,
         // Il sito ufficiale per primo: è la fonte più aggiornata su sale,
         // piani e allestimento, ed è ciò che rende il percorso navigabile.
         sitoOut.testo ? `DAL SITO UFFICIALE DEL MUSEO (disposizione delle sale, orari, allestimento):\n${sitoOut.testo}` : '',
