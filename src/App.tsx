@@ -923,7 +923,9 @@ export default function App() {
         // dall'ARCHIVIO offline in Vision (CameraScreen consuma la richiesta
         // in sospeso quando è montata — apriGuidaMuseo fa anche il cambio
         // scheda tramite OPEN_MUSEUM_GUIDE_EVENT, ascoltato più sopra).
-        apriGuidaMuseo({ poiId: null, venueKey: String(d.venueKey || ''), venueName: String(d.nome || ''), language: d.language ? String(d.language) : null });
+        // poiId: una Visita comprata sull'account ma mai aperta su questo
+        // telefono (14/09/2026) non è nell'archivio: si riapre dal server.
+        apriGuidaMuseo({ poiId: d.poiId ? String(d.poiId) : null, venueKey: String(d.venueKey || ''), venueName: String(d.nome || ''), language: d.language ? String(d.language) : null });
       }
     };
     window.addEventListener('wip-apri-download', h);

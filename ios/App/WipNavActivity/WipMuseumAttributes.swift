@@ -30,6 +30,8 @@ enum WipMuseumAzione {
     static let notifica = Notification.Name("wip.museum.azione")
     static let chiavePendente = "wipMuseumAzionePendente"
     static let prossima = "prossima"
+    /// Play/pausa dal cruscotto (14/09/2026): stesso gesto del tasto cuffie.
+    static let playPausa = "playpausa"
 }
 
 #if canImport(ActivityKit)
@@ -49,6 +51,12 @@ struct WipMuseumAttributes: ActivityAttributes {
         /// e la prossima, mentre parla il teaser).
         var inAscoltoTitolo: String
         var inAscoltoSala: String
+        /// LE FOTO DELLE OPERE (14/09/2026, committente: «entrambe con foto,
+        /// se ci sono»). Percorso di un JPEG piccolo nel container dell'App
+        /// Group, scritto dall'app (LiveActivityMuseum.swift): l'estensione
+        /// non puo' scaricare dalla rete, legge solo file condivisi. nil =
+        /// niente foto (o non ancora scaricata): resta il simbolo.
+        var inAscoltoFoto: String?
         /// Avanzamento 0...1 dell'opera in ascolto; nil o < 0 = ignoto (niente
         /// barra). Aggiornamento best-effort, non ad ogni secondo.
         var inAscoltoProgresso: Double?
@@ -58,6 +66,7 @@ struct WipMuseumAttributes: ActivityAttributes {
         /// l'ultima tappa del giro.
         var prossimaTitolo: String
         var prossimaSala: String
+        var prossimaFoto: String?
         /// Indice 1-based e totale tappe, per "3/12" in testa alla card.
         var indiceTappa: Int
         var tappeTotali: Int

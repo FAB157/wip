@@ -29,6 +29,7 @@ import { elencoDownload, byteTotaliDownload, statoDownload, EVENTO_DOWNLOADS, ty
 import { getOfflineItinerariesList, getOfflineItinerary, deleteOfflineItinerary } from '../lib/offlineStorage';
 import { scaricaPacchettoOffline, eliminaPacchettoOffline } from '../lib/pacchettoOffline';
 import { eliminaPacchettoMuseo } from '../lib/pacchettoMuseo';
+import { fetchVisiteAcquistate, type VisitaAcquistata } from '../lib/museumVisit';
 import { notify } from '../lib/toast';
 import { supabase } from '../lib/supabase';
 import OfflineMapsTab from './OfflineMapsTab';
@@ -121,6 +122,11 @@ export default function DownloadsScreen({ language }: Props) {
   const [offlinePlans, setOfflinePlans] = useState<any[]>([]);
   const [itinerariAccount, setItinerariAccount] = useState<any[]>([]);
   const [guideAccount, setGuideAccount] = useState<any[]>([]);
+  // Le Visite museo COMPRATE sull'account (14/09/2026, committente: «se
+  // acquistata, come itinerari e guide premium, anche la guida museo deve
+  // essere salvata nei miei download e archivio e sempre disponibile»):
+  // compaiono anche se mai aperte su questo telefono, e riaprirle e' gratis.
+  const [museiAccount, setMuseiAccount] = useState<VisitaAcquistata[]>([]);
   const [bytes, setBytes] = useState(0);
   const [inCorso, setInCorso] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>(leggiVista);
@@ -136,13 +142,15 @@ export default function DownloadsScreen({ language }: Props) {
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const uid = sessionData?.session?.user?.id;
-      if (!uid) { setItinerariAccount([]); setGuideAccount([]); return; }
-      const [ri, rg] = await Promise.all([
+      if (!uid) { setItinerariAccount([]); setGuideAccount([]); setMuseiAccount([]); return; }
+      const [ri, rg, rm] = await Promise.all([
         supabase.from('user_itineraries').select('id, titolo, updated_at').eq('user_id', uid).order('updated_at', { ascending: false }).limit(200),
         supabase.from('itinerary_guides').select('itinerary_hash, created_at, content_data').eq('user_id', uid).order('created_at', { ascending: false }).limit(200),
+        fetchVisiteAcquistate(),
       ]);
       setItinerariAccount(Array.isArray(ri.data) ? ri.data : []);
       setGuideAccount(Array.isArray(rg.data) ? rg.data : []);
+      setMuseiAccount(rm);
     } catch { /* best-effort: restano solo i download locali */ }
   };
 
@@ -212,7 +220,30 @@ export default function DownloadsScreen({ language }: Props) {
       }));
     return ordinaRecord([...locali, ...soloAccount] as unknown as DownloadRecord[]) as Array<DownloadRecord & { soloAccount?: boolean }>;
   }, [records, guideAccount, ordine]);
-  const musei = ordinaRecord(records.filter(r => r.tipo === 'museo'));
+  // Musei: registro locale + Visite comprate sull'account non ancora su
+  // questo telefono (dedup per chiave e per nome: la stessa sede puo' avere
+  // chiave «poi_<id>» all'acquisto e «nome_<slug>» nell'archivio).
+  const musei = useMemo(() => {
+    const locali = records.filter(r => r.tipo === 'museo');
+    const norma = (s: any) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const chiaviLocali = new Set(locali.map(r => String(r.meta?.venueKey || '')));
+    const nomiLocali = new Set(locali.map(r => norma(r.nome)));
+    const soloAccount = museiAccount
+      .filter(v => v.venueKey && !chiaviLocali.has(v.venueKey) && !nomiLocali.has(norma(v.venueName)))
+      .map(v => ({
+        id: `museo:${v.venueKey}::account`,
+        tipo: 'museo' as const,
+        nome: v.venueName,
+        sottotitolo: v.lingue.length ? v.lingue.join(' · ') : undefined,
+        createdAt: 0,
+        updatedAt: 0,
+        bytes: 0,
+        meta: { venueKey: v.venueKey, poiId: v.poiId, language: v.lingue[0] || null } as any,
+        parti: {} as any,
+        soloAccount: true,
+      }));
+    return ordinaRecord([...locali, ...soloAccount] as unknown as DownloadRecord[]) as Array<DownloadRecord & { soloAccount?: boolean }>;
+  }, [records, museiAccount, ordine]);
   const zone = records.filter(r => r.tipo === 'zona');
   // «Musei» mancava qui (12/09/2026): il pacchetto si registrava già nel
   // registro unico (pacchettoMuseo.ts, tipo='museo') ma questa schermata non
@@ -429,14 +460,16 @@ export default function DownloadsScreen({ language }: Props) {
           <Sezione vista={vista}>
           {musei.map((r) => {
             const Componente = vista === 'griglia' ? VoceGriglia : Voce;
+            const soloAccount = !!(r as any).soloAccount;
             return (
             <Componente
               key={r.id}
               icona={<Landmark size={20} />}
               titolo={r.nome}
               sotto={<>{r.sottotitolo && <span>{r.sottotitolo}</span>}{r.bytes ? <span>{fmtBytes(r.bytes)}</span> : null}</>}
-              onApri={() => apri({ tipo: 'museo', id: r.id, venueKey: r.meta?.venueKey, nome: r.nome, language: r.meta?.language })}
-              azioni={
+              badge={soloAccount ? <Badge stato="account" t={t} /> : undefined}
+              onApri={() => apri({ tipo: 'museo', id: r.id, venueKey: r.meta?.venueKey, poiId: r.meta?.poiId || null, nome: r.nome, language: soloAccount ? null : r.meta?.language })}
+              azioni={soloAccount ? undefined :
                 <button
                   onClick={() => { void eliminaMuseo(r); }}
                   aria-label="Elimina"

@@ -177,6 +177,33 @@ export function conservaVisita(visit: MuseumVisit, language: Language): void {
     visitatoIl: Date.now(),
   };
   scriviTutto(archivio);
+  registraNelRegistro(archivio[chiave]);
+}
+
+/**
+ * NEI MIEI DOWNLOAD DA SUBITO (14/09/2026, committente: «se acquistata, come
+ * itinerari e guide premium, anche la guida museo deve essere salvata nei
+ * miei download e archivio»). Prima ci finiva solo con «scarica tutto»; ora
+ * ogni visita conservata è nel registro unico, con il conteggio delle
+ * audioguide già nel telefono. Si scrive solo se cambia qualcosa: chi chiama
+ * lo fa a ogni aggiornamento della visita.
+ */
+function registraNelRegistro(voce: ArchivioMuseo | undefined): void {
+  if (!voce?.venueKey) return;
+  const chiave = chiaveArchivio(voce.venueKey, voce.language);
+  const fatte = Object.keys(voce.opere || {}).length;
+  const totali = voce.guide?.tappe?.length || 0;
+  void (async () => {
+    const esistente = await leggiDownload('museo', chiave);
+    const audio = (esistente?.parti as any)?.audioguide;
+    if (esistente && esistente.nome === voce.venueName && audio?.fatte === fatte && audio?.totali === totali) return;
+    await registraDownload('museo', chiave, {
+      nome: voce.venueName,
+      sottotitolo: `${fatte} ${fatte === 1 ? 'opera' : 'opere'} · ${voce.language}`,
+      parti: { poi: true, audioguide: { fatte, totali } },
+      meta: { venueKey: voce.venueKey, language: voce.language, tappe: totali, tipoLuogo: voce.guide?.tipo || 'museo' },
+    });
+  })();
 }
 
 /** Un'audioguida appena ascoltata entra nell'archivio: non si ripagherà più. */
@@ -189,6 +216,7 @@ export function conservaOpera(venueKey: string, language: Language, nomeOpera: s
   gia.visitatoIl = Date.now();
   archivio[chiave] = gia;
   scriviTutto(archivio);
+  registraNelRegistro(gia);
 }
 
 /**
@@ -248,6 +276,7 @@ export async function prescaricaPrimeOpere(
       room: t.dove || null,
       language,
       ...(stile ? { stile } : {}),
+      venueKey: visit.venueKey,
     });
     if (resp && resp.ok === true) {
       // Sull'app la voce si scarica subito (file nel telefono); sul web si
@@ -308,6 +337,9 @@ export async function scaricaPacchettoMuseo(
       artist: t.autore || null,
       room: t.dove || null,
       language,
+      // La Visita comprata di questo museo copre lo scaricamento: senza la
+      // chiave il server chiedeva il pass a chi aveva già pagato.
+      venueKey: visit.venueKey,
     });
     if (resp && resp.ok === true) {
       opere[k] = await scaricaVoce(visit.venueKey, language, resp.guide, t.nomeFonte || t.nome, visit.venue.name);

@@ -141,13 +141,58 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         NotificationCenter.default.addObserver(forName: WipMuseumAzione.notifica, object: nil, queue: .main) { [weak self] n in
             let azione = (n.userInfo?["azione"] as? String) ?? ""
             UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
-            guard azione == WipMuseumAzione.prossima else { return }
-            self?.notifyListeners("remoteNext", data: [:])
+            self?.eseguiAzioneCruscotto(azione)
         }
         if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipMuseumAzione.chiavePendente), !pendente.isEmpty {
             UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipMuseumAzione.chiavePendente)
-            if pendente == WipMuseumAzione.prossima { notifyListeners("remoteNext", data: [:]) }
+            eseguiAzioneCruscotto(pendente)
         }
+    }
+
+    /// Le azioni del cruscotto della visita museo (Live Activity): «prossima»
+    /// e' lo stesso evento 'remoteNext' del tasto della schermata di blocco;
+    /// «play/pausa» (14/09/2026) e' lo stesso gesto del tasto cuffie.
+    private func eseguiAzioneCruscotto(_ azione: String) {
+        switch azione {
+        case WipMuseumAzione.prossima:
+            notifyListeners("remoteNext", data: [:])
+        case WipMuseumAzione.playPausa:
+            DispatchQueue.main.async { _ = self.alternaPlayPausa() }
+        default:
+            break
+        }
+    }
+
+    /// Un solo tasto play/pausa (AirPods, tasto cuffie, cruscotto museo): col
+    /// player carico alterna; a player fermo con i tasti traccia accesi fa
+    /// partire la prossima (decide il JS); altrimenti agisce sulla voce nativa.
+    /// - returns: `false` se non c'era nulla su cui agire.
+    private func alternaPlayPausa() -> Bool {
+        if let player = self.player {
+            self.isPausedForSpeech = false
+            if player.rate > 0 {
+                player.pause()
+                self.programmaSpegnimentoSessione()
+                self.notifyPlaybackState(isPlaying: false)
+            } else {
+                self.activateAudioSession()
+                player.playImmediately(atRate: self.desiredRate)
+                self.notifyPlaybackState(isPlaying: true)
+            }
+            self.updateNowPlayingInfo()
+            return true
+        }
+        if self.trackCommandsEnabled {
+            self.notifyListeners("remotePlay", data: [:])
+            return true
+        }
+        guard SpeechQueue.shared.hasActiveMp3 else { return false }
+        if SpeechQueue.shared.isMp3Playing {
+            SpeechQueue.shared.pauseSpeaking()
+        } else {
+            SpeechQueue.shared.continueSpeaking()
+        }
+        return true
     }
 
     deinit {
@@ -456,10 +501,12 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
             "ascoltataSala": call.getString("ascoltataSala") ?? "",
             "inAscoltoTitolo": call.getString("inAscoltoTitolo") ?? "",
             "inAscoltoSala": call.getString("inAscoltoSala") ?? "",
+            "inAscoltoFotoUrl": call.getString("inAscoltoFotoUrl") ?? "",
             "inAscoltoProgresso": call.getDouble("inAscoltoProgresso") ?? -1,
             "inPausa": call.getBool("inPausa") ?? false,
             "prossimaTitolo": call.getString("prossimaTitolo") ?? "",
             "prossimaSala": call.getString("prossimaSala") ?? "",
+            "prossimaFotoUrl": call.getString("prossimaFotoUrl") ?? "",
             "indiceTappa": call.getDouble("indiceTappa") ?? 1,
             "tappeTotali": call.getDouble("tappeTotali") ?? 1
         ]
@@ -622,6 +669,9 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
     private func notifyPlaybackState(isPlaying: Bool) {
         ultimoStatoNotificato = isPlaying
         notifyListeners("playbackStatus", data: ["isPlaying": isPlaying])
+        // Il cruscotto della visita museo cambia faccia al tasto play/pausa,
+        // da qualunque parte arrivi la pausa (cruscotto, cuffie, sistema).
+        LiveActivityMuseum.shared.segnaPausa(!isPlaying)
     }
 
     private func teardownPlayer(deactivateSession: Bool) {
@@ -772,31 +822,7 @@ public class WipBackgroundAudioPlugin: CAPPlugin, CAPBridgedPlugin {
         // Un solo tasto play/pausa (AirPods, tasto cuffie): stessa logica.
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
             guard let self = self else { return .noSuchContent }
-            if let player = self.player {
-                self.isPausedForSpeech = false
-                if player.rate > 0 {
-                    player.pause()
-                    self.programmaSpegnimentoSessione()
-                    self.notifyPlaybackState(isPlaying: false)
-                } else {
-                    self.activateAudioSession()
-                    player.playImmediately(atRate: self.desiredRate)
-                    self.notifyPlaybackState(isPlaying: true)
-                }
-                self.updateNowPlayingInfo()
-                return .success
-            }
-            if self.trackCommandsEnabled {
-                self.notifyListeners("remotePlay", data: [:])
-                return .success
-            }
-            guard SpeechQueue.shared.hasActiveMp3 else { return .noSuchContent }
-            if SpeechQueue.shared.isMp3Playing {
-                SpeechQueue.shared.pauseSpeaking()
-            } else {
-                SpeechQueue.shared.continueSpeaking()
-            }
-            return .success
+            return self.alternaPlayPausa() ? .success : .noSuchContent
         }
         center.skipForwardCommand.preferredIntervals = [15]
         center.skipForwardCommand.addTarget { [weak self] _ in

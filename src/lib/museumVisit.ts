@@ -427,10 +427,19 @@ const venueKeyOf = (venue: VenueInfo) => venue.id ? `poi_${venue.id}` : `nome_${
  * stato visto; se è un altro luogo, la visita riparte da zero.
  */
 export function startVisitFromGuide(resp: Extract<VenueGuideResponse, { ok: true }>): MuseumVisit {
-  const key = venueKeyOf(resp.venue);
   const current = getVisit();
+  // LA CHIAVE NON CAMBIA SOTTO I PIEDI (14/09/2026). Lo stesso museo può
+  // tornare dal server con un id diverso (dalla mappa «poi_<id>», per nome
+  // «nome_<slug>», dopo «aggiungi opere» senza id): se è la sede della visita
+  // in corso si tiene la chiave che c'era, perché a quella sono legati la
+  // Visita comprata, le audioguide in archivio e le opere spuntate.
+  const stessaSede = !!current && (
+    current.venueKey === venueKeyOf(resp.venue) ||
+    (!!current.venue?.name && normalize(current.venue.name) === normalize(resp.venue?.name || ''))
+  );
+  const key = stessaSede ? current!.venueKey : venueKeyOf(resp.venue);
   const now = Date.now();
-  if (current && current.venueKey === key) {
+  if (current && stessaSede) {
     // Stesso luogo: si tengono le spunte, si aggiorna il resto.
     const seenNames = current.seen;
     const tappe = resp.guide.tappe.map(t => {
@@ -1256,6 +1265,25 @@ export async function onArtworkRecognized(card: any, coords: { lat: number | nul
 export type EsitoAvvioVisita = { ok: boolean; reason?: string; visit?: MuseumVisit; priceCredits?: number; upgradeCredits?: number; hasBasePass?: boolean; sample?: { text: string; language: string } | null; opere?: number; minOpere?: number; prezzoScansione?: number;
   /** 12/09/2026: la chiave del museo a cui legare l'acquisto della Visita (senza scadenza). */
   venueKey?: string | null };
+
+/**
+ * LE VISITE COMPRATE, DALL'ACCOUNT (14/09/2026). L'elenco delle Visite
+ * possedute (user_rewards_claimed, via /api/museums/mine): «I miei download»
+ * le mostra anche se su QUESTO telefono non sono mai state aperte —
+ * reinstallazione, secondo dispositivo — e riaprirle non costa nulla,
+ * perché il server riconosce la Visita comprata.
+ */
+export type VisitaAcquistata = { venueKey: string; venueName: string; poiId: string | null; venuePhotoIcon: string; lingue: string[] };
+export async function fetchVisiteAcquistate(): Promise<VisitaAcquistata[]> {
+  try {
+    const headers = await authHeaders();
+    if (!headers) return [];
+    const res = await fetch(getApiUrl('/api/museums/mine'), { headers });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.visite) ? data.visite : [];
+  } catch { return []; }
+}
 
 /** La chiave del museo della visita in corso (per legare scansioni e ascolti alla Visita posseduta). */
 export function visitaAttivaKey(): string | null {

@@ -74,11 +74,14 @@ export interface WipBackgroundAudioPlugin {
     ascoltataSala?: string;
     inAscoltoTitolo?: string;
     inAscoltoSala?: string;
+    /** Miniatura dell'opera in ascolto (URL): il nativo la scarica nel container dell'App Group per la lock screen. */
+    inAscoltoFotoUrl?: string;
     /** 0...1, assente = sconosciuto (niente barra). */
     inAscoltoProgresso?: number;
     inPausa?: boolean;
     prossimaTitolo?: string;
     prossimaSala?: string;
+    prossimaFotoUrl?: string;
     /** 1-based. */
     indiceTappa?: number;
     tappeTotali?: number;

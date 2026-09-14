@@ -429,8 +429,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
    * attivo) resta comunque il ripiego.
    */
   const aggiornaBannerMuseo = (opts: {
-    inAscolto?: { titolo: string; sala: string };
-    prossima?: { titolo: string; sala: string } | null;
+    inAscolto?: { titolo: string; sala: string; foto?: string };
+    prossima?: { titolo: string; sala: string; foto?: string } | null;
     inPausa?: boolean;
     indice?: number;
   }) => {
@@ -444,9 +444,11 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
       ascoltataSala: ultimaAscoltataRef.current.sala,
       inAscoltoTitolo: opts.inAscolto?.titolo || '',
       inAscoltoSala: opts.inAscolto?.sala || '',
+      inAscoltoFotoUrl: opts.inAscolto?.foto || '',
       inPausa: opts.inPausa ?? false,
       prossimaTitolo: opts.prossima?.titolo || '',
       prossimaSala: opts.prossima?.sala || '',
+      prossimaFotoUrl: opts.prossima?.foto || '',
       indiceTappa: posizione >= 0 ? posizione + 1 : 1,
       tappeTotali: Math.max(ordineAttivo.length, 1),
     }).catch(() => { /* Live Activity non disponibile: il Now Playing resta il ripiego */ });
@@ -1057,8 +1059,8 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
     if (!visit.dalLeader) {
       const pOra = prossimaTappa(getVisitSnapshot(), ordineTragitto);
       aggiornaBannerMuseo({
-        inAscolto: { titolo: tappa.nome, sala: String(tappa.dove || tappa.salaCodice || '') },
-        prossima: (pOra && pOra.indice !== i) ? { titolo: pOra.tappa.nome, sala: String(pOra.tappa.dove || pOra.tappa.salaCodice || '') } : null,
+        inAscolto: { titolo: tappa.nome, sala: String(tappa.dove || tappa.salaCodice || ''), foto: tappa.fotoIcona || tappa.foto || '' },
+        prossima: (pOra && pOra.indice !== i) ? { titolo: pOra.tappa.nome, sala: String(pOra.tappa.dove || pOra.tappa.salaCodice || ''), foto: pOra.tappa.fotoIcona || pOra.tappa.foto || '' } : null,
         indice: i,
       });
     }
@@ -1104,7 +1106,7 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
         // è già calcolata sopra.
         ultimaAscoltataRef.current = { titolo: tappa.nome, sala: String(tappa.dove || tappa.salaCodice || '') };
         aggiornaBannerMuseo({
-          prossima: { titolo: p.tappa.nome, sala: String(p.tappa.dove || p.tappa.salaCodice || '') },
+          prossima: { titolo: p.tappa.nome, sala: String(p.tappa.dove || p.tappa.salaCodice || ''), foto: p.tappa.fotoIcona || p.tappa.foto || '' },
           indice: i,
         });
         // SALA PER SALA (12/09/2026 sera, committente): finita un'opera, se
@@ -1867,10 +1869,14 @@ export default function MuseumVisitSheet({ visit, language, passExpiresAt, onClo
             onChange={(e) => void handleFotoRicordo(e.target.files?.[0] || null)}
           />
 
-          {/* LA PIANTA UFFICIALE: quella del sito del museo, con un tocco */}
-          {visit.guide.pianta && (
+          {/* LA PIANTA UFFICIALE: quella del sito del museo, con un tocco.
+              Prima il rimando scelto dal server (/api/museums/map: «Saalplan»,
+              «Floorplan», PDF della pianta), poi quello trovato alla
+              generazione della guida (14/09/2026: al KHM portava al sito,
+              non alla pianta). */}
+          {(mappaLink[0]?.url || visit.guide.pianta) && (
             <a
-              href={visit.guide.pianta}
+              href={mappaLink[0]?.url || visit.guide.pianta}
               target="_blank"
               rel="noopener noreferrer"
               className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white border border-slate-200 shadow-[0_1px_3px_rgba(15,23,42,0.06)] mb-3 text-left active:scale-[0.99] transition-transform"

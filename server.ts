@@ -6899,13 +6899,37 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
   const chiaveVisita = (venueKey: string) => `mvisit-${String(venueKey || '').replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 110)}`;
   const chiaveLuogoDi = (v: any) => v?.id ? `poi_${v.id}` : `nome_${normalizzaTesto(String(v?.name || '')).replace(/ /g, '_').slice(0, 60)}`;
   const visiteCache = new Map<string, { v: boolean; t: number }>();
-  async function haVisitaMuseo(userId: string, venueKey: string): Promise<boolean> {
-    if (!userId || !venueKey) return false;
-    const k = `${userId}|${venueKey}`;
+  const chiaveNomeDi = (nome: string) => `nome_${normalizzaTesto(String(nome || '')).replace(/ /g, '_').slice(0, 60)}`;
+  /**
+   * UNA SEDE, PIÙ CHIAVI (14/09/2026, Kunsthistorisches Wien: «L'ascolto
+   * delle opere è incluso nel Pass Museo» su una Visita già comprata). La
+   * stessa sede arriva come «poi_<id>» dalla mappa, «nome_<slug>» se scritta
+   * a mano, o con la chiave della riga di libreria; la Visita era stata
+   * registrata con una di queste e l'ascolto ne mandava un'altra. Si cercano
+   * tutte: la chiave dell'app, quella per nome e quelle della libreria per
+   * lo stesso nome.
+   */
+  async function chiaviSede(venueKey: string, venueName: string): Promise<string[]> {
+    const out = new Set<string>();
+    if (venueKey) out.add(venueKey);
+    const nome = String(venueName || '').replace(/["*]/g, '').trim();
+    if (nome) {
+      out.add(chiaveNomeDi(nome));
+      try {
+        const r = await axios.get(`${supabaseUrl}/rest/v1/museum_guides?venue_name=ilike.${encodeURIComponent(`"${nome}"`)}&select=venue_key&limit=10`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
+        for (const row of (Array.isArray(r.data) ? r.data : [])) if (row?.venue_key) out.add(String(row.venue_key));
+      } catch { /* la libreria è un criterio in più, non l'unico */ }
+    }
+    return [...out];
+  }
+  async function haVisitaMuseo(userId: string, venueKey: string, venueName = ''): Promise<boolean> {
+    if (!userId || (!venueKey && !venueName)) return false;
+    const k = `${userId}|${venueKey}|${normalizzaTesto(venueName)}`;
     const c = visiteCache.get(k);
     if (c && c.v && Date.now() - c.t < 600_000) return true;
     try {
-      const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&reward_source_id=eq.${encodeURIComponent(chiaveVisita(venueKey))}&select=id&limit=1`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
+      const chiavi = (await chiaviSede(venueKey, venueName)).map(chiaveVisita);
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&reward_source_id=in.(${chiavi.map(c => `"${c}"`).join(',')})&select=id&limit=1`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
       const v = Array.isArray(r.data) && r.data.length > 0;
       visiteCache.set(k, { v, t: Date.now() });
       return v;
@@ -7072,6 +7096,58 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
       priceCredits: await prezzoDi('museum_pass'),
       priceCreditsTour: await prezzoDi('museum_pass_tour'),
     });
+  });
+
+  // LE VISITE COMPRATE, DALL'ACCOUNT (14/09/2026, committente: «se
+  // acquistata, come itinerari e guide premium, anche la guida museo deve
+  // essere salvata nei miei download e archivio e sempre disponibile»).
+  // L'archivio locale (pacchettoMuseo.ts) vive nel telefono; questo elenco
+  // viene dal server, per ritrovare le Visite su un altro telefono o dopo
+  // una reinstallazione. Nome e foto dalla libreria (museum_guides), il nome
+  // dal POI per le sedi non ancora in libreria.
+  app.get("/api/museums/mine", rateLimiter, async (req, res) => {
+    try {
+      const userId = await verifyUserToken(req);
+      if (!userId) return res.status(401).json({ error: 'login_required' });
+      const svc = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` };
+      const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&select=reward_source_id&limit=300`, { headers: svc, timeout: 8000 });
+      const chiavi = [...new Set((Array.isArray(r.data) ? r.data : []).map((x: any) => String(x?.reward_source_id || '').replace(/^mvisit-/, '')).filter(Boolean))];
+      if (!chiavi.length) return res.json({ ok: true, visite: [] });
+      type VisitaMia = { venueKey: string; venueName: string; poiId: string | null; venuePhotoIcon: string; lingue: string[] };
+      const perChiave = new Map<string, VisitaMia>();
+      for (const k of chiavi) perChiave.set(k, { venueKey: k, venueName: '', poiId: k.startsWith('poi_') ? k.slice(4) : null, venuePhotoIcon: '', lingue: [] });
+      try {
+        const g = await axios.get(`${supabaseUrl}/rest/v1/museum_guides?venue_key=in.(${chiavi.map(k => `"${k}"`).join(',')})&select=venue_key,venue_name,poi_id,language,venue_photo`, { headers: svc, timeout: 8000 });
+        for (const row of (Array.isArray(g.data) ? g.data : [])) {
+          const v = perChiave.get(String(row?.venue_key || ''));
+          if (!v) continue;
+          v.venueName = v.venueName || String(row.venue_name || '');
+          v.poiId = v.poiId || (row.poi_id ? String(row.poi_id) : null);
+          if (!v.venuePhotoIcon && row.venue_photo) {
+            const f = String(row.venue_photo);
+            v.venuePhotoIcon = /commons\.wikimedia\.org/i.test(f) ? fotoCommons(f, 160) : f;
+          }
+          const lingua = String(row.language || '').toUpperCase();
+          if (lingua && !v.lingue.includes(lingua)) v.lingue.push(lingua);
+        }
+      } catch { /* senza libreria restano chiave e POI */ }
+      const senzaNome = [...perChiave.values()].filter(v => !v.venueName && v.poiId);
+      if (senzaNome.length) {
+        try {
+          const p = await axios.get(`${supabaseUrl}/rest/v1/shared_pois?id=in.(${senzaNome.map(v => `"${v.poiId}"`).join(',')})&select=id,name`, { headers: svc, timeout: 8000 });
+          for (const row of (Array.isArray(p.data) ? p.data : [])) {
+            const v = perChiave.get(`poi_${row?.id}`);
+            if (v && !v.venueName) v.venueName = String(row.name || '');
+          }
+        } catch { /* idem */ }
+      }
+      for (const v of perChiave.values()) {
+        if (!v.venueName && v.venueKey.startsWith('nome_')) v.venueName = v.venueKey.slice(5).replace(/_/g, ' ');
+      }
+      res.json({ ok: true, visite: [...perChiave.values()].filter(v => v.venueName) });
+    } catch (e: any) {
+      res.status(500).json({ error: 'server_error', message: e?.message });
+    }
   });
 
   // Acquisto: idempotente — con un pass già attivo NON riaddebita.
@@ -8025,13 +8101,18 @@ ORDER BY DESC(?fama)`;
       // si tengono i più promettenti, mappa delle sale per prima.
       const link = [...html.matchAll(/href=["']([^"'#?]+)["']/gi)].map(m => m[1]);
       const candidati: { href: string; peso: number }[] = [];
-      const RE_PIANTA = /(mappa|map\b|maps\b|plan\b|pianta|plano|planta|karte|plattegrond|floor)/i;
+      const RE_PIANTA = /(mappa|map\b|maps\b|plan\b|saalplan|floorplan|lageplan|raumplan|pianta|plano|planta|karte|plattegrond|floor)/i;
+      // «karte» da sola prende anche Jahreskarte (l'abbonamento) e
+      // Speisekarte (il menù): al Kunsthistorisches la «pianta» era
+      // l'abbonamento annuale (14/09/2026). Biglietti, tessere, ristorante e
+      // negozio non sono mai la pianta.
+      const RE_NON_PIANTA = /(jahreskarte|ticket|bigliett|abbonament|membership|mitglied|restaurant|cafe|menu|speise|fruehst|fr%C3%BChst|shop|newsletter|press)/i;
       for (const l of link) {
         try {
           const u = new URL(l, base.href);
           // La pianta può stare anche su un CDN: si accetta qualunque host
           // purché sia un file, o una pagina dello stesso sito.
-          if (RE_PIANTA.test(u.pathname)) {
+          if (RE_PIANTA.test(u.pathname) && !RE_NON_PIANTA.test(u.pathname)) {
             if (!pianta && /\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) pianta = u.href;
             else if (!paginaPianta && u.hostname.replace(/^www\./, '') === base.hostname.replace(/^www\./, '') && !/\.(pdf|png|jpg|jpeg|svg)$/i.test(u.pathname)) paginaPianta = u.href;
           }
@@ -8467,7 +8548,7 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
         if (!inDiretta) return null;
         if (guida && guidaGratuita(guida)) return null;
         // La Visita di QUESTO museo, comprata una volta, vale per sempre.
-        if (venue && await haVisitaMuseo(userId, chiaveLuogoDi(venue))) return null;
+        if (venue && await haVisitaMuseo(userId, chiaveLuogoDi(venue), venue.name)) return null;
         const pass = await getActiveMuseumPass(userId);
         if (pass?.tier === 'tour') return null;
         return {
@@ -10229,7 +10310,7 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
       // Visita posseduta per questo museo (l'app manda venueKey): l'ascolto
       // delle opere è compreso per sempre.
       const venueKeyArt = String(req.body?.venueKey || '').trim().slice(0, 160);
-      const visitaPosseduta = inDiretta && venueKeyArt ? await haVisitaMuseo(userId, venueKeyArt) : false;
+      const visitaPosseduta = inDiretta ? await haVisitaMuseo(userId, venueKeyArt, museo) : false;
       const gratuita = inDiretta ? (visitaPosseduta || await visitaGratuitaPer(museo, outLang)) : false;
       if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
@@ -11318,7 +11399,7 @@ Rispondi SOLO con JSON: {"trovato": true/false, "letto": "...", "sala": "...", "
       if (!/^(upload\.wikimedia\.org|commons\.wikimedia\.org)$/i.test(urlFoto.hostname)) return res.json({ ok: false, reason: 'no_photo' });
 
       const venueKeyAd = String(req.body?.venueKey || '').trim().slice(0, 160);
-      const gratuita = (venueKeyAd && await haVisitaMuseo(userId, venueKeyAd)) || await visitaGratuitaPer(museo, outLang);
+      const gratuita = (await haVisitaMuseo(userId, venueKeyAd, museo)) || await visitaGratuitaPer(museo, outLang);
       const pass = gratuita ? null : await getActiveMuseumPass(userId);
       if (!pass && !gratuita) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
       const usate = pass ? await countMuseumPassScans(userId, pass.expiresAt) : 0;
@@ -11444,7 +11525,7 @@ Rispondi SOLO con JSON: {"testo": "..."}`;
       let pass: { expiresAt: number; tier: 'base' | 'tour' } | null = null;
       let usate = 0;
       const venueKeyCmp = String(req.body?.venueKey || '').trim().slice(0, 160);
-      const gratuita = inDiretta ? ((venueKeyCmp && await haVisitaMuseo(userId, venueKeyCmp)) || await visitaGratuitaPer(museo, outLang)) : false;
+      const gratuita = inDiretta ? ((await haVisitaMuseo(userId, venueKeyCmp, museo)) || await visitaGratuitaPer(museo, outLang)) : false;
       if (inDiretta && !gratuita) {
         pass = await getActiveMuseumPass(userId);
         if (!pass) return res.json({ ok: false, reason: 'needs_pass', priceCredits: await prezzoDi('museum_pass'), hours: MUSEUM_PASS_HOURS });
@@ -12855,9 +12936,26 @@ I campi "chiusure", "gratis", "nota" e "saleChiuse" scrivili in ${nomeLingua(lan
       }
       // I rimandi ufficiali: la pagina «mappa» del sito e i PDF della pianta.
       const l = await axios.get(`${supabaseUrl}/rest/v1/fonti_poi?poi_id=${inLista}&fonte=in.(mappa,sito)&select=fonte,url,titolo,dati&order=recuperato_at`, { headers: svc, timeout: 6000 });
+      // LA PIANTA, NON IL SITO (14/09/2026, committente sul Kunsthistorisches:
+      // «il link della mappa porta al sito internet ma non direttamente alla
+      // mappa»). Il raccoglitore segnava come «pagina mappa» anche la
+      // Jahreskarte (l'abbonamento: «karte» ≠ pianta) e come PDF della pianta
+      // il menù della colazione, e li metteva prima di «Saalplan» e
+      // «Floorplan». Si ordina per parole della pianta nel titolo/URL e si
+      // scartano biglietti, tessere, ristorante e menù.
+      const parolePianta = /(floor-?plan|saal-?plan|raum-?plan|lage-?plan|gebaeude-?plan|geb%C3%A4udeplan|orientation|pianta|planimetri|mappa|museum-?map|site-?map|\bplan\b|plano|planta|plattegrond|plan-du|plan-de|map)/i;
+      const paroleNo = /(jahreskarte|ticket|bigliett|abbonament|membership|mitglied|restaurant|cafe|caf%C3%A9|menu|men%C3%BC|speise|fr%C3%BChst|fruehst|karte\.pdf|shop|newsletter|press)/i;
+      const punteggioLink = (x: any) => {
+        const testo = `${x?.titolo || ''} ${decodeURIComponent(String(x?.url || ''))}`;
+        if (paroleNo.test(testo) && !parolePianta.test(testo.replace(/jahreskarte/gi, ''))) return -1;
+        return (parolePianta.test(testo) ? 2 : 0) + (x.fonte === 'mappa' ? 1 : 0);
+      };
       const links = (Array.isArray(l.data) ? l.data : [])
         .filter((x: any) => (x.fonte === 'sito' && x?.dati?.paginaMappa === true) || (x.fonte === 'mappa' && String(x?.dati?.tipo || '') === 'pdf'))
-        .map((x: any) => ({ url: x.url, titolo: x.titolo || '', tipo: x.fonte === 'sito' ? 'pagina' : 'pdf' }))
+        .map((x: any) => ({ url: x.url, titolo: x.titolo || '', tipo: x.fonte === 'sito' ? 'pagina' : 'pdf', punti: punteggioLink(x) }))
+        .filter((x: any) => x.punti >= 0)
+        .sort((a: any, b: any) => b.punti - a.punti)
+        .map(({ punti: _p, ...x }: any) => x)
         .slice(0, 4);
       // Lo stesso museo può avere piante sotto due prefissi (wv-/wd-): prima
       // quelle con i pin, poi le altre; i pin sul bordo non si mostrano.
