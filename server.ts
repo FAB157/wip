@@ -2637,6 +2637,21 @@ function togliFrasiGeneriche(testo: string): string {
   const frasi = t.split(/(?<=[.!?])\s+/).filter(f => !FRASI_GENERICHE_VIETATE.test(f));
   return frasi.join(' ').trim();
 }
+/**
+ * SCRITTURA ESTRANEA (14/09/2026, Kunsthistorisches: «un punto di
+ * riferimento绝对 per la cronologia»): i modelli a volte infilano una parola
+ * cinese, cirillica o araba in un testo italiano. In una lingua latina non
+ * ci sta mai: si toglie la parola e lo spazio doppio che lascia. Per russo e
+ * cinese non si tocca nulla (lì quei caratteri sono il testo).
+ */
+function senzaScritturaEstranea(testo: string, lingua: string): string {
+  const l = String(lingua || '').toLowerCase().slice(0, 2);
+  if (!testo || l === 'zh' || l === 'ru' || l === 'ja' || l === 'ko' || l === 'ar') return testo;
+  return String(testo)
+    .replace(/[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯Ѐ-ӿ؀-ۿ]+/g, '')
+    .replace(/ {2,}/g, ' ').replace(/ ([,.;:!?])/g, '$1').trim();
+}
+
 function regolaSpecificita(poiName: string, opzioni: { soloSpecificita?: boolean } = {}): string {
   const specificita = `
            REGOLA FONDAMENTALE — SPECIFICITÀ (ha la precedenza su tutto il resto): OGNI frase deve contenere un riferimento concreto a "${poiName}" o a un suo elemento preciso preso dal materiale — un'opera, una sala, una data, un materiale, un nome di persona, un dettaglio architettonico, un fatto, una misura. Sono VIETATE le frasi generiche che potrebbero valere tali e quali per qualunque altro museo, monumento o luogo: niente «un luogo ricco di storia», «un'esperienza indimenticabile», «merita una visita», «un'atmosfera unica», «una tappa imperdibile», «vi lascerà senza fiato», «un tuffo nel passato» e simili. Niente introduzioni o chiusure di circostanza. Se per una frase non hai un dettaglio specifico da dire, NON riempirla con parole vuote: sostituiscila con un altro dettaglio concreto preso dal materiale.`;
@@ -6930,7 +6945,34 @@ Massimo 10 luoghi, senza duplicati. Nomi puliti (niente emoji, numerazione o has
     try {
       const chiavi = (await chiaviSede(venueKey, venueName)).map(chiaveVisita);
       const r = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&reward_source_id=in.(${chiavi.map(c => `"${c}"`).join(',')})&select=id&limit=1`, { headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` }, timeout: 5000 });
-      const v = Array.isArray(r.data) && r.data.length > 0;
+      let v = Array.isArray(r.data) && r.data.length > 0;
+      // IL PASS «VISITA» COMPRATO PRIMA DEL 12/09 NON SCADE (14/09/2026,
+      // committente al Kunsthistorisches: «se è acquistata non può dare
+      // questo errore»). Fino al 12/09 la visita guidata si comprava come
+      // Pass Museo di livello «tour» A TEMPO (mpass-<scadenza>-t-…); dal
+      // 12/09 è una Visita per museo senza scadenza (museum_visit). Chi ha
+      // pagato il vecchio pass da 150 crediti ha pagato la stessa cosa: al
+      // primo ascolto dopo la scadenza il pass diventa la Visita del museo
+      // che sta visitando, una volta sola per pass (segnaposto
+      // mvisit-legacy-<pass>), e da lì vale per sempre.
+      if (!v && venueKey) {
+        try {
+          const H = { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}`, 'Content-Type': 'application/json' };
+          const vecchi = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_pass&reward_source_id=like.${encodeURIComponent('mpass-%-t-%')}&created_at=lt.2026-09-12T00:00:00Z&select=reward_source_id&limit=5`, { headers: H, timeout: 5000 });
+          for (const p of (Array.isArray(vecchi.data) ? vecchi.data : [])) {
+            const marker = `mvisit-legacy-${String(p.reward_source_id || '').slice(6, 100)}`;
+            const usato = await axios.get(`${supabaseUrl}/rest/v1/user_rewards_claimed?user_id=eq.${userId}&reward_source_type=eq.museum_visit&reward_source_id=eq.${encodeURIComponent(marker)}&select=id&limit=1`, { headers: H, timeout: 5000 });
+            if (Array.isArray(usato.data) && usato.data.length) continue;
+            await axios.post(`${supabaseUrl}/rest/v1/user_rewards_claimed`, [
+              { user_id: userId, reward_source_type: 'museum_visit', reward_source_id: marker },
+              { user_id: userId, reward_source_type: 'museum_visit', reward_source_id: chiaveVisita(venueKey) },
+            ], { headers: { ...H, Prefer: 'resolution=ignore-duplicates' }, timeout: 5000 });
+            console.log(`[VisitaMuseo] pass «tour» del ${String(p.reward_source_id)} convertito in Visita di ${venueKey} per ${userId}`);
+            v = true;
+            break;
+          }
+        } catch (e: any) { console.warn('[VisitaMuseo] conversione del vecchio pass non riuscita:', e?.message); }
+      }
       visiteCache.set(k, { v, t: Date.now() });
       return v;
     } catch { return false; }
@@ -9717,9 +9759,9 @@ OPERA DI PARTENZA: ${currentWork ? `"${currentWork}"` : 'nessuna'}.`;
               // il muro misurato su tutte le 26 guide indipendentemente dalla
               // fonte — il modello scriveva fino a 250 parole, campoOpzionale
               // le tagliava qui. 1.900 caratteri copre 250 parole con margine.
-              const p = campoOpzionale(elenco[i]?.perche, 1900);
+              const p = senzaScritturaEstranea(campoOpzionale(elenco[i]?.perche, 1900), langCfg.wiki);
               if (p) (o as any)._perche = p;
-              const c = campoOpzionale(elenco[i]?.curiosita, 500);
+              const c = senzaScritturaEstranea(campoOpzionale(elenco[i]?.curiosita, 500), langCfg.wiki);
               if (c) (o as any)._curiosita = c;
             });
           } catch (e: any) {
