@@ -156,12 +156,18 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
   // (App Review, Guideline 4). Con un giro di più tappe resta Google, che
   // accetta le tappe intermedie; Mappe no.
   const dueNavigatori = Capacitor.getPlatform() === 'ios' && !modoItinerario && !giroInAuto;
+  const primaTappa: NavChoicePoi | null = modoItinerario ? (tappe!.find((t) => Number.isFinite(t?.lat) && Number.isFinite(t?.lon)) || null) : giroInAuto ? (giroInAuto[0] || null) : null;
+  const appleSuGiro = Capacitor.getPlatform() === 'ios' && !dueNavigatori && !!primaTappa;
+  // (14/09/2026) Sopra la barra delle schede e dentro l'area sicura di iPhone:
+  // il foglio sta sopra tutto (z 10050), non finisce sotto la barra in basso
+  // (padding = barra + home indicator) e se non entra scorre da solo.
   const sheet = (
     <div
-      className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
+      className="fixed inset-0 z-[10050] flex items-end justify-center bg-black/40"
+      style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 5.5rem)' }}
       onClick={(e) => { stop(e); onClose(); }}
     >
-      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden" onClick={stop}>
+      <div className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-y-auto max-h-[calc(100dvh-8rem)]" style={{ WebkitOverflowScrolling: 'touch' } as any} onClick={stop}>
         <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
           {titolo || poi.name || poi.nome}
         </p>
@@ -206,6 +212,21 @@ export default function NavChoiceSheet({ poi, language, onClose, tappe, onAPiedi
             <span className="flex-1">
               <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto_apple", lang)}</span>
               <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_apple_sub", lang)}</span>
+            </span>
+          </button>
+        )}
+        {/* (14/09/2026) Anche con un itinerario o un giro di più tappe, su
+            iPhone Mappe di Apple deve esserci: porta alla prima tappa (Mappe
+            non accetta le tappe intermedie); Google resta col giro intero. */}
+        {appleSuGiro && (
+          <button
+            onClick={(e) => { stop(e); onClose(); void navigaInAutoVerso(primaTappa!, 'apple'); }}
+            className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
+          >
+            <span className="text-xl">🚗</span>
+            <span className="flex-1">
+              <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto_apple", lang)}</span>
+              <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_apple_tappa_sub", lang).replace("{n}", String(primaTappa!.name || primaTappa!.nome || ""))}</span>
             </span>
           </button>
         )}

@@ -22,7 +22,7 @@ import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { useFavorites } from '../lib/favorites';
 import { supabase } from '../lib/supabase';
 import { getTranslatedPoiName } from '../lib/poiNameI18n';
-import { navigaAPiediVerso, navigaInAutoVerso } from './NavChoiceSheet';
+import NavChoiceSheet from './NavChoiceSheet';
 import { traduciVoci, tradotto } from '../lib/atlanteI18n';
 import { apriScheda } from '../lib/apriScheda';
 import { fotoDaWikidata } from '../lib/wikidataFoto';
@@ -654,67 +654,21 @@ export default function PoiPopupContent({ poi, onGuideClick, language, setMarker
     setShowNavChoice(v => !v);
   };
 
-  const navigaAPiedi = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setShowNavChoice(false);
-    // Verso la PORTA; senza porta, il civico dell'indirizzo (la via
-    // principale); altrimenti il centroide. Un solo imbuto (NavChoiceSheet)
-    // per popup, card, scheda e radar: la forma dell'evento e la scelta del
-    // punto d'arrivo restano una.
-    void navigaAPiediVerso(poi as any);
-  };
-
-  const navigaInAuto = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setShowNavChoice(false);
-    void navigaInAutoVerso(poi as any);
-  };
-
   // La scelta compare come foglio in basso invece che dentro la card: le tre
   // schede (atlante, utility, completa) hanno strutture diverse e una ha i
   // bottoni in griglia — un pannello inline la romperebbe.
-  const sceltaNav = !showNavChoice ? null : (
-    <div
-      className="fixed inset-0 z-[10000] flex items-end justify-center bg-black/40"
-      onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
-    >
-      <div
-        className="w-full max-w-sm m-3 rounded-2xl bg-white shadow-2xl overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <p className="px-4 pt-3 pb-2 text-[11px] font-bold uppercase tracking-wide text-gray-400 truncate">
-          {displayName(poi, language)}
-        </p>
-        <button
-          onClick={navigaAPiedi}
-          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
-        >
-          <span className="text-xl">🚶</span>
-          <span className="flex-1">
-            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_a_piedi", language)}</span>
-            <span className="block text-[11px] text-gray-500">{getTranslation("nav_a_piedi_sub", language)}</span>
-          </span>
-        </button>
-        <button
-          onClick={navigaInAuto}
-          className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-gray-50 transition-colors border-t border-gray-100"
-        >
-          <span className="text-xl">🚗</span>
-          <span className="flex-1">
-            <span className="block text-sm font-bold text-gray-900">{getTranslation("nav_in_auto", language)}</span>
-            <span className="block text-[11px] text-gray-500">{getTranslation("nav_in_auto_sub", language)}</span>
-          </span>
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setShowNavChoice(false); }}
-          className="w-full py-3 text-sm font-bold text-gray-500 border-t border-gray-100 hover:bg-gray-50 transition-colors"
-        >
-          {getTranslation("cancel", language)}
-        </button>
-      </div>
-    </div>
+  // (14/09/2026, iPhone: «se clicco su navigazione non scorre, rimane
+  // bloccata senza poter selezionare auto») Il foglio era un `fixed` scritto
+  // QUI DENTRO, cioè dentro il popup della mappa che ha un transform: il
+  // fixed si agganciava al popup, usciva tagliato sotto la barra e senza
+  // sfondo scuro. Ora è lo stesso NavChoiceSheet di scheda, card e radar,
+  // montato con portal sul body: su iPhone offre Mappe di Apple E Google Maps.
+  const sceltaNav = (
+    <NavChoiceSheet
+      poi={showNavChoice ? ({ ...(poi as any), name: displayName(poi, language) }) : null}
+      language={language}
+      onClose={() => setShowNavChoice(false)}
+    />
   );
 
   // ── Deriva categorie per styling ──────────────────────────────────

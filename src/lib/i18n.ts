@@ -1552,6 +1552,12 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     IT: "Apre l'app Mappe di Apple", EN: "Opens the Apple Maps app", FR: "Ouvre l'app Plans d'Apple", ES: "Abre la app Mapas de Apple",
     DE: "Öffnet die Apple-Karten-App", RU: "Откроет приложение Apple Карты", ZH: "打开 Apple 地图"
   },
+  // Itinerario o giro di più tappe su iPhone (14/09/2026): Mappe di Apple non
+  // accetta le tappe intermedie, quindi porta alla PRIMA tappa.
+  nav_in_auto_apple_tappa_sub: {
+    IT: "Mappe di Apple, fino alla prima tappa: {n}", EN: "Apple Maps, to the first stop: {n}", FR: "Plans d'Apple, jusqu'à la première étape : {n}", ES: "Mapas de Apple, hasta la primera parada: {n}",
+    DE: "Apple Karten, bis zur ersten Station: {n}", RU: "Apple Карты, до первой остановки: {n}", ZH: "Apple 地图，前往第一站：{n}"
+  },
   nav_in_auto_google: {
     IT: "In auto con Google Maps", EN: "By car with Google Maps", FR: "En voiture avec Google Maps", ES: "En coche con Google Maps",
     DE: "Mit dem Auto in Google Maps", RU: "На машине в Google Картах", ZH: "驾车（谷歌地图）"
