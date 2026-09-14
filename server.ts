@@ -8083,6 +8083,27 @@ ORDER BY DESC(?fama)`;
   }): Promise<void> {
     try {
       const tappe = Array.isArray(args.guide?.tappe) ? args.guide.tappe : [];
+      // ANTI-REGRESSIONE (14/09/2026, «finalizza i primi 100»). Il secondo
+      // giro sui musei 1-100 ha peggiorato alcune guide (Orsay 30→20 tappe,
+      // Tuol Sleng 14→3, Drottningholm ha perso le 16 sale): una
+      // rigenerazione che esce peggio della guida già in libreria NON la
+      // sostituisce. Punteggio = tappe×3 + foto×2 + sale; la nuova vince
+      // solo se non è sotto la vecchia. Vale per ogni chiamante (semina,
+      // rifacimento forzato, al volo): la libreria può solo migliorare.
+      const punteggio = (t: any[]) => t.length * 3 + t.filter((x: any) => x?.foto).length * 2 + t.filter((x: any) => String(x?.dove || '').trim()).length;
+      try {
+        const esistente = await axios.get(`${supabaseUrl}/rest/v1/museum_guides`, {
+          headers: { apikey: supabaseServiceKey, Authorization: `Bearer ${supabaseServiceKey}` },
+          params: { select: 'guide,stops_count', venue_key: `eq.${args.venueKey}`, language: `eq.${args.language}`, limit: 1 },
+          timeout: 6000,
+        });
+        const vecchia = Array.isArray(esistente.data) ? esistente.data[0] : null;
+        const tappeVecchie = Array.isArray(vecchia?.guide?.tappe) ? vecchia.guide.tappe : [];
+        if (tappeVecchie.length >= 6 && punteggio(tappe) < punteggio(tappeVecchie)) {
+          console.warn(`[VenueGuide] libreria: «${args.venue.name}» [${args.language}] nuova ${tappe.length} tappe/${tappe.filter((x: any) => x?.foto).length} foto peggiore della vecchia ${tappeVecchie.length}/${tappeVecchie.filter((x: any) => x?.foto).length}: tengo la vecchia`);
+          return;
+        }
+      } catch { /* libreria non leggibile: si salva come prima */ }
       await axios.post(`${supabaseUrl}/rest/v1/museum_guides`, {
         venue_key: args.venueKey,
         venue_name: args.venue.name,
@@ -8356,8 +8377,13 @@ ${pezzi.map((v, i) => `${i}. ${v}`).join('\n')}`;
     // passi facoltativi (foto opera per opera, categoria Commons, revisore e
     // riscrittura) si saltano quando resta poco: una guida senza revisore è
     // meglio di nessuna guida, e il giro dopo la rifà completa.
+    // (14/09/2026, «finalizza i primi 100») Il tetto vale per Vercel. Sul
+    // droplet il server locale non ha limiti e la semina notturna saltava
+    // comunque foto e revisore sui musei grandi: VENUE_GUIDE_BUDGET_MS nel
+    // .env del droplet (es. 1500000) alza il tetto e nessun passo si salta.
     const avvioRotta = Date.now();
-    const msRimasti = () => 285_000 - (Date.now() - avvioRotta);
+    const budgetRotta = (() => { const v = Number(process.env.VENUE_GUIDE_BUDGET_MS); return Number.isFinite(v) && v >= 60_000 ? v : 285_000; })();
+    const msRimasti = () => budgetRotta - (Date.now() - avvioRotta);
     try {
       // Chi sta chiamando: un visitatore fermo davanti al museo, oppure la
       // semina di sfondo (che entra col segreto di infrastruttura, mai mandato
