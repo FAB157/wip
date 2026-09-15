@@ -2524,6 +2524,13 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                 </div>
               </div>
               
+              {/* COUPON MAI SU iOS (15/09/2026): quarto rifiuto Apple della 1.3,
+                  Guideline 3.1.1 — lo screenshot del revisore inquadrava proprio
+                  questo riquadro: un codice che «regala crediti» e' uno sblocco
+                  fuori dagli acquisti in-app. Nello Shop era gia' stato tolto il
+                  30/08 per lo stesso motivo; qui era rimasto. Sul web e su
+                  Android resta (voucher delle strutture partner). */}
+              {Capacitor.getPlatform() !== 'ios' && (
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm mb-4">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-600">
@@ -2563,6 +2570,7 @@ export default function ProfileScreen({ guideMode, setGuideMode, itinerary, onRe
                   )}
                 </div>
               </div>
+              )}
               
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/10 shadow-sm">
                 <div className="flex items-center gap-3 mb-4">
