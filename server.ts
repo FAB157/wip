@@ -14,6 +14,14 @@ import Groq from "groq-sdk";
 // AWS_SECRET_ACCESS_KEY (nessuna chiave configurata ancora: Polly resta
 // inerte finché non arrivano, la catena scavalca al motore successivo).
 import { PollyClient, SynthesizeSpeechCommand } from "@aws-sdk/client-polly";
+// Gemini TTS nativo (16/09/2026, ripiego dopo Google Cloud TTS): risponde in
+// PCM grezzo, mai MP3 — lamejs lo incapsula in un MP3 vero in puro JS, perché
+// su Vercel non c'è ffmpeg da chiamare come processo esterno. Il pacchetto
+// "lamejs" storico (zhuker) non espone nulla via require/import in Node (il
+// suo entrypoint gira solo come <script> di pagina, verificato in locale: sia
+// require("lamejs") che require("lamejs/lame.all.js") falliscono); il fork
+// mantenuto "@breezystack/lamejs" lo corregge.
+import { Mp3Encoder } from "@breezystack/lamejs";
 import * as agentTools from "./agentTools.js";
 // Opere di un museo/chiesa opera per opera (12/09/2026): funzione pura,
 // nessuna dipendenza da server.ts — vedi la sua intestazione per il perché.
@@ -312,7 +320,7 @@ let agnesKeyCounter = 0;
 let cerebrasKeyCounter = 0;
 
 async function callUniversalAi(
-  primaryEngine: "agnes" | "deepseek" | "groq" | "together" | "mistral" | "cerebras" | "omniroute",
+  primaryEngine: "agnes" | "deepseek" | "gonka" | "groq" | "together" | "mistral" | "cerebras" | "omniroute",
   messages: any[],
   options: any = {},
   featureContext: string = "general",
@@ -329,6 +337,22 @@ async function callUniversalAi(
   const deepseekKey = process.env.DEEPSEEK_API_KEY || process.env.VITE_DEEPSEEK_API_KEY;
   const togetherKey = process.env.TOGETHER_API_KEY || process.env.VITE_TOGETHER_API_KEY;
   const mistralKey = process.env.MISTRAL_API_KEY || process.env.VITE_MISTRAL_API_KEY;
+  // GonkaRouter (16/09/2026): canale SEPARATO da DEEPSEEK_API_KEY, ammesso
+  // anche in background (vedi seminaGonkaConsentita sotto) — a differenza del
+  // canale diretto DeepSeek, che resta solo on the fly. `finalModel` viene
+  // prefissato "gonka:" apposta: il model id di default contiene la stringa
+  // "deepseek" (deepseek-ai/DeepSeek-V4-Flash-0731) e senza il prefisso
+  // finirebbe scambiato per il canale diretto nella telemetria sotto.
+  //
+  // DUE ACCOUNT SEPARATI (16/09/2026, committente): un pool per gli itinerari
+  // e uno per i musei, ognuno col proprio credito omaggio da $20 — non vanno
+  // mescolati. Il chiamante DEVE passare `options.gonkaPool: 'itinerari' |
+  // 'musei'`; senza pool esplicito il motore gonka viene saltato (non c'è un
+  // fallback "generico": non sapremmo quale dei due account addebitare).
+  const gonkaKeys: Record<string, string | undefined> = {
+    itinerari: process.env.GONKAROUTER_API_KEY_ITINERARI || process.env.VITE_GONKAROUTER_API_KEY_ITINERARI,
+    musei: process.env.GONKAROUTER_API_KEY_MUSEI || process.env.VITE_GONKAROUTER_API_KEY_MUSEI,
+  };
 
   async function tryEngine(engine: string) {
     if (engine === "agnes") {
@@ -370,6 +394,31 @@ async function callUniversalAi(
         // tronca in silenzio gli output lunghi (guide premium, itinerari).
         max_tokens: options.max_tokens || 8192
       }, { headers: { "Authorization": `Bearer ${deepseekKey}` }, timeout: 120000 });
+      textContent = res.data.choices?.[0]?.message?.content || "";
+      responseData = res.data;
+      tokensUsed = res.data.usage?.total_tokens || 0;
+      return true;
+    }
+
+    if (engine === "gonka") {
+      const pool = options.gonkaPool as ('itinerari' | 'musei' | undefined);
+      const gonkaKeyPool = pool ? gonkaKeys[pool] : undefined;
+      if (!pool || !gonkaKeyPool) return false; // nessun pool = nessun account da addebitare
+      // Test qualità/velocità del 16/09/2026 su 3 modelli offerti: GLM-5.3-Flash
+      // ha impiegato oltre 11 minuti senza rispondere (task interrotto) —
+      // MAI usarlo come default. DeepSeek-V4-Flash-0731 (~1-2 min, testo
+      // aderente alla regola di specificità) resta il default; MiniMax-M2.7
+      // espone il proprio reasoning (<think>...</think>) dentro il content e
+      // va ripulito dal chiamante se mai scelto esplicitamente.
+      const gonkaModel = options.gonkaModel || "deepseek-ai/DeepSeek-V4-Flash-0731";
+      finalModel = `gonka:${pool}:${gonkaModel}`;
+      const res = await axios.post("https://api.gonkarouter.io/v1/chat/completions", {
+        model: gonkaModel,
+        messages,
+        response_format: options.response_format,
+        temperature: options.temperature || 0.7,
+        max_tokens: options.max_tokens || 8192
+      }, { headers: { "Authorization": `Bearer ${gonkaKeyPool}` }, timeout: 180000 });
       textContent = res.data.choices?.[0]?.message?.content || "";
       responseData = res.data;
       tokensUsed = res.data.usage?.total_tokens || 0;
@@ -648,23 +697,36 @@ async function callUniversalAi(
   ) {
     consentiti = [...consentiti, 'deepseek'];
   }
-  // LA SEMINA PUÒ PAGARE, CON UN TETTO (13/09/2026, committente: «proviamo
-  // con DeepSeek e tetto 20 USD»). Quando i motori gratuiti sono esauriti
-  // (Gemini 500 richieste/giorno, Groq 200k token/giorno per chiave), i
-  // lavori di sfondo NON si fermano più: DeepSeek entra in coda, ma la
-  // spesa del mese dei soli script è contata in api_cache
-  // (deepseek_semina_usd_YYYY-MM) e oltre DEEPSEEK_SEMINA_LIMIT_USD (20 $)
-  // si torna alla catena gratuita e basta. Il tetto vale solo per la semina:
-  // l'utente in diretta ha la sua regola sopra.
+  // DEEPSEEK CANALE DIRETTO: MAI IN BACKGROUND (regola assoluta dal
+  // 16/09/2026, che sostituisce il vecchio meccanismo "semina può pagare con
+  // un tetto" del 13/09 — quel blocco permetteva a DeepSeek diretto di
+  // entrare in coda nei lavori di sfondo quando DEEPSEEK_SEMINA_LIMIT_USD
+  // era sopra zero. Ora che Gonka copre il fabbisogno di sfondo (vedi sotto),
+  // quella porta va tenuta chiusa nel codice, non solo a env var=0: se
+  // qualcuno rialzasse per errore DEEPSEEK_SEMINA_LIMIT_USD, il canale
+  // diretto NON deve comunque poter rientrare in coda per `background-script`.
+  // Restano intatti sopra: `ultimaSpiaggiaPagante` (utente in diretta) e il
+  // blocco Gonka sotto (background ammesso lì, non qui).
+  // GONKA IN SFONDO (16/09/2026, committente: «Mai in background DeepSeek
+  // canale diretto — tutto il resto DeepSeek tramite Gonka anche in
+  // background»). A differenza del blocco sopra, qui il tetto rappresenta il
+  // CREDITO OMAGGIO iniziale ($20, tariffa Gonka $0.0018/1M token su tutti i
+  // modelli): esaurito quello ci si ferma e si torna ai motori gratuiti,
+  // NON si passa a spesa reale senza un nuovo ordine esplicito — per questo
+  // GONKA_SEMINA_LIMIT_USD di default è 20, come il credito, non un budget
+  // aperto. Due pool separati (itinerari/musei, due account diversi): serve
+  // `options.gonkaPool` esplicito, altrimenti non si sa quale addebitare e
+  // il motore resta fuori dalla coda.
+  const gonkaPoolRichiesto = options.gonkaPool as ('itinerari' | 'musei' | undefined);
   if (
     userId === 'background-script' &&
-    !options.ultimaSpiaggiaPagante &&
-    !vietati.has('deepseek') &&
-    !consentiti.includes('deepseek') &&
-    !!deepseekKey &&
-    (await seminaDeepSeekConsentita())
+    !!gonkaPoolRichiesto &&
+    !vietati.has('gonka') &&
+    !consentiti.includes('gonka') &&
+    !!gonkaKeys[gonkaPoolRichiesto] &&
+    (await seminaGonkaConsentita(gonkaPoolRichiesto))
   ) {
-    consentiti = [...consentiti, 'deepseek'];
+    consentiti = [...consentiti, 'gonka'];
   }
   // Un motore che ha appena detto "quota esaurita" si salta finché il tetto
   // non si ricarica: nella semina del 19/08/2026 groq era esaurito e veniva
@@ -729,7 +791,15 @@ async function callUniversalAi(
 
   // Telemetry precisa al centesimo
   try {
-    const apiName = finalModel.includes('agnes') ? 'agnes_flash' : (finalModel.includes('deepseek') ? 'deepseek_v4_flash' : ((finalModel.includes('llama') || finalModel.includes('gpt-oss')) ? 'groq_llama' : (finalModel.includes('gemini') ? 'gemini_flash' : 'together_ai')));
+    // finalModel dei modelli Gonka è prefissato "gonka:" apposta (vedi
+    // commento su gonkaKey) perché il model id di default (deepseek-ai/...)
+    // contiene la stringa "deepseek" e verrebbe scambiato per il canale
+    // diretto qui sotto se non controllato PER PRIMO.
+    const isGonka = finalModel.startsWith('gonka:');
+    // finalModel = "gonka:<pool>:<model id>" — il pool serve qui sotto per
+    // addebitare il contatore/account giusto (itinerari o musei).
+    const gonkaPoolUsato = isGonka ? (finalModel.split(':')[1] as 'itinerari' | 'musei') : undefined;
+    const apiName = isGonka ? `gonka_${gonkaPoolUsato}` : (finalModel.includes('agnes') ? 'agnes_flash' : (finalModel.includes('deepseek') ? 'deepseek_v4_flash' : ((finalModel.includes('llama') || finalModel.includes('gpt-oss')) ? 'groq_llama' : (finalModel.includes('gemini') ? 'gemini_flash' : 'together_ai'))));
 
     // Costo reale DeepSeek V4 Flash (listino ufficiale, aggiornato 17/08/2026):
     // cache hit/miss separati sull'input, tariffa peak dimezzata rispetto a
@@ -737,7 +807,11 @@ async function callUniversalAi(
     // "deepseek-chat" (unico model usato in questo file) è l'alias del
     // tier Flash: mai il Pro, più caro, qui non serve.
     let realCost = 0;
-    if (finalModel.includes('deepseek')) {
+    if (isGonka) {
+      // Listino Gonka (16/09/2026): $0.0018 per 1M token, stessa tariffa per
+      // TUTTI i modelli e per input/output — nessun calcolo cache/peak da fare.
+      realCost = (tokensUsed || 0) * (0.0018 / 1000000);
+    } else if (finalModel.includes('deepseek')) {
       const utcHour = new Date().getUTCHours();
       const isPeak = (utcHour >= 1 && utcHour < 4) || (utcHour >= 6 && utcHour < 10);
       const rates = isPeak
@@ -764,11 +838,15 @@ async function callUniversalAi(
     // 'background-script' non è un uuid: con quello l'insert completo
     // falliva e il costo non veniva registrato (13/09/2026).
     const realUserId = userId && userId !== 'mock-user-id' && userId !== 'anonymous' && userId !== 'background-script' ? userId : null;
-    // Il tetto della semina: la spesa DeepSeek degli script si somma qui.
-    if (userId === 'background-script' && finalModel.includes('deepseek') && realCost > 0) {
+    // Il tetto della semina: la spesa degli script si somma qui, sul
+    // contatore del canale giusto (Gonka ha il proprio, separato da DeepSeek
+    // diretto — vedi seminaGonkaConsentita).
+    if (userId === 'background-script' && isGonka && gonkaPoolUsato && realCost > 0) {
+      await registraSpesaSeminaGonka(gonkaPoolUsato, realCost).catch(() => {});
+    } else if (userId === 'background-script' && finalModel.includes('deepseek') && realCost > 0) {
       await registraSpesaSeminaDeepSeek(realCost).catch(() => {});
     }
-    const cachePart = finalModel.includes('deepseek') ? ` | CacheHit: ${responseData.usage?.prompt_cache_hit_tokens || 0}` : '';
+    const cachePart = (!isGonka && finalModel.includes('deepseek')) ? ` | CacheHit: ${responseData.usage?.prompt_cache_hit_tokens || 0}` : '';
     await insertApiUsageLog({
       api_name: apiName,
       feature_context: `${featureContext} | Token: ${tokensUsed}${userPart}${cachePart}`,
@@ -784,35 +862,51 @@ async function callUniversalAi(
   return { ...responseData, data: textContent, truncated: wasTruncated };
 }
 
-// ── TETTO DEEPSEEK PER LA SEMINA (13/09/2026) ─────────────────────────
-// Contatore mensile in api_cache, letto prima di accodare DeepSeek a un
-// lavoro di sfondo e aggiornato a ogni risposta pagata. Fail-closed: se il
-// contatore non si legge, la semina resta gratuita.
-// «0» SPEGNE DeepSeek nella semina (13/09/2026 sera, committente: «basta
-// DeepSeek fino a ordine contrario» dopo i primi 100 musei + 30 siti):
-// con `|| 20` lo zero tornava 20 e non c'era modo di chiuderlo senza
-// togliere la chiave. Assente o non numerico = 20.
-const DEEPSEEK_SEMINA_LIMIT_USD = (() => {
-  const raw = String(process.env.DEEPSEEK_SEMINA_LIMIT_USD ?? '').trim();
+// ── SPESA DEEPSEEK CANALE DIRETTO (13/09/2026, ridefinito 16/09) ──────
+// Il canale diretto non entra più in coda per `background-script` (vedi il
+// commento sopra "DEEPSEEK CANALE DIRETTO: MAI IN BACKGROUND"): questo
+// contatore resta solo per tracciare la spesa dell'uso on the fly rimasto
+// (`ultimaSpiaggiaPagante`), non più per decidere un tetto della semina.
+const chiaveSpesaSemina = () => `deepseek_semina_usd_${new Date().toISOString().slice(0, 7)}`;
+async function registraSpesaSeminaDeepSeek(usd: number): Promise<void> {
+  const row = await getFromCache(chiaveSpesaSemina());
+  const spesa = (Number(row?.text_content) || 0) + usd;
+  await saveToCache(chiaveSpesaSemina(), 'counter', spesa.toFixed(6));
+}
+
+// ── TETTO GONKA PER LA SEMINA (16/09/2026) ────────────────────────────
+// Stesso meccanismo di sopra ma canale e contatore SEPARATI: la regola del
+// committente è «mai DeepSeek canale diretto in background, ma tramite
+// Gonka anche in background». Il tetto di default (20 $) rappresenta il
+// credito omaggio iniziale di GonkaRouter, non un budget a pagamento reale
+// («solo i $20 di credito gratuito, poi stop» — 16/09/2026): esaurito, la
+// semina torna ai motori gratuiti finché non arriva un nuovo ordine con un
+// tetto più alto.
+// Due pool = due account = due contatori e due tetti separati, mai
+// mescolati (musei e itinerari hanno ciascuno il proprio credito omaggio).
+const gonkaSeminaLimitUsd = (pool: 'itinerari' | 'musei') => {
+  const envName = pool === 'musei' ? 'GONKA_SEMINA_LIMIT_USD_MUSEI' : 'GONKA_SEMINA_LIMIT_USD_ITINERARI';
+  const raw = String(process.env[envName] ?? '').trim();
   const v = Number(raw);
   return raw !== '' && Number.isFinite(v) && v >= 0 ? v : 20;
-})();
-const chiaveSpesaSemina = () => `deepseek_semina_usd_${new Date().toISOString().slice(0, 7)}`;
-async function seminaDeepSeekConsentita(): Promise<boolean> {
+};
+const chiaveSpesaSeminaGonka = (pool: 'itinerari' | 'musei') => `gonka_semina_usd_${pool}_${new Date().toISOString().slice(0, 7)}`;
+async function seminaGonkaConsentita(pool: 'itinerari' | 'musei'): Promise<boolean> {
   try {
-    const row = await getFromCache(chiaveSpesaSemina());
+    const row = await getFromCache(chiaveSpesaSeminaGonka(pool));
     const spesa = Number(row?.text_content) || 0;
-    if (spesa >= DEEPSEEK_SEMINA_LIMIT_USD) {
-      console.warn(`[Universal AI] semina: DeepSeek oltre il tetto mensile (${spesa.toFixed(2)}/${DEEPSEEK_SEMINA_LIMIT_USD} $), resto sui gratuiti`);
+    const tetto = gonkaSeminaLimitUsd(pool);
+    if (spesa >= tetto) {
+      console.warn(`[Universal AI] semina: Gonka/${pool} oltre il tetto mensile (${spesa.toFixed(2)}/${tetto} $), resto sui gratuiti`);
       return false;
     }
     return true;
   } catch { return false; }
 }
-async function registraSpesaSeminaDeepSeek(usd: number): Promise<void> {
-  const row = await getFromCache(chiaveSpesaSemina());
+async function registraSpesaSeminaGonka(pool: 'itinerari' | 'musei', usd: number): Promise<void> {
+  const row = await getFromCache(chiaveSpesaSeminaGonka(pool));
   const spesa = (Number(row?.text_content) || 0) + usd;
-  await saveToCache(chiaveSpesaSemina(), 'counter', spesa.toFixed(6));
+  await saveToCache(chiaveSpesaSeminaGonka(pool), 'counter', spesa.toFixed(6));
 }
 
 // ── TELEMETRIA API RESILIENTE ──────────────────────────────────────────
@@ -32740,7 +32834,23 @@ out center tags;`;
    *  (12/09/2026). Polly ed ElevenLabs restano inerti finché non arrivano le
    *  rispettive chiavi: passano oltre in pochi millisecondi, non rallentano
    *  chi già funziona con Azure/Google. */
-  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Piper' | 'Kokoro' }> {
+  /** PCM 16-bit mono → MP3 vero, in puro JS (lamejs): niente ffmpeg, quindi
+   *  funziona anche su Vercel dove non c'è un binario esterno da chiamare. */
+  function pcmAMp3(pcm: Buffer, sampleRate: number): Buffer {
+    const campioni = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.length / 2));
+    const encoder = new Mp3Encoder(1, sampleRate, 128);
+    const BLOCCO = 1152;
+    const pezzi: Buffer[] = [];
+    for (let i = 0; i < campioni.length; i += BLOCCO) {
+      const buf = encoder.encodeBuffer(campioni.subarray(i, i + BLOCCO));
+      if (buf.length > 0) pezzi.push(Buffer.from(buf));
+    }
+    const fine = encoder.flush();
+    if (fine.length > 0) pezzi.push(Buffer.from(fine));
+    return Buffer.concat(pezzi);
+  }
+
+  async function synthesizeSpeech(text: string, voiceName: string): Promise<{ buffer: Buffer; provider: 'Azure' | 'Polly' | 'ElevenLabs' | 'Google' | 'Gemini' | 'Piper' | 'Kokoro' }> {
     const charCount = text.length;
     const currentUsage = await getTtsUsage();
 
@@ -32921,7 +33031,49 @@ out center tags;`;
     insertApiUsageLog({ api_name: 'google_tts', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.0002, tokens_used: 0, success: true }).catch(() => {});
     return { buffer: audioBuffer, provider: 'Google' };
     } catch (e: any) {
-      console.warn("Google TTS non disponibile, ultimo ripiego Piper sul droplet... Error:", e?.message);
+      console.warn("Google TTS non disponibile, provo Gemini TTS nativo... Error:", e?.message);
+    }
+
+    // GEMINI TTS NATIVO (16/09/2026, verificato in diretta col committente):
+    // non è Google Cloud Text-to-Speech (chiavi diverse, prodotto diverso),
+    // è la sintesi vocale dentro Gemini stesso — STESSE chiavi già in
+    // rotazione per l'arricchimento testi (geminiKeys), ma quota SEPARATA:
+    // l'errore 429 misurato in diretta è sulla metrica
+    // "generate_content_free_tier_requests" del modello gemini-2.5-flash-tts,
+    // non su quella dei testi. Limite reale: 3 richieste/minuto PER PROGETTO
+    // (quindi per chiave) sul piano gratuito — con N chiavi diverse ruotate
+    // qui sotto, N*3/minuto. È un modello "preview": Google può cambiarlo o
+    // toglierlo senza preavviso, per questo resta un ripiego di coda, mai il
+    // motore su cui contare per la produzione (Polly/Azure restano primari).
+    if (geminiKeys.length > 0) {
+      try {
+        const vocePerNome = E_VOCE_DANTE.test(voiceName) ? 'Puck' : 'Kore';
+        const pcmBase64 = await tentaConRotazione(geminiKeys, async (key: string) => {
+          const r = await axios.post(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${key}`,
+            {
+              contents: [{ parts: [{ text }] }],
+              generationConfig: {
+                responseModalities: ['AUDIO'],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: vocePerNome } } },
+              },
+            },
+            { timeout: 60000 }
+          );
+          const parte = r.data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+          if (!parte?.data) throw new Error('Gemini TTS: risposta senza audio');
+          return parte.data as string;
+        });
+        const pcm = Buffer.from(pcmBase64, 'base64');
+        // Gemini risponde sempre PCM 16-bit mono a 24kHz (audio/L16;rate=24000).
+        const audioBuffer = pcmAMp3(pcm, 24000);
+        if (audioBuffer.length < 500) throw new Error(`Gemini TTS returned ${audioBuffer.length} bytes`);
+        await updateTtsUsage('gemini_tts', charCount);
+        insertApiUsageLog({ api_name: 'gemini_tts', feature_context: 'sintesi_vocale_tts', cost_estimation: 0, tokens_used: 0, success: true }).catch(() => {});
+        return { buffer: audioBuffer, provider: 'Gemini' };
+      } catch (e: any) {
+        console.warn("Gemini TTS non disponibile, ultimo ripiego Piper sul droplet... Error:", e?.message);
+      }
     }
 
     // PIPER SUL DROPLET (13/09/2026, committente: «si possono installare su
