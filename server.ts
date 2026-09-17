@@ -9484,6 +9484,10 @@ OPERA DI PARTENZA: ${currentWork ? `"${currentWork}"` : 'nessuna'}.`;
             // dichiarazione ma il riflesso di un fatto verificabile — chi entra
             // col segreto di infrastruttura è la semina, e resta sui gratuiti.
             ultimaSpiaggiaPagante: inDiretta,
+            // GONKA/musei (16/09/2026): si aggiunge in coda ai gratuiti SOLO
+            // per la semina (il controllo userId==='background-script' è
+            // dentro callUniversalAi) — in diretta questo campo non fa nulla.
+            gonkaPool: 'musei',
           }, 'venue_guide', supabaseUrl, supabaseServiceKey, groq, userId);
           rawAi = String(ai?.data || '');
         } catch (e: any) {
@@ -9843,6 +9847,7 @@ OPERA DI PARTENZA: ${currentWork ? `"${currentWork}"` : 'nessuna'}.`;
               // aggiungere la curiosità.
               temperature: 0.3, max_tokens: 4000, response_format: { type: 'json_object' },
               excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
+              gonkaPool: 'musei',
             }, 'venue_guide_opera', supabaseUrl, supabaseServiceKey, groq, userId);
             const raw = String(ai?.data || '').replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
             const parsedLotto = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
@@ -10231,6 +10236,7 @@ ${JSON.stringify(elenco)}`;
           const ver = await callUniversalAi('gemini', [{ role: 'user', content: promptVerifica }], {
             temperature: 0, max_tokens: 3000, response_format: { type: 'json_object' },
             excludeEngines: [motoreGuida, 'agnes'], ultimaSpiaggiaPagante: false,
+            gonkaPool: 'musei',
           }, 'venue_guide_verifica', supabaseUrl, supabaseServiceKey, groq, userId);
           const rawV = String(ver?.data || '');
           const esito = JSON.parse(rawV.slice(rawV.indexOf('{'), rawV.lastIndexOf('}') + 1));
@@ -10273,6 +10279,7 @@ ${JSON.stringify(daRiscrivere.map(({ t, i }: any) => ({ n: i + 1, opera: t.nomeF
                 const ri = await callUniversalAi(motoreGuida, [{ role: 'user', content: promptRiscrivi }], {
                   temperature: 0.2, max_tokens: 3500, response_format: { type: 'json_object' },
                   excludeEngines: inDiretta ? ['agnes'] : [], ultimaSpiaggiaPagante: inDiretta,
+                  gonkaPool: 'musei',
                 }, 'venue_guide_riscrittura', supabaseUrl, supabaseServiceKey, groq, userId);
                 const rawR = String(ri?.data || '');
                 const esitoR = JSON.parse(rawR.slice(rawR.indexOf('{'), rawR.lastIndexOf('}') + 1));
@@ -24981,10 +24988,18 @@ Tassativo: restituisci SOLO l'oggetto JSON valido, nessuna formattazione markdow
     // fallback: è l'unico a pagamento della catena.
     const opts: any = { temperature: 0.7, response_format: { type: 'json_object' }, max_tokens: 8192 };
     if (engine !== 'deepseek') opts.excludeEngines = ['deepseek'];
+    // GONKA/itinerari (16/09/2026): qui 'agnes' come motore richiesto È il
+    // segnale di sfondo (la semina lo passa per default, la richiesta in
+    // diretta passa 'deepseek' — vedi libraryGenerateAndVerify). Si aggancia
+    // Gonka a quello stesso segnale, passando anche lo userId che
+    // callUniversalAi richiede per il tetto della semina; in diretta questo
+    // ramo non si tocca.
+    const daSfondo = engine === 'agnes';
+    if (daSfondo) opts.gonkaPool = 'itinerari';
     const resp = await callUniversalAi(engine as any,
       [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
       opts,
-      feature, supabaseUrl, supabaseServiceKey, null);
+      feature, supabaseUrl, supabaseServiceKey, null, daSfondo ? 'background-script' : undefined);
     if (resp?.truncated) throw new Error('output del generatore troncato (finish_reason=length)');
     const obj = libParseJsonLoose(resp?.data);
     if (!obj) throw new Error('output del generatore non è JSON valido');
@@ -32927,22 +32942,9 @@ out center tags;`;
     const primi = E_VOCE_DANTE.test(voiceName) ? [provaPolly, provaAzure] : [provaAzure, provaPolly];
     for (const prova of primi) { const r = await prova(); if (r) return r; }
 
-    // KOKORO SUL DROPLET (13/09/2026): la voce gratuita scelta dal
-    // committente dopo le quote a pagamento (Nicola). Solo per le lingue che
-    // Kokoro copre; lento su CPU, quindi mai in diretta oltre i 90 s.
-    if (process.env.KOKORO_URL && KOKORO_VOCI[voiceLocale]) {
-      try {
-        const audioBuffer = await synthesizeWrapper(process.env.KOKORO_URL, process.env.KOKORO_TOKEN, E_VOCE_DANTE.test(voiceName) ? KOKORO_VOCI[voiceLocale].dante : KOKORO_VOCI[voiceLocale].nicky, text, 240000);
-        if (audioBuffer.length < 500) throw new Error(`Kokoro returned ${audioBuffer.length} bytes`);
-        await updateTtsUsage('kokoro', charCount);
-        insertApiUsageLog({ api_name: 'kokoro', feature_context: 'sintesi_vocale_tts', cost_estimation: 0, tokens_used: 0, success: true }).catch(() => {});
-        return { buffer: audioBuffer, provider: 'Kokoro' };
-      } catch (e: any) {
-        console.warn("Kokoro non disponibile, provo ElevenLabs... Error:", e?.message);
-      }
-    }
-
     // Fallback su ElevenLabs, stesso principio: tetto mensile, poi si salta.
+    // Ordine 17/09/2026 (richiesta del committente, stesso per diretta e
+    // sfondo): ElevenLabs prima di Kokoro.
     if ((await getTtsUsage('elevenlabs')) < TTS_LIMITI_MENSILI.elevenlabs) {
       try {
         const audioBuffer = await synthesizeElevenLabs(text, voiceName);
@@ -32951,10 +32953,27 @@ out center tags;`;
         insertApiUsageLog({ api_name: 'elevenlabs', feature_context: 'sintesi_vocale_tts', cost_estimation: 0.02, tokens_used: 0, success: true }).catch(() => {});
         return { buffer: audioBuffer, provider: 'ElevenLabs' };
       } catch (e: any) {
-        console.warn("ElevenLabs TTS non disponibile, ripiego su Google... Error:", e.message);
+        console.warn("ElevenLabs TTS non disponibile, provo Kokoro... Error:", e.message);
       }
     } else {
-      console.warn(`[TTS] ElevenLabs oltre il tetto mensile (${TTS_LIMITI_MENSILI.elevenlabs} caratteri), salto a Google`);
+      console.warn(`[TTS] ElevenLabs oltre il tetto mensile (${TTS_LIMITI_MENSILI.elevenlabs} caratteri), salto a Kokoro`);
+    }
+
+    // KOKORO SUL DROPLET (13/09/2026): la voce gratuita scelta dal
+    // committente dopo le quote a pagamento (Nicola). Solo per le lingue che
+    // Kokoro copre; lento su CPU, quindi mai in diretta oltre i 90 s. Stesso
+    // ordine per diretta e sfondo (17/09/2026, richiesta esplicita del
+    // committente): nessuna riserva separata.
+    if (process.env.KOKORO_URL && KOKORO_VOCI[voiceLocale]) {
+      try {
+        const audioBuffer = await synthesizeWrapper(process.env.KOKORO_URL, process.env.KOKORO_TOKEN, E_VOCE_DANTE.test(voiceName) ? KOKORO_VOCI[voiceLocale].dante : KOKORO_VOCI[voiceLocale].nicky, text, 240000);
+        if (audioBuffer.length < 500) throw new Error(`Kokoro returned ${audioBuffer.length} bytes`);
+        await updateTtsUsage('kokoro', charCount);
+        insertApiUsageLog({ api_name: 'kokoro', feature_context: 'sintesi_vocale_tts', cost_estimation: 0, tokens_used: 0, success: true }).catch(() => {});
+        return { buffer: audioBuffer, provider: 'Kokoro' };
+      } catch (e: any) {
+        console.warn("Kokoro non disponibile, provo Google... Error:", e?.message);
+      }
     }
 
     // Google TTS, anche lui sotto tetto mensile; se cade o è oltre tetto,

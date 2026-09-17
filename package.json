@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-polly": "^3.1131.0",
+    "@breezystack/lamejs": "^1.2.7",
     "@capacitor-community/native-audio": "^8.0.0",
     "@capacitor-community/speech-recognition": "^7.0.1",
     "@capacitor/android": "^7.6.6",
