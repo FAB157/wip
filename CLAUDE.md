@@ -122,6 +122,19 @@ places that were not La Spezia (22/08/2026).
   somewhere else. It stays only where an illustration is admittedly generic
   (never a POI, a guide or an itinerary), and it must never be a fallback for
   a real place.
+- **Third-party editorial sources (travel blogs, social media, tourism
+  guides) are admitted, but never auto-published** (17/09/2026, committente:
+  «possiamo prendere sia social, blog, guide, ma lasciamole come da
+  verificare e alla fine le verifico io di persona e accetto»). Two
+  different guarantees are at stake: a place's own official site or
+  Wikipedia carries an implicit or known-CC license on its own photo — a
+  blog or social post almost never does, on top of the usual wrong-place
+  risk. So the tier split is: official site / Wikipedia → straight into
+  `shared_pois.image_url` (see `scripts/foto-gemme-sito-ufficiale.mjs`);
+  everything else → `foto_pois_da_verificare` (`stato='da_verificare'`,
+  migration `20260917080000_foto_pois_da_verificare.sql`), invisible in the
+  app until a human approves that exact row. Never write a third-party URL
+  into `image_url` directly, no matter how good the name match looks.
 - **No photo is better than the wrong photo.** Every renderer must survive a
   missing image. A place shown with someone else's picture is a printed lie,
   and it is worse than a blank space.

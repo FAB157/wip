@@ -19009,6 +19009,25 @@ ${description}
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80);
 
   /**
+   * Nome mojibake (17/09/2026): un nome scritto in alfabeto non latino salvato
+   * con l'encoding sbagliato (UTF-8 letto come Latin-1, es. thailandese ->
+   * testo illeggibile) sopravvive a seoSlug solo nei pochi byte che per caso
+   * cadono su a-z: risultato «a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a-a», uno dei
+   * pattern piu' frequenti fra i 332.280 URL che Search Console aveva
+   * scoperto senza indicizzare. Sono gli stessi ~1.200 nomi segnati «non
+   * riparabili» dalla riparazione mojibake del 06/09/2026: quasi sempre un
+   * duplicato malriuscito di un luogo che esiste anche con l'encoding giusto
+   * (verificato su un caso: stesso museo in thailandese corretto E in
+   * inglese, entrambi vicino a questo). Non e' un nome corto, e' un nome
+   * perso: 6+ caratteri con 2 lettere diverse al massimo.
+   */
+  const seoSlugDegenere = (slug: string) => {
+    if (slug.length < 6) return false;
+    const lettere = new Set(slug.replace(/-/g, ''));
+    return lettere.size <= 2;
+  };
+
+  /**
    * L'indirizzo di un luogo, costruito in UN SOLO posto: la sitemap e la
    * pagina devono per forza produrre la stessa stringa, altrimenti la
    * sitemap elenca URL che rispondono 404 — che e' peggio di non averla
@@ -19059,6 +19078,7 @@ ${description}
   const seoPoiAmmesso = (p: any) => {
     if (!p || p.is_hidden === true) return false;
     if (['draft', 'needs_revision', 'rejected', 'hidden'].includes(String(p.status || ''))) return false;
+    if (seoSlugDegenere(seoSlug(p.name))) return false;
     const testo = seoTesto(p).length;
     return p.image_url ? testo >= SEO_MIN_DESCRIZIONE : testo >= SEO_MIN_DESCRIZIONE_SENZA_FOTO;
   };
@@ -19380,6 +19400,15 @@ ${description}
         res.status(200).type('text/html').send(seoPaginaVuota());
         return;
       }
+      // CATEGORIE DEBOLI (17/09/2026): targhe openplaques, stazioni e dighe —
+      // tolte dalla sitemap lo stesso giorno (vedi categorie-seo.mjs) perche'
+      // Search Console ne aveva scoperte 332.280 indicizzandone quasi
+      // nessuna. Qui in piu': chi ci arriva gia' indicizzato o da un link
+      // vecchio vede la pagina vera (e' contenuto reale, non va negato), ma
+      // con `noindex` cosi' esce dall'indice al prossimo passaggio invece di
+      // restarci per mesi finche' non si rifa' tutta la sitemap.
+      const CATEGORIE_SEO_DEBOLI = new Set(['memorial', 'train_station', 'dam']);
+      const noindexDebole = CATEGORIE_SEO_DEBOLI.has(String(poi.category || ''));
 
       // La lingua e' quella del TESTO, non la nostra: vedi seoLingua(). Va
       // calcolata PRIMA del titolo: anche il testo di contorno (titolo, CTA,
@@ -19455,7 +19484,7 @@ ${description}
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${seoEscape(titolo.slice(0, 60))}</title>
 <meta name="description" content="${seoEscape(descr.slice(0, 160))}">
-<link rel="canonical" href="${seoEscape(url)}">
+${noindexDebole ? '<meta name="robots" content="noindex">\n' : ''}<link rel="canonical" href="${seoEscape(url)}">
 <meta property="og:type" content="article">
 <meta property="og:title" content="${seoEscape(titolo)}">
 <meta property="og:description" content="${seoEscape(descr.slice(0, 200))}">
