@@ -111,6 +111,38 @@ final class LiveActivityNav {
         #endif
     }
 
+    /**
+     * (18/09/2026) IL CRUSCOTTO A SCHERMO SPENTO. Aggiorna la Live Activity
+     * SOLO se ce n'e' gia' una in corso; non ne avvia mai una nuova. La chiama
+     * il nativo (BackgroundPoiManager.ridisegnaCruscottoNav) quando il JS e'
+     * congelato e i numeri li rifa' il NavFollower: dal background una
+     * `Activity.request` verrebbe rifiutata, mentre l'update di un'attivita'
+     * esistente da un processo vivo (background location) e' ammesso — entro
+     * un budget, per questo chi chiama rispetta 3 s + firma.
+     * Stesso dizionario e stessa traduzione (`statoDaDizionario`) di
+     * `avviaOAggiorna`: e' la stessa strada, senza il ramo che apre. La foto
+     * e' quella gia' scaricata per l'ultimo stato del JS: qui non si scarica.
+     * Sul main, come `avviaOAggiorna`.
+     * - returns: `true` se c'era un'attivita' da aggiornare.
+     */
+    @discardableResult
+    func aggiornaSeInCorso(stato: [String: Any]) -> Bool {
+        #if canImport(ActivityKit)
+        guard #available(iOS 16.1, *) else { return false }
+        guard let corrente = LiveActivityNav.attivita else { return false }
+        // Anche `ultimoStato`: se la foto finisce di scaricarsi adesso, la
+        // ripubblicazione non deve riportare indietro distanze e svolta.
+        LiveActivityNav.ultimoStato = stato
+        var contenuto = LiveActivityNav.statoDaDizionario(stato)
+        let fotoUrl = (stato["foto"] as? String) ?? ""
+        contenuto.fotoPath = LiveActivityNav.fotoPronta(fotoUrl) ?? ""
+        Task { await LiveActivityNav.aggiornaAttivita(corrente, contenuto) }
+        return true
+        #else
+        return false
+        #endif
+    }
+
     /// Chiude il cruscotto: fine del giro, pausa, o stop dell'audioguida.
     func termina() {
         #if canImport(ActivityKit)

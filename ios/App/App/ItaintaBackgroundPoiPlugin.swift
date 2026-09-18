@@ -70,7 +70,15 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
         CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
         // (28/08/2026) Cruscotto del navigatore: Live Activity su iOS,
         // notifica del foreground service su Android. Stessa API per il JS.
-        CAPPluginMethod(name: "updateNavBanner", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "updateNavBanner", returnType: CAPPluginReturnPromise),
+        // (18/09/2026) Navigatore a schermo spento: il JS consegna il percorso
+        // al follower nativo (NavFollower, in fondo a BackgroundPoiManager
+        // .swift) e gli manda il battito. Dichiarati QUI o dal JS restano
+        // promise appese per sempre (vedi la nota del 30/08 qui sopra).
+        CAPPluginMethod(name: "setNavRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearNavRoute", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "navHeartbeat", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getNavProgress", returnType: CAPPluginReturnPromise)
     ]
 
     private let prefs = UserDefaults.standard
@@ -99,6 +107,14 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
 
     override public func load() {
         super.load()
+        // (18/09/2026 notte, dalla revisione) PAGINA NUOVA = PERCORSO VECCHIO
+        // DA BUTTARE. Se la WebView viene ricaricata il JS riparte senza
+        // sapere di aver consegnato un percorso al follower, e non lo
+        // ritirerebbe mai: GPS da navigatore per sempre e un follower «al
+        // comando» che parla sopra al JS nuovo. Il giro in corso si
+        // riconsegna da solo al primo fix. Uguale nel plugin Android.
+        NavFollower.shared.clear()
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
         directDelegate.onFinished = { [weak self] utterance in self?.directFinished(utterance) }
         directSynth.delegate = directDelegate
         // Ponte eventi nativo → JS, equivalente del BroadcastReceiver Android.
@@ -136,6 +152,9 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             let azione = (n.userInfo?["azione"] as? String) ?? ""
             UserDefaults(suiteName: WipNavAppGroup.id)?.removeObject(forKey: WipNavAzione.chiavePendente)
             guard !azione.isEmpty else { return }
+            // (18/09/2026) A schermo spento il JS è sospeso: il follower
+            // nativo del navigatore obbedisce subito al tasto, il JS al risveglio.
+            BackgroundPoiManager.shared.azioneNavDalBanner(azione)
             self?.notifyListeners("navBannerAction", data: ["action": azione], retainUntilConsumed: true)
         }
         if let pendente = UserDefaults(suiteName: WipNavAppGroup.id)?.string(forKey: WipNavAzione.chiavePendente), !pendente.isEmpty {
@@ -618,11 +637,71 @@ public class ItaintaBackgroundPoiPlugin: CAPPlugin, CAPBridgedPlugin, CLLocation
             "modo": call.getString("modo") ?? "giro",
             "minutiRimanenti": call.getDouble("minutiRimanenti") ?? -1
         ]
+        // (18/09/2026) Il follower nativo RICORDA l'ultimo stato del cruscotto
+        // mandato dal JS: a schermo spento i numeri li rifà lui, ma
+        // indiceTappa, tappeTotali, foto, modo, metriTotali, nomeProssima e
+        // il passo al minuto li prende da qui (NavFollower.cruscotto). Prima
+        // del controllo `disponibili` non serve: senza Live Activity non c'è
+        // nulla da ridisegnare.
+        NavFollower.shared.ricordaCruscottoJs(stato)
         // Le API di ActivityKit vogliono il main thread.
         DispatchQueue.main.async {
             let ok = LiveActivityNav.shared.avviaOAggiorna(titoloGiro: titoloGiro, stato: stato)
             call.resolve(ok ? ["ok": true] : ["ok": false, "reason": "live_activity_request_failed"])
         }
+    }
+
+    // MARK: - Navigatore a schermo spento (18/09/2026)
+    //
+    // Ordine del committente: «il navigatore, sia nell'audioguida che nei
+    // percorsi, deve funzionare anche a schermo spento». A schermo spento la
+    // WebView è congelata e le svolte, che calcola e dice il JS, tacevano. Il
+    // JS consegna qui il percorso GIÀ pronto (manovre tradotte + tracciato) e
+    // finché è vivo manda un battito; se il battito manca da più di 12 s le
+    // frasi le dice il nativo, dalla stessa coda di speakText kind "nav"
+    // (BackgroundPoiManager.consegnaFixAlNavigatore). Stessi quattro metodi e
+    // stesso algoritmo di Android — specifica: docs/nav-nativo-spec.md.
+    // Mai un reject: il JS chiama e va avanti.
+
+    /// `{ routeJson }` → `{ ok }`. Sostituisce il percorso e, se il manager è
+    /// già avviato, porta SUBITO il GPS sul profilo da navigatore; se non lo
+    /// è, il profilo si applica quando parte.
+    @objc func setNavRoute(_ call: CAPPluginCall) {
+        let ok = NavFollower.shared.setRoute(json: call.getString("routeJson") ?? "")
+        // Anche con ok=false: il percorso di prima è stato tolto, il GPS
+        // torna al tier normale.
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
+        call.resolve(["ok": ok])
+    }
+
+    /// Toglie il percorso e ripristina la frequenza dei fix di prima.
+    @objc func clearNavRoute(_ call: CAPPluginCall) {
+        NavFollower.shared.clear()
+        BackgroundPoiManager.shared.aggiornaProfiloNavigatore()
+        call.resolve()
+    }
+
+    /// `{ indice, dettiVicino?, dettiLontano? }`: il JS è vivo e parla lui.
+    /// Gli array si leggono come NSNumber: un `as? [Int]` secco fallirebbe in
+    /// blocco al primo valore non intero arrivato dal ponte.
+    @objc func navHeartbeat(_ call: CAPPluginCall) {
+        let vicinoGrezzo: JSArray = call.getArray("dettiVicino") ?? []
+        let lontanoGrezzo: JSArray = call.getArray("dettiLontano") ?? []
+        let vicino: [Int] = vicinoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
+        let lontano: [Int] = lontanoGrezzo.compactMap { ($0 as? NSNumber)?.intValue }
+        NavFollower.shared.heartbeat(
+            indice: call.getInt("indice") ?? 0,
+            dettiVicino: vicino,
+            dettiLontano: lontano
+        )
+        call.resolve()
+    }
+
+    /// `{ attivo, id, indice, dettiVicino, dettiLontano, nativoAlComando,
+    /// ultimoTestoVicino, ultimoTestoLontano }`: al risveglio il JS riprende
+    /// da qui senza ripetere ciò che il nativo ha già detto.
+    @objc func getNavProgress(_ call: CAPPluginCall) {
+        call.resolve(NavFollower.shared.progress())
     }
 
     // MARK: - Teaser / deep link

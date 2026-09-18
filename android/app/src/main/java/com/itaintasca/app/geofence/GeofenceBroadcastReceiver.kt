@@ -135,7 +135,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             // presente e valido si riproduce quello (partenza istantanea,
             // voce neurale) invece del TTS di sistema; se la riproduzione
             // fallisce si torna al TTS del campo text.
-            val audioFile: String? = null
+            val audioFile: String? = null,
+            // (18/09/2026) SCADENZA, solo per le svolte del navigatore a
+            // schermo spento (NavFollower): la coda e` sequenziale e senza
+            // prelazione, e un «gira a destra» uscito dietro a una guida di
+            // quattro minuti e` un'indicazione SBAGLIATA, non in ritardo.
+            // Orologio SystemClock.elapsedRealtime(). null = non scade mai:
+            // teaser, arrivi, guide e speakText restano esattamente com'erano.
+            val scadenzaElapsedMs: Long? = null
         )
 
         // Player per gli MP3 prefetchati: vive accanto al TTS nella stessa coda
@@ -367,7 +374,12 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             val next: SpeechItem
             synchronized(this) {
                 if (isSpeaking) return
-                val sorted = speechQueue.toList().sortedWith(compareBy({ it.priority }, { if (it.isItinerary) 0 else 1 }))
+                // Le svolte scadute si buttano (vedi SpeechItem.scadenzaElapsedMs):
+                // senza scadenza (tutto il resto) non cambia nulla.
+                val adesso = android.os.SystemClock.elapsedRealtime()
+                val sorted = speechQueue.toList()
+                    .filter { it.scadenzaElapsedMs == null || adesso <= it.scadenzaElapsedMs }
+                    .sortedWith(compareBy({ it.priority }, { if (it.isItinerary) 0 else 1 }))
                 speechQueue.clear()
                 sorted.forEach { speechQueue.add(it) }
                 next = speechQueue.poll() ?: return

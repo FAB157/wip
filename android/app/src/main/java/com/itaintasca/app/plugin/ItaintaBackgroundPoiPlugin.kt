@@ -17,6 +17,7 @@ import com.getcapacitor.annotation.PermissionCallback
 import com.itaintasca.app.geofence.BearingGate
 import com.itaintasca.app.geofence.NotificationStrings
 import com.itaintasca.app.service.ItaintaBackgroundPoiService
+import com.itaintasca.app.service.NavFollower
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,6 +105,14 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
             context.registerReceiver(receiver, filter)
         }
         vivo = true
+        // (18/09/2026 notte, dalla revisione) PAGINA NUOVA = PERCORSO VECCHIO
+        // DA BUTTARE. Se l'Activity viene ricreata il JS riparte senza sapere
+        // di aver consegnato un percorso, e non lo ritirerebbe mai: GPS ad
+        // alta frequenza per sempre e un follower «al comando» che parla sopra
+        // al JS nuovo. Il giro in corso si riconsegna da solo al primo fix
+        // (giroDriver confronta la firma). NON in handleOnDestroy: se
+        // l'Activity muore a schermo spento la guida deve continuare.
+        try { NavFollower.clear(); avvisaServizioNav() } catch (_: Exception) { }
         // (03/09/2026) Un tasto del cruscotto toccato mentre la WebView era
         // morta: il servizio l'ha annotato e ha aperto l'app. Si consegna
         // adesso (retainUntilConsumed: il listener JS puo' non esserci ancora).
@@ -739,6 +748,25 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
      */
     @PluginMethod
     fun updateNavBanner(call: PluginCall) {
+        // (18/09/2026 notte) CRUSCOTTO A SCHERMO SPENTO: il follower nativo
+        // ricorda l'ultimo stato mandato dal JS — i campi separati che finora
+        // Android ignorava (li usava solo la Live Activity iOS). Gli servono
+        // quando la WebView e' congelata e il cruscotto lo ricalcola lui: nome
+        // tappa e istruzione di ripiego, passo dell'utente (minuti/metri) per
+        // l'ora d'arrivo, metri totali per l'avanzamento. Solo memoria: non
+        // cambia nulla di quello che questa funzione faceva gia'.
+        try {
+            val d = call.data
+            NavFollower.ricordaCruscottoJs(
+                attivo = call.getBoolean("attivo") ?: false,
+                inPausa = call.getBoolean("inPausa") ?: false,
+                nomeTappa = call.getString("nomeTappa") ?: "",
+                istruzione = call.getString("istruzione") ?: "",
+                metriRimanenti = d.optDouble("metriRimanenti", -1.0),
+                minutiRimanenti = d.optDouble("minutiRimanenti", -1.0),
+                metriTotali = d.optDouble("metriTotali", -1.0)
+            )
+        } catch (_: Exception) { }
         val ret = JSObject()
         val prefs = context.getSharedPreferences("ItaintaPrefs", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("isServiceActive", false)) {
@@ -1285,6 +1313,92 @@ class ItaintaBackgroundPoiPlugin : Plugin() {
         try { directTts?.stop() } catch (_: Exception) { }
         abandonDirectFocus()
         call.resolve()
+    }
+
+    // ------------------------------------------------------------------
+    // NAVIGATORE A SCHERMO SPENTO (18/09/2026). Committente: «il navigatore,
+    // sia nell'audioguida che nei percorsi, deve funzionare anche a schermo
+    // spento. È fondamentale». A schermo spento la WebView è congelata e le
+    // svolte, che calcola e dice il JS, tacevano. Il JS ora CONSEGNA al nativo
+    // il percorso già pronto (testi già tradotti) e manda un battito finché è
+    // vivo; quando il battito manca da più di 12 s le svolte le dice il
+    // servizio, dalla stessa coda di speakText kind "nav".
+    // Qui c'è solo il ponte: stato e algoritmo stanno in NavFollower (memoria
+    // condivisa col servizio), la voce nel servizio (onLocationResult).
+    // Orologio: SystemClock.elapsedRealtime(), LO STESSO che usa il servizio
+    // quando passa i fix — monotono, non salta con i cambi d'ora.
+    // ------------------------------------------------------------------
+
+    /**
+     * Avvisa il servizio che il percorso è comparso/sparito, così cambia
+     * SUBITO la cadenza dei fix (a riposo ne arriva uno ogni 20-60 s: senza
+     * avviso la prima svolta passerebbe prima che se ne accorga). Se il
+     * servizio non è ancora partito l'hook è null e non serve altro: alla
+     * partenza applyLocationRate guarda NavFollower da solo.
+     */
+    private fun avvisaServizioNav() {
+        try { ItaintaBackgroundPoiService.onNavRouteChanged?.invoke() } catch (_: Exception) { }
+    }
+
+    /** I number[] del JS arrivano come JSArray: via i non-numeri e i negativi. */
+    private fun leggiIndici(call: PluginCall, chiave: String): List<Int> {
+        val arr = call.getArray(chiave) ?: return emptyList()
+        val out = ArrayList<Int>(arr.length())
+        for (i in 0 until arr.length()) {
+            val v = arr.optInt(i, -1)
+            if (v >= 0) out.add(v)
+        }
+        return out
+    }
+
+    @PluginMethod
+    fun setNavRoute(call: PluginCall) {
+        val routeJson = call.getString("routeJson").orEmpty()
+        val ok = NavFollower.setRoute(routeJson, android.os.SystemClock.elapsedRealtime())
+        // Si avvisa in ogni caso: una consegna rifiutata TOGLIE il percorso
+        // precedente (vedi NavFollower.setRoute) e la cadenza deve tornare giù.
+        avvisaServizioNav()
+        val ret = JSObject()
+        ret.put("ok", ok)
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun clearNavRoute(call: PluginCall) {
+        NavFollower.clear()
+        avvisaServizioNav()
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun navHeartbeat(call: PluginCall) {
+        NavFollower.heartbeat(
+            // optInt e non getInt: un indice arrivato come 3.0 resta 3.
+            call.data.optInt("indice", -1),
+            leggiIndici(call, "dettiVicino"),
+            leggiIndici(call, "dettiLontano"),
+            android.os.SystemClock.elapsedRealtime()
+        )
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun getNavProgress(call: PluginCall) {
+        val p = NavFollower.progress(android.os.SystemClock.elapsedRealtime())
+        val vicino = JSArray()
+        p.dettiVicino.forEach { vicino.put(it) }
+        val lontano = JSArray()
+        p.dettiLontano.forEach { lontano.put(it) }
+        val ret = JSObject()
+        ret.put("attivo", p.attivo)
+        ret.put("id", p.id)
+        ret.put("indice", p.indice)
+        ret.put("dettiVicino", vicino)
+        ret.put("dettiLontano", lontano)
+        ret.put("nativoAlComando", p.nativoAlComando)
+        ret.put("ultimoTestoVicino", p.ultimoTestoVicino)
+        ret.put("ultimoTestoLontano", p.ultimoTestoLontano)
+        call.resolve(ret)
     }
 
     // ------------------------------------------------------------------

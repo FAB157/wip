@@ -22,6 +22,7 @@ import { reportTrigger } from '../lib/geofencing/telemetry';
 import { puntoArrivo } from '../lib/puntoArrivo';
 import { getTranslation, type Language } from '../lib/i18n';
 import { getGemmeVicine } from '../services/poiRepository';
+import { pubblicaPercorsoNativo, ritiraPercorsoNativo, battitoNav, type PassoNav } from '../lib/nav/navNativo';
 
 export type NavState = 'idle' | 'routing' | 'navigating' | 'arrived';
 
@@ -361,6 +362,33 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   const spokenRef = useRef<Set<number>>(new Set());
   // Manovre gia' pre-annunciate ("tra 150 m ...") — una sola volta ciascuna.
   const preannouncedRef = useRef<Set<number>>(new Set());
+
+  // SCHERMO SPENTO (18/09/2026): mentre questa pagina era congelata le svolte
+  // le ha dette il servizio nativo (lib/nav/navNativo). Al risveglio ci si
+  // allinea a lui — stessi indici: i passi consegnati sono route.steps uno a
+  // uno — altrimenti la prima cosa che si farebbe e` ripetere l'ultima svolta.
+  // L'arrivo l'ha gia` annunciato il nativo a schermo spento: al risveglio il
+  // ramo «arrivato» chiude la navigazione ma non lo ridice.
+  const arrivoDettoDalNativoRef = useRef(false);
+  useEffect(() => {
+    const allinea = (e: Event) => {
+      const d = (e as CustomEvent).detail || {};
+      if (d.canale !== 'tappa' || !routeRef.current) return;
+      // Il cruscotto l'ha ridisegnato il nativo col suo formato: firma
+      // azzerata = al prossimo fix lo riscrive questo hook, comunque.
+      bannerFirmaRef.current = '';
+      // Solo il DETTO DAVVERO (il nativo non riferisce la sua contabilita`
+      // muta). L'INDICE del nativo invece non si adotta (dalla revisione): lui
+      // avanza a linea d'aria, questo hook per progressione lungo il tracciato
+      // — al primo fix si rimette in pari da solo, e meglio.
+      (d.dettiVicino || []).forEach((i: number) => spokenRef.current.add(i));
+      (d.dettiLontano || []).forEach((i: number) => preannouncedRef.current.add(i));
+      const ultimo = routeRef.current.steps.length - 1;
+      if ((d.dettiVicino || []).includes(ultimo)) arrivoDettoDalNativoRef.current = true;
+    };
+    window.addEventListener('wip-nav-nativo-progresso', allinea);
+    return () => window.removeEventListener('wip-nav-nativo-progresso', allinea);
+  }, []);
   // "Girati": quanti fix con heading valido si sono gia' esaminati, e se
   // l'avviso e' gia' stato dato (una volta sola per navigazione).
   const giratiFixRef = useRef(0);
@@ -457,6 +485,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
   };
   const spegniBannerNav = () => {
     bannerFirmaRef.current = '';
+    // Navigazione finita o annullata: anche il follower nativo la lascia
+    // (solo il PROPRIO percorso: quello del giro non si tocca).
+    ritiraPercorsoNativo('tappa');
     // attivo=false: su Android la notifica del servizio torna al testo del
     // radar, su iOS si chiude la Live Activity, e la notifica locale di
     // ripiego viene cancellata (lo fa updateNavBanner stesso).
@@ -556,6 +587,31 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       return t !== 'depart' && t !== 'arrive';
     }).length;
     setRouteSummary({ distanceM: Math.round(route.distance), durationSec: Math.round(route.duration), turns });
+
+    // SCHERMO SPENTO (18/09/2026): lo stesso percorso va anche al servizio
+    // nativo, che dice le svolte quando questa pagina viene congelata (vedi
+    // lib/nav/navNativo). Passi uno a uno con route.steps: gli indici devono
+    // combaciare, servono al riallineamento. La partenza ha testo vuoto — la
+    // frase d'avvio la dice gia` questo hook — e l'arrivo porta la sua frase.
+    const l2 = (language || 'it').toLowerCase().slice(0, 2);
+    const nomeMeta = targetRef.current?.poiName || '';
+    const passi: PassoNav[] = route.steps.map((s) => {
+      const tipo = String(s.maneuverType || '').toLowerCase();
+      // tappa + manovra grezza: servono al cruscotto ridisegnato dal nativo.
+      const base = { lat: s.location.lat, lon: s.location.lon, tappa: nomeMeta, manovraTipo: s.maneuverType || '', manovraVerso: s.maneuverModifier || '' };
+      if (tipo === 'depart') return { ...base, testo: '', tipo: 'depart' as const };
+      if (tipo === 'arrive') {
+        const frase = s.instruction || (ARRIVE_PHRASES[l2] || ARRIVE_PHRASES.en).replace('{name}', nomeMeta).trim();
+        return { ...base, testo: frase, tipo: 'arrive' as const };
+      }
+      return { ...base, testo: s.instruction || '', tipo: 'turn' as const };
+    });
+    arrivoDettoDalNativoRef.current = false;
+    pubblicaPercorsoNativo({
+      canale: 'tappa',
+      firma: `tappa:${targetRef.current?.lat},${targetRef.current?.lon}:${Math.round(route.distance)}:${route.steps.length}:${Date.now()}`,
+      passi, indice: 0, linea: g, lingua: l2, finale: true,
+    });
   };
 
   // Punto più vicino sul TRACCIATO (proiezione sul segmento, non sul vertice):
@@ -894,6 +950,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
       // ripetendo "Sei arrivato" a ogni fix.
       unsubRef.current?.();
       unsubRef.current = null;
+      // Il percorso di PRIMA va tolto subito anche dal follower nativo (dalla
+      // revisione): se questa navigazione fallisce (rete assente) il JS resta
+      // fermo, e a schermo spento il nativo dettava il percorso abbandonato.
+      ritiraPercorsoNativo('tappa');
 
       setState('routing');
       targetRef.current = target;
@@ -1111,7 +1171,10 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           // sovrapporsi (unica coda), e solo allora scatta la logica normale
           // dell'audioguida. Su web (o se la coda non lo prende in carico)
           // si ricade sul percorso di sempre.
-          void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
+          // A schermo spento l'arrivo l'ha gia` detto il follower nativo: al
+          // risveglio si chiude la navigazione senza ripeterlo.
+          if (arrivoDettoDalNativoRef.current) arrivoDettoDalNativoRef.current = false;
+          else void speakArrivalNative(arrivePhrase, t.poiId != null ? String(t.poiId) : undefined)
             .then(taken => { if (!taken) speakInstruction(arrivePhrase, language); });
           window.dispatchEvent(
             new CustomEvent('wip-nav-arrived', { detail: { poiId: t.poiId, poiName: t.poiName, dayIndex: t.dayIndex, stopIndex: t.stopIndex } }),
@@ -1120,6 +1183,9 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
           unsubRef.current = null;
           return;
         }
+
+        // Battito per il follower nativo: «sono vivo, le svolte le dico io».
+        battitoNav('tappa', stepIdxRef.current, spokenRef.current, preannouncedRef.current);
 
         // Avanzamento sui waypoint + lettura manovra entro 30 m
         let idx = stepIdxRef.current;
@@ -1206,6 +1272,11 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
             break;
           }
         }
+        // Secondo battito, DOPO il ciclo (dalla revisione): la svolta detta in
+        // QUESTO fix deve arrivare subito al follower nativo. Col solo battito
+        // in testa gli arrivava al fix dopo, e una pagina congelata nel mezzo
+        // gliela faceva ripetere. Se non e` cambiato nulla non manda niente.
+        battitoNav('tappa', stepIdxRef.current, spokenRef.current, preannouncedRef.current);
       });
 
       // FIX WIPNAV-5: con origine personalizzata, se non arriva MAI un fix
@@ -1270,6 +1341,7 @@ export function useWalkingNavigation(language = 'it'): UseWalkingNavigationResul
     // Solo se QUESTA navigazione era in corso — non si tocca quello del giro.
     if (targetRef.current) {
       bannerFirmaRef.current = '';
+      ritiraPercorsoNativo('tappa');
       locationService.updateNavBanner('', '', false)
         .catch(() => {})
         .finally(() => { locationService.rilasciaServizioNativoPerNav().catch(() => {}); });

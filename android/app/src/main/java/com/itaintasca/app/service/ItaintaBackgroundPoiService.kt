@@ -100,6 +100,15 @@ class ItaintaBackgroundPoiService : Service() {
          * refresh periodico. null quando il servizio non e' vivo.
          */
         @Volatile var onVoiceStateChanged: (() -> Unit)? = null
+        /**
+         * (18/09/2026) NAVIGATORE A SCHERMO SPENTO. Hook in-process invocato
+         * dal plugin quando il JS consegna o toglie un percorso (setNavRoute /
+         * clearNavRoute): il servizio adegua SUBITO la cadenza dei fix, senza
+         * aspettare il prossimo fix che a riposo puo' arrivare dopo 20-60 s.
+         * null quando il servizio non e' vivo: non serve altro, alla partenza
+         * applyLocationRate guarda NavFollower da solo.
+         */
+        @Volatile var onNavRouteChanged: (() -> Unit)? = null
         // Heartbeat letto da ServiceWatchdog: aggiornato a ogni fix GPS
         // processato, così il watchdog riavvia solo un servizio davvero
         // bloccato invece di farlo ciecamente ogni 15 min.
@@ -211,6 +220,12 @@ class ItaintaBackgroundPoiService : Service() {
     // "il palazzo di fronte", quindi solo lì si chiede al fornitore il fix più
     // caro possibile. Non tocca mai lo stato a RIPOSO.
     @Volatile private var isFine = false
+    // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: `true` quando l'ultima
+    // requestLocationUpdates e' stata fatta con un percorso attivo in
+    // NavFollower (cadenza da navigatore). Serve solo a rendere idempotente
+    // syncNavRate: si ri-registra quando il percorso compare o sparisce, non a
+    // ogni fix. Lo scrive applyLocationRate, l'unico punto che fa la richiesta.
+    @Volatile private var navRateOn = false
     // Guard: un solo giro di valutazione alla volta (i fix possono
     // sovrapporsi alle query su Room).
     private val predictiveBusy = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -248,6 +263,9 @@ class ItaintaBackgroundPoiService : Service() {
         // (AUD-14) La voce nativa avvisa qui quando parte/finisce: si
         // ricostruisce la notifica con/senza i tasti della coda vocale.
         onVoiceStateChanged = { refreshNotificationForVoice() }
+        // (18/09/2026) Il plugin avvisa da un thread del bridge: la cadenza
+        // dei fix si tocca solo dal main, come fa tutto il resto del servizio.
+        onNavRouteChanged = { Handler(Looper.getMainLooper()).post { syncNavRate() } }
     }
 
     /**
@@ -486,7 +504,10 @@ class ItaintaBackgroundPoiService : Service() {
             else -> null
         }
         if (azioneNav != null) {
+            applicaAzioneNavAlFollower(azioneNav)
             inoltraAzioneNav(azioneNav)
+            // (18/09/2026 notte) Dopo, non prima: vedi ridisegnaCruscottoDopoAzione.
+            ridisegnaCruscottoDopoAzione(azioneNav)
             return START_STICKY
         }
 
@@ -825,6 +846,14 @@ class ItaintaBackgroundPoiService : Service() {
                 // stato attività il gate non scatta mai.
                 if (isGpsTeleport(location)) return
 
+                // (18/09/2026) NAVIGATORE A SCHERMO SPENTO: il fix va anche al
+                // follower delle svolte. Dopo i due gate qui sopra (fix
+                // simulati, teletrasporto): una svolta detta su una posizione
+                // finta e' peggio di una svolta in ritardo di un fix. Senza
+                // percorso costa un confronto e ritorna. Non tocca nulla di
+                // quello che segue (radar, predittore, recinti).
+                seguiNavigatore(location)
+
                 if (lastQueryLocation == null && currentPois.isEmpty()) {
                     updateNotificationAndStatus("Audioguida attiva", "Posizione acquisita. Caricamento radar...")
                 }
@@ -906,7 +935,22 @@ class ItaintaBackgroundPoiService : Service() {
         // batteria.
         if (!armed) BearingGate.disattiva()
         val cb = locationCallback ?: return
-        val request = if (armed) {
+        // (18/09/2026) NAVIGATORE A SCHERMO SPENTO. Con un percorso attivo in
+        // NavFollower il servizio deve ricevere un fix ogni ~2 s anche quando
+        // NON c'e' nessun POI in rotta — anzi soprattutto allora: in "modalita'
+        // navigatore" (categories=['gemme:off']) il radar e' vuoto, il
+        // predittore non arma mai e a RIPOSO arriverebbe un fix ogni 20-60 s,
+        // cioe' una svolta si' e tre no. Si riusa la richiesta ARMATA cosi'
+        // com'e' (HIGH_ACCURACY, 2 s a piedi / 1 s in auto, nessun filtro di
+        // spostamento): e' gia' dentro i limiti chiesti dal follower (≤ 2000
+        // ms, ≤ 5 m). Senza percorso `navAttivo` e' false e questa funzione si
+        // comporta ESATTAMENTE come prima: il RIPOSO non e' toccato. Tolto il
+        // percorso (clearNavRoute o arrivo finale) syncNavRate richiama qui e
+        // si torna al livello che il predittore aveva deciso (isArmed/isFine).
+        // Il gate di bussola qui sopra segue ancora il solo `armed` vero.
+        val navAttivo = NavFollower.haPercorsoAttivo()
+        navRateOn = navAttivo
+        val request = if (armed || navAttivo) {
             // Intervallo armato MODE-AWARE: in auto serve reattività (1 s); a piedi
             // 2 s dimezza il carico GNSS/CPU senza perdere trigger (a passo d'uomo
             // 2 s ≈ 3 m). Prima era 1 Hz pieno anche a piedi = il driver di calore #1.
@@ -958,7 +1002,7 @@ class ItaintaBackgroundPoiService : Service() {
         try {
             fusedClient.removeLocationUpdates(cb)
             fusedClient.requestLocationUpdates(request, cb, Looper.getMainLooper())
-            Log.d(TAG, "Location rate → ${if (armed) "ARMED (high accuracy, fine${if (fine) ", ultimi metri" else ""})" else "IDLE (20s, balanced)"}")
+            Log.d(TAG, "Location rate → ${if (armed) "ARMED (high accuracy, fine${if (fine) ", ultimi metri" else ""})" else if (navAttivo) "NAV (high accuracy, percorso attivo)" else "IDLE (20s, balanced)"}")
         } catch (e: SecurityException) {
             // (MAP-01) Permesso revocato a servizio acceso: non si resta
             // "attivi" senza posizione.
@@ -979,6 +1023,149 @@ class ItaintaBackgroundPoiService : Service() {
             isFine = false
             applyLocationRate(false)
         }
+    }
+
+    /**
+     * (18/09/2026) NAVIGATORE A SCHERMO SPENTO: allinea la cadenza dei fix
+     * alla presenza di un percorso in NavFollower. Idempotente: rifa' la
+     * requestLocationUpdates solo quando il percorso compare o sparisce
+     * (consegna, clearNavRoute, arrivo finale), mantenendo il livello armato
+     * che il predittore ha deciso. Chiamata dal main: dall'hook del plugin
+     * (subito) e a ogni fix (rete di sicurezza: copre il percorso consegnato a
+     * servizio non ancora partito e quello che FINISCE dentro onFix).
+     */
+    private fun syncNavRate() {
+        if (locationCallback == null) return
+        if (NavFollower.haPercorsoAttivo() == navRateOn) return
+        applyLocationRate(isArmed, isFine)
+    }
+
+    /**
+     * (18/09/2026) NAVIGATORE A SCHERMO SPENTO: passa il fix al follower e, se
+     * ha una frase, la DICE. Il follower tiene il conto delle manovre a ogni
+     * fix ma ritorna una frase solo quando il battito del JS manca da piu' di
+     * 12 s (WebView congelata): finche' il JS e' vivo parla lui, qui si tace.
+     *
+     * La voce passa per la STESSA strada di speakText kind "nav" del plugin a
+     * servizio acceso: la coda sequenziale di GeofenceBroadcastReceiver
+     * (priority 0 = passa davanti ai teaser in attesa, mai sopra quello in
+     * corso; fuoco audio e pausa della guida JS li gestisce la coda). Nessun
+     * secondo motore TTS — la nota in testa al file resta vera: il servizio
+     * non parla, accoda.
+     *
+     * Posizione GREZZA, non quella snappata alla strada: le manovre e il
+     * tracciato arrivano dal motore di percorso del JS, non dal tile di RoadSnap.
+     * Orologio elapsedRealtime: lo stesso del plugin (battito), monotono.
+     */
+    private fun seguiNavigatore(location: Location) {
+        try {
+            // Un fix senza accuratezza dichiarata non si puo' giudicare: si
+            // passa un valore oltre MAX_ACC_M cosi' il follower lo scarta.
+            val acc = if (location.hasAccuracy()) location.accuracy.toDouble() else 9999.0
+            val frase = NavFollower.onFix(
+                location.latitude, location.longitude, acc, SystemClock.elapsedRealtime()
+            )
+            if (!frase.isNullOrBlank()) {
+                Log.d(TAG, "NavFollower al comando (JS muto): \"$frase\"")
+                diceNavigatore(frase)
+            }
+            // (18/09/2026 notte) IL CRUSCOTTO A SCHERMO SPENTO: DOPO la logica
+            // delle svolte, sullo stesso fix. Il follower ritorna qualcosa solo
+            // col nativo al comando, al massimo ogni 3 s e solo a firma
+            // cambiata; col JS vivo e' sempre null e la notifica resta sua.
+            NavFollower.cruscotto(
+                location.latitude, location.longitude, acc,
+                SystemClock.elapsedRealtime(), System.currentTimeMillis()
+            )?.let { ridisegnaCruscottoNativo(it) }
+        } catch (e: Exception) {
+            // Il navigatore non deve MAI far cadere il giro dei POI qui sotto.
+            Log.w(TAG, "NavFollower: ${e.message}")
+        }
+        syncNavRate()
+    }
+
+    /** La voce del navigatore: la stessa coda di `speakText` kind "nav". */
+    private fun diceNavigatore(frase: String) {
+        GeofenceBroadcastReceiver.enqueue(
+            this,
+            GeofenceBroadcastReceiver.Companion.SpeechItem(
+                text = frase,
+                isGem = false,
+                isItinerary = false,
+                poiId = null,
+                priority = 0,
+                kind = "nav",
+                // Una svolta vale 20 secondi: dopo, dirla sarebbe sbagliato.
+                scadenzaElapsedMs = SystemClock.elapsedRealtime() + 20_000L
+            )
+        )
+    }
+
+    /**
+     * (18/09/2026) I tasti del cruscotto premuti a SCHERMO SPENTO: il JS è
+     * congelato e l'azione inoltrata la vedrà solo al risveglio, ma intanto
+     * chi parla è il follower nativo — che quindi obbedisce subito da solo.
+     * Col JS vivo è innocuo (vedi NavFollower.alternaPausa).
+     */
+    private fun applicaAzioneNavAlFollower(azione: String) {
+        try {
+            when (azione) {
+                "pausa" -> NavFollower.alternaPausa()
+                "termina" -> {
+                    NavFollower.clear(); syncNavRate()
+                    // (18/09/2026 notte) «Termina» SPEGNE il cruscotto. Lo fa
+                    // gia' inoltraAzioneNav subito dopo: qui e' esplicito perche'
+                    // il follower non dipenda da quell'ordine (la chiave
+                    // anti-duplicato evita la doppia pubblicazione).
+                    ridisegnaCruscottoNativo(NavFollower.Cruscotto(spegni = true))
+                }
+                "riascolta" -> NavFollower.ripeti(SystemClock.elapsedRealtime())?.let { diceNavigatore(it) }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "NavFollower azione $azione: ${e.message}")
+        }
+    }
+
+    /**
+     * (18/09/2026 notte) Tasto «pausa»/«riprendi» a SCHERMO SPENTO: ridisegno
+     * immediato del cruscotto con l'`inPausa` del follower. Va chiamata DOPO
+     * inoltraAzioneNav, non dentro applicaAzioneNavAlFollower: inoltraAzioneNav
+     * sul tasto pausa ROVESCIA navBannerInPausa rispetto a quello che trova, e
+     * un ridisegno fatto prima verrebbe rovesciato di nuovo («Pausa» al posto
+     * di «Riprendi»). Fatto dopo, l'ultima parola e' quella del follower, che
+     * a schermo spento e' chi comanda davvero. Col JS vivo cruscottoSubito e'
+     * null e resta tutto com'era.
+     */
+    private fun ridisegnaCruscottoDopoAzione(azione: String) {
+        if (azione != "pausa") return
+        try {
+            NavFollower.cruscottoSubito(SystemClock.elapsedRealtime(), System.currentTimeMillis())
+                ?.let { ridisegnaCruscottoNativo(it) }
+        } catch (e: Exception) {
+            Log.w(TAG, "NavFollower cruscotto dopo $azione: ${e.message}")
+        }
+    }
+
+    /**
+     * (18/09/2026 notte) IL CRUSCOTTO A SCHERMO SPENTO. Committente: «anche il
+     * monitor, il banner deve funzionare sul display spento». Ridisegna la
+     * notifica per la STESSA strada interna di updateNavBanner
+     * (ACTION_NAV_BANNER → applicaNavBanner): stessa notifica persistente,
+     * stessa chiave anti-duplicato, stessi tasti. Il follower porta titolo,
+     * corpo e pausa ricalcolati sul fix; foto e modo restano quelli
+     * dell'ultimo stato mandato dal JS (la foto si ripassa uguale, cosi'
+     * applicaNavBanner non la butta e non la riscarica; modo=null = si tiene).
+     * `spegni` = come updateNavBanner con attivo:false.
+     */
+    private fun ridisegnaCruscottoNativo(c: NavFollower.Cruscotto) {
+        if (c.spegni) {
+            applicaNavBanner(null, null, false)
+            return
+        }
+        // Tappa cambiata a schermo spento: la foto ricordata è della tappa di
+        // prima → non si mostra (regola: nessuna foto è meglio di quella sbagliata).
+        val foto = if (c.tappaCambiata) "" else navBannerFotoUrl
+        applicaNavBanner(c.titolo, c.corpo, true, foto, inPausa = c.inPausa)
     }
 
     /**
@@ -2285,6 +2472,7 @@ class ItaintaBackgroundPoiService : Service() {
     override fun onDestroy() {
         // Pulizia rigorosa per evitare memory leaks
         onVoiceStateChanged = null
+        onNavRouteChanged = null
         serviceScope.cancel()
         locationCallback?.let {
             try {

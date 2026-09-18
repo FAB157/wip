@@ -78,6 +78,25 @@ export interface ItaintaBackgroundPoiPlugin {
   stopSpeakText(): Promise<void>;
 
   /**
+   * NAVIGATORE A SCHERMO SPENTO (18/09/2026, committente: «deve funzionare
+   * anche a schermo spento, è fondamentale»). Le svolte le calcola e le dice
+   * il JS, ma a schermo spento la WebView viene congelata e il navigatore
+   * taceva. Il JS consegna qui il percorso GIÀ tradotto; il servizio nativo —
+   * che i fix GPS li riceve comunque — tiene il conto delle manovre e le dice
+   * lui quando il battito del JS manca da 8 s. Contratto completo e
+   * algoritmo (identico su Kotlin e Swift): `docs/nav-nativo-spec.md`.
+   * Chi chiama passa da `src/lib/nav/navNativo.ts`, mai da qui direttamente.
+   */
+  setNavRoute(options: { routeJson: string }): Promise<{ ok?: boolean }>;
+  clearNavRoute(): Promise<void>;
+  navHeartbeat(options: { indice: number; dettiVicino?: number[]; dettiLontano?: number[] }): Promise<void>;
+  getNavProgress(): Promise<{
+    attivo?: boolean; id?: string; indice?: number;
+    dettiVicino?: number[]; dettiLontano?: number[];
+    nativoAlComando?: boolean; ultimoTestoVicino?: string; ultimoTestoLontano?: string;
+  }>;
+
+  /**
    * Cruscotto del navigatore a display spento. Android: riscrive la notifica
    * (ongoing) del foreground service. iOS: avvia/aggiorna/termina la Live
    * Activity su lock screen e Dynamic Island. `ok:false` = il nativo non l'ha

@@ -1413,6 +1413,97 @@ class TourService {
     };
   }
 
+  /**
+   * IL GIRO PER IL FOLLOWER NATIVO (18/09/2026, navigatore a schermo spento:
+   * vedi lib/nav/navNativo). Le tratte ANCORA DA FARE, appiattite in una sola
+   * lista di manovre col testo gia` tradotto: a schermo spento questa pagina e`
+   * congelata e non puo` consegnare la tratta dopo, quindi il nativo le riceve
+   * tutte insieme e le scorre da solo, fermandosi a ogni arrivo finche' non ci
+   * si allontana dalla tappa.
+   *  - partenze: testo vuoto (nemmeno aggiornaPasso le dice: lo step 0 si salta);
+   *  - arrivi: «Sei arrivato a <tappa>» — a schermo spento e` l'unico segnale
+   *    che la tappa e` quella; teaser e audioguida li fa partire, come sempre,
+   *    il geofence del servizio, nella stessa coda vocale;
+   *  - `firma` cambia quando cambia il percorso (ricalcolo, tappa fatta o
+   *    saltata, lingua): il driver la confronta a ogni fix e riconsegna.
+   * null = niente da seguire (nessun giro, sospeso, in pausa, finito).
+   */
+  /** La firma da sola, economica: il driver la guarda a OGNI fix. null = niente da seguire. */
+  firmaPerNativo(): string | null {
+    const giro = this.giro;
+    if (!giro || this.eSospeso() || this.pausaManuale || this.stato.stato === 'FINITO') return null;
+    const tratte: any[] = Array.isArray(giro.tratte) ? giro.tratte : [];
+    if (tratte.length === 0) return null;
+    return `giro:${giro.id}|${Math.max(0, this.stato.tappaCorrente)}|${tratte.length}|${Math.round(giro.metri || 0)}|${giro.geometria?.length || 0}|${this.lingua}|${this.sospeso ? 'cuffie-spente' : 'cuffie-accese'}`;
+  }
+
+  /** Indice della prossima manovra DENTRO la lista di passiPerNativo (che parte dalla tratta corrente). */
+  indicePerNativo(): number {
+    return this.tappaDelPasso === this.stato.tappaCorrente ? Math.max(0, this.passoCorrente) : 0;
+  }
+
+  /**
+   * AL RISVEGLIO DALLO SCHERMO SPENTO (dalla revisione del 18/09/2026): il
+   * follower nativo ha camminato per noi, e `aggiornaPasso` da solo non si
+   * rimette in pari — avanza solo per prossimita` (15 m / 40 m), quindi dopo
+   * una tratta intera a pagina congelata restava fermo su una manovra ormai
+   * alle spalle. `i` e` il passo DENTRO la tratta corrente. Solo in avanti.
+   * Le tappe fatte nel frattempo le chiude il driver con completaTappa().
+   */
+  allineaPassoDaNativo(i: number) {
+    const steps: any[] = this.giro?.tratte?.[this.stato.tappaCorrente]?.steps || [];
+    if (!Number.isFinite(i) || steps.length < 2) return;
+    if (this.tappaDelPasso !== this.stato.tappaCorrente) { this.tappaDelPasso = this.stato.tappaCorrente; this.passoCorrente = 0; }
+    this.passoCorrente = Math.max(this.passoCorrente, Math.min(Math.round(i), steps.length - 1));
+  }
+
+  passiPerNativo(fraseArrivo: string): {
+    firma: string;
+    passi: { lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive'; tappa?: string; manovraTipo?: string; manovraVerso?: string }[];
+    linea: [number, number][];
+    indice: number;
+  } | null {
+    const giro = this.giro;
+    const firma = this.firmaPerNativo();
+    if (!giro || !firma) return null;
+    const tratte: any[] = Array.isArray(giro.tratte) ? giro.tratte : [];
+    const da = Math.max(0, this.stato.tappaCorrente);
+    const passi: { lat: number; lon: number; testo: string; tipo: 'depart' | 'turn' | 'arrive'; tappa?: string; manovraTipo?: string; manovraVerso?: string }[] = [];
+    for (let j = da; j < tratte.length; j++) {
+      const steps: any[] = Array.isArray(tratte[j]?.steps) ? tratte[j].steps : [];
+      const iTappa = giro.ordine?.[j];
+      const tappaJ = iTappa != null ? giro.tappe?.[iTappa] : null;
+      const nomeTappa = String(tappaJ?.nome || '').trim();
+      // «Sei arrivato a X» lo dice il follower SOLO dove non lo dice gia` il
+      // geofence del servizio (dalla revisione): a cuffie accese l'arrivo a
+      // una tappa con guida lo annuncia il receiver («Sei arrivato a X.
+      // <teaser>»), e si sentiva due volte di fila. Lo dice invece per le
+      // tappe senza guida e a cuffie spente (percorso su misura).
+      const arrivoParlato = !!nomeTappa && (tappaJ?.senzaGuida === true || this.sospeso);
+      for (const s of steps) {
+        const l = s?.maneuver?.location;
+        if (!Array.isArray(l) || l.length < 2) continue;
+        const lat = Number(l[1]), lon = Number(l[0]);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        const tipoOsrm = String(s?.maneuver?.type || '').toLowerCase();
+        // tappa + manovra grezza: a schermo spento il cruscotto (notifica /
+        // Live Activity) lo ridisegna il follower, e gli servono il nome
+        // della meta di QUESTA tratta e la freccia.
+        const extra = { tappa: nomeTappa, manovraTipo: String(s?.maneuver?.type || ''), manovraVerso: String(s?.maneuver?.modifier || '') };
+        if (tipoOsrm === 'depart') passi.push({ lat, lon, testo: '', tipo: 'depart', ...extra });
+        else if (tipoOsrm === 'arrive') passi.push({ lat, lon, testo: arrivoParlato ? `${fraseArrivo} ${nomeTappa}`.trim() : '', tipo: 'arrive', ...extra });
+        else passi.push({ lat, lon, testo: istruzionePerStep(s, this.lingua, nomeTappa || undefined) || '', tipo: 'turn', ...extra });
+      }
+    }
+    if (passi.length < 2) return null;
+    return {
+      firma,
+      passi,
+      linea: Array.isArray(giro.geometria) ? giro.geometria : [],
+      indice: Math.min(this.indicePerNativo(), passi.length - 1),
+    };
+  }
+
   private aggiornaPasso(pos: { lat: number; lon: number }) {
     const leg: any = this.giro?.tratte?.[this.stato.tappaCorrente];
     const steps: any[] = Array.isArray(leg?.steps) ? leg.steps : [];

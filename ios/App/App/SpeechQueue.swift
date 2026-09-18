@@ -33,6 +33,14 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         // e valido si riproduce quello (partenza istantanea, voce neurale)
         // invece del TTS; se fallisce si torna al TTS del campo text.
         var audioFile: String? = nil
+        // (18/09/2026) SCADENZA, solo per le frasi del navigatore dette dal
+        // nativo a schermo spento (NavFollower, BackgroundPoiManager
+        // .consegnaFixAlNavigatore): «gira a destra» pronunciato due minuti
+        // dopo, perché davanti in coda c'era una guida, è un'indicazione
+        // sbagliata. Epoch ms; nil = non scade mai, cioè TUTTI gli item di
+        // prima (teaser, arrivi, guide, speakText del JS): per loro non
+        // cambia nulla.
+        var scadenzaMs: Double? = nil
     }
 
     private let synthesizer = AVSpeechSynthesizer()
@@ -208,6 +216,14 @@ final class SpeechQueue: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDel
         guard prefs.bool(forKey: "isServiceActive") else {
             queue.removeAll()
             return
+        }
+        // (18/09/2026) Via le frasi del navigatore scadute mentre aspettavano
+        // il turno (vedi SpeechItem.scadenzaMs). Gli item senza scadenza —
+        // tutti gli altri — non vengono toccati.
+        let ora = nowMs()
+        queue.removeAll { item in
+            if let scadenza = item.scadenzaMs { return scadenza < ora }
+            return false
         }
         // Ordina per priorità (itinerario prima) come Android
         queue.sort {

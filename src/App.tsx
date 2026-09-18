@@ -344,7 +344,14 @@ export default function App() {
       if (!action) return;
       // Un evento trattenuto (retainUntilConsumed) e consegnato dopo un
       // minuto non e` piu` un tocco: non si salta una tappa a sorpresa.
-      if (Number.isFinite(ts) && ts > 0 && Date.now() - ts > 60_000) return;
+      // TRANNE «pausa» e «termina» (18/09/2026, navigatore a schermo spento):
+      // a pagina congelata il follower nativo ha GIA` obbedito a quel tasto —
+      // scartarli qui lasciava il giro in cammino nel JS e in pausa (o chiuso)
+      // nel nativo. Pausa/riprendi si alternano: applicarli tutti, in ordine,
+      // riporta il JS dove l'utente ha lasciato il nativo. «Salta» e
+      // «ricalcola» no: fatti a sorpresa minuti dopo sono un danno.
+      const vecchio = Number.isFinite(ts) && ts > 0 && Date.now() - ts > 60_000;
+      if (vecchio && action !== 'pausa' && action !== 'termina') return;
       if (tourService.inCorso()) {
         switch (action) {
           case 'pausa': tourService.impostaPausa(!tourService.vista()?.inPausa); break;
@@ -534,6 +541,16 @@ export default function App() {
   // fermo sull'ultimo stato per sempre.
   const firmaBannerRef = useRef<string>('');
   const bannerAttivoRef = useRef<boolean>(false);
+  // SCHERMO SPENTO (18/09/2026): mentre la pagina era congelata il cruscotto
+  // l'ha ridisegnato il follower nativo, col SUO titolo («nome · 300 m»). Al
+  // risveglio (evento di lib/nav/navNativo) si azzera la firma: il prossimo
+  // giro dell'effetto qui sotto riscrive il banner nel formato del giro, anche
+  // se i numeri sono gli stessi di prima del congelamento.
+  useEffect(() => {
+    const azzera = () => { firmaBannerRef.current = ''; };
+    window.addEventListener('wip-nav-nativo-progresso', azzera);
+    return () => window.removeEventListener('wip-nav-nativo-progresso', azzera);
+  }, []);
   useEffect(() => {
     // IN PAUSA IL CRUSCOTTO RESTA (03/09/2026): prima spariva, e dalla lock
     // screen non c'era modo di riprendere. Ora dice «In pausa» col tasto play.

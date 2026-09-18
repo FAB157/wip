@@ -79,13 +79,24 @@ Content is generated once and cached forever:
 
 This is the part most likely to bite you: **the same logic exists three times and all must be kept in sync.**
 
-- **Web/foreground**: `src/services/locationService.ts` (a 700-line singleton owning geolocation watch, the audio element graph, the TTS queue and quota checks) plus `src/lib/geofencing/*` (`SmartGeofenceManager`, `triggerManager`, `waypointTracker`, `transportDetector`, `routeEngine`, `audioDirector`).
+- **Web/foreground**: `src/services/locationService.ts` (a singleton owning geolocation watch, the audio element graph, the TTS queue and quota checks) plus `src/lib/geofencing/foregroundTriggers.ts` (the actual web trigger engine; `telemetry`, `gpsReplay`, `footprints`, `bearingGate`, `predittore` support it). The names `SmartGeofenceManager`, `triggerManager`, `waypointTracker`, `transportDetector`, `routeEngine` survive only in old comments — those files no longer exist (verified 18/09/2026); `audioDirector` lives in `src/lib/tour/`.
 - **Android/background**: `ItaintaBackgroundPoiService.kt`, a foreground Service with its own Room DB (`db/PoiEntity.kt`, `TriggerStateEntity.kt`), its own `SupabaseClient.kt`, its own Android `TextToSpeech`, `GeofenceManager` + `GeofenceBroadcastReceiver`, `BootReceiver` for restart-on-boot and `ServiceWatchdog` for keep-alive.
 - **iOS/background**: `ios/App/App/*.swift` — `BackgroundPoiManager.swift` (CLLocationManager background updates + in-process trigger state machine, port of service+receiver), `SpeechQueue.swift` (AVSpeechSynthesizer teaser queue), `WipSupabaseClient.swift`, `PoiStore.swift` (UserDefaults/JSON instead of Room), `WipPackageDownloadManager.swift`, plus the two plugins `ItaintaBackgroundPoiPlugin.swift` and `WipBackgroundAudioPlugin.swift` registered in `MainViewController.swift`. Same plugin API, same events, same prefs keys as Android.
 
 They are bridged by `ItaintaBackgroundPoiPlugin.kt` (Capacitor plugin `ItaintaBackgroundPoiPlugin`) and by `localStorage`: `App.tsx` writes `wip_active_subcategories`, `wip_audioguide_active` etc., and the native service reads them on next start. The Kotlin service also carries its own `CATEGORY_MAP` translating UI categories (`monumenti`, `musei`, `chiese`, …) to DB category values — **if you add a category to the web filter, add it to that map too, and to `PoiCategories.map` in `ios/App/App/PoiModels.swift`.**
 
 Audio playback in the background goes through a second plugin, `WipBackgroundAudioPlugin`/`WipBackgroundAudioService` (`src/plugins/WipBackgroundAudio.ts`).
+
+### Turn-by-turn with the screen off — the native "follower" (18/09/2026)
+
+Set after the committente's order: «il navigatore, sia nell'audioguida che nei percorsi, deve funzionare anche a schermo spento. È fondamentale». Turn-by-turn is computed and spoken by JS (`src/hooks/useWalkingNavigation.ts` for a single stop, `src/lib/tour/giroDriver.ts` + `src/services/tourService.ts` for tours/percorsi) — and the WebView is frozen when the screen is off, so the navigator went silent while the native geofencing audioguide kept talking.
+
+- JS does **not** get ported: it hands the native service a ready route (maneuvers with **already translated** text + decimated polyline) through `src/lib/nav/navNativo.ts` — the only module allowed to call the four plugin methods `setNavRoute` / `clearNavRoute` / `navHeartbeat` / `getNavProgress`.
+- Hand-over is by **heartbeat**: while the page is alive it sends a heartbeat on every fix (and every 4 s) and speaks itself, with its full audio direction; if the heartbeat is older than 8 s the native `NavFollower` speaks (`android/.../service/NavFollower.kt`; class `NavFollower` at the bottom of `ios/App/App/BackgroundPoiManager.swift` — no new Swift files, the pbxproj is hand-edited). The follower **always** keeps count of maneuvers, even while silent, so nothing is repeated or skipped at the switch.
+- It speaks through the **same** native TTS queue as `speakText` kind `"nav"` — never a second TTS engine. Nav phrases expire after 20 s in the queue (`scadenzaElapsedMs` / `scadenzaMs`, additive fields: `null` = never, teasers and guides unchanged).
+- While a route is active the native service raises its GPS rate on its own (in "navigator mode" it would otherwise idle at 20 s / 80 m).
+- The contract and the algorithm live in `docs/nav-nativo-spec.md` and must stay **identical** on Kotlin and Swift: change one, change the other and the spec. The native side cannot recalculate a route (the server routes, JS phrases): off-route with the screen off is only *announced*.
+- The single native route slot is shared by both JS navigators: each one retires only the route it published.
 
 ### Cross-component communication
 
