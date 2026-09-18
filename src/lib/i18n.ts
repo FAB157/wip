@@ -5659,6 +5659,14 @@ export const TRANSLATIONS: Record<string, Partial<Record<Language, string>>> = {
     DE: "Vorübergehendes Problem beim Abbuchen der Credits. Es wurde nichts abgezogen: versuche es gleich erneut.",
     RU: "Временная ошибка списания кредитов. Кредиты не списаны: попробуйте чуть позже.",
     ZH: "扣除点数时出现临时问题，未扣除任何点数，请稍后重试。" },
+  err_ai_consent_declined: {
+    IT: "Questa funzione ha bisogno del permesso per usare l'intelligenza artificiale. Puoi darlo quando vuoi dal campo dove scrivi.",
+    EN: "This feature needs permission to use artificial intelligence. You can grant it anytime from where you type.",
+    FR: "Cette fonction a besoin de votre permission pour utiliser l'intelligence artificielle. Vous pouvez l'accorder à tout moment depuis le champ où vous écrivez.",
+    ES: "Esta función necesita permiso para usar inteligencia artificial. Puedes darlo cuando quieras desde donde escribes.",
+    DE: "Diese Funktion benötigt die Erlaubnis, künstliche Intelligenz zu nutzen. Du kannst sie jederzeit im Eingabefeld erteilen.",
+    RU: "Для этой функции нужно разрешение на использование ИИ. Вы можете дать его в любой момент в поле ввода.",
+    ZH: "此功能需要您授权使用人工智能。您可以随时在输入框中授权。" },
   err_ai_timeout: {
     IT: "Il server sta impiegando troppo tempo a rispondere. Riprova tra poco.",
     EN: "The server is taking too long to respond. Try again shortly.",

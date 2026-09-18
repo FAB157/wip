@@ -65,6 +65,7 @@ import ZeroCreditsBanner from "./components/ZeroCreditsBanner";
 import AgentControls from "./components/AgentControls";
 import DayPassOfferModal from "./components/DayPassOfferModal";
 import ToastHost from "./components/ToastHost";
+import AiConsentHost from "./components/AiConsentHost";
 import { useFeatureFlag } from "./lib/featureFlags";
 import { record as recordNotification } from "./lib/notificationCenter";
 
@@ -2140,6 +2141,11 @@ export default function App() {
         {/* Canale unico delle notifiche in-app (lib/toast.ts): sostituisce
             gli alert() bloccanti sparsi nelle schermate. */}
         <ToastHost language={language} />
+
+        {/* Consenso alle AI di terze parti (App Store 5.1.2(i), 18/09/2026):
+            un solo host per tutta l'app, lo aprono chat, AI Scan e itinerari
+            tramite chiediConsensoAi() PRIMA del primo invio. */}
+        <AiConsentHost language={language} />
 
         {/* BOTTOM NAV */}
         {activeTab !== "camera" && (

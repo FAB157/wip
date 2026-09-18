@@ -20,6 +20,7 @@ import CreditConfirmationModal from './CreditConfirmationModal';
 import { consumeCredits, PRICING_LIST, getWalletBalance, refundCredits, notifyCreditsChanged } from '../lib/pricing';
 import { printScoped } from '../lib/printScoped';
 import { getApiUrl, apiFetch } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { OSRM_FOOT_BASE } from '../services/osrmService';
 import { notify as sharedNotify } from '../lib/toast';
 import { Capacitor } from '@capacitor/core';
@@ -211,6 +212,7 @@ const PLAN_ERROR_KEYS: Record<string, string> = {
   STREAM_UNSUPPORTED: 'err_ai_empty',
   INVALID_RESPONSE: 'err_ai_invalid_response',
   UNAUTHORIZED: 'err_login_required',
+  CONSENSO_AI_NEGATO: 'err_ai_consent_declined',
 };
 
 /** Messaggio utente per un errore di generazione/sostituzione/suggerimento. */
@@ -242,6 +244,11 @@ async function processItineraryStream(
   body: any,
   onPartialData: (data: any) => void
 ): Promise<any> {
+  // App Store 5.1.2(i) (18/09/2026): qui passa OGNI generazione/rigenerazione
+  // di itinerario, ed è un'AI di terze parti (Groq e a cascata). Il consenso
+  // si chiede una volta sola (chiediConsensoAi ricorda il sì); un no qui
+  // arriva come errore gestito, non come crash della UI.
+  if (!(await chiediConsensoAi())) throw new PlanError('CONSENSO_AI_NEGATO');
   const controller = new AbortController();
   // 30s per il primo byte: prima dello stream il server fa quota + RAG +
   // retrieval ristoranti (fino a ~6s) — con 20s i margini erano stretti.

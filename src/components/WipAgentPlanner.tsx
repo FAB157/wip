@@ -22,6 +22,7 @@ import { motion } from 'motion/react';
 import { X, Mic, Send, Loader2, Volume2, VolumeX, Sparkles, Pencil } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getApiUrl } from '../lib/api';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { Language, getTranslation } from '../lib/i18n';
 import { notify } from '../lib/toast';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
@@ -125,6 +126,8 @@ export default function WipAgentPlanner({
   const send = async (text: string, confermaAcquisto = false) => {
     const clean = text.trim();
     if (!clean || thinking) return;
+    // App Store 5.1.2(i) (18/09/2026): dialogo con un'AI di terze parti.
+    if (!(await chiediConsensoAi())) return;
     setError(null);
     setReady(null);
     stopSpeaking();

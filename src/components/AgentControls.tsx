@@ -9,6 +9,7 @@ import { getTranslation, type Language } from '../lib/i18n';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
 import { getGuideCharacter } from '../lib/guideSettings';
 import { avviaAscolto, type SessioneVoce } from '../lib/voceInput';
+import { chiediConsensoAi } from '../lib/aiConsent';
 
 interface AgentControlsProps {
   itineraryId: string;
@@ -228,6 +229,11 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
   // si riapriva il modale addebitando i 3 crediti una seconda volta.
   const handleSendEvent = async (eventMessage: string, skipGate = false) => {
     if (!eventMessage.trim() || isOptimizing) return;
+
+    // App Store 5.1.2(i): il messaggio (e, più sotto, la posizione) finisce a
+    // un'AI di terze parti — si chiede il permesso PRIMA, e senza non parte
+    // niente. Il testo resta nel campo: chi poi acconsente non lo riscrive.
+    if (!(await chiediConsensoAi())) return;
 
     if (modalita === 'aiuto') {
       return void inviaMessaggioAiuto(eventMessage.trim());
@@ -543,7 +549,13 @@ export default function AgentControls({ itineraryId, userId, status, chatHistory
                 if (!isExpanded) setIsExpanded(true);
               }}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSendEvent(customEvent); }}
-              onFocus={() => !isExpanded && setIsExpanded(true)}
+              onFocus={() => {
+                if (!isExpanded) setIsExpanded(true);
+                // Il permesso si chiede appena si tocca il campo, non solo
+                // all'invio: chi apre la chat vede SUBITO quali dati partono
+                // e verso chi (è ciò che App Review va a cercare).
+                void chiediConsensoAi();
+              }}
               placeholder={
                 isListening
                   ? tr('chat_listening')

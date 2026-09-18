@@ -15,6 +15,7 @@
 import { supabase } from './supabase';
 import { getApiUrl } from './api';
 import { Language } from './i18n';
+import { chiediConsensoAi } from './aiConsent';
 
 export type VenueTappa = {
   nome: string;
@@ -876,6 +877,8 @@ export async function fetchOrariDi(venueName: string, poiId: string | null | und
  * materiale di quell'opera, un credito. 402 = crediti finiti.
  */
 export async function askGuide(args: { artwork: string; venueName: string; question: string; language: Language }): Promise<{ ok: boolean; risposta?: string; reason?: string }> {
+  // App Store 5.1.2(i): la domanda scritta dall'utente va a un'AI di terze parti.
+  if (!(await chiediConsensoAi())) return { ok: false, reason: 'consenso' };
   const headers = await authHeaders();
   if (!headers) return { ok: false, reason: 'login' };
   try {
@@ -904,6 +907,8 @@ export type Cartellino = {
   confidenza: number;
 };
 export async function leggiCartellino(imageBase64: string, venueName: string, language: Language): Promise<{ ok: true; cartellino: Cartellino } | { ok: false; reason: string }> {
+  // App Store 5.1.2(i): la foto del cartellino va a un'AI di terze parti.
+  if (!(await chiediConsensoAi())) return { ok: false, reason: 'consenso' };
   const headers = await authHeaders();
   if (!headers) return { ok: false, reason: 'login' };
   try {

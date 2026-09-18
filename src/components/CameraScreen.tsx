@@ -23,6 +23,7 @@ import { toggleFavoritePoi, getLocalFavorites } from '../lib/favorites';
 import { getNearbyPois } from '../services/poiRepository';
 import MuseumVisitSheet from './MuseumVisitSheet';
 import LoadingQuiz from './LoadingQuiz';
+import { chiediConsensoAi } from '../lib/aiConsent';
 import { MuseumVisit, MUSEUM_VISIT_EVENT, OPEN_MUSEUM_VISIT_EVENT, getVisit, onArtworkRecognized, startVisitByName, startVisitByPoi, fetchVenueGuide, startVisitFromGuide, countSeen, fetchMuseumLibrary, MuseumLibraryItem, fetchMuseumSuggest, MuseumSuggestion, OPEN_MUSEUM_GUIDE_EVENT, prendiRichiestaGuidaMuseo, riapriVisitaConservata, whereAmI, DoveSono, markWorkSeen, visitaAttivaKey, fetchPrezziBiglietti } from '../lib/museumVisit';
 import { visiteConservate, opereInArchivio, ArchivioMuseo, museoScaricato } from '../lib/pacchettoMuseo';
 import { speakAudioguide, stopSpeech } from '../services/ttsService';
@@ -1050,6 +1051,15 @@ export default function CameraScreen({ onRecognize, onClose, language }: CameraS
   };
 
   const analyzeImage = async (base64Image: string, meta: ShotMeta) => {
+    // App Store 5.1.2(i) (18/09/2026): la foto va a un'AI di terze parti.
+    // Il permesso si chiede QUI, ingresso unico di ogni foto (scatto, galleria,
+    // screenshot) e prima anche della coda offline: senza consenso la foto
+    // non lascia il telefono e non viene nemmeno accodata.
+    if (!(await chiediConsensoAi())) {
+      setPreviewImage(null);
+      setIsScanning(false);
+      return;
+    }
     // Modalità 📱 Screenshot: flusso dedicato (sopra), vale sia per la foto
     // scattata (schermo di un altro telefono) sia per il file dalla galleria.
     if (visionTarget === 'screenshot') {
